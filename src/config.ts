@@ -12,5 +12,6 @@ export function loadConfig(): Config {
     model,
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
+    autoApprove: process.env.REIKA_AUTO_APPROVE === 'true' || process.env.REIKA_AUTO_APPROVE === '1',
   };
 }

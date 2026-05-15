@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
+import { buildEditDiff } from './_diff.js';
 
 export const editTool: Tool = {
   name: 'edit',
@@ -38,6 +39,17 @@ export const editTool: Tool = {
       return {
         summary: `Edit failed: old_string appears multiple times in ${rel}; add surrounding context to make it unique`,
       };
+    }
+
+    if (ctx.requestApproval) {
+      const diff = buildEditDiff(
+        oldStr,
+        newStr,
+        text.slice(0, first),
+        text.slice(first + oldStr.length),
+      );
+      const ok = await ctx.requestApproval({ tool: 'edit', path: rel, diff });
+      if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }
 
     const next = text.slice(0, first) + newStr + text.slice(first + oldStr.length);

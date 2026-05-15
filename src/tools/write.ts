@@ -1,6 +1,7 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
+import { buildWriteDiff } from './_diff.js';
 
 export const writeTool: Tool = {
   name: 'write',
@@ -22,6 +23,12 @@ export const writeTool: Tool = {
     const existing = await stat(full).catch(() => null);
     if (existing) {
       return { summary: `Write failed: ${rel} already exists; use edit instead` };
+    }
+
+    if (ctx.requestApproval) {
+      const diff = buildWriteDiff(content);
+      const ok = await ctx.requestApproval({ tool: 'write', path: rel, diff });
+      if (!ok) return { summary: `Write declined by user for ${rel}` };
     }
 
     await mkdir(dirname(full), { recursive: true });

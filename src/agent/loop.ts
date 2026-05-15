@@ -1,4 +1,10 @@
-import type { Config, ContextBundle, Message, Tool } from '../types.js';
+import type {
+  ApprovalRequest,
+  Config,
+  ContextBundle,
+  Message,
+  Tool,
+} from '../types.js';
 import { buildSystemPrompt } from './prompt.js';
 import { callModel } from '../provider/client.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -14,6 +20,7 @@ export async function runTurn(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
+  requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
 }): Promise<void> {
   const userMsg: Message = { role: 'user', content: opts.userInput };
@@ -64,7 +71,10 @@ export async function runTurn(opts: {
         summary = `Unknown tool: ${call.name}`;
       } else {
         try {
-          const result = await tool.run(call.args, { cwd: opts.bundle.cwd });
+          const result = await tool.run(call.args, {
+            cwd: opts.bundle.cwd,
+            requestApproval: opts.requestApproval,
+          });
           summary = result.summary;
           payload = result.payload;
         } catch (e) {

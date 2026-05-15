@@ -4,12 +4,13 @@ import { Header } from './Header.js';
 import { Scrollback } from './Scrollback.js';
 import { Input } from './Input.js';
 import { Status } from './Status.js';
+import { Approval } from './Approval.js';
 import { loadConfig } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { defaultTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { ApprovalRequest, Config, ContextBundle, Message } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -29,10 +30,16 @@ export function App() {
   const [tools] = useState(() => defaultTools());
   const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
+  const [pending, setPending] = useState<{
+    request: ApprovalRequest;
+    resolve: (allow: boolean) => void;
+  } | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
+  const pendingRef = useRef<typeof pending>(null);
+  pendingRef.current = pending;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -87,13 +94,30 @@ export function App() {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
+      if (pendingRef.current) {
+        pendingRef.current.resolve(false);
+        setPending(null);
+      }
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
       } else {
         exit();
       }
+      return;
+    }
+    if (pendingRef.current) {
+      if (input === 'y' || input === 'Y') {
+        pendingRef.current.resolve(true);
+        setPending(null);
+      } else if (input === 'n' || input === 'N') {
+        pendingRef.current.resolve(false);
+        setPending(null);
+      }
     }
   });
+
+  const requestApproval = (req: ApprovalRequest): Promise<boolean> =>
+    new Promise(resolve => setPending({ request: req, resolve }));
 
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
@@ -116,6 +140,7 @@ export function App() {
         tools,
         payloads,
         signal: controller.signal,
+        requestApproval: config.autoApprove ? undefined : requestApproval,
         onMessage: msg => {
           if (msg.role === 'assistant') {
             streamingRef.current = '';
@@ -183,7 +208,12 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
           />
-          <Input disabled={status !== 'idle'} onSubmit={onSubmit} />
+          {pending ? <Approval request={pending.request} /> : null}
+          <Input
+            disabled={status !== 'idle' || pending !== null}
+            spinning={status === 'busy' && pending === null}
+            onSubmit={onSubmit}
+          />
           <Status
             model={config?.model ?? ''}
             turns={messages.filter(m => m.role === 'assistant').length}

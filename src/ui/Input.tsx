@@ -6,19 +6,21 @@ const FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 
 export function Input({
   disabled,
+  spinning,
   onSubmit,
 }: {
   disabled: boolean;
+  spinning: boolean;
   onSubmit: (value: string) => void;
 }) {
   const [value, setValue] = useState('');
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
-    if (!disabled) return;
+    if (!spinning) return;
     const id = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), 80);
     return () => clearInterval(id);
-  }, [disabled]);
+  }, [spinning]);
 
   const handle = (v: string) => {
     if (disabled) return;
@@ -30,7 +32,7 @@ export function Input({
     onSubmit(v);
   };
 
-  const prompt = disabled ? `${FRAMES[frame]}  ` : '> ';
+  const prompt = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : '> ';
 
   return (
     <Box borderStyle="round" paddingX={1}>

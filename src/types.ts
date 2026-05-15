@@ -21,8 +21,15 @@ export type ToolResult = {
   display?: string;
 };
 
+export type ApprovalRequest = {
+  tool: string;
+  path: string;
+  diff: string;
+};
+
 export type ToolContext = {
   cwd: string;
+  requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
 };
 
 export type ToolParameters = {
@@ -52,4 +59,5 @@ export type Config = {
   model: string;
   maxTurns: number;
   repoMapBudget: number;
+  autoApprove: boolean;
 };
