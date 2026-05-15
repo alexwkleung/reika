@@ -1,11 +1,12 @@
 import OpenAI from 'openai';
-import type { Config, Message, Tool, ToolCall } from '../types.js';
+import type { Config, Message, Tool, ToolCall, Usage } from '../types.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 
 export type ModelResponse = {
   content: string;
   reasoning?: string;
   toolCalls?: ToolCall[];
+  usage?: Usage;
 };
 
 export async function callModel(opts: {
@@ -29,6 +30,7 @@ export async function callModel(opts: {
   const contentParts: string[] = [];
   const reasoningParts: string[] = [];
   const callsByIndex = new Map<number, { id: string; name: string; args: string }>();
+  let usage: Usage | undefined;
 
   try {
     const stream = await client.chat.completions.create(
@@ -37,11 +39,18 @@ export async function callModel(opts: {
         messages,
         tools: opts.tools.length > 0 ? toolsToOpenAI(opts.tools) : undefined,
         stream: true,
+        stream_options: { include_usage: true },
       },
       { signal: opts.signal },
     );
 
     for await (const chunk of stream) {
+      if (chunk.usage) {
+        usage = {
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+        };
+      }
       const delta = chunk.choices[0]?.delta as
         | (typeof chunk.choices[0]['delta'] & { reasoning_content?: string | null })
         | undefined;
@@ -74,6 +83,7 @@ export async function callModel(opts: {
         content: contentParts.join(''),
         reasoning: reasoningParts.join('') || undefined,
         toolCalls: undefined,
+        usage,
       };
     }
     throw e;
@@ -102,6 +112,7 @@ export async function callModel(opts: {
     content,
     reasoning: reasoningParts.join('') || undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage,
   };
 }
 

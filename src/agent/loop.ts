@@ -4,6 +4,7 @@ import type {
   ContextBundle,
   Message,
   Tool,
+  Usage,
 } from '../types.js';
 import { buildSystemPrompt } from './prompt.js';
 import { callModel } from '../provider/client.js';
@@ -20,6 +21,7 @@ export async function runTurn(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
+  onUsage?: (usage: Usage) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -44,6 +46,8 @@ export async function runTurn(opts: {
       onReasoningDelta: opts.onReasoningDelta,
       signal: opts.signal,
     });
+
+    if (response.usage) opts.onUsage?.(response.usage);
 
     if (opts.signal?.aborted) {
       commitAborted(opts, response.content);

@@ -13,7 +13,13 @@ export type Message =
       reasoning?: string;
     }
   | { role: 'tool'; callId: string; summary: string; payload?: string; payloadId?: string }
-  | { role: 'error'; content: string };
+  | { role: 'error'; content: string }
+  | { role: 'system'; content: string };
+
+export type Usage = {
+  promptTokens: number;
+  completionTokens: number;
+};
 
 export type ToolResult = {
   summary: string;

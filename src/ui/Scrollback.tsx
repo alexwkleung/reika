@@ -63,6 +63,13 @@ function MessageView({ msg }: { msg: Message }) {
       </Box>
     );
   }
+  if (msg.role === 'system') {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Text dimColor>{msg.content}</Text>
+      </Box>
+    );
+  }
   return null;
 }
 

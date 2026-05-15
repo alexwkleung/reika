@@ -10,7 +10,7 @@ import { bootstrap } from '../context/bootstrap.js';
 import { defaultTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
-import type { ApprovalRequest, Config, ContextBundle, Message } from '../types.js';
+import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -30,6 +30,7 @@ export function App() {
   const [tools] = useState(() => defaultTools());
   const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
+  const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -145,10 +146,59 @@ export function App() {
     return new Promise(resolve => setPending({ request: req, resolve }));
   };
 
+  const handleCommand = (raw: string): void => {
+    const rest = raw.slice(1);
+    const space = rest.indexOf(' ');
+    const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
+    const echo: Message = { role: 'user', content: raw };
+
+    if (name === 'clear') {
+      setMessages([]);
+      setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+      sessionAutoApproveRef.current = false;
+      return;
+    }
+    if (name === 'exit' || name === 'quit') {
+      exit();
+      return;
+    }
+
+    let response: string;
+    switch (name) {
+      case 'help':
+        response = [
+          'Commands:',
+          '  /help         show this list',
+          '  /clear        clear conversation history and reset session',
+          '  /model        show current model and base URL',
+          '  /cwd          show working directory',
+          '  /tokens       show token usage this session',
+          '  /exit, /quit  exit reika',
+        ].join('\n');
+        break;
+      case 'model':
+        response = config ? `model: ${config.model}\nbase:  ${config.baseURL}` : 'config not loaded';
+        break;
+      case 'cwd':
+        response = bundle?.cwd ?? '(unknown)';
+        break;
+      case 'tokens':
+        response = `prompt:     ${totalUsage.promptTokens}\ncompletion: ${totalUsage.completionTokens}`;
+        break;
+      default:
+        response = `Unknown command: /${name}. Try /help.`;
+    }
+    setMessages(prev => [...prev, echo, { role: 'system', content: response }]);
+  };
+
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
     const trimmed = input.trim();
     if (!trimmed) return;
+    if (trimmed.startsWith('/')) {
+      handleCommand(trimmed);
+      return;
+    }
     setStatus('busy');
     setPhase('thinking');
     streamingRef.current = '';
@@ -185,6 +235,11 @@ export function App() {
           scheduleReasoningFlush();
         },
         onPhase: p => setPhase(p),
+        onUsage: u =>
+          setTotalUsage(t => ({
+            promptTokens: t.promptTokens + u.promptTokens,
+            completionTokens: t.completionTokens + u.completionTokens,
+          })),
       });
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
@@ -247,6 +302,7 @@ export function App() {
             turns={messages.filter(m => m.role === 'assistant').length}
             status={status === 'busy' ? phase : status}
             elapsed={status === 'busy' ? elapsed : null}
+            usage={totalUsage}
           />
         </>
       )}
