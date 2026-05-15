@@ -41,15 +41,9 @@ function MessageView({ msg }: { msg: Message }) {
     );
   }
   if (msg.role === 'assistant') {
-    const isTerminal = !msg.content && (!msg.toolCalls || msg.toolCalls.length === 0);
-    const reasoningText = msg.reasoning
-      ? isTerminal
-        ? msg.reasoning
-        : reasoningPreview(msg.reasoning)
-      : null;
     return (
       <Box flexDirection="column" marginTop={1}>
-        {reasoningText ? <Text dimColor>{`▸ ${reasoningText}`}</Text> : null}
+        {msg.reasoning ? <Text dimColor>{`▸ ${msg.reasoning}`}</Text> : null}
         {msg.content ? <Text>{msg.content}</Text> : null}
         {msg.toolCalls?.map(tc => (
           <Text key={tc.id} dimColor>{`· ${tc.name}(${formatArgs(tc.args)})`}</Text>
@@ -79,9 +73,4 @@ function formatArgs(args: Record<string, unknown>): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
-}
-
-function reasoningPreview(r: string): string {
-  const firstLine = r.split('\n').find(l => l.trim().length > 0) ?? '';
-  return truncate(firstLine.trim(), 100);
 }
