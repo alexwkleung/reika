@@ -4,7 +4,8 @@ import { listTool } from "./list.js";
 import { grepTool } from "./grep.js";
 import { editTool } from "./edit.js";
 import { writeTool } from "./write.js";
+import { bashTool } from "./bash.js";
 
 export function defaultTools(): Tool[] {
-  return [readTool, listTool, grepTool, editTool, writeTool];
+  return [readTool, listTool, grepTool, editTool, writeTool, bashTool];
 }

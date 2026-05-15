@@ -3,9 +3,17 @@ import { Box, Text } from 'ink';
 import { highlight } from 'cli-highlight';
 import type { ApprovalRequest } from '../types.js';
 
-export function Approval({ request }: { request: ApprovalRequest }) {
-  const lang = detectLanguage(request.path);
-  const lines = request.diff.split('\n');
+export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
+export type ApprovalChoice = 0 | 1 | 2;
+
+export function Approval({
+  request,
+  selectedIndex,
+}: {
+  request: ApprovalRequest;
+  selectedIndex: number;
+}) {
+  const isCommand = request.tool === 'bash';
   return (
     <Box
       borderStyle="round"
@@ -13,16 +21,53 @@ export function Approval({ request }: { request: ApprovalRequest }) {
       paddingX={1}
       marginTop={1}
     >
-      <Text bold>{`${request.tool}  ${request.path}`}</Text>
+      <Text bold>{`${request.tool}  ${request.subject}`}</Text>
       <Box flexDirection="column" marginTop={1}>
-        {lines.map((line, i) => (
-          <DiffLine key={i} line={line} language={lang} />
+        {isCommand ? (
+          <CommandPreview command={request.preview} />
+        ) : (
+          <DiffPreview diff={request.preview} path={request.subject} />
+        )}
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        {APPROVAL_OPTIONS.map((label, i) => (
+          <Text key={i} bold={i === selectedIndex}>
+            {`${i === selectedIndex ? '› ' : '  '}${label}`}
+          </Text>
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>{'[y] approve  ·  [n] decline  ·  ctrl-c abort'}</Text>
+        <Text dimColor>
+          {'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}
+        </Text>
       </Box>
     </Box>
+  );
+}
+
+function DiffPreview({ diff, path }: { diff: string; path: string }) {
+  const lang = detectLanguage(path);
+  const lines = diff.split('\n');
+  return (
+    <>
+      {lines.map((line, i) => (
+        <DiffLine key={i} line={line} language={lang} />
+      ))}
+    </>
+  );
+}
+
+function CommandPreview({ command }: { command: string }) {
+  const lines = command.split('\n');
+  return (
+    <>
+      {lines.map((line, i) => (
+        <Box key={i}>
+          <Text color="green">{i === 0 ? '$ ' : '  '}</Text>
+          <Text>{safeHighlight(line, 'bash')}</Text>
+        </Box>
+      ))}
+    </>
   );
 }
 

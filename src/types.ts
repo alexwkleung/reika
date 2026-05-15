@@ -23,8 +23,8 @@ export type ToolResult = {
 
 export type ApprovalRequest = {
   tool: string;
-  path: string;
-  diff: string;
+  subject: string;
+  preview: string;
 };
 
 export type ToolContext = {

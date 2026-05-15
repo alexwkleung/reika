@@ -48,7 +48,7 @@ export const editTool: Tool = {
         text.slice(0, first),
         text.slice(first + oldStr.length),
       );
-      const ok = await ctx.requestApproval({ tool: 'edit', path: rel, diff });
+      const ok = await ctx.requestApproval({ tool: 'edit', subject: rel, preview: diff });
       if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }
 

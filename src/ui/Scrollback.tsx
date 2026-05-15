@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Static, Text } from 'ink';
 import type { Message } from '../types.js';
+import { renderMarkdown } from './markdown.js';
 
 export function Scrollback({
   messages,
@@ -44,7 +45,7 @@ function MessageView({ msg }: { msg: Message }) {
     return (
       <Box flexDirection="column" marginTop={1}>
         {msg.reasoning ? <Text dimColor>{`▸ ${msg.reasoning}`}</Text> : null}
-        {msg.content ? <Text>{msg.content}</Text> : null}
+        {msg.content ? <Text>{renderMarkdown(msg.content)}</Text> : null}
         {msg.toolCalls?.map(tc => (
           <Text key={tc.id} dimColor>{`· ${tc.name}(${formatArgs(tc.args)})`}</Text>
         ))}

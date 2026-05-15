@@ -27,7 +27,7 @@ export const writeTool: Tool = {
 
     if (ctx.requestApproval) {
       const diff = buildWriteDiff(content);
-      const ok = await ctx.requestApproval({ tool: 'write', path: rel, diff });
+      const ok = await ctx.requestApproval({ tool: 'write', subject: rel, preview: diff });
       if (!ok) return { summary: `Write declined by user for ${rel}` };
     }
 

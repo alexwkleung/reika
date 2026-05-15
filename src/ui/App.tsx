@@ -34,12 +34,16 @@ export function App() {
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
   } | null>(null);
+  const [approvalSelected, setApprovalSelected] = useState(0);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
   const pendingRef = useRef<typeof pending>(null);
   pendingRef.current = pending;
+  const approvalSelectedRef = useRef(0);
+  approvalSelectedRef.current = approvalSelected;
+  const sessionAutoApproveRef = useRef(false);
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -105,19 +109,41 @@ export function App() {
       }
       return;
     }
-    if (pendingRef.current) {
-      if (input === 'y' || input === 'Y') {
-        pendingRef.current.resolve(true);
-        setPending(null);
-      } else if (input === 'n' || input === 'N') {
-        pendingRef.current.resolve(false);
-        setPending(null);
+    if (!pendingRef.current) return;
+    if (key.upArrow) {
+      setApprovalSelected(i => Math.max(0, i - 1));
+      return;
+    }
+    if (key.downArrow) {
+      setApprovalSelected(i => Math.min(2, i + 1));
+      return;
+    }
+    if (key.return) {
+      const sel = approvalSelectedRef.current;
+      const resolve = pendingRef.current.resolve;
+      setPending(null);
+      if (sel === 0) resolve(true);
+      else if (sel === 1) resolve(false);
+      else {
+        sessionAutoApproveRef.current = true;
+        resolve(true);
       }
+      return;
+    }
+    if (input === 'y' || input === 'Y') {
+      pendingRef.current.resolve(true);
+      setPending(null);
+    } else if (input === 'n' || input === 'N') {
+      pendingRef.current.resolve(false);
+      setPending(null);
     }
   });
 
-  const requestApproval = (req: ApprovalRequest): Promise<boolean> =>
-    new Promise(resolve => setPending({ request: req, resolve }));
+  const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
+    if (sessionAutoApproveRef.current) return Promise.resolve(true);
+    setApprovalSelected(0);
+    return new Promise(resolve => setPending({ request: req, resolve }));
+  };
 
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
@@ -208,7 +234,9 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
           />
-          {pending ? <Approval request={pending.request} /> : null}
+          {pending ? (
+            <Approval request={pending.request} selectedIndex={approvalSelected} />
+          ) : null}
           <Input
             disabled={status !== 'idle' || pending !== null}
             spinning={status === 'busy' && pending === null}
