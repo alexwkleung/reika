@@ -14,18 +14,24 @@ export function messagesToOpenAI(
     if (msg.role === 'user') {
       out.push({ role: 'user', content: msg.content });
     } else if (msg.role === 'assistant') {
-      out.push({
+      const param: Record<string, unknown> = {
         role: 'assistant',
         content: msg.content,
-        tool_calls: msg.toolCalls?.map(tc => ({
+      };
+      if (msg.toolCalls) {
+        param.tool_calls = msg.toolCalls.map(tc => ({
           id: tc.id,
           type: 'function' as const,
           function: {
             name: tc.name,
             arguments: JSON.stringify(tc.args),
           },
-        })),
-      });
+        }));
+      }
+      if (msg.reasoning) {
+        param.reasoning_content = msg.reasoning;
+      }
+      out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
     } else if (msg.role === 'tool') {
       const fresh = i >= freshFrom && msg.payload;
       const content = fresh
@@ -37,6 +43,7 @@ export function messagesToOpenAI(
         content,
       });
     }
+    // error messages are UI-only and intentionally skipped here
   }
   return out;
 }

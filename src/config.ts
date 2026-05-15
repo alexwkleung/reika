@@ -10,6 +10,7 @@ export function loadConfig(): Config {
     baseURL: process.env.REIKA_BASE_URL ?? 'http://localhost:11434/v1',
     apiKey: process.env.REIKA_API_KEY ?? 'no-key',
     model,
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '8', 10),
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
+    repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
   };
 }

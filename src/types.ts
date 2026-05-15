@@ -6,8 +6,14 @@ export type ToolCall = {
 
 export type Message =
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
-  | { role: 'tool'; callId: string; summary: string; payload?: string; payloadId?: string };
+  | {
+      role: 'assistant';
+      content: string;
+      toolCalls?: ToolCall[];
+      reasoning?: string;
+    }
+  | { role: 'tool'; callId: string; summary: string; payload?: string; payloadId?: string }
+  | { role: 'error'; content: string };
 
 export type ToolResult = {
   summary: string;
@@ -45,4 +51,5 @@ export type Config = {
   apiKey: string;
   model: string;
   maxTurns: number;
+  repoMapBudget: number;
 };

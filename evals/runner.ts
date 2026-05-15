@@ -37,7 +37,7 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
     }
 
     const config = loadConfig();
-    const bundle = await bootstrap(cwd);
+    const bundle = await bootstrap(cwd, config.repoMapBudget);
     const tools = defaultTools();
     const payloads = new PayloadStore();
     const messages: Message[] = [];

@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Static, Text, useApp, useInput } from 'ink';
+import { Header } from './Header.js';
 import { Scrollback } from './Scrollback.js';
 import { Input } from './Input.js';
 import { Status } from './Status.js';
@@ -13,12 +14,15 @@ import type { Config, ContextBundle, Message } from '../types.js';
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 
+type HeaderItem = { model: string; cwd: string };
+
 export function App() {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
   const [phase, setPhase] = useState<Phase>('thinking');
   const [streaming, setStreaming] = useState<string>('');
+  const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,12 +33,32 @@ export function App() {
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
+  const streamingRef = useRef<string>('');
+  const reasoningRef = useRef<string>('');
+  const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reasoningFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const scheduleFlush = (): void => {
+    if (flushTimerRef.current !== null) return;
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      setStreaming(streamingRef.current);
+    }, 50);
+  };
+
+  const scheduleReasoningFlush = (): void => {
+    if (reasoningFlushTimerRef.current !== null) return;
+    reasoningFlushTimerRef.current = setTimeout(() => {
+      reasoningFlushTimerRef.current = null;
+      setStreamingReasoning(reasoningRef.current);
+    }, 50);
+  };
 
   useEffect(() => {
     (async () => {
       try {
         const cfg = loadConfig();
-        const b = await bootstrap(process.cwd());
+        const b = await bootstrap(process.cwd(), cfg.repoMapBudget);
         setConfig(cfg);
         setBundle(b);
         setStatus('idle');
@@ -77,7 +101,10 @@ export function App() {
     if (!trimmed) return;
     setStatus('busy');
     setPhase('thinking');
+    streamingRef.current = '';
+    reasoningRef.current = '';
     setStreaming('');
+    setStreamingReasoning('');
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -90,23 +117,49 @@ export function App() {
         payloads,
         signal: controller.signal,
         onMessage: msg => {
-          if (msg.role === 'assistant') setStreaming('');
+          if (msg.role === 'assistant') {
+            streamingRef.current = '';
+            reasoningRef.current = '';
+            setStreaming('');
+            setStreamingReasoning('');
+          }
           setMessages(prev => [...prev, msg]);
         },
-        onContentDelta: delta => setStreaming(prev => prev + delta),
+        onContentDelta: delta => {
+          streamingRef.current += delta;
+          scheduleFlush();
+        },
+        onReasoningDelta: delta => {
+          reasoningRef.current += delta;
+          scheduleReasoningFlush();
+        },
         onPhase: p => setPhase(p),
       });
-      setStatus('idle');
-      setStreaming('');
     } catch (e) {
-      setError((e as Error).message);
-      setStatus('error');
+      setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
     } finally {
+      if (flushTimerRef.current !== null) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      if (reasoningFlushTimerRef.current !== null) {
+        clearTimeout(reasoningFlushTimerRef.current);
+        reasoningFlushTimerRef.current = null;
+      }
+      streamingRef.current = '';
+      reasoningRef.current = '';
+      setStreaming('');
+      setStreamingReasoning('');
+      setStatus('idle');
       abortRef.current = null;
     }
   };
 
-  if (status === 'loading') return <Text>Loading…</Text>;
+  const headerItems = useMemo<HeaderItem[]>(
+    () => (bundle && config ? [{ model: config.model, cwd: bundle.cwd }] : []),
+    [bundle, config],
+  );
+
   if (status === 'error') {
     return (
       <Box flexDirection="column">
@@ -115,17 +168,30 @@ export function App() {
       </Box>
     );
   }
+
   return (
     <Box flexDirection="column">
-      <Scrollback messages={messages} streaming={status === 'busy' ? streaming : ''} />
-      <Input disabled={status !== 'idle'} onSubmit={onSubmit} />
-      <Status
-        model={config?.model ?? ''}
-        turns={messages.filter(m => m.role === 'assistant').length}
-        status={status === 'busy' ? phase : status}
-        elapsed={status === 'busy' ? elapsed : null}
-        hint={status === 'busy' ? 'ctrl-c to abort' : null}
-      />
+      <Static items={headerItems}>
+        {(h, i) => <Header key={i} model={h.model} cwd={h.cwd} />}
+      </Static>
+      {status === 'loading' ? (
+        <Text>Loading…</Text>
+      ) : (
+        <>
+          <Scrollback
+            messages={messages}
+            streaming={status === 'busy' ? streaming : ''}
+            streamingReasoning={status === 'busy' ? streamingReasoning : ''}
+          />
+          <Input disabled={status !== 'idle'} onSubmit={onSubmit} />
+          <Status
+            model={config?.model ?? ''}
+            turns={messages.filter(m => m.role === 'assistant').length}
+            status={status === 'busy' ? phase : status}
+            elapsed={status === 'busy' ? elapsed : null}
+          />
+        </>
+      )}
     </Box>
   );
 }

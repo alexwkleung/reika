@@ -4,6 +4,7 @@ import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 
 export type ModelResponse = {
   content: string;
+  reasoning?: string;
   toolCalls?: ToolCall[];
 };
 
@@ -13,6 +14,7 @@ export async function callModel(opts: {
   tools: Tool[];
   config: Config;
   onContentDelta?: (text: string) => void;
+  onReasoningDelta?: (text: string) => void;
   signal?: AbortSignal;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
@@ -25,6 +27,7 @@ export async function callModel(opts: {
   const messages = messagesToOpenAI(opts.system, opts.history);
 
   const contentParts: string[] = [];
+  const reasoningParts: string[] = [];
   const callsByIndex = new Map<number, { id: string; name: string; args: string }>();
 
   try {
@@ -39,11 +42,17 @@ export async function callModel(opts: {
     );
 
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
+      const delta = chunk.choices[0]?.delta as
+        | (typeof chunk.choices[0]['delta'] & { reasoning_content?: string | null })
+        | undefined;
       if (!delta) continue;
       if (delta.content) {
         contentParts.push(delta.content);
         opts.onContentDelta?.(delta.content);
+      }
+      if (delta.reasoning_content) {
+        reasoningParts.push(delta.reasoning_content);
+        opts.onReasoningDelta?.(delta.reasoning_content);
       }
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -61,7 +70,11 @@ export async function callModel(opts: {
     }
   } catch (e) {
     if (opts.signal?.aborted) {
-      return { content: contentParts.join(''), toolCalls: undefined };
+      return {
+        content: contentParts.join(''),
+        reasoning: reasoningParts.join('') || undefined,
+        toolCalls: undefined,
+      };
     }
     throw e;
   }
@@ -75,8 +88,51 @@ export async function callModel(opts: {
     toolCalls.push({ id: acc.id, name: acc.name, args: parsed });
   }
 
+  let content = contentParts.join('');
+
+  if (toolCalls.length === 0) {
+    const fallback = extractToolCallsFromContent(content);
+    if (fallback.calls.length > 0) {
+      toolCalls.push(...fallback.calls);
+      content = fallback.cleanedContent;
+    }
+  }
+
   return {
-    content: contentParts.join(''),
+    content,
+    reasoning: reasoningParts.join('') || undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
   };
+}
+
+const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+
+function extractToolCallsFromContent(
+  content: string,
+): { calls: ToolCall[]; cleanedContent: string } {
+  const calls: ToolCall[] = [];
+  let match: RegExpExecArray | null;
+  TOOL_CALL_RE.lastIndex = 0;
+  while ((match = TOOL_CALL_RE.exec(content)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]) as {
+        name?: unknown;
+        arguments?: unknown;
+        args?: unknown;
+      };
+      if (typeof parsed.name !== 'string') continue;
+      const rawArgs = parsed.arguments ?? parsed.args ?? {};
+      const args =
+        typeof rawArgs === 'object' && rawArgs !== null
+          ? (rawArgs as Record<string, unknown>)
+          : {};
+      calls.push({
+        id: `xml-${Math.random().toString(36).slice(2, 10)}`,
+        name: parsed.name,
+        args,
+      });
+    } catch {}
+  }
+  const cleanedContent = content.replace(TOOL_CALL_RE, '').trim();
+  return { calls, cleanedContent };
 }

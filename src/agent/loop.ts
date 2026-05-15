@@ -12,6 +12,7 @@ export async function runTurn(opts: {
   payloads: PayloadStore;
   onMessage: (msg: Message) => void;
   onContentDelta?: (text: string) => void;
+  onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -33,6 +34,7 @@ export async function runTurn(opts: {
       tools: opts.tools,
       config: opts.config,
       onContentDelta: opts.onContentDelta,
+      onReasoningDelta: opts.onReasoningDelta,
       signal: opts.signal,
     });
 
@@ -45,6 +47,7 @@ export async function runTurn(opts: {
       role: 'assistant',
       content: response.content,
       toolCalls: response.toolCalls,
+      reasoning: response.reasoning,
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
@@ -80,6 +83,13 @@ export async function runTurn(opts: {
       opts.onMessage(toolMsg);
     }
   }
+
+  const exhausted: Message = {
+    role: 'assistant',
+    content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise REIKA_MAX_TURNS)`,
+  };
+  opts.history.push(exhausted);
+  opts.onMessage(exhausted);
 }
 
 function commitAborted(

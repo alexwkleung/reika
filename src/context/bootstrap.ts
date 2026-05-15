@@ -2,11 +2,17 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ContextBundle } from '../types.js';
+import { buildRepoMap } from './repomap.js';
 
-export async function bootstrap(cwd: string): Promise<ContextBundle> {
-  const projectSummary = await summarizeProject(cwd);
-  const instructions = await loadInstructions(cwd);
-  const repoMap = '';
+export async function bootstrap(
+  cwd: string,
+  repoMapBudget?: number,
+): Promise<ContextBundle> {
+  const [projectSummary, instructions, repoMap] = await Promise.all([
+    summarizeProject(cwd),
+    loadInstructions(cwd),
+    buildRepoMap(cwd, repoMapBudget),
+  ]);
 
   const hash = createHash('sha256')
     .update(`${projectSummary}\n${instructions}\n${repoMap}`)
