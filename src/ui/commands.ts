@@ -13,6 +13,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "model", desc: "show current model and base URL" },
   { name: "cwd", desc: "show working directory" },
   { name: "tokens", desc: "show token usage this session" },
+  { name: "stats", desc: "show full session summary" },
   { name: "exit", desc: "exit Reika" },
   { name: "quit", desc: "alias of /exit" },
 ];

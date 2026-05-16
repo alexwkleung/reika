@@ -57,19 +57,15 @@ export function Input({
         return;
       }
 
-      if (key.backspace) {
+      // macOS terminals usually send Backspace as DEL (\x7f), which some Ink
+      // configurations route to key.delete rather than key.backspace. Treat both
+      // as backward delete so it works consistently across platforms.
+      if (key.backspace || key.delete) {
         if (key.meta || key.ctrl) {
           const start = wordBackward(value, cursor);
           update(value.slice(0, start) + value.slice(cursor), start);
         } else if (cursor > 0) {
           update(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1);
-        }
-        return;
-      }
-
-      if (key.delete) {
-        if (cursor < value.length) {
-          update(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
         }
         return;
       }

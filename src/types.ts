@@ -5,17 +5,25 @@ export type ToolCall = {
 };
 
 export type Message =
-  | { role: 'user'; content: string; display?: string }
+  | { role: 'user'; content: string; display?: string; nested?: boolean }
   | {
       role: 'assistant';
       content: string;
       toolCalls?: ToolCall[];
       reasoning?: string;
+      nested?: boolean;
     }
-  | { role: 'tool'; callId: string; summary: string; payload?: string; payloadId?: string }
-  | { role: 'error'; content: string }
-  | { role: 'system'; content: string }
-  | { role: 'shell'; command: string; output: string };
+  | {
+      role: 'tool';
+      callId: string;
+      summary: string;
+      payload?: string;
+      payloadId?: string;
+      nested?: boolean;
+    }
+  | { role: 'error'; content: string; nested?: boolean }
+  | { role: 'system'; content: string; nested?: boolean }
+  | { role: 'shell'; command: string; output: string; nested?: boolean };
 
 export type Usage = {
   promptTokens: number;
@@ -39,6 +47,7 @@ export type ToolContext = {
   cwd: string;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
+  spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
 };
 
 export type ToolParameters = {
@@ -70,4 +79,8 @@ export type Config = {
   maxTurns: number;
   repoMapBudget: number;
   autoApprove: boolean;
+  subagentModel?: string;
+  subagentBaseURL?: string;
+  subagentApiKey?: string;
+  subagentMaxTurns: number;
 };

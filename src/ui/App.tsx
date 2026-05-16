@@ -16,6 +16,7 @@ import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
+import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
@@ -55,6 +56,9 @@ export function App() {
   const [inputValue, setInputValue] = useState<string>('');
   const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
   const [suggestionSelected, setSuggestionSelected] = useState(0);
+  const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
+  const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
+  const [exitRequested, setExitRequested] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
@@ -72,6 +76,14 @@ export function App() {
   suggestionStateRef.current = suggestionState;
   const suggestionSelectedRef = useRef(0);
   suggestionSelectedRef.current = suggestionSelected;
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
+  const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
+  usageRef.current = totalUsage;
+  const sessionStartedAtRef = useRef(sessionStartedAt);
+  sessionStartedAtRef.current = sessionStartedAt;
+  const approvalsRef = useRef<Approvals>({ approved: 0, declined: 0 });
+  approvalsRef.current = approvals;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -126,6 +138,13 @@ export function App() {
   }, [bundle, config]);
 
   useEffect(() => {
+    if (!exitRequested) return;
+    // Defer one tick so the just-pushed summary message renders before we unmount.
+    const id = setTimeout(() => exit(), 0);
+    return () => clearTimeout(id);
+  }, [exitRequested, exit]);
+
+  useEffect(() => {
     if (status !== 'busy') {
       setElapsed(0);
       startedAtRef.current = null;
@@ -150,7 +169,7 @@ export function App() {
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
       } else {
-        exit();
+        requestExit();
       }
       return;
     }
@@ -210,6 +229,19 @@ export function App() {
     }
   });
 
+  const requestExit = (): void => {
+    if (hasActivity(messagesRef.current)) {
+      const summary = buildSummary(
+        messagesRef.current,
+        usageRef.current,
+        sessionStartedAtRef.current,
+        approvalsRef.current,
+      );
+      setMessages(prev => [...prev, { role: 'system', content: summary }]);
+    }
+    setExitRequested(true);
+  };
+
   const onInputChange = (value: string): void => {
     setInputValue(value);
     if (!bundle) {
@@ -223,9 +255,22 @@ export function App() {
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
     const hasWarnings = !!req.warnings && req.warnings.length > 0;
-    if (sessionAutoApproveRef.current && !hasWarnings) return Promise.resolve(true);
+    if (sessionAutoApproveRef.current && !hasWarnings) {
+      setApprovals(a => ({ ...a, approved: a.approved + 1 }));
+      return Promise.resolve(true);
+    }
     setApprovalSelected(0);
-    return new Promise(resolve => setPending({ request: req, resolve }));
+    return new Promise(resolve => {
+      const wrappedResolve = (allow: boolean): void => {
+        setApprovals(a =>
+          allow
+            ? { ...a, approved: a.approved + 1 }
+            : { ...a, declined: a.declined + 1 },
+        );
+        resolve(allow);
+      };
+      setPending({ request: req, resolve: wrappedResolve });
+    });
   };
 
   const handleCommand = async (raw: string): Promise<void> => {
@@ -238,12 +283,26 @@ export function App() {
     if (name === 'clear' || name === 'new') {
       setMessages([]);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+      setApprovals({ approved: 0, declined: 0 });
+      setSessionStartedAt(Date.now());
       sessionAutoApproveRef.current = false;
       setMode('agent');
       return;
     }
     if (name === 'exit' || name === 'quit') {
-      exit();
+      requestExit();
+      return;
+    }
+    if (name === 'stats') {
+      const content = hasActivity(messagesRef.current)
+        ? buildSummary(
+            messagesRef.current,
+            usageRef.current,
+            sessionStartedAtRef.current,
+            approvalsRef.current,
+          )
+        : 'No activity yet.';
+      setMessages(prev => [...prev, echo, { role: 'system', content }]);
       return;
     }
     if (name === 'shell') {
@@ -300,7 +359,8 @@ export function App() {
           '  /model             show current model and base URL',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
-          '  /exit, /quit       exit reika',
+          '  /stats             show full session summary',
+          '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
         ].join('\n');
         break;

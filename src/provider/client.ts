@@ -95,7 +95,7 @@ export async function callModel(opts: {
     try {
       parsed = JSON.parse(acc.args || '{}');
     } catch {}
-    toolCalls.push({ id: acc.id, name: acc.name, args: parsed });
+    toolCalls.push({ id: acc.id, name: sanitizeToolName(acc.name), args: parsed });
   }
 
   let content = contentParts.join('');
@@ -114,6 +114,12 @@ export async function callModel(opts: {
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
   };
+}
+
+// Strip chat-template artifacts that some servers (Harmony / gpt-oss, certain
+// llama.cpp builds) leak into the tool name field.
+function sanitizeToolName(raw: string): string {
+  return raw.replace(/<\|[^|]*\|>.*$/, '').trim();
 }
 
 const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;

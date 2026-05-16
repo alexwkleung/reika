@@ -13,5 +13,13 @@ export function loadConfig(): Config {
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: process.env.REIKA_AUTO_APPROVE === 'true' || process.env.REIKA_AUTO_APPROVE === '1',
+    subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
+    subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
+    subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
   };
+}
+
+function emptyToUndefined(s: string | undefined): string | undefined {
+  return s && s.trim() !== '' ? s : undefined;
 }

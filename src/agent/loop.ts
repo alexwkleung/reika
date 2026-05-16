@@ -4,6 +4,7 @@ import type {
   ContextBundle,
   Message,
   Tool,
+  ToolResult,
   Usage,
 } from '../types.js';
 import { buildSystemPrompt } from './prompt.js';
@@ -85,6 +86,7 @@ export async function runTurn(opts: {
             cwd: opts.bundle.cwd,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
+            spawnSubagent: makeSpawnSubagent(opts),
           });
           summary = result.summary;
           payload = result.payload;
@@ -107,7 +109,7 @@ export async function runTurn(opts: {
 
   const exhausted: Message = {
     role: 'assistant',
-    content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise REIKA_MAX_TURNS)`,
+    content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)`,
   };
   opts.history.push(exhausted);
   opts.onMessage(exhausted);
@@ -121,4 +123,46 @@ function commitAborted(
   const m: Message = { role: 'assistant', content };
   opts.history.push(m);
   opts.onMessage(m);
+}
+
+type RunTurnOpts = Parameters<typeof runTurn>[0];
+
+function makeSpawnSubagent(parent: RunTurnOpts) {
+  return async (sub: { task: string }): Promise<ToolResult> => {
+    const subConfig: Config = {
+      ...parent.config,
+      model: parent.config.subagentModel ?? parent.config.model,
+      baseURL: parent.config.subagentBaseURL ?? parent.config.baseURL,
+      apiKey: parent.config.subagentApiKey ?? parent.config.apiKey,
+      maxTurns: parent.config.subagentMaxTurns,
+    };
+    const subTools = parent.tools.filter(t => t.name !== 'subagent');
+    const subHistory: Message[] = [];
+
+    await runTurn({
+      userInput: sub.task,
+      history: subHistory,
+      bundle: parent.bundle,
+      config: subConfig,
+      tools: subTools,
+      payloads: parent.payloads,
+      signal: parent.signal,
+      requestApproval: parent.requestApproval,
+      onUsage: parent.onUsage,
+      onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
+      // streaming + phase callbacks are intentionally not forwarded so the parent's
+      // live region stays clean; subagent activity is visible via nested committed messages
+    });
+
+    const finalAssistant = [...subHistory]
+      .reverse()
+      .find(m => m.role === 'assistant') as
+      | (Message & { role: 'assistant' })
+      | undefined;
+    const result = finalAssistant?.content ?? '';
+    return {
+      summary: `Subagent completed (${result.length} chars)`,
+      payload: result || '(no output)',
+    };
+  };
 }

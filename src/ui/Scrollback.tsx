@@ -40,6 +40,15 @@ export function Scrollback({
 }
 
 function MessageView({ msg }: { msg: Message }) {
+  const inner = renderMessage(msg);
+  if (inner === null) return null;
+  if ('nested' in msg && msg.nested) {
+    return <Box marginLeft={4}>{inner}</Box>;
+  }
+  return inner;
+}
+
+function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'user') {
     const display = msg.display ?? msg.content;
     return (
@@ -94,7 +103,7 @@ function MessageView({ msg }: { msg: Message }) {
 
 function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
-    .map(([k, v]) => `${k}=${truncate(JSON.stringify(v), 60)}`)
+    .map(([k, v]) => `${k}=${truncate(JSON.stringify(v), 120)}`)
     .join(', ');
 }
 
