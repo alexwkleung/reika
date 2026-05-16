@@ -1,10 +1,10 @@
-# Agent guide for Reika
+# Agent Guide for Reika
 
-This file is loaded automatically by reika when it runs in this directory. Conventions and pointers below.
+This file is loaded automatically by Reika when it runs in this directory. Conventions and pointers below.
 
 ## Project
 
-reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud.
+Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud.
 
 ## Code conventions
 
@@ -56,6 +56,14 @@ Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if pre
 ## Bundle and prompt caching
 
 `ContextBundle` is built once via `bootstrap()` and treated as stable across turns to maximize prompt caching at the provider. Don't mutate it during a session. The only legitimate refresh path is `/cd`, which re-runs `bootstrap()` for a new cwd. If you add a context source, plumb it into `bootstrap()` and the system-prompt builder; never re-fetch per-turn.
+
+## .gitignore is honored
+
+Bootstrap loads `.gitignore` (and `.git/info/exclude`) into an `Ignore` instance on `bundle.ignore`. Any walker that touches the filesystem MUST consult it: `buildFileIndex` (fdir exclude+filter), `buildRepoMap` (manual walk), `list` and `grep` tools (via `ctx.ignore`). New walkers added to tools or context modules MUST do the same — otherwise the agent burns exploration on build outputs.
+
+## Config sources
+
+`loadConfig()` reads dotenv from cwd `.env` first, then `~/.config/reika/.env` as fallback. Shell env vars take precedence over both (dotenv's no-override default). Order matters — don't reorder without thinking about precedence.
 
 ## Eval workflow
 

@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
+import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
 import { shouldSkipDir } from './_walk.js';
 
@@ -33,7 +34,7 @@ export const grepTool: Tool = {
     }
     const start = resolve(ctx.cwd, startPath);
     const matches: string[] = [];
-    await walk(start, ctx.cwd, include, re, matches);
+    await walk(start, ctx.cwd, ctx.ignore, include, re, matches);
     const truncated = matches.length >= MAX_MATCHES;
     return {
       summary: `Found ${matches.length}${truncated ? '+' : ''} matches for /${pattern}/`,
@@ -45,6 +46,7 @@ export const grepTool: Tool = {
 async function walk(
   path: string,
   cwd: string,
+  ig: Ignore | undefined,
   include: string | undefined,
   re: RegExp,
   matches: string[],
@@ -53,7 +55,7 @@ async function walk(
   const st = await stat(path).catch(() => null);
   if (!st) return;
   if (st.isFile()) {
-    await scanFile(path, cwd, include, re, matches);
+    await scanFile(path, cwd, ig, include, re, matches);
     return;
   }
   if (!st.isDirectory()) return;
@@ -62,9 +64,12 @@ async function walk(
     if (matches.length >= MAX_MATCHES) return;
     if (entry.isDirectory()) {
       if (shouldSkipDir(entry.name)) continue;
-      await walk(join(path, entry.name), cwd, include, re, matches);
+      const subPath = join(path, entry.name);
+      const relSub = relative(cwd, subPath);
+      if (ig && relSub.length > 0 && ig.ignores(relSub + '/')) continue;
+      await walk(subPath, cwd, ig, include, re, matches);
     } else if (entry.isFile()) {
-      await scanFile(join(path, entry.name), cwd, include, re, matches);
+      await scanFile(join(path, entry.name), cwd, ig, include, re, matches);
     }
   }
 }
@@ -72,23 +77,25 @@ async function walk(
 async function scanFile(
   filePath: string,
   cwd: string,
+  ig: Ignore | undefined,
   include: string | undefined,
   re: RegExp,
   matches: string[],
 ): Promise<void> {
   if (include && !filePath.endsWith(include)) return;
+  const relFile = relative(cwd, filePath);
+  if (ig && ig.ignores(relFile)) return;
   const st = await stat(filePath).catch(() => null);
   if (!st || st.size > MAX_FILE_BYTES) return;
   const text = await readFile(filePath, 'utf8').catch(() => null);
   if (text === null) return;
   if (NULL_BYTE_RE.test(text)) return;
   const lines = text.split('\n');
-  const rel = relative(cwd, filePath);
   for (let i = 0; i < lines.length; i++) {
     if (matches.length >= MAX_MATCHES) return;
     if (re.test(lines[i])) {
       const line = lines[i].length > LINE_TRUNC ? lines[i].slice(0, LINE_TRUNC) + '…' : lines[i];
-      matches.push(`${rel}:${i + 1}: ${line}`);
+      matches.push(`${relFile}:${i + 1}: ${line}`);
     }
   }
 }

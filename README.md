@@ -23,7 +23,22 @@ llama-server -m /path/to/Qwen3.5-9B-Q5_K_M.gguf \
   --jinja --reasoning off
 ```
 
+## Global install
+
+```sh
+npm run install:global     # builds + installs the `reika` binary globally
+npm run uninstall:global   # removes it
+```
+
+After global install, `reika` is on your `$PATH`. Run it from any project directory.
+
 ## Configuration
+
+Config sources, in precedence order (higher wins):
+
+1. **Shell env vars** (e.g. `export REIKA_MODEL=qwen3-9b` in `~/.zshrc`)
+2. **Project `.env`** (cwd where you run `reika`) — per-project overrides
+3. **Global `~/.config/reika/.env`** — defaults for a global install
 
 `.env` keys (see `.env.example`):
 
@@ -102,6 +117,10 @@ The big design ideas:
 - Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
+
+## `.gitignore` is respected
+
+`buildFileIndex`, `buildRepoMap`, `list`, and `grep` all skip paths matched by your project's `.gitignore` (plus `.git/info/exclude`). Hardcoded skip dirs (`node_modules`, `dist`, `build`, `target`, `coverage`, `out`) apply on top — so even projects without a `.gitignore` get sensible exclusions.
 
 ## Inspired by
 

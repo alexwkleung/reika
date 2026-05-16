@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { join, resolve, relative } from 'node:path';
+import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
 import { shouldSkipDir } from './_walk.js';
 
@@ -20,7 +21,7 @@ export const listTool: Tool = {
     const depth = Math.max(1, Math.min(5, Number(args.depth ?? 1)));
     const start = resolve(ctx.cwd, path);
     const out: string[] = [];
-    await walk(start, ctx.cwd, depth, out);
+    await walk(start, ctx.cwd, ctx.ignore, depth, out);
     const truncated = out.length >= MAX_ENTRIES;
     const rel = relative(ctx.cwd, start) || '.';
     return {
@@ -30,7 +31,13 @@ export const listTool: Tool = {
   },
 };
 
-async function walk(dir: string, cwd: string, depthLeft: number, out: string[]): Promise<void> {
+async function walk(
+  dir: string,
+  cwd: string,
+  ig: Ignore | undefined,
+  depthLeft: number,
+  out: string[],
+): Promise<void> {
   if (depthLeft <= 0 || out.length >= MAX_ENTRIES) return;
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -38,10 +45,14 @@ async function walk(dir: string, cwd: string, depthLeft: number, out: string[]):
     if (entry.isDirectory()) {
       if (shouldSkipDir(entry.name)) continue;
       const sub = join(dir, entry.name);
-      out.push(`${relative(cwd, sub)}/`);
-      await walk(sub, cwd, depthLeft - 1, out);
+      const relSub = relative(cwd, sub);
+      if (ig && relSub.length > 0 && ig.ignores(relSub + '/')) continue;
+      out.push(`${relSub}/`);
+      await walk(sub, cwd, ig, depthLeft - 1, out);
     } else if (entry.isFile()) {
-      out.push(relative(cwd, join(dir, entry.name)));
+      const relFile = relative(cwd, join(dir, entry.name));
+      if (ig && ig.ignores(relFile)) continue;
+      out.push(relFile);
     }
   }
 }

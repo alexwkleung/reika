@@ -84,6 +84,7 @@ export async function runTurn(opts: {
         try {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,
+            ignore: opts.bundle.ignore,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),

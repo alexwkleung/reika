@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
+import type { Ignore } from 'ignore';
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage', 'out']);
 const EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs']);
@@ -25,9 +26,13 @@ type FileEntry = {
   symbols: string[];
 };
 
-export async function buildRepoMap(cwd: string, budget: number = DEFAULT_BUDGET): Promise<string> {
+export async function buildRepoMap(
+  cwd: string,
+  ig: Ignore,
+  budget: number = DEFAULT_BUDGET,
+): Promise<string> {
   const files: FileEntry[] = [];
-  await walk(cwd, cwd, files);
+  await walk(cwd, cwd, ig, files);
 
   const symbolToFiles = new Map<string, Set<string>>();
   for (const f of files) {
@@ -89,23 +94,27 @@ export async function buildRepoMap(cwd: string, budget: number = DEFAULT_BUDGET)
   return lines.join('\n');
 }
 
-async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {
+async function walk(dir: string, root: string, ig: Ignore, out: FileEntry[]): Promise<void> {
   const items = await readdir(dir, { withFileTypes: true }).catch(() => null);
   if (!items) return;
   for (const entry of items) {
     if (entry.isDirectory()) {
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
-      await walk(join(dir, entry.name), root, out);
+      const subRel = relative(root, join(dir, entry.name));
+      if (subRel.length > 0 && ig.ignores(subRel + '/')) continue;
+      await walk(join(dir, entry.name), root, ig, out);
       continue;
     }
     if (!entry.isFile()) continue;
     if (!EXTS.has(extname(entry.name))) continue;
     const full = join(dir, entry.name);
+    const relPath = relative(root, full);
+    if (ig.ignores(relPath)) continue;
     const st = await stat(full).catch(() => null);
     if (!st || st.size > MAX_FILE_BYTES) continue;
     const text = await readFile(full, 'utf8').catch(() => null);
     if (text === null) continue;
-    out.push({ path: relative(root, full), content: text, symbols: extractSymbols(text) });
+    out.push({ path: relPath, content: text, symbols: extractSymbols(text) });
   }
 }
 

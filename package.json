@@ -15,12 +15,15 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run lint && npm run format:check",
-    "eval": "tsx evals/runner.ts"
+    "eval": "tsx evals/runner.ts",
+    "install:global": "npm run build && npm install -g .",
+    "uninstall:global": "npm uninstall -g reika-code"
   },
   "dependencies": {
     "cli-highlight": "^2.1.11",
     "dotenv": "^16.4.5",
     "fdir": "^6.5.0",
+    "ignore": "^7.0.5",
     "ink": "^5.0.1",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",

@@ -1,3 +1,5 @@
+import type { Ignore } from 'ignore';
+
 export type ToolCall = {
   id: string;
   name: string;
@@ -45,6 +47,7 @@ export type ApprovalRequest = {
 
 export type ToolContext = {
   cwd: string;
+  ignore?: Ignore;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
@@ -70,6 +73,7 @@ export type ContextBundle = {
   cwd: string;
   hash: string;
   fileIndex: string[];
+  ignore: Ignore;
 };
 
 export type Config = {

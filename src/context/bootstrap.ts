@@ -4,13 +4,15 @@ import { createHash } from 'node:crypto';
 import type { ContextBundle } from '../types.js';
 import { buildRepoMap } from './repomap.js';
 import { buildFileIndex } from './files.js';
+import { loadGitignore } from './gitignore.js';
 
 export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<ContextBundle> {
+  const ig = await loadGitignore(cwd);
   const [projectSummary, instructions, repoMap, fileIndex] = await Promise.all([
     summarizeProject(cwd),
     loadInstructions(cwd),
-    buildRepoMap(cwd, repoMapBudget),
-    buildFileIndex(cwd),
+    buildRepoMap(cwd, ig, repoMapBudget),
+    buildFileIndex(cwd, ig),
   ]);
 
   const hash = createHash('sha256')
@@ -18,7 +20,7 @@ export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<Co
     .digest('hex')
     .slice(0, 16);
 
-  return { projectSummary, repoMap, instructions, cwd, hash, fileIndex };
+  return { projectSummary, repoMap, instructions, cwd, hash, fileIndex, ignore: ig };
 }
 
 async function summarizeProject(cwd: string): Promise<string> {
