@@ -3,6 +3,9 @@ import { highlight } from 'cli-highlight';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 
+// marked-terminal calls renderer callbacks with multiple args (text, ordered, etc.).
+// Passing chalk methods directly causes the extra args to be string-joined onto
+// the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
 marked.use(
   markedTerminal({
     code: (code: string, lang?: string) => {
@@ -15,21 +18,36 @@ marked.use(
         return code;
       }
     },
-    codespan: chalk.bold,
-    heading: chalk.bold,
-    firstHeading: chalk.bold,
-    strong: chalk.bold,
-    em: chalk.italic,
-    blockquote: chalk.dim,
-    hr: chalk.dim,
-    listitem: chalk.reset,
-    list: chalk.reset,
-    paragraph: chalk.reset,
-    del: chalk.dim,
-    link: chalk.bold,
-    href: chalk.dim,
+    codespan: (code: string) => chalk.bold(code),
+    heading: (text: string) => chalk.bold(text),
+    firstHeading: (text: string) => chalk.bold(text),
+    strong: (text: string) => chalk.bold(text),
+    em: (text: string) => chalk.italic(text),
+    blockquote: (text: string) => chalk.dim(text),
+    hr: () => chalk.dim('─'.repeat(40)),
+    del: (text: string) => chalk.dim(text),
+    // marked-terminal v7 passes raw markdown to listitem without parsing inline
+    // tokens (strong, codespan, em, etc.). Re-parse the text so our inline
+    // renderers actually run.
+    listitem: (text: string) => {
+      try {
+        const inline = marked.parseInline(text, { async: false });
+        return typeof inline === 'string' ? inline : text;
+      } catch {
+        return text;
+      }
+    },
+    list: (body: string) => body,
+    paragraph: (text: string) => text,
+    // marked-terminal passes (href, title, text) at runtime, but @types/marked-terminal
+    // only allows (text) => string. Cast through unknown so we can render the link text.
+    link: ((_href: string, _title: string | null, text: string) => chalk.bold(text)) as unknown as (
+      s: string,
+    ) => string,
+    href: (href: string) => chalk.dim(href),
     reflowText: false,
     showSectionPrefix: false,
+    tab: 2,
   }) as Parameters<typeof marked.use>[0],
 );
 
