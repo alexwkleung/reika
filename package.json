@@ -14,7 +14,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "eval": "tsx evals/runner.ts",
     "install:global": "npm run build && npm install -g .",
     "uninstall:global": "npm uninstall -g reika-code"
@@ -44,7 +46,8 @@
     "prettier": "^3.8.3",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "typescript-eslint": "^8.59.3"
+    "typescript-eslint": "^8.59.3",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=18"

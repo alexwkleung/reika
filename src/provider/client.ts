@@ -117,14 +117,14 @@ export async function callModel(opts: {
 }
 
 // Strip chat-template artifacts that some servers (Harmony / gpt-oss, certain
-// llama.cpp builds) leak into the tool name field.
-function sanitizeToolName(raw: string): string {
+// llama.cpp builds) leak into the tool name field. Exported for unit tests.
+export function sanitizeToolName(raw: string): string {
   return raw.replace(/<\|[^|]*\|>.*$/, '').trim();
 }
 
 const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
 
-function extractToolCallsFromContent(content: string): {
+export function extractToolCallsFromContent(content: string): {
   calls: ToolCall[];
   cleanedContent: string;
 } {

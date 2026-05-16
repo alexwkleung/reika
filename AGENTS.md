@@ -6,11 +6,26 @@ This file is loaded automatically by Reika when it runs in this directory. Conve
 
 Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud.
 
+## Design rationale: agent-first ergonomics
+
+Reika is meant to be edited by small local models, frequently dogfooding itself. That constraint shapes a number of choices that would otherwise be pure style preferences. The pattern: optimize for "how cheaply can an LLM with limited context understand and modify a unit in isolation."
+
+- **Colocated tests** (`bar.test.ts` next to `bar.ts`) — when the model edits `bar.ts`, the test file appears in the same directory listing. With a separate `tests/` tree, models often miss the tests entirely and break them silently.
+- **One concept per file, shallow directory depth (≤3–4 levels)** — a 5000-line file forces partial reads and lost context. Deep nesting adds path-traversal cost to every lookup.
+- **Predictable file shapes within a category** — every tool file (`src/tools/*.ts`) exports a single `Tool` object with the same structure. The model learns the pattern once and applies it elsewhere without re-exploring.
+- **Names that read like sentences** — `findFreshToolBlockStart` is faster for the model to understand than `getStart` plus a 5-line comment explaining what "start" means.
+- **Comments for WHY only** — the model can read the code. Only motivation, constraint, or non-obvious-tradeoff information is new signal.
+- **Skip heavy indirection** — Factory → AbstractBuilder → ConcreteImpl chains cost tokens at every layer the model traverses to find one fact. Direct code that does one thing beats reusable generics at small-model scale. The "rule of three" for extracting abstractions shifts toward "rule of five" — accept mild duplication before abstracting.
+- **Front-load discovery into the bootstrap context** — AGENTS.md, repo map, file index, project summary all flow into the system prompt at startup so the model doesn't burn turns rediscovering structure each session.
+
+Most of these are also just good hygiene for humans. What's different is the cost-benefit math: when the reader is an LLM with a token budget, **locality wins over modularity**, **explicit naming wins over clever naming + docs**, **direct code wins over abstraction**. When you're tempted to add a layer for cleanliness, ask: does this make the code 2× easier for a model to edit, or 0.5× easier? Often the answer is the latter.
+
 ## Code conventions
 
 - **Formatter**: Prettier — single quotes, semicolons, trailing commas, 100-col width, 2-space indent
 - **Linter**: ESLint flat config with typescript-eslint + react-hooks rules
-- **Pre-commit**: run `npm run check` (typecheck + lint + format:check)
+- **Tests**: vitest, colocated `*.test.ts` files (e.g. `client.test.ts` next to `client.ts`)
+- **Pre-commit**: run `npm run check` (typecheck + lint + format:check + test)
 - **Style**: functions over classes when state is minimal; classes only for things with real lifecycle (e.g. `PayloadStore`)
 - **Comments**: only when explaining _why_ (constraints, non-obvious choices). Never explain _what_ — well-named identifiers do that. Never multi-paragraph.
 - **Dependencies**: minimal. Adding one needs a clear reason.
@@ -93,6 +108,21 @@ Bootstrap loads `.gitignore` (and `.git/info/exclude`) into an `Ignore` instance
 ## Config sources
 
 `loadConfig()` reads dotenv from cwd `.env` first, then `~/.config/reika/.env` as fallback. Shell env vars take precedence over both (dotenv's no-override default). Order matters — don't reorder without thinking about precedence.
+
+## Tests (vitest)
+
+`npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
+
+- `src/provider/toolcall.ts` — `messagesToOpenAI` (assistant content nulling, tool message `name` field, payload aging)
+- `src/provider/client.ts` — `sanitizeToolName`, `extractToolCallsFromContent`
+- `src/ui/suggest.ts` — command + file autocomplete matching
+- `src/ui/summary.ts` — session stats derivation
+- `src/agent/mentions.ts` — `@filepath` expansion
+- `src/search/tavily.ts`, `searxng.ts` — provider request shape + response normalization (fetch mocked)
+
+**Not covered (deliberately):** UI components (Ink testing is awkward; evals own end-to-end behavior), tools that wrap node fs/process (read/list/grep/edit/write/bash — shallow wrappers), the agent loop itself (evals territory).
+
+**When editing a covered module, run `npm test` before declaring done.** Tests catch regressions evals can't (evals only run when a real model invokes the broken path).
 
 ## Eval workflow
 

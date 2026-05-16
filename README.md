@@ -102,7 +102,8 @@ Type `/` in the input to see suggestions. Highlights:
 - `npm run typecheck` — TypeScript only
 - `npm run lint` / `lint:fix`
 - `npm run format` / `format:check`
-- `npm run check` — typecheck + lint + format:check (use before committing)
+- `npm test` / `test:watch` — vitest unit tests
+- `npm run check` — typecheck + lint + format:check + test (use before committing)
 - `npm run eval` — run the eval suite against the configured model
 
 ## Architecture
@@ -114,6 +115,19 @@ The big design ideas:
 - **Single system-prompt builder.** Parameterized; no duplication across modes.
 - **OpenAI-compatible end-to-end.** Cloud (OpenAI, OpenRouter, Groq, Moonshot/Kimi) and local (llama.cpp, ollama, LM Studio, vLLM) all work.
 - **Streaming, abort, approval, subagent** all flow through one `AbortController` and one set of callbacks.
+
+## Design philosophy
+
+Reika is designed for the world where coding agents — not humans — are often the primary editor. Small models in particular have a fixed token budget per turn, so codebase _shape_ directly affects how well an agent can work in it. The conventions here treat that as a first-class design constraint, not an afterthought:
+
+- **Colocated tests** (`bar.test.ts` next to `bar.ts`) so the model sees both in one directory scan
+- **One concept per file, shallow directory depth** so a unit fits in a single read
+- **Predictable file shapes within a category** (every tool follows the same `Tool` shape) so the pattern is learned once
+- **Names that read like sentences** so identifiers reduce the need for explanatory comments
+- **Comments only for WHY, never WHAT** — the model already reads what
+- **Light on abstraction** — direct code beats three-layer indirection at small-model scales; "rule of three" becomes more like "rule of five"
+
+Most of these are also just good hygiene for humans. What's different is the cost-benefit math: when the reader is an LLM with a token budget, the case for locality, predictability, and explicit naming gets stronger; the case for clever abstraction gets weaker. See `AGENTS.md` for the longer version and the specific conventions that fall out of this stance.
 
 ## Working caveats
 
