@@ -146,13 +146,19 @@ export function App() {
     }
     startedAtRef.current = Date.now();
     setElapsed(0);
+  }, [status]);
+
+  useEffect(() => {
+    // Pause the elapsed-time interval while an approval is pending — every tick
+    // re-renders the live region, which trips the xterm.js scroll-jump bug.
+    if (status !== 'busy' || pending !== null) return;
     const id = setInterval(() => {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [status]);
+  }, [status, pending]);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
