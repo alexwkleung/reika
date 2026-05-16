@@ -5,17 +5,22 @@ import TextInput from 'ink-text-input';
 const FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 
 export function Input({
+  value,
+  onChange,
+  onSubmit,
   disabled,
   spinning,
   mode,
-  onSubmit,
+  placeholder,
 }: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: (value: string) => void;
   disabled: boolean;
   spinning: boolean;
   mode: 'agent' | 'shell';
-  onSubmit: (value: string) => void;
+  placeholder?: string;
 }) {
-  const [value, setValue] = useState('');
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
@@ -27,10 +32,9 @@ export function Input({
   const handle = (v: string) => {
     if (disabled) return;
     if (v.endsWith('\\')) {
-      setValue(v.slice(0, -1) + '\n');
+      onChange(v.slice(0, -1) + '\n');
       return;
     }
-    setValue('');
     onSubmit(v);
   };
 
@@ -42,9 +46,10 @@ export function Input({
       <Text>{prompt}</Text>
       <TextInput
         value={value}
-        onChange={disabled ? () => {} : setValue}
+        onChange={disabled ? () => {} : onChange}
         onSubmit={handle}
         focus={!disabled}
+        placeholder={placeholder}
       />
     </Box>
   );

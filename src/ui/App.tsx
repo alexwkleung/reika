@@ -14,6 +14,8 @@ import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
+import { Suggestions } from './Suggestions.js';
+import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
@@ -50,6 +52,9 @@ export function App() {
   const [approvalSelected, setApprovalSelected] = useState(0);
   const [mode, setMode] = useState<Mode>('agent');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
+  const [inputValue, setInputValue] = useState<string>('');
+  const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
+  const [suggestionSelected, setSuggestionSelected] = useState(0);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
@@ -61,6 +66,12 @@ export function App() {
   const sessionAutoApproveRef = useRef(false);
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
+  const inputValueRef = useRef('');
+  inputValueRef.current = inputValue;
+  const suggestionStateRef = useRef<SuggestionState | null>(null);
+  suggestionStateRef.current = suggestionState;
+  const suggestionSelectedRef = useRef(0);
+  suggestionSelectedRef.current = suggestionSelected;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -143,35 +154,72 @@ export function App() {
       }
       return;
     }
-    if (!pendingRef.current) return;
-    if (key.upArrow) {
-      setApprovalSelected(i => Math.max(0, i - 1));
-      return;
-    }
-    if (key.downArrow) {
-      setApprovalSelected(i => Math.min(2, i + 1));
-      return;
-    }
-    if (key.return) {
-      const sel = approvalSelectedRef.current;
-      const resolve = pendingRef.current.resolve;
-      setPending(null);
-      if (sel === 0) resolve(true);
-      else if (sel === 1) resolve(false);
-      else {
-        sessionAutoApproveRef.current = true;
-        resolve(true);
+    if (pendingRef.current) {
+      if (key.upArrow) {
+        setApprovalSelected(i => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setApprovalSelected(i => Math.min(2, i + 1));
+        return;
+      }
+      if (key.return) {
+        const sel = approvalSelectedRef.current;
+        const resolve = pendingRef.current.resolve;
+        setPending(null);
+        if (sel === 0) resolve(true);
+        else if (sel === 1) resolve(false);
+        else {
+          sessionAutoApproveRef.current = true;
+          resolve(true);
+        }
+        return;
+      }
+      if (input === 'y' || input === 'Y') {
+        pendingRef.current.resolve(true);
+        setPending(null);
+      } else if (input === 'n' || input === 'N') {
+        pendingRef.current.resolve(false);
+        setPending(null);
       }
       return;
     }
-    if (input === 'y' || input === 'Y') {
-      pendingRef.current.resolve(true);
-      setPending(null);
-    } else if (input === 'n' || input === 'N') {
-      pendingRef.current.resolve(false);
-      setPending(null);
+    const sug = suggestionStateRef.current;
+    if (sug && sug.items.length > 0) {
+      if (key.upArrow) {
+        setSuggestionSelected(i => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setSuggestionSelected(i => Math.min(sug.items.length - 1, i + 1));
+        return;
+      }
+      if (key.tab) {
+        const sel = sug.items[suggestionSelectedRef.current];
+        if (sel) {
+          const next = acceptSuggestion(inputValueRef.current, sel, sug.partial);
+          setInputValue(next);
+          setSuggestionState(null);
+        }
+        return;
+      }
+      if (key.escape) {
+        setSuggestionState(null);
+        return;
+      }
     }
   });
+
+  const onInputChange = (value: string): void => {
+    setInputValue(value);
+    if (!bundle) {
+      setSuggestionState(null);
+      return;
+    }
+    const next = computeSuggestions(value, bundle.fileIndex);
+    setSuggestionState(next);
+    setSuggestionSelected(0);
+  };
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
     const hasWarnings = !!req.warnings && req.warnings.length > 0;
@@ -307,6 +355,8 @@ export function App() {
 
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
+    setInputValue('');
+    setSuggestionState(null);
     const trimmed = input.trim();
     if (!trimmed) return;
     if (trimmed.startsWith('/')) {
@@ -423,12 +473,21 @@ export function App() {
           />
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />
+          ) : suggestionState ? (
+            <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
           <Input
             disabled={status !== 'idle' || pending !== null}
             spinning={status === 'busy' && pending === null}
             mode={mode}
+            value={inputValue}
+            onChange={onInputChange}
             onSubmit={onSubmit}
+            placeholder={
+              mode === 'shell'
+                ? 'Run a shell command'
+                : 'Type / for commands, @ to attach files'
+            }
           />
           <Status
             model={config?.model ?? ''}

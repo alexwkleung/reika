@@ -60,6 +60,7 @@ export type ContextBundle = {
   instructions: string;
   cwd: string;
   hash: string;
+  fileIndex: string[];
 };
 
 export type Config = {
