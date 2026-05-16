@@ -10,7 +10,7 @@ export const subagentTool: Tool = {
       task: {
         type: 'string',
         description:
-          "A specific, self-contained task description. The subagent has no parent context, so include any relevant file paths, symbols, or constraints explicitly.",
+          'A specific, self-contained task description. The subagent has no parent context, so include any relevant file paths, symbols, or constraints explicitly.',
       },
     },
     required: ['task'],

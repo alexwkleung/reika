@@ -134,7 +134,6 @@ export function App() {
     if (bundle && config) {
       setHeaderItems(prev => [...prev, { model: config.model, cwd: bundle.cwd }]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bundle, config]);
 
   useEffect(() => {
@@ -263,9 +262,7 @@ export function App() {
     return new Promise(resolve => {
       const wrappedResolve = (allow: boolean): void => {
         setApprovals(a =>
-          allow
-            ? { ...a, approved: a.approved + 1 }
-            : { ...a, declined: a.declined + 1 },
+          allow ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
         resolve(allow);
       };
@@ -316,11 +313,7 @@ export function App() {
     }
     if (name === 'agent') {
       setMode('agent');
-      setMessages(prev => [
-        ...prev,
-        echo,
-        { role: 'system', content: 'Agent mode.' },
-      ]);
+      setMessages(prev => [...prev, echo, { role: 'system', content: 'Agent mode.' }]);
       return;
     }
     if (name === 'cd') {
@@ -339,7 +332,10 @@ export function App() {
         setBundle(newBundle);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
-        setMessages(prev => [...prev, { role: 'system', content: `cd failed: ${(e as Error).message}` }]);
+        setMessages(prev => [
+          ...prev,
+          { role: 'system', content: `cd failed: ${(e as Error).message}` },
+        ]);
       } finally {
         setStatus('idle');
       }
@@ -365,7 +361,9 @@ export function App() {
         ].join('\n');
         break;
       case 'model':
-        response = config ? `model: ${config.model}\nbase:  ${config.baseURL}` : 'config not loaded';
+        response = config
+          ? `model: ${config.model}\nbase:  ${config.baseURL}`
+          : 'config not loaded';
         break;
       case 'cwd':
         response = bundle?.cwd ?? '(unknown)';
@@ -544,9 +542,7 @@ export function App() {
             onChange={onInputChange}
             onSubmit={onSubmit}
             placeholder={
-              mode === 'shell'
-                ? 'Run a shell command'
-                : 'Type / for commands, @ to attach files'
+              mode === 'shell' ? 'Run a shell command' : 'Type / for commands, @ to attach files'
             }
           />
           <Status

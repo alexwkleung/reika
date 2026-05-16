@@ -52,7 +52,7 @@ export async function callModel(opts: {
         };
       }
       const delta = chunk.choices[0]?.delta as
-        | (typeof chunk.choices[0]['delta'] & { reasoning_content?: string | null })
+        | ((typeof chunk.choices)[0]['delta'] & { reasoning_content?: string | null })
         | undefined;
       if (!delta) continue;
       if (delta.content) {
@@ -124,9 +124,10 @@ function sanitizeToolName(raw: string): string {
 
 const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
 
-function extractToolCallsFromContent(
-  content: string,
-): { calls: ToolCall[]; cleanedContent: string } {
+function extractToolCallsFromContent(content: string): {
+  calls: ToolCall[];
+  cleanedContent: string;
+} {
   const calls: ToolCall[] = [];
   let match: RegExpExecArray | null;
   TOOL_CALL_RE.lastIndex = 0;
@@ -140,9 +141,7 @@ function extractToolCallsFromContent(
       if (typeof parsed.name !== 'string') continue;
       const rawArgs = parsed.arguments ?? parsed.args ?? {};
       const args =
-        typeof rawArgs === 'object' && rawArgs !== null
-          ? (rawArgs as Record<string, unknown>)
-          : {};
+        typeof rawArgs === 'object' && rawArgs !== null ? (rawArgs as Record<string, unknown>) : {};
       calls.push({
         id: `xml-${Math.random().toString(36).slice(2, 10)}`,
         name: parsed.name,

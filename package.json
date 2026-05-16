@@ -10,6 +10,11 @@
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.eval.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
     "eval": "tsx evals/runner.ts"
   },
   "dependencies": {
@@ -26,8 +31,14 @@
     "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.59.3"
   },
   "engines": {
     "node": ">=18"

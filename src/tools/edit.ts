@@ -5,12 +5,16 @@ import { buildEditDiff } from './_diff.js';
 
 export const editTool: Tool = {
   name: 'edit',
-  description: 'Replace one exact-match occurrence of old_string with new_string in a file. Fails if old_string is missing or appears more than once — add surrounding context to make it unique.',
+  description:
+    'Replace one exact-match occurrence of old_string with new_string in a file. Fails if old_string is missing or appears more than once — add surrounding context to make it unique.',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'File path, relative to cwd.' },
-      old_string: { type: 'string', description: 'Exact text to replace. Include enough context to be unique in the file.' },
+      old_string: {
+        type: 'string',
+        description: 'Exact text to replace. Include enough context to be unique in the file.',
+      },
       new_string: { type: 'string', description: 'Replacement text.' },
     },
     required: ['path', 'old_string', 'new_string'],

@@ -6,11 +6,15 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 export const bashTool: Tool = {
   name: 'bash',
-  description: 'Execute a shell command in the working directory. Prefer the dedicated tools (read, grep, edit, write, list) when they fit; use bash for build, test, lint, git, and similar workflows.',
+  description:
+    'Execute a shell command in the working directory. Prefer the dedicated tools (read, grep, edit, write, list) when they fit; use bash for build, test, lint, git, and similar workflows.',
   parameters: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: 'Shell command to execute. Single string, run via /bin/sh.' },
+      command: {
+        type: 'string',
+        description: 'Shell command to execute. Single string, run via /bin/sh.',
+      },
     },
     required: ['command'],
   },
@@ -64,7 +68,7 @@ export function execStream(
     proc.on('close', (code, signal) => {
       clearTimeout(timeoutId);
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const payload = (buffer.join('') + truncated) || '(no output)';
+      const payload = buffer.join('') + truncated || '(no output)';
       if (timedOut) {
         resolve({
           summary: `Bash timeout: ${command} (killed after ${DEFAULT_TIMEOUT_MS / 1000}s)`,
@@ -95,12 +99,18 @@ export function execStream(
 }
 
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/, label: 'Recursive force delete (rm -rf)' },
+  {
+    re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
+    label: 'Recursive force delete (rm -rf)',
+  },
   { re: /\bsudo\b/, label: 'Privilege escalation (sudo)' },
   { re: /(curl|wget)[^|]*\|\s*(sh|bash|zsh)\b/, label: 'Piping remote content to shell' },
   { re: /\|\s*(sh|bash|zsh)\b/, label: 'Piping to shell' },
   { re: /\bdd\s+[^&;|]*\bof=\/dev\//, label: 'Direct device write (dd of=/dev/…)' },
-  { re: /\bgit\s+push[^&;|]*(--force\b|--force-with-lease\b|\s-f\b)/, label: 'Force push to remote' },
+  {
+    re: /\bgit\s+push[^&;|]*(--force\b|--force-with-lease\b|\s-f\b)/,
+    label: 'Force push to remote',
+  },
   { re: /\bgit\s+branch\s+-D\b/, label: 'Force-delete git branch' },
   { re: /\bgit\s+reset\s+--hard\b/, label: 'Hard reset (discards uncommitted changes)' },
   { re: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'Force-clean untracked files' },

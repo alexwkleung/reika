@@ -1,6 +1,6 @@
-import React from "react";
-import { homedir } from "node:os";
-import { Box, Text } from "ink";
+import React from 'react';
+import { homedir } from 'node:os';
+import { Box, Text } from 'ink';
 
 export function Header({ model, cwd }: { model: string; cwd: string }) {
   return (
@@ -14,7 +14,7 @@ export function Header({ model, cwd }: { model: string; cwd: string }) {
 function displayCwd(cwd: string): string {
   const home = homedir();
   if (home && cwd.startsWith(home)) {
-    return "~" + cwd.slice(home.length);
+    return '~' + cwd.slice(home.length);
   }
   return cwd;
 }

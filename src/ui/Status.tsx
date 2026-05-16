@@ -17,9 +17,7 @@ export function Status({
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${elapsed}s` : '';
-  const keys = busy
-    ? 'ctrl-c abort'
-    : 'enter submit · \\ + enter newline · ctrl-c exit';
+  const keys = busy ? 'ctrl-c abort' : 'enter submit · \\ + enter newline · ctrl-c exit';
   const tokens =
     usage.promptTokens > 0 || usage.completionTokens > 0
       ? ` · ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
@@ -27,9 +25,7 @@ export function Status({
 
   return (
     <Box>
-      <Text dimColor>
-        {`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}
-      </Text>
+      <Text dimColor>{`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}</Text>
     </Box>
   );
 }

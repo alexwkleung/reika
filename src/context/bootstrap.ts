@@ -5,10 +5,7 @@ import type { ContextBundle } from '../types.js';
 import { buildRepoMap } from './repomap.js';
 import { buildFileIndex } from './files.js';
 
-export async function bootstrap(
-  cwd: string,
-  repoMapBudget?: number,
-): Promise<ContextBundle> {
+export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<ContextBundle> {
   const [projectSummary, instructions, repoMap, fileIndex] = await Promise.all([
     summarizeProject(cwd),
     loadInstructions(cwd),

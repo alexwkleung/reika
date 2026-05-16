@@ -1,15 +1,12 @@
 import type { ContextBundle } from '../types.js';
 
-export function buildSystemPrompt(opts: {
-  bundle: ContextBundle;
-  planMode?: boolean;
-}): string {
+export function buildSystemPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {
   const parts: string[] = [
     '/no_think',
     [
       'You are a coding assistant operating in a terminal. Be concise.',
       'Rules:',
-      '1. For any question about this project\'s code, you MUST use tools before answering. Never describe code from general knowledge.',
+      "1. For any question about this project's code, you MUST use tools before answering. Never describe code from general knowledge.",
       '2. To find where something is defined, use grep for the symbol name. Do NOT guess file paths or extensions.',
       '3. Before edit, read the file to see exact text. Your old_string must be copied verbatim from the file, including indentation.',
       '4. If a tool call fails, do not give up — try a different tool (grep, list, read) to recover.',

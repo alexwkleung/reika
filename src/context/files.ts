@@ -1,13 +1,6 @@
 import { fdir } from 'fdir';
 
-const SKIP_DIRS = new Set([
-  'node_modules',
-  'dist',
-  'build',
-  'target',
-  'coverage',
-  'out',
-]);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage', 'out']);
 const MAX_FILES = 10_000;
 
 export async function buildFileIndex(cwd: string): Promise<string[]> {

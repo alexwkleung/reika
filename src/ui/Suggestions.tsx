@@ -10,12 +10,7 @@ export function Suggestions({
   selectedIndex: number;
 }) {
   return (
-    <Box
-      borderStyle="round"
-      flexDirection="column"
-      paddingX={1}
-      marginTop={1}
-    >
+    <Box borderStyle="round" flexDirection="column" paddingX={1} marginTop={1}>
       {state.items.map((item, i) => (
         <Text key={i} bold={i === selectedIndex}>
           {`${i === selectedIndex ? '› ' : '  '}${item.display}`}

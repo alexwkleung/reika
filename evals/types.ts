@@ -15,6 +15,4 @@ export type AssertCtx = {
   toolCallCount: number;
 };
 
-export type AssertResult =
-  | { pass: true; note?: string }
-  | { pass: false; reason: string };
+export type AssertResult = { pass: true; note?: string } | { pass: false; reason: string };

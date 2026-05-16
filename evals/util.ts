@@ -9,7 +9,5 @@ export function lastAssistantContent(messages: Message[]): string | null {
 }
 
 export function calledTool(messages: Message[], name: string): boolean {
-  return messages.some(
-    m => m.role === 'assistant' && m.toolCalls?.some(tc => tc.name === name),
-  );
+  return messages.some(m => m.role === 'assistant' && m.toolCalls?.some(tc => tc.name === name));
 }

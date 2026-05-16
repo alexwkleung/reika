@@ -10,7 +10,8 @@ const NULL_BYTE_RE = /\x00/;
 
 export const grepTool: Tool = {
   name: 'grep',
-  description: 'Search file contents with a JavaScript regex. Returns up to 100 matches; refine pattern or scope if truncated.',
+  description:
+    'Search file contents with a JavaScript regex. Returns up to 100 matches; refine pattern or scope if truncated.',
   parameters: {
     type: 'object',
     properties: {

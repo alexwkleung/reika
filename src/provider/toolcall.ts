@@ -35,9 +35,7 @@ export function messagesToOpenAI(
       out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
     } else if (msg.role === 'tool') {
       const fresh = i >= freshFrom && msg.payload;
-      const content = fresh
-        ? `${msg.summary}\n\n${msg.payload}`
-        : msg.summary;
+      const content = fresh ? `${msg.summary}\n\n${msg.payload}` : msg.summary;
       const toolName = findToolNameForCall(history, msg.callId);
       const param: Record<string, unknown> = {
         role: 'tool',

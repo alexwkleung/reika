@@ -154,9 +154,7 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
       // live region stays clean; subagent activity is visible via nested committed messages
     });
 
-    const finalAssistant = [...subHistory]
-      .reverse()
-      .find(m => m.role === 'assistant') as
+    const finalAssistant = [...subHistory].reverse().find(m => m.role === 'assistant') as
       | (Message & { role: 'assistant' })
       | undefined;
     const result = finalAssistant?.content ?? '';

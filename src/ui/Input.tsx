@@ -94,14 +94,7 @@ export function Input({
       }
 
       // Plain character insertion (multi-char input from paste is fine).
-      if (
-        input &&
-        !key.meta &&
-        !key.upArrow &&
-        !key.downArrow &&
-        !key.tab &&
-        !key.escape
-      ) {
+      if (input && !key.meta && !key.upArrow && !key.downArrow && !key.tab && !key.escape) {
         const next = value.slice(0, cursor) + input + value.slice(cursor);
         update(next, cursor + input.length);
       }

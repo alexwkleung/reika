@@ -1,24 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
 
-const SKIP_DIRS = new Set([
-  'node_modules',
-  'dist',
-  'build',
-  'target',
-  'coverage',
-  'out',
-]);
-const EXTS = new Set([
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mts',
-  '.cts',
-  '.mjs',
-  '.cjs',
-]);
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage', 'out']);
+const EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs']);
 const MAX_FILE_BYTES = 200_000;
 const DEFAULT_BUDGET = 3200;
 
@@ -41,10 +25,7 @@ type FileEntry = {
   symbols: string[];
 };
 
-export async function buildRepoMap(
-  cwd: string,
-  budget: number = DEFAULT_BUDGET,
-): Promise<string> {
+export async function buildRepoMap(cwd: string, budget: number = DEFAULT_BUDGET): Promise<string> {
   const files: FileEntry[] = [];
   await walk(cwd, cwd, files);
 
@@ -108,11 +89,7 @@ export async function buildRepoMap(
   return lines.join('\n');
 }
 
-async function walk(
-  dir: string,
-  root: string,
-  out: FileEntry[],
-): Promise<void> {
+async function walk(dir: string, root: string, out: FileEntry[]): Promise<void> {
   const items = await readdir(dir, { withFileTypes: true }).catch(() => null);
   if (!items) return;
   for (const entry of items) {

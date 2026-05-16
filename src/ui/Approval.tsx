@@ -16,12 +16,7 @@ export function Approval({
   const isCommand = request.tool === 'bash';
   const warnings = request.warnings ?? [];
   return (
-    <Box
-      borderStyle="round"
-      flexDirection="column"
-      paddingX={1}
-      marginTop={1}
-    >
+    <Box borderStyle="round" flexDirection="column" paddingX={1} marginTop={1}>
       <Text bold>{`${request.tool}  ${request.subject}`}</Text>
       <Box flexDirection="column" marginTop={1}>
         {isCommand ? (
@@ -32,7 +27,9 @@ export function Approval({
       </Box>
       {warnings.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text bold color="red">{'WARNING'}</Text>
+          <Text bold color="red">
+            {'WARNING'}
+          </Text>
           {warnings.map((w, i) => (
             <Text key={i} bold>{`  · ${w}`}</Text>
           ))}
@@ -46,9 +43,7 @@ export function Approval({
         ))}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>
-          {'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}
-        </Text>
+        <Text dimColor>{'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}</Text>
       </Box>
     </Box>
   );

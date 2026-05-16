@@ -24,7 +24,8 @@ export async function expandMentions(input: string, cwd: string): Promise<Mentio
       const raw = await readFile(full, 'utf8');
       const truncated =
         raw.length > MAX_MENTION_BYTES
-          ? raw.slice(0, MAX_MENTION_BYTES) + `\n…(truncated, ${raw.length - MAX_MENTION_BYTES} more bytes)`
+          ? raw.slice(0, MAX_MENTION_BYTES) +
+            `\n…(truncated, ${raw.length - MAX_MENTION_BYTES} more bytes)`
           : raw;
       blocks.push(`<file path="${mention}">\n${truncated}\n</file>`);
       found.push(mention);

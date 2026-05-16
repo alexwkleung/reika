@@ -7,8 +7,7 @@ export const fixture: Fixture = {
   setup: {
     'src/foo.ts': 'export const widget = 42;\n',
   },
-  prompt:
-    'add a comment "// the answer" on the line above the widget export in src/foo.ts',
+  prompt: 'add a comment "// the answer" on the line above the widget export in src/foo.ts',
   assert: async ({ cwd }) => {
     const content = await readFile(join(cwd, 'src/foo.ts'), 'utf8');
     if (!content.includes('// the answer')) {

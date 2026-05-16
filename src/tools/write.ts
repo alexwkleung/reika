@@ -5,7 +5,8 @@ import { buildWriteDiff } from './_diff.js';
 
 export const writeTool: Tool = {
   name: 'write',
-  description: 'Create a new file with the given content. Fails if the file already exists — use edit for modifications. Parent directories are created as needed.',
+  description:
+    'Create a new file with the given content. Fails if the file already exists — use edit for modifications. Parent directories are created as needed.',
   parameters: {
     type: 'object',
     properties: {

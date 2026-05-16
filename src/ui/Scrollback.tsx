@@ -16,9 +16,7 @@ export function Scrollback({
 }) {
   return (
     <>
-      <Static items={messages}>
-        {(msg, i) => <MessageView key={i} msg={msg} />}
-      </Static>
+      <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
       {streamingReasoning ? (
         <Box flexDirection="column" marginTop={1}>
           <Text dimColor>{`▸ ${streamingReasoning}`}</Text>

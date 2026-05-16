@@ -95,7 +95,9 @@ async function main(): Promise<void> {
       const rec = await runFixture(fix);
       records.push(rec);
       const status = rec.result.pass ? 'PASS' : `FAIL — ${rec.result.reason}`;
-      process.stdout.write(`${status} (${rec.toolCallCount} calls, ${(rec.elapsedMs / 1000).toFixed(1)}s)\n`);
+      process.stdout.write(
+        `${status} (${rec.toolCallCount} calls, ${(rec.elapsedMs / 1000).toFixed(1)}s)\n`,
+      );
     } catch (e) {
       const reason = (e as Error).message;
       records.push({
