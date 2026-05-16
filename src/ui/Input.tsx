@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { theme } from './theme.js';
 
 const FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 const INVERSE_ON = '\x1b[7m';
@@ -103,12 +104,13 @@ export function Input({
   );
 
   const idlePrompt = mode === 'shell' ? '$ ' : '> ';
-  const prompt = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : idlePrompt;
+  const promptText = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : idlePrompt;
+  const promptColor = spinning ? theme.accent : undefined;
   const showPlaceholder = !value && !!placeholder && !disabled;
 
   return (
     <Box borderStyle="round" paddingX={1}>
-      <Text>{prompt}</Text>
+      <Text color={promptColor}>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
           <Text>{`${INVERSE_ON} ${INVERSE_OFF}`}</Text>

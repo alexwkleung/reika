@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Static, Text } from 'ink';
 import type { Message } from '../types.js';
 import { renderMarkdown } from './markdown.js';
+import { theme } from './theme.js';
 
 export function Scrollback({
   messages,
@@ -51,7 +52,9 @@ function renderMessage(msg: Message): React.ReactElement | null {
     const display = msg.display ?? msg.content;
     return (
       <Box flexDirection="row" marginTop={1}>
-        <Text bold>{'▎ '}</Text>
+        <Text bold color={theme.accent}>
+          {'▎ '}
+        </Text>
         <Text bold>{display}</Text>
       </Box>
     );
@@ -60,7 +63,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
     return (
       <Box flexDirection="column" marginTop={1}>
         <Box>
-          <Text color="green">{'$ '}</Text>
+          <Text color={theme.success}>{'$ '}</Text>
           <Text>{msg.command}</Text>
         </Box>
         {msg.output ? <Text dimColor>{msg.output}</Text> : null}
@@ -83,15 +86,24 @@ function renderMessage(msg: Message): React.ReactElement | null {
   }
   if (msg.role === 'error') {
     return (
-      <Box flexDirection="column" marginTop={1}>
-        <Text bold>Error</Text>
+      <Box
+        flexDirection="column"
+        marginTop={1}
+        borderStyle="round"
+        borderColor={theme.error}
+        paddingX={1}
+      >
+        <Text bold color={theme.error}>
+          Error
+        </Text>
         <Text>{msg.content}</Text>
       </Box>
     );
   }
   if (msg.role === 'system') {
     return (
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="row" marginTop={1}>
+        <Text color={theme.accent}>{'❯ '}</Text>
         <Text dimColor>{msg.content}</Text>
       </Box>
     );

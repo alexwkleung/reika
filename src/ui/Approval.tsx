@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { highlight } from 'cli-highlight';
 import type { ApprovalRequest } from '../types.js';
+import { theme } from './theme.js';
 
 export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
 export type ApprovalChoice = 0 | 1 | 2;
@@ -16,7 +17,14 @@ export function Approval({
   const isCommand = request.tool === 'bash';
   const warnings = request.warnings ?? [];
   return (
-    <Box borderStyle="round" flexDirection="column" paddingX={1} marginTop={1}>
+    <Box
+      borderStyle="round"
+      borderColor={theme.warning}
+      flexDirection="column"
+      paddingX={1}
+      paddingY={1}
+      marginTop={1}
+    >
       <Text bold>{`${request.tool}  ${request.subject}`}</Text>
       <Box flexDirection="column" marginTop={1}>
         {isCommand ? (
@@ -36,11 +44,17 @@ export function Approval({
         </Box>
       ) : null}
       <Box flexDirection="column" marginTop={1}>
-        {APPROVAL_OPTIONS.map((label, i) => (
-          <Text key={i} bold={i === selectedIndex}>
-            {`${i === selectedIndex ? '› ' : '  '}${label}`}
-          </Text>
-        ))}
+        {APPROVAL_OPTIONS.map((label, i) => {
+          const selected = i === selectedIndex;
+          return (
+            <Box key={i}>
+              <Text bold color={selected ? theme.accent : undefined}>
+                {selected ? '› ' : '  '}
+              </Text>
+              <Text bold={selected}>{label}</Text>
+            </Box>
+          );
+        })}
       </Box>
       <Box marginTop={1}>
         <Text dimColor>{'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}</Text>

@@ -517,7 +517,7 @@ export function App() {
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" paddingX={1}>
       <Static items={headerItems}>
         {(h, i) => <Header key={i} model={h.model} cwd={h.cwd} />}
       </Static>

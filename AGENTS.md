@@ -49,6 +49,22 @@ Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-
 - Lift state to `App.tsx` for cross-component features (suggestions, approval, mode)
 - Bordered boxes use `borderStyle="round"` consistently
 
+## Theme
+
+Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.accent`, `theme.warning`, etc. — never hardcoded color strings. The pattern:
+
+- `accent` (magentaBright) — brand + focus (Reika title, user `▎`, selected `›`, spinner)
+- `secondary` (gray) — muted UI text
+- `warning` (yellow) — wait/caution (approval box border)
+- `error` (red) — problem (error box border, diff `-` lines, WARNING heading)
+- `success` (green) — positive (diff `+` lines, shell `$` prompt)
+
+To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors.
+
+## Layout
+
+`App.tsx` sets `paddingX={1}` on its outer Box for a uniform 1-column gutter. Don't add competing horizontal padding to top-level children — bordered boxes and inline content stay visually aligned because they all live inside that single gutter.
+
 ## Approval gate
 
 Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if present. When it returns `false`, the tool MUST exit without performing its action and emit a clear summary like `"Edit declined by user for X"`. The `ApprovalRequest` object also accepts optional `warnings` — for `bash`, dangerous patterns trigger warnings that bypass session-auto-approve.
