@@ -42,7 +42,7 @@ export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tools] = useState(() => defaultTools());
+  const [tools, setTools] = useState<ReturnType<typeof defaultTools>>(() => defaultTools());
   const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
   const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
@@ -122,6 +122,7 @@ export function App() {
         const b = await bootstrap(process.cwd(), cfg.repoMapBudget);
         setConfig(cfg);
         setBundle(b);
+        setTools(defaultTools(cfg));
         setHeaderItems(prev => [...prev, { model: cfg.model, cwd: b.cwd }]);
         setStatus('idle');
       } catch (e) {

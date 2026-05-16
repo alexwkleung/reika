@@ -22,7 +22,8 @@ Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-
 | `src/agent/`    | Turn loop, prompt builder, mention parser                                             |
 | `src/provider/` | OpenAI-compatible client + tool-call serialization                                    |
 | `src/tools/`    | One tool per file; register in `src/tools/index.ts`                                   |
-| `src/context/`  | Bootstrap, repo map, file index (fdir-based)                                          |
+| `src/context/`  | Bootstrap, repo map, file index (fdir-based), gitignore                               |
+| `src/search/`   | Web search providers — `types.ts` (interface) + per-provider adapters                 |
 | `src/store/`    | Addressable payload storage                                                           |
 | `src/ui/`       | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here |
 | `evals/`        | Fixture-based agent evals; runner + per-fixture files                                 |
@@ -32,9 +33,20 @@ Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-
 
 1. Create `src/tools/<name>.ts` exporting a `Tool` (see `read.ts` for read-only shape, `bash.ts` for streaming + approval shape)
 2. If it mutates files or runs commands, gate it via `ctx.requestApproval` — never skip the gate
-3. Register in `src/tools/index.ts`'s `defaultTools()`
+3. Register in `src/tools/index.ts`'s `defaultTools(config)`. If the tool needs a credential or endpoint, branch on the config (env-var-gated registration — keeps the system prompt lean for users who haven't opted in)
 4. Description must be short and action-oriented (small models pay for every token in the system prompt)
 5. Add an eval fixture in `evals/fixtures/` if behavior is testable
+
+## Optional tools and provider abstractions
+
+When a tool wraps an external service (web search, GitHub, etc.):
+
+- Put the provider abstraction in its own subdir (e.g. `src/search/types.ts` with `SearchProvider` interface; per-provider adapters next to it)
+- The tool file (`src/tools/search.ts`) is a thin factory that takes a provider and returns a `Tool`
+- Register conditionally in `defaultTools(config)` based on which credentials are present
+- Multiple providers for the same role (Tavily, SearXNG, Brave, Exa…) implement the same interface; switching is config-only, no tool-layer changes
+
+This is how `search` + `fetch_url` are wired — `REIKA_TAVILY_API_KEY` set → both register; unset → system prompt stays lean.
 
 ## Adding a slash command
 

@@ -21,16 +21,19 @@
   },
   "dependencies": {
     "cli-highlight": "^2.1.11",
+    "defuddle": "^0.18.1",
     "dotenv": "^16.4.5",
     "fdir": "^6.5.0",
     "ignore": "^7.0.5",
     "ink": "^5.0.1",
+    "jsdom": "^27.0.1",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "openai": "^4.71.0",
     "react": "^18.3.1"
   },
   "devDependencies": {
+    "@types/jsdom": "^28.0.3",
     "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",

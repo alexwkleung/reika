@@ -42,32 +42,36 @@ Config sources, in precedence order (higher wins):
 
 `.env` keys (see `.env.example`):
 
-| Key                        | Default                     | What                                         |
-| -------------------------- | --------------------------- | -------------------------------------------- |
-| `REIKA_BASE_URL`           | `http://localhost:11434/v1` | OpenAI-compatible endpoint                   |
-| `REIKA_MODEL`              | _required_                  | Model name                                   |
-| `REIKA_API_KEY`            | `no-key`                    | Cloud API key (any non-empty for local)      |
-| `REIKA_MAX_TURNS`          | `12`                        | Tool-call iterations per user turn           |
-| `REIKA_REPO_MAP_BUDGET`    | `3200`                      | Chars allotted to repo map in system prompt  |
-| `REIKA_AUTO_APPROVE`       | `false`                     | Skip the approval prompt for edit/write/bash |
-| `REIKA_SUBAGENT_MODEL`     | _falls back to main_        | Override model for subagents                 |
-| `REIKA_SUBAGENT_BASE_URL`  | _falls back_                | Override server for subagents                |
-| `REIKA_SUBAGENT_API_KEY`   | _falls back_                | Override key for subagents                   |
-| `REIKA_SUBAGENT_MAX_TURNS` | `6`                         | Subagent iteration limit                     |
+| Key                        | Default                     | What                                                                         |
+| -------------------------- | --------------------------- | ---------------------------------------------------------------------------- |
+| `REIKA_BASE_URL`           | `http://localhost:11434/v1` | OpenAI-compatible endpoint                                                   |
+| `REIKA_MODEL`              | _required_                  | Model name                                                                   |
+| `REIKA_API_KEY`            | `no-key`                    | Cloud API key (any non-empty for local)                                      |
+| `REIKA_MAX_TURNS`          | `12`                        | Tool-call iterations per user turn                                           |
+| `REIKA_REPO_MAP_BUDGET`    | `3200`                      | Chars allotted to repo map in system prompt                                  |
+| `REIKA_AUTO_APPROVE`       | `false`                     | Skip the approval prompt for edit/write/bash                                 |
+| `REIKA_SUBAGENT_MODEL`     | _falls back to main_        | Override model for subagents                                                 |
+| `REIKA_SUBAGENT_BASE_URL`  | _falls back_                | Override server for subagents                                                |
+| `REIKA_SUBAGENT_API_KEY`   | _falls back_                | Override key for subagents                                                   |
+| `REIKA_SUBAGENT_MAX_TURNS` | `6`                         | Subagent iteration limit                                                     |
+| `REIKA_TAVILY_API_KEY`     | _unset_                     | Enables `search` + `fetch_url`. Free key at [tavily.com](https://tavily.com) |
+| `REIKA_SEARXNG_URL`        | _unset_                     | SearXNG instance URL (adapter slot reserved; not yet implemented)            |
 
 ## Tools
 
-The agent has these tools:
+The agent has these tools. Optional tools register only when their config is present:
 
-| Tool       | What                                                               | Approval?              |
-| ---------- | ------------------------------------------------------------------ | ---------------------- |
-| `read`     | Read lines from a file (line-ranged, default 200 lines)            | no                     |
-| `list`     | List files in a directory (depth-limited)                          | no                     |
-| `grep`     | JS regex over file contents (cap 100 matches)                      | no                     |
-| `edit`     | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    |
-| `write`    | Create a new file; refuses to overwrite                            | yes                    |
-| `bash`     | Run a shell command (streamed output, danger-pattern warnings)     | yes                    |
-| `subagent` | Spawn an isolated subagent for focused exploration                 | no (its own tools may) |
+| Tool        | What                                                               | Approval?              | Optional?                                              |
+| ----------- | ------------------------------------------------------------------ | ---------------------- | ------------------------------------------------------ |
+| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                                                      |
+| `list`      | List files in a directory (depth-limited)                          | no                     | —                                                      |
+| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                                                      |
+| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                                                      |
+| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                                                      |
+| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                                                      |
+| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                                                      |
+| `search`    | Web search via Tavily (returns title + URL + snippet, up to 8)     | no                     | requires `REIKA_TAVILY_API_KEY`                        |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | requires `REIKA_TAVILY_API_KEY` (paired with `search`) |
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 
