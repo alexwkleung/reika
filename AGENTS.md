@@ -54,6 +54,7 @@ Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-
 Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.accent`, `theme.warning`, etc. — never hardcoded color strings. The pattern:
 
 - `accent` (magentaBright) — brand + focus (Reika title, user `▎`, selected `›`, spinner)
+- `tool` (cyan) — tool activity (tool call `·` + name, tool result `↳`)
 - `secondary` (gray) — muted UI text
 - `warning` (yellow) — wait/caution (approval box border)
 - `error` (red) — problem (error box border, diff `-` lines, WARNING heading)

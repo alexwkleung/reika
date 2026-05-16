@@ -76,13 +76,21 @@ function renderMessage(msg: Message): React.ReactElement | null {
         {msg.reasoning ? <Text dimColor>{`▸ ${msg.reasoning}`}</Text> : null}
         {msg.content ? <Text>{renderMarkdown(msg.content)}</Text> : null}
         {msg.toolCalls?.map(tc => (
-          <Text key={tc.id} dimColor>{`· ${tc.name}(${formatArgs(tc.args)})`}</Text>
+          <Box key={tc.id}>
+            <Text color={theme.tool}>{`· ${tc.name}`}</Text>
+            <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
+          </Box>
         ))}
       </Box>
     );
   }
   if (msg.role === 'tool') {
-    return <Text dimColor>{`  ↳ ${msg.summary}`}</Text>;
+    return (
+      <Box>
+        <Text color={theme.tool}>{'  ↳ '}</Text>
+        <Text color={theme.secondary}>{msg.summary}</Text>
+      </Box>
+    );
   }
   if (msg.role === 'error') {
     return (

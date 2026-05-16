@@ -4,7 +4,8 @@
 
 export const theme = {
   accent: 'magentaBright',
-  secondary: 'gray',
+  tool: 'cyan',
+  secondary: '#a0a0a0',
   warning: 'yellow',
   error: 'red',
   success: 'green',
