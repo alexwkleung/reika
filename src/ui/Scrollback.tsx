@@ -7,10 +7,12 @@ export function Scrollback({
   messages,
   streaming,
   streamingReasoning,
+  streamingTool,
 }: {
   messages: Message[];
   streaming: string;
   streamingReasoning: string;
+  streamingTool: string;
 }) {
   return (
     <>
@@ -26,6 +28,11 @@ export function Scrollback({
         <Box flexDirection="column" marginTop={1}>
           <Text>{streaming}</Text>
           <Text dimColor>▌</Text>
+        </Box>
+      ) : null}
+      {streamingTool ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text dimColor>{streamingTool}</Text>
         </Box>
       ) : null}
     </>

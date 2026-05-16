@@ -22,6 +22,7 @@ export async function runTurn(opts: {
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
   onUsage?: (usage: Usage) => void;
+  onToolProgress?: (chunk: string) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -78,6 +79,7 @@ export async function runTurn(opts: {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,
             requestApproval: opts.requestApproval,
+            onProgress: opts.onToolProgress,
           });
           summary = result.summary;
           payload = result.payload;

@@ -31,11 +31,13 @@ export type ApprovalRequest = {
   tool: string;
   subject: string;
   preview: string;
+  warnings?: string[];
 };
 
 export type ToolContext = {
   cwd: string;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  onProgress?: (chunk: string) => void;
 };
 
 export type ToolParameters = {

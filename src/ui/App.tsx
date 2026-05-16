@@ -24,6 +24,7 @@ export function App() {
   const [phase, setPhase] = useState<Phase>('thinking');
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
+  const [streamingTool, setStreamingTool] = useState<string>('');
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +48,10 @@ export function App() {
   const sessionAutoApproveRef = useRef(false);
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
+  const toolRef = useRef<string>('');
   const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reasoningFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const toolFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const scheduleFlush = (): void => {
     if (flushTimerRef.current !== null) return;
@@ -63,6 +66,14 @@ export function App() {
     reasoningFlushTimerRef.current = setTimeout(() => {
       reasoningFlushTimerRef.current = null;
       setStreamingReasoning(reasoningRef.current);
+    }, 50);
+  };
+
+  const scheduleToolFlush = (): void => {
+    if (toolFlushTimerRef.current !== null) return;
+    toolFlushTimerRef.current = setTimeout(() => {
+      toolFlushTimerRef.current = null;
+      setStreamingTool(toolRef.current);
     }, 50);
   };
 
@@ -141,7 +152,8 @@ export function App() {
   });
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
-    if (sessionAutoApproveRef.current) return Promise.resolve(true);
+    const hasWarnings = !!req.warnings && req.warnings.length > 0;
+    if (sessionAutoApproveRef.current && !hasWarnings) return Promise.resolve(true);
     setApprovalSelected(0);
     return new Promise(resolve => setPending({ request: req, resolve }));
   };
@@ -203,8 +215,10 @@ export function App() {
     setPhase('thinking');
     streamingRef.current = '';
     reasoningRef.current = '';
+    toolRef.current = '';
     setStreaming('');
     setStreamingReasoning('');
+    setStreamingTool('');
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -224,6 +238,10 @@ export function App() {
             setStreaming('');
             setStreamingReasoning('');
           }
+          if (msg.role === 'tool') {
+            toolRef.current = '';
+            setStreamingTool('');
+          }
           setMessages(prev => [...prev, msg]);
         },
         onContentDelta: delta => {
@@ -233,6 +251,10 @@ export function App() {
         onReasoningDelta: delta => {
           reasoningRef.current += delta;
           scheduleReasoningFlush();
+        },
+        onToolProgress: chunk => {
+          toolRef.current += chunk;
+          scheduleToolFlush();
         },
         onPhase: p => setPhase(p),
         onUsage: u =>
@@ -252,10 +274,16 @@ export function App() {
         clearTimeout(reasoningFlushTimerRef.current);
         reasoningFlushTimerRef.current = null;
       }
+      if (toolFlushTimerRef.current !== null) {
+        clearTimeout(toolFlushTimerRef.current);
+        toolFlushTimerRef.current = null;
+      }
       streamingRef.current = '';
       reasoningRef.current = '';
+      toolRef.current = '';
       setStreaming('');
       setStreamingReasoning('');
+      setStreamingTool('');
       setStatus('idle');
       abortRef.current = null;
     }
@@ -288,6 +316,7 @@ export function App() {
             messages={messages}
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
+            streamingTool={status === 'busy' ? streamingTool : ''}
           />
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />

@@ -14,6 +14,7 @@ export function Approval({
   selectedIndex: number;
 }) {
   const isCommand = request.tool === 'bash';
+  const warnings = request.warnings ?? [];
   return (
     <Box
       borderStyle="round"
@@ -29,6 +30,14 @@ export function Approval({
           <DiffPreview diff={request.preview} path={request.subject} />
         )}
       </Box>
+      {warnings.length > 0 ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color="red">{'WARNING'}</Text>
+          {warnings.map((w, i) => (
+            <Text key={i} bold>{`  · ${w}`}</Text>
+          ))}
+        </Box>
+      ) : null}
       <Box flexDirection="column" marginTop={1}>
         {APPROVAL_OPTIONS.map((label, i) => (
           <Text key={i} bold={i === selectedIndex}>
