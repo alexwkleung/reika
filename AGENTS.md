@@ -23,7 +23,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 ## Code conventions
 
 - **Formatter**: Prettier — single quotes, semicolons, trailing commas, 100-col width, 2-space indent
-- **Linter**: ESLint flat config with typescript-eslint + react-hooks rules
+- **Linter**: ESLint flat config with typescript-eslint + react-hooks + unused-imports rules. Unused imports are auto-removed by `npm run lint:fix` — leave that cleanup to the tool rather than manual pruning.
 - **Tests**: vitest, colocated `*.test.ts` files (e.g. `client.test.ts` next to `client.ts`)
 - **Pre-commit**: run `npm run check` (typecheck + lint + format:check + test)
 - **Style**: functions over classes when state is minimal; classes only for things with real lifecycle (e.g. `PayloadStore`)
