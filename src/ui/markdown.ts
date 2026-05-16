@@ -45,9 +45,12 @@ marked.use(
       s: string,
     ) => string,
     href: (href: string) => chalk.dim(href),
-    reflowText: false,
+    reflowText: true,
     showSectionPrefix: false,
     tab: 2,
+    // Wrap at terminal width minus the App's paddingX gutter on both sides.
+    // marked-terminal then breaks on word boundaries instead of Ink character-wrapping.
+    width: Math.max(40, (process.stdout.columns || 80) - 2),
   }) as Parameters<typeof marked.use>[0],
 );
 
