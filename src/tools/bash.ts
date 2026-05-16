@@ -33,7 +33,7 @@ export const bashTool: Tool = {
   },
 };
 
-function execStream(
+export function execStream(
   command: string,
   ctx: { cwd: string; onProgress?: (chunk: string) => void },
 ): Promise<ToolResult> {

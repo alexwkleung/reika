@@ -5,7 +5,7 @@ export type ToolCall = {
 };
 
 export type Message =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; display?: string }
   | {
       role: 'assistant';
       content: string;
@@ -14,7 +14,8 @@ export type Message =
     }
   | { role: 'tool'; callId: string; summary: string; payload?: string; payloadId?: string }
   | { role: 'error'; content: string }
-  | { role: 'system'; content: string };
+  | { role: 'system'; content: string }
+  | { role: 'shell'; command: string; output: string };
 
 export type Usage = {
   promptTokens: number;

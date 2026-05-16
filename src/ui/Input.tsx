@@ -7,10 +7,12 @@ const FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 export function Input({
   disabled,
   spinning,
+  mode,
   onSubmit,
 }: {
   disabled: boolean;
   spinning: boolean;
+  mode: 'agent' | 'shell';
   onSubmit: (value: string) => void;
 }) {
   const [value, setValue] = useState('');
@@ -32,7 +34,8 @@ export function Input({
     onSubmit(v);
   };
 
-  const prompt = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : '> ';
+  const idlePrompt = mode === 'shell' ? '$ ' : '> ';
+  const prompt = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : idlePrompt;
 
   return (
     <Box borderStyle="round" paddingX={1}>

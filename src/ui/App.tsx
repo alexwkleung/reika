@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
+import { isAbsolute, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { Header } from './Header.js';
 import { Scrollback } from './Scrollback.js';
 import { Input } from './Input.js';
@@ -10,12 +12,21 @@ import { bootstrap } from '../context/bootstrap.js';
 import { defaultTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
+import { execStream } from '../tools/bash.js';
+import { expandMentions } from '../agent/mentions.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
+type Mode = 'agent' | 'shell';
 
 type HeaderItem = { model: string; cwd: string };
+
+function expandHome(p: string): string {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
+  return p;
+}
 
 export function App() {
   const { exit } = useApp();
@@ -37,6 +48,8 @@ export function App() {
     resolve: (allow: boolean) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
+  const [mode, setMode] = useState<Mode>('agent');
+  const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
@@ -46,6 +59,8 @@ export function App() {
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
   const sessionAutoApproveRef = useRef(false);
+  const modeRef = useRef<Mode>('agent');
+  modeRef.current = mode;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -91,6 +106,13 @@ export function App() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (bundle && config) {
+      setHeaderItems(prev => [...prev, { model: config.model, cwd: bundle.cwd }]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle, config]);
 
   useEffect(() => {
     if (status !== 'busy') {
@@ -158,20 +180,62 @@ export function App() {
     return new Promise(resolve => setPending({ request: req, resolve }));
   };
 
-  const handleCommand = (raw: string): void => {
+  const handleCommand = async (raw: string): Promise<void> => {
     const rest = raw.slice(1);
     const space = rest.indexOf(' ');
     const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
+    const args = space === -1 ? '' : rest.slice(space + 1);
     const echo: Message = { role: 'user', content: raw };
 
-    if (name === 'clear') {
+    if (name === 'clear' || name === 'new') {
       setMessages([]);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       sessionAutoApproveRef.current = false;
+      setMode('agent');
       return;
     }
     if (name === 'exit' || name === 'quit') {
       exit();
+      return;
+    }
+    if (name === 'shell') {
+      setMode('shell');
+      setMessages(prev => [
+        ...prev,
+        echo,
+        { role: 'system', content: 'Shell mode. Commands run directly in cwd. /agent to return.' },
+      ]);
+      return;
+    }
+    if (name === 'agent') {
+      setMode('agent');
+      setMessages(prev => [
+        ...prev,
+        echo,
+        { role: 'system', content: 'Agent mode.' },
+      ]);
+      return;
+    }
+    if (name === 'cd') {
+      const target = args.trim();
+      if (!target) {
+        setMessages(prev => [...prev, echo, { role: 'system', content: 'Usage: /cd <path>' }]);
+        return;
+      }
+      if (!bundle || !config) return;
+      const expanded = expandHome(target);
+      const newCwd = isAbsolute(expanded) ? expanded : resolve(bundle.cwd, expanded);
+      setStatus('busy');
+      setMessages(prev => [...prev, echo, { role: 'system', content: `Re-indexing ${newCwd}…` }]);
+      try {
+        const newBundle = await bootstrap(newCwd, config.repoMapBudget);
+        setBundle(newBundle);
+        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
+      } catch (e) {
+        setMessages(prev => [...prev, { role: 'system', content: `cd failed: ${(e as Error).message}` }]);
+      } finally {
+        setStatus('idle');
+      }
       return;
     }
 
@@ -180,12 +244,16 @@ export function App() {
       case 'help':
         response = [
           'Commands:',
-          '  /help         show this list',
-          '  /clear        clear conversation history and reset session',
-          '  /model        show current model and base URL',
-          '  /cwd          show working directory',
-          '  /tokens       show token usage this session',
-          '  /exit, /quit  exit reika',
+          '  /help              show this list',
+          '  /new, /clear       reset conversation, tokens, mode',
+          '  /cd <path>         change cwd (re-indexes repo map)',
+          '  /shell             enter shell mode (raw bash, no model)',
+          '  /agent             return to agent mode',
+          '  /model             show current model and base URL',
+          '  /cwd               show working directory',
+          '  /tokens            show token usage this session',
+          '  /exit, /quit       exit reika',
+          '  @<path>            in agent mode, inline a file as context',
         ].join('\n');
         break;
       case 'model':
@@ -203,14 +271,53 @@ export function App() {
     setMessages(prev => [...prev, echo, { role: 'system', content: response }]);
   };
 
+  const runShell = async (command: string): Promise<void> => {
+    if (!bundle) return;
+    const echo: Message = { role: 'user', content: command };
+    setMessages(prev => [...prev, echo]);
+    setStatus('busy');
+    toolRef.current = '';
+    setStreamingTool('');
+    try {
+      const result = await execStream(command, {
+        cwd: bundle.cwd,
+        onProgress: chunk => {
+          toolRef.current += chunk;
+          scheduleToolFlush();
+        },
+      });
+      const shellMsg: Message = {
+        role: 'shell',
+        command,
+        output: result.payload ?? '',
+      };
+      setMessages(prev => [...prev, shellMsg]);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
+    } finally {
+      if (toolFlushTimerRef.current !== null) {
+        clearTimeout(toolFlushTimerRef.current);
+        toolFlushTimerRef.current = null;
+      }
+      toolRef.current = '';
+      setStreamingTool('');
+      setStatus('idle');
+    }
+  };
+
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
     const trimmed = input.trim();
     if (!trimmed) return;
     if (trimmed.startsWith('/')) {
-      handleCommand(trimmed);
+      await handleCommand(trimmed);
       return;
     }
+    if (modeRef.current === 'shell') {
+      await runShell(trimmed);
+      return;
+    }
+    const { augmented, display } = await expandMentions(trimmed, bundle.cwd);
     setStatus('busy');
     setPhase('thinking');
     streamingRef.current = '';
@@ -223,7 +330,8 @@ export function App() {
     abortRef.current = controller;
     try {
       await runTurn({
-        userInput: trimmed,
+        userInput: augmented,
+        userDisplay: display !== augmented ? display : undefined,
         history: messages.slice(),
         bundle,
         config,
@@ -289,11 +397,6 @@ export function App() {
     }
   };
 
-  const headerItems = useMemo<HeaderItem[]>(
-    () => (bundle && config ? [{ model: config.model, cwd: bundle.cwd }] : []),
-    [bundle, config],
-  );
-
   if (status === 'error') {
     return (
       <Box flexDirection="column">
@@ -324,6 +427,7 @@ export function App() {
           <Input
             disabled={status !== 'idle' || pending !== null}
             spinning={status === 'busy' && pending === null}
+            mode={mode}
             onSubmit={onSubmit}
           />
           <Status

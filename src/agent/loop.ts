@@ -12,6 +12,7 @@ import type { PayloadStore } from '../store/payloads.js';
 
 export async function runTurn(opts: {
   userInput: string;
+  userDisplay?: string;
   history: Message[];
   bundle: ContextBundle;
   config: Config;
@@ -26,7 +27,11 @@ export async function runTurn(opts: {
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
 }): Promise<void> {
-  const userMsg: Message = { role: 'user', content: opts.userInput };
+  const userMsg: Message = {
+    role: 'user',
+    content: opts.userInput,
+    ...(opts.userDisplay ? { display: opts.userDisplay } : {}),
+  };
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 

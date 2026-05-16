@@ -41,10 +41,22 @@ export function Scrollback({
 
 function MessageView({ msg }: { msg: Message }) {
   if (msg.role === 'user') {
+    const display = msg.display ?? msg.content;
     return (
       <Box flexDirection="row" marginTop={1}>
         <Text bold>{'▎ '}</Text>
-        <Text bold>{msg.content}</Text>
+        <Text bold>{display}</Text>
+      </Box>
+    );
+  }
+  if (msg.role === 'shell') {
+    return (
+      <Box flexDirection="column" marginTop={1}>
+        <Box>
+          <Text color="green">{'$ '}</Text>
+          <Text>{msg.command}</Text>
+        </Box>
+        {msg.output ? <Text dimColor>{msg.output}</Text> : null}
       </Box>
     );
   }
