@@ -122,6 +122,7 @@ export function App() {
         const b = await bootstrap(process.cwd(), cfg.repoMapBudget);
         setConfig(cfg);
         setBundle(b);
+        setHeaderItems(prev => [...prev, { model: cfg.model, cwd: b.cwd }]);
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
@@ -129,12 +130,6 @@ export function App() {
       }
     })();
   }, []);
-
-  useEffect(() => {
-    if (bundle && config) {
-      setHeaderItems(prev => [...prev, { model: config.model, cwd: bundle.cwd }]);
-    }
-  }, [bundle, config]);
 
   useEffect(() => {
     if (!exitRequested) return;
@@ -330,6 +325,7 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
+        setHeaderItems(prev => [...prev, { model: config.model, cwd: newBundle.cwd }]);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
