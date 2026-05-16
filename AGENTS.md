@@ -46,7 +46,7 @@ When a tool wraps an external service (web search, GitHub, etc.):
 - Register conditionally in `defaultTools(config)` based on which credentials are present
 - Multiple providers for the same role (Tavily, SearXNG, Brave, Exa…) implement the same interface; switching is config-only, no tool-layer changes
 
-This is how `search` + `fetch_url` are wired — `REIKA_TAVILY_API_KEY` set → both register; unset → system prompt stays lean.
+This is how `search` + `fetch_url` are wired. Two providers implement `SearchProvider`: `SearxngProvider` (self-hosted, local-first) and `TavilyProvider` (cloud, AI-optimized snippets). SearXNG takes precedence when both `REIKA_SEARXNG_URL` and `REIKA_TAVILY_API_KEY` are set. If neither is set, neither tool registers and the system prompt stays lean.
 
 ## Adding a slash command
 
