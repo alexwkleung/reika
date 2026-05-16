@@ -15,7 +15,7 @@ cp .env.example .env
 npm run dev
 ```
 
-For a local llama.cpp setup with Qwen3:
+Example of a local llama.cpp setup with Qwen3.5 (reasoning off for hardware constrained setups):
 
 ```sh
 llama-server -m /path/to/Qwen3.5-9B-Q5_K_M.gguf \
