@@ -109,7 +109,7 @@ export function Input({
   const showPlaceholder = !value && !!placeholder && !disabled;
 
   return (
-    <Box borderStyle="round" paddingX={1}>
+    <Box borderStyle="round" paddingX={1} marginTop={1}>
       <Text color={promptColor}>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
