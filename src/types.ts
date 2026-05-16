@@ -76,6 +76,12 @@ export type ContextBundle = {
   ignore: Ignore;
 };
 
+export type Profile = {
+  model: string;
+  baseURL: string;
+  apiKey: string;
+};
+
 export type Config = {
   baseURL: string;
   apiKey: string;
@@ -89,4 +95,5 @@ export type Config = {
   subagentMaxTurns: number;
   tavilyApiKey?: string;
   searxngUrl?: string;
+  profiles: Record<string, Profile>;
 };

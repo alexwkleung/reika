@@ -7,7 +7,7 @@ import { Scrollback } from './Scrollback.js';
 import { Input } from './Input.js';
 import { Status } from './Status.js';
 import { Approval } from './Approval.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { defaultTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
@@ -52,6 +52,7 @@ export function App() {
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
   const [mode, setMode] = useState<Mode>('agent');
+  const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
@@ -70,6 +71,8 @@ export function App() {
   const sessionAutoApproveRef = useRef(false);
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
+  const activeProfileRef = useRef('default');
+  activeProfileRef.current = activeProfile;
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
   const suggestionStateRef = useRef<SuggestionState | null>(null);
@@ -286,6 +289,7 @@ export function App() {
       setSessionStartedAt(Date.now());
       sessionAutoApproveRef.current = false;
       setMode('agent');
+      setActiveProfile('default');
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -363,11 +367,46 @@ export function App() {
           '  @<path>            in agent mode, inline a file as context',
         ].join('\n');
         break;
-      case 'model':
-        response = config
-          ? `model: ${config.model}\nbase:  ${config.baseURL}`
-          : 'config not loaded';
+      case 'model': {
+        if (!config) {
+          response = 'config not loaded';
+          break;
+        }
+        const target = args.trim().toLowerCase();
+        if (target) {
+          if (!config.profiles[target]) {
+            const avail = Object.keys(config.profiles).join(', ');
+            response = `Unknown profile: ${target}. Available: ${avail}`;
+            break;
+          }
+          setActiveProfile(target);
+          const next = config.profiles[target];
+          if (bundle) {
+            setHeaderItems(prev => [...prev, { model: next.model, cwd: bundle.cwd }]);
+          }
+          setMessages(prev => [
+            ...prev,
+            echo,
+            { role: 'system', content: `Switched to profile '${target}' (${next.model})` },
+          ]);
+          return;
+        }
+        const current = config.profiles[activeProfile] ?? config.profiles.default;
+        const list = Object.entries(config.profiles)
+          .map(([n, p]) => `  ${n === activeProfile ? '›' : ' '} ${n} → ${p.model}`)
+          .join('\n');
+        response = [
+          `current: ${activeProfile}`,
+          `model:   ${current.model}`,
+          `base:    ${current.baseURL}`,
+          '',
+          'available profiles:',
+          list,
+          '',
+          'switch with /model <name>',
+        ].join('\n');
         break;
+      }
       case 'cwd':
         response = bundle?.cwd ?? '(unknown)';
         break;
@@ -445,7 +484,7 @@ export function App() {
         userDisplay: display !== augmented ? display : undefined,
         history: messages.slice(),
         bundle,
-        config,
+        config: resolveProfile(config, activeProfile),
         tools,
         payloads,
         signal: controller.signal,
@@ -549,7 +588,7 @@ export function App() {
             }
           />
           <Status
-            model={config?.model ?? ''}
+            model={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
             turns={messages.filter(m => m.role === 'assistant').length}
             status={status === 'busy' ? phase : status}
             elapsed={status === 'busy' ? elapsed : null}

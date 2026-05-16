@@ -57,6 +57,34 @@ Config sources, in precedence order (higher wins):
 | `REIKA_SEARXNG_URL`        | _unset_                     | SearXNG instance URL (self-hosted, local-first). Takes precedence over Tavily         |
 | `REIKA_TAVILY_API_KEY`     | _unset_                     | Tavily key — free at [tavily.com](https://tavily.com), enables `search` + `fetch_url` |
 
+## Profiles (multi-model)
+
+Define additional model configurations and switch between them at runtime with `/model <name>`:
+
+```ini
+# Default profile (existing keys — always available as "default")
+REIKA_MODEL=qwen3-9b
+REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_API_KEY=no-key
+
+# Additional named profiles — list them, then define each
+REIKA_PROFILES=kimi,gpt4
+REIKA_KIMI_MODEL=kimi-k2.6
+REIKA_KIMI_BASE_URL=https://api.moonshot.ai/v1
+REIKA_KIMI_API_KEY=sk-...
+REIKA_GPT4_MODEL=gpt-4o
+REIKA_GPT4_BASE_URL=https://api.openai.com/v1
+REIKA_GPT4_API_KEY=sk-...
+```
+
+Then in-session:
+
+- `/model` — show current profile and list available
+- `/model kimi` — switch to the kimi profile (model + endpoint + key swap as a unit)
+- `/new` — resets to default
+
+Conversation history persists across switches; if styles clash, run `/new` first. Token counter accumulates across profiles for a single session bill.
+
 ## Tools
 
 The agent has these tools. Optional tools register only when their config is present:

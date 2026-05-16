@@ -1,0 +1,124 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { loadConfig, resolveProfile } from './config.js';
+
+const ENV_KEYS = [
+  'REIKA_MODEL',
+  'REIKA_BASE_URL',
+  'REIKA_API_KEY',
+  'REIKA_PROFILES',
+  'REIKA_KIMI_MODEL',
+  'REIKA_KIMI_BASE_URL',
+  'REIKA_KIMI_API_KEY',
+  'REIKA_GPT4_MODEL',
+  'REIKA_GPT4_BASE_URL',
+  'REIKA_GPT4_API_KEY',
+];
+
+let saved: Record<string, string | undefined>;
+
+beforeEach(() => {
+  saved = {};
+  for (const k of ENV_KEYS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+});
+
+afterEach(() => {
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+describe('loadConfig — profiles', () => {
+  it('always has a "default" profile from the flat REIKA_MODEL/BASE_URL/API_KEY', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_BASE_URL = 'http://localhost:8080/v1';
+    process.env.REIKA_API_KEY = 'k';
+    const cfg = loadConfig();
+    expect(cfg.profiles.default).toEqual({
+      model: 'qwen3-9b',
+      baseURL: 'http://localhost:8080/v1',
+      apiKey: 'k',
+    });
+  });
+
+  it('loads named profiles from REIKA_PROFILES + per-profile env vars', () => {
+    process.env.REIKA_MODEL = 'default-model';
+    process.env.REIKA_PROFILES = 'kimi,gpt4';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_BASE_URL = 'https://moonshot.example/v1';
+    process.env.REIKA_KIMI_API_KEY = 'kimi-key';
+    process.env.REIKA_GPT4_MODEL = 'gpt-4o';
+    process.env.REIKA_GPT4_BASE_URL = 'https://openai.example/v1';
+    process.env.REIKA_GPT4_API_KEY = 'gpt-key';
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.profiles).sort()).toEqual(['default', 'gpt4', 'kimi']);
+    expect(cfg.profiles.kimi).toEqual({
+      model: 'kimi-k2',
+      baseURL: 'https://moonshot.example/v1',
+      apiKey: 'kimi-key',
+    });
+  });
+
+  it('skips named profiles that lack a MODEL env var', () => {
+    process.env.REIKA_MODEL = 'default';
+    process.env.REIKA_PROFILES = 'kimi,broken';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    // REIKA_BROKEN_MODEL deliberately unset
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.profiles)).toContain('kimi');
+    expect(Object.keys(cfg.profiles)).not.toContain('broken');
+  });
+
+  it('falls back to default base/key when a profile only sets MODEL', () => {
+    process.env.REIKA_MODEL = 'default-m';
+    process.env.REIKA_BASE_URL = 'http://default-base/v1';
+    process.env.REIKA_API_KEY = 'default-key';
+    process.env.REIKA_PROFILES = 'minimal';
+    process.env.REIKA_MINIMAL_MODEL = 'minimal-m';
+    const cfg = loadConfig();
+    expect(cfg.profiles.minimal).toEqual({
+      model: 'minimal-m',
+      baseURL: 'http://default-base/v1',
+      apiKey: 'default-key',
+    });
+  });
+
+  it('normalizes profile names to lowercase', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'Kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    const cfg = loadConfig();
+    expect(cfg.profiles.kimi).toBeDefined();
+    expect(cfg.profiles.Kimi).toBeUndefined();
+  });
+});
+
+describe('resolveProfile', () => {
+  it('returns the config unchanged when the named profile is missing', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    const resolved = resolveProfile(cfg, 'nonexistent');
+    expect(resolved.model).toBe(cfg.model);
+    expect(resolved.baseURL).toBe(cfg.baseURL);
+  });
+
+  it('overlays the named profile onto config', () => {
+    process.env.REIKA_MODEL = 'default-m';
+    process.env.REIKA_BASE_URL = 'http://default/v1';
+    process.env.REIKA_API_KEY = 'default-k';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_BASE_URL = 'https://moonshot/v1';
+    process.env.REIKA_KIMI_API_KEY = 'kimi-k';
+    const cfg = loadConfig();
+    const resolved = resolveProfile(cfg, 'kimi');
+    expect(resolved.model).toBe('kimi-k2');
+    expect(resolved.baseURL).toBe('https://moonshot/v1');
+    expect(resolved.apiKey).toBe('kimi-k');
+    // Non-profile fields preserved
+    expect(resolved.maxTurns).toBe(cfg.maxTurns);
+  });
+});
