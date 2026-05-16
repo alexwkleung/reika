@@ -3,7 +3,9 @@ import { Box, Static, Text, useApp, useInput } from 'ink';
 import { isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Header } from './Header.js';
+import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
+import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Status } from './Status.js';
 import { Approval } from './Approval.js';
@@ -23,7 +25,9 @@ type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 type Mode = 'agent' | 'shell';
 
-type HeaderItem = { model: string; cwd: string };
+type HeaderItem =
+  | { kind: 'splash'; model: string; cwd: string; version: string }
+  | { kind: 'header'; model: string; cwd: string };
 
 function expandHome(p: string): string {
   if (p === '~') return homedir();
@@ -126,7 +130,10 @@ export function App() {
         setConfig(cfg);
         setBundle(b);
         setTools(defaultTools(cfg));
-        setHeaderItems(prev => [...prev, { model: cfg.model, cwd: b.cwd }]);
+        setHeaderItems(prev => [
+          ...prev,
+          { kind: 'splash', model: cfg.model, cwd: b.cwd, version: VERSION },
+        ]);
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
@@ -336,7 +343,10 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
-        setHeaderItems(prev => [...prev, { model: config.model, cwd: newBundle.cwd }]);
+        setHeaderItems(prev => [
+          ...prev,
+          { kind: 'header', model: config.model, cwd: newBundle.cwd },
+        ]);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
@@ -382,7 +392,10 @@ export function App() {
           setActiveProfile(target);
           const next = config.profiles[target];
           if (bundle) {
-            setHeaderItems(prev => [...prev, { model: next.model, cwd: bundle.cwd }]);
+            setHeaderItems(prev => [
+              ...prev,
+              { kind: 'header', model: next.model, cwd: bundle.cwd },
+            ]);
           }
           setMessages(prev => [
             ...prev,
@@ -559,7 +572,13 @@ export function App() {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Static items={headerItems}>
-        {(h, i) => <Header key={i} model={h.model} cwd={h.cwd} />}
+        {(h, i) =>
+          h.kind === 'splash' ? (
+            <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} />
+          ) : (
+            <Header key={i} model={h.model} cwd={h.cwd} />
+          )
+        }
       </Static>
       {status === 'loading' ? (
         <Text>Loading…</Text>
