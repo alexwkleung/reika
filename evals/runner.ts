@@ -56,7 +56,9 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
         tools,
         payloads,
         signal: controller.signal,
-        onMessage: msg => messages.push(msg),
+        // history mutation already populates `messages`; pushing again here would
+        // produce a duplicate of every message and break strict providers.
+        onMessage: () => {},
       });
     } finally {
       clearTimeout(timeoutId);

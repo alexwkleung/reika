@@ -14,12 +14,13 @@ export function messagesToOpenAI(
     if (msg.role === 'user') {
       out.push({ role: 'user', content: msg.content });
     } else if (msg.role === 'assistant') {
+      const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;
       const param: Record<string, unknown> = {
         role: 'assistant',
-        content: msg.content,
+        content: hasTools && !msg.content ? null : msg.content,
       };
-      if (msg.toolCalls) {
-        param.tool_calls = msg.toolCalls.map(tc => ({
+      if (hasTools) {
+        param.tool_calls = msg.toolCalls!.map(tc => ({
           id: tc.id,
           type: 'function' as const,
           function: {
@@ -37,11 +38,14 @@ export function messagesToOpenAI(
       const content = fresh
         ? `${msg.summary}\n\n${msg.payload}`
         : msg.summary;
-      out.push({
+      const toolName = findToolNameForCall(history, msg.callId);
+      const param: Record<string, unknown> = {
         role: 'tool',
         tool_call_id: msg.callId,
         content,
-      });
+      };
+      if (toolName) param.name = toolName;
+      out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
   }
@@ -55,6 +59,15 @@ function findFreshToolBlockStart(history: Message[]): number {
     if (history[i].role !== 'tool') return i + 1;
   }
   return 0;
+}
+
+function findToolNameForCall(history: Message[], callId: string): string | undefined {
+  for (const msg of history) {
+    if (msg.role !== 'assistant' || !msg.toolCalls) continue;
+    const match = msg.toolCalls.find(tc => tc.id === callId);
+    if (match) return match.name;
+  }
+  return undefined;
 }
 
 export function toolsToOpenAI(tools: Tool[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
