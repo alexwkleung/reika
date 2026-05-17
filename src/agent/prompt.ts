@@ -16,7 +16,6 @@ export function buildSystemPrompt(opts: {
 
 function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {
   const parts: string[] = [
-    '/no_think',
     [
       'You are a coding assistant operating in a terminal. Be concise.',
       'Rules:',
@@ -46,7 +45,6 @@ function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): 
 
 function buildChatPrompt(_bundle: ContextBundle): string {
   return [
-    '/no_think',
     'You are a helpful assistant running in a terminal chat. Be concise and direct.',
     "You do not have access to the user's filesystem or shell in this mode. If web-search tools are available, use them only when the answer requires current information or external documentation.",
   ].join('\n\n');
