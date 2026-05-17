@@ -25,7 +25,7 @@ export function Scrollback({
       ) : null}
       {streaming ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text>{streaming}</Text>
+          <Text>{renderMarkdown(streaming)}</Text>
           <Text color={theme.muted}>▌</Text>
         </Box>
       ) : null}
@@ -81,6 +81,11 @@ function renderMessage(msg: Message): React.ReactElement | null {
             <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
           </Box>
         ))}
+        {msg.durationMs !== undefined ? (
+          <Box marginTop={1}>
+            <Text color={theme.muted}>{`worked for ${formatDuration(msg.durationMs)}`}</Text>
+          </Box>
+        ) : null}
       </Box>
     );
   }
@@ -127,4 +132,12 @@ function formatArgs(args: Record<string, unknown>): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s}s`;
 }

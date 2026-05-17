@@ -37,10 +37,11 @@ export async function runTurn(opts: {
   opts.onMessage(userMsg);
 
   const system = buildSystemPrompt({ bundle: opts.bundle });
+  const turnStart = Date.now();
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
-      commitAborted(opts, '');
+      commitAborted(opts, '', turnStart);
       return;
     }
     opts.onPhase?.('thinking');
@@ -57,23 +58,26 @@ export async function runTurn(opts: {
     if (response.usage) opts.onUsage?.(response.usage);
 
     if (opts.signal?.aborted) {
-      commitAborted(opts, response.content);
+      commitAborted(opts, response.content, turnStart);
       return;
     }
 
+    const toolCalls = response.toolCalls ?? [];
+    const isFinal = toolCalls.length === 0;
     const assistantMsg: Message = {
       role: 'assistant',
       content: response.content,
       toolCalls: response.toolCalls,
       reasoning: response.reasoning,
+      ...(isFinal ? { durationMs: Date.now() - turnStart } : {}),
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
 
-    if (!response.toolCalls || response.toolCalls.length === 0) return;
+    if (isFinal) return;
 
     opts.onPhase?.('tool');
-    for (const call of response.toolCalls) {
+    for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
       let summary: string;
@@ -111,6 +115,7 @@ export async function runTurn(opts: {
   const exhausted: Message = {
     role: 'assistant',
     content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)`,
+    durationMs: Date.now() - turnStart,
   };
   opts.history.push(exhausted);
   opts.onMessage(exhausted);
@@ -119,9 +124,10 @@ export async function runTurn(opts: {
 function commitAborted(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   partial: string,
+  turnStart: number,
 ): void {
   const content = partial ? `${partial}\n\n(aborted)` : '(aborted)';
-  const m: Message = { role: 'assistant', content };
+  const m: Message = { role: 'assistant', content, durationMs: Date.now() - turnStart };
   opts.history.push(m);
   opts.onMessage(m);
 }

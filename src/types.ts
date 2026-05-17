@@ -13,6 +13,7 @@ export type Message =
       content: string;
       toolCalls?: ToolCall[];
       reasoning?: string;
+      durationMs?: number;
       nested?: boolean;
     }
   | {
