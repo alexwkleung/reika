@@ -106,6 +106,22 @@ function renderMessage(msg: Message): React.ReactElement | null {
             <DiffView diff={msg.diff.text} path={msg.diff.path} />
           </Box>
         ) : null}
+        {msg.command ? (
+          <Box flexDirection="column" marginTop={1} marginLeft={4}>
+            <Box>
+              <Text color={theme.success}>{'$ '}</Text>
+              <Text>{msg.command.text}</Text>
+            </Box>
+            {msg.command.outputTail ? (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={theme.muted}>{msg.command.outputTail}</Text>
+                {msg.command.outputTruncated ? (
+                  <Text color={theme.muted}>…(more output omitted)</Text>
+                ) : null}
+              </Box>
+            ) : null}
+          </Box>
+        ) : null}
       </Box>
     );
   }

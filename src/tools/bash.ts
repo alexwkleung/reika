@@ -3,6 +3,8 @@ import type { Tool, ToolResult } from '../types.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
+const OUTPUT_TAIL_BYTES = 2 * 1024;
+const OUTPUT_TAIL_LINES = 10;
 
 export const bashTool: Tool = {
   name: 'bash',
@@ -67,23 +69,28 @@ export function execStream(
 
     proc.on('close', (code, signal) => {
       clearTimeout(timeoutId);
+      const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const payload = buffer.join('') + truncated || '(no output)';
+      const payload = rawOutput + truncated || '(no output)';
+      const display = buildCommandDisplay(command, rawOutput);
       if (timedOut) {
         resolve({
           summary: `Bash timeout: ${command} (killed after ${DEFAULT_TIMEOUT_MS / 1000}s)`,
           payload,
+          command: display,
         });
       } else if (code === 0) {
         resolve({
           summary: `Ran: ${command} (${totalBytes} bytes output)`,
           payload,
+          command: display,
         });
       } else {
         const reason = signal ? `signal ${signal}` : `exit ${code}`;
         resolve({
           summary: `Bash failed: ${command} (${reason})`,
           payload,
+          command: display,
         });
       }
     });
@@ -93,9 +100,23 @@ export function execStream(
       resolve({
         summary: `Bash failed: ${command} (${err.message})`,
         payload: buffer.join('') || err.message,
+        command: buildCommandDisplay(command, buffer.join('') || err.message),
       });
     });
   });
+}
+
+function buildCommandDisplay(
+  command: string,
+  output: string,
+): { text: string; outputTail: string; outputTruncated: boolean } {
+  if (!output) return { text: command, outputTail: '', outputTruncated: false };
+  const byteTail =
+    output.length > OUTPUT_TAIL_BYTES ? output.slice(output.length - OUTPUT_TAIL_BYTES) : output;
+  const lines = byteTail.split('\n');
+  const lineTail = lines.slice(-OUTPUT_TAIL_LINES);
+  const outputTruncated = output.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
+  return { text: command, outputTail: lineTail.join('\n'), outputTruncated };
 }
 
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [

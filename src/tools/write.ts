@@ -26,15 +26,19 @@ export const writeTool: Tool = {
       return { summary: `Write failed: ${rel} already exists; use edit instead` };
     }
 
+    const diffText = buildWriteDiff(content);
+
     if (ctx.requestApproval) {
-      const diff = buildWriteDiff(content);
-      const ok = await ctx.requestApproval({ tool: 'write', subject: rel, preview: diff });
+      const ok = await ctx.requestApproval({ tool: 'write', subject: rel, preview: diffText });
       if (!ok) return { summary: `Write declined by user for ${rel}` };
     }
 
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content, 'utf8');
-    const lines = content.split('\n').length;
-    return { summary: `Wrote ${rel} (${lines} lines)` };
+    const added = diffText.split('\n').filter(l => l.startsWith('+ ')).length;
+    return {
+      summary: `Wrote ${rel} (+${added})`,
+      diff: { text: diffText, path: rel, added, removed: 0 },
+    };
   },
 };

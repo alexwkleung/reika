@@ -84,6 +84,7 @@ export async function runTurn(opts: {
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
+      let command: ToolResult['command'];
       if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
@@ -98,6 +99,7 @@ export async function runTurn(opts: {
           summary = result.summary;
           payload = result.payload;
           diff = result.diff;
+          command = result.command;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -110,6 +112,7 @@ export async function runTurn(opts: {
         payload,
         payloadId,
         ...(diff ? { diff } : {}),
+        ...(command ? { command } : {}),
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
