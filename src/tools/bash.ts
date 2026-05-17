@@ -139,12 +139,47 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\brm\s+[^&;|]*\.env\b/, label: 'Deleting environment file (.env)' },
   { re: />\s*\/dev\/sd[a-z]\b/, label: 'Writing to raw disk device' },
   { re: /:(){:|:&};:|:\(\)\s*\{\s*:\|:&\s*\};\s*:/, label: 'Fork bomb pattern' },
+  // Global / persistent package installs — affect state outside the project
+  {
+    re: /\bnpm\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
+    label: 'Global npm install (persistent system change)',
+  },
+  {
+    re: /\bnpm\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
+    label: 'Global npm install (persistent system change)',
+  },
+  {
+    re: /\bpnpm\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
+    label: 'Global pnpm install (persistent system change)',
+  },
+  {
+    re: /\bpnpm\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
+    label: 'Global pnpm install (persistent system change)',
+  },
+  { re: /\byarn\s+global\s+add\b/, label: 'Global yarn install (persistent system change)' },
+  {
+    re: /\bbun\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
+    label: 'Global bun install (persistent system change)',
+  },
+  {
+    re: /\bbun\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
+    label: 'Global bun install (persistent system change)',
+  },
+  { re: /\bbrew\s+install\b/, label: 'Homebrew install (system-level)' },
+  { re: /\bcargo\s+install\b/, label: 'Cargo install (global binary)' },
+  { re: /\bgo\s+install\b/, label: 'Go install (global $GOBIN)' },
+  { re: /\bpipx\s+install\b/, label: 'pipx install (global Python tool)' },
+  { re: /\buv\s+tool\s+install\b/, label: 'uv tool install (global Python tool)' },
+  {
+    re: /\bgem\s+install\b(?![^|;&]*--user\b)/,
+    label: 'Gem install (system-level unless --user)',
+  },
 ];
 
-function detectDangerousPatterns(command: string): string[] {
+export function detectDangerousPatterns(command: string): string[] {
   const hits: string[] = [];
   for (const { re, label } of DANGER_PATTERNS) {
-    if (re.test(command)) hits.push(label);
+    if (re.test(command) && !hits.includes(label)) hits.push(label);
   }
   return hits;
 }
