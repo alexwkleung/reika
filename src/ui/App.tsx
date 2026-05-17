@@ -11,7 +11,7 @@ import { Status } from './Status.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
-import { defaultTools } from '../tools/index.js';
+import { chatTools, defaultTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
@@ -23,7 +23,7 @@ import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
-type Mode = 'agent' | 'shell';
+type Mode = 'agent' | 'shell' | 'chat';
 
 type HeaderItem =
   | { kind: 'splash'; model: string; cwd: string; version: string; subagent?: string }
@@ -47,6 +47,7 @@ export function App() {
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tools, setTools] = useState<ReturnType<typeof defaultTools>>(() => defaultTools());
+  const [chatToolsList, setChatToolsList] = useState<ReturnType<typeof chatTools>>(() => []);
   const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
   const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
@@ -87,6 +88,8 @@ export function App() {
   suggestionSelectedRef.current = suggestionSelected;
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
+  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent.
+  const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = totalUsage;
   const sessionStartedAtRef = useRef(sessionStartedAt);
@@ -132,6 +135,7 @@ export function App() {
         setConfig(cfg);
         setBundle(b);
         setTools(defaultTools(cfg));
+        setChatToolsList(chatTools(cfg));
         setHeaderItems(prev => [
           ...prev,
           {
@@ -291,6 +295,38 @@ export function App() {
     });
   };
 
+  const switchMode = (next: Mode, banner: string, echo: Message): void => {
+    if (next === mode) {
+      setMessages(prev => [...prev, echo, { role: 'system', content: `Already in ${next} mode.` }]);
+      return;
+    }
+    if (statusRef.current === 'busy') {
+      setMessages(prev => [
+        ...prev,
+        echo,
+        { role: 'system', content: 'Cannot switch modes while busy. Wait or ctrl-c to abort.' },
+      ]);
+      return;
+    }
+    const currentIsChat = mode === 'chat';
+    const nextIsChat = next === 'chat';
+    const switchMsg: Message = { role: 'system', content: banner };
+    if (currentIsChat !== nextIsChat) {
+      // Crossing the chat boundary — save current array, restore the other side's stash
+      const stash = stashedMessagesRef.current;
+      if (currentIsChat) {
+        stash.chat = messagesRef.current;
+      } else {
+        stash.agent = messagesRef.current;
+      }
+      const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
+      setMessages([...restored, echo, switchMsg]);
+    } else {
+      setMessages(prev => [...prev, echo, switchMsg]);
+    }
+    setMode(next);
+  };
+
   const handleCommand = async (raw: string): Promise<void> => {
     const rest = raw.slice(1);
     const space = rest.indexOf(' ');
@@ -324,18 +360,14 @@ export function App() {
       setMessages(prev => [...prev, echo, { role: 'system', content }]);
       return;
     }
-    if (name === 'shell') {
-      setMode('shell');
-      setMessages(prev => [
-        ...prev,
-        echo,
-        { role: 'system', content: 'Shell mode. Commands run directly in cwd. /agent to return.' },
-      ]);
-      return;
-    }
-    if (name === 'agent') {
-      setMode('agent');
-      setMessages(prev => [...prev, echo, { role: 'system', content: 'Agent mode.' }]);
+    if (name === 'shell' || name === 'agent' || name === 'chat') {
+      const banner =
+        name === 'shell'
+          ? 'Shell mode. Commands run directly in cwd. /agent to return.'
+          : name === 'chat'
+            ? 'Chat mode. Filesystem and shell tools disabled. Conversation isolated from agent. /agent to return.'
+            : 'Agent mode.';
+      switchMode(name, banner, echo);
       return;
     }
     if (name === 'cd') {
@@ -377,6 +409,7 @@ export function App() {
           '  /new, /clear       reset conversation, tokens, mode',
           '  /cd <path>         change cwd (re-indexes repo map)',
           '  /shell             enter shell mode (raw bash, no model)',
+          '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
           '  /agent             return to agent mode',
           '  /model             show current model and base URL',
           '  /cwd               show working directory',
@@ -534,10 +567,11 @@ export function App() {
         history: messages.slice(),
         bundle,
         config: resolveProfile(config, activeProfile),
-        tools,
+        tools: mode === 'chat' ? chatToolsList : tools,
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove ? undefined : requestApproval,
+        promptMode: mode === 'chat' ? 'chat' : 'agent',
         onMessage: msg => {
           if (msg.role === 'assistant') {
             streamingRef.current = '';
@@ -649,6 +683,7 @@ export function App() {
             elapsed={status === 'busy' ? elapsed : null}
             usage={totalUsage}
             autoApprove={config?.autoApprove || sessionAutoApprove}
+            modeTag={mode === 'agent' ? undefined : mode}
           />
         </>
       )}

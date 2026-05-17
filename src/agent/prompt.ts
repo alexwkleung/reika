@@ -1,6 +1,20 @@
 import type { ContextBundle } from '../types.js';
 
-export function buildSystemPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {
+export type PromptMode = 'agent' | 'chat';
+
+export function buildSystemPrompt(opts: {
+  bundle: ContextBundle;
+  mode?: PromptMode;
+  planMode?: boolean;
+}): string {
+  const mode = opts.mode ?? 'agent';
+  if (mode === 'chat') {
+    return buildChatPrompt(opts.bundle);
+  }
+  return buildAgentPrompt(opts);
+}
+
+function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {
   const parts: string[] = [
     '/no_think',
     [
@@ -28,4 +42,12 @@ export function buildSystemPrompt(opts: { bundle: ContextBundle; planMode?: bool
     parts.push('Plan mode: describe your approach first. Do not modify files.');
   }
   return parts.join('\n\n');
+}
+
+function buildChatPrompt(_bundle: ContextBundle): string {
+  return [
+    '/no_think',
+    'You are a helpful assistant running in a terminal chat. Be concise and direct.',
+    "You do not have access to the user's filesystem or shell in this mode. If web-search tools are available, use them only when the answer requires current information or external documentation.",
+  ].join('\n\n');
 }

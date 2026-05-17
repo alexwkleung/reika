@@ -9,6 +9,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'clear', desc: 'alias of /new' },
   { name: 'cd', desc: 'change cwd (re-indexes repo map)' },
   { name: 'shell', desc: 'enter shell mode (raw bash, no model)' },
+  { name: 'chat', desc: 'enter chat mode (no filesystem/shell tools; isolated context)' },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'model', desc: 'show current model and base URL' },
   { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },

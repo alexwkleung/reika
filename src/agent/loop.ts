@@ -7,7 +7,7 @@ import type {
   ToolResult,
   Usage,
 } from '../types.js';
-import { buildSystemPrompt } from './prompt.js';
+import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
 import type { PayloadStore } from '../store/payloads.js';
 
@@ -27,6 +27,7 @@ export async function runTurn(opts: {
   onToolProgress?: (chunk: string) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
+  promptMode?: PromptMode;
 }): Promise<void> {
   const userMsg: Message = {
     role: 'user',
@@ -36,7 +37,7 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  const system = buildSystemPrompt({ bundle: opts.bundle });
+  const system = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
   const turnStart = Date.now();
 
   for (let i = 0; i < opts.config.maxTurns; i++) {

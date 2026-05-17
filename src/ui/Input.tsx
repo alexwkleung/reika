@@ -20,7 +20,7 @@ export function Input({
   onSubmit: (value: string) => void;
   disabled: boolean;
   spinning: boolean;
-  mode: 'agent' | 'shell';
+  mode: 'agent' | 'shell' | 'chat';
   placeholder?: string;
 }) {
   const [cursor, setCursor] = useState(value.length);
@@ -103,7 +103,7 @@ export function Input({
     { isActive: !disabled },
   );
 
-  const idlePrompt = mode === 'shell' ? '$ ' : '> ';
+  const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
   const promptText = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : idlePrompt;
   const promptColor = spinning ? theme.accent : undefined;
   const showPlaceholder = !value && !!placeholder && !disabled;

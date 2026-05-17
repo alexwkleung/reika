@@ -14,19 +14,28 @@ import type { SearchProvider } from '../search/types.js';
 
 export function defaultTools(config?: Config): Tool[] {
   const tools: Tool[] = [readTool, listTool, grepTool, editTool, writeTool, bashTool, subagentTool];
-
-  // SearXNG takes precedence over Tavily when both are configured — local-first.
-  let provider: SearchProvider | undefined;
-  if (config?.searxngUrl) {
-    provider = new SearxngProvider(config.searxngUrl);
-  } else if (config?.tavilyApiKey) {
-    provider = new TavilyProvider(config.tavilyApiKey);
-  }
-
-  if (provider) {
-    tools.push(createSearchTool(provider));
+  const search = makeSearchProvider(config);
+  if (search) {
+    tools.push(createSearchTool(search));
     tools.push(fetchUrlTool);
   }
-
   return tools;
+}
+
+// Tools available in chat mode — knowledge-only, no filesystem or shell access.
+export function chatTools(config?: Config): Tool[] {
+  const tools: Tool[] = [];
+  const search = makeSearchProvider(config);
+  if (search) {
+    tools.push(createSearchTool(search));
+    tools.push(fetchUrlTool);
+  }
+  return tools;
+}
+
+function makeSearchProvider(config?: Config): SearchProvider | undefined {
+  // SearXNG takes precedence over Tavily when both are configured — local-first.
+  if (config?.searxngUrl) return new SearxngProvider(config.searxngUrl);
+  if (config?.tavilyApiKey) return new TavilyProvider(config.tavilyApiKey);
+  return undefined;
 }

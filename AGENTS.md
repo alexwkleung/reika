@@ -93,6 +93,22 @@ To re-theme, edit `theme.ts` only. New UI must consult these names, not introduc
 
 `App.tsx` sets `paddingX={1}` on its outer Box for a uniform 1-column gutter. Don't add competing horizontal padding to top-level children — bordered boxes and inline content stay visually aligned because they all live inside that single gutter.
 
+## Modes (agent / shell / chat)
+
+Three runtime modes. Each affects what input does and what context is preserved.
+
+| Mode              | Input behavior                                                                | Tools                                                        | History                                                                   |
+| ----------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `agent` (default) | Runs through model + agent system prompt                                      | `defaultTools(config)` — full set                            | shared with shell                                                         |
+| `shell`           | Runs as bash directly (no model)                                              | n/a                                                          | shared with agent — shell output becomes part of agent's context          |
+| `chat`            | Runs through model + lean chat system prompt (no tool-use rules, no repo map) | `chatTools(config)` — knowledge-only (`search`, `fetch_url`) | **isolated** — separate `messages` array, stashed/restored on mode switch |
+
+Implementation: a single `messages` state holds the active mode's history. When the user crosses the chat boundary (agent/shell ↔ chat), `stashedMessagesRef` saves the outgoing side and restores the incoming side's prior history. Switching between agent and shell does not stash because they share. `/new` clears only the current mode's history (the other side's stash survives).
+
+Mode switches are blocked while `status === 'busy'` to avoid mid-turn state corruption.
+
+When adding new modes, follow the same pattern: decide which existing side it shares with (or define its own stash slot) and update the swap logic in `switchMode()`.
+
 ## Approval gate
 
 Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if present. When it returns `false`, the tool MUST exit without performing its action and emit a clear summary like `"Edit declined by user for X"`. The `ApprovalRequest` object also accepts optional `warnings` — for `bash`, dangerous patterns trigger warnings that bypass session-auto-approve.

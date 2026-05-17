@@ -10,6 +10,7 @@ export function Status({
   elapsed,
   usage,
   autoApprove,
+  modeTag,
 }: {
   model: string;
   turns: number;
@@ -17,6 +18,7 @@ export function Status({
   elapsed: number | null;
   usage: Usage;
   autoApprove?: boolean;
+  modeTag?: string;
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${elapsed}s` : '';
@@ -30,6 +32,12 @@ export function Status({
 
   return (
     <Box>
+      {modeTag ? (
+        <>
+          <Text color={theme.tool}>{modeTag}</Text>
+          <Text color={theme.muted}>{' · '}</Text>
+        </>
+      ) : null}
       {autoApprove ? (
         <>
           <Text color={theme.warning}>auto approve on</Text>

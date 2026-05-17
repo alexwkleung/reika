@@ -107,6 +107,7 @@ Approval prompts show a unified diff (or the command for `bash`), with `Approve 
 
 - **Agent** (default): input goes to the model; it can call tools
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
+- **Chat**: `/chat` to enter — pure chat with the model. No filesystem/shell tools registered (only `search` and `fetch_url` if configured). Conversation history is fully isolated from agent mode — switching back and forth keeps each side's history independent. `/agent` returns. Status bar shows a `chat` tag when active.
 
 ## Slash commands
 
