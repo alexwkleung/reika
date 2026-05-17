@@ -9,12 +9,14 @@ export function Status({
   status,
   elapsed,
   usage,
+  autoApprove,
 }: {
   model: string;
   turns: number;
   status: string;
   elapsed: number | null;
   usage: Usage;
+  autoApprove?: boolean;
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${elapsed}s` : '';
@@ -28,6 +30,12 @@ export function Status({
 
   return (
     <Box>
+      {autoApprove ? (
+        <>
+          <Text color={theme.warning}>auto approve on</Text>
+          <Text color={theme.muted}>{' · '}</Text>
+        </>
+      ) : null}
       <Text
         color={theme.muted}
       >{`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}</Text>

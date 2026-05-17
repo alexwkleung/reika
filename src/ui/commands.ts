@@ -11,6 +11,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'shell', desc: 'enter shell mode (raw bash, no model)' },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'model', desc: 'show current model and base URL' },
+  { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
   { name: 'stats', desc: 'show full session summary' },

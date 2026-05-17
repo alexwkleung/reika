@@ -97,6 +97,8 @@ To re-theme, edit `theme.ts` only. New UI must consult these names, not introduc
 
 Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if present. When it returns `false`, the tool MUST exit without performing its action and emit a clear summary like `"Edit declined by user for X"`. The `ApprovalRequest` object also accepts optional `warnings` — for `bash`, dangerous patterns trigger warnings that bypass session-auto-approve.
 
+**Session vs env auto-approve:** `REIKA_AUTO_APPROVE=true` skips the gate entirely (App passes `requestApproval: undefined` to `runTurn`). The session-level toggle (`/approvals on`, or the "Always (this session)" choice during a prompt) flips `sessionAutoApprove` state, which short-circuits inside `requestApproval`. Env always wins; the slash command is no-op when env is on. Status bar shows a yellow `auto-approve` indicator when either is active.
+
 ## Bundle and prompt caching
 
 `ContextBundle` is built once via `bootstrap()` and treated as stable across turns to maximize prompt caching at the provider. Don't mutate it during a session. The only legitimate refresh path is `/cd`, which re-runs `bootstrap()` for a new cwd. If you add a context source, plumb it into `bootstrap()` and the system-prompt builder; never re-fetch per-turn.

@@ -119,6 +119,7 @@ Type `/` in the input to see suggestions. Highlights:
 | `/cd <path>`                  | Change cwd (re-indexes repo map). Tilde works.                                  |
 | `/shell` / `/agent`           | Toggle modes                                                                    |
 | `/model` / `/cwd` / `/tokens` | Show current values                                                             |
+| `/approvals [on\|off]`        | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
 | `/stats`                      | Full session summary (duration, turns, tools, files modified, approvals)        |
 | `/exit` / `/quit`             | Exit (prints session summary first)                                             |
 | `@<path>`                     | In agent mode, inlines a file as context. Tab autocomplete from the file index. |

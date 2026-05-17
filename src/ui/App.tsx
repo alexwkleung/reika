@@ -64,6 +64,7 @@ export function App() {
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
+  const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const statusRef = useRef<UIStatus>('loading');
@@ -73,6 +74,7 @@ export function App() {
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
   const sessionAutoApproveRef = useRef(false);
+  sessionAutoApproveRef.current = sessionAutoApprove;
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
   const activeProfileRef = useRef('default');
@@ -207,7 +209,7 @@ export function App() {
         if (sel === 0) resolve(true);
         else if (sel === 1) resolve(false);
         else {
-          sessionAutoApproveRef.current = true;
+          setSessionAutoApprove(true);
           resolve(true);
         }
         return;
@@ -301,7 +303,7 @@ export function App() {
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
-      sessionAutoApproveRef.current = false;
+      setSessionAutoApprove(false);
       setMode('agent');
       setActiveProfile('default');
       return;
@@ -425,6 +427,33 @@ export function App() {
         }
         lines.push('', 'available profiles:', list, '', 'switch with /model <name>');
         response = lines.join('\n');
+        break;
+      }
+      case 'approvals': {
+        const envOn = config?.autoApprove === true;
+        const target = args.trim().toLowerCase();
+        if (target === 'on' || target === 'off') {
+          if (envOn) {
+            response = `auto-approve is forced on by REIKA_AUTO_APPROVE; session toggle has no effect.`;
+            break;
+          }
+          setSessionAutoApprove(target === 'on');
+          response = `Session auto-approve: ${target}`;
+          break;
+        }
+        if (target) {
+          response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
+          break;
+        }
+        const effective = envOn || sessionAutoApprove;
+        response = [
+          `auto-approve: ${effective ? 'on' : 'off'}`,
+          `  source: ${envOn ? 'REIKA_AUTO_APPROVE (env)' : sessionAutoApprove ? 'session toggle' : '(disabled)'}`,
+          '',
+          envOn
+            ? 'env REIKA_AUTO_APPROVE forces on; session toggle is shadowed'
+            : 'toggle with /approvals on or /approvals off',
+        ].join('\n');
         break;
       }
       case 'cwd':
@@ -619,6 +648,7 @@ export function App() {
             status={status === 'busy' ? phase : status}
             elapsed={status === 'busy' ? elapsed : null}
             usage={totalUsage}
+            autoApprove={config?.autoApprove || sessionAutoApprove}
           />
         </>
       )}
