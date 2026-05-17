@@ -11,7 +11,18 @@ const LOGO = [
   '╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝',
 ];
 
-export function Splash({ model, cwd, version }: { model: string; cwd: string; version: string }) {
+export function Splash({
+  model,
+  cwd,
+  version,
+  subagent,
+}: {
+  model: string;
+  cwd: string;
+  version: string;
+  subagent?: string;
+}) {
+  const labelWidth = subagent ? 'subagent:  '.length : 'model:    '.length;
   return (
     <Box
       borderStyle="round"
@@ -30,11 +41,17 @@ export function Splash({ model, cwd, version }: { model: string; cwd: string; ve
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Box>
-          <Text dimColor>{'model:  '}</Text>
+          <Text dimColor>{padLabel('model:', labelWidth)}</Text>
           <Text>{model}</Text>
         </Box>
+        {subagent ? (
+          <Box>
+            <Text dimColor>{padLabel('subagent:', labelWidth)}</Text>
+            <Text>{subagent}</Text>
+          </Box>
+        ) : null}
         <Box>
-          <Text dimColor>{'cwd:    '}</Text>
+          <Text dimColor>{padLabel('cwd:', labelWidth)}</Text>
           <Text>{displayCwd(cwd)}</Text>
         </Box>
       </Box>
@@ -43,6 +60,10 @@ export function Splash({ model, cwd, version }: { model: string; cwd: string; ve
       </Box>
     </Box>
   );
+}
+
+function padLabel(label: string, width: number): string {
+  return label + ' '.repeat(Math.max(1, width - label.length));
 }
 
 function displayCwd(cwd: string): string {

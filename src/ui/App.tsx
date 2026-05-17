@@ -26,7 +26,7 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 type Mode = 'agent' | 'shell';
 
 type HeaderItem =
-  | { kind: 'splash'; model: string; cwd: string; version: string }
+  | { kind: 'splash'; model: string; cwd: string; version: string; subagent?: string }
   | { kind: 'header'; model: string; cwd: string };
 
 function expandHome(p: string): string {
@@ -132,7 +132,14 @@ export function App() {
         setTools(defaultTools(cfg));
         setHeaderItems(prev => [
           ...prev,
-          { kind: 'splash', model: cfg.model, cwd: b.cwd, version: VERSION },
+          {
+            kind: 'splash',
+            model: cfg.model,
+            cwd: b.cwd,
+            version: VERSION,
+            subagent:
+              cfg.subagentModel && cfg.subagentModel !== cfg.model ? cfg.subagentModel : undefined,
+          },
         ]);
         setStatus('idle');
       } catch (e) {
@@ -408,16 +415,16 @@ export function App() {
         const list = Object.entries(config.profiles)
           .map(([n, p]) => `  ${n === activeProfile ? '›' : ' '} ${n} → ${p.model}`)
           .join('\n');
-        response = [
+        const lines = [
           `current: ${activeProfile}`,
-          `model:   ${current.model}`,
-          `base:    ${current.baseURL}`,
-          '',
-          'available profiles:',
-          list,
-          '',
-          'switch with /model <name>',
-        ].join('\n');
+          `model:    ${current.model}`,
+          `base:     ${current.baseURL}`,
+        ];
+        if (config.subagentModel && config.subagentModel !== current.model) {
+          lines.push(`subagent: ${config.subagentModel}`);
+        }
+        lines.push('', 'available profiles:', list, '', 'switch with /model <name>');
+        response = lines.join('\n');
         break;
       }
       case 'cwd':
@@ -574,7 +581,7 @@ export function App() {
       <Static items={headerItems}>
         {(h, i) =>
           h.kind === 'splash' ? (
-            <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} />
+            <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
           ) : (
             <Header key={i} model={h.model} cwd={h.cwd} />
           )

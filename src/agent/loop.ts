@@ -159,8 +159,11 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
       | (Message & { role: 'assistant' })
       | undefined;
     const result = finalAssistant?.content ?? '';
+    const usedDifferentModel = subConfig.model !== parent.config.model;
     return {
-      summary: `Subagent completed (${result.length} chars)`,
+      summary: usedDifferentModel
+        ? `Subagent (${subConfig.model}) completed (${result.length} chars)`
+        : `Subagent completed (${result.length} chars)`,
       payload: result || '(no output)',
     };
   };
