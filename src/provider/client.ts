@@ -53,16 +53,22 @@ export async function callModel(opts: {
         };
       }
       const delta = chunk.choices[0]?.delta as
-        | ((typeof chunk.choices)[0]['delta'] & { reasoning_content?: string | null })
+        | ((typeof chunk.choices)[0]['delta'] & {
+            reasoning_content?: string | null;
+            reasoning?: string | null;
+          })
         | undefined;
       if (!delta) continue;
       if (delta.content) {
         contentParts.push(delta.content);
         opts.onContentDelta?.(delta.content);
       }
-      if (delta.reasoning_content) {
-        reasoningParts.push(delta.reasoning_content);
-        opts.onReasoningDelta?.(delta.reasoning_content);
+      // Field name differs by provider: DeepSeek/Kimi use `reasoning_content`,
+      // OpenRouter normalizes to `reasoning`. Accept either.
+      const reasoningChunk = delta.reasoning_content ?? delta.reasoning;
+      if (reasoningChunk) {
+        reasoningParts.push(reasoningChunk);
+        opts.onReasoningDelta?.(reasoningChunk);
       }
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
