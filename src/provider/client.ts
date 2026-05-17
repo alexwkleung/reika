@@ -40,6 +40,7 @@ export async function callModel(opts: {
         tools: opts.tools.length > 0 ? toolsToOpenAI(opts.tools) : undefined,
         stream: true,
         stream_options: { include_usage: true },
+        ...(opts.config.maxTokens ? { max_tokens: opts.config.maxTokens } : {}),
       },
       { signal: opts.signal },
     );

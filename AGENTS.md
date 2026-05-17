@@ -135,6 +135,8 @@ When calling `runTurn`, App.tsx passes `resolveProfile(config, activeProfile)` r
 
 Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they always come from the top-level config regardless of which profile is active. This is intentional: subagent model selection is a separate axis from main-thread model selection.
 
+**Per-profile `maxTokens`:** caps response tokens for that profile's calls. Falls back to the global `REIKA_MAX_TOKENS` if a profile doesn't set its own. `resolveProfile` carries it through to `callModel`, which passes `max_tokens` to the OpenAI client only when defined (so unset = server default applies). Setting too low truncates tool-call JSON silently — keep ≥4k for tool-heavy use, more for reasoning models.
+
 ## Tests (vitest)
 
 `npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:

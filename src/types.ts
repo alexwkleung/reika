@@ -81,6 +81,7 @@ export type Profile = {
   model: string;
   baseURL: string;
   apiKey: string;
+  maxTokens?: number;
 };
 
 export type Config = {
@@ -97,4 +98,5 @@ export type Config = {
   tavilyApiKey?: string;
   searxngUrl?: string;
   profiles: Record<string, Profile>;
+  maxTokens?: number;
 };

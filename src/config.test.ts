@@ -5,13 +5,17 @@ const ENV_KEYS = [
   'REIKA_MODEL',
   'REIKA_BASE_URL',
   'REIKA_API_KEY',
+  'REIKA_MAX_TOKENS',
   'REIKA_PROFILES',
   'REIKA_KIMI_MODEL',
   'REIKA_KIMI_BASE_URL',
   'REIKA_KIMI_API_KEY',
+  'REIKA_KIMI_MAX_TOKENS',
   'REIKA_GPT4_MODEL',
   'REIKA_GPT4_BASE_URL',
   'REIKA_GPT4_API_KEY',
+  'REIKA_GPT4_MAX_TOKENS',
+  'REIKA_MINIMAL_MODEL',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -120,5 +124,59 @@ describe('resolveProfile', () => {
     expect(resolved.apiKey).toBe('kimi-k');
     // Non-profile fields preserved
     expect(resolved.maxTurns).toBe(cfg.maxTurns);
+  });
+});
+
+describe('maxTokens', () => {
+  it('is undefined when REIKA_MAX_TOKENS is not set', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    expect(cfg.maxTokens).toBeUndefined();
+    expect(cfg.profiles.default.maxTokens).toBeUndefined();
+  });
+
+  it('reads REIKA_MAX_TOKENS into the default profile', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MAX_TOKENS = '4096';
+    const cfg = loadConfig();
+    expect(cfg.maxTokens).toBe(4096);
+    expect(cfg.profiles.default.maxTokens).toBe(4096);
+  });
+
+  it('named profile inherits maxTokens from default when not overridden', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MAX_TOKENS = '4096';
+    process.env.REIKA_PROFILES = 'minimal';
+    process.env.REIKA_MINIMAL_MODEL = 'mini';
+    const cfg = loadConfig();
+    expect(cfg.profiles.minimal.maxTokens).toBe(4096);
+  });
+
+  it('per-profile REIKA_<NAME>_MAX_TOKENS overrides the default', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MAX_TOKENS = '4096';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MAX_TOKENS = '16384';
+    const cfg = loadConfig();
+    expect(cfg.profiles.kimi.maxTokens).toBe(16384);
+    expect(cfg.profiles.default.maxTokens).toBe(4096);
+  });
+
+  it('ignores invalid (non-numeric) values', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MAX_TOKENS = 'abc';
+    const cfg = loadConfig();
+    expect(cfg.maxTokens).toBeUndefined();
+  });
+
+  it('resolveProfile carries maxTokens through', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MAX_TOKENS = '8192';
+    const cfg = loadConfig();
+    const resolved = resolveProfile(cfg, 'kimi');
+    expect(resolved.maxTokens).toBe(8192);
   });
 });
