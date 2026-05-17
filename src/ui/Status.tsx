@@ -18,7 +18,9 @@ export function Status({
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${elapsed}s` : '';
-  const keys = busy ? 'ctrl-c abort' : 'enter submit · \\ + enter newline · ctrl-c exit';
+  const keys = busy
+    ? 'ctrl-c to abort'
+    : 'enter to submit · shift+enter for newline · ctrl-c to exit';
   const tokens =
     usage.promptTokens > 0 || usage.completionTokens > 0
       ? ` · ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
