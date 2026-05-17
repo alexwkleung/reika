@@ -16,6 +16,8 @@ const ENV_KEYS = [
   'REIKA_GPT4_API_KEY',
   'REIKA_GPT4_MAX_TOKENS',
   'REIKA_MINIMAL_MODEL',
+  'REIKA_BROKEN_MODEL',
+  'REIKA_BROKEN_BASE_URL',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -124,6 +126,40 @@ describe('resolveProfile', () => {
     expect(resolved.apiKey).toBe('kimi-k');
     // Non-profile fields preserved
     expect(resolved.maxTurns).toBe(cfg.maxTurns);
+  });
+});
+
+describe('base URL validation', () => {
+  it('rejects REIKA_BASE_URL ending in /chat/completions', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
+    expect(() => loadConfig()).toThrow(/REIKA_BASE_URL.*API root.*\/chat\/completions/);
+  });
+
+  it('rejects /chat/completions even with a trailing slash', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions/';
+    expect(() => loadConfig()).toThrow(/REIKA_BASE_URL/);
+  });
+
+  it('rejects /completions (legacy endpoint)', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_BASE_URL = 'https://api.example.com/v1/completions';
+    expect(() => loadConfig()).toThrow(/REIKA_BASE_URL/);
+  });
+
+  it('accepts a clean API root', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_BASE_URL = 'https://openrouter.ai/api/v1';
+    expect(() => loadConfig()).not.toThrow();
+  });
+
+  it('validates per-profile base URLs too', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'broken';
+    process.env.REIKA_BROKEN_MODEL = 'x';
+    process.env.REIKA_BROKEN_BASE_URL = 'https://api.example.com/v1/chat/completions';
+    expect(() => loadConfig()).toThrow(/REIKA_BROKEN_BASE_URL/);
   });
 });
 

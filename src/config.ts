@@ -16,6 +16,7 @@ export function loadConfig(): Config {
     );
   }
   const baseURL = process.env.REIKA_BASE_URL ?? 'http://localhost:11434/v1';
+  validateBaseURL(baseURL, 'REIKA_BASE_URL');
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
   const defaultProfile: Profile = { model, baseURL, apiKey, maxTokens };
@@ -51,9 +52,11 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
     const profileModel = process.env[`REIKA_${upper}_MODEL`];
     if (!profileModel) continue;
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
+    const profileBaseURL = process.env[`REIKA_${upper}_BASE_URL`] ?? defaultProfile.baseURL;
+    validateBaseURL(profileBaseURL, `REIKA_${upper}_BASE_URL`);
     profiles[lower] = {
       model: profileModel,
-      baseURL: process.env[`REIKA_${upper}_BASE_URL`] ?? defaultProfile.baseURL,
+      baseURL: profileBaseURL,
       apiKey: process.env[`REIKA_${upper}_API_KEY`] ?? defaultProfile.apiKey,
       maxTokens: profileMaxTokens ?? defaultProfile.maxTokens,
     };
@@ -63,6 +66,19 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
 
 function emptyToUndefined(s: string | undefined): string | undefined {
   return s && s.trim() !== '' ? s : undefined;
+}
+
+// Catch the common footgun of including the endpoint path in the base URL.
+// The OpenAI SDK appends `/chat/completions` itself, so a base URL ending in
+// `/chat/completions` produces 404s as it path-doubles.
+function validateBaseURL(url: string, source: string): void {
+  const normalized = url.replace(/\/+$/, '');
+  if (normalized.endsWith('/chat/completions') || normalized.endsWith('/completions')) {
+    throw new Error(
+      `${source} should be the API root, not an endpoint. Got "${url}". ` +
+        `Drop the trailing "/chat/completions" — the OpenAI SDK appends it automatically.`,
+    );
+  }
 }
 
 function parseIntOrUndef(s: string | undefined): number | undefined {
