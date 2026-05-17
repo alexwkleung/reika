@@ -83,6 +83,7 @@ export async function runTurn(opts: {
       const tool = opts.tools.find(t => t.name === call.name);
       let summary: string;
       let payload: string | undefined;
+      let diff: ToolResult['diff'];
       if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
@@ -96,6 +97,7 @@ export async function runTurn(opts: {
           });
           summary = result.summary;
           payload = result.payload;
+          diff = result.diff;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -107,6 +109,7 @@ export async function runTurn(opts: {
         summary,
         payload,
         payloadId,
+        ...(diff ? { diff } : {}),
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);

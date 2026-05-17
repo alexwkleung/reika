@@ -45,20 +45,32 @@ export const editTool: Tool = {
       };
     }
 
+    const diffText = buildEditDiff(
+      oldStr,
+      newStr,
+      text.slice(0, first),
+      text.slice(first + oldStr.length),
+    );
+
     if (ctx.requestApproval) {
-      const diff = buildEditDiff(
-        oldStr,
-        newStr,
-        text.slice(0, first),
-        text.slice(first + oldStr.length),
-      );
-      const ok = await ctx.requestApproval({ tool: 'edit', subject: rel, preview: diff });
+      const ok = await ctx.requestApproval({ tool: 'edit', subject: rel, preview: diffText });
       if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }
 
     const next = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
     await writeFile(full, next, 'utf8');
     const line = text.slice(0, first).split('\n').length;
-    return { summary: `Edited ${rel} at line ${line}` };
+    const added = countPrefixed(diffText, '+ ');
+    const removed = countPrefixed(diffText, '- ');
+    return {
+      summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
+      diff: { text: diffText, path: rel, added, removed },
+    };
   },
 };
+
+function countPrefixed(text: string, prefix: string): number {
+  let n = 0;
+  for (const line of text.split('\n')) if (line.startsWith(prefix)) n++;
+  return n;
+}

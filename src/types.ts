@@ -22,6 +22,7 @@ export type Message =
       summary: string;
       payload?: string;
       payloadId?: string;
+      diff?: { text: string; path: string; added: number; removed: number };
       nested?: boolean;
     }
   | { role: 'error'; content: string; nested?: boolean }
@@ -37,6 +38,7 @@ export type ToolResult = {
   summary: string;
   payload?: string;
   display?: string;
+  diff?: { text: string; path: string; added: number; removed: number };
 };
 
 export type ApprovalRequest = {

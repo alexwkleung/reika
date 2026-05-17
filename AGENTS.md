@@ -113,6 +113,8 @@ When adding new modes, follow the same pattern: decide which existing side it sh
 
 Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if present. When it returns `false`, the tool MUST exit without performing its action and emit a clear summary like `"Edit declined by user for X"`. The `ApprovalRequest` object also accepts optional `warnings` — for `bash`, dangerous patterns trigger warnings that bypass session-auto-approve.
 
+If the tool produces a diff (e.g., `edit`), include it on the `ToolResult` via `diff: { text, path, added, removed }`. The loop attaches it to the tool message, and `Scrollback` renders the diff under the summary via `DiffView` so the user can see what was actually applied. The diff text uses the `+ `/`- `/`  ` line-prefix format produced by `buildEditDiff` / `buildWriteDiff`.
+
 **Session vs env auto-approve:** `REIKA_AUTO_APPROVE=true` skips the gate entirely (App passes `requestApproval: undefined` to `runTurn`). The session-level toggle (`/approvals on`, or the "Always (this session)" choice during a prompt) flips `sessionAutoApprove` state, which short-circuits inside `requestApproval`. Env always wins; the slash command is no-op when env is on. Status bar shows a yellow `auto-approve` indicator when either is active.
 
 ## Bundle and prompt caching

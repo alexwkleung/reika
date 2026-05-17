@@ -3,6 +3,7 @@ import { Box, Static, Text } from 'ink';
 import type { Message } from '../types.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
+import { DiffView } from './DiffView.js';
 
 export function Scrollback({
   messages,
@@ -95,9 +96,16 @@ function renderMessage(msg: Message): React.ReactElement | null {
   }
   if (msg.role === 'tool') {
     return (
-      <Box>
-        <Text color={theme.tool}>{'  ↳ '}</Text>
-        <Text color={theme.secondary}>{msg.summary}</Text>
+      <Box flexDirection="column">
+        <Box>
+          <Text color={theme.tool}>{'  ↳ '}</Text>
+          <Text color={theme.secondary}>{msg.summary}</Text>
+        </Box>
+        {msg.diff ? (
+          <Box flexDirection="column" marginTop={1} marginLeft={4}>
+            <DiffView diff={msg.diff.text} path={msg.diff.path} />
+          </Box>
+        ) : null}
       </Box>
     );
   }
