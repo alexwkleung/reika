@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { Usage } from '../types.js';
+import { theme } from './theme.js';
 
 export function Status({
   model,
@@ -25,7 +26,9 @@ export function Status({
 
   return (
     <Box>
-      <Text dimColor>{`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}</Text>
+      <Text
+        color={theme.muted}
+      >{`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}</Text>
     </Box>
   );
 }

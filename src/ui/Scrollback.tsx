@@ -20,18 +20,18 @@ export function Scrollback({
       <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
       {streamingReasoning ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>{`▸ ${streamingReasoning}`}</Text>
+          <Text color={theme.muted}>{`▸ ${streamingReasoning}`}</Text>
         </Box>
       ) : null}
       {streaming ? (
         <Box flexDirection="column" marginTop={1}>
           <Text>{streaming}</Text>
-          <Text dimColor>▌</Text>
+          <Text color={theme.muted}>▌</Text>
         </Box>
       ) : null}
       {streamingTool ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>{streamingTool}</Text>
+          <Text color={theme.muted}>{streamingTool}</Text>
         </Box>
       ) : null}
     </>
@@ -66,14 +66,14 @@ function renderMessage(msg: Message): React.ReactElement | null {
           <Text color={theme.success}>{'$ '}</Text>
           <Text>{msg.command}</Text>
         </Box>
-        {msg.output ? <Text dimColor>{msg.output}</Text> : null}
+        {msg.output ? <Text color={theme.muted}>{msg.output}</Text> : null}
       </Box>
     );
   }
   if (msg.role === 'assistant') {
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <Text dimColor>{`▸ ${msg.reasoning}`}</Text> : null}
+        {msg.reasoning ? <Text color={theme.muted}>{`▸ ${msg.reasoning}`}</Text> : null}
         {msg.content ? <Text>{renderMarkdown(msg.content)}</Text> : null}
         {msg.toolCalls?.map(tc => (
           <Box key={tc.id}>
@@ -112,7 +112,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
     return (
       <Box flexDirection="row" marginTop={1}>
         <Text color={theme.accent}>{'❯ '}</Text>
-        <Text dimColor>{msg.content}</Text>
+        <Text color={theme.muted}>{msg.content}</Text>
       </Box>
     );
   }

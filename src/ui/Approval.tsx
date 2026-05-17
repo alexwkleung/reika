@@ -57,7 +57,9 @@ export function Approval({
         })}
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>{'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}</Text>
+        <Text color={theme.muted}>
+          {'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}
+        </Text>
       </Box>
     </Box>
   );
@@ -112,7 +114,7 @@ function DiffLine({ line, language }: { line: string; language: string }) {
   return (
     <Box>
       <Text>{'  '}</Text>
-      <Text dimColor>{code}</Text>
+      <Text color={theme.muted}>{code}</Text>
     </Box>
   );
 }

@@ -114,7 +114,7 @@ export function Input({
       {showPlaceholder ? (
         <Box>
           <Text>{`${INVERSE_ON} ${INVERSE_OFF}`}</Text>
-          <Text dimColor>{placeholder}</Text>
+          <Text color={theme.muted}>{placeholder}</Text>
         </Box>
       ) : (
         <Text>{renderWithCursor(value, cursor, !disabled)}</Text>

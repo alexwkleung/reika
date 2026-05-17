@@ -24,7 +24,7 @@ export function Suggestions({
         );
       })}
       <Box marginTop={1}>
-        <Text dimColor>{'↑↓ navigate  ·  tab accept  ·  esc dismiss'}</Text>
+        <Text color={theme.muted}>{'↑↓ navigate  ·  tab accept  ·  esc dismiss'}</Text>
       </Box>
     </Box>
   );

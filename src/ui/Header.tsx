@@ -9,7 +9,7 @@ export function Header({ model, cwd }: { model: string; cwd: string }) {
       <Text bold color={theme.accent}>
         Reika
       </Text>
-      <Text dimColor>{`  ·  ${model}  ·  ${displayCwd(cwd)}`}</Text>
+      <Text color={theme.muted}>{`  ·  ${model}  ·  ${displayCwd(cwd)}`}</Text>
     </Box>
   );
 }

@@ -37,26 +37,26 @@ export function Splash({
         </Text>
       ))}
       <Box marginTop={1}>
-        <Text dimColor>{`minimal coding agent · v${version}`}</Text>
+        <Text color={theme.muted}>{`minimal coding agent · v${version}`}</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Box>
-          <Text dimColor>{padLabel('model:', labelWidth)}</Text>
+          <Text color={theme.muted}>{padLabel('model:', labelWidth)}</Text>
           <Text>{model}</Text>
         </Box>
         {subagent ? (
           <Box>
-            <Text dimColor>{padLabel('subagent:', labelWidth)}</Text>
+            <Text color={theme.muted}>{padLabel('subagent:', labelWidth)}</Text>
             <Text>{subagent}</Text>
           </Box>
         ) : null}
         <Box>
-          <Text dimColor>{padLabel('cwd:', labelWidth)}</Text>
+          <Text color={theme.muted}>{padLabel('cwd:', labelWidth)}</Text>
           <Text>{displayCwd(cwd)}</Text>
         </Box>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>/help for commands · @ to attach files</Text>
+        <Text color={theme.muted}>/help for commands · @ to attach files</Text>
       </Box>
     </Box>
   );
