@@ -74,7 +74,11 @@ function renderMessage(msg: Message): React.ReactElement | null {
     return (
       <Box flexDirection="column" marginTop={1}>
         {msg.reasoning ? <Text color={theme.muted}>{`▸ ${msg.reasoning}`}</Text> : null}
-        {msg.content ? <Text>{renderMarkdown(msg.content)}</Text> : null}
+        {msg.content ? (
+          <Box marginTop={msg.reasoning ? 1 : 0}>
+            <Text>{renderMarkdown(msg.content)}</Text>
+          </Box>
+        ) : null}
         {msg.toolCalls?.map(tc => (
           <Box key={tc.id}>
             <Text color={theme.tool}>{`· ${tc.name}`}</Text>
