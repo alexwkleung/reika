@@ -99,6 +99,7 @@ The agent has these tools. Optional tools register only when their config is pre
 | `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                                                      |
 | `list`      | List files in a directory (depth-limited)                          | no                     | —                                                      |
 | `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                                                      |
+| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                                                      |
 | `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                                                      |
 | `write`     | Create a new file; refuses to overwrite                            | yes                    | —                                                      |
 | `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                                                      |

@@ -2,6 +2,7 @@ import type { Config, Tool } from '../types.js';
 import { readTool } from './read.js';
 import { listTool } from './list.js';
 import { grepTool } from './grep.js';
+import { globTool } from './glob.js';
 import { editTool } from './edit.js';
 import { writeTool } from './write.js';
 import { bashTool } from './bash.js';
@@ -13,7 +14,16 @@ import { SearxngProvider } from '../search/searxng.js';
 import type { SearchProvider } from '../search/types.js';
 
 export function defaultTools(config?: Config): Tool[] {
-  const tools: Tool[] = [readTool, listTool, grepTool, editTool, writeTool, bashTool, subagentTool];
+  const tools: Tool[] = [
+    readTool,
+    listTool,
+    grepTool,
+    globTool,
+    editTool,
+    writeTool,
+    bashTool,
+    subagentTool,
+  ];
   const search = makeSearchProvider(config);
   if (search) {
     tools.push(createSearchTool(search));
