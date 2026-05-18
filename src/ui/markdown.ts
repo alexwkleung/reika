@@ -62,3 +62,15 @@ export function renderMarkdown(content: string): string {
     return content;
   }
 }
+
+// Strip the most common markdown markers without applying any styling. Used for
+// reasoning text so it stays in flat muted color (no syntax-highlight escape from
+// code blocks). Edge cases like links/tables/fences degrade to the prior literal-text
+// behavior — strict improvement, never worse.
+export function stripReasoningMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/(?<!\*)\*(.+?)\*(?!\*)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '');
+}

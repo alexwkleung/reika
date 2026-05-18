@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Static, Text } from 'ink';
 import type { Message } from '../types.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
 
@@ -21,7 +21,7 @@ export function Scrollback({
       <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
       {streamingReasoning ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.muted}>{`▸ ${streamingReasoning}`}</Text>
+          <Text color={theme.muted}>{`▸ ${stripReasoningMarkdown(streamingReasoning)}`}</Text>
         </Box>
       ) : null}
       {streaming ? (
@@ -74,7 +74,9 @@ function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'assistant') {
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <Text color={theme.muted}>{`▸ ${msg.reasoning}`}</Text> : null}
+        {msg.reasoning ? (
+          <Text color={theme.muted}>{`▸ ${stripReasoningMarkdown(msg.reasoning)}`}</Text>
+        ) : null}
         {msg.content ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>{renderMarkdown(msg.content)}</Text>
