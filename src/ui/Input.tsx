@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { theme } from './theme.js';
 
-const FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+// Clockwise rotation — the missing dot moves through clock positions 1 → 3 → 4 → 5 → 7 → 8 → 9 → 11.
+const FRAMES = ['⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽', '⣾'];
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
 
