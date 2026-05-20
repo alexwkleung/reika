@@ -15,6 +15,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
+  { name: 'skills', desc: 'list available skills (loaded from skills dirs)' },
   { name: 'stats', desc: 'show full session summary' },
   { name: 'exit', desc: 'exit Reika' },
   { name: 'quit', desc: 'alias of /exit' },

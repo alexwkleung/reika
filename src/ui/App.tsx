@@ -272,7 +272,7 @@ export function App() {
       setSuggestionState(null);
       return;
     }
-    const next = computeSuggestions(value, bundle.fileIndex);
+    const next = computeSuggestions(value, bundle.fileIndex, bundle.skills);
     setSuggestionState(next);
     setSuggestionSelected(0);
   };
@@ -495,8 +495,33 @@ export function App() {
       case 'tokens':
         response = `prompt:     ${totalUsage.promptTokens}\ncompletion: ${totalUsage.completionTokens}`;
         break;
-      default:
+      case 'skills': {
+        const list = bundle?.skills ?? [];
+        if (list.length === 0) {
+          response =
+            'No skills loaded. Drop *.md files in ~/.config/reika/skills/ or <cwd>/.reika/skills/.';
+        } else {
+          response = [
+            'Available skills (invoke as /<name>):',
+            ...list.map(
+              s =>
+                `  /${s.name.padEnd(16)} ${s.description} ${s.source === 'project' ? '(project)' : ''}`,
+            ),
+          ].join('\n');
+        }
+        break;
+      }
+      default: {
+        const skill = bundle?.skills.find(s => s.name === name);
+        if (skill) {
+          setMessages(prev => [...prev, echo]);
+          const extra = args.trim();
+          const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
+          await submitToModel(prompt, raw);
+          return;
+        }
         response = `Unknown command: /${name}. Try /help.`;
+      }
     }
     setMessages(prev => [...prev, echo, { role: 'system', content: response }]);
   };
@@ -550,6 +575,11 @@ export function App() {
       return;
     }
     const { augmented, display } = await expandMentions(trimmed, bundle.cwd);
+    await submitToModel(augmented, display !== augmented ? display : undefined);
+  };
+
+  const submitToModel = async (modelText: string, displayOverride?: string): Promise<void> => {
+    if (!config || !bundle) return;
     setStatus('busy');
     setPhase('thinking');
     streamingRef.current = '';
@@ -562,8 +592,8 @@ export function App() {
     abortRef.current = controller;
     try {
       await runTurn({
-        userInput: augmented,
-        userDisplay: display !== augmented ? display : undefined,
+        userInput: modelText,
+        userDisplay: displayOverride,
         history: messages.slice(),
         bundle,
         config: resolveProfile(config, activeProfile),

@@ -13,13 +13,27 @@ export type SuggestionState = {
 
 const MAX_FILE_SUGGESTIONS = 8;
 
-export function computeSuggestions(value: string, fileIndex: string[]): SuggestionState | null {
+export type SkillEntry = { name: string; description: string };
+
+export function computeSuggestions(
+  value: string,
+  fileIndex: string[],
+  skills: SkillEntry[] = [],
+): SuggestionState | null {
   if (value.startsWith('/') && !value.includes(' ') && !value.includes('\n')) {
     const partial = value.slice(1).toLowerCase();
-    const items: Suggestion[] = COMMANDS.filter(c => c.name.startsWith(partial)).map(c => ({
+    const builtIns = COMMANDS.filter(c => c.name.startsWith(partial)).map(c => ({
       value: `/${c.name}`,
       display: `/${c.name}  —  ${c.desc}`,
     }));
+    const builtInNames = new Set(COMMANDS.map(c => c.name));
+    const skillItems = skills
+      .filter(s => !builtInNames.has(s.name) && s.name.startsWith(partial))
+      .map(s => ({
+        value: `/${s.name}`,
+        display: `/${s.name}  —  ${s.description}`,
+      }));
+    const items: Suggestion[] = [...builtIns, ...skillItems];
     if (items.length === 0) return null;
     return { kind: 'command', items, partial: value };
   }

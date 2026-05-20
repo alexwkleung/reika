@@ -1,4 +1,5 @@
 import type { Ignore } from 'ignore';
+import type { Skill } from './skills.js';
 
 export type ToolCall = {
   id: string;
@@ -79,6 +80,7 @@ export type ContextBundle = {
   hash: string;
   fileIndex: string[];
   ignore: Ignore;
+  skills: Skill[];
 };
 
 export type Profile = {

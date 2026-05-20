@@ -29,6 +29,38 @@ describe('computeSuggestions — commands', () => {
     const state = computeSuggestions('/cd somepath', FILE_INDEX);
     expect(state).toBeNull();
   });
+
+  it('includes skills alongside built-in commands', () => {
+    const skills = [
+      { name: 'review', description: 'review the branch' },
+      { name: 'deploy', description: 'deploy to staging' },
+    ];
+    const state = computeSuggestions('/', FILE_INDEX, skills);
+    const names = state?.items.map(i => i.value) ?? [];
+    expect(names).toContain('/review');
+    expect(names).toContain('/deploy');
+    expect(names).toContain('/help'); // built-ins still present
+  });
+
+  it('built-in commands shadow skills with the same name', () => {
+    const skills = [{ name: 'help', description: 'shadowed' }];
+    const state = computeSuggestions('/h', FILE_INDEX, skills);
+    const items = state?.items ?? [];
+    const helpItems = items.filter(i => i.value === '/help');
+    expect(helpItems).toHaveLength(1);
+    expect(helpItems[0].display).not.toContain('shadowed');
+  });
+
+  it('skill prefix filter works the same as commands', () => {
+    const skills = [
+      { name: 'review', description: 'r' },
+      { name: 'deploy', description: 'd' },
+    ];
+    const state = computeSuggestions('/rev', FILE_INDEX, skills);
+    const names = state?.items.map(i => i.value) ?? [];
+    expect(names).toContain('/review');
+    expect(names).not.toContain('/deploy');
+  });
 });
 
 describe('computeSuggestions — file mentions', () => {

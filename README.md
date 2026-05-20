@@ -109,6 +109,49 @@ The agent has these tools. Optional tools register only when their config is pre
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 
+## Skills (reusable prompt templates)
+
+Drop a `*.md` file in a skills directory and it becomes a slash command. Useful for saved workflows (`/review`, `/deploy`, `/refactor`, etc.).
+
+**Locations (project shadows global on name collision):**
+
+- Global: `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
+- Project: `<cwd>/.reika/skills/`
+
+**Layouts (both supported):**
+
+- **Flat file:** `~/.config/reika/skills/review.md` → `/review`
+- **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in verbatim.
+
+**File format** — plain markdown with optional YAML frontmatter:
+
+```md
+---
+description: Review the current branch end-to-end
+---
+
+Review the changes on this branch:
+
+1. Run git diff main...HEAD
+2. Check for missing tests on changed code
+3. Check for inconsistencies with AGENTS.md
+   Report a punch list.
+```
+
+Without frontmatter, the first non-empty line becomes the autocomplete description; the whole file is the prompt body.
+
+**Invocation:**
+
+- `/review` — sends the file body as your input
+- `/review focus on the API changes` — appends extra args to the body, separated by a blank line
+- `/skills` — list available skills
+
+**Rules:**
+
+- Built-in commands always win over skills with the same name — you can't shadow `/help` or `/exit`
+- Skill names are lowercased filenames; only `[a-z0-9_-]` are accepted (skip files with weird names)
+- Skills load at bootstrap and on `/cd` — edit a file mid-session, then `/cd .` to refresh
+
 ## Modes
 
 - **Agent** (default): input goes to the model; it can call tools
@@ -128,6 +171,7 @@ Type `/` in the input to see suggestions. Highlights:
 | `/model` / `/cwd` / `/tokens` | Show current values                                                             |
 | `/approvals [on\|off]`        | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
 | `/stats`                      | Full session summary (duration, turns, tools, files modified, approvals)        |
+| `/skills`                     | List available skills (loaded from skill dirs at startup)                       |
 | `/exit` / `/quit`             | Exit (prints session summary first)                                             |
 | `@<path>`                     | In agent mode, inlines a file as context. Tab autocomplete from the file index. |
 
