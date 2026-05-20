@@ -144,10 +144,15 @@ function renderMessage(msg: Message): React.ReactElement | null {
     );
   }
   if (msg.role === 'system') {
+    // Color must be on the OUTER Text so wrapped continuation lines inherit it;
+    // a colored inner Text loses its color on wrap because Ink falls back to the
+    // outer's color. The accent marker overrides for its own segment.
     return (
-      <Box flexDirection="row" marginTop={1}>
-        <Text color={theme.accent}>{'❯ '}</Text>
-        <Text color={theme.muted}>{msg.content}</Text>
+      <Box marginTop={1}>
+        <Text color={theme.muted}>
+          <Text color={theme.accent}>{'❯ '}</Text>
+          {msg.content}
+        </Text>
       </Box>
     );
   }

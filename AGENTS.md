@@ -76,6 +76,24 @@ This is how `search` + `fetch_url` are wired. Two providers implement `SearchPro
 - Lift state to `App.tsx` for cross-component features (suggestions, approval, mode)
 - Bordered boxes use `borderStyle="round"` consistently
 
+### Ink wrapping pitfalls
+
+Two interactions to watch for when content can wrap:
+
+1. **`flexDirection="row"` + a wrappable Text mis-renders continuation lines** (blank lines appear between wrap breaks). Fix: drop the row layout and use a single Text with nested color segments for inline markers.
+2. **Color on a nested Text doesn't survive wrapping** — the outer Text's color (or default) wins on continuation lines. Fix: put the dominant color on the OUTER Text and let inner segments override (e.g., for accent markers).
+
+Combined pattern for "marker + body that may wrap":
+
+```tsx
+<Text color={theme.muted}>
+  <Text color={theme.accent}>{'❯ '}</Text>
+  {content}
+</Text>
+```
+
+Don't use `<Box flexDirection="row">` to compose marker + body unless you're certain the body won't wrap.
+
 ## Theme
 
 Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.accent`, `theme.warning`, etc. — never hardcoded color strings. The pattern:

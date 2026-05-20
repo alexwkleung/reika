@@ -10,6 +10,9 @@ export function Suggestions({
   state: SuggestionState;
   selectedIndex: number;
 }) {
+  // Reserve a few cols for the round border, paddingX, and the `› ` marker.
+  const termWidth = process.stdout.columns || 100;
+  const maxDisplay = Math.max(20, termWidth - 8);
   return (
     <Box borderStyle="round" flexDirection="column" paddingX={1} marginTop={1}>
       {state.items.map((item, i) => {
@@ -19,7 +22,7 @@ export function Suggestions({
             <Text bold color={selected ? theme.accent : undefined}>
               {selected ? '› ' : '  '}
             </Text>
-            <Text bold={selected}>{item.display}</Text>
+            <Text bold={selected}>{truncate(item.display, maxDisplay)}</Text>
           </Box>
         );
       })}
@@ -28,4 +31,8 @@ export function Suggestions({
       </Box>
     </Box>
   );
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
