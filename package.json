@@ -29,6 +29,7 @@
     "ignore": "^7.0.5",
     "ink": "^5.0.1",
     "jsdom": "^27.0.1",
+    "jsonrepair": "^3.14.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "openai": "^4.71.0",

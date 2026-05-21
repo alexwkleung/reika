@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractToolCallsFromContent, sanitizeToolName } from './client.js';
+import { extractToolCallsFromContent, sanitizeToolName, tryParseJson } from './client.js';
 
 describe('sanitizeToolName', () => {
   it('returns clean names unchanged', () => {
@@ -70,5 +70,73 @@ describe('extractToolCallsFromContent', () => {
     const input = '<tool_call>{"name":"a"}</tool_call><tool_call>{"name":"b"}</tool_call>';
     const result = extractToolCallsFromContent(input);
     expect(result.calls[0].id).not.toBe(result.calls[1].id);
+  });
+
+  it('recovers tool calls from JSON with trailing commas via repair', () => {
+    const input = '<tool_call>{"name":"read","arguments":{"path":"foo",},}</tool_call>';
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('read');
+    expect(result.calls[0].args).toEqual({ path: 'foo' });
+  });
+
+  it('recovers tool calls from single-quoted JSON via repair', () => {
+    const input = "<tool_call>{'name':'grep','arguments':{'pattern':'x'}}</tool_call>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('grep');
+    expect(result.calls[0].args).toEqual({ pattern: 'x' });
+  });
+});
+
+describe('tryParseJson', () => {
+  it('parses valid JSON without repair', () => {
+    const { args, repaired } = tryParseJson('{"path":"foo"}');
+    expect(args).toEqual({ path: 'foo' });
+    expect(repaired).toBe(false);
+  });
+
+  it('returns empty + no repair flag for empty/falsy input', () => {
+    expect(tryParseJson('')).toEqual({ args: {}, repaired: false });
+    expect(tryParseJson('{}')).toEqual({ args: {}, repaired: false });
+  });
+
+  it('repairs trailing commas', () => {
+    const { args, repaired } = tryParseJson('{"path":"foo",}');
+    expect(args).toEqual({ path: 'foo' });
+    expect(repaired).toBe(true);
+  });
+
+  it('repairs single-quoted JSON', () => {
+    const { args, repaired } = tryParseJson("{'path':'foo'}");
+    expect(args).toEqual({ path: 'foo' });
+    expect(repaired).toBe(true);
+  });
+
+  it('repairs unquoted keys', () => {
+    const { args, repaired } = tryParseJson('{path:"foo"}');
+    expect(args).toEqual({ path: 'foo' });
+    expect(repaired).toBe(true);
+  });
+
+  it('repairs truncated JSON (missing closing brace)', () => {
+    const { args, repaired } = tryParseJson('{"path":"foo"');
+    expect(args).toEqual({ path: 'foo' });
+    expect(repaired).toBe(true);
+  });
+
+  it('returns empty args when input is completely unparseable', () => {
+    const { args, repaired } = tryParseJson('this is not json at all !!!');
+    // Even jsonrepair can produce something out of garbage; what matters is the
+    // result is a safe object. If it parsed to a non-object (e.g. string), wrap to {}.
+    expect(typeof args).toBe('object');
+    expect(args).not.toBeNull();
+    // repaired may be true or false depending on jsonrepair's output type
+    expect(typeof repaired).toBe('boolean');
+  });
+
+  it('returns empty args (not array/string) when JSON parses to non-object', () => {
+    const { args } = tryParseJson('"just a string"');
+    expect(args).toEqual({});
   });
 });

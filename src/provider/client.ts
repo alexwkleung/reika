@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, Tool, ToolCall, Usage } from '../types.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 
@@ -98,11 +99,12 @@ export async function callModel(opts: {
 
   const toolCalls: ToolCall[] = [];
   for (const [, acc] of callsByIndex) {
-    let parsed: Record<string, unknown> = {};
-    try {
-      parsed = JSON.parse(acc.args || '{}');
-    } catch {}
-    toolCalls.push({ id: acc.id, name: sanitizeToolName(acc.name), args: parsed });
+    const name = sanitizeToolName(acc.name);
+    const { args, repaired } = tryParseJson(acc.args || '{}');
+    if (repaired) {
+      process.stderr.write(`[reika] repaired malformed JSON in tool args for ${name}\n`);
+    }
+    toolCalls.push({ id: acc.id, name, args });
   }
 
   let content = contentParts.join('');
@@ -129,6 +131,28 @@ export function sanitizeToolName(raw: string): string {
   return raw.replace(/<\|[^|]*\|>.*$/, '').trim();
 }
 
+// Parse tool-call JSON args with a forgiving fallback. Small/local models
+// occasionally emit slop (trailing commas, single quotes, unquoted keys, truncation).
+// `repaired: true` signals jsonrepair was used — caller may want to log it so
+// "this tool got weird args" is debuggable. Exported for unit tests.
+export function tryParseJson(input: string): {
+  args: Record<string, unknown> & { name?: unknown; arguments?: unknown; args?: unknown };
+  repaired: boolean;
+} {
+  const wrap = (v: unknown): Record<string, unknown> =>
+    typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
+  try {
+    return { args: wrap(JSON.parse(input || '{}')), repaired: false };
+  } catch {
+    // fall through to repair
+  }
+  try {
+    return { args: wrap(JSON.parse(jsonrepair(input))), repaired: true };
+  } catch {
+    return { args: {}, repaired: false };
+  }
+}
+
 const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
 
 export function extractToolCallsFromContent(content: string): {
@@ -139,22 +163,19 @@ export function extractToolCallsFromContent(content: string): {
   let match: RegExpExecArray | null;
   TOOL_CALL_RE.lastIndex = 0;
   while ((match = TOOL_CALL_RE.exec(content)) !== null) {
-    try {
-      const parsed = JSON.parse(match[1]) as {
-        name?: unknown;
-        arguments?: unknown;
-        args?: unknown;
-      };
-      if (typeof parsed.name !== 'string') continue;
-      const rawArgs = parsed.arguments ?? parsed.args ?? {};
-      const args =
-        typeof rawArgs === 'object' && rawArgs !== null ? (rawArgs as Record<string, unknown>) : {};
-      calls.push({
-        id: `xml-${Math.random().toString(36).slice(2, 10)}`,
-        name: parsed.name,
-        args,
-      });
-    } catch {}
+    const { args: parsed, repaired } = tryParseJson(match[1]);
+    if (typeof parsed.name !== 'string') continue;
+    const rawArgs = parsed.arguments ?? parsed.args ?? {};
+    const args =
+      typeof rawArgs === 'object' && rawArgs !== null ? (rawArgs as Record<string, unknown>) : {};
+    if (repaired) {
+      process.stderr.write(`[reika] repaired malformed JSON in <tool_call> for ${parsed.name}\n`);
+    }
+    calls.push({
+      id: `xml-${Math.random().toString(36).slice(2, 10)}`,
+      name: parsed.name,
+      args,
+    });
   }
   const cleanedContent = content.replace(TOOL_CALL_RE, '').trim();
   return { calls, cleanedContent };
