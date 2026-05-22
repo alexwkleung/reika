@@ -31,7 +31,11 @@ export function Approval({
         {isCommand ? (
           <CommandPreview command={request.preview} />
         ) : (
-          <DiffView diff={request.preview} path={request.subject} />
+          <DiffView
+            diff={request.preview}
+            path={request.subject}
+            maxWidth={Math.max(20, (process.stdout.columns || 80) - 6)}
+          />
         )}
       </Box>
       {warnings.length > 0 ? (

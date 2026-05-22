@@ -105,7 +105,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
         </Box>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
-            <DiffView diff={msg.diff.text} path={msg.diff.path} />
+            <DiffView diff={msg.diff.text} path={msg.diff.path} maxWidth={diffViewWidth()} />
           </Box>
         ) : null}
         {msg.command ? (
@@ -167,6 +167,12 @@ function formatArgs(args: Record<string, unknown>): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// Available width for diff content inside a tool-result. Subtracts App's
+// paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6.
+function diffViewWidth(): number {
+  return Math.max(20, (process.stdout.columns || 80) - 6);
 }
 
 function formatDuration(ms: number): string {

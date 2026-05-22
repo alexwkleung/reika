@@ -1,3 +1,5 @@
+import { diffArrays } from 'diff';
+
 const CONTEXT_LINES = 3;
 
 export function buildEditDiff(
@@ -13,8 +15,13 @@ export function buildEditDiff(
 
   const out: string[] = [];
   for (const l of before) out.push(`  ${l}`);
-  for (const l of oldLines) out.push(`- ${l}`);
-  for (const l of newLines) out.push(`+ ${l}`);
+  // Line-level diff so lines that exist on both sides render as context (`  `)
+  // rather than being naively dumped as `-` then `+`. Reveals what actually
+  // changed instead of repeating the whole block twice.
+  for (const change of diffArrays(oldLines, newLines)) {
+    const prefix = change.removed ? '- ' : change.added ? '+ ' : '  ';
+    for (const l of change.value) out.push(`${prefix}${l}`);
+  }
   for (const l of after) out.push(`  ${l}`);
   return out.join('\n');
 }
