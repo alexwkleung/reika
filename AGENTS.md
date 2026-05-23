@@ -63,6 +63,8 @@ When a tool wraps an external service (web search, GitHub, etc.):
 
 This is how `search` + `fetch_url` are wired. Two providers implement `SearchProvider`: `SearxngProvider` (self-hosted, local-first) and `TavilyProvider` (cloud, AI-optimized snippets). SearXNG takes precedence when both `REIKA_SEARXNG_URL` and `REIKA_TAVILY_API_KEY` are set. If neither is set, neither tool registers and the system prompt stays lean.
 
+**Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
+
 ## Adding a slash command
 
 1. Add to `COMMANDS` in `src/ui/commands.ts` with `name` + `desc`

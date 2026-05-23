@@ -16,12 +16,19 @@ export const fetchUrlTool: Tool = {
     },
     required: ['url'],
   },
-  async run(args) {
+  async run(args, ctx) {
     const url = String(args.url ?? '').trim();
     if (!url) return { summary: 'Fetch failed: empty URL' };
     if (!/^https?:\/\//i.test(url)) {
       return { summary: `Fetch failed: not an http(s) URL — ${url}` };
     }
+    const budget = ctx.webBudget?.fetches;
+    if (budget && budget.used >= budget.max) {
+      return {
+        summary: `Fetch budget exceeded for this turn (max ${budget.max}). Summarize what you have or split into multiple turns.`,
+      };
+    }
+    if (budget) budget.used++;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {

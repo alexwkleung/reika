@@ -13,9 +13,16 @@ export function createSearchTool(provider: SearchProvider): Tool {
       },
       required: ['query'],
     },
-    async run(args) {
+    async run(args, ctx) {
       const query = String(args.query ?? '').trim();
       if (!query) return { summary: 'Search failed: empty query' };
+      const budget = ctx.webBudget?.searches;
+      if (budget && budget.used >= budget.max) {
+        return {
+          summary: `Search budget exceeded for this turn (max ${budget.max}). Summarize what you have or split into multiple turns.`,
+        };
+      }
+      if (budget) budget.used++;
       try {
         const results = await provider.search(query, { maxResults: 8 });
         if (results.length === 0) {

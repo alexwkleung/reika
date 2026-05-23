@@ -6,6 +6,7 @@ import type {
   Tool,
   ToolResult,
   Usage,
+  WebBudget,
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
@@ -39,6 +40,12 @@ export async function runTurn(opts: {
 
   const system = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
   const turnStart = Date.now();
+  // One budget per user turn — caps total search + fetch calls across all
+  // internal model→tool rounds. Subagent calls get their own budget.
+  const webBudget: WebBudget = {
+    searches: { used: 0, max: opts.config.maxSearchesPerTurn },
+    fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
+  };
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
@@ -92,6 +99,7 @@ export async function runTurn(opts: {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,
             ignore: opts.bundle.ignore,
+            webBudget,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),

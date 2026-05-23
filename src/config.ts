@@ -36,6 +36,8 @@ export function loadConfig(): Config {
     tavilyApiKey: emptyToUndefined(process.env.REIKA_TAVILY_API_KEY),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     profiles: loadProfiles(defaultProfile),
+    maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
+    maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
   };
 }
 

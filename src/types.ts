@@ -51,9 +51,15 @@ export type ApprovalRequest = {
   warnings?: string[];
 };
 
+export type WebBudget = {
+  searches: { used: number; max: number };
+  fetches: { used: number; max: number };
+};
+
 export type ToolContext = {
   cwd: string;
   ignore?: Ignore;
+  webBudget?: WebBudget;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
@@ -105,4 +111,6 @@ export type Config = {
   searxngUrl?: string;
   profiles: Record<string, Profile>;
   maxTokens?: number;
+  maxSearchesPerTurn: number;
+  maxFetchesPerTurn: number;
 };
