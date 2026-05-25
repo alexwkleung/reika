@@ -45,6 +45,9 @@ export const fetchUrlTool: Tool = {
           ? content.slice(0, MAX_PAYLOAD_BYTES) +
             `\n…(truncated, ${content.length - MAX_PAYLOAD_BYTES} more chars)`
           : content;
+      // Record the URL only on success so the loop can stamp it as a source on
+      // the final assistant message. Failed fetches don't contribute.
+      ctx.fetchedUrls?.add(url);
       return {
         summary: `Fetched ${url} (${content.length} chars extracted)`,
         payload: trimmed || '(no extractable content)',

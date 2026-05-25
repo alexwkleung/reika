@@ -24,12 +24,16 @@ export function createSearchTool(provider: SearchProvider): Tool {
       }
       if (budget) budget.used++;
       try {
-        const results = await provider.search(query, { maxResults: 8 });
+        const raw = await provider.search(query, { maxResults: 8 });
+        // Filter out results missing a URL — those are unusable for the model
+        // (it can't cite or fetch them) and lead to "undefined" leaking into
+        // citations downstream.
+        const results = raw.filter(r => r.url && r.url.trim().length > 0);
         if (results.length === 0) {
           return { summary: `No results for "${query}"` };
         }
         const payload = results
-          .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
+          .map((r, i) => `${i + 1}. ${r.title || '(no title)'}\n   ${r.url}\n   ${r.snippet || ''}`)
           .join('\n\n');
         return {
           summary: `Found ${results.length} result(s) for "${query}"`,

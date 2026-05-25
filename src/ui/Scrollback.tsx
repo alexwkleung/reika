@@ -88,6 +88,11 @@ function renderMessage(msg: Message): React.ReactElement | null {
             <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
           </Box>
         ))}
+        {msg.sources && msg.sources.length > 0 ? (
+          <Box marginTop={1}>
+            <Text color={theme.tool}>{`Sources: ${msg.sources.join(', ')}`}</Text>
+          </Box>
+        ) : null}
         {msg.durationMs !== undefined ? (
           <Box marginTop={1}>
             <Text color={theme.muted}>{`worked for ${formatDuration(msg.durationMs)}`}</Text>

@@ -15,6 +15,7 @@ export type Message =
       toolCalls?: ToolCall[];
       reasoning?: string;
       durationMs?: number;
+      sources?: string[];
       nested?: boolean;
     }
   | {
@@ -60,6 +61,9 @@ export type ToolContext = {
   cwd: string;
   ignore?: Ignore;
   webBudget?: WebBudget;
+  // Tools push successfully-fetched URLs here; the loop stamps them onto the
+  // final assistant message as `sources`, rendered deterministically in scrollback.
+  fetchedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;

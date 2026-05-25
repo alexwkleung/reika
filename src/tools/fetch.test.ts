@@ -68,4 +68,42 @@ describe('fetch_url tool — budget enforcement', () => {
     expect(result.summary).toMatch(/not an http\(s\) URL/);
     expect(budget.fetches.used).toBe(0);
   });
+
+  it('records URL in ctx.fetchedUrls on successful fetch', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<html><body>hi</body></html>'),
+    );
+    const fetchedUrls = new Set<string>();
+    await fetchUrlTool.run({ url: 'https://example.com/page' }, { cwd: '/tmp', fetchedUrls });
+    expect(fetchedUrls.has('https://example.com/page')).toBe(true);
+  });
+
+  it('does NOT record URL on a failed fetch (non-OK status)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => '',
+    } as unknown as Response);
+    const fetchedUrls = new Set<string>();
+    await fetchUrlTool.run({ url: 'https://example.com/missing' }, { cwd: '/tmp', fetchedUrls });
+    expect(fetchedUrls.size).toBe(0);
+  });
+
+  it('does NOT record URL on a network error', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+    const fetchedUrls = new Set<string>();
+    await fetchUrlTool.run({ url: 'https://unreachable.example' }, { cwd: '/tmp', fetchedUrls });
+    expect(fetchedUrls.size).toBe(0);
+  });
+
+  it('dedupes when same URL is fetched twice', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<html><body>hi</body></html>'),
+    );
+    const fetchedUrls = new Set<string>();
+    await fetchUrlTool.run({ url: 'https://example.com' }, { cwd: '/tmp', fetchedUrls });
+    await fetchUrlTool.run({ url: 'https://example.com' }, { cwd: '/tmp', fetchedUrls });
+    expect(fetchedUrls.size).toBe(1);
+  });
 });

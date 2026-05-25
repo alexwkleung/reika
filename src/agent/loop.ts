@@ -46,10 +46,13 @@ export async function runTurn(opts: {
     searches: { used: 0, max: opts.config.maxSearchesPerTurn },
     fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
   };
+  // Track URLs successfully fetched this turn. Stamped onto the final assistant
+  // message as `sources` for deterministic citation rendering (no model recall).
+  const fetchedUrls = new Set<string>();
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
-      commitAborted(opts, '', turnStart);
+      commitAborted(opts, '', turnStart, fetchedUrls);
       return;
     }
     opts.onPhase?.('thinking');
@@ -66,7 +69,7 @@ export async function runTurn(opts: {
     if (response.usage) opts.onUsage?.(response.usage);
 
     if (opts.signal?.aborted) {
-      commitAborted(opts, response.content, turnStart);
+      commitAborted(opts, response.content, turnStart, fetchedUrls);
       return;
     }
 
@@ -78,6 +81,7 @@ export async function runTurn(opts: {
       toolCalls: response.toolCalls,
       reasoning: response.reasoning,
       ...(isFinal ? { durationMs: Date.now() - turnStart } : {}),
+      ...(isFinal && fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
@@ -100,6 +104,7 @@ export async function runTurn(opts: {
             cwd: opts.bundle.cwd,
             ignore: opts.bundle.ignore,
             webBudget,
+            fetchedUrls,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
@@ -131,6 +136,7 @@ export async function runTurn(opts: {
     role: 'assistant',
     content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)`,
     durationMs: Date.now() - turnStart,
+    ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
   opts.history.push(exhausted);
   opts.onMessage(exhausted);
@@ -140,9 +146,15 @@ function commitAborted(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   partial: string,
   turnStart: number,
+  fetchedUrls: Set<string>,
 ): void {
   const content = partial ? `${partial}\n\n(aborted)` : '(aborted)';
-  const m: Message = { role: 'assistant', content, durationMs: Date.now() - turnStart };
+  const m: Message = {
+    role: 'assistant',
+    content,
+    durationMs: Date.now() - turnStart,
+    ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+  };
   opts.history.push(m);
   opts.onMessage(m);
 }
