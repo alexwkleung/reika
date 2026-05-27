@@ -1,6 +1,6 @@
 // Skill loading — markdown files in a directory become slash commands.
 // Files may have YAML frontmatter for metadata; falls back to first line as description.
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 
@@ -35,7 +35,22 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
   let entries: Array<{ name: string; isDir: boolean }>;
   try {
     const raw = await readdir(dir, { withFileTypes: true });
-    entries = raw.map(e => ({ name: e.name, isDir: e.isDirectory() }));
+    // Resolve symlinks — Dirent.isDirectory() reports the symlink type, not its
+    // target, so symlinked skill dirs (common when users keep skills in a git
+    // repo and symlink into ~/.config/reika/skills/) would otherwise be skipped.
+    entries = await Promise.all(
+      raw.map(async e => {
+        if (e.isSymbolicLink()) {
+          try {
+            const target = await stat(join(dir, e.name));
+            return { name: e.name, isDir: target.isDirectory() };
+          } catch {
+            return { name: e.name, isDir: false };
+          }
+        }
+        return { name: e.name, isDir: e.isDirectory() };
+      }),
+    );
   } catch {
     return [];
   }

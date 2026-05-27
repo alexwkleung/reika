@@ -153,6 +153,7 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - Built-in commands always win over skills with the same name — you can't shadow `/help` or `/exit`
 - Skill names are lowercased filenames; only `[a-z0-9_-]` are accepted (skip files with weird names)
 - Skills load at bootstrap and on `/cd` — edit a file mid-session, then `/cd .` to refresh
+- Files under `<cwd>/.reika/` (including `.reika/skills/`, `.reika/handoff/`, etc.) appear in `@` autocomplete — handy for inlining a project-local handoff doc, an in-repo skill file, or any other reika-scratch content. Other dot-dirs (`.git/`, `.vscode/`, etc.) stay hidden.
 
 ## Modes
 

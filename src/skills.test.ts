@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -182,5 +182,24 @@ describe('loadSkills', () => {
     const skills = await loadSkills(cwd);
     const review = skills.find(s => s.name === 'review');
     expect(review?.body).toBe('DIR VERSION');
+  });
+
+  it('loads skills via a symlinked directory (e.g. ~/git/skills symlinked into ~/.config/reika/skills/)', async () => {
+    // Create a "source" skill dir outside the project, then symlink it into
+    // the project skills dir — mirrors the common pattern of keeping skills
+    // version-controlled separately and linking them into reika's loader path.
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'reika-skills-source-'));
+    try {
+      await mkdir(join(sourceRoot, 'handoff'), { recursive: true });
+      await writeFile(join(sourceRoot, 'handoff/SKILL.md'), 'handoff body', 'utf8');
+      await mkdir(join(cwd, '.reika/skills'), { recursive: true });
+      await symlink(join(sourceRoot, 'handoff'), join(cwd, '.reika/skills/handoff'));
+      const skills = await loadSkills(cwd);
+      const handoff = skills.find(s => s.name === 'handoff');
+      expect(handoff).toBeDefined();
+      expect(handoff?.body).toBe('handoff body');
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
   });
 });

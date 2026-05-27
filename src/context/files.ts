@@ -9,6 +9,9 @@ export async function buildFileIndex(cwd: string, ig: Ignore): Promise<string[]>
   const crawler = new fdir()
     .withRelativePaths()
     .exclude((dirName, dirPath) => {
+      // .reika/ is our own scratch dir (skills, handoff docs, etc.) — keep it
+      // visible to `@` autocomplete and tool walks. Other dot-dirs stay hidden.
+      if (dirName === '.reika') return false;
       if (dirName.startsWith('.') || SKIP_DIRS.has(dirName)) return true;
       const rel = relative(cwd, dirPath);
       return rel.length > 0 && ig.ignores(rel + '/');
