@@ -83,7 +83,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
           <Box flexDirection="column" marginTop={msg.reasoning || msg.content ? 1 : 0}>
             {msg.toolCalls.map(tc => (
               <Box key={tc.id}>
-                <Text color={theme.tool}>{`• ${tc.name}`}</Text>
+                <Text color={theme.tool}>{`• ${capitalize(tc.name)}`}</Text>
                 <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
               </Box>
             ))}
@@ -250,6 +250,12 @@ function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
     .map(([k, v]) => `${k}=${truncate(JSON.stringify(v), 120)}`)
     .join(', ');
+}
+
+// Title-case the tool name's first letter for a tidier, conventional look
+// (Read, List, Bash …).
+function capitalize(s: string): string {
+  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 function truncate(s: string, max: number): string {
