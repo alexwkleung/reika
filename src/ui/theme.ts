@@ -10,4 +10,5 @@ export const theme = {
   warning: 'yellow',
   error: 'red',
   success: 'green',
+  userBg: '#303030',
 } as const;

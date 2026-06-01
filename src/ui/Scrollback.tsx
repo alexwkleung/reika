@@ -50,15 +50,7 @@ function MessageView({ msg }: { msg: Message }) {
 
 function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'user') {
-    const display = msg.display ?? msg.content;
-    return (
-      <Box flexDirection="row" marginTop={1}>
-        <Text bold color={theme.accent}>
-          {'▎ '}
-        </Text>
-        <Text bold>{display}</Text>
-      </Box>
-    );
+    return <UserBubble text={msg.display ?? msg.content} />;
   }
   if (msg.role === 'shell') {
     return (
@@ -95,7 +87,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
         ) : null}
         {msg.durationMs !== undefined ? (
           <Box marginTop={1}>
-            <Text color={theme.muted}>{`worked for ${formatDuration(msg.durationMs)}`}</Text>
+            <Text color={theme.muted}>{`Worked for ${formatDuration(msg.durationMs)}`}</Text>
           </Box>
         ) : null}
       </Box>
@@ -162,6 +154,57 @@ function renderMessage(msg: Message): React.ReactElement | null {
     );
   }
   return null;
+}
+
+// Grey "bubble" for the user's message: an accent bar down the left, one space
+// of horizontal padding on each side, and a blank background row above/below so
+// the box has a little vertical breathing room.
+function UserBubble({ text }: { text: string }) {
+  const term = process.stdout.columns || 80;
+  const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
+  const contentW = Math.max(1, avail - 4); // ' ▎ ' gutter (3) + trailing space (1).
+  const lines = wrapText(text, contentW);
+  const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {rows.map((line, i) => (
+        <Text key={i} backgroundColor={theme.userBg}>
+          <Text> </Text>
+          <Text bold color={theme.accent}>
+            ▎
+          </Text>
+          <Text bold>{` ${line.padEnd(contentW)} `}</Text>
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+// Word-wrap to a column width, hard-splitting any token longer than the width.
+function wrapText(text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const raw of text.split('\n')) {
+    let line = '';
+    for (let word of raw.split(' ')) {
+      while (word.length > width) {
+        if (line) {
+          out.push(line);
+          line = '';
+        }
+        out.push(word.slice(0, width));
+        word = word.slice(width);
+      }
+      if (!line) line = word;
+      else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+      else {
+        out.push(line);
+        line = word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 function formatArgs(args: Record<string, unknown>): string {

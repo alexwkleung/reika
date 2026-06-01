@@ -2,8 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { theme } from './theme.js';
 
-// Clockwise rotation — the missing dot moves through clock positions 1 → 3 → 4 → 5 → 7 → 8 → 9 → 11.
-const FRAMES = ['⣷', '⣯', '⣟', '⡿', '⢿', '⣻', '⣽', '⣾'];
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
 
@@ -12,7 +10,7 @@ export function Input({
   onChange,
   onSubmit,
   disabled,
-  spinning,
+  canSubmit,
   mode,
   placeholder,
 }: {
@@ -20,12 +18,11 @@ export function Input({
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   disabled: boolean;
-  spinning: boolean;
+  canSubmit: boolean;
   mode: 'agent' | 'shell' | 'chat';
   placeholder?: string;
 }) {
   const [cursor, setCursor] = useState(value.length);
-  const [frame, setFrame] = useState(0);
   const lastValueRef = useRef(value);
 
   // External value change (e.g., suggestion accept, submit clear) — snap cursor to end.
@@ -35,12 +32,6 @@ export function Input({
       setCursor(value.length);
     }
   }, [value]);
-
-  useEffect(() => {
-    if (!spinning) return;
-    const id = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), 80);
-    return () => clearInterval(id);
-  }, [spinning]);
 
   const update = (next: string, nextCursor: number): void => {
     lastValueRef.current = next;
@@ -55,6 +46,9 @@ export function Input({
           update(value.slice(0, -1) + '\n', cursor);
           return;
         }
+        // While a turn is streaming the user can keep typing/composing, but the
+        // message can't be sent until the turn finishes or is aborted.
+        if (!canSubmit) return;
         onSubmit(value);
         return;
       }
@@ -105,13 +99,12 @@ export function Input({
   );
 
   const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
-  const promptText = spinning ? `${FRAMES[frame]}  ` : disabled ? '…  ' : idlePrompt;
-  const promptColor = spinning ? theme.accent : undefined;
+  const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
 
   return (
     <Box borderStyle="round" paddingX={1} marginTop={1}>
-      <Text color={promptColor}>{promptText}</Text>
+      <Text>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
           <Text>{`${INVERSE_ON} ${INVERSE_OFF}`}</Text>

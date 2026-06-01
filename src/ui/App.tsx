@@ -7,6 +7,7 @@ import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
+import { Working } from './Working.js';
 import { Status } from './Status.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveProfile } from '../config.js';
@@ -695,9 +696,10 @@ export function App() {
           ) : suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
+          {status === 'busy' && pending === null ? <Working /> : null}
           <Input
-            disabled={status !== 'idle' || pending !== null}
-            spinning={status === 'busy' && pending === null}
+            disabled={pending !== null}
+            canSubmit={status === 'idle' && pending === null}
             mode={mode}
             value={inputValue}
             onChange={onInputChange}
