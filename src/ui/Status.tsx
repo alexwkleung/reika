@@ -11,6 +11,7 @@ export function Status({
   usage,
   autoApprove,
   modeTag,
+  exitArmed,
 }: {
   model: string;
   turns: number;
@@ -19,6 +20,7 @@ export function Status({
   usage: Usage;
   autoApprove?: boolean;
   modeTag?: string;
+  exitArmed?: boolean;
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${elapsed}s` : '';
@@ -44,9 +46,12 @@ export function Status({
           <Text color={theme.muted}>{' · '}</Text>
         </>
       ) : null}
-      <Text
-        color={theme.muted}
-      >{`${model} · turn ${turns} · ${status}${timer}${tokens} · ${keys}`}</Text>
+      <Text color={theme.muted}>{`${model} · turn ${turns} · ${status}${timer}${tokens} · `}</Text>
+      {exitArmed ? (
+        <Text color={theme.warning}>press ctrl-c again to exit</Text>
+      ) : (
+        <Text color={theme.muted}>{keys}</Text>
+      )}
     </Box>
   );
 }

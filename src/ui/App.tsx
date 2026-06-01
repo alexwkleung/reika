@@ -67,9 +67,20 @@ export function App() {
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
+  const [exitArmed, setExitArmed] = useState(false);
   const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const exitArmedRef = useRef(false);
+  exitArmedRef.current = exitArmed;
+  const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const disarmExit = (): void => {
+    if (exitTimerRef.current) {
+      clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
+    }
+    setExitArmed(false);
+  };
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
   const pendingRef = useRef<typeof pending>(null);
@@ -157,6 +168,10 @@ export function App() {
     })();
   }, []);
 
+  useEffect(() => () => {
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+  }, []);
+
   useEffect(() => {
     if (!exitRequested) return;
     // Defer one tick so the just-pushed summary message renders before we unmount.
@@ -188,15 +203,36 @@ export function App() {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
-      if (pendingRef.current) {
-        pendingRef.current.resolve(false);
+      const hadPending = pendingRef.current !== null;
+      // Interrupt anything in flight: decline a pending approval, abort a turn.
+      if (hadPending) {
+        pendingRef.current!.resolve(false);
         setPending(null);
       }
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
-      } else {
-        requestExit();
+        return;
       }
+      if (hadPending) return;
+      // Idle. A non-empty input clears first — catches the common accidental tap.
+      if (inputValueRef.current.length > 0) {
+        setInputValue('');
+        setSuggestionState(null);
+        disarmExit();
+        return;
+      }
+      // Empty input: require a second Ctrl+C within the window to actually exit.
+      if (exitArmedRef.current) {
+        disarmExit();
+        requestExit();
+        return;
+      }
+      setExitArmed(true);
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => {
+        exitTimerRef.current = null;
+        setExitArmed(false);
+      }, 1500);
       return;
     }
     if (pendingRef.current) {
@@ -710,6 +746,7 @@ export function App() {
             usage={totalUsage}
             autoApprove={config?.autoApprove || sessionAutoApprove}
             modeTag={mode === 'agent' ? undefined : mode}
+            exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />
         </>
       )}
