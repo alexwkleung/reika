@@ -89,6 +89,73 @@ describe('extractToolCallsFromContent', () => {
   });
 });
 
+describe('extractToolCallsFromContent (pythonic)', () => {
+  it('extracts a sentinel-fenced pythonic call', () => {
+    const input = "<|tool_call_start|>[list(path='/Users/alex/Git/reika-code', depth=1)]<|tool_call_end|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('list');
+    expect(result.calls[0].args).toEqual({ path: '/Users/alex/Git/reika-code', depth: 1 });
+    expect(result.cleanedContent).toBe('');
+  });
+
+  it('keeps surrounding prose when stripping sentinel-fenced calls', () => {
+    const input = "let me look\n<|tool_call_start|>[list(path='.')]<|tool_call_end|>\ndone";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].args).toEqual({ path: '.' });
+    expect(result.cleanedContent).toContain('let me look');
+    expect(result.cleanedContent).toContain('done');
+    expect(result.cleanedContent).not.toContain('tool_call_start');
+  });
+
+  it('extracts multiple pythonic calls from one list', () => {
+    const input = "<|tool_call_start|>[read(path='a'), grep(pattern='x')]<|tool_call_end|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls.map(c => c.name)).toEqual(['read', 'grep']);
+    expect(result.calls[1].args).toEqual({ pattern: 'x' });
+  });
+
+  it('extracts a Llama-style <|python_tag|> call', () => {
+    const input = "<|python_tag|>bash(command='ls -la')<|eot_id|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('bash');
+    expect(result.calls[0].args).toEqual({ command: 'ls -la' });
+  });
+
+  it('extracts a bare pythonic call list with no sentinels', () => {
+    const input = "[list(path='.', depth=2)]";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].args).toEqual({ path: '.', depth: 2 });
+  });
+
+  it('maps Python literals (True/False/None) to JSON', () => {
+    const input = "<|tool_call_start|>[edit(recursive=True, dry=False, note=None)]<|tool_call_end|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls[0].args).toEqual({ recursive: true, dry: false, note: null });
+  });
+
+  it('handles list-valued kwargs', () => {
+    const input = "<|tool_call_start|>[grep(globs=['*.ts', '*.js'])]<|tool_call_end|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls[0].args).toEqual({ globs: ['*.ts', '*.js'] });
+  });
+
+  it('does not treat plain prose as a pythonic call', () => {
+    const result = extractToolCallsFromContent('I will call list(path) for you.');
+    expect(result.calls).toEqual([]);
+    expect(result.cleanedContent).toBe('I will call list(path) for you.');
+  });
+
+  it('skips pythonic calls that use positional args', () => {
+    const input = "<|tool_call_start|>[read('foo.ts')]<|tool_call_end|>";
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(0);
+  });
+});
+
 describe('tryParseJson', () => {
   it('parses valid JSON without repair', () => {
     const { args, repaired } = tryParseJson('{"path":"foo"}');

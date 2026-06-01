@@ -153,12 +153,22 @@ export function tryParseJson(input: string): {
   }
 }
 
+// A content parser extracts tool calls embedded in assistant text, for models
+// that emit calls inline instead of via native function-calling. It returns null
+// when its format isn't present, so parsers can be tried in a chain. Each format
+// varies on two independent axes — the *envelope* (how the call is fenced) and the
+// *payload* (JSON vs pythonic kwargs) — so adding a new model's dialect is one more
+// function pushed onto CONTENT_PARSERS, not a change to the dispatch site.
+export type ContentToolCallParser = (
+  content: string,
+) => { calls: ToolCall[]; cleanedContent: string } | null;
+
 const TOOL_CALL_RE = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
 
-export function extractToolCallsFromContent(content: string): {
-  calls: ToolCall[];
-  cleanedContent: string;
-} {
+// `<tool_call>{json}</tool_call>` — Qwen/Hermes-style, JSON payload.
+export function parseXmlToolCalls(
+  content: string,
+): { calls: ToolCall[]; cleanedContent: string } | null {
   const calls: ToolCall[] = [];
   let match: RegExpExecArray | null;
   TOOL_CALL_RE.lastIndex = 0;
@@ -177,6 +187,135 @@ export function extractToolCallsFromContent(content: string): {
       args,
     });
   }
-  const cleanedContent = content.replace(TOOL_CALL_RE, '').trim();
+  if (calls.length === 0) return null;
+  return { calls, cleanedContent: content.replace(TOOL_CALL_RE, '').trim() };
+}
+
+// Pythonic tool calls: `[fn(k=v, ...), ...]`, optionally fenced by sentinel tokens
+// (`<|tool_call_start|>…<|tool_call_end|>` for Qwen-style, `<|python_tag|>…` for
+// Llama 3.x). Args are Python kwargs, not JSON. We support flat kwargs only —
+// each value is mapped to its JSON form and parsed via tryParseJson. Positional
+// args and nested calls are unsupported (logged + skipped).
+const PY_SENTINELS = [
+  /<\|tool_call_start\|>([\s\S]*?)<\|tool_call_end\|>/g,
+  /<\|python_tag\|>([\s\S]*?)(?=<\||$)/g,
+];
+const PY_CALL_RE = /([A-Za-z_]\w*)\s*\(([\s\S]*?)\)/g;
+
+export function parsePythonicToolCalls(
+  content: string,
+): { calls: ToolCall[]; cleanedContent: string } | null {
+  // Candidate regions: sentinel-fenced bodies, or — absent sentinels — the whole
+  // content when it is itself just a pythonic call list (guards against prose).
+  const bodies: string[] = [];
+  let hadSentinel = false;
+  for (const re of PY_SENTINELS) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      hadSentinel = true;
+      bodies.push(m[1]);
+    }
+  }
+  let bareMatch = false;
+  if (!hadSentinel) {
+    const trimmed = content.trim();
+    if (/^\[?\s*[A-Za-z_]\w*\s*\(/.test(trimmed) && /\)\s*\]?$/.test(trimmed)) {
+      bodies.push(trimmed);
+      bareMatch = true;
+    }
+  }
+  if (bodies.length === 0) return null;
+
+  const calls: ToolCall[] = [];
+  for (const body of bodies) {
+    PY_CALL_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = PY_CALL_RE.exec(body)) !== null) {
+      const name = m[1];
+      const args = parsePythonicArgs(m[2], name);
+      if (!args) continue;
+      calls.push({ id: `py-${Math.random().toString(36).slice(2, 10)}`, name, args });
+    }
+  }
+  if (calls.length === 0) return null;
+
+  let cleanedContent = content;
+  if (bareMatch) {
+    cleanedContent = '';
+  } else {
+    for (const re of PY_SENTINELS) cleanedContent = cleanedContent.replace(re, '');
+    cleanedContent = cleanedContent.trim();
+  }
   return { calls, cleanedContent };
+}
+
+// Convert flat Python kwargs (`key=value, ...`) into a parsed args object.
+// Returns null if the body uses an unsupported feature (positional args).
+function parsePythonicArgs(body: string, name: string): Record<string, unknown> | null {
+  const trimmed = body.trim();
+  if (trimmed === '') return {};
+  const fields: string[] = [];
+  for (const part of splitTopLevel(trimmed)) {
+    const eq = part.indexOf('=');
+    if (eq === -1) {
+      process.stderr.write(`[reika] skipped pythonic call ${name}: positional args unsupported\n`);
+      return null;
+    }
+    const key = part.slice(0, eq).trim();
+    if (!/^[A-Za-z_]\w*$/.test(key)) return null;
+    fields.push(`${JSON.stringify(key)}:${pyValueToJson(part.slice(eq + 1).trim())}`);
+  }
+  return tryParseJson(`{${fields.join(',')}}`).args;
+}
+
+// Map a single Python literal to its JSON-text form. Numbers, double-quoted
+// strings, lists and dicts pass through to tryParseJson (which repairs the rest).
+function pyValueToJson(v: string): string {
+  if (v === 'True') return 'true';
+  if (v === 'False') return 'false';
+  if (v === 'None') return 'null';
+  const single = /^'([\s\S]*)'$/.exec(v);
+  if (single) return JSON.stringify(single[1]);
+  return v;
+}
+
+// Split on commas that are not inside quotes, parens, brackets or braces.
+function splitTopLevel(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let quote = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote && s[i - 1] !== '\\') quote = '';
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === '(' || c === '[' || c === '{') {
+      depth++;
+    } else if (c === ')' || c === ']' || c === '}') {
+      depth--;
+    } else if (c === ',' && depth === 0) {
+      parts.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(s.slice(start));
+  return parts.map(p => p.trim()).filter(p => p !== '');
+}
+
+const CONTENT_PARSERS: ContentToolCallParser[] = [parseXmlToolCalls, parsePythonicToolCalls];
+
+// Try each text-based tool-call format in order; first non-empty result wins.
+// Native function-calling always takes precedence — this only runs as a fallback.
+export function extractToolCallsFromContent(content: string): {
+  calls: ToolCall[];
+  cleanedContent: string;
+} {
+  for (const parse of CONTENT_PARSERS) {
+    const result = parse(content);
+    if (result && result.calls.length > 0) return result;
+  }
+  return { calls: [], cleanedContent: content };
 }
