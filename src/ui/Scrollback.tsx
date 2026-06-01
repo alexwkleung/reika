@@ -192,13 +192,14 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
-// Grey "bubble" for the user's message: an accent bar down the left, one space
-// of horizontal padding on each side, and a blank background row above/below so
-// the box has a little vertical breathing room.
+// Grey "bubble" for the user's message: an accent bar flush against the left
+// edge (aligned with the Thinking block's bar), one space of padding after it
+// and a trailing space, plus a blank background row above/below for breathing
+// room.
 function UserBubble({ text }: { text: string }) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
-  const contentW = Math.max(1, avail - 4); // ' ▎ ' gutter (3) + trailing space (1).
+  const contentW = Math.max(1, avail - 3); // '▎ ' gutter (2) + trailing space (1).
   const lines = wrapText(text, contentW);
   const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
 
@@ -206,7 +207,6 @@ function UserBubble({ text }: { text: string }) {
     <Box flexDirection="column" marginTop={1}>
       {rows.map((line, i) => (
         <Text key={i} backgroundColor={theme.userBg}>
-          <Text> </Text>
           <Text bold color={theme.accent}>
             ▎
           </Text>
