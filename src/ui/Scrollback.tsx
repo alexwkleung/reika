@@ -77,7 +77,10 @@ function renderMessage(msg: Message): React.ReactElement | null {
           </Box>
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
-          <Box flexDirection="column" marginTop={1}>
+          // Gap above the tool calls only when reasoning/content sits above them
+          // in this message; otherwise the message's own marginTop is the gap and
+          // a second one would double up between back-to-back tool calls.
+          <Box flexDirection="column" marginTop={msg.reasoning || msg.content ? 1 : 0}>
             {msg.toolCalls.map(tc => (
               <Box key={tc.id}>
                 <Text color={theme.tool}>{`· ${tc.name}`}</Text>
