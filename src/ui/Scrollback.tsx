@@ -21,8 +21,8 @@ export function Scrollback({
     <>
       <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
       {streamingReasoning ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.muted}>{`▸ ${stripReasoningMarkdown(streamingReasoning)}`}</Text>
+        <Box marginTop={1}>
+          <ReasoningBlock text={streamingReasoning} />
         </Box>
       ) : null}
       {streaming ? (
@@ -70,20 +70,22 @@ function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'assistant') {
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? (
-          <Text color={theme.muted}>{`▸ ${stripReasoningMarkdown(msg.reasoning)}`}</Text>
-        ) : null}
+        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} /> : null}
         {msg.content ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>{renderMarkdown(msg.content)}</Text>
           </Box>
         ) : null}
-        {msg.toolCalls?.map(tc => (
-          <Box key={tc.id}>
-            <Text color={theme.tool}>{`· ${tc.name}`}</Text>
-            <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
+        {msg.toolCalls && msg.toolCalls.length > 0 ? (
+          <Box flexDirection="column" marginTop={1}>
+            {msg.toolCalls.map(tc => (
+              <Box key={tc.id}>
+                <Text color={theme.tool}>{`· ${tc.name}`}</Text>
+                <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
+              </Box>
+            ))}
           </Box>
-        ))}
+        ) : null}
         {msg.sources && msg.sources.length > 0 ? (
           <Box marginTop={1}>
             <Text color={theme.tool}>{`Sources: ${msg.sources.join(', ')}`}</Text>
@@ -158,6 +160,36 @@ function renderMessage(msg: Message): React.ReactElement | null {
     );
   }
   return null;
+}
+
+// Reasoning/"Thinking" preview: a muted bar down the left with a small label on
+// top. Shares the user bubble's left-bar visual language but stays understated —
+// muted bar, no background — so it reads as distinct from a user message.
+function ReasoningBlock({ text }: { text: string }) {
+  const term = process.stdout.columns || 80;
+  const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
+  const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
+  // Models often emit leading/trailing newlines and blank-line runs; those would
+  // become empty bar rows, so collapse blank lines and trim the ends first.
+  const cleaned = stripReasoningMarkdown(text).replace(/\n\s*\n/g, '\n').trim();
+  const lines = wrapText(cleaned, contentW);
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color={theme.muted}>{'▎ '}</Text>
+        <Text bold color={theme.muted}>
+          Thinking
+        </Text>
+      </Box>
+      {lines.map((line, i) => (
+        <Box key={i}>
+          <Text color={theme.muted}>{'▎ '}</Text>
+          <Text color={theme.muted}>{line}</Text>
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 // Grey "bubble" for the user's message: an accent bar down the left, one space
