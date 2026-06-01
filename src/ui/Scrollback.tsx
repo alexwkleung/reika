@@ -83,7 +83,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
           <Box flexDirection="column" marginTop={msg.reasoning || msg.content ? 1 : 0}>
             {msg.toolCalls.map(tc => (
               <Box key={tc.id}>
-                <Text color={theme.tool}>{`· ${tc.name}`}</Text>
+                <Text color={theme.tool}>{`• ${tc.name}`}</Text>
                 <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
               </Box>
             ))}
