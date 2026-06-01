@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
 import { isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { Header } from './Header.js';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
@@ -26,9 +25,11 @@ type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 type Mode = 'agent' | 'shell' | 'chat';
 
-type HeaderItem =
-  | { kind: 'splash'; model: string; cwd: string; version: string; subagent?: string }
-  | { kind: 'header'; model: string; cwd: string };
+// Only the startup splash lives in the dedicated header <Static>. The compact
+// header (after /cd or /model) flows through the message stream instead — Ink
+// honors a single <Static>, so appending to this one after the message log's
+// Static takes over would render nowhere.
+type HeaderItem = { kind: 'splash'; model: string; cwd: string; version: string; subagent?: string };
 
 function expandHome(p: string): string {
   if (p === '~') return homedir();
@@ -385,11 +386,11 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
-        setHeaderItems(prev => [
+        setMessages(prev => [
           ...prev,
-          { kind: 'header', model: config.model, cwd: newBundle.cwd },
+          { role: 'header', model: config.model, cwd: newBundle.cwd },
+          { role: 'system', content: `cwd is now ${newCwd}` },
         ]);
-        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
           ...prev,
@@ -434,15 +435,12 @@ export function App() {
           }
           setActiveProfile(target);
           const next = config.profiles[target];
-          if (bundle) {
-            setHeaderItems(prev => [
-              ...prev,
-              { kind: 'header', model: next.model, cwd: bundle.cwd },
-            ]);
-          }
           setMessages(prev => [
             ...prev,
             echo,
+            ...(bundle
+              ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }]
+              : []),
             { role: 'system', content: `Switched to profile '${target}' (${next.model})` },
           ]);
           return;
@@ -673,13 +671,9 @@ export function App() {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Static items={headerItems}>
-        {(h, i) =>
-          h.kind === 'splash' ? (
-            <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
-          ) : (
-            <Header key={i} model={h.model} cwd={h.cwd} />
-          )
-        }
+        {(h, i) => (
+          <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
+        )}
       </Static>
       {status === 'loading' ? (
         <Text>Loading…</Text>

@@ -24,13 +24,7 @@ export function Splash({
 }) {
   const labelWidth = subagent ? 'subagent:  '.length : 'model:    '.length;
   return (
-    <Box
-      borderStyle="round"
-      borderColor={theme.accent}
-      flexDirection="column"
-      paddingX={2}
-      paddingY={1}
-    >
+    <Box flexDirection="column" paddingY={1}>
       {LOGO.map((line, i) => (
         <Text key={i} color={theme.accent}>
           {line}

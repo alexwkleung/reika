@@ -4,6 +4,7 @@ import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
+import { Header } from './Header.js';
 
 export function Scrollback({
   messages,
@@ -51,6 +52,9 @@ function MessageView({ msg }: { msg: Message }) {
 function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'user') {
     return <UserBubble text={msg.display ?? msg.content} />;
+  }
+  if (msg.role === 'header') {
+    return <Header model={msg.model} cwd={msg.cwd} />;
   }
   if (msg.role === 'shell') {
     return (

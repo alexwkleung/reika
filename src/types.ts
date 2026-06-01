@@ -30,6 +30,7 @@ export type Message =
     }
   | { role: 'error'; content: string; nested?: boolean }
   | { role: 'system'; content: string; nested?: boolean }
+  | { role: 'header'; model: string; cwd: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
 export type Usage = {
