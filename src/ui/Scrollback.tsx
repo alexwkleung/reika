@@ -25,10 +25,9 @@ export function Scrollback({
           <ReasoningBlock text={streamingReasoning} />
         </Box>
       ) : null}
-      {streaming ? (
+      {streaming.trim() ? (
         <Box flexDirection="column" marginTop={1}>
           <Text>{renderMarkdown(streaming)}</Text>
-          <Text color={theme.muted}>▌</Text>
         </Box>
       ) : null}
       {streamingTool ? (
