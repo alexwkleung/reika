@@ -68,19 +68,24 @@ function renderMessage(msg: Message): React.ReactElement | null {
     );
   }
   if (msg.role === 'assistant') {
+    // Models sometimes emit whitespace-only content alongside reasoning + a tool
+    // call; rendering that as a real line would add a blank row (with margins on
+    // both sides) between the Thinking block and the tool calls, so treat it as
+    // empty.
+    const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
         {msg.reasoning ? <ReasoningBlock text={msg.reasoning} /> : null}
-        {msg.content ? (
+        {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
-            <Text>{renderMarkdown(msg.content)}</Text>
+            <Text>{renderMarkdown(msg.content!)}</Text>
           </Box>
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
           // Gap above the tool calls only when reasoning/content sits above them
           // in this message; otherwise the message's own marginTop is the gap and
           // a second one would double up between back-to-back tool calls.
-          <Box flexDirection="column" marginTop={msg.reasoning || msg.content ? 1 : 0}>
+          <Box flexDirection="column" marginTop={msg.reasoning || hasContent ? 1 : 0}>
             {msg.toolCalls.map(tc => (
               <Box key={tc.id}>
                 <Text color={theme.tool}>{`• ${capitalize(tc.name)}`}</Text>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripReasoningMarkdown } from './markdown.js';
+import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 
 describe('stripReasoningMarkdown', () => {
   it('strips bold markers', () => {
@@ -46,5 +46,41 @@ describe('stripReasoningMarkdown', () => {
 
   it('does not confuse italic regex with bold (no false match on **)', () => {
     expect(stripReasoningMarkdown('**hello**')).toBe('hello');
+  });
+});
+
+describe('renderMarkdown lists', () => {
+  it('renders unordered bullets as • not literal *', () => {
+    const out = renderMarkdown('Title:\n\n* one\n* two');
+    expect(out).toContain('• one');
+    expect(out).toContain('• two');
+    expect(out).not.toContain('* one');
+  });
+
+  it('numbers ordered list items', () => {
+    const out = renderMarkdown('Steps:\n\n1. first\n2. second\n3. third');
+    expect(out).toContain('1. first');
+    expect(out).toContain('2. second');
+    expect(out).toContain('3. third');
+    expect(out).not.toContain('* first');
+  });
+
+  it('keeps a single blank line between a paragraph and a following list', () => {
+    const out = renderMarkdown('Title:\n\n* one\n* two');
+    // One blank line (\n\n), not the doubled \n\n\n the old override produced.
+    expect(out).toContain('Title:\n\n  • one');
+    expect(out).not.toContain('\n\n\n');
+  });
+
+  it('recognizes a list even without a blank line before it', () => {
+    const out = renderMarkdown('Title:\n* one\n* two');
+    expect(out).toContain('• one');
+    expect(out).not.toContain('* one');
+  });
+
+  it('leaves asterisks inside code blocks untouched', () => {
+    const out = renderMarkdown('code:\n\n```c\nint x = 2 * 3;\n```');
+    expect(out).toContain('2 * 3');
+    expect(out).not.toContain('2 • 3');
   });
 });

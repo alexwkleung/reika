@@ -37,7 +37,22 @@ marked.use(
         return text;
       }
     },
-    list: (body: string) => body,
+    // marked-terminal builds every list item with a hardcoded '* ' bullet and
+    // relies on its default `list` to renumber/re-bullet and trim. Overriding
+    // `list` (to dodge the multi-arg chalk bug) skips all of that, which is why
+    // bullets render as a literal '*' and a stray leading blank line creeps in.
+    // Replicate the needed bits: trim, number ordered items, and use a real '•'.
+    list: (body: string, ordered?: boolean) => {
+      const lines = body
+        .trim()
+        .split('\n')
+        .filter(line => line.length > 0);
+      if (!ordered) {
+        return lines.map(line => line.replace(/^(\s*)\* /, '$1• ')).join('\n');
+      }
+      let n = 0;
+      return lines.map(line => (/^\s*\* /.test(line) ? line.replace('* ', `${++n}. `) : line)).join('\n');
+    },
     paragraph: (text: string) => text,
     // marked-terminal passes (href, title, text) at runtime, but @types/marked-terminal
     // only allows (text) => string. Cast through unknown so we can render the link text.

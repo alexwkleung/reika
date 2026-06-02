@@ -23,7 +23,7 @@ export function Status({
   exitArmed?: boolean;
 }) {
   const busy = elapsed !== null;
-  const timer = busy ? ` · ${elapsed}s` : '';
+  const timer = busy ? ` · ${formatElapsed(elapsed)}` : '';
   const keys = busy
     ? 'ctrl-c to abort'
     : 'enter to submit · shift+enter for newline · ctrl-c to exit';
@@ -54,6 +54,16 @@ export function Status({
       )}
     </Box>
   );
+}
+
+export function formatElapsed(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (h > 0) return `${h}h${pad(m)}m${pad(s)}s`;
+  if (m > 0) return `${m}m${pad(s)}s`;
+  return `${s}s`;
 }
 
 export function kFormat(n: number): string {
