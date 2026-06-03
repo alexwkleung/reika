@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import { messagesToOpenAI } from './toolcall.js';
 
+// Total serialized characters of a built request — content plus tool_call JSON.
+function requestChars(out: unknown[]): number {
+  return (out as Array<{ content?: unknown; tool_calls?: unknown }>).reduce((n, m) => {
+    const content = typeof m.content === 'string' ? m.content.length : 0;
+    const calls = m.tool_calls ? JSON.stringify(m.tool_calls).length : 0;
+    return n + content + calls;
+  }, 0);
+}
+
 describe('messagesToOpenAI', () => {
   it('prepends the system prompt as the first message', () => {
     const out = messagesToOpenAI('SYSTEM', []);
@@ -80,6 +89,140 @@ describe('messagesToOpenAI', () => {
     expect(freshTool?.content).toContain('FRESH PAYLOAD');
   });
 
+  it('leaves fresh payloads untouched when no context window is given', () => {
+    const big = 'Z'.repeat(100_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: big },
+    ];
+    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+      tool_call_id?: string;
+      content?: string;
+    }>;
+    const tool = out.find(m => m.tool_call_id === 'c');
+    expect(tool?.content).toContain(big);
+    expect(tool?.content).not.toContain('omitted to fit the context window');
+  });
+
+  it('caps an oversized fresh payload so the whole request fits the window', () => {
+    const big = 'Z'.repeat(100_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: big },
+    ];
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+      content?: string;
+    };
+    expect(tool?.content).toContain('omitted to fit the context window');
+    // The invariant that matters: the serialized request never exceeds the window.
+    expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  it('splits the remaining budget across multiple fresh payloads', () => {
+    const big = 'Z'.repeat(100_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'a', name: 'read', args: {} },
+          { id: 'b', name: 'read', args: {} },
+        ],
+      },
+      { role: 'tool', callId: 'a', summary: 's', payload: big },
+      { role: 'tool', callId: 'b', summary: 's', payload: big },
+    ];
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const a = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'a') as {
+      content?: string;
+    };
+    const b = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'b') as {
+      content?: string;
+    };
+    expect(a?.content).toContain('omitted to fit the context window');
+    expect(b?.content).toContain('omitted to fit the context window');
+    expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  it('tightens the cap as calibration rises (denser tokenizer)', () => {
+    const big = 'Z'.repeat(100_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: big },
+    ];
+    const len = (cal: number): number => {
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: cal });
+      const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+        content?: string;
+      };
+      return tool.content!.length;
+    };
+    // A denser tokenizer (higher calibration) leaves room for fewer payload chars.
+    // (Values must be above the cap's density floor to show the effect.)
+    expect(len(4)).toBeLessThan(len(2));
+  });
+
+  it('applies a density floor so a tiny calibration cannot overflow the window', () => {
+    const big = 'Z'.repeat(100_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: big },
+    ];
+    // Even with an absurdly low learned calibration, the floor on the fresh conversion
+    // keeps the serialized request within the window.
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: 0.1 });
+    const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+      content?: string;
+    };
+    expect(tool?.content).toContain('omitted to fit the context window');
+    expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  it('leaves moderate context with ample room for fresh tool output', () => {
+    // A realistic mid-session: some history, well under the window. A small fresh tool
+    // result must survive untouched (regression: the density floor used to over-truncate).
+    const history: Message[] = [
+      { role: 'user', content: 'q'.repeat(4000) },
+      { role: 'assistant', content: 'a'.repeat(4000) },
+      { role: 'user', content: 'find matches' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'g', name: 'grep', args: {} }] },
+      {
+        role: 'tool',
+        callId: 'g',
+        summary: 'Found 7 matches',
+        payload: 'file.ts:12: hit\n'.repeat(7),
+      },
+    ];
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: 1.3 });
+    const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'g') as {
+      content?: string;
+    };
+    expect(tool?.content).toContain('file.ts:12: hit');
+    expect(tool?.content).not.toContain('omitted to fit the context window');
+  });
+
+  it('does not cap a fresh payload that fits within budget', () => {
+    const small = 'ok'.repeat(100);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: small },
+    ];
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 }) as unknown as Array<{
+      tool_call_id?: string;
+      content?: string;
+    }>;
+    const tool = out.find(m => m.tool_call_id === 'c');
+    expect(tool?.content).toContain(small);
+    expect(tool?.content).not.toContain('omitted to fit the context window');
+  });
+
   it('skips error and system messages (UI-only)', () => {
     const history: Message[] = [
       { role: 'user', content: 'hi' },
@@ -92,16 +235,53 @@ describe('messagesToOpenAI', () => {
     expect(roles).toEqual(['system', 'user', 'assistant']);
   });
 
-  it('roundtrips reasoning_content on assistant messages', () => {
+  it('merges compaction recaps into the leading system message, not as separate turns', () => {
     const history: Message[] = [
+      { role: 'compaction', content: 'RECAP OF EARLIER TURNS' },
+      { role: 'user', content: 'now do this' },
+    ];
+    const out = messagesToOpenAI('BASE SYSTEM', history);
+    // Exactly one system message, carrying both the base prompt and the recap.
+    expect(out.filter(m => m.role === 'system')).toHaveLength(1);
+    expect(out[0].role).toBe('system');
+    expect(out[0].content).toContain('BASE SYSTEM');
+    expect(out[0].content).toContain('RECAP OF EARLIER TURNS');
+    // The compaction message itself is not emitted as its own turn.
+    expect(out).toHaveLength(2); // system + user
+    expect(out[1]).toEqual({ role: 'user', content: 'now do this' });
+  });
+
+  it('keeps reasoning_content only on the most recent tool-call round', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
       {
         role: 'assistant',
-        content: 'answer',
-        reasoning: 'thinking…',
+        content: '',
+        reasoning: 'old thinking',
+        toolCalls: [{ id: 'c1', name: 'read', args: {} }],
       },
+      { role: 'tool', callId: 'c1', summary: 'r1' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'current thinking',
+        toolCalls: [{ id: 'c2', name: 'read', args: {} }],
+      },
+      { role: 'tool', callId: 'c2', summary: 'r2' },
     ];
     const out = messagesToOpenAI('sys', history);
+    const assistants = out.filter(m => m.role === 'assistant') as Array<{
+      reasoning_content?: string;
+    }>;
+    // The resolved earlier round's reasoning is dropped; the active round's is kept.
+    expect(assistants[0].reasoning_content).toBeUndefined();
+    expect(assistants[1].reasoning_content).toBe('current thinking');
+  });
+
+  it('drops reasoning from a completed (final-answer) assistant message', () => {
+    const history: Message[] = [{ role: 'assistant', content: 'answer', reasoning: 'thinking…' }];
+    const out = messagesToOpenAI('sys', history);
     const assistant = out[1] as { reasoning_content?: string };
-    expect(assistant.reasoning_content).toBe('thinking…');
+    expect(assistant.reasoning_content).toBeUndefined();
   });
 });
