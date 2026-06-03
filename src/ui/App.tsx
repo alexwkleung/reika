@@ -29,7 +29,13 @@ type Mode = 'agent' | 'shell' | 'chat';
 // header (after /cd or /model) flows through the message stream instead — Ink
 // honors a single <Static>, so appending to this one after the message log's
 // Static takes over would render nowhere.
-type HeaderItem = { kind: 'splash'; model: string; cwd: string; version: string; subagent?: string };
+type HeaderItem = {
+  kind: 'splash';
+  model: string;
+  cwd: string;
+  version: string;
+  subagent?: string;
+};
 
 function expandHome(p: string): string {
   if (p === '~') return homedir();
@@ -53,6 +59,13 @@ export function App() {
   const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
   const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
+  // Most recent call's usage (the authoritative current context size + cache hit rate),
+  // and the pre-send estimate used to fill the gauge before that real count arrives.
+  const [lastUsage, setLastUsage] = useState<Usage | null>(null);
+  const [estimatedContext, setEstimatedContext] = useState<number | null>(null);
+  // Learned char→token calibration for the context estimate, persisted across turns so the
+  // first call of each turn (which re-seeds the full history) triggers compaction accurately.
+  const calibrationRef = useRef(1);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -168,9 +181,12 @@ export function App() {
     })();
   }, []);
 
-  useEffect(() => () => {
-    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!exitRequested) return;
@@ -375,6 +391,9 @@ export function App() {
     if (name === 'clear' || name === 'new') {
       setMessages([]);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+      setLastUsage(null);
+      setEstimatedContext(null);
+      calibrationRef.current = 1;
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(false);
@@ -474,9 +493,7 @@ export function App() {
           setMessages(prev => [
             ...prev,
             echo,
-            ...(bundle
-              ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }]
-              : []),
+            ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
             { role: 'system', content: `Switched to profile '${target}' (${next.model})` },
           ]);
           return;
@@ -663,11 +680,23 @@ export function App() {
           scheduleToolFlush();
         },
         onPhase: p => setPhase(p),
-        onUsage: u =>
+        onUsage: u => {
+          setLastUsage(u);
           setTotalUsage(t => ({
             promptTokens: t.promptTokens + u.promptTokens,
             completionTokens: t.completionTokens + u.completionTokens,
-          })),
+            ...(u.cachedTokens != null
+              ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
+              : t.cachedTokens != null
+                ? { cachedTokens: t.cachedTokens }
+                : {}),
+          }));
+        },
+        onContextEstimate: t => setEstimatedContext(t),
+        priorCalibration: calibrationRef.current,
+        onCalibration: f => {
+          calibrationRef.current = f;
+        },
       });
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
@@ -744,6 +773,9 @@ export function App() {
             status={status === 'busy' ? phase : status}
             elapsed={status === 'busy' ? elapsed : null}
             usage={totalUsage}
+            contextTokens={lastUsage?.promptTokens ?? estimatedContext}
+            contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
+            cachedTokens={lastUsage?.cachedTokens}
             autoApprove={config?.autoApprove || sessionAutoApprove}
             modeTag={mode === 'agent' ? undefined : mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
