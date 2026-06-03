@@ -27,6 +27,17 @@ llama-server -m /path/to/Qwen3.5-9B-Q5_K_M.gguf \
   --jinja --reasoning off
 ```
 
+If you run a thinking-mode model with reasoning **on** (e.g. qwen3.6), add the
+Qwen3-recommended sampling — greedy/near-greedy decoding makes it spiral into
+endless reasoning loops that never finish a turn:
+
+```sh
+  --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0.5
+```
+
+reika sends no sampling parameters of its own, so these `llama-server` flags
+(or your provider's defaults) are what actually apply.
+
 ## Global install
 
 ```sh
