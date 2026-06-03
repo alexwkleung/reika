@@ -34,22 +34,55 @@ export const editTool: Tool = {
     }
 
     const text = await readFile(full, 'utf8');
+
+    // Resolve the match. Exact byte-match is the fast, precise path. If it
+    // misses — almost always because the model's leading whitespace is off by a
+    // few spaces — fall back to a whitespace-insensitive line-block match and
+    // re-indent new_string to the file's real indentation. This collapses the
+    // read→guess→retry loop that weaker models otherwise burn on every edit.
+    let start: number;
+    let matchLen: number;
+    let effectiveNew: string;
+
     const first = text.indexOf(oldStr);
-    if (first === -1) {
-      return { summary: `Edit failed: old_string not found in ${rel}` };
-    }
-    const second = text.indexOf(oldStr, first + oldStr.length);
-    if (second !== -1) {
-      return {
-        summary: `Edit failed: old_string appears multiple times in ${rel}; add surrounding context to make it unique`,
-      };
+    if (first !== -1) {
+      const second = text.indexOf(oldStr, first + oldStr.length);
+      if (second !== -1) {
+        const a = lineOf(text, first);
+        const b = lineOf(text, second);
+        return {
+          summary: `Edit failed: old_string appears multiple times in ${rel} (lines ${a}, ${b}); add surrounding context to make it unique`,
+        };
+      }
+      start = first;
+      matchLen = oldStr.length;
+      effectiveNew = newStr;
+    } else {
+      const fuzzy = fuzzyLineMatch(text, oldStr, newStr);
+      if (fuzzy.status === 'multiple') {
+        return {
+          summary: `Edit failed: old_string appears multiple times in ${rel} (lines ${fuzzy.lines.join(', ')}); add surrounding context to make it unique`,
+        };
+      }
+      if (fuzzy.status === 'mixed') {
+        return {
+          summary: `Edit failed: new_string mixes indentation in ${rel}; line "${fuzzy.line.trim()}" doesn't match the block's base indent — re-indent it consistently and retry`,
+        };
+      }
+      if (fuzzy.status === 'none') {
+        return { summary: `Edit failed: old_string not found in ${rel}.${fuzzy.hint}` };
+      }
+      start = fuzzy.start;
+      matchLen = fuzzy.len;
+      effectiveNew = fuzzy.newStr;
     }
 
+    const matchedOld = text.slice(start, start + matchLen);
     const diffText = buildEditDiff(
-      oldStr,
-      newStr,
-      text.slice(0, first),
-      text.slice(first + oldStr.length),
+      matchedOld,
+      effectiveNew,
+      text.slice(0, start),
+      text.slice(start + matchLen),
     );
 
     if (ctx.requestApproval) {
@@ -57,9 +90,9 @@ export const editTool: Tool = {
       if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }
 
-    const next = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
+    const next = text.slice(0, start) + effectiveNew + text.slice(start + matchLen);
     await writeFile(full, next, 'utf8');
-    const line = text.slice(0, first).split('\n').length;
+    const line = text.slice(0, start).split('\n').length;
     const added = countPrefixed(diffText, '+ ');
     const removed = countPrefixed(diffText, '- ');
     return {
@@ -73,4 +106,128 @@ function countPrefixed(text: string, prefix: string): number {
   let n = 0;
   for (const line of text.split('\n')) if (line.startsWith(prefix)) n++;
   return n;
+}
+
+type FuzzyResult =
+  | { status: 'unique'; start: number; len: number; newStr: string }
+  | { status: 'multiple'; lines: number[] }
+  | { status: 'mixed'; line: string }
+  | { status: 'none'; hint: string };
+
+// Whitespace-insensitive line-block match. Compares old_string against the file
+// line-by-line on trimmed content, so leading/trailing indentation differences
+// don't block a match. Still requires the block to be UNIQUE — same safety
+// contract as the exact path. On success, new_string is re-indented so its
+// absolute indentation matches the file even if the model used a wrong base.
+function fuzzyLineMatch(text: string, oldStr: string, newStr: string): FuzzyResult {
+  const fileLines = text.split('\n');
+  let oldLines = oldStr.split('\n');
+  let newLines = newStr.split('\n');
+
+  // A trailing newline in old_string yields a trailing '' line; drop it (and the
+  // matching one in new_string) so we match whole lines without requiring an
+  // extra blank line after the block in the file.
+  if (oldLines.length > 1 && oldLines[oldLines.length - 1] === '') {
+    oldLines = oldLines.slice(0, -1);
+    if (newLines.length > 0 && newLines[newLines.length - 1] === '') {
+      newLines = newLines.slice(0, -1);
+    }
+  }
+
+  const oldTrim = oldLines.map(l => l.trim());
+  const n = oldTrim.length;
+
+  const starts: number[] = [];
+  for (let s = 0; s + n <= fileLines.length; s++) {
+    let ok = true;
+    for (let k = 0; k < n; k++) {
+      if (fileLines[s + k].trim() !== oldTrim[k]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) starts.push(s);
+  }
+
+  if (starts.length === 0) {
+    return { status: 'none', hint: notFoundHint(fileLines, oldLines, oldTrim) };
+  }
+  if (starts.length > 1) {
+    return { status: 'multiple', lines: starts.map(s => s + 1) };
+  }
+
+  const s = starts[0];
+  const start = fileLines.slice(0, s).reduce((acc, l) => acc + l.length + 1, 0);
+  const matchLen = fileLines.slice(s, s + n).join('\n').length;
+
+  // Re-indent new_string by the base-indent delta observed on the first
+  // non-blank matched line. Each new line that shares the model's (wrong) base
+  // indent gets it swapped for the file's real base; relative indentation within
+  // the block is preserved. Blank lines stay blank.
+  const i0 = oldTrim.findIndex(t => t !== '');
+  let reindented = newLines;
+  if (i0 !== -1) {
+    const baseOld = leadingWs(oldLines[i0]);
+    const baseFile = leadingWs(fileLines[s + i0]);
+    if (baseOld !== baseFile) {
+      // Guard: every non-blank new line must share the model's base indent so we
+      // can rewrite it to the file's. A line that doesn't (mixed tabs/spaces, or
+      // a dedent below the block base) can't be re-indented unambiguously —
+      // reject loudly rather than emit a silently mis-indented edit.
+      const offending = newLines.find(l => l.trim() !== '' && !l.startsWith(baseOld));
+      if (offending !== undefined) {
+        return { status: 'mixed', line: offending };
+      }
+      reindented = newLines.map(l => (l.trim() === '' ? '' : baseFile + l.slice(baseOld.length)));
+    }
+  }
+
+  return { status: 'unique', start, len: matchLen, newStr: reindented.join('\n') };
+}
+
+function lineOf(text: string, index: number): number {
+  let n = 1;
+  for (let i = 0; i < index && i < text.length; i++) if (text[i] === '\n') n++;
+  return n;
+}
+
+function leadingWs(s: string): string {
+  const m = /^[ \t]*/.exec(s);
+  return m ? m[0] : '';
+}
+
+// Point the model at the likely spot when even the tolerant match fails, so it
+// can correct in one retry instead of probing with cat/sed. When the block's
+// anchor line exists, locate the best-aligned candidate and report exactly which
+// line diverged and what the file actually has there — the costly thing for a
+// weak model to discover on its own.
+function notFoundHint(fileLines: string[], oldLines: string[], oldTrim: string[]): string {
+  const i0 = oldTrim.findIndex(t => t !== '');
+  if (i0 === -1) return '';
+  const anchor = oldTrim[i0];
+  const n = oldTrim.length;
+
+  // Candidate block starts: file lines whose content equals the anchor, aligned
+  // so the anchor sits at its position within the block. Keep the candidate that
+  // matched the most leading lines — that's the model's likely intended spot.
+  let best: { start: number; matched: number } | null = null;
+  for (let a = 0; a < fileLines.length; a++) {
+    if (fileLines[a].trim() !== anchor) continue;
+    const s = a - i0;
+    if (s < 0) continue;
+    let matched = 0;
+    while (matched < n && fileLines[s + matched]?.trim() === oldTrim[matched]) matched++;
+    if (!best || matched > best.matched) best = { start: s, matched };
+  }
+
+  if (!best) return ' No line matches it even ignoring whitespace; re-read the file.';
+
+  const k = best.matched;
+  const divLine = best.start + k + 1;
+  const expected = oldTrim[k] ?? '';
+  const actual = fileLines[best.start + k]?.trim() ?? '(end of file)';
+  return (
+    ` Closest match starts at line ${best.start + 1} ("${oldLines[i0].trim()}")` +
+    ` but line ${divLine} differs: expected "${expected}", file has "${actual}". Re-read there and copy verbatim.`
+  );
 }

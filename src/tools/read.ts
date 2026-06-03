@@ -25,7 +25,11 @@ export const readTool: Tool = {
     const lines = text.split('\n');
     const slice = lines.slice(offset - 1, offset - 1 + limit);
     const end = offset - 1 + slice.length;
-    const numbered = slice.map((l, i) => `${String(offset + i).padStart(5, ' ')}  ${l}`).join('\n');
+    // Gutter uses `│` (not spaces) so the line-number field can't be mistaken
+    // for the line's own leading indentation — everything after `│` is verbatim
+    // file content. This keeps weaker models from mis-counting whitespace when
+    // they copy text into an edit's old_string.
+    const numbered = slice.map((l, i) => `${String(offset + i).padStart(5, ' ')}│${l}`).join('\n');
     const rel = relative(ctx.cwd, full) || path;
     return {
       summary: `Read ${rel} lines ${offset}-${end} of ${lines.length}`,

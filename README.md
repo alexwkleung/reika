@@ -4,7 +4,11 @@ Minimalistic coding-agent CLI tuned for small local models. Built on TypeScript 
 
 ## Status
 
-Experimental. Built as a research project exploring how lean a coding agent can be while still being usable on local 3B–9B models — and scaling cleanly to cloud models when you want them.
+Reika is currently experimental.
+
+Initially built as a research project exploring how lean a coding agent can be while still being usable on local 3B–9B models and scaling cleanly to cloud models when needed.
+
+Primarily tested on 8B/9B (dense), 20B (MoE), and 35B (MoE) local models with low quantization (Q2-Q4) via MLX and llama.cpp.
 
 ## Quick start
 
