@@ -30,12 +30,20 @@ export type Message =
     }
   | { role: 'error'; content: string; nested?: boolean }
   | { role: 'system'; content: string; nested?: boolean }
+  // A deterministic recap that replaces an older span of history once context nears the
+  // window. Lives only in the model-facing history (merged into the system prompt by
+  // messagesToOpenAI); the UI keeps the full scrollback separately.
+  | { role: 'compaction'; content: string; nested?: boolean }
   | { role: 'header'; model: string; cwd: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
 export type Usage = {
   promptTokens: number;
   completionTokens: number;
+  // Prompt tokens served from the provider's cache. Populated when the provider
+  // reports it (OpenAI `prompt_tokens_details.cached_tokens`, DeepSeek
+  // `prompt_cache_hit_tokens`); undefined means the provider didn't report it.
+  cachedTokens?: number;
 };
 
 export type ToolResult = {
@@ -99,6 +107,9 @@ export type Profile = {
   baseURL: string;
   apiKey: string;
   maxTokens?: number;
+  // Total context window of the model, used as the denominator for the context-fill
+  // gauge. Undefined when unknown (the gauge then shows absolute tokens, no percentage).
+  contextWindow?: number;
 };
 
 export type Config = {
@@ -116,6 +127,7 @@ export type Config = {
   searxngUrl?: string;
   profiles: Record<string, Profile>;
   maxTokens?: number;
+  contextWindow?: number;
   maxSearchesPerTurn: number;
   maxFetchesPerTurn: number;
 };

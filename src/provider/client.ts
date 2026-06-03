@@ -18,6 +18,8 @@ export async function callModel(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   signal?: AbortSignal;
+  // Learned char→token calibration, used to size the fit-to-window payload cap.
+  calibration?: number;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -26,7 +28,10 @@ export async function callModel(opts: {
     baseURL: opts.config.baseURL,
     apiKey: opts.config.apiKey,
   });
-  const messages = messagesToOpenAI(opts.system, opts.history);
+  const messages = messagesToOpenAI(opts.system, opts.history, {
+    contextWindow: opts.config.contextWindow,
+    calibration: opts.calibration,
+  });
 
   const contentParts: string[] = [];
   const reasoningParts: string[] = [];
@@ -48,9 +53,18 @@ export async function callModel(opts: {
 
     for await (const chunk of stream) {
       if (chunk.usage) {
+        // Cache-hit accounting is reported under different field names per provider:
+        // OpenAI nests it in `prompt_tokens_details.cached_tokens`; DeepSeek exposes
+        // a top-level `prompt_cache_hit_tokens`. Accept either; undefined otherwise.
+        const u = chunk.usage as typeof chunk.usage & {
+          prompt_tokens_details?: { cached_tokens?: number | null } | null;
+          prompt_cache_hit_tokens?: number | null;
+        };
+        const cached = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens;
         usage = {
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
+          promptTokens: u.prompt_tokens,
+          completionTokens: u.completion_tokens,
+          ...(cached != null ? { cachedTokens: cached } : {}),
         };
       }
       const delta = chunk.choices[0]?.delta as

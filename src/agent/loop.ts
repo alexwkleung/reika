@@ -10,6 +10,8 @@ import type {
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
+import { estimateRequestTokens } from '../provider/tokens.js';
+import { compactHistory, shouldCompact } from './compaction.js';
 import type { PayloadStore } from '../store/payloads.js';
 
 export async function runTurn(opts: {
@@ -25,6 +27,14 @@ export async function runTurn(opts: {
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
   onUsage?: (usage: Usage) => void;
+  // Pre-send estimate of the next request's prompt tokens. Fires before each model
+  // call so the UI can show context fill before the provider's real count arrives.
+  onContextEstimate?: (tokens: number) => void;
+  // Calibration of the char-based estimate against the provider's real token count,
+  // threaded across turns (each turn re-seeds the full history, so the learned factor
+  // must persist for the first call's compaction decision to be accurate).
+  priorCalibration?: number;
+  onCalibration?: (factor: number) => void;
   onToolProgress?: (chunk: string) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
@@ -49,6 +59,19 @@ export async function runTurn(opts: {
   // Track URLs successfully fetched this turn. Stamped onto the final assistant
   // message as `sources` for deterministic citation rendering (no model recall).
   const fetchedUrls = new Set<string>();
+  // Notify the user at most once per turn that compaction kicked in, even if it runs
+  // again across the turn's tool rounds.
+  let notifiedCompaction = false;
+
+  const window = opts.config.contextWindow;
+  // The char-based estimate systematically diverges from a model's real tokenizer (code,
+  // JSON and CJK tokenize denser). Calibrate it against the provider's reported
+  // promptTokens so the compaction trigger fires at the *real* threshold, not a heuristic
+  // one. Seeded from the prior turn's learned factor since each turn re-seeds the full
+  // history from the UI scrollback.
+  let calibration = opts.priorCalibration && opts.priorCalibration > 0 ? opts.priorCalibration : 1;
+  const rawEstimate = (): number =>
+    estimateRequestTokens(system, opts.history, opts.tools, { contextWindow: window, calibration });
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
@@ -56,6 +79,24 @@ export async function runTurn(opts: {
       return;
     }
     opts.onPhase?.('thinking');
+
+    // Keep the request under the window: if the calibrated estimate crosses the threshold,
+    // collapse the oldest turns into a recap before calling. Compaction mutates this turn's
+    // history copy; the UI scrollback is untouched, so the user keeps the full log.
+    if (window && shouldCompact(rawEstimate() * calibration, window)) {
+      const removed = compactHistory(opts.history, window, calibration);
+      if (removed > 0 && !notifiedCompaction) {
+        notifiedCompaction = true;
+        opts.onMessage({
+          role: 'system',
+          content: `Context compacted — folded ${removed} earlier message${
+            removed === 1 ? '' : 's'
+          } into a recap (older tool output still re-readable).`,
+        });
+      }
+    }
+    const sentEstimate = rawEstimate();
+    opts.onContextEstimate?.(Math.round(sentEstimate * calibration));
     const response = await callModel({
       system,
       history: opts.history,
@@ -64,9 +105,20 @@ export async function runTurn(opts: {
       onContentDelta: opts.onContentDelta,
       onReasoningDelta: opts.onReasoningDelta,
       signal: opts.signal,
+      calibration,
     });
 
     if (response.usage) opts.onUsage?.(response.usage);
+
+    // Recalibrate from what the provider actually counted vs. what we estimated for the
+    // request we just sent. Clamped to a sane band to ignore one-off outliers.
+    if (response.usage?.promptTokens && sentEstimate > 0) {
+      const factor = response.usage.promptTokens / sentEstimate;
+      if (factor > 0.2 && factor < 8) {
+        calibration = factor;
+        opts.onCalibration?.(calibration);
+      }
+    }
 
     if (opts.signal?.aborted) {
       commitAborted(opts, response.content, turnStart, fetchedUrls);

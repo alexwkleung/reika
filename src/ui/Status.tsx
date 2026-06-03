@@ -9,6 +9,9 @@ export function Status({
   status,
   elapsed,
   usage,
+  contextTokens,
+  contextWindow,
+  cachedTokens,
   autoApprove,
   modeTag,
   exitArmed,
@@ -18,6 +21,9 @@ export function Status({
   status: string;
   elapsed: number | null;
   usage: Usage;
+  contextTokens?: number | null;
+  contextWindow?: number;
+  cachedTokens?: number;
   autoApprove?: boolean;
   modeTag?: string;
   exitArmed?: boolean;
@@ -31,6 +37,15 @@ export function Status({
     usage.promptTokens > 0 || usage.completionTokens > 0
       ? ` · ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
       : '';
+
+  // Current context size and how full the window is. The fill % drives the color so a
+  // long run that's approaching the limit is visible at a glance.
+  const fill = contextFill(contextTokens, contextWindow);
+  const ctx = formatContext(contextTokens, contextWindow);
+  const ctxColor = fill != null && fill >= 0.8 ? theme.warning : theme.muted;
+  // Share of the prompt the provider served from cache last call. Absent when the
+  // provider doesn't report it.
+  const cache = formatCache(cachedTokens, contextTokens);
 
   return (
     <Box>
@@ -46,7 +61,10 @@ export function Status({
           <Text color={theme.muted}>{' · '}</Text>
         </>
       ) : null}
-      <Text color={theme.muted}>{`${model} · turn ${turns} · ${status}${timer}${tokens} · `}</Text>
+      <Text color={theme.muted}>{`${model} · turn ${turns} · ${status}${timer}${tokens}`}</Text>
+      {ctx ? <Text color={ctxColor}>{ctx}</Text> : null}
+      {cache ? <Text color={theme.muted}>{cache}</Text> : null}
+      <Text color={theme.muted}>{' · '}</Text>
       {exitArmed ? (
         <Text color={theme.warning}>press ctrl-c again to exit</Text>
       ) : (
@@ -54,6 +72,28 @@ export function Status({
       )}
     </Box>
   );
+}
+
+// Fraction of the context window currently used, or null when either operand is unknown.
+export function contextFill(contextTokens?: number | null, contextWindow?: number): number | null {
+  if (!contextTokens || !contextWindow) return null;
+  return contextTokens / contextWindow;
+}
+
+// ` · ctx 45k/128k (35%)` when the window is known, ` · ctx 45k` when only the size is,
+// empty string when there's nothing to show yet.
+export function formatContext(contextTokens?: number | null, contextWindow?: number): string {
+  if (contextTokens == null || contextTokens <= 0) return '';
+  const fill = contextFill(contextTokens, contextWindow);
+  return fill != null
+    ? ` · ctx ${kFormat(contextTokens)}/${kFormat(contextWindow!)} (${Math.round(fill * 100)}%)`
+    : ` · ctx ${kFormat(contextTokens)}`;
+}
+
+// ` · cache 89%` (cached share of the last prompt), empty when unavailable.
+export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
+  if (cachedTokens == null || !contextTokens) return '';
+  return ` · cache ${Math.round((cachedTokens / contextTokens) * 100)}%`;
 }
 
 export function formatElapsed(seconds: number): string {

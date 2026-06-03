@@ -17,25 +17,75 @@ export function Scrollback({
   streamingReasoning: string;
   streamingTool: string;
 }) {
+  // The live (non-Static) region must never grow taller than the viewport: Ink can't
+  // erase a frame taller than the screen, which is what produces the "duplicated
+  // terminal" on long streamed output and breaks native scrollback. Each active stream
+  // block shows only its tail, sized so the blocks together fit the viewport. Full text
+  // lands in <Static> when the message commits, where the terminal scrolls it natively.
+  const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
+  const budget = liveTailBudget(active);
+
   return (
     <>
       <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
       {streamingReasoning ? (
         <Box marginTop={1}>
-          <ReasoningBlock text={streamingReasoning} />
+          <ReasoningBlock text={streamingReasoning} maxLines={budget} />
         </Box>
       ) : null}
-      {streaming.trim() ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text>{renderMarkdown(streaming)}</Text>
-        </Box>
-      ) : null}
-      {streamingTool ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.muted}>{streamingTool}</Text>
-        </Box>
-      ) : null}
+      {streaming.trim() ? <StreamingContent text={streaming} maxLines={budget} /> : null}
+      {streamingTool ? <StreamingTool text={streamingTool} maxLines={budget} /> : null}
     </>
+  );
+}
+
+// Per-block line budget for the live region: the viewport minus fixed chrome (input,
+// status, working, margins), split across however many stream blocks are active.
+function liveTailBudget(activeBlocks: number): number {
+  const rows = process.stdout.rows || 24;
+  return Math.max(3, Math.floor((rows - 8) / activeBlocks));
+}
+
+// Keep only the last `maxLines` newline-rows, with a character backstop for pathological
+// long-unwrapped lines. `truncated` flags that earlier output was dropped from the view.
+export function tailText(
+  text: string,
+  maxLines: number,
+  maxChars = maxLines * 240,
+): { text: string; truncated: boolean } {
+  let out = text;
+  let truncated = false;
+  const lines = out.split('\n');
+  if (lines.length > maxLines) {
+    out = lines.slice(-maxLines).join('\n');
+    truncated = true;
+  }
+  if (out.length > maxChars) {
+    out = out.slice(-maxChars);
+    truncated = true;
+  }
+  return { text: out, truncated };
+}
+
+// Live assistant text: rendered as a bounded tail (markdown preview); the committed
+// message re-renders the full text in <Static>.
+function StreamingContent({ text, maxLines }: { text: string; maxLines: number }) {
+  const { text: shown, truncated } = tailText(text, maxLines);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
+      <Text>{renderMarkdown(shown)}</Text>
+    </Box>
+  );
+}
+
+function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
+  const { text: shown, truncated } = tailText(text, maxLines);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
+      <Text color={theme.muted}>{shown}</Text>
+    </Box>
   );
 }
 
@@ -172,14 +222,21 @@ function renderMessage(msg: Message): React.ReactElement | null {
 // Reasoning/"Thinking" preview: a muted bar down the left with a small label on
 // top. Shares the user bubble's left-bar visual language but stays understated —
 // muted bar, no background — so it reads as distinct from a user message.
-function ReasoningBlock({ text }: { text: string }) {
+function ReasoningBlock({ text, maxLines }: { text: string; maxLines?: number }) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
-  const cleaned = stripReasoningMarkdown(text).replace(/\n\s*\n/g, '\n').trim();
-  const lines = wrapText(cleaned, contentW);
+  const cleaned = stripReasoningMarkdown(text)
+    .replace(/\n\s*\n/g, '\n')
+    .trim();
+  let lines = wrapText(cleaned, contentW);
+  // Bound the live preview to its tail so the frame can't exceed the viewport; the
+  // committed message passes no maxLines and shows in full (in <Static>).
+  if (maxLines !== undefined && lines.length > maxLines) {
+    lines = lines.slice(-maxLines);
+  }
 
   return (
     <Box flexDirection="column">

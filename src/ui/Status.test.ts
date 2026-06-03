@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { kFormat } from './Status.js';
+import { kFormat, formatContext, formatCache, contextFill } from './Status.js';
 
 describe('kFormat', () => {
   it('shows raw numbers below 1k', () => {
@@ -54,5 +54,46 @@ describe('kFormat', () => {
     // Without B handling, kFormat(1_000_000_000) would have produced "1000M"
     expect(kFormat(1_000_000_000)).not.toContain('1000M');
     expect(kFormat(1_000_000_000)).toMatch(/B$/);
+  });
+});
+
+describe('contextFill', () => {
+  it('returns the used fraction when both operands are known', () => {
+    expect(contextFill(32_000, 128_000)).toBeCloseTo(0.25);
+  });
+
+  it('returns null when either operand is missing or zero', () => {
+    expect(contextFill(undefined, 128_000)).toBeNull();
+    expect(contextFill(0, 128_000)).toBeNull();
+    expect(contextFill(32_000, undefined)).toBeNull();
+  });
+});
+
+describe('formatContext', () => {
+  it('shows tokens, window, and percent when the window is known', () => {
+    expect(formatContext(45_000, 128_000)).toBe(' · ctx 45k/128k (35%)');
+  });
+
+  it('shows only the size when the window is unknown', () => {
+    expect(formatContext(45_000)).toBe(' · ctx 45k');
+  });
+
+  it('renders nothing before any context exists', () => {
+    expect(formatContext(undefined)).toBe('');
+    expect(formatContext(0, 128_000)).toBe('');
+  });
+});
+
+describe('formatCache', () => {
+  it('shows the cached share of the last prompt', () => {
+    expect(formatCache(40_000, 50_000)).toBe(' · cache 80%');
+  });
+
+  it('renders nothing when the provider does not report cache hits', () => {
+    expect(formatCache(undefined, 50_000)).toBe('');
+  });
+
+  it('renders nothing when there is no prompt to compare against', () => {
+    expect(formatCache(40_000, 0)).toBe('');
   });
 });

@@ -1,13 +1,50 @@
 import type OpenAI from 'openai';
 import type { Message, Tool } from '../types.js';
 
+// Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
+// token-denominated window to the char-denominated payload length.
+const CHARS_PER_TOKEN = 4;
+// Tokens reserved from the window for the model's response, so prompt + generation fits.
+const RESERVE_TOKENS = 1024;
+// Use only this fraction of the computed budget, as slack against estimate error and the
+// learned calibration lagging a step behind a sudden content shift.
+const BUDGET_SAFETY = 0.9;
+// Floor on the calibration used *for the cap* (calibration = real tokens per estimate ≈
+// 4/chars-per-token). The learned average is trained on whatever the session has seen
+// (often prose-heavy reasoning, ~3.5 chars/token) and badly under-counts a sudden dump of
+// dense content like build logs or minified code (~2–2.5 chars/token). Since the cap is a
+// safety backstop and truncation is recoverable, assume the dense worst case here so a
+// single tool dump can't overflow the window while calibration is still catching up.
+const CAP_DENSITY_FLOOR = 2.0;
+
 export function messagesToOpenAI(
   system: string,
   history: Message[],
+  opts?: { contextWindow?: number; calibration?: number },
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const freshFrom = findFreshToolBlockStart(history);
+  // Reasoning is scratch work: a thinking model emits it every round, and kept verbatim it
+  // starves the budget over a long multi-round turn. Keep it only on the most recent
+  // tool-call round (the active roundtrip — required so providers that validate it don't
+  // break, see the cloud-thinking-models note) and drop all earlier reasoning.
+  const keepReasoningFrom = lastToolCallAssistantIndex(history);
+  // Compaction recaps fold into the single leading system block (rather than a second
+  // system message mid-array) for the widest chat-template compatibility.
+  const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
+  const systemContent = recaps.length
+    ? `${system}\n\n# Earlier conversation (compacted)\n\n${recaps.join('\n\n')}`
+    : system;
+  // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
+  // else in the request, so a single big tool round can never overflow the server.
+  const perPayloadCap = freshPayloadCharCap(
+    systemContent,
+    history,
+    freshFrom,
+    keepReasoningFrom,
+    opts,
+  );
   const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: 'system', content: system },
+    { role: 'system', content: systemContent },
   ];
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
@@ -29,13 +66,15 @@ export function messagesToOpenAI(
           },
         }));
       }
-      if (msg.reasoning) {
+      if (msg.reasoning && i >= keepReasoningFrom) {
         param.reasoning_content = msg.reasoning;
       }
       out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
     } else if (msg.role === 'tool') {
       const fresh = i >= freshFrom && msg.payload;
-      const content = fresh ? `${msg.summary}\n\n${msg.payload}` : msg.summary;
+      const content = fresh
+        ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
+        : msg.summary;
       const toolName = findToolNameForCall(history, msg.callId);
       const param: Record<string, unknown> = {
         role: 'tool',
@@ -57,6 +96,94 @@ function findFreshToolBlockStart(history: Message[]): number {
     if (history[i].role !== 'tool') return i + 1;
   }
   return 0;
+}
+
+// Per-payload character budget for the fresh tool block, computed to *fit the window*:
+// take the prompt's char budget (window minus response headroom, converted from tokens
+// via the learned calibration), subtract everything else in the request, and split what
+// remains across the fresh payloads. Returns undefined (no cap) when the context window
+// is unknown; 0 collapses payloads to summary-only when nothing else leaves room.
+function freshPayloadCharCap(
+  systemContent: string,
+  history: Message[],
+  freshFrom: number,
+  keepReasoningFrom: number,
+  opts?: { contextWindow?: number; calibration?: number },
+): number | undefined {
+  const cw = opts?.contextWindow;
+  if (!cw) return undefined;
+  const learned = opts?.calibration && opts.calibration > 0 ? opts.calibration : 1;
+  // The floor is only for converting the *fresh* allowance to chars — the non-fresh content
+  // is already-seen and well-described by the learned average, so applying the worst-case
+  // density to the whole budget (as a naive cap would) needlessly shrinks the effective
+  // window and truncates tool output even when there's plenty of real room.
+  const capCalib = Math.max(learned, CAP_DENSITY_FLOOR);
+
+  let freshCount = 0;
+  let nonFreshChars = systemContent.length;
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (i >= freshFrom && m.role === 'tool' && m.payload) {
+      freshCount++;
+      nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
+    } else {
+      // Match the build loop: reasoning only counts where it's actually sent.
+      nonFreshChars += nonFreshChars0(m, i >= keepReasoningFrom);
+    }
+  }
+  if (freshCount === 0) return undefined;
+
+  // Work in real tokens: budget the prompt, subtract the (accurately-estimated) non-fresh
+  // content, and convert what's left for fresh payloads back to chars pessimistically.
+  const promptTokenBudget = (cw - RESERVE_TOKENS) * BUDGET_SAFETY;
+  const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * learned;
+  const freshTokenBudget = promptTokenBudget - nonFreshTokens;
+  if (freshTokenBudget <= 0) return 0;
+  const freshCharBudget = (freshTokenBudget * CHARS_PER_TOKEN) / capCalib;
+  return Math.floor(freshCharBudget / freshCount);
+}
+
+// Index of the most recent assistant message that has tool_calls — the only round whose
+// reasoning is kept. Returns history.length (keep none) when there is no such message.
+function lastToolCallAssistantIndex(history: Message[]): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) return i;
+  }
+  return history.length;
+}
+
+// Approximate the chars a message contributes to the serialized request, excluding fresh
+// payloads (handled separately). Compaction recaps are already folded into systemContent,
+// so they count as 0 here to avoid double-counting.
+function nonFreshChars0(m: Message, includeReasoning: boolean): number {
+  switch (m.role) {
+    case 'user':
+      return m.content.length;
+    case 'assistant':
+      return (
+        (m.content?.length ?? 0) +
+        (includeReasoning ? (m.reasoning?.length ?? 0) : 0) +
+        (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)
+      );
+    case 'tool':
+      return m.summary.length;
+    default:
+      return 0;
+  }
+}
+
+// Truncate an over-budget payload. The marker makes clear this is a *context* limit, not
+// the command failing — otherwise a model will loop re-running with different shell flags
+// (tail/cat/head) trying to "get the full output". The full text stays in the PayloadStore.
+function capPayload(payload: string, cap: number | undefined): string {
+  if (cap === undefined || payload.length <= cap) return payload;
+  const omitted = payload.length - cap;
+  return (
+    `${payload.slice(0, cap)}\n\n` +
+    `[reika: ${omitted} chars omitted to fit the context window — this is a context-size ` +
+    `limit, not a command error. Re-running with different flags will not help.]`
+  );
 }
 
 function findToolNameForCall(history: Message[], callId: string): string | undefined {

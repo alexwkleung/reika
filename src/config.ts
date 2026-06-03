@@ -19,12 +19,14 @@ export function loadConfig(): Config {
   validateBaseURL(baseURL, 'REIKA_BASE_URL');
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
-  const defaultProfile: Profile = { model, baseURL, apiKey, maxTokens };
+  const contextWindow = parseIntOrUndef(process.env.REIKA_CONTEXT_WINDOW);
+  const defaultProfile: Profile = { model, baseURL, apiKey, maxTokens, contextWindow };
   return {
     baseURL,
     apiKey,
     model,
     maxTokens,
+    contextWindow,
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove:
@@ -54,6 +56,7 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
     const profileModel = process.env[`REIKA_${upper}_MODEL`];
     if (!profileModel) continue;
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
+    const profileContextWindow = parseIntOrUndef(process.env[`REIKA_${upper}_CONTEXT_WINDOW`]);
     const profileBaseURL = process.env[`REIKA_${upper}_BASE_URL`] ?? defaultProfile.baseURL;
     validateBaseURL(profileBaseURL, `REIKA_${upper}_BASE_URL`);
     profiles[lower] = {
@@ -61,6 +64,7 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
       baseURL: profileBaseURL,
       apiKey: process.env[`REIKA_${upper}_API_KEY`] ?? defaultProfile.apiKey,
       maxTokens: profileMaxTokens ?? defaultProfile.maxTokens,
+      contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
     };
   }
   return profiles;
@@ -98,5 +102,6 @@ export function resolveProfile(config: Config, profileName: string): Config {
     baseURL: profile.baseURL,
     apiKey: profile.apiKey,
     maxTokens: profile.maxTokens,
+    contextWindow: profile.contextWindow,
   };
 }
