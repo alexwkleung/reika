@@ -32,17 +32,17 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 ## Where things live
 
-| Path            | Purpose                                                                               |
-| --------------- | ------------------------------------------------------------------------------------- |
-| `src/agent/`    | Turn loop, prompt builder, mention parser                                             |
-| `src/provider/` | OpenAI-compatible client + tool-call serialization                                    |
-| `src/tools/`    | One tool per file; register in `src/tools/index.ts`                                   |
-| `src/context/`  | Bootstrap, repo map, file index (fdir-based), gitignore                               |
-| `src/search/`   | Web search providers — `types.ts` (interface) + per-provider adapters                 |
-| `src/store/`    | Addressable payload storage                                                           |
-| `src/ui/`       | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here |
-| `evals/`        | Fixture-based agent evals; runner + per-fixture files                                 |
-| `src/types.ts`  | Shared types: `Message`, `Tool`, `Config`, `ContextBundle`, etc.                      |
+| Path            | Purpose                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------- |
+| `src/agent/`    | Turn loop, prompt builder, mention parser, history compaction (`compaction.ts`)             |
+| `src/provider/` | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`) |
+| `src/tools/`    | One tool per file; register in `src/tools/index.ts`                                         |
+| `src/context/`  | Bootstrap, repo map, file index (fdir-based), gitignore                                     |
+| `src/search/`   | Web search providers — `types.ts` (interface) + per-provider adapters                       |
+| `src/store/`    | Addressable payload storage                                                                 |
+| `src/ui/`       | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here       |
+| `evals/`        | Fixture-based agent evals; runner + per-fixture files                                       |
+| `src/types.ts`  | Shared types: `Message`, `Tool`, `Config`, `ContextBundle`, etc.                            |
 
 ## Adding a new tool
 
@@ -145,6 +145,33 @@ If the tool ran a shell command (e.g., `bash`), include `command: { text, output
 
 **Keep the system prompt provider-neutral.** Don't add model-specific control tokens (e.g., Qwen's `/no_think`, gpt-oss Harmony headers, Mistral instruction tags) to `prompt.ts` — they're junk text for any non-matching model and waste tokens. Inference-engine flags (`--reasoning off` for llama.cpp, `temperature`, etc.) are the right layer for model-specific tuning.
 
+## Context management
+
+Three layers keep a long session inside the model's window. They only engage when
+`REIKA_CONTEXT_WINDOW` is set (otherwise the gauge shows absolute tokens and nothing is
+capped). Each has a non-obvious invariant — don't "simplify" them without reading why:
+
+- **Calibration** (`loop.ts`): the char/4 token estimate (`tokens.ts`) systematically
+  under-counts dense tokenizers (code/JSON/CJK). After each call we learn
+  `realPromptTokens / estimate` and persist it across turns (turns re-seed the full
+  history from the UI scrollback, so the factor must carry over). Everything below uses it.
+- **Fit-to-window payload cap** (`toolcall.ts`): fresh tool payloads are truncated to the
+  room left after everything else, so a single big tool result can't overflow. Non-fresh
+  content is measured with the _learned_ calibration; the fresh allowance is converted to
+  chars with a pessimistic floor (`CAP_DENSITY_FLOOR`) so a sudden dense dump can't overflow
+  while calibration lags. The truncation marker says "context limit, not a command error" on
+  purpose — without it, models loop re-running with different shell flags.
+- **Compaction** (`compaction.ts`): once the calibrated estimate crosses 75% of the window,
+  the oldest turns fold into one recap message (merged into the system block), keeping recent
+  turns verbatim and splitting only on user boundaries so no tool result is orphaned from its
+  `tool_call`. It runs on the loop's local history copy; the UI scrollback is untouched.
+  Note it can't compact _within_ a single long turn (only one user message), so a runaway
+  multi-round turn is bounded by the cap + reasoning pruning, not compaction.
+
+**Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only on the
+most recent tool-call round (the active roundtrip — see the cross-provider note) and dropped
+elsewhere. A thinking model otherwise accumulates reasoning every round and starves the budget.
+
 ## .gitignore is honored
 
 Bootstrap loads `.gitignore` (and `.git/info/exclude`) into an `Ignore` instance on `bundle.ignore`. Any walker that touches the filesystem MUST consult it: `buildFileIndex` (fdir exclude+filter), `buildRepoMap` (manual walk), `list` / `grep` / `glob` tools (via `ctx.ignore`). New walkers added to tools or context modules MUST do the same — otherwise the agent burns exploration on build outputs.
@@ -207,5 +234,7 @@ Eval timeouts use the same `AbortController` pattern as the user-side abort.
 ## Cross-provider gotchas worth knowing
 
 - For Qwen3 / DeepSeek-R1 / Kimi K2 on llama.cpp: use `--jinja --reasoning off`, not `--reasoning-budget 0`
+- Qwen3 thinking mode (seen on qwen3.6) loops endlessly under greedy decoding — needs `--temp 0.6 --top-p 0.95 --top-k 20 --min-p 0` (+ presence/DRY) on the server; reika sends no sampling params. Not a context bug; a single runaway completion can't be interrupted between calls
+- The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up
 - Cloud thinking models (Kimi K2 etc.) require `reasoning_content` to be roundtripped on assistant messages with tool_calls — handled in `src/provider/toolcall.ts`
 - gpt-oss family on certain servers leaks `<|channel|>` Harmony markers in tool-call names — `sanitizeToolName()` in `src/provider/client.ts` strips them defensively
