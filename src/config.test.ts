@@ -6,16 +6,20 @@ const ENV_KEYS = [
   'REIKA_BASE_URL',
   'REIKA_API_KEY',
   'REIKA_MAX_TOKENS',
+  'REIKA_CONTEXT_WINDOW',
   'REIKA_PROFILES',
   'REIKA_KIMI_MODEL',
   'REIKA_KIMI_BASE_URL',
   'REIKA_KIMI_API_KEY',
   'REIKA_KIMI_MAX_TOKENS',
+  'REIKA_KIMI_CONTEXT_WINDOW',
   'REIKA_GPT4_MODEL',
   'REIKA_GPT4_BASE_URL',
   'REIKA_GPT4_API_KEY',
   'REIKA_GPT4_MAX_TOKENS',
+  'REIKA_GPT4_CONTEXT_WINDOW',
   'REIKA_MINIMAL_MODEL',
+  'REIKA_MINIMAL_CONTEXT_WINDOW',
   'REIKA_BROKEN_MODEL',
   'REIKA_BROKEN_BASE_URL',
 ];
@@ -214,5 +218,52 @@ describe('maxTokens', () => {
     const cfg = loadConfig();
     const resolved = resolveProfile(cfg, 'kimi');
     expect(resolved.maxTokens).toBe(8192);
+  });
+});
+
+describe('contextWindow', () => {
+  it('is undefined when REIKA_CONTEXT_WINDOW is not set', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    expect(cfg.contextWindow).toBeUndefined();
+    expect(cfg.profiles.default.contextWindow).toBeUndefined();
+  });
+
+  it('reads REIKA_CONTEXT_WINDOW into the default profile', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    const cfg = loadConfig();
+    expect(cfg.contextWindow).toBe(16384);
+    expect(cfg.profiles.default.contextWindow).toBe(16384);
+  });
+
+  it('named profile inherits contextWindow from default when not overridden', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    process.env.REIKA_PROFILES = 'minimal';
+    process.env.REIKA_MINIMAL_MODEL = 'mini';
+    const cfg = loadConfig();
+    expect(cfg.profiles.minimal.contextWindow).toBe(16384);
+  });
+
+  it('per-profile REIKA_<NAME>_CONTEXT_WINDOW overrides the default', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_CONTEXT_WINDOW = '262144';
+    const cfg = loadConfig();
+    expect(cfg.profiles.kimi.contextWindow).toBe(262144);
+    expect(cfg.profiles.default.contextWindow).toBe(16384);
+  });
+
+  it('resolveProfile carries contextWindow through', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_CONTEXT_WINDOW = '131072';
+    const cfg = loadConfig();
+    const resolved = resolveProfile(cfg, 'kimi');
+    expect(resolved.contextWindow).toBe(131072);
   });
 });

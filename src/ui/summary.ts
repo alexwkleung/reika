@@ -45,6 +45,13 @@ export function buildSummary(
     `Tools:           ${totalTools}${breakdown}`,
     `Subagents:       ${subagentCount}`,
     `Tokens:          ${usage.promptTokens.toLocaleString()} ↑  ${usage.completionTokens.toLocaleString()} ↓`,
+    ...(usage.cachedTokens && usage.promptTokens > 0
+      ? [
+          `Cache hits:      ${usage.cachedTokens.toLocaleString()} (${Math.round(
+            (usage.cachedTokens / usage.promptTokens) * 100,
+          )}% of prompt)`,
+        ]
+      : []),
     `Files modified:  ${filesText}`,
     `Approvals:       ${approvals.approved} approved, ${approvals.declined} declined`,
   ].join('\n');
