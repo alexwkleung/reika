@@ -1,9 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdin } from 'ink';
 import { theme } from './theme.js';
 
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
+
+// Home/End escape sequences. Terminals (e.g. iTerm2 with Cmd+Left/Right remapped
+// to send \e[H / \e[F) emit these for line-start/end. Ink's keypress parser
+// recognizes them but `useInput` doesn't surface Home/End, so we read the raw
+// chunk off Ink's input emitter instead (see the useEffect below).
+const HOME_SEQS = new Set(['\x1b[H', '\x1bOH', '\x1b[1~', '\x1b[7~']);
+const END_SEQS = new Set(['\x1b[F', '\x1bOF', '\x1b[4~', '\x1b[8~']);
 
 export function Input({
   value,
@@ -24,6 +31,31 @@ export function Input({
 }) {
   const [cursor, setCursor] = useState(value.length);
   const lastValueRef = useRef(value);
+
+  // Kept current each render so the raw-stdin listener (which closes over them
+  // once) always sees the latest value/cursor without re-subscribing.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+
+  // Home/End (incl. Cmd+Arrow remapped to \e[H / \e[F) bypass `useInput`, which
+  // discards them. Subscribe to Ink's raw input emitter and map them to line
+  // start/end ourselves. Ink still also dispatches them through useInput as an
+  // empty keypress, which our handler ignores — no double-handling.
+  const { internal_eventEmitter } = useStdin();
+  useEffect(() => {
+    if (disabled || !internal_eventEmitter) return;
+    const onInput = (chunk: string | Buffer): void => {
+      const s = typeof chunk === 'string' ? chunk : chunk.toString();
+      if (HOME_SEQS.has(s)) setCursor(lineStart(valueRef.current, cursorRef.current));
+      else if (END_SEQS.has(s)) setCursor(lineEnd(valueRef.current, cursorRef.current));
+    };
+    internal_eventEmitter.on('input', onInput);
+    return () => {
+      internal_eventEmitter.removeListener('input', onInput);
+    };
+  }, [disabled, internal_eventEmitter]);
 
   // External value change (e.g., suggestion accept, submit clear) — snap cursor to end.
   useEffect(() => {
@@ -66,20 +98,32 @@ export function Input({
         return;
       }
 
+      // Option/Alt+Arrow jumps by word; Ctrl+Arrow jumps to line start/end.
+      // (Cmd+Arrow can't be bound — macOS terminals never forward the ⌘ key.)
       if (key.leftArrow) {
-        if (key.meta || key.ctrl) setCursor(wordBackward(value, cursor));
+        if (key.meta) setCursor(wordBackward(value, cursor));
+        else if (key.ctrl) setCursor(lineStart(value, cursor));
         else setCursor(Math.max(0, cursor - 1));
         return;
       }
       if (key.rightArrow) {
-        if (key.meta || key.ctrl) setCursor(wordForward(value, cursor));
+        if (key.meta) setCursor(wordForward(value, cursor));
+        else if (key.ctrl) setCursor(lineEnd(value, cursor));
         else setCursor(Math.min(value.length, cursor + 1));
         return;
       }
 
+      // Many macOS terminals emit readline word motions for Option+Arrow:
+      // ESC-b / ESC-f (Ink reports these as meta + 'b'/'f'), not a modified
+      // arrow sequence. Handle them so Option+Arrow word-jumps without Cmd.
+      if (key.meta && (input === 'b' || input === 'f')) {
+        setCursor(input === 'b' ? wordBackward(value, cursor) : wordForward(value, cursor));
+        return;
+      }
+
       if (key.ctrl) {
-        if (input === 'a') setCursor(0);
-        else if (input === 'e') setCursor(value.length);
+        if (input === 'a') setCursor(lineStart(value, cursor));
+        else if (input === 'e') setCursor(lineEnd(value, cursor));
         else if (input === 'u') update(value.slice(cursor), 0);
         else if (input === 'k') update(value.slice(0, cursor), cursor);
         else if (input === 'w') {
@@ -137,4 +181,16 @@ function wordBackward(value: string, cursor: number): number {
   while (i > 0 && /\s/.test(value[i - 1])) i--;
   while (i > 0 && /\S/.test(value[i - 1])) i--;
   return i;
+}
+
+// Start/end of the current logical line (the buffer may span multiple lines
+// via Shift+Enter or `\`-continuation), not the whole buffer.
+function lineStart(value: string, cursor: number): number {
+  const nl = value.lastIndexOf('\n', cursor - 1);
+  return nl === -1 ? 0 : nl + 1;
+}
+
+function lineEnd(value: string, cursor: number): number {
+  const nl = value.indexOf('\n', cursor);
+  return nl === -1 ? value.length : nl;
 }
