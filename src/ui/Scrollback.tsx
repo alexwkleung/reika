@@ -108,10 +108,10 @@ function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'shell') {
     return (
       <Box flexDirection="column" marginTop={1}>
-        <Box>
+        <Text>
           <Text color={theme.success}>{'$ '}</Text>
           <Text>{msg.command}</Text>
-        </Box>
+        </Text>
         {msg.output ? <Text color={theme.muted}>{msg.output}</Text> : null}
       </Box>
     );
@@ -136,10 +136,13 @@ function renderMessage(msg: Message): React.ReactElement | null {
           // a second one would double up between back-to-back tool calls.
           <Box flexDirection="column" marginTop={msg.reasoning || hasContent ? 1 : 0}>
             {msg.toolCalls.map(tc => (
-              <Box key={tc.id}>
+              // One Text with nested colored runs, not two sibling <Text> in a row:
+              // when the line wraps (long edit args), Ink drops the boundary char
+              // between adjacent siblings, rendering "• Edit(…)" as "• Edi(…)".
+              <Text key={tc.id}>
                 <Text color={theme.tool}>{`• ${capitalize(tc.name)}`}</Text>
                 <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
-              </Box>
+              </Text>
             ))}
           </Box>
         ) : null}
@@ -159,10 +162,10 @@ function renderMessage(msg: Message): React.ReactElement | null {
   if (msg.role === 'tool') {
     return (
       <Box flexDirection="column">
-        <Box>
+        <Text>
           <Text color={theme.tool}>{'  ↳ '}</Text>
           <Text color={theme.secondary}>{msg.summary}</Text>
-        </Box>
+        </Text>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <DiffView diff={msg.diff.text} path={msg.diff.path} maxWidth={diffViewWidth()} />
@@ -170,10 +173,10 @@ function renderMessage(msg: Message): React.ReactElement | null {
         ) : null}
         {msg.command ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
-            <Box>
+            <Text>
               <Text color={theme.success}>{'$ '}</Text>
               <Text>{msg.command.text}</Text>
-            </Box>
+            </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
                 <Text color={theme.muted}>{msg.command.outputTail}</Text>
