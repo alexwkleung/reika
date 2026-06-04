@@ -83,4 +83,16 @@ describe('renderMarkdown lists', () => {
     expect(out).toContain('2 * 3');
     expect(out).not.toContain('2 • 3');
   });
+
+  it('renders colons inside inline code within a list item (no *#COLON|* leak)', () => {
+    const out = renderMarkdown('- Run `http://localhost:3000` now');
+    expect(out).toContain('http://localhost:3000');
+    expect(out).not.toContain('*#COLON|*');
+  });
+
+  it('does not leak the colon sentinel for ordered-list inline code', () => {
+    const out = renderMarkdown('1. `git:status`\n2. plain');
+    expect(out).toContain('git:status');
+    expect(out).not.toContain('*#COLON|*');
+  });
 });

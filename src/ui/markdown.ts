@@ -3,6 +3,10 @@ import { highlight } from 'cli-highlight';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 
+// marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
+// in its source) and restores it in a final pass. See the listitem override.
+const COLON_SENTINEL = /\*#COLON\|\*/g;
+
 // marked-terminal calls renderer callbacks with multiple args (text, ordered, etc.).
 // Passing chalk methods directly causes the extra args to be string-joined onto
 // the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
@@ -32,7 +36,12 @@ marked.use(
     listitem: (text: string) => {
       try {
         const inline = marked.parseInline(text, { async: false });
-        return typeof inline === 'string' ? inline : text;
+        const rendered = typeof inline === 'string' ? inline : text;
+        // marked-terminal escapes colons inside codespans to a sentinel and
+        // unescapes them in a final pass that already ran before this override.
+        // Our nested parseInline re-introduces the sentinel, so undo it here or
+        // inline-code colons leak as `*#COLON|*`.
+        return rendered.replace(COLON_SENTINEL, ':');
       } catch {
         return text;
       }
