@@ -52,3 +52,62 @@ describe('Scrollback tool-call label', () => {
     expect(frame).not.toMatch(/↳Edit failed:/);
   });
 });
+
+// Regression: Ink repaints the whole terminal — emitting `\x1b[3J`, which clears
+// native scrollback (iTerm2: "a control sequence attempted to clear scrollback") —
+// whenever the live frame is at least as tall as the viewport (build/ink.js:
+// `outputHeight >= stdout.rows`). On a long stream that repaint fires every frame,
+// producing the scroll-lock / jitter / duplicated-terminal behavior. The live blocks
+// must therefore stay bounded in *wrapped display rows*, not logical lines.
+describe('Scrollback live-region height', () => {
+  const setViewport = (rows: number, columns: number) => {
+    const prev = { rows: process.stdout.rows, columns: process.stdout.columns };
+    Object.defineProperty(process.stdout, 'rows', { value: rows, configurable: true });
+    Object.defineProperty(process.stdout, 'columns', { value: columns, configurable: true });
+    return () =>
+      Object.defineProperties(process.stdout, {
+        rows: { value: prev.rows, configurable: true },
+        columns: { value: prev.columns, configurable: true },
+      });
+  };
+
+  it('keeps a huge streamed payload under the viewport height', () => {
+    const restore = setViewport(30, 60);
+    try {
+      // 2000 logical lines, many of them long enough to wrap several times — the
+      // pre-fix code (bounding logical lines, then letting markdown + Ink wrap)
+      // would blow far past 30 rows.
+      const huge = Array.from(
+        { length: 2000 },
+        (_, i) => `Line ${i}: ${'lorem ipsum '.repeat(8)}`,
+      ).join('\n');
+      const { lastFrame } = render(
+        <Scrollback messages={[]} streaming={huge} streamingReasoning="" streamingTool="" />,
+      );
+      const height = (lastFrame() ?? '').split('\n').length;
+      expect(height).toBeLessThan(process.stdout.rows);
+    } finally {
+      restore();
+    }
+  });
+
+  it('bounds reasoning + content + tool blocks together under the viewport', () => {
+    const restore = setViewport(30, 60);
+    try {
+      const big = (tag: string) =>
+        Array.from({ length: 500 }, (_, i) => `${tag} ${i}: ${'word '.repeat(12)}`).join('\n');
+      const { lastFrame } = render(
+        <Scrollback
+          messages={[]}
+          streaming={big('content')}
+          streamingReasoning={big('think')}
+          streamingTool={big('tool')}
+        />,
+      );
+      const height = (lastFrame() ?? '').split('\n').length;
+      expect(height).toBeLessThan(process.stdout.rows);
+    } finally {
+      restore();
+    }
+  });
+});

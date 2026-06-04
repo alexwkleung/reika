@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Static, Text } from 'ink';
+import wrapAnsi from 'wrap-ansi';
 import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
@@ -39,11 +40,40 @@ export function Scrollback({
   );
 }
 
-// Per-block line budget for the live region: the viewport minus fixed chrome (input,
-// status, working, margins), split across however many stream blocks are active.
+// Per-block budget for the live region, in *display* rows. Ink repaints the whole
+// terminal — including `\x1b[3J`, which clears native scrollback (iTerm2's "a control
+// sequence attempted to clear scrollback") — whenever the dynamic frame is at least
+// as tall as the viewport (build/ink.js: `outputHeight >= stdout.rows`). So the
+// active stream blocks plus the fixed chrome must stay strictly under it. Reserve
+// chrome (input/status/working + the Box margins), a per-block overhead (each block's
+// marginTop plus its header/"…" line), and one safety row, then split what's left.
 function liveTailBudget(activeBlocks: number): number {
   const rows = process.stdout.rows || 24;
-  return Math.max(3, Math.floor((rows - 8) / activeBlocks));
+  const CHROME = 8;
+  const PER_BLOCK_OVERHEAD = 3;
+  const SAFETY = 2;
+  const avail = rows - CHROME - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
+  return Math.max(3, Math.floor(avail / activeBlocks));
+}
+
+// Content width for a live block: terminal columns minus the App's paddingX={1} on
+// each side. Matches the width Ink lays the block's <Text> out at.
+function liveContentWidth(): number {
+  return Math.max(20, (process.stdout.columns || 80) - 2);
+}
+
+// Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
+// decides the live frame exceeds the viewport. We wrap with the exact same wrap-ansi
+// options Ink uses (build/wrap-text.js), so the row count matches and Ink's own
+// re-wrap of the result is a no-op (lines are already ≤ width).
+export function tailDisplay(
+  text: string,
+  maxRows: number,
+  width: number,
+): { text: string; truncated: boolean } {
+  const rows = wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
+  if (rows.length <= maxRows) return { text: rows.join('\n'), truncated: false };
+  return { text: rows.slice(-maxRows).join('\n'), truncated: true };
 }
 
 // Keep only the last `maxLines` newline-rows, with a character backstop for pathological
@@ -70,17 +100,25 @@ export function tailText(
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
 // message re-renders the full text in <Static>.
 function StreamingContent({ text, maxLines }: { text: string; maxLines: number }) {
-  const { text: shown, truncated } = tailText(text, maxLines);
+  const width = liveContentWidth();
+  // Cheap logical-line pre-trim caps markdown render cost on very long streams; the
+  // factor keeps enough lines to fill `maxLines` display rows even when each wraps.
+  // The render-then-tailDisplay below is what actually bounds the frame height — it
+  // measures the *rendered* output (markdown can expand lines, e.g. code fences) in
+  // wrapped display rows, which is what Ink counts against the viewport.
+  const pre = tailText(text, maxLines * 4);
+  const tail = tailDisplay(renderMarkdown(pre.text), maxLines, width);
+  const truncated = pre.truncated || tail.truncated;
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text>{renderMarkdown(shown)}</Text>
+      <Text>{tail.text}</Text>
     </Box>
   );
 }
 
 function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
-  const { text: shown, truncated } = tailText(text, maxLines);
+  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth());
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
