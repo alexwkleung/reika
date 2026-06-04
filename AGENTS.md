@@ -168,9 +168,13 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   Note it can't compact _within_ a single long turn (only one user message), so a runaway
   multi-round turn is bounded by the cap + reasoning pruning, not compaction.
 
-**Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only on the
-most recent tool-call round (the active roundtrip — see the cross-provider note) and dropped
-elsewhere. A thinking model otherwise accumulates reasoning every round and starves the budget.
+**Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
+last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always
+among them — see the cross-provider note) and dropped elsewhere. Unbounded, a thinking model
+accumulates reasoning every round and starves the budget; pruned to 1, it re-derives the same
+analysis across rounds (and a `repeat_penalty` can't suppress what's no longer in-window).
+Keeping a small recent window is the balance — raise the env var to trade tokens for
+chain-of-thought continuity, lower it under context pressure.
 
 ## .gitignore is honored
 

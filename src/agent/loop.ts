@@ -71,7 +71,11 @@ export async function runTurn(opts: {
   // history from the UI scrollback.
   let calibration = opts.priorCalibration && opts.priorCalibration > 0 ? opts.priorCalibration : 1;
   const rawEstimate = (): number =>
-    estimateRequestTokens(system, opts.history, opts.tools, { contextWindow: window, calibration });
+    estimateRequestTokens(system, opts.history, opts.tools, {
+      contextWindow: window,
+      calibration,
+      reasoningRounds: opts.config.reasoningRounds,
+    });
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {

@@ -57,24 +57,25 @@ Config sources, in precedence order (higher wins):
 
 `.env` keys (see `.env.example`):
 
-| Key                           | Default                     | What                                                                                                                                      |
-| ----------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_BASE_URL`              | `http://localhost:11434/v1` | OpenAI-compatible endpoint                                                                                                                |
-| `REIKA_MODEL`                 | _required_                  | Model name                                                                                                                                |
-| `REIKA_API_KEY`               | `no-key`                    | Cloud API key (any non-empty for local)                                                                                                   |
-| `REIKA_MAX_TURNS`             | `12`                        | Tool-call iterations per user turn                                                                                                        |
-| `REIKA_REPO_MAP_BUDGET`       | `3200`                      | Chars allotted to repo map in system prompt                                                                                               |
-| `REIKA_AUTO_APPROVE`          | `false`                     | Skip the approval prompt for edit/write/bash                                                                                              |
-| `REIKA_SUBAGENT_MODEL`        | _falls back to main_        | Override model for subagents                                                                                                              |
-| `REIKA_SUBAGENT_BASE_URL`     | _falls back_                | Override server for subagents                                                                                                             |
-| `REIKA_SUBAGENT_API_KEY`      | _falls back_                | Override key for subagents                                                                                                                |
-| `REIKA_SUBAGENT_MAX_TURNS`    | `6`                         | Subagent iteration limit                                                                                                                  |
-| `REIKA_MAX_TOKENS`            | _unset_                     | Cap response tokens per call (cloud cost/latency control). Per-profile override available                                                 |
-| `REIKA_CONTEXT_WINDOW`        | _unset_                     | Model context window; denominator for the status-line `ctx` fill gauge. Per-profile override available. Unset shows absolute tokens, no % |
-| `REIKA_SEARXNG_URL`           | _unset_                     | SearXNG instance URL (self-hosted, local-first). Takes precedence over Tavily                                                             |
-| `REIKA_TAVILY_API_KEY`        | _unset_                     | Tavily key — free at [tavily.com](https://tavily.com), enables `search` + `fetch_url`                                                     |
-| `REIKA_MAX_SEARCHES_PER_TURN` | `3`                         | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                          |
-| `REIKA_MAX_FETCHES_PER_TURN`  | `5`                         | Cap `fetch_url` calls per user turn                                                                                                       |
+| Key                           | Default                     | What                                                                                                                                                     |
+| ----------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REIKA_BASE_URL`              | `http://localhost:11434/v1` | OpenAI-compatible endpoint                                                                                                                               |
+| `REIKA_MODEL`                 | _required_                  | Model name                                                                                                                                               |
+| `REIKA_API_KEY`               | `no-key`                    | Cloud API key (any non-empty for local)                                                                                                                  |
+| `REIKA_MAX_TURNS`             | `12`                        | Tool-call iterations per user turn                                                                                                                       |
+| `REIKA_REPO_MAP_BUDGET`       | `3200`                      | Chars allotted to repo map in system prompt                                                                                                              |
+| `REIKA_AUTO_APPROVE`          | `false`                     | Skip the approval prompt for edit/write/bash                                                                                                             |
+| `REIKA_SUBAGENT_MODEL`        | _falls back to main_        | Override model for subagents                                                                                                                             |
+| `REIKA_SUBAGENT_BASE_URL`     | _falls back_                | Override server for subagents                                                                                                                            |
+| `REIKA_SUBAGENT_API_KEY`      | _falls back_                | Override key for subagents                                                                                                                               |
+| `REIKA_SUBAGENT_MAX_TURNS`    | `6`                         | Subagent iteration limit                                                                                                                                 |
+| `REIKA_MAX_TOKENS`            | _unset_                     | Cap response tokens per call (cloud cost/latency control). Per-profile override available                                                                |
+| `REIKA_CONTEXT_WINDOW`        | _unset_                     | Model context window; denominator for the status-line `ctx` fill gauge. Per-profile override available. Unset shows absolute tokens, no %                |
+| `REIKA_REASONING_ROUNDS`      | `2`                         | Recent tool-call rounds that keep their reasoning in context (rest pruned). 1 = leanest; higher avoids re-derivation on thinking models, at a token cost |
+| `REIKA_SEARXNG_URL`           | _unset_                     | SearXNG instance URL (self-hosted, local-first). Takes precedence over Tavily                                                                            |
+| `REIKA_TAVILY_API_KEY`        | _unset_                     | Tavily key — free at [tavily.com](https://tavily.com), enables `search` + `fetch_url`                                                                    |
+| `REIKA_MAX_SEARCHES_PER_TURN` | `3`                         | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                                         |
+| `REIKA_MAX_FETCHES_PER_TURN`  | `5`                         | Cap `fetch_url` calls per user turn                                                                                                                      |
 
 ## Profiles (multi-model)
 

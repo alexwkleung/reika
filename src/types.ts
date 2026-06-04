@@ -128,6 +128,10 @@ export type Config = {
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;
+  // How many recent tool-call rounds keep their reasoning_content in context. Older
+  // reasoning is pruned. 1 = only the active roundtrip (leanest); higher keeps the
+  // model's chain-of-thought so it doesn't re-derive across rounds, at a token cost.
+  reasoningRounds: number;
   maxSearchesPerTurn: number;
   maxFetchesPerTurn: number;
 };

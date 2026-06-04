@@ -20,14 +20,17 @@ const CAP_DENSITY_FLOOR = 2.0;
 export function messagesToOpenAI(
   system: string,
   history: Message[],
-  opts?: { contextWindow?: number; calibration?: number },
+  opts?: { contextWindow?: number; calibration?: number; reasoningRounds?: number },
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const freshFrom = findFreshToolBlockStart(history);
-  // Reasoning is scratch work: a thinking model emits it every round, and kept verbatim it
-  // starves the budget over a long multi-round turn. Keep it only on the most recent
-  // tool-call round (the active roundtrip — required so providers that validate it don't
-  // break, see the cloud-thinking-models note) and drop all earlier reasoning.
-  const keepReasoningFrom = lastToolCallAssistantIndex(history);
+  // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
+  // starves the budget over a long multi-round turn, but pruning it too hard makes the
+  // model re-derive the same analysis across rounds. Keep the last N tool-call rounds (the
+  // active roundtrip is always among them — required so providers that validate it don't
+  // break, see the cloud-thinking-models note) and drop older reasoning.
+  const reasoningRounds =
+    opts?.reasoningRounds && opts.reasoningRounds > 0 ? opts.reasoningRounds : 1;
+  const keepReasoningFrom = reasoningKeepFromIndex(history, reasoningRounds);
   // Compaction recaps fold into the single leading system block (rather than a second
   // system message mid-array) for the widest chat-template compatibility.
   const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
@@ -143,14 +146,22 @@ function freshPayloadCharCap(
   return Math.floor(freshCharBudget / freshCount);
 }
 
-// Index of the most recent assistant message that has tool_calls — the only round whose
-// reasoning is kept. Returns history.length (keep none) when there is no such message.
-function lastToolCallAssistantIndex(history: Message[]): number {
+// Index from which reasoning_content is kept: the start of the Nth-most-recent tool-call
+// round. Messages at or after it keep their reasoning; earlier ones are pruned. Returns
+// history.length (keep none) when there are no tool-call rounds at all.
+function reasoningKeepFromIndex(history: Message[], rounds: number): number {
+  let seen = 0;
+  let earliestToolCall = -1;
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
-    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) return i;
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      earliestToolCall = i;
+      if (++seen === rounds) return i;
+    }
   }
-  return history.length;
+  // Fewer than `rounds` tool-call rounds exist: keep from the earliest one, or — if there
+  // are no tool-call rounds at all — keep none (final-answer reasoning isn't needed later).
+  return earliestToolCall === -1 ? history.length : earliestToolCall;
 }
 
 // Approximate the chars a message contributes to the serialized request, excluding fresh

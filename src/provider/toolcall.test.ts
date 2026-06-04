@@ -300,4 +300,28 @@ describe('messagesToOpenAI', () => {
     const assistant = out[1] as { reasoning_content?: string };
     expect(assistant.reasoning_content).toBeUndefined();
   });
+
+  it('keeps reasoning for the last N tool-call rounds when reasoningRounds > 1', () => {
+    const round = (n: number): Message[] => [
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: `think ${n}`,
+        toolCalls: [{ id: `c${n}`, name: 'read', args: {} }],
+      },
+      { role: 'tool', callId: `c${n}`, summary: `r${n}` },
+    ];
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round(1),
+      ...round(2),
+      ...round(3),
+    ];
+    const out = messagesToOpenAI('sys', history, { reasoningRounds: 2 });
+    const reasonings = out
+      .filter(m => m.role === 'assistant')
+      .map(m => (m as { reasoning_content?: string }).reasoning_content);
+    // Oldest round pruned; the last two kept.
+    expect(reasonings).toEqual([undefined, 'think 2', 'think 3']);
+  });
 });
