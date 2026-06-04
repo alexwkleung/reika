@@ -102,7 +102,7 @@ describe('messagesToOpenAI', () => {
     }>;
     const tool = out.find(m => m.tool_call_id === 'c');
     expect(tool?.content).toContain(big);
-    expect(tool?.content).not.toContain('omitted to fit the context window');
+    expect(tool?.content).not.toContain('to fit the context window');
   });
 
   it('caps an oversized fresh payload so the whole request fits the window', () => {
@@ -116,9 +116,25 @@ describe('messagesToOpenAI', () => {
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
-    expect(tool?.content).toContain('omitted to fit the context window');
+    expect(tool?.content).toContain('to fit the context window');
     // The invariant that matters: the serialized request never exceeds the window.
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  it('keeps both the head and the tail when truncating (conclusion survives)', () => {
+    // Build/command output puts the result at the end — the tail must survive.
+    const payload = 'HEAD_START' + 'x'.repeat(100_000) + 'TAIL_END_dmg_path';
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload },
+    ];
+    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+      content?: string;
+    };
+    expect(tool?.content).toContain('HEAD_START');
+    expect(tool?.content).toContain('TAIL_END_dmg_path');
   });
 
   it('splits the remaining budget across multiple fresh payloads', () => {
@@ -143,8 +159,8 @@ describe('messagesToOpenAI', () => {
     const b = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'b') as {
       content?: string;
     };
-    expect(a?.content).toContain('omitted to fit the context window');
-    expect(b?.content).toContain('omitted to fit the context window');
+    expect(a?.content).toContain('to fit the context window');
+    expect(b?.content).toContain('to fit the context window');
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
   });
 
@@ -180,7 +196,7 @@ describe('messagesToOpenAI', () => {
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
-    expect(tool?.content).toContain('omitted to fit the context window');
+    expect(tool?.content).toContain('to fit the context window');
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
   });
 
@@ -204,7 +220,7 @@ describe('messagesToOpenAI', () => {
       content?: string;
     };
     expect(tool?.content).toContain('file.ts:12: hit');
-    expect(tool?.content).not.toContain('omitted to fit the context window');
+    expect(tool?.content).not.toContain('to fit the context window');
   });
 
   it('does not cap a fresh payload that fits within budget', () => {
@@ -220,7 +236,7 @@ describe('messagesToOpenAI', () => {
     }>;
     const tool = out.find(m => m.tool_call_id === 'c');
     expect(tool?.content).toContain(small);
-    expect(tool?.content).not.toContain('omitted to fit the context window');
+    expect(tool?.content).not.toContain('to fit the context window');
   });
 
   it('skips error and system messages (UI-only)', () => {

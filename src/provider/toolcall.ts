@@ -173,16 +173,22 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
   }
 }
 
-// Truncate an over-budget payload. The marker makes clear this is a *context* limit, not
-// the command failing — otherwise a model will loop re-running with different shell flags
-// (tail/cat/head) trying to "get the full output". The full text stays in the PayloadStore.
+// Truncate an over-budget payload, keeping the head AND the tail. Build/test/command
+// output puts the signal (artifact paths, pass/fail, errors) at the *end*, so head-only
+// truncation hands the model noise and hides the conclusion; we bias toward the tail.
+// The marker makes clear this is a *context* limit, not the command failing — otherwise a
+// model loops re-running with different flags. Full text stays in the PayloadStore.
+const HEAD_FRACTION = 0.4;
 function capPayload(payload: string, cap: number | undefined): string {
   if (cap === undefined || payload.length <= cap) return payload;
+  const head = Math.floor(cap * HEAD_FRACTION);
+  const tail = cap - head;
   const omitted = payload.length - cap;
   return (
-    `${payload.slice(0, cap)}\n\n` +
-    `[reika: ${omitted} chars omitted to fit the context window — this is a context-size ` +
-    `limit, not a command error. Re-running with different flags will not help.]`
+    `${payload.slice(0, head)}\n\n` +
+    `[reika: ${omitted} chars omitted from the middle to fit the context window — a ` +
+    `context-size limit, not a command error; re-running won't help. Output continues:]\n\n` +
+    `${payload.slice(payload.length - tail)}`
   );
 }
 
