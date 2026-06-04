@@ -31,6 +31,7 @@ export async function callModel(opts: {
   const messages = messagesToOpenAI(opts.system, opts.history, {
     contextWindow: opts.config.contextWindow,
     calibration: opts.calibration,
+    reasoningRounds: opts.config.reasoningRounds,
   });
 
   const contentParts: string[] = [];

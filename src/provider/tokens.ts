@@ -20,11 +20,12 @@ export function estimateRequestTokens(
   system: string,
   history: Message[],
   tools: Tool[],
-  opts?: { contextWindow?: number; calibration?: number },
+  opts?: { contextWindow?: number; calibration?: number; reasoningRounds?: number },
 ): number {
   const messages = messagesToOpenAI(system, history, {
     contextWindow: opts?.contextWindow,
     calibration: opts?.calibration,
+    reasoningRounds: opts?.reasoningRounds,
   });
   const toolDefs = tools.length > 0 ? toolsToOpenAI(tools) : [];
   // A small per-message envelope (role/delimiters) the chat template adds on top of

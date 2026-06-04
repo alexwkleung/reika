@@ -22,6 +22,7 @@ const ENV_KEYS = [
   'REIKA_MINIMAL_CONTEXT_WINDOW',
   'REIKA_BROKEN_MODEL',
   'REIKA_BROKEN_BASE_URL',
+  'REIKA_REASONING_ROUNDS',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -265,5 +266,24 @@ describe('contextWindow', () => {
     const cfg = loadConfig();
     const resolved = resolveProfile(cfg, 'kimi');
     expect(resolved.contextWindow).toBe(131072);
+  });
+});
+
+describe('reasoningRounds', () => {
+  it('defaults to 2 when unset', () => {
+    process.env.REIKA_MODEL = 'm';
+    expect(loadConfig().reasoningRounds).toBe(2);
+  });
+
+  it('reads REIKA_REASONING_ROUNDS', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_REASONING_ROUNDS = '5';
+    expect(loadConfig().reasoningRounds).toBe(5);
+  });
+
+  it('floors at 1 (the active round must keep its reasoning)', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_REASONING_ROUNDS = '0';
+    expect(loadConfig().reasoningRounds).toBe(1);
   });
 });
