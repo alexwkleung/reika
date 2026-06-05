@@ -156,17 +156,32 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   `realPromptTokens / estimate` and persist it across turns (turns re-seed the full
   history from the UI scrollback, so the factor must carry over). Everything below uses it.
 - **Fit-to-window payload cap** (`toolcall.ts`): fresh tool payloads are truncated to the
-  room left after everything else, so a single big tool result can't overflow. Non-fresh
-  content is measured with the _learned_ calibration; the fresh allowance is converted to
-  chars with a pessimistic floor (`CAP_DENSITY_FLOOR`) so a sudden dense dump can't overflow
-  while calibration lags. The truncation marker says "context limit, not a command error" on
-  purpose — without it, models loop re-running with different shell flags.
-- **Compaction** (`compaction.ts`): once the calibrated estimate crosses 75% of the window,
-  the oldest turns fold into one recap message (merged into the system block), keeping recent
-  turns verbatim and splitting only on user boundaries so no tool result is orphaned from its
-  `tool_call`. It runs on the loop's local history copy; the UI scrollback is untouched.
-  Note it can't compact _within_ a single long turn (only one user message), so a runaway
-  multi-round turn is bounded by the cap + reasoning pruning, not compaction.
+  room left after everything else, so a single big tool result can't overflow. The room left
+  reserves `minGenTokens` for the model's reply — the same generation reserve compaction and
+  the backstop use (see below). Non-fresh content is measured with the _learned_ calibration;
+  the fresh allowance is converted to chars with a pessimistic floor (`CAP_DENSITY_FLOOR`) so
+  a sudden dense dump can't overflow while calibration lags. The truncation marker says
+  "context limit, not a command error" on purpose — without it, models loop re-running with
+  different shell flags.
+- **Compaction** (`compaction.ts`): once the calibrated estimate crosses
+  `(window − minGenTokens) × 0.9` — i.e. when the prompt would leave less than the generation
+  reserve (plus slack) — the oldest turns fold into one recap message (merged into the system
+  block), keeping recent turns verbatim and splitting only on user boundaries so no tool
+  result is orphaned from its `tool_call`. Keep/recap budgets are sized off the _available_
+  room (`window − minGenTokens`), not the full window, so the result fits under the trigger
+  even when the reserve is a large fraction of a small window. It runs on the loop's local
+  history copy; the UI scrollback is untouched. Note it can't compact _within_ a single long
+  turn (only one user message), so a runaway multi-round turn is bounded by the cap +
+  reasoning pruning + the backstop, not compaction.
+- **Generation backstop** (`budget.ts`): each turn the loop computes `max_tokens =
+window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whichever is smaller)
+  and passes it to `callModel`. It caps a spiraling small/quantized model so it can't run to
+  the context end. The cap is a _ceiling_; `minGenTokens` is the _floor_, enforced upstream
+  by compaction keeping the prompt under `window − minGen` — so on a normal turn the ceiling
+  already lands ≥ the floor and the cap never fires. One number, `REIKA_MIN_GEN_TOKENS`
+  (default 2048), drives all three: the cap reserve, the compaction trigger, and this floor.
+  Size it ~2048 for reasoning-off models, 6144–8192 for reasoning-on thinking models on a
+  small window.
 
 **Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
 last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always
@@ -192,7 +207,9 @@ When calling `runTurn`, App.tsx passes `resolveProfile(config, activeProfile)` r
 
 Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they always come from the top-level config regardless of which profile is active. This is intentional: subagent model selection is a separate axis from main-thread model selection.
 
-**Per-profile `maxTokens`:** caps response tokens for that profile's calls. Falls back to the global `REIKA_MAX_TOKENS` if a profile doesn't set its own. `resolveProfile` carries it through to `callModel`, which passes `max_tokens` to the OpenAI client only when defined (so unset = server default applies). Setting too low truncates tool-call JSON silently — keep ≥4k for tool-heavy use, more for reasoning models.
+**Per-profile `maxTokens`:** an _explicit_ ceiling on response tokens, falling back to the global `REIKA_MAX_TOKENS`. It is no longer the only source of `max_tokens`: when `contextWindow` is set, the loop computes a per-turn backstop (`window − prompt − margin`, see the Generation backstop above) and sends `min(REIKA_MAX_TOKENS, backstop)`. With no window known and no `REIKA_MAX_TOKENS`, `max_tokens` is omitted (server default). An explicit `REIKA_MAX_TOKENS` still wins as a hard cap, so setting it too low truncates tool-call JSON silently — keep ≥4k for tool-heavy use, or just leave it unset and let `minGenTokens` size the reserve.
+
+**Per-profile `minGenTokens`** (`REIKA_<NAME>_MIN_GEN_TOKENS`): the generation reserve, falling back to the global `REIKA_MIN_GEN_TOKENS` (default 2048). One number drives the cap reserve, the compaction trigger, and the backstop floor — set it larger (6144–8192) on a small-window profile running a reasoning model so compaction fires early enough to leave think-room.
 
 ## Tests (vitest)
 

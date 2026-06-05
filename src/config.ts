@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Config, Profile } from './types.js';
+import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
 // dotenv defaults to no-override, so loading cwd first then global gives the right order.
@@ -20,13 +21,26 @@ export function loadConfig(): Config {
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
   const contextWindow = parseIntOrUndef(process.env.REIKA_CONTEXT_WINDOW);
-  const defaultProfile: Profile = { model, baseURL, apiKey, maxTokens, contextWindow };
+  // Floor at 256 so a misconfigured tiny value can't starve generation entirely.
+  const minGenTokens = Math.max(
+    256,
+    parseIntOrUndef(process.env.REIKA_MIN_GEN_TOKENS) ?? DEFAULT_MIN_GEN_TOKENS,
+  );
+  const defaultProfile: Profile = {
+    model,
+    baseURL,
+    apiKey,
+    maxTokens,
+    contextWindow,
+    minGenTokens,
+  };
   return {
     baseURL,
     apiKey,
     model,
     maxTokens,
     contextWindow,
+    minGenTokens,
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove:
@@ -60,6 +74,7 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
     if (!profileModel) continue;
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
     const profileContextWindow = parseIntOrUndef(process.env[`REIKA_${upper}_CONTEXT_WINDOW`]);
+    const profileMinGen = parseIntOrUndef(process.env[`REIKA_${upper}_MIN_GEN_TOKENS`]);
     const profileBaseURL = process.env[`REIKA_${upper}_BASE_URL`] ?? defaultProfile.baseURL;
     validateBaseURL(profileBaseURL, `REIKA_${upper}_BASE_URL`);
     profiles[lower] = {
@@ -68,6 +83,7 @@ function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
       apiKey: process.env[`REIKA_${upper}_API_KEY`] ?? defaultProfile.apiKey,
       maxTokens: profileMaxTokens ?? defaultProfile.maxTokens,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
+      minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
     };
   }
   return profiles;
@@ -106,5 +122,6 @@ export function resolveProfile(config: Config, profileName: string): Config {
     apiKey: profile.apiKey,
     maxTokens: profile.maxTokens,
     contextWindow: profile.contextWindow,
+    minGenTokens: profile.minGenTokens ?? config.minGenTokens,
   };
 }

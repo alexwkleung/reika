@@ -23,6 +23,10 @@ const ENV_KEYS = [
   'REIKA_BROKEN_MODEL',
   'REIKA_BROKEN_BASE_URL',
   'REIKA_REASONING_ROUNDS',
+  'REIKA_MIN_GEN_TOKENS',
+  'REIKA_KIMI_MIN_GEN_TOKENS',
+  'REIKA_GPT4_MIN_GEN_TOKENS',
+  'REIKA_MINIMAL_MIN_GEN_TOKENS',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -52,6 +56,7 @@ describe('loadConfig — profiles', () => {
       model: 'qwen3-9b',
       baseURL: 'http://localhost:8080/v1',
       apiKey: 'k',
+      minGenTokens: 2048,
     });
   });
 
@@ -70,6 +75,7 @@ describe('loadConfig — profiles', () => {
       model: 'kimi-k2',
       baseURL: 'https://moonshot.example/v1',
       apiKey: 'kimi-key',
+      minGenTokens: 2048,
     });
   });
 
@@ -94,6 +100,7 @@ describe('loadConfig — profiles', () => {
       model: 'minimal-m',
       baseURL: 'http://default-base/v1',
       apiKey: 'default-key',
+      minGenTokens: 2048,
     });
   });
 
@@ -266,6 +273,46 @@ describe('contextWindow', () => {
     const cfg = loadConfig();
     const resolved = resolveProfile(cfg, 'kimi');
     expect(resolved.contextWindow).toBe(131072);
+  });
+});
+
+describe('minGenTokens', () => {
+  it('defaults to 2048 when unset', () => {
+    process.env.REIKA_MODEL = 'm';
+    expect(loadConfig().minGenTokens).toBe(2048);
+    expect(loadConfig().profiles.default.minGenTokens).toBe(2048);
+  });
+
+  it('reads REIKA_MIN_GEN_TOKENS', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MIN_GEN_TOKENS = '6144';
+    expect(loadConfig().minGenTokens).toBe(6144);
+  });
+
+  it('floors at 256 against a starving misconfiguration', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MIN_GEN_TOKENS = '16';
+    expect(loadConfig().minGenTokens).toBe(256);
+  });
+
+  it('per-profile REIKA_<NAME>_MIN_GEN_TOKENS overrides the default', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_MIN_GEN_TOKENS = '2048';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MIN_GEN_TOKENS = '8192';
+    const cfg = loadConfig();
+    expect(cfg.profiles.kimi.minGenTokens).toBe(8192);
+    expect(cfg.profiles.default.minGenTokens).toBe(2048);
+  });
+
+  it('resolveProfile carries minGenTokens through', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MIN_GEN_TOKENS = '6144';
+    const cfg = loadConfig();
+    expect(resolveProfile(cfg, 'kimi').minGenTokens).toBe(6144);
   });
 });
 

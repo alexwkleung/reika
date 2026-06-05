@@ -1,20 +1,40 @@
 import type { Message } from '../types.js';
+import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
 
-// Compact once the (calibrated) estimate crosses this fraction of the context window.
-export const COMPACT_THRESHOLD = 0.75;
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
 const CHARS_PER_TOKEN = 4;
-// Post-compaction budgets as a fraction of the window: recent turns kept verbatim, and
-// the recap of everything older. Sized conservatively so kept + recap + system stays well
-// under the trigger threshold even when a model tokenizes denser than the heuristic — and
-// so the recap can't grow without bound as a session lengthens.
+// Post-compaction budgets as a fraction of the *available* window (total minus the
+// generation reserve): recent turns kept verbatim, and the recap of everything older.
+// Sized conservatively so kept + recap + system stays under the trigger even when a model
+// tokenizes denser than the heuristic — and so the recap can't grow without bound.
 const KEEP_FRACTION = 0.3;
 const RECAP_FRACTION = 0.1;
 // Per-entry text budget inside the recap.
 const MAX_TEXT = 240;
+// Slack against estimate error: trigger compaction slightly before the prompt would
+// actually leave less than the generation reserve, not exactly at the wall.
+const COMPACT_SAFETY = 0.9;
 
-export function shouldCompact(estimatedTokens: number, contextWindow?: number): boolean {
-  return !!contextWindow && estimatedTokens > contextWindow * COMPACT_THRESHOLD;
+// Tokens of room available for the prompt: the window minus the generation reserve.
+// Compaction targets this so kept history + recap leave room for the model's reply.
+// Guards a nonsensical reserve ≥ window by falling back to half the window.
+function availTokens(window: number, minGen: number): number {
+  const avail = window - minGen;
+  return avail > 0 ? avail : Math.floor(window / 2);
+}
+
+// The calibrated prompt-token count at which compaction should fire: just under the room
+// left once the generation reserve is set aside. Exported for tests and the loop's gauge.
+export function compactThreshold(window: number, minGen = DEFAULT_MIN_GEN_TOKENS): number {
+  return availTokens(window, minGen) * COMPACT_SAFETY;
+}
+
+export function shouldCompact(
+  promptTokens: number,
+  contextWindow?: number,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+): boolean {
+  return !!contextWindow && promptTokens > compactThreshold(contextWindow, minGen);
 }
 
 // Collapse older turns into a single `compaction` message, in place, so the request fits
@@ -22,12 +42,20 @@ export function shouldCompact(estimatedTokens: number, contextWindow?: number): 
 // user-message boundary, so no tool result is ever split from its tool_call) and condenses
 // the rest into a size-bounded recap. Returns the number of messages removed (0 = nothing
 // safe to do). Lossless by reference: raw tool payloads stay in the PayloadStore.
-export function compactHistory(history: Message[], contextWindow: number, calibration = 1): number {
+export function compactHistory(
+  history: Message[],
+  contextWindow: number,
+  calibration = 1,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+): number {
   if (!contextWindow) return 0;
   // Budgets are in chars but the window is in tokens; divide by the learned char→token
-  // calibration so "30% of the window" holds in *real* tokens, not the heuristic's.
+  // calibration so "30% of the available window" holds in *real* tokens, not the
+  // heuristic's. Sized off the available room (window − reserve) so the result fits under
+  // the trigger even when the reserve is a large fraction of a small window.
   const calib = calibration > 0 ? calibration : 1;
-  const keepBudget = (contextWindow * CHARS_PER_TOKEN * KEEP_FRACTION) / calib;
+  const avail = availTokens(contextWindow, minGen);
+  const keepBudget = (avail * CHARS_PER_TOKEN * KEEP_FRACTION) / calib;
 
   // Walk back from the end, keeping recent messages until the keep budget is spent.
   let chars = 0;
@@ -44,7 +72,7 @@ export function compactHistory(history: Message[], contextWindow: number, calibr
   if (lastUser >= 0 && keepFrom > lastUser) keepFrom = lastUser;
   if (keepFrom <= 0) return 0;
 
-  const recap = buildRecap(history.slice(0, keepFrom), contextWindow, calib);
+  const recap = buildRecap(history.slice(0, keepFrom), avail, calib);
   history.splice(0, keepFrom, { role: 'compaction', content: recap });
   return keepFrom;
 }
@@ -81,8 +109,8 @@ function msgChars(m: Message): number {
 // conclusion, aggregate tool usage, and files touched, bounded to RECAP_FRACTION of the
 // window: when there's more than fits, the most recent turns are kept and the rest are
 // noted as a count. Any prior recap in the span is carried forward.
-function buildRecap(span: Message[], contextWindow: number, calib: number): string {
-  const recapBudget = (contextWindow * CHARS_PER_TOKEN * RECAP_FRACTION) / calib;
+function buildRecap(span: Message[], avail: number, calib: number): string {
+  const recapBudget = (avail * CHARS_PER_TOKEN * RECAP_FRACTION) / calib;
   const priorRecaps: string[] = [];
   const entries: string[] = [];
   const toolCounts: Record<string, number> = {};

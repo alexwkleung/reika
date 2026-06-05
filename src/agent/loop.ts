@@ -11,6 +11,7 @@ import type {
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
+import { computeMaxTokens } from '../provider/budget.js';
 import { compactHistory, shouldCompact } from './compaction.js';
 import type { PayloadStore } from '../store/payloads.js';
 
@@ -75,6 +76,7 @@ export async function runTurn(opts: {
       contextWindow: window,
       calibration,
       reasoningRounds: opts.config.reasoningRounds,
+      minGenTokens: opts.config.minGenTokens,
     });
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
@@ -87,8 +89,8 @@ export async function runTurn(opts: {
     // Keep the request under the window: if the calibrated estimate crosses the threshold,
     // collapse the oldest turns into a recap before calling. Compaction mutates this turn's
     // history copy; the UI scrollback is untouched, so the user keeps the full log.
-    if (window && shouldCompact(rawEstimate() * calibration, window)) {
-      const removed = compactHistory(opts.history, window, calibration);
+    if (window && shouldCompact(rawEstimate() * calibration, window, opts.config.minGenTokens)) {
+      const removed = compactHistory(opts.history, window, calibration, opts.config.minGenTokens);
       if (removed > 0 && !notifiedCompaction) {
         notifiedCompaction = true;
         opts.onMessage({
@@ -110,6 +112,15 @@ export async function runTurn(opts: {
       onReasoningDelta: opts.onReasoningDelta,
       signal: opts.signal,
       calibration,
+      // Per-turn backstop: cap generation to the room actually left in the window so a
+      // spiraling small/quantized model can't run to the context end. The cap only fires
+      // on a genuine spiral — compaction keeps the prompt small enough that a normal turn
+      // has minGen-plus tokens to work with. See provider/budget.ts.
+      maxTokens: computeMaxTokens({
+        contextWindow: window,
+        promptTokens: Math.round(sentEstimate * calibration),
+        userMaxTokens: opts.config.maxTokens,
+      }),
     });
 
     if (response.usage) opts.onUsage?.(response.usage);

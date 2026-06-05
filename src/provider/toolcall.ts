@@ -1,11 +1,10 @@
 import type OpenAI from 'openai';
 import type { Message, Tool } from '../types.js';
+import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
 // token-denominated window to the char-denominated payload length.
 const CHARS_PER_TOKEN = 4;
-// Tokens reserved from the window for the model's response, so prompt + generation fits.
-const RESERVE_TOKENS = 1024;
 // Use only this fraction of the computed budget, as slack against estimate error and the
 // learned calibration lagging a step behind a sudden content shift.
 const BUDGET_SAFETY = 0.9;
@@ -20,7 +19,12 @@ const CAP_DENSITY_FLOOR = 2.0;
 export function messagesToOpenAI(
   system: string,
   history: Message[],
-  opts?: { contextWindow?: number; calibration?: number; reasoningRounds?: number },
+  opts?: {
+    contextWindow?: number;
+    calibration?: number;
+    reasoningRounds?: number;
+    minGenTokens?: number;
+  },
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
   const freshFrom = findFreshToolBlockStart(history);
   // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
@@ -111,10 +115,14 @@ function freshPayloadCharCap(
   history: Message[],
   freshFrom: number,
   keepReasoningFrom: number,
-  opts?: { contextWindow?: number; calibration?: number },
+  opts?: { contextWindow?: number; calibration?: number; minGenTokens?: number },
 ): number | undefined {
   const cw = opts?.contextWindow;
   if (!cw) return undefined;
+  // Reserve the same generation room the backstop and compaction use, so a fresh tool
+  // dump can't leave a thinking model with no tokens to respond in. See provider/budget.ts.
+  const reserve =
+    opts?.minGenTokens && opts.minGenTokens > 0 ? opts.minGenTokens : DEFAULT_MIN_GEN_TOKENS;
   const learned = opts?.calibration && opts.calibration > 0 ? opts.calibration : 1;
   // The floor is only for converting the *fresh* allowance to chars — the non-fresh content
   // is already-seen and well-described by the learned average, so applying the worst-case
@@ -138,7 +146,7 @@ function freshPayloadCharCap(
 
   // Work in real tokens: budget the prompt, subtract the (accurately-estimated) non-fresh
   // content, and convert what's left for fresh payloads back to chars pessimistically.
-  const promptTokenBudget = (cw - RESERVE_TOKENS) * BUDGET_SAFETY;
+  const promptTokenBudget = (cw - reserve) * BUDGET_SAFETY;
   const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * learned;
   const freshTokenBudget = promptTokenBudget - nonFreshTokens;
   if (freshTokenBudget <= 0) return 0;

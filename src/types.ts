@@ -110,6 +110,10 @@ export type Profile = {
   // Total context window of the model, used as the denominator for the context-fill
   // gauge. Undefined when unknown (the gauge then shows absolute tokens, no percentage).
   contextWindow?: number;
+  // Generation room reserved from the window, in tokens. Drives the per-turn max_tokens
+  // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
+  // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
+  minGenTokens?: number;
 };
 
 export type Config = {
@@ -128,6 +132,10 @@ export type Config = {
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;
+  // Generation room reserved from the window, in tokens (REIKA_MIN_GEN_TOKENS). Drives
+  // the per-turn max_tokens backstop, the fit-to-window payload reserve, and the
+  // compaction trigger — one number, three call sites. See provider/budget.ts.
+  minGenTokens: number;
   // How many recent tool-call rounds keep their reasoning_content in context. Older
   // reasoning is pruned. 1 = only the active roundtrip (leanest); higher keeps the
   // model's chain-of-thought so it doesn't re-derive across rounds, at a token cost.
