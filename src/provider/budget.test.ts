@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeMaxTokens, BUDGET_MARGIN_TOKENS } from './budget.js';
+import {
+  computeMaxTokens,
+  shouldRetryTruncated,
+  BUDGET_MARGIN_TOKENS,
+  MAX_LENGTH_RETRIES,
+} from './budget.js';
 
 describe('computeMaxTokens', () => {
   it('returns the user cap unchanged when no window is known', () => {
@@ -42,5 +47,39 @@ describe('computeMaxTokens', () => {
   it('never returns below the 256-token last-resort floor', () => {
     // Prompt nearly fills the window: still hand back a few tokens, not zero/negative.
     expect(computeMaxTokens({ contextWindow: 16384, promptTokens: 16384 })).toBe(256);
+  });
+});
+
+describe('shouldRetryTruncated', () => {
+  it('retries a length-stop with no tool call, within the retry budget', () => {
+    expect(
+      shouldRetryTruncated({ finishReason: 'length', hasToolCalls: false, priorRetries: 0 }),
+    ).toBe(true);
+  });
+
+  it('does not retry a normal (non-length) finish', () => {
+    expect(
+      shouldRetryTruncated({ finishReason: 'stop', hasToolCalls: false, priorRetries: 0 }),
+    ).toBe(false);
+    expect(
+      shouldRetryTruncated({ finishReason: undefined, hasToolCalls: false, priorRetries: 0 }),
+    ).toBe(false);
+  });
+
+  it('leaves a length-stop alone when it still produced a tool call', () => {
+    // The call closed before the cut, so it's usable — proceed normally.
+    expect(
+      shouldRetryTruncated({ finishReason: 'length', hasToolCalls: true, priorRetries: 0 }),
+    ).toBe(false);
+  });
+
+  it('stops after MAX_LENGTH_RETRIES consecutive truncations (no infinite loop)', () => {
+    expect(
+      shouldRetryTruncated({
+        finishReason: 'length',
+        hasToolCalls: false,
+        priorRetries: MAX_LENGTH_RETRIES,
+      }),
+    ).toBe(false);
   });
 });

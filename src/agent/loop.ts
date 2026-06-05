@@ -11,7 +11,7 @@ import type {
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
-import { computeMaxTokens } from '../provider/budget.js';
+import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
 import { compactHistory, shouldCompact } from './compaction.js';
 import type { PayloadStore } from '../store/payloads.js';
 
@@ -63,6 +63,9 @@ export async function runTurn(opts: {
   // Notify the user at most once per turn that compaction kicked in, even if it runs
   // again across the turn's tool rounds.
   let notifiedCompaction = false;
+  // Consecutive length-stops recovered from. Reset on any clean (non-truncated) round so
+  // the budget is per-spiral, not per-turn.
+  let lengthRetries = 0;
 
   const window = opts.config.contextWindow;
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
@@ -142,6 +145,39 @@ export async function runTurn(opts: {
 
     const toolCalls = response.toolCalls ?? [];
     const isFinal = toolCalls.length === 0;
+
+    // Generation cut off mid-thought with no tool call (backstop firing, or a spiral
+    // hitting the cap): record the partial for the user, nudge the model to continue
+    // concisely, and retry. Bounded by MAX_LENGTH_RETRIES so a genuinely-stuck model
+    // doesn't loop — the second truncation falls through and commits as the final answer.
+    if (
+      shouldRetryTruncated({
+        finishReason: response.finishReason,
+        hasToolCalls: !isFinal,
+        priorRetries: lengthRetries,
+      })
+    ) {
+      lengthRetries++;
+      if (response.content || response.reasoning) {
+        const partial: Message = {
+          role: 'assistant',
+          content: response.content,
+          reasoning: response.reasoning,
+        };
+        opts.history.push(partial);
+        opts.onMessage(partial);
+      }
+      const nudge: Message = {
+        role: 'user',
+        content:
+          '(your previous response was cut off at the token limit — continue concisely: give the answer or call a tool directly, no long preamble)',
+      };
+      opts.history.push(nudge);
+      opts.onMessage(nudge);
+      continue;
+    }
+    lengthRetries = 0;
+
     const assistantMsg: Message = {
       role: 'assistant',
       content: response.content,

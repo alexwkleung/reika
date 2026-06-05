@@ -37,3 +37,21 @@ export function computeMaxTokens(opts: {
   const ceiling = Math.max(256, cw - promptTokens - BUDGET_MARGIN_TOKENS);
   return userMaxTokens ? Math.min(userMaxTokens, ceiling) : ceiling;
 }
+
+// Consecutive length-stops the loop will try to recover from before accepting the partial.
+export const MAX_LENGTH_RETRIES = 1;
+
+// A `length` finish_reason with no usable tool call is generation cut off mid-thought (the
+// backstop firing, or a spiral hitting max_tokens) — not a real final answer. The loop
+// nudges once to recover; a second consecutive truncation means the model is stuck, so it
+// accepts the partial and stops rather than looping. A length-stop that still produced a
+// tool call is left alone — the call closed before the cut, so it's usable.
+export function shouldRetryTruncated(opts: {
+  finishReason?: string;
+  hasToolCalls: boolean;
+  priorRetries: number;
+}): boolean {
+  return (
+    opts.finishReason === 'length' && !opts.hasToolCalls && opts.priorRetries < MAX_LENGTH_RETRIES
+  );
+}

@@ -8,6 +8,10 @@ export type ModelResponse = {
   reasoning?: string;
   toolCalls?: ToolCall[];
   usage?: Usage;
+  // The provider's stop reason for the last chunk. 'length' means generation was cut off
+  // at the token limit (the per-turn backstop firing, or a spiral hitting it) — the loop
+  // uses it to recover rather than treat a truncated turn as a real final answer.
+  finishReason?: string;
 };
 
 export async function callModel(opts: {
@@ -43,6 +47,7 @@ export async function callModel(opts: {
   const reasoningParts: string[] = [];
   const callsByIndex = new Map<number, { id: string; name: string; args: string }>();
   let usage: Usage | undefined;
+  let finishReason: string | undefined;
 
   try {
     const stream = await client.chat.completions.create(
@@ -73,6 +78,8 @@ export async function callModel(opts: {
           ...(cached != null ? { cachedTokens: cached } : {}),
         };
       }
+      const fr = chunk.choices[0]?.finish_reason;
+      if (fr) finishReason = fr;
       const delta = chunk.choices[0]?.delta as
         | ((typeof chunk.choices)[0]['delta'] & {
             reasoning_content?: string | null;
@@ -112,6 +119,7 @@ export async function callModel(opts: {
         reasoning: reasoningParts.join('') || undefined,
         toolCalls: undefined,
         usage,
+        finishReason,
       };
     }
     throw e;
@@ -142,6 +150,7 @@ export async function callModel(opts: {
     reasoning: reasoningParts.join('') || undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
+    finishReason,
   };
 }
 
