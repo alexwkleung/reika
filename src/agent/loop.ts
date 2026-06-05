@@ -98,6 +98,7 @@ export async function runTurn(opts: {
         notifiedCompaction = true;
         opts.onMessage({
           role: 'system',
+          tone: 'info',
           content: `Context compacted — folded ${removed} earlier message${
             removed === 1 ? '' : 's'
           } into a recap (older tool output still re-readable).`,
@@ -167,13 +168,20 @@ export async function runTurn(opts: {
         opts.history.push(partial);
         opts.onMessage(partial);
       }
-      const nudge: Message = {
+      // The nudge must be role 'user' to reach the model (messagesToOpenAI drops system
+      // messages). Push it to history but don't surface it as a user bubble — it isn't the
+      // user's input. The UI sees a separate 'warn' system notice instead (same split
+      // compaction uses: model-facing message in history, UI-only notice via onMessage).
+      opts.history.push({
         role: 'user',
         content:
           '(your previous response was cut off at the token limit — continue concisely: give the answer or call a tool directly, no long preamble)',
-      };
-      opts.history.push(nudge);
-      opts.onMessage(nudge);
+      });
+      opts.onMessage({
+        role: 'system',
+        tone: 'warn',
+        content: 'Response cut off at the token limit — retrying.',
+      });
       continue;
     }
     lengthRetries = 0;

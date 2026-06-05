@@ -245,13 +245,19 @@ function renderMessage(msg: Message): React.ReactElement | null {
     );
   }
   if (msg.role === 'system') {
+    // Tone distinguishes harness notices: 'warn' (truncation retry) gets a recycle glyph in
+    // warning yellow, 'info' (compaction) a caret in tool cyan, default a caret in accent.
+    // Keeping the marker off the user's accent makes auto-events read as not-the-user.
+    const markerColor =
+      msg.tone === 'warn' ? theme.warning : msg.tone === 'info' ? theme.tool : theme.accent;
+    const marker = msg.tone === 'warn' ? '⟳ ' : '❯ ';
     // Color must be on the OUTER Text so wrapped continuation lines inherit it;
     // a colored inner Text loses its color on wrap because Ink falls back to the
-    // outer's color. The accent marker overrides for its own segment.
+    // outer's color. The marker overrides for its own segment.
     return (
       <Box marginTop={1}>
         <Text color={theme.muted}>
-          <Text color={theme.accent}>{'❯ '}</Text>
+          <Text color={markerColor}>{marker}</Text>
           {msg.content}
         </Text>
       </Box>

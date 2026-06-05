@@ -29,7 +29,11 @@ export type Message =
       nested?: boolean;
     }
   | { role: 'error'; content: string; nested?: boolean }
-  | { role: 'system'; content: string; nested?: boolean }
+  // `tone` styles the scrollback marker: undefined = default (accent ❯), 'info' = a routine
+  // automatic event (compaction), 'warn' = an automatic recovery the user should notice
+  // (truncation retry). Distinguishes harness-generated notices from each other and from
+  // the user's own input.
+  | { role: 'system'; content: string; tone?: 'info' | 'warn'; nested?: boolean }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
   // messagesToOpenAI); the UI keeps the full scrollback separately.
