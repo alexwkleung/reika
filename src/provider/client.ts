@@ -20,6 +20,9 @@ export async function callModel(opts: {
   signal?: AbortSignal;
   // Learned char→token calibration, used to size the fit-to-window payload cap.
   calibration?: number;
+  // Per-turn generation backstop computed by the caller (window − prompt − margin).
+  // Falls back to the profile's fixed REIKA_MAX_TOKENS when not provided.
+  maxTokens?: number;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -32,7 +35,9 @@ export async function callModel(opts: {
     contextWindow: opts.config.contextWindow,
     calibration: opts.calibration,
     reasoningRounds: opts.config.reasoningRounds,
+    minGenTokens: opts.config.minGenTokens,
   });
+  const maxTokens = opts.maxTokens ?? opts.config.maxTokens;
 
   const contentParts: string[] = [];
   const reasoningParts: string[] = [];
@@ -47,7 +52,7 @@ export async function callModel(opts: {
         tools: opts.tools.length > 0 ? toolsToOpenAI(opts.tools) : undefined,
         stream: true,
         stream_options: { include_usage: true },
-        ...(opts.config.maxTokens ? { max_tokens: opts.config.maxTokens } : {}),
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
       },
       { signal: opts.signal },
     );

@@ -1,17 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { compactHistory, shouldCompact, COMPACT_THRESHOLD } from './compaction.js';
+import { compactHistory, shouldCompact, compactThreshold } from './compaction.js';
 
 describe('shouldCompact', () => {
   it('is false without a context window', () => {
     expect(shouldCompact(1_000_000, undefined)).toBe(false);
   });
 
-  it('is false below the threshold and true above it', () => {
+  it('triggers around the window minus the generation reserve, not a fixed fraction', () => {
     const window = 16384;
-    const threshold = window * COMPACT_THRESHOLD;
-    expect(shouldCompact(threshold - 1, window)).toBe(false);
-    expect(shouldCompact(threshold + 1, window)).toBe(true);
+    const minGen = 2048;
+    const threshold = compactThreshold(window, minGen);
+    expect(shouldCompact(threshold - 1, window, minGen)).toBe(false);
+    expect(shouldCompact(threshold + 1, window, minGen)).toBe(true);
+  });
+
+  it('tightens the trigger as the generation reserve grows (small-window thinking model)', () => {
+    const window = 16384;
+    // A bigger reserve must lower the threshold so generation room is preserved.
+    expect(compactThreshold(window, 8192)).toBeLessThan(compactThreshold(window, 2048));
   });
 });
 
@@ -53,7 +60,7 @@ describe('compactHistory', () => {
       ...turn(3, 'c.ts'),
       ...turn(4, 'd.ts'),
     ];
-    const removed = compactHistory(history, W);
+    const removed = compactHistory(history, W, 1, 0);
     expect(removed).toBeGreaterThan(0);
     expect(history[0].role).toBe('compaction');
     // Kept region starts at a user-message boundary.
@@ -69,7 +76,7 @@ describe('compactHistory', () => {
       ...turn(3, 'c.ts'),
       ...turn(4, 'd.ts'),
     ];
-    compactHistory(history, W);
+    compactHistory(history, W, 1, 0);
     const recap = (history[0] as { content: string }).content;
     expect(recap).toContain('q1');
     expect(recap).toContain('a.ts');
@@ -81,7 +88,7 @@ describe('compactHistory', () => {
   it('bounds recap size and condenses the oldest turns once over the recap budget', () => {
     const history: Message[] = [];
     for (let i = 1; i <= 40; i++) history.push(...turn(i, `f${i}.ts`));
-    compactHistory(history, W);
+    compactHistory(history, W, 1, 0);
     const recap = (history[0] as { content: string }).content;
     // Bounded regardless of session length (40 turns in, recap stays compact).
     expect(recap.length).toBeLessThan(800);
@@ -96,7 +103,7 @@ describe('compactHistory', () => {
       ...turn(3, 'c.ts'),
       ...turn(4, 'd.ts'),
     ];
-    compactHistory(history, W);
+    compactHistory(history, W, 1, 0);
     expect((history[0] as { content: string }).content).toContain('PRIOR RECAP');
   });
 
@@ -107,7 +114,7 @@ describe('compactHistory', () => {
       ...turn(3, 'c.ts'),
       ...turn(4, 'd.ts'),
     ];
-    compactHistory(history, W);
+    compactHistory(history, W, 1, 0);
     const kept = history.slice(1);
     for (const m of kept) {
       if (m.role === 'tool') {
