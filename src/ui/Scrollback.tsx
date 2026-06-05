@@ -323,7 +323,7 @@ function UserBubble({ text }: { text: string }) {
           <Text bold color={theme.accent}>
             ▎
           </Text>
-          <Text bold>{` ${line.padEnd(contentW)} `}</Text>
+          <Text>{` ${line.padEnd(contentW)} `}</Text>
         </Text>
       ))}
     </Box>
