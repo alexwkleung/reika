@@ -5,6 +5,7 @@ import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { scrubPaths } from './paths.js';
+import { redactSecrets } from './redact.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
 
@@ -123,7 +124,7 @@ function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text color={theme.muted}>{scrubPaths(shown)}</Text>
+      <Text color={theme.muted}>{redactSecrets(scrubPaths(shown))}</Text>
     </Box>
   );
 }
@@ -203,7 +204,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
       <Box flexDirection="column">
         <Text>
           <Text color={theme.tool}>{'  ↳ '}</Text>
-          <Text color={theme.secondary}>{scrubPaths(msg.summary ?? '')}</Text>
+          <Text color={theme.secondary}>{redactSecrets(scrubPaths(msg.summary ?? ''))}</Text>
         </Text>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
@@ -214,11 +215,11 @@ function renderMessage(msg: Message): React.ReactElement | null {
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <Text>
               <Text color={theme.success}>{'$ '}</Text>
-              <Text>{scrubPaths(msg.command.text)}</Text>
+              <Text>{redactSecrets(scrubPaths(msg.command.text))}</Text>
             </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
-                <Text color={theme.muted}>{scrubPaths(msg.command.outputTail)}</Text>
+                <Text color={theme.muted}>{redactSecrets(scrubPaths(msg.command.outputTail))}</Text>
                 {msg.command.outputTruncated ? (
                   <Text color={theme.muted}>…(more output omitted)</Text>
                 ) : null}
@@ -357,7 +358,7 @@ function wrapText(text: string, width: number): string[] {
 
 function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
-    .map(([k, v]) => `${k}=${truncate(scrubPaths(JSON.stringify(v)), 120)}`)
+    .map(([k, v]) => `${k}=${truncate(redactSecrets(scrubPaths(JSON.stringify(v))), 120)}`)
     .join(', ');
 }
 
