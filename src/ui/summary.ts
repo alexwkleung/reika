@@ -1,4 +1,5 @@
 import type { Message, Usage } from '../types.js';
+import { scrubPaths } from './paths.js';
 
 export type Approvals = {
   approved: number;
@@ -35,7 +36,13 @@ export function buildSummary(
     .sort((a, b) => b[1] - a[1])
     .map(([n, c]) => `${c} ${n}`);
   const breakdown = breakdownEntries.length > 0 ? `  (${breakdownEntries.join(', ')})` : '';
-  const filesText = files.size === 0 ? '(none)' : Array.from(files).sort().join(', ');
+  const filesText =
+    files.size === 0
+      ? '(none)'
+      : Array.from(files)
+          .sort()
+          .map(f => scrubPaths(f))
+          .join(', ');
 
   return [
     'Session summary',
