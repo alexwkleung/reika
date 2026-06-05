@@ -53,6 +53,32 @@ describe('Scrollback tool-call label', () => {
   });
 });
 
+describe('Scrollback system-message tone', () => {
+  const frameFor = (msg: Message): string => {
+    const { lastFrame } = render(
+      <Scrollback messages={[msg]} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return lastFrame() ?? '';
+  };
+
+  it('marks a warn notice (truncation retry) with the recycle glyph', () => {
+    const frame = frameFor({
+      role: 'system',
+      tone: 'warn',
+      content: 'Response cut off — retrying.',
+    });
+    expect(frame).toContain('⟳ Response cut off');
+    expect(frame).not.toContain('❯');
+  });
+
+  it('marks info and default notices with the caret (not the warn glyph)', () => {
+    expect(frameFor({ role: 'system', tone: 'info', content: 'Context compacted.' })).toContain(
+      '❯ Context compacted.',
+    );
+    expect(frameFor({ role: 'system', content: 'plain note' })).toContain('❯ plain note');
+  });
+});
+
 // Regression: Ink repaints the whole terminal — emitting `\x1b[3J`, which clears
 // native scrollback (iTerm2: "a control sequence attempted to clear scrollback") —
 // whenever the live frame is at least as tall as the viewport (build/ink.js:
