@@ -30,7 +30,20 @@ export function Input({
   placeholder?: string;
 }) {
   const [cursor, setCursor] = useState(value.length);
+  const [blinkOn, setBlinkOn] = useState(true);
   const lastValueRef = useRef(value);
+
+  // Blink the drawn cursor (~530ms, the classic terminal rate). We draw our own
+  // block via inverse video rather than the real terminal cursor, so the
+  // terminal's blink setting can't reach it — we toggle visibility ourselves.
+  // Re-running on value/cursor change snaps it solid and restarts the timer, so
+  // the block is always visible the instant you type or move.
+  useEffect(() => {
+    if (disabled) return;
+    setBlinkOn(true);
+    const id = setInterval(() => setBlinkOn((on) => !on), 530);
+    return () => clearInterval(id);
+  }, [value, cursor, disabled]);
 
   // Kept current each render so the raw-stdin listener (which closes over them
   // once) always sees the latest value/cursor without re-subscribing.
@@ -161,22 +174,28 @@ export function Input({
       <Text>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
-          <Text>{`${INVERSE_ON} ${INVERSE_OFF}`}</Text>
+          <Text>{blinkOn ? `${INVERSE_ON} ${INVERSE_OFF}` : ' '}</Text>
           <Text color={theme.muted}>{placeholder}</Text>
         </Box>
       ) : (
-        <Text>{renderWithCursor(value, cursor, !disabled)}</Text>
+        <Text>{renderWithCursor(value, cursor, !disabled, blinkOn)}</Text>
       )}
     </Box>
   );
 }
 
-function renderWithCursor(value: string, cursor: number, focused: boolean): string {
+function renderWithCursor(
+  value: string,
+  cursor: number,
+  focused: boolean,
+  blinkOn: boolean,
+): string {
   if (!focused) return value;
   const before = value.slice(0, cursor);
   const at = value[cursor] ?? ' ';
   const after = value.slice(cursor + 1);
-  return before + INVERSE_ON + at + INVERSE_OFF + after;
+  const drawn = blinkOn ? INVERSE_ON + at + INVERSE_OFF : at;
+  return before + drawn + after;
 }
 
 function wordForward(value: string, cursor: number): number {
