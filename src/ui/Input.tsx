@@ -174,8 +174,14 @@ export function Input({
       <Text>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
-          <Text>{blinkOn ? `${INVERSE_ON} ${INVERSE_OFF}` : ' '}</Text>
-          <Text color={theme.muted}>{placeholder}</Text>
+          {blinkOn ? (
+            <>
+              <Text>{`${INVERSE_ON}${placeholder[0]}${INVERSE_OFF}`}</Text>
+              <Text color={theme.muted}>{placeholder.slice(1)}</Text>
+            </>
+          ) : (
+            <Text color={theme.muted}>{placeholder}</Text>
+          )}
         </Box>
       ) : (
         <Text>{renderWithCursor(value, cursor, !disabled, blinkOn)}</Text>
