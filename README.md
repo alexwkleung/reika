@@ -1,6 +1,6 @@
 # Reika
 
-Minimalistic coding-agent CLI tuned for small local models. Built on TypeScript + Ink, OpenAI-compatible APIs (cloud or llama.cpp), with a focus on context discipline.
+Minimalistic coding-agent CLI tuned for small local models. Built on TypeScript + Ink, OpenAI-compatible APIs, with a focus on context discipline.
 
 ## Status
 
@@ -19,24 +19,8 @@ cp .env.example .env
 npm run dev
 ```
 
-Example of a local llama.cpp setup with Qwen3.5 (reasoning off for hardware constrained setups):
-
-```sh
-llama-server -m /path/to/Qwen3.5-9B-Q5_K_M.gguf \
-  --host 127.0.0.1 --port 8080 \
-  --jinja --reasoning off
-```
-
-If you run a thinking-mode model with reasoning **on** (e.g. qwen3.6), add the
-Qwen3-recommended sampling — greedy/near-greedy decoding makes it spiral into
-endless reasoning loops that never finish a turn:
-
-```sh
-  --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0.5
-```
-
-reika sends no sampling parameters of its own, so these `llama-server` flags
-(or your provider's defaults) are what actually apply.
+Reika sends no sampling parameters of its own, so `llama-server` flags
+or your provider's defaults are what actually apply.
 
 ## Global install
 
@@ -51,9 +35,9 @@ After global install, `reika` is on your `$PATH`. Run it from any project direct
 
 Config sources, in precedence order (higher wins):
 
-1. **Shell env vars** (e.g. `export REIKA_MODEL=qwen3-9b` in `~/.zshrc`)
-2. **Project `.env`** (cwd where you run `reika`) — per-project overrides
-3. **Global `~/.config/reika/.env`** — defaults for a global install
+1. **Shell env vars** (e.g. `export REIKA_MODEL=qwen3.5-9b` in `~/.zshrc`).
+2. **Project `.env`** (cwd where you run `reika`) — per-project overrides.
+3. **Global `~/.config/reika/.env`** — defaults for a global install.
 
 `.env` keys (see `.env.example`):
 
@@ -84,22 +68,22 @@ Define additional model configurations and switch between them at runtime with `
 
 ```ini
 # Default profile (existing keys — always available as "default")
-REIKA_MODEL=qwen3-9b
+REIKA_MODEL=qwen3.5-9b
 REIKA_BASE_URL=http://localhost:8080/v1
 REIKA_API_KEY=no-key
 
 # Additional named profiles — list them, then define each
-REIKA_PROFILES=kimi,gpt4
+REIKA_PROFILES=kimi,gpt
 REIKA_KIMI_MODEL=kimi-k2.6
 REIKA_KIMI_BASE_URL=https://api.moonshot.ai/v1
 REIKA_KIMI_API_KEY=sk-...
 REIKA_KIMI_MAX_TOKENS=16384         # reasoning models need headroom
 REIKA_KIMI_CONTEXT_WINDOW=262144    # drives the ctx fill gauge for this profile
 REIKA_KIMI_MIN_GEN_TOKENS=8192      # generation reserve; raise for reasoning models
-REIKA_GPT4_MODEL=gpt-4o
-REIKA_GPT4_BASE_URL=https://api.openai.com/v1
-REIKA_GPT4_API_KEY=sk-...
-REIKA_GPT4_MAX_TOKENS=4096
+REIKA_GPT_MODEL=gpt-5.4-mini
+REIKA_GPT_BASE_URL=https://api.openai.com/v1
+REIKA_GPT_API_KEY=sk-...
+REIKA_GPT_MAX_TOKENS=4096
 ```
 
 Per-profile `_MAX_TOKENS`, `_CONTEXT_WINDOW`, and `_MIN_GEN_TOKENS` fall back to the corresponding global defaults if unset. When a context window is known, `max_tokens` is computed per turn as the room actually left (`window − prompt − margin`), capped by `REIKA_MAX_TOKENS` if you set one — so you usually don't need to set `_MAX_TOKENS` at all; size `_MIN_GEN_TOKENS` instead to reserve think-room. If you _do_ pin `_MAX_TOKENS`, **set it generously** — a value low enough to truncate mid-JSON breaks tool calls silently, and reasoning models (DeepSeek-R1, Kimi K2) need extra headroom since the thinking phase counts toward the cap.
@@ -173,7 +157,7 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - Built-in commands always win over skills with the same name — you can't shadow `/help` or `/exit`
 - Skill names are lowercased filenames; only `[a-z0-9_-]` are accepted (skip files with weird names)
 - Skills load at bootstrap and on `/cd` — edit a file mid-session, then `/cd .` to refresh
-- Files under `<cwd>/.reika/` (including `.reika/skills/`, `.reika/handoff/`, etc.) appear in `@` autocomplete — handy for inlining a project-local handoff doc, an in-repo skill file, or any other reika-scratch content. Other dot-dirs (`.git/`, `.vscode/`, etc.) stay hidden.
+- Files under `<cwd>/.reika/` (including `.reika/skills/`, `.reika/handoff/`, etc.) appear in `@` autocomplete — handy for inlining a project-local handoff doc, an in-repo skill file, or any other Reika-scratch content. Other dot-dirs (`.git/`, `.vscode/`, etc.) stay hidden.
 
 ## Modes
 
