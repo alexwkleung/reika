@@ -85,6 +85,16 @@ export function Input({
         return;
       }
 
+      // Newline insertion. Both Shift+Enter (when the terminal is configured to
+      // emit it) and Ctrl+J arrive as a bare line feed — Ink names this 'enter'
+      // (input '\n', key.return false), distinct from Return's carriage return
+      // (\r). Insert a newline rather than submitting. A lone '\n' only; pasted
+      // text with embedded newlines is multi-char and falls to insertion below.
+      if (input === '\n') {
+        update(value.slice(0, cursor) + '\n' + value.slice(cursor), cursor + 1);
+        return;
+      }
+
       // macOS terminals usually send Backspace as DEL (\x7f), which some Ink
       // configurations route to key.delete rather than key.backspace. Treat both
       // as backward delete so it works consistently across platforms.

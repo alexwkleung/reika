@@ -32,7 +32,7 @@ export function Status({
   const timer = busy ? ` · ${formatElapsed(elapsed)}` : '';
   const keys = busy
     ? 'ctrl-c to abort'
-    : 'enter to submit · shift+enter for newline · ctrl-c to exit';
+    : 'enter to submit · shift+enter/ctrl-j for newline · ctrl-c to exit';
   const tokens =
     usage.promptTokens > 0 || usage.completionTokens > 0
       ? ` · ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
