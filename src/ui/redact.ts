@@ -28,6 +28,9 @@ const RULES: Array<[RegExp, string]> = [
   [/(identityHash=)[0-9A-Fa-f]{40}/g, `$1${REDACTED}`],
   // Apple app-specific password: xxxx-xxxx-xxxx-xxxx (lowercase letters).
   [/\b[a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4}\b/g, REDACTED],
+  // provisioningProfile=<name|path>. Left visible for the harmless non-values
+  // null/none so we don't add confusing noise.
+  [/(provisioningProfile=)(?!(?:null|none)\b)\S+/gi, `$1${REDACTED}`],
   // Notarization / signing key=value fields (electron-builder log style).
   [
     /\b(appleId|appleIdPassword|appleApiKey|appleApiKeyId|appleApiIssuer|teamId|ascProvider|installerIdentity)=\S+/gi,

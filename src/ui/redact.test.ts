@@ -41,6 +41,14 @@ describe('redactSecrets', () => {
     );
   });
 
+  it('redacts a provisioningProfile value but leaves null visible', () => {
+    expect(redactSecrets('provisioningProfile=MyApp_Dev.provisionprofile')).toBe(
+      'provisioningProfile=<redacted>',
+    );
+    expect(redactSecrets('provisioningProfile=null')).toBe('provisioningProfile=null');
+    expect(redactSecrets('provisioningProfile=none')).toBe('provisioningProfile=none');
+  });
+
   it('leaves ordinary build output untouched', () => {
     const s = 'Building App.app … done in 12.3s';
     expect(redactSecrets(s)).toBe(s);
