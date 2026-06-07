@@ -75,6 +75,9 @@ export function App() {
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
+  // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
+  // independent of the chat transcript so it spans chat, shell, and commands.
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
   const [suggestionSelected, setSuggestionSelected] = useState(0);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
@@ -618,6 +621,8 @@ export function App() {
     setSuggestionState(null);
     const trimmed = input.trim();
     if (!trimmed) return;
+    // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
+    setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
     if (trimmed.startsWith('/')) {
       await handleCommand(trimmed);
       return;
@@ -760,6 +765,7 @@ export function App() {
             disabled={pending !== null}
             canSubmit={status === 'idle' && pending === null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
+            history={inputHistory}
             mode={mode}
             value={inputValue}
             onChange={onInputChange}

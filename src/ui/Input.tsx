@@ -21,6 +21,7 @@ export function Input({
   mode,
   placeholder,
   suggesting,
+  history,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -32,6 +33,9 @@ export function Input({
   // True while the completion/approval overlay owns Up/Down (App navigates it);
   // we leave the arrows alone then instead of moving the cursor between lines.
   suggesting: boolean;
+  // Past submissions, oldest→newest, recalled by Up on the first line / Down on
+  // the last line (shell-style history).
+  history: string[];
 }) {
   const [cursor, setCursor] = useState(value.length);
   const [blinkOn, setBlinkOn] = useState(true);
@@ -61,6 +65,12 @@ export function Input({
   // "recompute from the current column"; any non-vertical action clears it.
   const goalColRef = useRef<number | null>(null);
 
+  // History recall position: null means "showing the live draft", a number
+  // indexes into `history`. While walking history we keep the draft so coming
+  // back down past the newest entry restores what was being typed.
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const draftRef = useRef('');
+
   // Home/End (incl. Cmd+Arrow remapped to \e[H / \e[F) bypass `useInput`, which
   // discards them. Subscribe to Ink's raw input emitter and map them to line
   // start/end ourselves. Ink still also dispatches them through useInput as an
@@ -84,11 +94,14 @@ export function Input({
     };
   }, [disabled, internal_eventEmitter]);
 
-  // External value change (e.g., suggestion accept, submit clear) — snap cursor to end.
+  // External value change (e.g., suggestion accept, submit clear) — snap cursor to
+  // end. Our own recall calls update() (which syncs lastValueRef) first, so this
+  // only fires for App-driven changes, where leaving history navigation is right.
   useEffect(() => {
     if (value !== lastValueRef.current) {
       lastValueRef.current = value;
       setCursor(value.length);
+      setHistoryIndex(null);
     }
   }, [value]);
 
@@ -96,6 +109,36 @@ export function Input({
     lastValueRef.current = next;
     setCursor(nextCursor);
     onChange(next);
+  };
+
+  // Replace the buffer with a recalled entry and park the cursor at its end.
+  const recall = (index: number | null, text: string): void => {
+    goalColRef.current = null;
+    setHistoryIndex(index);
+    update(text, text.length);
+  };
+
+  // Up on the first line: step toward older entries. The first step stashes the
+  // current draft so Down can bring it back. No-op once at the oldest entry.
+  const recallPrev = (): void => {
+    if (history.length === 0) return;
+    if (historyIndex === null) {
+      draftRef.current = value;
+      recall(history.length - 1, history[history.length - 1]);
+    } else if (historyIndex > 0) {
+      recall(historyIndex - 1, history[historyIndex - 1]);
+    }
+  };
+
+  // Down on the last line: step toward newer entries; stepping past the newest
+  // restores the stashed draft (usually empty). No-op when not walking history.
+  const recallNext = (): void => {
+    if (historyIndex === null) return;
+    if (historyIndex < history.length - 1) {
+      recall(historyIndex + 1, history[historyIndex + 1]);
+    } else {
+      recall(null, draftRef.current);
+    }
   };
 
   useInput(
@@ -158,19 +201,25 @@ export function Input({
       // Up/Down walk between lines of a multi-line buffer, holding the column.
       // While a completion/approval overlay is open it owns the arrows (App
       // navigates the list), so we stay out of the way. Ctrl/Meta+Up/Down aren't
-      // ours either. On the first/last line there's nowhere to go, so it's a
-      // no-op (single-line input is unaffected).
+      // ours either. At the buffer edge — Up on the first line, Down on the last
+      // — there's no line to move to, so we recall message history instead.
       if ((key.upArrow || key.downArrow) && !suggesting && !key.ctrl && !key.meta) {
         const ls = lineStart(value, cursor);
+        const le = lineEnd(value, cursor);
+        if (key.upArrow && ls === 0) {
+          recallPrev();
+          return;
+        }
+        if (key.downArrow && le === value.length) {
+          recallNext();
+          return;
+        }
         const col = goalColRef.current ?? cursor - ls;
         goalColRef.current = col;
         if (key.upArrow) {
-          if (ls === 0) return; // already on the first line
           const prevStart = lineStart(value, ls - 1);
           setCursor(prevStart + Math.min(col, ls - 1 - prevStart));
         } else {
-          const le = lineEnd(value, cursor);
-          if (le === value.length) return; // already on the last line
           const nextStart = le + 1;
           setCursor(nextStart + Math.min(col, lineEnd(value, nextStart) - nextStart));
         }
