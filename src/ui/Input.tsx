@@ -20,6 +20,7 @@ export function Input({
   canSubmit,
   mode,
   placeholder,
+  suggesting,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -28,6 +29,9 @@ export function Input({
   canSubmit: boolean;
   mode: 'agent' | 'shell' | 'chat';
   placeholder?: string;
+  // True while the completion/approval overlay owns Up/Down (App navigates it);
+  // we leave the arrows alone then instead of moving the cursor between lines.
+  suggesting: boolean;
 }) {
   const [cursor, setCursor] = useState(value.length);
   const [blinkOn, setBlinkOn] = useState(true);
@@ -41,7 +45,7 @@ export function Input({
   useEffect(() => {
     if (disabled) return;
     setBlinkOn(true);
-    const id = setInterval(() => setBlinkOn((on) => !on), 530);
+    const id = setInterval(() => setBlinkOn(on => !on), 530);
     return () => clearInterval(id);
   }, [value, cursor, disabled]);
 
@@ -52,6 +56,11 @@ export function Input({
   const cursorRef = useRef(cursor);
   cursorRef.current = cursor;
 
+  // Remembered column for vertical (Up/Down) motion, so walking through a short
+  // line and back doesn't snap the cursor to that line's length. Null means
+  // "recompute from the current column"; any non-vertical action clears it.
+  const goalColRef = useRef<number | null>(null);
+
   // Home/End (incl. Cmd+Arrow remapped to \e[H / \e[F) bypass `useInput`, which
   // discards them. Subscribe to Ink's raw input emitter and map them to line
   // start/end ourselves. Ink still also dispatches them through useInput as an
@@ -61,8 +70,13 @@ export function Input({
     if (disabled || !internal_eventEmitter) return;
     const onInput = (chunk: string | Buffer): void => {
       const s = typeof chunk === 'string' ? chunk : chunk.toString();
-      if (HOME_SEQS.has(s)) setCursor(lineStart(valueRef.current, cursorRef.current));
-      else if (END_SEQS.has(s)) setCursor(lineEnd(valueRef.current, cursorRef.current));
+      if (HOME_SEQS.has(s)) {
+        goalColRef.current = null;
+        setCursor(lineStart(valueRef.current, cursorRef.current));
+      } else if (END_SEQS.has(s)) {
+        goalColRef.current = null;
+        setCursor(lineEnd(valueRef.current, cursorRef.current));
+      }
     };
     internal_eventEmitter.on('input', onInput);
     return () => {
@@ -86,6 +100,11 @@ export function Input({
 
   useInput(
     (input, key) => {
+      // Any key other than a bare Up/Down resets the remembered goal column.
+      if (!((key.upArrow || key.downArrow) && !key.ctrl && !key.meta)) {
+        goalColRef.current = null;
+      }
+
       if (key.return) {
         if (value.endsWith('\\')) {
           update(value.slice(0, -1) + '\n', cursor);
@@ -136,6 +155,28 @@ export function Input({
         return;
       }
 
+      // Up/Down walk between lines of a multi-line buffer, holding the column.
+      // While a completion/approval overlay is open it owns the arrows (App
+      // navigates the list), so we stay out of the way. Ctrl/Meta+Up/Down aren't
+      // ours either. On the first/last line there's nowhere to go, so it's a
+      // no-op (single-line input is unaffected).
+      if ((key.upArrow || key.downArrow) && !suggesting && !key.ctrl && !key.meta) {
+        const ls = lineStart(value, cursor);
+        const col = goalColRef.current ?? cursor - ls;
+        goalColRef.current = col;
+        if (key.upArrow) {
+          if (ls === 0) return; // already on the first line
+          const prevStart = lineStart(value, ls - 1);
+          setCursor(prevStart + Math.min(col, ls - 1 - prevStart));
+        } else {
+          const le = lineEnd(value, cursor);
+          if (le === value.length) return; // already on the last line
+          const nextStart = le + 1;
+          setCursor(nextStart + Math.min(col, lineEnd(value, nextStart) - nextStart));
+        }
+        return;
+      }
+
       // Many macOS terminals emit readline word motions for Option+Arrow:
       // ESC-b / ESC-f (Ink reports these as meta + 'b'/'f'), not a modified
       // arrow sequence. Handle them so Option+Arrow word-jumps without Cmd.
@@ -156,10 +197,18 @@ export function Input({
         return;
       }
 
-      // Plain character insertion (multi-char input from paste is fine).
+      // Plain character insertion. A paste arrives here too: Ink hands the whole
+      // clipboard over as one multi-char `input` (it has no bracketed-paste
+      // support), and terminals encode the line breaks in a paste as carriage
+      // returns. Normalize before inserting — raw \r would carriage-return the
+      // rendered <Text> to column 0 and shred the box; CRs become \n so a
+      // multi-line paste lands as a clean multi-line buffer (same shape as
+      // Shift+Enter), which lineStart/lineEnd and the renderer already handle.
       if (input && !key.meta && !key.upArrow && !key.downArrow && !key.tab && !key.escape) {
-        const next = value.slice(0, cursor) + input + value.slice(cursor);
-        update(next, cursor + input.length);
+        const text = normalizePaste(input);
+        if (!text) return;
+        const next = value.slice(0, cursor) + text + value.slice(cursor);
+        update(next, cursor + text.length);
       }
     },
     { isActive: !disabled },
@@ -190,18 +239,33 @@ export function Input({
   );
 }
 
+// Clean up typed/pasted text before it enters the buffer. Terminals send a
+// paste's internal newlines as \r (or \r\n) and may, on some configs, wrap the
+// payload in bracketed-paste markers; left in the buffer these corrupt the
+// rendered input box. Fold every line ending to \n, drop the markers, and strip
+// other C0 control chars (keeping \t and \n) so the buffer stays printable.
+function normalizePaste(input: string): string {
+  return input
+    .replace(/\x1b\[20[01]~/g, '') // bracketed-paste start/end markers
+    .replace(/\r\n?/g, '\n') // CRLF or lone CR -> LF
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ''); // other controls (keep \t, \n)
+}
+
 function renderWithCursor(
   value: string,
   cursor: number,
   focused: boolean,
   blinkOn: boolean,
 ): string {
-  if (!focused) return value;
+  if (!focused || !blinkOn) return value;
   const before = value.slice(0, cursor);
-  const at = value[cursor] ?? ' ';
-  const after = value.slice(cursor + 1);
-  const drawn = blinkOn ? INVERSE_ON + at + INVERSE_OFF : at;
-  return before + drawn + after;
+  const ch = value[cursor];
+  // At a line break or the end of the buffer there's no glyph to invert, so the
+  // block would land on a zero-width newline and vanish. Draw it over a space
+  // instead, and re-emit the newline after it so the line break is preserved.
+  const at = ch === undefined || ch === '\n' ? ' ' : ch;
+  const after = ch === '\n' ? '\n' + value.slice(cursor + 1) : value.slice(cursor + 1);
+  return before + INVERSE_ON + at + INVERSE_OFF + after;
 }
 
 function wordForward(value: string, cursor: number): number {

@@ -759,6 +759,7 @@ export function App() {
           <Input
             disabled={pending !== null}
             canSubmit={status === 'idle' && pending === null}
+            suggesting={!!suggestionState && suggestionState.items.length > 0}
             mode={mode}
             value={inputValue}
             onChange={onInputChange}
