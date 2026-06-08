@@ -4,11 +4,15 @@ Minimalistic coding-agent CLI tuned for small local models. Built on TypeScript 
 
 ## Status
 
-Reika is currently experimental.
+Reika is currently experimental but is stable for proper use.
 
 Initially built as a research project exploring how lean a coding agent can be while still being usable on local 3B–9B models and scaling cleanly to cloud models when needed.
 
-Primarily tested on 8B/9B (dense), 20B (MoE), and 35B (MoE) local models with low quantization (Q2-Q4) via MLX and llama.cpp.
+Primarily tested on 8B/9B (dense), 20B (MoE), and 35B (MoE) local models with low quantization (Q2-Q4) via llama.cpp and MLX.
+
+## Note
+
+Although Reika can work with smaller models, the output and quality will vary during agentic coding compared to pure chat.
 
 ## Quick start
 
@@ -129,7 +133,7 @@ Drop a `*.md` file in a skills directory and it becomes a slash command. Useful 
 - **Flat file:** `~/.config/reika/skills/review.md` → `/review`
 - **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in verbatim.
 
-**File format** — plain markdown with optional YAML frontmatter:
+**File format** — plain markdown with optional YAML frontmatter. Example below:
 
 ```md
 ---
@@ -218,7 +222,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 ## Working caveats
 
-- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=true` for trusted runs.
+- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=true` for trusted runs. Only "dangerous" commands will force you to manually approve/reject if auto approve is on. So basically yolo mode with safeguards.
 - Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
@@ -229,4 +233,4 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 ## Inspired by
 
-Claude Code, Codex, Crush, OpenCode — same Ink-based UI shape, similar slash commands and approval flow, but tuned for context discipline at small-model scales rather than cloud-first ergonomics.
+Inspired by Claude Code, Codex, Crush, OpenCode for the Ink-based UI, slash commands, and approval flow, but is tuned for context discipline at the scale of small models rather than cloud models first.

@@ -211,7 +211,7 @@ Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they alw
 
 **Per-profile `minGenTokens`** (`REIKA_<NAME>_MIN_GEN_TOKENS`): the generation reserve, falling back to the global `REIKA_MIN_GEN_TOKENS` (default 2048). One number drives the cap reserve, the compaction trigger, and the backstop floor — set it larger (6144–8192) on a small-window profile running a reasoning model so compaction fires early enough to leave think-room.
 
-## Tests (vitest)
+## Tests (Vitest)
 
 `npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
 
@@ -254,8 +254,7 @@ Eval timeouts use the same `AbortController` pattern as the user-side abort.
 
 ## Cross-provider gotchas worth knowing
 
-- For Qwen3 / DeepSeek-R1 / Kimi K2 on llama.cpp: use `--jinja --reasoning off`, not `--reasoning-budget 0`
-- Qwen3 thinking mode (seen on qwen3.6) loops endlessly under greedy decoding — needs `--temp 0.6 --top-p 0.95 --top-k 20 --min-p 0` (+ presence/DRY) on the server; reika sends no sampling params. Not a context bug; a single runaway completion can't be interrupted between calls
-- The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up
-- Cloud thinking models (Kimi K2 etc.) require `reasoning_content` to be roundtripped on assistant messages with tool_calls — handled in `src/provider/toolcall.ts`
-- gpt-oss family on certain servers leaks `<|channel|>` Harmony markers in tool-call names — `sanitizeToolName()` in `src/provider/client.ts` strips them defensively
+- Reika sends no sampling params so some models may need their sampling parameters tweaked in order to reduce issues like endless loops. Not a context bug; a single runaway completion can't be interrupted between calls.
+- The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up.
+- Some cloud thinking models require `reasoning_content` to be roundtripped on assistant messages with tool_calls — handled in `src/provider/toolcall.ts`
+- GPT-OSS on some inference engines leaks `<|channel|>` Harmony markers in tool-call names — `sanitizeToolName()` in `src/provider/client.ts` strips them defensively.
