@@ -272,6 +272,7 @@ export async function runTurn(opts: {
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
+            bashTimeoutMs: opts.config.bashTimeoutMs,
           });
           summary = result.summary;
           payload = result.payload;

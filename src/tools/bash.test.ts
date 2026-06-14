@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectDangerousPatterns } from './bash.js';
+import { detectDangerousPatterns, execStream } from './bash.js';
 
 describe('detectDangerousPatterns — destructive commands', () => {
   it('flags rm -rf', () => {
@@ -134,5 +134,18 @@ describe('detectDangerousPatterns — dedupe', () => {
     const hits = detectDangerousPatterns('npm install -g typescript');
     const npmHits = hits.filter(h => h.includes('npm'));
     expect(npmHits).toHaveLength(1);
+  });
+});
+
+describe('execStream — timeout', () => {
+  it('honors a custom timeout and reports the duration that fired', async () => {
+    const result = await execStream('sleep 5', { cwd: process.cwd() }, 50);
+    expect(result.summary).toMatch(/Bash timeout: sleep 5 \(killed after 0\.05s\)/);
+  });
+
+  it('runs normally when the command finishes within the timeout', async () => {
+    const result = await execStream('echo hi', { cwd: process.cwd() }, 5000);
+    expect(result.summary).toMatch(/^Ran: echo hi/);
+    expect(result.payload).toContain('hi');
   });
 });

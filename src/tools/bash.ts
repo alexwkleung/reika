@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
 const OUTPUT_TAIL_LINES = 10;
@@ -35,13 +35,14 @@ export const bashTool: Tool = {
       if (!ok) return { summary: `Bash declined by user: ${command}` };
     }
 
-    return execStream(command, ctx);
+    return execStream(command, ctx, ctx.bashTimeoutMs);
   },
 };
 
 export function execStream(
   command: string,
   ctx: { cwd: string; onProgress?: (chunk: string) => void },
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<ToolResult> {
   return new Promise(resolve => {
     const proc = spawn('/bin/sh', ['-c', command], { cwd: ctx.cwd });
@@ -65,7 +66,7 @@ export function execStream(
     const timeoutId = setTimeout(() => {
       timedOut = true;
       proc.kill('SIGTERM');
-    }, DEFAULT_TIMEOUT_MS);
+    }, timeoutMs);
 
     proc.on('close', (code, signal) => {
       clearTimeout(timeoutId);
@@ -75,7 +76,7 @@ export function execStream(
       const display = buildCommandDisplay(command, rawOutput);
       if (timedOut) {
         resolve({
-          summary: `Bash timeout: ${command} (killed after ${DEFAULT_TIMEOUT_MS / 1000}s)`,
+          summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
           payload,
           command: display,
         });

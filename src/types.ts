@@ -80,6 +80,9 @@ export type ToolContext = {
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
+  // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/
+  // install isn't killed prematurely. Undefined falls back to the bash tool's own default.
+  bashTimeoutMs?: number;
 };
 
 export type ToolParameters = {
@@ -146,4 +149,8 @@ export type Config = {
   reasoningRounds: number;
   maxSearchesPerTurn: number;
   maxFetchesPerTurn: number;
+  // Wall-clock timeout for a single bash command, ms (REIKA_BASH_TIMEOUT_MS). Builds, installs
+  // and full test suites routinely exceed the old 120s; 5 min covers them without letting a
+  // hung command hold the agent loop too long.
+  bashTimeoutMs: number;
 };

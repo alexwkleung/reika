@@ -65,6 +65,7 @@ Config sources, in precedence order (higher wins):
 | `REIKA_TAVILY_API_KEY`        | _unset_                     | Tavily key — free at [tavily.com](https://tavily.com), enables `search` + `fetch_url`                                                                                                                                                                                        |
 | `REIKA_MAX_SEARCHES_PER_TURN` | `3`                         | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                                                                                                                                                             |
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`                         | Cap `fetch_url` calls per user turn                                                                                                                                                                                                                                          |
+| `REIKA_BASH_TIMEOUT_MS`       | `300000`                    | Wall-clock timeout for a single bash command, ms (raise for slow builds, lower to fail hangs faster)                                                                                                                                                                         |
 
 ## Profiles (multi-model)
 
