@@ -91,7 +91,8 @@ describe('extractToolCallsFromContent', () => {
 
 describe('extractToolCallsFromContent (pythonic)', () => {
   it('extracts a sentinel-fenced pythonic call', () => {
-    const input = "<|tool_call_start|>[list(path='/Users/alex/Git/reika-code', depth=1)]<|tool_call_end|>";
+    const input =
+      "<|tool_call_start|>[list(path='/Users/alex/Git/reika-code', depth=1)]<|tool_call_end|>";
     const result = extractToolCallsFromContent(input);
     expect(result.calls).toHaveLength(1);
     expect(result.calls[0].name).toBe('list');
@@ -132,7 +133,8 @@ describe('extractToolCallsFromContent (pythonic)', () => {
   });
 
   it('maps Python literals (True/False/None) to JSON', () => {
-    const input = "<|tool_call_start|>[edit(recursive=True, dry=False, note=None)]<|tool_call_end|>";
+    const input =
+      '<|tool_call_start|>[edit(recursive=True, dry=False, note=None)]<|tool_call_end|>';
     const result = extractToolCallsFromContent(input);
     expect(result.calls[0].args).toEqual({ recursive: true, dry: false, note: null });
   });

@@ -15,6 +15,55 @@ import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
 import { compactHistory, shouldCompact } from './compaction.js';
 import type { PayloadStore } from '../store/payloads.js';
 
+// Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
+// the same result is a no-progress loop. `bash` is included because weak models run `grep`/
+// `ls` through it; its summary carries the output byte count, so a repeat only fires on
+// byte-identical output (a flaky/changed command differs and is left alone).
+const TRACKED_TOOLS = new Set(['read', 'grep', 'list', 'glob', 'bash']);
+// Tools whose whole purpose is mutation. They reset the repeat memory, since repo state may
+// have changed, so a legitimate read-after-edit is never mistaken for a loop. Deliberately
+// NOT including `bash`: it's used for read-only greps far more than mutation here, and letting
+// it clear would wipe read-tracking between every interspersed `bash grep`.
+const MUTATING_TOOLS = new Set(['write', 'edit']);
+
+// The repeat key for a call. `read` normalizes away `limit` and keys on (path, offset): a
+// model that re-reads from the same position with a different window — read(path, limit=100)
+// then limit=300 then limit=80, all starting at line 1 — is looping even though each summary
+// differs. Other tracked tools key on their result summary, which encodes their semantic
+// identity (grep pattern, list/glob dir+pattern, bash command + byte count).
+function repeatKey(name: string, args: Record<string, unknown>, summary: string): string {
+  if (name === 'read') return `read\0${String(args.path ?? '')}\0${Number(args.offset ?? 1)}`;
+  return `${name}\0${summary}`;
+}
+
+// On a repeat of the same tracked call within a turn, append an escalating redirect to the
+// payload so a looping model gets a "this won't change" signal at the point of recency.
+// Untracked tools (fetch/search/subagent/unknown) pass through; mutating tools reset memory.
+export function flagRepeatedCall(
+  seen: Map<string, number>,
+  name: string,
+  args: Record<string, unknown>,
+  summary: string,
+  payload: string | undefined,
+): string | undefined {
+  if (MUTATING_TOOLS.has(name)) {
+    seen.clear();
+    return payload;
+  }
+  if (!TRACKED_TOOLS.has(name)) return payload;
+  const key = repeatKey(name, args, summary);
+  const count = (seen.get(key) ?? 0) + 1;
+  seen.set(key, count);
+  if (count <= 1) return payload;
+  return (
+    (payload ?? '') +
+    `\n\n(reika: you have run this ${name} ${count} times this turn with the same result — it ` +
+    `will not change by repeating it. Make a different move: page to a different part of the ` +
+    `file, search for the specific symbol you need, open a different file, or act on what you ` +
+    `already have.)`
+  );
+}
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -66,6 +115,10 @@ export async function runTurn(opts: {
   // Consecutive length-stops recovered from. Reset on any clean (non-truncated) round so
   // the budget is per-spiral, not per-turn.
   let lengthRetries = 0;
+  // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
+  // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
+  // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
+  const seenReadOnly = new Map<string, number>();
 
   const window = opts.config.contextWindow;
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
@@ -219,6 +272,7 @@ export async function runTurn(opts: {
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
+            bashTimeoutMs: opts.config.bashTimeoutMs,
           });
           summary = result.summary;
           payload = result.payload;
@@ -228,6 +282,11 @@ export async function runTurn(opts: {
           summary = `Tool error: ${(e as Error).message}`;
         }
       }
+      // Loop-breaker: weak models re-issue the same read/grep/bash and stall on the identical
+      // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
+      // on path+offset so window-varying re-reads still count); mutating tools reset the memory
+      // so a read-after-edit isn't flagged. Skipped for unknown tools (nothing produced).
+      if (tool) payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
       const toolMsg: Message = {
         role: 'tool',

@@ -60,7 +60,9 @@ marked.use(
         return lines.map(line => line.replace(/^(\s*)\* /, '$1• ')).join('\n');
       }
       let n = 0;
-      return lines.map(line => (/^\s*\* /.test(line) ? line.replace('* ', `${++n}. `) : line)).join('\n');
+      return lines
+        .map(line => (/^\s*\* /.test(line) ? line.replace('* ', `${++n}. `) : line))
+        .join('\n');
     },
     paragraph: (text: string) => text,
     // marked-terminal passes (href, title, text) at runtime, but @types/marked-terminal

@@ -54,6 +54,7 @@ export function loadConfig(): Config {
     profiles: loadProfiles(defaultProfile),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
+    bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '300000', 10),
     // Floor at 1 so the active tool-call round always keeps its reasoning (required for
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),

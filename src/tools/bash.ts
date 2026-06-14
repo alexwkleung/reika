@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
 const OUTPUT_TAIL_LINES = 10;
@@ -35,13 +35,14 @@ export const bashTool: Tool = {
       if (!ok) return { summary: `Bash declined by user: ${command}` };
     }
 
-    return execStream(command, ctx);
+    return execStream(command, ctx, ctx.bashTimeoutMs);
   },
 };
 
 export function execStream(
   command: string,
   ctx: { cwd: string; onProgress?: (chunk: string) => void },
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<ToolResult> {
   return new Promise(resolve => {
     const proc = spawn('/bin/sh', ['-c', command], { cwd: ctx.cwd });
@@ -65,17 +66,17 @@ export function execStream(
     const timeoutId = setTimeout(() => {
       timedOut = true;
       proc.kill('SIGTERM');
-    }, DEFAULT_TIMEOUT_MS);
+    }, timeoutMs);
 
     proc.on('close', (code, signal) => {
       clearTimeout(timeoutId);
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const payload = rawOutput + truncated || '(no output)';
+      const payload = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
       const display = buildCommandDisplay(command, rawOutput);
       if (timedOut) {
         resolve({
-          summary: `Bash timeout: ${command} (killed after ${DEFAULT_TIMEOUT_MS / 1000}s)`,
+          summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
           payload,
           command: display,
         });
@@ -104,6 +105,22 @@ export function execStream(
       });
     });
   });
+}
+
+// A bare line-search (grep/rg/etc.) returns only matching lines, never the surrounding
+// code. Weak models tend to re-run the search with new flags instead of opening the file.
+// When the output carries line numbers, append a one-line nudge to read those locations.
+// Fires only when line numbers are present (so there's somewhere concrete to point), and is
+// harmless if shown — it's a hint, not a command result.
+const SEARCH_CMD_RE = /\b(?:e?grep|fgrep|rg|ag|ack)\b/;
+const LINE_PREFIXED_RE = /^(?:[^\n:]*:)?\d+[:-]/m;
+
+function searchHint(command: string, output: string): string {
+  if (!SEARCH_CMD_RE.test(command) || !LINE_PREFIXED_RE.test(output)) return '';
+  return (
+    '\n\n(reika: these are matching lines only, not the full file. Use the read tool at the ' +
+    'listed line numbers to see the surrounding code instead of re-running the search.)'
+  );
 }
 
 function buildCommandDisplay(
