@@ -484,27 +484,26 @@ export function App() {
           response = 'config not loaded';
           break;
         }
+        const modelKeys = config.models.map(m => m.toLowerCase());
         const target = args.trim().toLowerCase();
         if (target) {
           if (!config.profiles[target]) {
             const avail = Object.keys(config.profiles).join(', ');
-            response = `Unknown profile: ${target}. Available: ${avail}`;
+            response = `Unknown model/profile: ${target}. Available: ${avail}`;
             break;
           }
           setActiveProfile(target);
           const next = config.profiles[target];
+          const kind = modelKeys.includes(target) ? 'model' : 'profile';
           setMessages(prev => [
             ...prev,
             echo,
             ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
-            { role: 'system', content: `Switched to profile '${target}' (${next.model})` },
+            { role: 'system', content: `Switched to ${kind} '${target}' (${next.model})` },
           ]);
           return;
         }
         const current = config.profiles[activeProfile] ?? config.profiles.default;
-        const list = Object.entries(config.profiles)
-          .map(([n, p]) => `  ${n === activeProfile ? '›' : ' '} ${n} → ${p.model}`)
-          .join('\n');
         const lines = [
           `current: ${activeProfile}`,
           `model:    ${current.model}`,
@@ -513,7 +512,27 @@ export function App() {
         if (config.subagentModel && config.subagentModel !== current.model) {
           lines.push(`subagent: ${config.subagentModel}`);
         }
-        lines.push('', 'available profiles:', list, '', 'switch with /model <name>');
+        // Models served by the default base URL. The first is active when activeProfile
+        // is still 'default'; otherwise the marker follows the selected model name.
+        const modelList = config.models
+          .map((m, i) => {
+            const active =
+              activeProfile === m.toLowerCase() || (activeProfile === 'default' && i === 0);
+            return `  ${active ? '›' : ' '} ${m}`;
+          })
+          .join('\n');
+        lines.push('', 'models (default base url):', modelList);
+        // Named profiles only — exclude 'default' and the auto-registered model entries.
+        const namedProfiles = Object.entries(config.profiles).filter(
+          ([n]) => n !== 'default' && !modelKeys.includes(n),
+        );
+        if (namedProfiles.length > 0) {
+          const profileList = namedProfiles
+            .map(([n, p]) => `  ${n === activeProfile ? '›' : ' '} ${n} → ${p.model}`)
+            .join('\n');
+          lines.push('', 'profiles:', profileList);
+        }
+        lines.push('', 'switch with /model <name>');
         response = lines.join('\n');
         break;
       }

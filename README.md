@@ -48,7 +48,7 @@ Config sources, in precedence order (higher wins):
 | Key                           | Default                     | What                                                                                                                                                                                                                                                                         |
 | ----------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `REIKA_BASE_URL`              | `http://localhost:11434/v1` | OpenAI-compatible endpoint                                                                                                                                                                                                                                                   |
-| `REIKA_MODEL`                 | _required_                  | Model name                                                                                                                                                                                                                                                                   |
+| `REIKA_MODEL`                 | _required_                  | Model name, or a comma-separated list of models served by the same `REIKA_BASE_URL`. First is the default; switch with `/model <name>`                                                                                                                                       |
 | `REIKA_API_KEY`               | `no-key`                    | Cloud API key (any non-empty for local)                                                                                                                                                                                                                                      |
 | `REIKA_MAX_TURNS`             | `12`                        | Tool-call iterations per user turn                                                                                                                                                                                                                                           |
 | `REIKA_REPO_MAP_BUDGET`       | `3200`                      | Chars allotted to repo map in system prompt                                                                                                                                                                                                                                  |
@@ -67,9 +67,18 @@ Config sources, in precedence order (higher wins):
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`                         | Cap `fetch_url` calls per user turn                                                                                                                                                                                                                                          |
 | `REIKA_BASH_TIMEOUT_MS`       | `300000`                    | Wall-clock timeout for a single bash command, ms (raise for slow builds, lower to fail hangs faster)                                                                                                                                                                         |
 
-## Profiles (multi-model)
+## Multiple models
 
-Define additional model configurations and switch between them at runtime with `/model <name>`:
+There are two ways to expose more than one model, and they compose.
+
+**Same base URL (e.g. a model router).** Just list the models in `REIKA_MODEL`, comma-separated. They all share `REIKA_BASE_URL`/`REIKA_API_KEY`; the first is the default, and the rest are switchable with `/model <name>` — no extra env vars to add or remove as your router's catalogue changes:
+
+```ini
+REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_MODEL=qwen3-coder,kimi-k2,glm-4.6   # /model kimi-k2 to switch
+```
+
+**Different endpoints/keys — named profiles.** When a model lives behind a different base URL or API key, define a full profile and switch between them at runtime with `/model <name>`:
 
 ```ini
 # Default profile (existing keys — always available as "default")
@@ -95,11 +104,12 @@ Per-profile `_MAX_TOKENS`, `_CONTEXT_WINDOW`, and `_MIN_GEN_TOKENS` fall back to
 
 Then in-session:
 
-- `/model` — show current profile and list available
-- `/model kimi` — switch to the kimi profile (model + endpoint + key swap as a unit)
+- `/model` — show the current selection and list available models (default base URL) and named profiles
+- `/model kimi-k2` — switch to a model on the default base URL (model name only swaps)
+- `/model kimi` — switch to a named profile (model + endpoint + key swap as a unit)
 - `/new` — resets to default
 
-Conversation history persists across switches; if styles clash, run `/new` first. Token counter accumulates across profiles for a single session bill.
+Conversation history persists across switches; if styles clash, run `/new` first. Token counter accumulates across models/profiles for a single session bill.
 
 ## Tools
 

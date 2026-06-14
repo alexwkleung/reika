@@ -10,12 +10,19 @@ dotenv.config();
 dotenv.config({ path: join(homedir(), '.config', 'reika', '.env') });
 
 export function loadConfig(): Config {
-  const model = process.env.REIKA_MODEL;
-  if (!model) {
+  // REIKA_MODEL is a comma-separated list of models served by the default base URL.
+  // The first is the active default; any extras become switchable auto-profiles (see
+  // loadProfiles). A single value behaves exactly as before.
+  const models = (process.env.REIKA_MODEL ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (models.length === 0) {
     throw new Error(
       'REIKA_MODEL is required. Set it in your shell, a .env in the current directory, or ~/.config/reika/.env.',
     );
   }
+  const model = models[0];
   const baseURL = process.env.REIKA_BASE_URL ?? 'http://localhost:11434/v1';
   validateBaseURL(baseURL, 'REIKA_BASE_URL');
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
@@ -38,6 +45,7 @@ export function loadConfig(): Config {
     baseURL,
     apiKey,
     model,
+    models,
     maxTokens,
     contextWindow,
     minGenTokens,
@@ -51,7 +59,7 @@ export function loadConfig(): Config {
     subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
     tavilyApiKey: emptyToUndefined(process.env.REIKA_TAVILY_API_KEY),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
-    profiles: loadProfiles(defaultProfile),
+    profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
     bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '300000', 10),
@@ -61,8 +69,19 @@ export function loadConfig(): Config {
   };
 }
 
-function loadProfiles(defaultProfile: Profile): Record<string, Profile> {
+function loadProfiles(defaultProfile: Profile, models: string[]): Record<string, Profile> {
   const profiles: Record<string, Profile> = { default: defaultProfile };
+  // When REIKA_MODEL lists more than one model, register each as a lightweight profile
+  // keyed by its lowercased name, inheriting the default base URL/key/token config. This
+  // makes `/model <model>` switch among models on the same base URL (e.g. a model router).
+  // A single model registers nothing — back-compat for the common case.
+  if (models.length > 1) {
+    for (const m of models) {
+      const key = m.toLowerCase();
+      if (key === 'default' || profiles[key]) continue;
+      profiles[key] = { ...defaultProfile, model: m };
+    }
+  }
   const names = (process.env.REIKA_PROFILES ?? '')
     .split(',')
     .map(s => s.trim())

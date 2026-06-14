@@ -114,6 +114,72 @@ describe('loadConfig — profiles', () => {
   });
 });
 
+describe('loadConfig — multi-model REIKA_MODEL', () => {
+  it('parses a comma-separated list; first model is the default', () => {
+    process.env.REIKA_MODEL = 'a,b,c';
+    process.env.REIKA_BASE_URL = 'http://router/v1';
+    process.env.REIKA_API_KEY = 'k';
+    const cfg = loadConfig();
+    expect(cfg.model).toBe('a');
+    expect(cfg.models).toEqual(['a', 'b', 'c']);
+  });
+
+  it('registers each extra model as an auto-profile inheriting the default base/key', () => {
+    process.env.REIKA_MODEL = 'a,b,c';
+    process.env.REIKA_BASE_URL = 'http://router/v1';
+    process.env.REIKA_API_KEY = 'k';
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.profiles).sort()).toEqual(['a', 'b', 'c', 'default']);
+    expect(cfg.profiles.b).toEqual({
+      model: 'b',
+      baseURL: 'http://router/v1',
+      apiKey: 'k',
+      minGenTokens: 2048,
+    });
+  });
+
+  it('trims whitespace and drops empty entries', () => {
+    process.env.REIKA_MODEL = ' a , b ,, ';
+    const cfg = loadConfig();
+    expect(cfg.models).toEqual(['a', 'b']);
+  });
+
+  it('lowercases auto-profile keys so /model matches a lowercased target', () => {
+    process.env.REIKA_MODEL = 'Qwen3-Coder,Kimi-K2';
+    const cfg = loadConfig();
+    expect(cfg.profiles['kimi-k2']).toBeDefined();
+    expect(cfg.profiles['kimi-k2'].model).toBe('Kimi-K2');
+  });
+
+  it('resolveProfile swaps only the model, preserving base/key', () => {
+    process.env.REIKA_MODEL = 'a,b';
+    process.env.REIKA_BASE_URL = 'http://router/v1';
+    process.env.REIKA_API_KEY = 'k';
+    const cfg = loadConfig();
+    const resolved = resolveProfile(cfg, 'b');
+    expect(resolved.model).toBe('b');
+    expect(resolved.baseURL).toBe('http://router/v1');
+    expect(resolved.apiKey).toBe('k');
+  });
+
+  it('a single model registers no model-named profile (back-compat)', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    expect(cfg.models).toEqual(['m']);
+    expect(Object.keys(cfg.profiles)).toEqual(['default']);
+  });
+
+  it('an explicit named profile wins over an auto-model of the same name', () => {
+    process.env.REIKA_MODEL = 'a,kimi';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_BASE_URL = 'https://moonshot.example/v1';
+    const cfg = loadConfig();
+    expect(cfg.profiles.kimi.model).toBe('kimi-k2');
+    expect(cfg.profiles.kimi.baseURL).toBe('https://moonshot.example/v1');
+  });
+});
+
 describe('resolveProfile', () => {
   it('returns the config unchanged when the named profile is missing', () => {
     process.env.REIKA_MODEL = 'm';

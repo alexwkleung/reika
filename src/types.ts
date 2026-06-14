@@ -127,6 +127,10 @@ export type Config = {
   baseURL: string;
   apiKey: string;
   model: string;
+  // Models served by the default base URL (parsed from a comma-separated REIKA_MODEL).
+  // model === models[0]. When more than one is listed, each is also registered as an
+  // auto-profile keyed by its lowercased name so /model <name> can switch between them.
+  models: string[];
   maxTurns: number;
   repoMapBudget: number;
   autoApprove: boolean;
