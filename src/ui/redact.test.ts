@@ -3,15 +3,17 @@ import { redactSecrets } from './redact.js';
 
 describe('redactSecrets', () => {
   it('redacts an electron-builder identityName phrase', () => {
-    expect(
-      redactSecrets('identityName=Developer ID Application: Jane Dev (AB12CD34EF)'),
-    ).toBe('identityName=<redacted>');
+    expect(redactSecrets('identityName=Developer ID Application: Jane Dev (AB12CD34EF)')).toBe(
+      'identityName=<redacted>',
+    );
   });
 
   it('redacts a quoted signing identity from `security find-identity`', () => {
-    expect(redactSecrets('  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Jane Dev (AB12CD34EF)"')).toBe(
-      '  1) <redacted> "<redacted>"',
-    );
+    expect(
+      redactSecrets(
+        '  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Jane Dev (AB12CD34EF)"',
+      ),
+    ).toBe('  1) <redacted> "<redacted>"');
   });
 
   it('redacts identityHash but leaves a bare git SHA untouched', () => {
@@ -20,7 +22,9 @@ describe('redactSecrets', () => {
     );
     // A bare 40-hex token with no signing context must survive.
     const sha = 'abc1234' + '0'.repeat(33);
-    expect(redactSecrets(`HEAD is now at ${sha} fix build`)).toBe(`HEAD is now at ${sha} fix build`);
+    expect(redactSecrets(`HEAD is now at ${sha} fix build`)).toBe(
+      `HEAD is now at ${sha} fix build`,
+    );
   });
 
   it('redacts an Apple app-specific password', () => {
