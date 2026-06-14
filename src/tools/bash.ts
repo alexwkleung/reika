@@ -71,7 +71,7 @@ export function execStream(
       clearTimeout(timeoutId);
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const payload = rawOutput + truncated || '(no output)';
+      const payload = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
       const display = buildCommandDisplay(command, rawOutput);
       if (timedOut) {
         resolve({
@@ -104,6 +104,22 @@ export function execStream(
       });
     });
   });
+}
+
+// A bare line-search (grep/rg/etc.) returns only matching lines, never the surrounding
+// code. Weak models tend to re-run the search with new flags instead of opening the file.
+// When the output carries line numbers, append a one-line nudge to read those locations.
+// Fires only when line numbers are present (so there's somewhere concrete to point), and is
+// harmless if shown — it's a hint, not a command result.
+const SEARCH_CMD_RE = /\b(?:e?grep|fgrep|rg|ag|ack)\b/;
+const LINE_PREFIXED_RE = /^(?:[^\n:]*:)?\d+[:-]/m;
+
+function searchHint(command: string, output: string): string {
+  if (!SEARCH_CMD_RE.test(command) || !LINE_PREFIXED_RE.test(output)) return '';
+  return (
+    '\n\n(reika: these are matching lines only, not the full file. Use the read tool at the ' +
+    'listed line numbers to see the surrounding code instead of re-running the search.)'
+  );
 }
 
 function buildCommandDisplay(
