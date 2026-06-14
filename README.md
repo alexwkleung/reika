@@ -11,6 +11,7 @@ Reika is currently experimental but is stable for proper use.
 Past:
 
 > Initially built as a research project exploring how lean a coding agent can be while still being usable on local 3B–9B models and scaling cleanly to cloud models when needed.
+>
 > Started testing Reika using 8B/9B (dense), 20B (MoE), and 35B (MoE) local models with low quantization (Q2-Q4) via llama.cpp and MLX.
 
 Now:
