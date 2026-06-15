@@ -32,6 +32,13 @@ export function defaultTools(config?: Config): Tool[] {
   return tools;
 }
 
+// EXPERIMENT (plan mode): read-only exploration tools. No edit/write/bash/subagent — so a
+// model in plan mode structurally cannot mutate the repo or run side-effecting commands. The
+// only failure mode left is over-exploration, which the ledger + convergence nudge target.
+export function planTools(): Tool[] {
+  return [readTool, listTool, grepTool, globTool];
+}
+
 // Tools available in chat mode — knowledge-only, no filesystem or shell access.
 export function chatTools(config?: Config): Tool[] {
   const tools: Tool[] = [];
