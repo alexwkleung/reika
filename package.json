@@ -19,7 +19,7 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "eval": "tsx evals/runner.ts",
     "install:global": "npm run build && npm install -g .",
-    "uninstall:global": "npm uninstall -g reika-code"
+    "uninstall:global": "npm uninstall -g reika"
   },
   "dependencies": {
     "cli-highlight": "^2.1.11",

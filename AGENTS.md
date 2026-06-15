@@ -113,17 +113,20 @@ To re-theme, edit `theme.ts` only. New UI must consult these names, not introduc
 
 `App.tsx` sets `paddingX={1}` on its outer Box for a uniform 1-column gutter. Don't add competing horizontal padding to top-level children — bordered boxes and inline content stay visually aligned because they all live inside that single gutter.
 
-## Modes (agent / shell / chat)
+## Modes (agent / shell / chat / plan)
 
-Three runtime modes. Each affects what input does and what context is preserved.
+Four runtime modes. Each affects what input does and what context is preserved.
 
-| Mode              | Input behavior                                                                | Tools                                                        | History                                                                   |
-| ----------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `agent` (default) | Runs through model + agent system prompt                                      | `defaultTools(config)` — full set                            | shared with shell                                                         |
-| `shell`           | Runs as bash directly (no model)                                              | n/a                                                          | shared with agent — shell output becomes part of agent's context          |
-| `chat`            | Runs through model + lean chat system prompt (no tool-use rules, no repo map) | `chatTools(config)` — knowledge-only (`search`, `fetch_url`) | **isolated** — separate `messages` array, stashed/restored on mode switch |
+| Mode              | Input behavior                                                                | Tools                                                        | History                                                                      |
+| ----------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `agent` (default) | Runs through model + agent system prompt                                      | `defaultTools(config)` — full set                            | shared with shell + plan                                                     |
+| `shell`           | Runs as bash directly (no model)                                              | n/a                                                          | shared with agent — shell output becomes part of agent's context             |
+| `chat`            | Runs through model + lean chat system prompt (no tool-use rules, no repo map) | `chatTools(config)` — knowledge-only (`search`, `fetch_url`) | **isolated** — separate `messages` array, stashed/restored on mode switch    |
+| `plan`            | Runs through model + plan system prompt; read-only, ends in a written plan    | `planTools()` — read-only (`read`/`list`/`grep`/`glob`)      | shared with agent — `/plan` explore → `/agent` executes with plan in context |
 
-Implementation: a single `messages` state holds the active mode's history. When the user crosses the chat boundary (agent/shell ↔ chat), `stashedMessagesRef` saves the outgoing side and restores the incoming side's prior history. Switching between agent and shell does not stash because they share. `/new` clears only the current mode's history (the other side's stash survives).
+Implementation: a single `messages` state holds the active mode's history. When the user crosses the chat boundary (agent/shell/plan ↔ chat), `stashedMessagesRef` saves the outgoing side and restores the incoming side's prior history. Switching among agent, shell, and plan does not stash — they share one history (so a plan carries into agent execution); only chat is isolated. `/new` clears only the current mode's history (the other side's stash survives).
+
+Plan mode's force-write machinery (adaptive novelty cap, reasoning→plan transform with a window-budgeted reference dump) lives in `loop.ts` behind `promptMode === 'plan'`; `REIKA_PLAN_EXPERIMENT=1` just sets the startup mode. It's gated as experimental — keep its constants and helpers together and clearly marked.
 
 Mode switches are blocked while `status === 'busy'` to avoid mid-turn state corruption.
 
@@ -166,13 +169,15 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
 - **Compaction** (`compaction.ts`): once the calibrated estimate crosses
   `(window − minGenTokens) × 0.9` — i.e. when the prompt would leave less than the generation
   reserve (plus slack) — the oldest turns fold into one recap message (merged into the system
-  block), keeping recent turns verbatim and splitting only on user boundaries so no tool
-  result is orphaned from its `tool_call`. Keep/recap budgets are sized off the _available_
-  room (`window − minGenTokens`), not the full window, so the result fits under the trigger
-  even when the reserve is a large fraction of a small window. It runs on the loop's local
-  history copy; the UI scrollback is untouched. Note it can't compact _within_ a single long
-  turn (only one user message), so a runaway multi-round turn is bounded by the cap +
-  reasoning pruning + the backstop, not compaction.
+  block), keeping recent turns verbatim. It snaps the keep-boundary _back_ over `tool` messages
+  to a tool-call-group start (so no tool result is orphaned from its `tool_call`) and pins the
+  original user task verbatim, recapping only what follows. Snapping back rather than forward to
+  a user message is what lets it compact _within_ a single long turn — e.g. a read-heavy
+  plan-mode exploration that has one user message and no later boundary; the old user-only snap
+  found nothing and no-op'd, so the request grew unbounded. Keep/recap budgets are sized off the
+  _available_ room (`window − minGenTokens`), not the full window, so the result fits under the
+  trigger even when the reserve is a large fraction of a small window. It runs on the loop's
+  local history copy; the UI scrollback is untouched.
 - **Generation backstop** (`budget.ts`): each turn the loop computes `max_tokens =
 window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whichever is smaller)
   and passes it to `callModel`. It caps a spiraling small/quantized model so it can't run to
@@ -258,3 +263,4 @@ Eval timeouts use the same `AbortController` pattern as the user-side abort.
 - The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up.
 - Some cloud thinking models require `reasoning_content` to be roundtripped on assistant messages with tool_calls — handled in `src/provider/toolcall.ts`
 - GPT-OSS on some inference engines leaks `<|channel|>` Harmony markers in tool-call names — `sanitizeToolName()` in `src/provider/client.ts` strips them defensively.
+- Models without a native tool-calling template fall back to emitting calls as text; `extractToolCallsFromContent` (`client.ts`) parses the dialects (`<tool_call>{json}`, Hermes `<function=…>`, pythonic `fn(k=v)`). Thinking models sometimes leak the call into the `reasoning_content` channel instead of `content` — `callModel` recovers it from reasoning when content is empty, so the turn doesn't stall. Prefer a native template; these parsers are the fallback.

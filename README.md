@@ -187,23 +187,24 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - **Agent** (default): input goes to the model; it can call tools
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
 - **Chat**: `/chat` to enter — pure chat with the model. No filesystem/shell tools registered (only `search` and `fetch_url` if configured). Conversation history is fully isolated from agent mode — switching back and forth keeps each side's history independent. `/agent` returns. Status bar shows a `chat` tag when active.
+- **Plan**: `/plan` to enter — read-only exploration. Only `read`/`list`/`grep`/`glob` are registered (no `edit`/`write`/`bash`), so the model can't change anything; it explores and ends by writing a numbered, file-specific plan. Unlike chat, history is **shared** with agent mode, so the flow is `/plan` → it writes the plan → `/agent` to execute it with the plan already in context. `REIKA_PLAN_EXPERIMENT=1` starts the session in plan mode. `/agent` returns. Status bar shows a `plan` tag when active.
 
 ## Slash commands
 
 Type `/` in the input to see suggestions. Highlights:
 
-| Command                       | What                                                                            |
-| ----------------------------- | ------------------------------------------------------------------------------- |
-| `/help`                       | List all commands                                                               |
-| `/new` / `/clear`             | Reset conversation, tokens, mode                                                |
-| `/cd <path>`                  | Change cwd (re-indexes repo map). Tilde works.                                  |
-| `/shell` / `/agent`           | Toggle modes                                                                    |
-| `/model` / `/cwd` / `/tokens` | Show current values                                                             |
-| `/approvals [on\|off]`        | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
-| `/stats`                      | Full session summary (duration, turns, tools, files modified, approvals)        |
-| `/skills`                     | List available skills (loaded from skill dirs at startup)                       |
-| `/exit` / `/quit`             | Exit (prints session summary first)                                             |
-| `@<path>`                     | In agent mode, inlines a file as context. Tab autocomplete from the file index. |
+| Command                                 | What                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
+| `/help`                                 | List all commands                                                               |
+| `/new` / `/clear`                       | Reset conversation, tokens, mode                                                |
+| `/cd <path>`                            | Change cwd (re-indexes repo map). Tilde works.                                  |
+| `/shell` / `/chat` / `/plan` / `/agent` | Switch modes (shell / chat / plan / back to agent)                              |
+| `/model` / `/cwd` / `/tokens`           | Show current values                                                             |
+| `/approvals [on\|off]`                  | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
+| `/stats`                                | Full session summary (duration, turns, tools, files modified, approvals)        |
+| `/skills`                               | List available skills (loaded from skill dirs at startup)                       |
+| `/exit` / `/quit`                       | Exit (prints session summary first)                                             |
+| `@<path>`                               | In agent mode, inlines a file as context. Tab autocomplete from the file index. |
 
 ## Scripts
 
@@ -245,6 +246,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 - Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
+- Tool calling is most reliable when the model is served with its **native function-calling chat template**. Without one, models fall back to emitting tool calls as text — Reika parses the common dialects (`<tool_call>{json}</tool_call>`, Hermes `<function=…>`, pythonic `fn(k=v)`, and calls leaked into the reasoning channel) as a best-effort fallback, but the native path avoids the malformed/looping/leaked calls those fallbacks exist to catch. If a local model misbehaves on tool use, first check that your server (llama.cpp / Ollama / vLLM / MLX) loads a tools-enabled template for it.
 
 ## `.gitignore` is respected
 
