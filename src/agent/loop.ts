@@ -72,6 +72,10 @@ export function flagRepeatedCall(
 // looping model is cut off PLAN_STALL_ROUNDS rounds after it stops making progress. PLAN_HARD_CEILING
 // is a backstop against a model that keeps finding trivially-new things forever.
 const PLAN_STALL_ROUNDS = 2;
+// 12 is right for ~16k: the model over-gathers vs the transform's findings budget well before then
+// (measured ~26k tokens read against a ~10k budget), so more rounds are wasted. On a larger window
+// this is too low — scale it with contextWindow, tuned by the gathered-payloads vs transform-budget
+// ratio (visible under REIKA_DEBUG). Don't add the scaling speculatively; pick the curve with data.
 const PLAN_HARD_CEILING = 12;
 // Generation room reserved for the plan at force-write — the rest of the window budgets the
 // transform's reference material. These models emit a few thousand tokens of reasoning *before*
