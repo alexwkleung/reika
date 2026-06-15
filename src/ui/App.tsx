@@ -810,7 +810,7 @@ export function App() {
             contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
             cachedTokens={lastUsage?.cachedTokens}
             autoApprove={config?.autoApprove || sessionAutoApprove}
-            modeTag={mode === 'agent' ? undefined : mode}
+            modeTag={mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />
         </>
