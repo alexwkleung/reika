@@ -62,9 +62,9 @@ describe('compactHistory', () => {
     ];
     const removed = compactHistory(history, W, 1, 0);
     expect(removed).toBeGreaterThan(0);
-    expect(history[0].role).toBe('compaction');
-    // Kept region starts at a user-message boundary.
-    expect(history[1].role).toBe('user');
+    // The original task is pinned verbatim at the front; the recap of the middle follows it.
+    expect(history[0]).toMatchObject({ role: 'user', content: 'q1' });
+    expect(history[1].role).toBe('compaction');
     // The most recent turn is still intact.
     expect(history.some(m => m.role === 'user' && m.content === 'q4')).toBe(true);
   });
@@ -77,9 +77,10 @@ describe('compactHistory', () => {
       ...turn(4, 'd.ts'),
     ];
     compactHistory(history, W, 1, 0);
-    const recap = (history[0] as { content: string }).content;
-    expect(recap).toContain('q1');
-    expect(recap).toContain('a.ts');
+    // q1's user text is pinned at the front, not summarized; the recap follows it.
+    expect(history[0]).toMatchObject({ role: 'user', content: 'q1' });
+    const recap = (history[1] as { content: string }).content;
+    expect(recap).toContain('a.ts'); // q1's tool turn is summarized into the recap
     expect(recap).toContain('Tools used');
     expect(recap).not.toContain('q4'); // kept verbatim, not summarized
     expect(recap).not.toContain('XXXXX'); // raw payloads never enter the recap
@@ -89,7 +90,7 @@ describe('compactHistory', () => {
     const history: Message[] = [];
     for (let i = 1; i <= 40; i++) history.push(...turn(i, `f${i}.ts`));
     compactHistory(history, W, 1, 0);
-    const recap = (history[0] as { content: string }).content;
+    const recap = (history[1] as { content: string }).content;
     // Bounded regardless of session length (40 turns in, recap stays compact).
     expect(recap.length).toBeLessThan(800);
     expect(recap).toMatch(/\+\d+ earlier turns? condensed/);
@@ -107,7 +108,35 @@ describe('compactHistory', () => {
     expect((history[0] as { content: string }).content).toContain('PRIOR RECAP');
   });
 
-  it('never leaves a tool result without its tool_call (splits on user boundaries)', () => {
+  it('compacts within a single long turn (one user message, many tool rounds)', () => {
+    // Plan-mode exploration: one user task, then many read rounds with no later user boundary.
+    // The old user-only boundary snapped to nothing here and grew unbounded; now it must compact.
+    const history: Message[] = [{ role: 'user', content: 'the task' }];
+    for (let i = 1; i <= 12; i++) {
+      history.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `c${i}`, name: 'read', args: { path: `f${i}.ts` } }],
+        },
+        { role: 'tool', callId: `c${i}`, summary: `read f${i}.ts`, payload: 'X'.repeat(500) },
+      );
+    }
+    const removed = compactHistory(history, W, 1, 0);
+    expect(removed).toBeGreaterThan(0); // the bug: this used to be 0
+    // The task survives verbatim; no kept tool result is orphaned from its tool_call.
+    expect(history[0]).toMatchObject({ role: 'user', content: 'the task' });
+    for (const [idx, m] of history.entries()) {
+      if (m.role === 'tool') {
+        const hasCall = history
+          .slice(0, idx)
+          .some(a => a.role === 'assistant' && a.toolCalls?.some(tc => tc.id === m.callId));
+        expect(hasCall).toBe(true);
+      }
+    }
+  });
+
+  it('never leaves a tool result without its tool_call (splits on group boundaries)', () => {
     const history = [
       ...turn(1, 'a.ts'),
       ...turn(2, 'b.ts'),

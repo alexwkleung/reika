@@ -158,6 +158,34 @@ describe('extractToolCallsFromContent (pythonic)', () => {
   });
 });
 
+describe('extractToolCallsFromContent (hermes xml)', () => {
+  it('parses <function=name><parameter=key> calls with number coercion', () => {
+    const input =
+      '<tool_call>\n<function=read>\n<parameter=path>\npackages/ui/styles.css\n</parameter>\n' +
+      '<parameter=offset>\n0\n</parameter>\n<parameter=limit>\n30\n</parameter>\n</function>\n</tool_call>';
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('read');
+    expect(result.calls[0].args).toEqual({ path: 'packages/ui/styles.css', offset: 0, limit: 30 });
+    expect(result.cleanedContent).toBe('');
+  });
+
+  it('parses the dialect without a <tool_call> wrapper and strips it from prose', () => {
+    const input =
+      'Here is the plan.\n<function=list>\n<parameter=path>\nsrc\n</parameter>\n</function>';
+    const result = extractToolCallsFromContent(input);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].name).toBe('list');
+    expect(result.calls[0].args).toEqual({ path: 'src' });
+    expect(result.cleanedContent).toBe('Here is the plan.');
+  });
+
+  it('does not match plain prose mentioning function=', () => {
+    const result = extractToolCallsFromContent('the signature is function=read here');
+    expect(result.calls).toEqual([]);
+  });
+});
+
 describe('tryParseJson', () => {
   it('parses valid JSON without repair', () => {
     const { args, repaired } = tryParseJson('{"path":"foo"}');
