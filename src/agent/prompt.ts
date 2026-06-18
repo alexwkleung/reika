@@ -1,6 +1,6 @@
 import type { ContextBundle } from '../types.js';
 
-export type PromptMode = 'agent' | 'chat';
+export type PromptMode = 'agent' | 'chat' | 'plan';
 
 export function buildSystemPrompt(opts: {
   bundle: ContextBundle;
@@ -11,7 +11,36 @@ export function buildSystemPrompt(opts: {
   if (mode === 'chat') {
     return buildChatPrompt(opts.bundle);
   }
+  if (mode === 'plan') {
+    return buildPlanPrompt(opts.bundle);
+  }
   return buildAgentPrompt(opts);
+}
+
+// EXPERIMENT (plan mode): read-only exploration that must converge on a written plan. The
+// stopping condition is stated explicitly — weak models in a read-only mode have no natural
+// closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
+// a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
+function buildPlanPrompt(bundle: ContextBundle): string {
+  const parts: string[] = [
+    [
+      'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',
+      'You can ONLY explore the codebase — read, list, grep, glob. You CANNOT edit, write,',
+      'or run commands; those tools are not available and will fail.',
+      'Your job: explore just enough to understand the change, then STOP and write a plan.',
+      'Rules:',
+      '1. Use grep/read/list/glob to ground every claim in the actual code. Never guess.',
+      '2. Explore only what you need. The moment you can describe the steps, STOP exploring.',
+      '3. Do NOT re-read or re-grep something you already examined — act on what you have.',
+      '4. End by writing a numbered, file-specific plan of the steps to make the change.',
+      '   Each step names the file and what changes. Do not write any code — just the plan.',
+    ].join('\n'),
+    `Working directory: ${bundle.cwd}`,
+  ];
+  if (bundle.projectSummary) parts.push(`Project:\n${bundle.projectSummary}`);
+  if (bundle.repoMap) parts.push(`Repo map:\n${bundle.repoMap}`);
+  if (bundle.instructions) parts.push(`Project instructions:\n${bundle.instructions}`);
+  return parts.join('\n\n');
 }
 
 function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {

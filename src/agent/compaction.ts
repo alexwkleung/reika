@@ -65,23 +65,22 @@ export function compactHistory(
     if (chars > keepBudget) break;
     keepFrom = i;
   }
-  // The kept region must start at a user message (clean turn boundary).
-  while (keepFrom < history.length && history[keepFrom].role !== 'user') keepFrom++;
-  // Always keep at least the current (last) turn intact, even if it alone is over budget.
-  const lastUser = lastUserIndex(history);
-  if (lastUser >= 0 && keepFrom > lastUser) keepFrom = lastUser;
-  if (keepFrom <= 0) return 0;
+  // Snap keepFrom back to the start of its tool-call group so a kept tool result is never orphaned
+  // from the assistant tool_call it answers (a bare leading tool message is an API error). Walking
+  // *back* to a group boundary — rather than the old *forward* snap to a user message — is what lets
+  // compaction engage *within* a single long turn. Plan-mode exploration is one user message
+  // followed by dozens of tool rounds with no later user boundary; the old rule found none, clamped
+  // to "keep everything", and the request grew unbounded until the server rejected it.
+  while (keepFrom > 0 && history[keepFrom].role === 'tool') keepFrom--;
+  // Preserve the original request verbatim: if the conversation opens with the user's task, keep it
+  // at index 0 and recap only what follows — a long exploration must never compact away the very
+  // thing it's planning for.
+  const recapStart = history[0]?.role === 'user' ? 1 : 0;
+  if (keepFrom <= recapStart) return 0;
 
-  const recap = buildRecap(history.slice(0, keepFrom), avail, calib);
-  history.splice(0, keepFrom, { role: 'compaction', content: recap });
-  return keepFrom;
-}
-
-function lastUserIndex(history: Message[]): number {
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'user') return i;
-  }
-  return -1;
+  const recap = buildRecap(history.slice(recapStart, keepFrom), avail, calib);
+  history.splice(recapStart, keepFrom - recapStart, { role: 'compaction', content: recap });
+  return keepFrom - recapStart;
 }
 
 // Approximate the characters a message contributes to a request (at rest: tool payloads

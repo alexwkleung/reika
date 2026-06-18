@@ -28,7 +28,7 @@ export function Input({
   onSubmit: (value: string) => void;
   disabled: boolean;
   canSubmit: boolean;
-  mode: 'agent' | 'shell' | 'chat';
+  mode: 'agent' | 'shell' | 'chat' | 'plan';
   placeholder?: string;
   // True while the completion/approval overlay owns Up/Down (App navigates it);
   // we leave the arrows alone then instead of moving the cursor between lines.

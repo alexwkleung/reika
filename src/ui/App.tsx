@@ -11,7 +11,7 @@ import { Status } from './Status.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
-import { chatTools, defaultTools } from '../tools/index.js';
+import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
@@ -23,7 +23,7 @@ import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
-type Mode = 'agent' | 'shell' | 'chat';
+type Mode = 'agent' | 'shell' | 'chat' | 'plan';
 
 // Only the startup splash lives in the dedicated header <Static>. The compact
 // header (after /cd or /model) flows through the message stream instead — Ink
@@ -71,7 +71,11 @@ export function App() {
     resolve: (allow: boolean) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
-  const [mode, setMode] = useState<Mode>('agent');
+  // REIKA_PLAN_EXPERIMENT=1 starts the session in plan mode (A/B convenience); /plan and /agent
+  // toggle it at any time regardless.
+  const [mode, setMode] = useState<Mode>(
+    process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent',
+  );
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -420,13 +424,15 @@ export function App() {
       setMessages(prev => [...prev, echo, { role: 'system', content }]);
       return;
     }
-    if (name === 'shell' || name === 'agent' || name === 'chat') {
+    if (name === 'shell' || name === 'agent' || name === 'chat' || name === 'plan') {
       const banner =
         name === 'shell'
           ? 'Shell mode. Commands run directly in cwd. /agent to return.'
           : name === 'chat'
             ? 'Chat mode. Filesystem and shell tools disabled. Conversation isolated from agent. /agent to return.'
-            : 'Agent mode.';
+            : name === 'plan'
+              ? 'Plan mode — read-only exploration; will end with a written plan. /agent to execute it.'
+              : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
     }
@@ -673,11 +679,12 @@ export function App() {
         history: messages.slice(),
         bundle,
         config: resolveProfile(config, activeProfile),
-        tools: mode === 'chat' ? chatToolsList : tools,
+        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
+        tools: mode === 'chat' ? chatToolsList : mode === 'plan' ? planTools() : tools,
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove ? undefined : requestApproval,
-        promptMode: mode === 'chat' ? 'chat' : 'agent',
+        promptMode: mode === 'chat' ? 'chat' : mode === 'plan' ? 'plan' : 'agent',
         onMessage: msg => {
           if (msg.role === 'assistant') {
             streamingRef.current = '';
@@ -803,7 +810,7 @@ export function App() {
             contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
             cachedTokens={lastUsage?.cachedTokens}
             autoApprove={config?.autoApprove || sessionAutoApprove}
-            modeTag={mode === 'agent' ? undefined : mode}
+            modeTag={mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />
         </>

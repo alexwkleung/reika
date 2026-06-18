@@ -142,6 +142,13 @@ export async function callModel(opts: {
     if (fallback.calls.length > 0) {
       toolCalls.push(...fallback.calls);
       content = fallback.cleanedContent;
+    } else if (!content.trim()) {
+      // Thinking models sometimes emit the tool call inside the reasoning channel instead of
+      // content (seen with the Hermes `<function=…>` dialect). With nothing in content to commit,
+      // the turn would otherwise be treated as final and stall mid-exploration — so recover the
+      // call from reasoning. Guarded on empty content so a real final answer is never hijacked.
+      const fromReasoning = extractToolCallsFromContent(reasoningParts.join(''));
+      if (fromReasoning.calls.length > 0) toolCalls.push(...fromReasoning.calls);
     }
   }
 
@@ -218,6 +225,51 @@ export function parseXmlToolCalls(
   }
   if (calls.length === 0) return null;
   return { calls, cleanedContent: content.replace(TOOL_CALL_RE, '').trim() };
+}
+
+// `<function=name><parameter=key>value</parameter></function>` — Hermes/Qwen XML dialect,
+// optionally wrapped in `<tool_call>…</tool_call>`. Distinct from parseXmlToolCalls (which wants
+// a JSON payload): here the call name is an attribute and each arg is its own tag with a raw
+// (unquoted) text body. Seen leaking from 30–35B local models when they fall back from native
+// function-calling mid-turn; without this they'd be committed as junk content.
+const FN_BLOCK_RE = /<function=([A-Za-z_]\w*)>([\s\S]*?)<\/function>/g;
+const FN_PARAM_RE = /<parameter=([A-Za-z_]\w*)>([\s\S]*?)<\/parameter>/g;
+
+// Coerce a raw XML parameter body to its JSON-text form: bare numbers/booleans/null pass
+// through, everything else (paths, patterns) is treated as a string. Mirrors pyValueToJson.
+function xmlParamToJson(v: string): string {
+  const t = v.trim();
+  if (/^-?\d+$/.test(t) || /^-?\d*\.\d+$/.test(t)) return t;
+  if (t === 'true' || t === 'false' || t === 'null') return t;
+  return JSON.stringify(t);
+}
+
+export function parseHermesXmlToolCalls(
+  content: string,
+): { calls: ToolCall[]; cleanedContent: string } | null {
+  const calls: ToolCall[] = [];
+  let block: RegExpExecArray | null;
+  FN_BLOCK_RE.lastIndex = 0;
+  while ((block = FN_BLOCK_RE.exec(content)) !== null) {
+    const name = block[1];
+    const fields: string[] = [];
+    let param: RegExpExecArray | null;
+    FN_PARAM_RE.lastIndex = 0;
+    while ((param = FN_PARAM_RE.exec(block[2])) !== null) {
+      fields.push(`${JSON.stringify(param[1])}:${xmlParamToJson(param[2])}`);
+    }
+    calls.push({
+      id: `fn-${Math.random().toString(36).slice(2, 10)}`,
+      name,
+      args: tryParseJson(`{${fields.join(',')}}`).args,
+    });
+  }
+  if (calls.length === 0) return null;
+  const cleanedContent = content
+    .replace(FN_BLOCK_RE, '')
+    .replace(/<\/?tool_call>/g, '')
+    .trim();
+  return { calls, cleanedContent };
 }
 
 // Pythonic tool calls: `[fn(k=v, ...), ...]`, optionally fenced by sentinel tokens
@@ -334,7 +386,11 @@ function splitTopLevel(s: string): string[] {
   return parts.map(p => p.trim()).filter(p => p !== '');
 }
 
-const CONTENT_PARSERS: ContentToolCallParser[] = [parseXmlToolCalls, parsePythonicToolCalls];
+const CONTENT_PARSERS: ContentToolCallParser[] = [
+  parseXmlToolCalls,
+  parseHermesXmlToolCalls,
+  parsePythonicToolCalls,
+];
 
 // Try each text-based tool-call format in order; first non-empty result wins.
 // Native function-calling always takes precedence — this only runs as a fallback.
