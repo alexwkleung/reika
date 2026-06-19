@@ -193,7 +193,12 @@ function renderMessage(msg: Message): React.ReactElement | null {
         ) : null}
         {msg.durationMs !== undefined ? (
           <Box marginTop={1}>
-            <Text color={theme.muted}>{`Worked for ${formatDuration(msg.durationMs)}`}</Text>
+            {/* Filled square doubles as a "turn complete" marker (the universal
+                stop/done glyph) and an anchor of color on an otherwise inert line. */}
+            <Text>
+              <Text color={theme.accent}>{'■ '}</Text>
+              <Text color={theme.muted}>{`Worked for ${formatDuration(msg.durationMs)}`}</Text>
+            </Text>
           </Box>
         ) : null}
       </Box>
