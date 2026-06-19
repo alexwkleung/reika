@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { highlight } from 'cli-highlight';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
+import { theme } from './theme.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
 // in its source) and restores it in a final pass. See the listitem override.
@@ -22,7 +23,7 @@ marked.use(
         return code;
       }
     },
-    codespan: (code: string) => chalk.bold(code),
+    codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
     heading: (text: string) => chalk.bold(text),
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),

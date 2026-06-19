@@ -4,6 +4,7 @@
 
 export const theme = {
   accent: 'magentaBright',
+  inlineCode: '#d7a8d7', // soft magenta echoing the accent, readable in prose
   tool: '#c8c8c8',
   info: 'cyan',
   secondary: '#a0a0a0',
