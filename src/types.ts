@@ -24,7 +24,7 @@ export type Message =
       summary: string;
       payload?: string;
       payloadId?: string;
-      diff?: { text: string; path: string; added: number; removed: number };
+      diff?: { text: string; path: string; added: number; removed: number; startLine?: number };
       command?: { text: string; outputTail: string; outputTruncated: boolean };
       nested?: boolean;
     }
@@ -62,6 +62,9 @@ export type ApprovalRequest = {
   tool: string;
   subject: string;
   preview: string;
+  // 1-based file line number of the first line in `preview`, when it's a diff.
+  // Lets the diff view render an editor-style line-number gutter.
+  startLine?: number;
   warnings?: string[];
 };
 

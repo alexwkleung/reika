@@ -26,6 +26,15 @@ export function buildEditDiff(
   return out.join('\n');
 }
 
+// 1-based file line number of the first line the edit diff renders. The diff
+// leads with up to CONTEXT_LINES of `beforeText`'s trailing lines, so the first
+// shown line sits that many lines above where the match begins.
+export function editDiffStartLine(beforeText: string): number {
+  const matchStartLine = beforeText === '' ? 1 : beforeText.split('\n').length;
+  const beforeCount = lastLines(beforeText, CONTEXT_LINES).length;
+  return Math.max(1, matchStartLine - beforeCount);
+}
+
 export function buildWriteDiff(content: string): string {
   const lines = stripTrailingNewline(content).split('\n');
   return lines.map(l => `+ ${l}`).join('\n');

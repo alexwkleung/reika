@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
-import { buildEditDiff } from './_diff.js';
+import { buildEditDiff, editDiffStartLine } from './_diff.js';
 
 export const editTool: Tool = {
   name: 'edit',
@@ -78,15 +78,22 @@ export const editTool: Tool = {
     }
 
     const matchedOld = text.slice(start, start + matchLen);
+    const beforeText = text.slice(0, start);
     const diffText = buildEditDiff(
       matchedOld,
       effectiveNew,
-      text.slice(0, start),
+      beforeText,
       text.slice(start + matchLen),
     );
+    const startLine = editDiffStartLine(beforeText);
 
     if (ctx.requestApproval) {
-      const ok = await ctx.requestApproval({ tool: 'edit', subject: rel, preview: diffText });
+      const ok = await ctx.requestApproval({
+        tool: 'edit',
+        subject: rel,
+        preview: diffText,
+        startLine,
+      });
       if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }
 
@@ -97,7 +104,7 @@ export const editTool: Tool = {
     const removed = countPrefixed(diffText, '- ');
     return {
       summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
-      diff: { text: diffText, path: rel, added, removed },
+      diff: { text: diffText, path: rel, added, removed, startLine },
     };
   },
 };

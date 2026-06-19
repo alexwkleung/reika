@@ -208,7 +208,12 @@ function renderMessage(msg: Message): React.ReactElement | null {
         </Text>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
-            <DiffView diff={msg.diff.text} path={msg.diff.path} maxWidth={diffViewWidth()} />
+            <DiffView
+              diff={msg.diff.text}
+              path={msg.diff.path}
+              maxWidth={diffViewWidth()}
+              startLine={msg.diff.startLine}
+            />
           </Box>
         ) : null}
         {msg.command ? (

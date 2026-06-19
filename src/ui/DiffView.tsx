@@ -1,29 +1,64 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { highlight } from 'cli-highlight';
 import { diffWordsWithSpace } from 'diff';
 import { theme } from './theme.js';
+import { highlightCode } from './highlight.js';
 
 export function DiffView({
   diff,
   path,
   maxWidth,
+  startLine,
 }: {
   diff: string;
   path: string;
   // Available cols for diff rendering. Used to pad changed-line backgrounds to
   // full width without overflowing. Caller knows its own container offset.
   maxWidth: number;
+  // 1-based file line number of the first line in the diff. When provided, a
+  // line-number gutter is rendered (old number for removed lines, new number for
+  // added/context). Omit to render without a gutter.
+  startLine?: number;
 }) {
   const lang = detectLanguage(path);
   const blocks = parseDiffBlocks(diff.split('\n'));
+  const rows = assignLineNumbers(blocks, startLine);
+  const showGutter = startLine !== undefined;
+  // Width of the number column, sized to the largest line number in view.
+  const gutterWidth = showGutter ? String(rows.maxLineNo).length : 0;
+  // Gutter eats columns the content background must not pad over: digits + one space.
+  const contentWidth = showGutter ? Math.max(0, maxWidth - gutterWidth - 1) : maxWidth;
+
   return (
     <>
-      {blocks.flatMap((block, bi) => {
-        if (block.kind === 'context') {
-          return [<ContextLine key={`c${bi}`} line={block.line} />];
+      {rows.lines.map((row, i) => {
+        const gutter = showGutter ? String(row.lineNo).padStart(gutterWidth) : '';
+        if (row.kind === 'context') {
+          return <ContextLine key={i} line={row.text} gutter={gutter} language={lang} />;
         }
-        return renderChangeBlock(block.removed, block.added, lang, bi, maxWidth);
+        if (row.kind === 'paired') {
+          return (
+            <PairedLine
+              key={i}
+              line={row.text}
+              other={row.other}
+              side={row.side}
+              language={lang}
+              maxWidth={contentWidth}
+              gutter={gutter}
+            />
+          );
+        }
+        return (
+          <PlainChangeLine
+            key={i}
+            line={row.text}
+            side={row.side}
+            language={lang}
+            maxWidth={contentWidth}
+            gutter={gutter}
+          />
+        );
       })}
     </>
   );
@@ -59,74 +94,85 @@ export function parseDiffBlocks(lines: string[]): DiffBlock[] {
   return blocks;
 }
 
-function renderChangeBlock(
-  removed: string[],
-  added: string[],
-  language: string,
-  bi: number,
-  maxWidth: number,
-): React.ReactElement[] {
-  const out: React.ReactElement[] = [];
-  const pairedCount = Math.min(removed.length, added.length);
-  // Paired lines get word-level intra-line highlighting.
-  for (let i = 0; i < pairedCount; i++) {
-    out.push(
-      <PairedLine
-        key={`r${bi}-${i}`}
-        line={removed[i]}
-        other={added[i]}
-        side="removed"
-        language={language}
-        maxWidth={maxWidth}
-      />,
-    );
+type RenderRow =
+  | { kind: 'context'; text: string; lineNo: number }
+  | { kind: 'plain'; text: string; side: 'removed' | 'added'; lineNo: number }
+  | { kind: 'paired'; text: string; other: string; side: 'removed' | 'added'; lineNo: number };
+
+// Flatten blocks into rows in display order, assigning each a file line number.
+// Removed lines advance the old-file counter, added lines the new-file counter,
+// context lines both — so the gutter reads like an editor would number the file.
+// Exported for unit tests.
+export function assignLineNumbers(
+  blocks: DiffBlock[],
+  startLine: number | undefined,
+): { lines: RenderRow[]; maxLineNo: number } {
+  const lines: RenderRow[] = [];
+  let oldNo = startLine ?? 1;
+  let newNo = startLine ?? 1;
+  let maxLineNo = 0;
+  const note = (n: number) => {
+    if (n > maxLineNo) maxLineNo = n;
+  };
+
+  for (const block of blocks) {
+    if (block.kind === 'context') {
+      const text = block.line.startsWith('  ') ? block.line.slice(2) : block.line;
+      lines.push({ kind: 'context', text, lineNo: newNo });
+      note(newNo);
+      oldNo++;
+      newNo++;
+      continue;
+    }
+    const pairedCount = Math.min(block.removed.length, block.added.length);
+    // Removed lines (paired then leftover) keyed off the old-file counter.
+    for (let i = 0; i < block.removed.length; i++) {
+      const lineNo = oldNo + i;
+      note(lineNo);
+      if (i < pairedCount) {
+        lines.push({ kind: 'paired', text: block.removed[i], other: block.added[i], side: 'removed', lineNo });
+      } else {
+        lines.push({ kind: 'plain', text: block.removed[i], side: 'removed', lineNo });
+      }
+    }
+    // Added lines keyed off the new-file counter.
+    for (let i = 0; i < block.added.length; i++) {
+      const lineNo = newNo + i;
+      note(lineNo);
+      if (i < pairedCount) {
+        lines.push({ kind: 'paired', text: block.added[i], other: block.removed[i], side: 'added', lineNo });
+      } else {
+        lines.push({ kind: 'plain', text: block.added[i], side: 'added', lineNo });
+      }
+    }
+    oldNo += block.removed.length;
+    newNo += block.added.length;
   }
-  // Leftover removed lines (no matching added): plain full-line red.
-  for (let i = pairedCount; i < removed.length; i++) {
-    out.push(
-      <PlainChangeLine
-        key={`r${bi}-${i}`}
-        line={removed[i]}
-        side="removed"
-        language={language}
-        maxWidth={maxWidth}
-      />,
-    );
-  }
-  // Paired added lines.
-  for (let i = 0; i < pairedCount; i++) {
-    out.push(
-      <PairedLine
-        key={`a${bi}-${i}`}
-        line={added[i]}
-        other={removed[i]}
-        side="added"
-        language={language}
-        maxWidth={maxWidth}
-      />,
-    );
-  }
-  // Leftover added lines (write tool or net new lines).
-  for (let i = pairedCount; i < added.length; i++) {
-    out.push(
-      <PlainChangeLine
-        key={`a${bi}-${i}`}
-        line={added[i]}
-        side="added"
-        language={language}
-        maxWidth={maxWidth}
-      />,
-    );
-  }
-  return out;
+  return { lines, maxLineNo };
 }
 
-function ContextLine({ line }: { line: string }) {
-  const code = line.startsWith('  ') ? line.slice(2) : line;
+// Muted dim color for the line-number gutter so it recedes behind the code.
+function Gutter({ gutter }: { gutter: string }) {
+  if (!gutter) return null;
+  return <Text color={theme.muted}>{`${gutter} `}</Text>;
+}
+
+// Context lines carry the same syntax highlighting as changed lines so the diff
+// reads like an editor view — only the `+`/`-` lines get a tinted background.
+function ContextLine({
+  line,
+  gutter,
+  language,
+}: {
+  line: string;
+  gutter: string;
+  language: string;
+}) {
   return (
     <Box>
+      <Gutter gutter={gutter} />
       <Text>{'  '}</Text>
-      <Text color={theme.muted}>{code}</Text>
+      <Text>{highlightCode(line, language)}</Text>
     </Box>
   );
 }
@@ -146,20 +192,25 @@ function PlainChangeLine({
   side,
   language,
   maxWidth,
+  gutter,
 }: {
   line: string;
   side: 'removed' | 'added';
   language: string;
   maxWidth: number;
+  gutter: string;
 }) {
   const bg = side === 'added' ? ADDED_BG : REMOVED_BG;
   const prefix = side === 'added' ? '+ ' : '- ';
   return (
-    <Text backgroundColor={bg}>
-      {prefix}
-      {safeHighlight(line, language)}
-      {padToWidth(prefix.length + line.length, maxWidth)}
-    </Text>
+    <Box>
+      <Gutter gutter={gutter} />
+      <Text backgroundColor={bg}>
+        {prefix}
+        {highlightCode(line, language)}
+        {padToWidth(prefix.length + line.length, maxWidth)}
+      </Text>
+    </Box>
   );
 }
 
@@ -182,12 +233,14 @@ function PairedLine({
   side,
   language,
   maxWidth,
+  gutter,
 }: {
   line: string;
   other: string;
   side: 'removed' | 'added';
   language: string;
   maxWidth: number;
+  gutter: string;
 }) {
   const oldText = side === 'removed' ? line : other;
   const newText = side === 'removed' ? other : line;
@@ -196,7 +249,15 @@ function PairedLine({
   const parts = coalesceParts(diffWordsWithSpace(oldText, newText));
 
   if (!isWorthIntraLine(parts, oldText, newText)) {
-    return <PlainChangeLine line={line} side={side} language={language} maxWidth={maxWidth} />;
+    return (
+      <PlainChangeLine
+        line={line}
+        side={side}
+        language={language}
+        maxWidth={maxWidth}
+        gutter={gutter}
+      />
+    );
   }
 
   const bg = side === 'added' ? ADDED_BG : REMOVED_BG;
@@ -204,28 +265,31 @@ function PairedLine({
   const prefix = side === 'added' ? '+ ' : '- ';
 
   return (
-    <Text backgroundColor={bg}>
-      {prefix}
-      <Text>
-        {parts.map((p, i) => {
-          // Skip segments that belong only to the other side.
-          if (side === 'removed' && p.added) return null;
-          if (side === 'added' && p.removed) return null;
-          const isChange = side === 'removed' ? p.removed : p.added;
-          if (isChange) {
-            // Brighter background + bold for the changed portion — stands out
-            // against the line's base background.
-            return (
-              <Text key={i} bold backgroundColor={highlightBg}>
-                {p.value}
-              </Text>
-            );
-          }
-          return <Text key={i}>{safeHighlight(p.value, language)}</Text>;
-        })}
+    <Box>
+      <Gutter gutter={gutter} />
+      <Text backgroundColor={bg}>
+        {prefix}
+        <Text>
+          {parts.map((p, i) => {
+            // Skip segments that belong only to the other side.
+            if (side === 'removed' && p.added) return null;
+            if (side === 'added' && p.removed) return null;
+            const isChange = side === 'removed' ? p.removed : p.added;
+            if (isChange) {
+              // Brighter background + bold for the changed portion — stands out
+              // against the line's base background.
+              return (
+                <Text key={i} bold backgroundColor={highlightBg}>
+                  {p.value}
+                </Text>
+              );
+            }
+            return <Text key={i}>{highlightCode(p.value, language)}</Text>;
+          })}
+        </Text>
+        {padToWidth(prefix.length + line.length, maxWidth)}
       </Text>
-      {padToWidth(prefix.length + line.length, maxWidth)}
-    </Text>
+    </Box>
   );
 }
 
@@ -258,15 +322,6 @@ function coalesceParts(
     }
   }
   return out;
-}
-
-function safeHighlight(code: string, language: string): string {
-  if (!code.trim()) return code;
-  try {
-    return highlight(code, { language, ignoreIllegals: true });
-  } catch {
-    return code;
-  }
 }
 
 function detectLanguage(path: string): string {

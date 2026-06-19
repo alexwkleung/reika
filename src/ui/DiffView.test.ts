@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDiffBlocks, diffStats } from './DiffView.js';
+import { parseDiffBlocks, diffStats, assignLineNumbers } from './DiffView.js';
 
 describe('parseDiffBlocks', () => {
   it('returns context-only blocks when no changes', () => {
@@ -69,6 +69,44 @@ describe('parseDiffBlocks', () => {
     expect(blocks[0].kind).toBe('change');
     expect(blocks[1].kind).toBe('context');
     expect(blocks[2].kind).toBe('change');
+  });
+});
+
+describe('assignLineNumbers', () => {
+  it('numbers context and changes like an editor numbers the file', () => {
+    const blocks = parseDiffBlocks([
+      '  before',
+      '- old line',
+      '+ new line',
+      '  after',
+    ]);
+    // First diff line is file line 244.
+    const { lines, maxLineNo } = assignLineNumbers(blocks, 244);
+    expect(lines.map(l => [l.kind, l.lineNo])).toEqual([
+      ['context', 244],
+      ['paired', 245], // removed — old-file line 245
+      ['paired', 245], // added — new-file line 245
+      ['context', 246],
+    ]);
+    expect(maxLineNo).toBe(246);
+  });
+
+  it('advances old and new counters independently for asymmetric blocks', () => {
+    const blocks = parseDiffBlocks(['  a', '- b', '- c', '+ x', '  d']);
+    const { lines } = assignLineNumbers(blocks, 10);
+    expect(lines.map(l => [l.kind, 'side' in l ? l.side : null, l.lineNo])).toEqual([
+      ['context', null, 10],
+      ['paired', 'removed', 11], // old line 11, paired with the lone addition
+      ['plain', 'removed', 12], // old line 12, no counterpart
+      ['paired', 'added', 11], // new line 11
+      ['context', null, 12], // new line 12 (old line 13)
+    ]);
+  });
+
+  it('defaults to line 1 when no startLine is given', () => {
+    const blocks = parseDiffBlocks(['+ a', '+ b']);
+    const { lines } = assignLineNumbers(blocks, undefined);
+    expect(lines.map(l => l.lineNo)).toEqual([1, 2]);
   });
 });
 

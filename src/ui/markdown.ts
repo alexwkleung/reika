@@ -1,8 +1,8 @@
 import chalk from 'chalk';
-import { highlight } from 'cli-highlight';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { theme } from './theme.js';
+import { codeTheme } from './highlight.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
 // in its source) and restores it in a final pass. See the listitem override.
@@ -12,18 +12,9 @@ const COLON_SENTINEL = /\*#COLON\|\*/g;
 // Passing chalk methods directly causes the extra args to be string-joined onto
 // the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
 marked.use(
-  markedTerminal({
-    code: (code: string, lang?: string) => {
-      try {
-        return highlight(code, {
-          language: lang || 'plaintext',
-          ignoreIllegals: true,
-        });
-      } catch {
-        return code;
-      }
-    },
-    codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
+  markedTerminal(
+    {
+      codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
     heading: (text: string) => chalk.bold(text),
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),
@@ -75,10 +66,23 @@ marked.use(
     reflowText: true,
     showSectionPrefix: false,
     tab: 2,
+    // cli-table3 defaults its header cells to red, which is hard to read and
+    // reads like an error. Override to a calmer cyan (no bold — bold renders as
+    // harsh bright-cyan that clashes with the magenta inline code); grey border.
+    tableOptions: { style: { head: ['cyan'], border: ['grey'] } },
     // Wrap at terminal width minus the App's paddingX gutter on both sides.
     // marked-terminal then breaks on word boundaries instead of Ink character-wrapping.
-    width: Math.max(40, (process.stdout.columns || 80) - 2),
-  }) as Parameters<typeof marked.use>[0],
+      width: Math.max(40, (process.stdout.columns || 80) - 2),
+      // marked-terminal does its own fenced-code highlighting via cli-highlight and
+      // ignores any `code` renderer override; the theme must be supplied through
+      // this second `highlightOptions` argument instead.
+    },
+    // @types/marked-terminal types this arg for the old `cardinal` highlighter,
+    // but at runtime marked-terminal forwards it straight to cli-highlight's
+    // `highlight()`, which is what actually renders fenced code. Cast past the
+    // stale types.
+    { theme: codeTheme, ignoreIllegals: true } as unknown as Parameters<typeof markedTerminal>[1],
+  ) as Parameters<typeof marked.use>[0],
 );
 
 export function renderMarkdown(content: string): string {

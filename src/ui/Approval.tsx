@@ -1,9 +1,9 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { highlight } from 'cli-highlight';
 import type { ApprovalRequest } from '../types.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
+import { highlightCode } from './highlight.js';
 
 export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
 export type ApprovalChoice = 0 | 1 | 2;
@@ -35,6 +35,7 @@ export function Approval({
             diff={request.preview}
             path={request.subject}
             maxWidth={Math.max(20, (process.stdout.columns || 80) - 6)}
+            startLine={request.startLine}
           />
         )}
       </Box>
@@ -77,18 +78,9 @@ function CommandPreview({ command }: { command: string }) {
       {lines.map((line, i) => (
         <Box key={i}>
           <Text color="green">{i === 0 ? '$ ' : '  '}</Text>
-          <Text>{safeHighlight(line, 'bash')}</Text>
+          <Text>{highlightCode(line, 'bash')}</Text>
         </Box>
       ))}
     </>
   );
-}
-
-function safeHighlight(code: string, language: string): string {
-  if (!code.trim()) return code;
-  try {
-    return highlight(code, { language, ignoreIllegals: true });
-  } catch {
-    return code;
-  }
 }

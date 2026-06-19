@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildEditDiff, buildWriteDiff } from './_diff.js';
+import { buildEditDiff, buildWriteDiff, editDiffStartLine } from './_diff.js';
 
 describe('buildEditDiff', () => {
   it('shows actual changes with surrounding context', () => {
@@ -56,6 +56,24 @@ describe('buildEditDiff', () => {
     expect(diff).toContain('  a');
     expect(diff).toContain('+ b');
     expect(diff).toContain('  c');
+  });
+});
+
+describe('editDiffStartLine', () => {
+  it('is 1 when the edit is at the top of the file', () => {
+    expect(editDiffStartLine('')).toBe(1);
+  });
+
+  it('accounts for the context lines shown above the match', () => {
+    // 246 lines precede the match (trailing newline => match begins on line 247).
+    // The diff shows 3 context lines above it, so it starts at line 244.
+    const before = Array.from({ length: 246 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+    expect(editDiffStartLine(before)).toBe(244);
+  });
+
+  it('clamps context when fewer than 3 lines precede the match', () => {
+    // Match begins on line 2; only 1 context line can be shown above it.
+    expect(editDiffStartLine('line 1\n')).toBe(1);
   });
 });
 

@@ -29,7 +29,12 @@ export const writeTool: Tool = {
     const diffText = buildWriteDiff(content);
 
     if (ctx.requestApproval) {
-      const ok = await ctx.requestApproval({ tool: 'write', subject: rel, preview: diffText });
+      const ok = await ctx.requestApproval({
+        tool: 'write',
+        subject: rel,
+        preview: diffText,
+        startLine: 1,
+      });
       if (!ok) return { summary: `Write declined by user for ${rel}` };
     }
 
@@ -38,7 +43,7 @@ export const writeTool: Tool = {
     const added = diffText.split('\n').filter(l => l.startsWith('+ ')).length;
     return {
       summary: `Wrote ${rel} (+${added})`,
-      diff: { text: diffText, path: rel, added, removed: 0 },
+      diff: { text: diffText, path: rel, added, removed: 0, startLine: 1 },
     };
   },
 };
