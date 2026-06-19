@@ -9,6 +9,7 @@ export const theme = {
   info: 'cyan',
   secondary: '#a0a0a0',
   muted: '#808080',
+  reasoning: '#6495ed', // cornflower blue: thinking-block bar, dimmer than the accent
   warning: 'yellow',
   error: 'red',
   success: 'green',

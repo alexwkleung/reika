@@ -273,9 +273,10 @@ function renderMessage(msg: Message): React.ReactElement | null {
   return null;
 }
 
-// Reasoning/"Thinking" preview: a muted bar down the left with a small label on
-// top. Shares the user bubble's left-bar visual language but stays understated —
-// muted bar, no background — so it reads as distinct from a user message.
+// Reasoning/"Thinking" preview: a cornflower-blue bar down the left with a small
+// label on top. Shares the user bubble's left-bar visual language but stays
+// understated — colored bar, muted text, no background, and dimmer than the
+// user bar's accent — so it reads as a subordinate aside, not a user message.
 function ReasoningBlock({ text, maxLines }: { text: string; maxLines?: number }) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
@@ -295,14 +296,14 @@ function ReasoningBlock({ text, maxLines }: { text: string; maxLines?: number })
   return (
     <Box flexDirection="column">
       <Box>
-        <Text color={theme.muted}>{'▎ '}</Text>
+        <Text color={theme.reasoning}>{'▎ '}</Text>
         <Text bold color={theme.muted}>
           Thinking
         </Text>
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text color={theme.muted}>{'▎ '}</Text>
+          <Text color={theme.reasoning}>{'▎ '}</Text>
           <Text color={theme.muted}>{line}</Text>
         </Box>
       ))}
