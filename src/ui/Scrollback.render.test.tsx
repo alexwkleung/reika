@@ -10,9 +10,28 @@ import type { Message } from '../types.js';
 // colored runs, which wraps as one string and keeps every character.
 describe('Scrollback tool-call label', () => {
   it('keeps the full tool name when long args force the line to wrap', () => {
-    const longCss =
-      '.kana-model-select {\n  flex: 1;\n  min-width: 0;\n  max-width: 200px;\n' +
-      '  width: 200px;\n  appearance: none;\n  background: var(--surface);\n}';
+    // Use a tool whose args still render in full (bash) so the line actually
+    // wraps — edit/write now hide their bulky body args, so they no longer do.
+    const longCmd = `echo ${'lorem ipsum dolor sit amet '.repeat(8).trim()}`;
+    const messages: Message[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't1', name: 'bash', args: { command: longCmd } }],
+      },
+    ];
+
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('• Bash(');
+    expect(frame).not.toMatch(/• Bas\(/);
+  });
+
+  it('hides an edit’s old_string/new_string but keeps the path', () => {
+    const longCss = '.kana-model-select {\n  flex: 1;\n  min-width: 0;\n}';
     const messages: Message[] = [
       {
         role: 'assistant',
@@ -32,8 +51,9 @@ describe('Scrollback tool-call label', () => {
     );
     const frame = lastFrame() ?? '';
 
-    expect(frame).toContain('• Edit(');
-    expect(frame).not.toMatch(/• Edi\(/);
+    expect(frame).toContain('• Edit(path="packages/ui/src/styles.css")');
+    expect(frame).not.toContain('old_string');
+    expect(frame).not.toContain('new_string');
   });
 
   it('keeps the "↳ " prefix intact when a long tool summary wraps', () => {

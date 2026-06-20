@@ -181,7 +181,7 @@ function renderMessage(msg: Message): React.ReactElement | null {
               // between adjacent siblings, rendering "• Edit(…)" as "• Edi(…)".
               <Text key={tc.id}>
                 <Text color={theme.tool}>{`• ${capitalize(tc.name)}`}</Text>
-                <Text color={theme.secondary}>{`(${formatArgs(tc.args)})`}</Text>
+                <Text color={theme.secondary}>{`(${formatArgs(tc.name, tc.args)})`}</Text>
               </Text>
             ))}
           </Box>
@@ -374,8 +374,19 @@ function wrapText(text: string, width: number): string[] {
   return out;
 }
 
-function formatArgs(args: Record<string, unknown>): string {
+// Args whose values are already shown in full elsewhere (the diff view) and only
+// bloat the header — drop them so e.g. an edit reads "• Edit(path=…)" instead of
+// "• Edit(path=…, old_string=…, new_string=…)". Path stays; it's the one bit the
+// diff header doesn't make obvious at a glance.
+const HIDDEN_ARGS: Record<string, ReadonlySet<string>> = {
+  edit: new Set(['old_string', 'new_string']),
+  write: new Set(['content']),
+};
+
+function formatArgs(name: string, args: Record<string, unknown>): string {
+  const hidden = HIDDEN_ARGS[name];
   return Object.entries(args)
+    .filter(([k]) => !hidden?.has(k))
     .map(([k, v]) => `${k}=${truncate(redactSecrets(scrubPaths(JSON.stringify(v))), 120)}`)
     .join(', ');
 }
