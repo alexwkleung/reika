@@ -8,11 +8,14 @@ import { codeTheme } from './highlight.js';
 // in its source) and restores it in a final pass. See the listitem override.
 const COLON_SENTINEL = /\*#COLON\|\*/g;
 
+// Left indent marked-terminal applies to block elements (code, blockquotes,
+// lists). We keep it for those but strip it back off code blocks below.
+const TAB_WIDTH = 2;
+
 // marked-terminal calls renderer callbacks with multiple args (text, ordered, etc.).
 // Passing chalk methods directly causes the extra args to be string-joined onto
 // the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
-marked.use(
-  markedTerminal(
+const terminalExtension = markedTerminal(
     {
       codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
     heading: (text: string) => chalk.bold(text),
@@ -65,7 +68,7 @@ marked.use(
     href: (href: string) => chalk.dim(href),
     reflowText: true,
     showSectionPrefix: false,
-    tab: 2,
+    tab: TAB_WIDTH,
     // cli-table3 defaults its header cells to red, which is hard to read and
     // reads like an error. Override to a calmer cyan (no bold — bold renders as
     // harsh bright-cyan that clashes with the magenta inline code); grey border.
@@ -82,8 +85,19 @@ marked.use(
     // `highlight()`, which is what actually renders fenced code. Cast past the
     // stale types.
     { theme: codeTheme, ignoreIllegals: true } as unknown as Parameters<typeof markedTerminal>[1],
-  ) as Parameters<typeof marked.use>[0],
-);
+  ) as unknown as { renderer: Record<string, (...args: unknown[]) => string>; useNewRenderer: boolean };
+
+// marked-terminal hardcodes a left indent (`this.tab`) on fenced code blocks
+// inside its internal `code` renderer, which the options object can't reach.
+// Wrap the produced renderer to strip that injected indent back off each line so
+// code blocks align flush with paragraphs instead of sitting `TAB_WIDTH` spaces in.
+const renderCode = terminalExtension.renderer.code;
+const stripTabIndent = new RegExp(`^ {${TAB_WIDTH}}`, 'gm');
+terminalExtension.renderer.code = function (this: unknown, ...args: unknown[]): string {
+  return renderCode.apply(this, args).replace(stripTabIndent, '');
+};
+
+marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
 
 export function renderMarkdown(content: string): string {
   try {
