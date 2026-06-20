@@ -266,6 +266,10 @@ export async function runTurn(opts: {
   // Track URLs successfully fetched this turn. Stamped onto the final assistant
   // message as `sources` for deterministic citation rendering (no model recall).
   const fetchedUrls = new Set<string>();
+  // Dependencies whose installed type surface has been injected this turn, so each imported
+  // dep is grounded at most once per turn (tools/_deps.ts). Per-turn like fetchedUrls: a
+  // fresh turn may have lost the surface to compaction, so re-grounding then is fine.
+  const resolvedDeps = new Set<string>();
   // Notify the user at most once per turn that compaction kicked in, even if it runs
   // again across the turn's tool rounds.
   let notifiedCompaction = false;
@@ -513,6 +517,7 @@ export async function runTurn(opts: {
             ignore: opts.bundle.ignore,
             webBudget,
             fetchedUrls,
+            resolvedDeps,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),

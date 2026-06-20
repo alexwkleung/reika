@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
+import { surfaceImportedDeps } from './_deps.js';
 
 export const editTool: Tool = {
   name: 'edit',
@@ -102,9 +103,13 @@ export const editTool: Tool = {
     const line = text.slice(0, start).split('\n').length;
     const added = countPrefixed(diffText, '+ ');
     const removed = countPrefixed(diffText, '- ');
+    // Scan only the replacement text: this fires when the model introduces an import,
+    // grounding it on the dependency's real API rather than an assumed shape.
+    const payload = await surfaceImportedDeps(ctx, effectiveNew);
     return {
       summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
       diff: { text: diffText, path: rel, added, removed, startLine },
+      ...(payload ? { payload } : {}),
     };
   },
 };

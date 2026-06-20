@@ -83,6 +83,10 @@ export type ToolContext = {
   // Tools push successfully-fetched URLs here; the loop stamps them onto the
   // final assistant message as `sources`, rendered deterministically in scrollback.
   fetchedUrls?: Set<string>;
+  // Dependency package names whose installed type surface has already been injected into a
+  // tool result this turn (see tools/_deps.ts). edit/write consult and extend it so each
+  // imported dep is grounded at most once per turn — bounded bloat, no re-injection.
+  resolvedDeps?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
