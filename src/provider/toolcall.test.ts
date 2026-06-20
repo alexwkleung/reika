@@ -251,6 +251,17 @@ describe('messagesToOpenAI', () => {
     expect(roles).toEqual(['system', 'user', 'assistant']);
   });
 
+  it('skips meta user messages (slash-command echoes are UI-only)', () => {
+    const history: Message[] = [
+      { role: 'user', content: '/model', meta: true },
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: 'real answer' },
+    ];
+    const out = messagesToOpenAI('sys', history);
+    expect(out.map(m => m.role)).toEqual(['system', 'user', 'assistant']);
+    expect(out.find(m => m.role === 'user')?.content).toBe('real question');
+  });
+
   it('merges compaction recaps into the leading system message, not as separate turns', () => {
     const history: Message[] = [
       { role: 'compaction', content: 'RECAP OF EARLIER TURNS' },

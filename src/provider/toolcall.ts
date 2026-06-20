@@ -56,6 +56,9 @@ export function messagesToOpenAI(
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (msg.role === 'user') {
+      // Slash-command echoes (meta) belong to the UI scrollback only — the model never
+      // sees a bare `/model` or `/stats` turn (its system response was already dropped).
+      if (msg.meta) continue;
       out.push({ role: 'user', content: msg.content });
     } else if (msg.role === 'assistant') {
       const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;

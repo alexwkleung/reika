@@ -8,7 +8,10 @@ export type ToolCall = {
 };
 
 export type Message =
-  | { role: 'user'; content: string; display?: string; nested?: boolean }
+  // `meta` marks a UI-only echo of a slash command (e.g. `/model`, `/stats`): shown in the
+  // scrollback as the user's input but never sent to the model — its system response is
+  // already dropped, so a bare command turn would just be redundant context.
+  | { role: 'user'; content: string; display?: string; nested?: boolean; meta?: boolean }
   | {
       role: 'assistant';
       content: string;

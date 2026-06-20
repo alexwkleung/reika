@@ -393,7 +393,8 @@ export function App() {
     const space = rest.indexOf(' ');
     const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
     const args = space === -1 ? '' : rest.slice(space + 1);
-    const echo: Message = { role: 'user', content: raw };
+    // `meta` keeps this command echo in the scrollback but out of the model-facing history.
+    const echo: Message = { role: 'user', content: raw, meta: true };
 
     if (name === 'clear' || name === 'new') {
       setMessages([]);
@@ -608,7 +609,9 @@ export function App() {
 
   const runShell = async (command: string): Promise<void> => {
     if (!bundle) return;
-    const echo: Message = { role: 'user', content: command };
+    // Shell mode is "raw bash, no model" — the command echo stays in the scrollback but is
+    // kept out of the model history (its output, the `shell` message below, is UI-only too).
+    const echo: Message = { role: 'user', content: command, meta: true };
     setMessages(prev => [...prev, echo]);
     setStatus('busy');
     toolRef.current = '';
