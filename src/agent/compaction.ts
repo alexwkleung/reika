@@ -74,8 +74,9 @@ export function compactHistory(
   while (keepFrom > 0 && history[keepFrom].role === 'tool') keepFrom--;
   // Preserve the original request verbatim: if the conversation opens with the user's task, keep it
   // at index 0 and recap only what follows — a long exploration must never compact away the very
-  // thing it's planning for.
-  const recapStart = history[0]?.role === 'user' ? 1 : 0;
+  // thing it's planning for. A leading slash-command echo (meta) is not the task, so don't pin it.
+  const first = history[0];
+  const recapStart = first && first.role === 'user' && !first.meta ? 1 : 0;
   if (keepFrom <= recapStart) return 0;
 
   const recap = buildRecap(history.slice(recapStart, keepFrom), avail, calib);
@@ -126,7 +127,8 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   for (const m of span) {
     if (m.role === 'compaction') {
       priorRecaps.push(m.content);
-    } else if (m.role === 'user') {
+    } else if (m.role === 'user' && !m.meta) {
+      // Skip slash-command echoes — they're UI-only and must not re-enter context via the recap.
       flush();
       pending = `- User: ${trunc(m.display ?? m.content)}`;
     } else if (m.role === 'assistant') {

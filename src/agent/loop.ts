@@ -157,7 +157,10 @@ function gatherPlanFindings(history: Message[], charBudget: number): string {
 // React/CSS priors with made-up paths. `budgetChars` bounds the whole turn so a large task that
 // read more than the window holds degrades to partial grounding rather than overflowing (400).
 function buildPlanTransformInput(history: Message[], budgetChars: number): string {
-  const task = (history.find(m => m.role === 'user')?.content ?? '').slice(0, 2000);
+  const task = (
+    history.find((m): m is Message & { role: 'user' } => m.role === 'user' && !m.meta)?.content ??
+    ''
+  ).slice(0, 2000);
   const analysisRaw = gatherPlanAnalysis(history);
   // Keep the most recent analysis (where the converged plan lives) within a fixed cap.
   const analysis = analysisRaw.length > 4000 ? `…${analysisRaw.slice(-4000)}` : analysisRaw;

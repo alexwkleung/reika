@@ -154,4 +154,36 @@ describe('compactHistory', () => {
       }
     }
   });
+
+  it('never folds a slash-command echo (meta) into the recap', () => {
+    const history: Message[] = [
+      { role: 'user', content: '/model', meta: true },
+      ...turn(1, 'a.ts'),
+      { role: 'user', content: '/stats', meta: true },
+      ...turn(2, 'b.ts'),
+      ...turn(3, 'c.ts'),
+      ...turn(4, 'd.ts'),
+    ];
+    compactHistory(history, W, 1, 0);
+    const recap = history.find(m => m.role === 'compaction') as { content: string } | undefined;
+    expect(recap).toBeDefined();
+    // The command text must not reappear in the recap that merges into the system prompt.
+    expect(recap!.content).not.toContain('/model');
+    expect(recap!.content).not.toContain('/stats');
+  });
+
+  it('pins the real task, not a leading meta echo, at the front', () => {
+    const history: Message[] = [
+      { role: 'user', content: '/help', meta: true },
+      ...turn(1, 'a.ts'),
+      ...turn(2, 'b.ts'),
+      ...turn(3, 'c.ts'),
+      ...turn(4, 'd.ts'),
+    ];
+    compactHistory(history, W, 1, 0);
+    // recapStart=0 (leading message is meta, not pinned), so the recap leads and the
+    // meta echo is dropped rather than preserved verbatim as "the original request".
+    expect(history[0].role).toBe('compaction');
+    expect((history[0] as { content: string }).content).not.toContain('/help');
+  });
 });

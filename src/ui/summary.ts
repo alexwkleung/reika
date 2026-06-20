@@ -13,7 +13,7 @@ export function buildSummary(
   approvals: Approvals,
 ): string {
   const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-  const userTurns = messages.filter(m => m.role === 'user' && !m.nested).length;
+  const userTurns = messages.filter(m => m.role === 'user' && !m.nested && !m.meta).length;
   const assistantTurns = messages.filter(m => m.role === 'assistant' && !m.nested).length;
 
   const toolCounts: Record<string, number> = {};
@@ -65,7 +65,8 @@ export function buildSummary(
 }
 
 export function hasActivity(messages: Message[]): boolean {
-  return messages.some(m => m.role === 'user' && !m.nested);
+  // Slash-command echoes (meta) aren't real work — a session that only ran commands has no summary.
+  return messages.some(m => m.role === 'user' && !m.nested && !m.meta);
 }
 
 function formatDuration(seconds: number): string {
