@@ -30,9 +30,7 @@ export function Status({
 }) {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${formatElapsed(elapsed)}` : '';
-  const keys = busy
-    ? 'ctrl-c to abort'
-    : 'enter to submit · shift+enter/ctrl-j for newline · ctrl-c to exit';
+  const keys = busy ? 'ctrl-c to abort' : 'ctrl-c to exit';
   const tokens =
     usage.promptTokens > 0 || usage.completionTokens > 0
       ? ` · ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
@@ -57,7 +55,7 @@ export function Status({
       ) : null}
       {autoApprove ? (
         <>
-          <Text color={theme.warning}>auto approve on</Text>
+          <Text color={theme.warning}>auto approve</Text>
           <Text color={theme.muted}>{' · '}</Text>
         </>
       ) : null}
