@@ -209,7 +209,14 @@ function renderMessage(msg: Message): React.ReactElement | null {
       <Box flexDirection="column">
         <Text>
           <Text color={theme.tool}>{'  ↳ '}</Text>
-          <Text color={theme.secondary}>{redactSecrets(scrubPaths(msg.summary ?? ''))}</Text>
+          {/* Drop the redundant leading "Read " for display only: the `↳` already
+              marks this as a child of the Read tool call, and the path follows
+              immediately so it reads cleanly. The model-facing summary
+              (loop.ts) keeps the verb as grounding. Scoped to Read because other
+              tools' verbs ("Found", "Ran:", "Edited") carry meaning. */}
+          <Text color={theme.secondary}>
+            {redactSecrets(scrubPaths((msg.summary ?? '').replace(/^Read /, '')))}
+          </Text>
         </Text>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
