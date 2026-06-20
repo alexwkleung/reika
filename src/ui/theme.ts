@@ -10,7 +10,7 @@ export const theme = {
   secondary: '#a0a0a0',
   muted: '#808080',
   reasoning: '#6495ed', // cornflower blue: thinking-block bar, dimmer than the accent
-  warning: 'yellow',
+  warning: '#e5d49a', // soft pastel yellow — luminous but easy on the eyes, matches the other accents
   error: 'red',
   success: 'green',
   userBg: '#303030',
