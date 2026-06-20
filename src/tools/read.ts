@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
+import { createHash } from 'node:crypto';
 import type { Tool } from '../types.js';
 
 // line-ranged by default
@@ -22,6 +23,10 @@ export const readTool: Tool = {
     const limit = Math.max(1, Number(args.limit ?? 200));
     const full = resolve(ctx.cwd, path);
     const text = await readFile(full, 'utf8');
+    // Hash the whole file (not the returned slice) so a window-varying re-read of the same
+    // region hashes identically; the loop's ReadTrace uses it to tell an unchanged re-read
+    // from a refetch after the file changed. Cheap: the bytes are already in memory.
+    const contentHash = createHash('sha1').update(text).digest('hex');
     const lines = text.split('\n');
     // A file ending in '\n' yields a trailing '' element; don't count it as a real
     // line, or the continuation marker below claims "1 more line" pointing at nothing.
@@ -35,6 +40,7 @@ export const readTool: Tool = {
       return {
         summary: `Read ${rel}: offset ${offset} past end of file (${total} lines)`,
         payload: `(offset ${offset} is past the end of ${rel}, which has ${total} lines — re-read with a smaller offset)`,
+        contentHash,
       };
     }
 
@@ -57,6 +63,7 @@ export const readTool: Tool = {
     return {
       summary: `Read ${rel} lines ${offset}-${end} of ${total}`,
       payload: numbered + more,
+      contentHash,
     };
   },
 };

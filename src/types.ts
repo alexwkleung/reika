@@ -59,6 +59,11 @@ export type ToolResult = {
   display?: string;
   diff?: { text: string; path: string; added: number; removed: number };
   command?: { text: string; outputTail: string; outputTruncated: boolean };
+  // Hash of the whole file the read covered. Set only by `read`; lets the loop's ReadTrace
+  // tell a re-read of unchanged content from a legitimate refetch after the file changed,
+  // without a second disk read. Keyed on the full file (not the slice) so a window-varying
+  // re-read of the same region still hashes identically. See agent/readtrace.ts.
+  contentHash?: string;
 };
 
 export type ApprovalRequest = {
