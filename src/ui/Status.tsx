@@ -51,7 +51,7 @@ export function Status({
     <Box>
       {modeTag ? (
         <>
-          <Text color={theme.tool}>{modeTag}</Text>
+          <Text color={modeColor(modeTag)}>{modeTag}</Text>
           <Text color={theme.muted}>{' · '}</Text>
         </>
       ) : null}
@@ -66,12 +66,26 @@ export function Status({
       {cache ? <Text color={theme.muted}>{cache}</Text> : null}
       <Text color={theme.muted}>{' · '}</Text>
       {exitArmed ? (
-        <Text color={theme.warning}>press ctrl-c again to exit</Text>
+        <Text color={theme.tool}>press ctrl-c again to exit</Text>
       ) : (
         <Text color={theme.muted}>{keys}</Text>
       )}
     </Box>
   );
+}
+
+// Soft pastel per mode tag; falls back to muted for anything unexpected.
+function modeColor(mode: string): string {
+  switch (mode) {
+    case 'plan':
+      return theme.modePlan;
+    case 'chat':
+      return theme.modeChat;
+    case 'shell':
+      return theme.modeShell;
+    default:
+      return theme.modeAgent;
+  }
 }
 
 // Fraction of the context window currently used, or null when either operand is unknown.
