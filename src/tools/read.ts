@@ -7,20 +7,20 @@ import type { Tool } from '../types.js';
 export const readTool: Tool = {
   name: 'read',
   description:
-    'Read lines from a file. Returns up to 200 lines by default. Use offset+limit for paging.',
+    'Read lines from a file. Returns up to 300 lines by default. Use offset+limit for paging.',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'File path, absolute or relative to cwd.' },
       offset: { type: 'integer', description: 'Starting line, 1-indexed. Default 1.' },
-      limit: { type: 'integer', description: 'Max lines to return. Default 200.' },
+      limit: { type: 'integer', description: 'Max lines to return. Default 300.' },
     },
     required: ['path'],
   },
   async run(args, ctx) {
     const path = String(args.path);
     const offset = Math.max(1, Number(args.offset ?? 1));
-    const limit = Math.max(1, Number(args.limit ?? 200));
+    const limit = Math.max(1, Number(args.limit ?? 300));
     const full = resolve(ctx.cwd, path);
     const text = await readFile(full, 'utf8');
     // Hash the whole file (not the returned slice) so a window-varying re-read of the same

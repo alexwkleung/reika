@@ -22,9 +22,9 @@ describe('readTool', () => {
     const lines = Array.from({ length: 500 }, (_, i) => `line${i + 1}`);
     await writeFile(join(cwd, 'big.txt'), lines.join('\n'), 'utf8');
     const result = await readTool.run({ path: 'big.txt' }, ctx());
-    expect(result.payload).toContain('300 more lines below');
-    expect(result.payload).toContain('offset=201');
-    expect(result.summary).toMatch(/lines 1-200 of 500/);
+    expect(result.payload).toContain('200 more lines below');
+    expect(result.payload).toContain('offset=301');
+    expect(result.summary).toMatch(/lines 1-300 of 500/);
   });
 
   it('omits the marker when the read reaches EOF', async () => {
