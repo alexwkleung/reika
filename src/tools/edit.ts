@@ -105,7 +105,13 @@ export const editTool: Tool = {
     const removed = countPrefixed(diffText, '- ');
     // Scan only the replacement text: this fires when the model introduces an import,
     // grounding it on the dependency's real API rather than an assumed shape.
-    const payload = await surfaceImportedDeps(ctx, effectiveNew);
+    const depPayload = await surfaceImportedDeps(ctx, effectiveNew);
+    // Hand back the post-edit file (small files only) so a follow-up edit to the same file is built
+    // from current bytes instead of a now-stale read — collapsing the re-read-after-edit loop. The
+    // size cap keeps the cost trivial and is where multi-site edits actually cluster; large files
+    // fall back to the diff region (model re-reads only if it needs a distant block).
+    const refreshed = refreshedFile(rel, next);
+    const payload = [depPayload, refreshed].filter(Boolean).join('\n\n') || undefined;
     return {
       summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
       diff: { text: diffText, path: rel, added, removed, startLine },
@@ -113,6 +119,31 @@ export const editTool: Tool = {
     };
   },
 };
+
+// A small edited file is cheap to echo back and is exactly where the re-read-after-edit loop bites
+// (config/index/test modules with edits scattered across the file). Above the cap, the per-edit
+// context cost stops being trivial and could feed compaction, so we don't — the diff region already
+// covers near-edits. Lines numbered with the same `│` gutter as the read tool so the model consumes
+// it identically (copy the text after `│` for the next old_string).
+const REFRESH_MAX_LINES = 120;
+const REFRESH_MAX_CHARS = 8000;
+
+function refreshedFile(rel: string, content: string): string | undefined {
+  if (content.length > REFRESH_MAX_CHARS) return undefined;
+  const lines = content.split('\n');
+  // A trailing newline yields a phantom empty final element; don't number it.
+  const total =
+    lines.length > 1 && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+  if (total > REFRESH_MAX_LINES) return undefined;
+  const numbered = lines
+    .slice(0, total)
+    .map((l, i) => `${String(i + 1).padStart(5, ' ')}│${l}`)
+    .join('\n');
+  return (
+    `(reika: ${rel} after your edit — current contents below. Build any further edits to this ` +
+    `file from this exact text; you do not need to re-read it.)\n${numbered}`
+  );
+}
 
 function countPrefixed(text: string, prefix: string): number {
   let n = 0;
