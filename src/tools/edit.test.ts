@@ -43,6 +43,46 @@ describe('editTool', () => {
     expect(result.summary).toMatch(/multiple times/);
   });
 
+  describe('post-edit file echo', () => {
+    it('returns the updated file (numbered) for a small file so a follow-up edit needs no re-read', async () => {
+      await write('a.ts', 'const x = 1;\nconst y = 2;\n');
+      const result = await editTool.run(
+        { path: 'a.ts', old_string: 'const x = 1;', new_string: 'const x = 99;' },
+        ctx(),
+      );
+      expect(result.summary).toMatch(/^Edited/);
+      // Payload carries the post-edit contents, numbered with the read gutter, with the new value.
+      expect(result.payload).toContain('after your edit');
+      expect(result.payload).toContain('1│const x = 99;');
+      expect(result.payload).toContain('2│const y = 2;');
+    });
+
+    it('does not echo the file when it exceeds the line cap (avoids context bloat)', async () => {
+      const big = Array.from({ length: 200 }, (_, i) => `const v${i} = ${i};`).join('\n') + '\n';
+      await write('big.ts', big);
+      const result = await editTool.run(
+        { path: 'big.ts', old_string: 'const v0 = 0;', new_string: 'const v0 = 1;' },
+        ctx(),
+      );
+      expect(result.summary).toMatch(/^Edited/);
+      // No echoed file body (the dep-grounding payload is the only thing that could appear, and a
+      // plain const carries no import), so the payload is absent.
+      expect(result.payload ?? '').not.toContain('after your edit');
+    });
+
+    it('does not echo the file when it exceeds the char cap even if line count is small', async () => {
+      // Few lines but huge; the edit keeps it huge, so the post-edit file stays over the char cap.
+      const longLine = 'const s = "' + 'x'.repeat(9000) + '";\n';
+      await write('long.ts', longLine);
+      const result = await editTool.run(
+        { path: 'long.ts', old_string: 'const s =', new_string: 'const t =' },
+        ctx(),
+      );
+      expect(result.summary).toMatch(/^Edited/);
+      expect(result.payload ?? '').not.toContain('after your edit');
+    });
+  });
+
   describe('whitespace-tolerant fallback', () => {
     it('matches a single line whose indentation the model got wrong', async () => {
       // File uses 2-space indent; model supplies 4 spaces.
