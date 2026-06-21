@@ -125,40 +125,61 @@ export async function callModel(opts: {
     throw e;
   }
 
-  const toolCalls: ToolCall[] = [];
+  const nativeToolCalls: ToolCall[] = [];
   for (const [, acc] of callsByIndex) {
     const name = sanitizeToolName(acc.name);
     const { args, repaired } = tryParseJson(acc.args || '{}');
     if (repaired) {
       process.stderr.write(`[reika] repaired malformed JSON in tool args for ${name}\n`);
     }
-    toolCalls.push({ id: acc.id, name, args });
+    nativeToolCalls.push({ id: acc.id, name, args });
   }
 
-  let content = contentParts.join('');
+  const resolved = resolveResponseText(
+    contentParts.join(''),
+    reasoningParts.join(''),
+    nativeToolCalls,
+  );
+  return {
+    content: resolved.content,
+    reasoning: resolved.reasoning,
+    toolCalls: resolved.toolCalls.length > 0 ? resolved.toolCalls : undefined,
+    usage,
+    finishReason,
+  };
+}
+
+// Resolve the final (content, reasoning, toolCalls) from a streamed response. Pure and exported so
+// the recovery/stripping rules are unit-testable without mocking a stream. Two jobs:
+//   1. Recover an inline tool call when the model emitted one as text instead of via native
+//      function-calling — from content, or (when content is empty) from the reasoning channel.
+//      The empty-content guard keeps a real final answer from being hijacked.
+//   2. Strip recognized tool-call markup from the reasoning that's handed back. This is the
+//      load-bearing fix: with reasoningRounds > 1 a surviving `<function=…>` block in reasoning is
+//      re-read by the model next round and re-fired, an identical-read loop that mimics the model
+//      spinning but is really un-stripped dialect markup (observed bricking 35B Q2). Stripping is
+//      unconditional, so it also cleans markup the model narrated alongside a native call; when
+//      there's no markup, cleanedContent is the reasoning unchanged and a normal turn is identical.
+export function resolveResponseText(
+  rawContent: string,
+  rawReasoning: string,
+  nativeToolCalls: ToolCall[],
+): { content: string; reasoning: string | undefined; toolCalls: ToolCall[] } {
+  const toolCalls = [...nativeToolCalls];
+  let content = rawContent;
+  const parsedReasoning = extractToolCallsFromContent(rawReasoning);
 
   if (toolCalls.length === 0) {
     const fallback = extractToolCallsFromContent(content);
     if (fallback.calls.length > 0) {
       toolCalls.push(...fallback.calls);
       content = fallback.cleanedContent;
-    } else if (!content.trim()) {
-      // Thinking models sometimes emit the tool call inside the reasoning channel instead of
-      // content (seen with the Hermes `<function=…>` dialect). With nothing in content to commit,
-      // the turn would otherwise be treated as final and stall mid-exploration — so recover the
-      // call from reasoning. Guarded on empty content so a real final answer is never hijacked.
-      const fromReasoning = extractToolCallsFromContent(reasoningParts.join(''));
-      if (fromReasoning.calls.length > 0) toolCalls.push(...fromReasoning.calls);
+    } else if (!content.trim() && parsedReasoning.calls.length > 0) {
+      toolCalls.push(...parsedReasoning.calls);
     }
   }
 
-  return {
-    content,
-    reasoning: reasoningParts.join('') || undefined,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage,
-    finishReason,
-  };
+  return { content, reasoning: parsedReasoning.cleanedContent || undefined, toolCalls };
 }
 
 // Strip chat-template artifacts that some servers (Harmony / gpt-oss, certain

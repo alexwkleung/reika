@@ -1,5 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { extractToolCallsFromContent, sanitizeToolName, tryParseJson } from './client.js';
+import {
+  extractToolCallsFromContent,
+  resolveResponseText,
+  sanitizeToolName,
+  tryParseJson,
+} from './client.js';
+
+describe('resolveResponseText', () => {
+  const HERMES_READ =
+    '<function=read><parameter=path>packages/ui/src/components/Composer.tsx</parameter>' +
+    '<parameter=offset>300</parameter></function>';
+
+  it('recovers a Hermes call emitted in the reasoning channel AND strips it from reasoning', () => {
+    // The 35B Q2 loop: read emitted as in-band XML in reasoning. Without stripping, the markup
+    // survives in the fed-back reasoning and the model re-fires it every round.
+    const r = resolveResponseText('', `Let me read the composer.\n${HERMES_READ}`, []);
+    expect(r.toolCalls).toHaveLength(1);
+    expect(r.toolCalls[0]).toMatchObject({ name: 'read', args: { path: expect.any(String) } });
+    expect(r.reasoning).toBe('Let me read the composer.');
+    expect(r.reasoning).not.toContain('<function=');
+  });
+
+  it('strips narrated call markup from reasoning even when a native call is present', () => {
+    const native = [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }];
+    const r = resolveResponseText('', `Reading it now.\n${HERMES_READ}`, native);
+    // Native call wins (no recovery), but the reasoning is still cleaned so it can't re-fire.
+    expect(r.toolCalls).toEqual(native);
+    expect(r.reasoning).toBe('Reading it now.');
+  });
+
+  it('leaves a normal turn untouched (no markup => reasoning byte-identical)', () => {
+    const r = resolveResponseText('Here is the answer.', 'I considered the options carefully.', []);
+    expect(r.toolCalls).toEqual([]);
+    expect(r.content).toBe('Here is the answer.');
+    expect(r.reasoning).toBe('I considered the options carefully.');
+  });
+
+  it('does not hijack a real final answer when reasoning happens to carry markup', () => {
+    // Content is non-empty (a real answer), so the reasoning call is NOT recovered as a tool call —
+    // but the markup is still scrubbed from the reasoning.
+    const r = resolveResponseText('Done — here is the summary.', HERMES_READ, []);
+    expect(r.toolCalls).toEqual([]);
+    expect(r.content).toBe('Done — here is the summary.');
+    expect(r.reasoning ?? '').not.toContain('<function=');
+  });
+});
 
 describe('sanitizeToolName', () => {
   it('returns clean names unchanged', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flagRepeatedCall } from './loop.js';
+import { flagRepeatedCall, buildAgentLoopLedger } from './loop.js';
 
 // Convenience: read calls keyed on path+offset.
 const read = (
@@ -23,6 +23,17 @@ describe('flagRepeatedCall', () => {
     const third = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
     expect(second).toContain('2 times');
     expect(third).toContain('3 times');
+    expect(second?.startsWith('body')).toBe(true);
+  });
+
+  it('names the exact range in the read nudge (concrete redirect, not generic)', () => {
+    const seen = new Map<string, number>();
+    read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
+    const second = read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
+    // Points at the specific range via the summary, and keeps the escalating count.
+    expect(second).toContain('Read a.ts lines 1-200 of 800');
+    expect(second).toContain('2 times');
+    expect(second).toContain('re-reading the same start line returns identical bytes');
     expect(second?.startsWith('body')).toBe(true);
   });
 
@@ -119,5 +130,46 @@ describe('flagRepeatedCall', () => {
       undefined,
     );
     expect(out).toMatch(/2 times/);
+  });
+});
+
+describe('buildAgentLoopLedger', () => {
+  it('names the looping files and gives a stop-or-explain directive', () => {
+    const ledger = buildAgentLoopLedger([
+      { path: 'packages/ui/src/api/sse.ts', offset: 1, repeats: 3 },
+      { path: 'packages/server/src/http/chat.ts', offset: 201, repeats: 3 },
+    ]);
+    // Names both files (the one past line 1 carries its offset), persists the "already read" fact,
+    // and offers the non-edit escape so a cornered model isn't forced into a wrong change.
+    expect(ledger).toContain('packages/ui/src/api/sse.ts');
+    expect(ledger).toContain('packages/server/src/http/chat.ts:L201');
+    expect(ledger).toContain('identical bytes');
+    expect(ledger).toContain('state specifically what is still blocking you');
+  });
+
+  it('escalates to a hard pause directive once inspection tools are withdrawn', () => {
+    const looping = [{ path: 'packages/server/src/http/chat.ts', offset: 151, repeats: 3 }];
+    const soft = buildAgentLoopLedger(looping, false);
+    const hard = buildAgentLoopLedger(looping, true);
+    // Soft tier: still frames re-reading as unhelpful. Hard tier: states reading is paused.
+    expect(soft).toContain('Re-reading them returns identical bytes');
+    expect(soft).not.toContain('PAUSED');
+    expect(hard).toContain('PAUSED');
+    expect(hard).toContain('Make the edit');
+    // Both name the looping file and keep the blocker escape.
+    expect(hard).toContain('chat.ts:L151');
+    expect(hard).toContain('what is still blocking you');
+  });
+
+  it('caps the listed files so a pathological turn cannot bloat the system prompt', () => {
+    const many = Array.from({ length: 20 }, (_, n) => ({
+      path: `f${n}.ts`,
+      offset: 1,
+      repeats: 3,
+    }));
+    const ledger = buildAgentLoopLedger(many);
+    expect(ledger).toContain('f0.ts');
+    expect(ledger).toContain('f7.ts');
+    expect(ledger).not.toContain('f8.ts'); // sliced at 8
   });
 });

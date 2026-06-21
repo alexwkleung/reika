@@ -13,6 +13,8 @@ import { callModel } from '../provider/client.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
 import { compactHistory, shouldCompact, compactThreshold } from './compaction.js';
+import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 
 // Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
@@ -55,6 +57,19 @@ export function flagRepeatedCall(
   const count = (seen.get(key) ?? 0) + 1;
   seen.set(key, count);
   if (count <= 1) return payload;
+  // For reads, point at the exact range (the summary names path + lines) so a weak model gets a
+  // concrete redirect, not a generic "do something different". The claim is anchored on the always-
+  // true fact — re-reading the same start line returns identical bytes — rather than on where any
+  // prior copy lives: this read's own payload is live in the next request by construction, so the
+  // nudge needs no liveness check and can't mislead the model into skipping a genuine refetch.
+  if (name === 'read') {
+    return (
+      (payload ?? '') +
+      `\n\n(reika: you have re-read this same range ${count} times this turn (${summary}) — ` +
+      `re-reading the same start line returns identical bytes and won't make progress. Act on what ` +
+      `you already have, page to a different part of the file, or open another file.)`
+    );
+  }
   return (
     (payload ?? '') +
     `\n\n(reika: you have run this ${name} ${count} times this turn with the same result — it ` +
@@ -218,6 +233,68 @@ function buildPlanLedger(history: Message[], round: number): string {
   return lines.join('\n');
 }
 
+// Confirmed-loop thresholds, split by class (see ReadTrace.loopingReads). dup-aged: the content
+// aged out, so a single re-read can be a rational refetch — only 3+ identical passes is a loop.
+// dup-live: the content is still in context, so re-reading it is never a refetch — 2 is already a
+// loop, and firing a round sooner matters because live re-reads re-emit full payloads that inflate
+// the uncompactable fresh block (observed: a dup-live loop drove payloads 35k→42k while compaction
+// shed nothing). Both still leave the per-payload soft nudge (fires on the 2nd) its first shot.
+const LOOP_AGED_REPEATS = 3;
+const LOOP_LIVE_REPEATS = 2;
+// Only treat a loop as active if its last re-read was within this many rounds — so the ledger
+// disappears once the model breaks out, rather than nagging for the rest of the turn.
+const LOOP_RECENT_ROUNDS = 2;
+
+// Read-only/inspection tools withdrawn when a loop persists past the ledger (the loop-break tier).
+// edit/write/bash stay, so the model can still complete the task — it just can't keep hiding in the
+// read it's circling. Enforced at dispatch too, because this model emits reads as in-band XML and
+// would otherwise route around an omitted tool.
+const INSPECTION_TOOLS = new Set(['read', 'grep', 'glob', 'list']);
+// Rounds a loop must stay active (ledger shown and ignored) before escalating from the directive to
+// withdrawing the inspection tools. 2 gives the ledger one full round to work first. This is the
+// agent-mode analogue of plan mode's forced tool-withdrawal: directives get ignored by these
+// models (observed twice — soft nudge, then ledger); "a weak quant can't call a tool that isn't
+// there" is what actually forces the explore→act transition (the stop-and-commit failure).
+const LOOP_WITHDRAW_AFTER = 2;
+// Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
+// inflate context; it just states the rule and the way out.
+const WITHDRAWAL_DIRECTIVE =
+  '(reika: inspection tools (read/grep/glob/list) are paused because you have re-read the same ' +
+  'content repeatedly without making a change. You already have what you need. Make the edit the ' +
+  'task requires with the edit/write tools, or if something specific is blocking you, say what it ' +
+  'is. Reading and searching are unavailable until you make progress.)';
+
+// Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
+// read loop. The per-payload nudge (flagRepeatedCall) can't break a period >= 2 loop on a one-round
+// liveness window — it ages out before the loop returns to that call — so the signal must live in
+// the system suffix, which is regenerated each round and never ages. Emitted ONLY while a loop is
+// active (ReadTrace.loopingReads), so a healthy turn never sees it. The "or state what is blocking
+// you" escape is load-bearing: it gives a cornered model an out that isn't a premature wrong edit.
+// `withdrawn` adds the harder line once we've escalated to pulling the inspection tools.
+export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false): string {
+  const files = looping
+    .slice(0, 8)
+    .map(l => (l.offset > 1 ? `${l.path}:L${l.offset}` : l.path))
+    .join(', ');
+  const lines = [
+    '',
+    '--- reika status (auto-generated — not user input) ---',
+    `You have re-read the same file(s) several times this turn and the content has not changed: ${files}.`,
+  ];
+  if (withdrawn) {
+    lines.push(
+      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
+      'tools, or state specifically what is still blocking you.',
+    );
+  } else {
+    lines.push(
+      'Re-reading them returns identical bytes — it will not surface anything new. Stop gathering and',
+      'either make the change the task needs, or state specifically what is still blocking you.',
+    );
+  }
+  return lines.join('\n');
+}
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -279,10 +356,25 @@ export async function runTurn(opts: {
   // Consecutive plan-mode rounds that surfaced no new information (seenReadOnly didn't grow). Drives
   // the adaptive force-write: a converged or looping model stalls here; a productive one resets it.
   let planStaleRounds = 0;
+  // Consecutive rounds an agent-mode read loop has stayed active (ledger showing). Once it crosses
+  // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
+  // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
+  let loopActiveRounds = 0;
+  // Whether the model has made any edit/write this turn. Tool withdrawal exists to force the
+  // explore→act transition; once the model has acted, that job is done. After the first edit a
+  // re-read is usually edit-recovery (re-fetching exact bytes to build old_string after the content
+  // aged out), NOT gratuitous looping — withdrawing read there forces it onto bash-grep and makes
+  // edits *harder* to land (observed). So withdrawal is scoped to the pre-edit explore loop; the
+  // soft ledger still fires after, since it's harmless and the re-reads are genuinely redundant.
+  let editingStarted = false;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
   const seenReadOnly = new Map<string, number>();
+  // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / dup-live /
+  // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
+  // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
+  const readTrace = new ReadTrace();
 
   const window = opts.config.contextWindow;
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
@@ -312,13 +404,46 @@ export async function runTurn(opts: {
     const planForceWrite =
       opts.promptMode === 'plan' &&
       (planStaleRounds >= PLAN_STALL_ROUNDS || i >= PLAN_HARD_CEILING);
+    // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
+    // inspection tools this round to force the explore→act transition. Recomputed each round, so it
+    // lifts as soon as the loop clears. Never set in plan mode (which has its own force-write).
+    let withdrawInspection = false;
     if (opts.promptMode === 'plan') {
       system = planForceWrite
         ? buildPlanWritePrompt()
         : baseSystem + '\n\n' + buildPlanLedger(opts.history, i);
+    } else {
+      // Agent/chat: surface a persistent stop directive only while a read loop is active. ReadTrace
+      // reflects rounds 0..i-1 here (it's updated during dispatch), so a loop confirmed at round
+      // i-1 appears in round i's system. Reset to baseSystem otherwise, so a recovered model — or a
+      // turn that never looped — isn't nagged. Chat mode has no reads, so this is always baseSystem.
+      const looping = readTrace.loopingReads(
+        i,
+        LOOP_RECENT_ROUNDS,
+        LOOP_AGED_REPEATS,
+        LOOP_LIVE_REPEATS,
+      );
+      loopActiveRounds = looping.length > 0 ? loopActiveRounds + 1 : 0;
+      // Scope to the explore→act transition: never withdraw once editing has begun (see editingStarted).
+      withdrawInspection = !editingStarted && loopActiveRounds >= LOOP_WITHDRAW_AFTER;
+      system =
+        looping.length > 0
+          ? baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection)
+          : baseSystem;
+      if (withdrawInspection) {
+        debugLog(
+          `[reika:debug] round=${i} inspection-withdrawn loopActiveRounds=${loopActiveRounds}\n`,
+        );
+      }
     }
-    // Empty tool lists are already a supported path (chat mode with no search provider).
-    const callTools = planForceWrite ? [] : opts.tools;
+    // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
+    // break, drop the inspection tools so the offered set steers a tool-list-respecting model
+    // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
+    const callTools = planForceWrite
+      ? []
+      : withdrawInspection
+        ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
+        : opts.tools;
     // Char budget for the transform turn: the window minus the plan's generation reserve, in chars
     // (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
     // overflows the window on a large task — the real cause of the large-repo 400s.
@@ -337,7 +462,7 @@ export async function runTurn(opts: {
     // Keep the request under the window: if the calibrated estimate crosses the threshold,
     // collapse the oldest turns into a recap before calling. Compaction mutates this turn's
     // history copy; the UI scrollback is untouched, so the user keeps the full log.
-    if (process.env.REIKA_DEBUG) {
+    if (debugEnabled()) {
       const e = rawEstimate();
       // Raw composition of the stored history (pre-aging), to see what dominates the request.
       let rsnChars = 0;
@@ -350,7 +475,7 @@ export async function runTurn(opts: {
           payChars += m.payload?.length ?? 0;
         }
       }
-      process.stderr.write(
+      debugLog(
         `[reika:debug] round=${i} mode=${opts.promptMode ?? 'agent'} histLen=${opts.history.length} ` +
           `forceWrite=${planForceWrite} estimate=${e} calib=${calibration.toFixed(3)} ` +
           `adjusted=${Math.round(e * calibration)} ` +
@@ -369,9 +494,7 @@ export async function runTurn(opts: {
       shouldCompact(rawEstimate() * calibration, window, opts.config.minGenTokens)
     ) {
       const removed = compactHistory(opts.history, window, calibration, opts.config.minGenTokens);
-      if (process.env.REIKA_DEBUG) {
-        process.stderr.write(`[reika:debug] round=${i} compaction removed=${removed}\n`);
-      }
+      debugLog(`[reika:debug] round=${i} compaction removed=${removed}\n`);
       if (removed > 0 && !notifiedCompaction) {
         notifiedCompaction = true;
         opts.onMessage({
@@ -416,13 +539,11 @@ export async function runTurn(opts: {
         opts.onCalibration?.(calibration);
       }
     }
-    if (process.env.REIKA_DEBUG) {
-      process.stderr.write(
-        `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
-          `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
-          `finishReason=${response.finishReason ?? '?'}\n`,
-      );
-    }
+    debugLog(
+      `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
+        `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
+        `finishReason=${response.finishReason ?? '?'}\n`,
+    );
 
     if (opts.signal?.aborted) {
       commitAborted(opts, response.content, turnStart, fetchedUrls);
@@ -495,7 +616,12 @@ export async function runTurn(opts: {
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
 
-    if (isFinal) return;
+    if (isFinal) {
+      if (readTrace.total() > 0) {
+        debugLog(`[reika:debug] read-trace-summary ${readTrace.summary()}\n`);
+      }
+      return;
+    }
 
     opts.onPhase?.('tool');
     // Novelty watermark for the adaptive cap: seenReadOnly only gains a key on a first-time
@@ -504,11 +630,19 @@ export async function runTurn(opts: {
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
+      // Loop break: refuse a withdrawn inspection call at dispatch — covers the in-band caller that
+      // routes around the omitted tool list. No execution, no content; just the directive.
+      const refused = withdrawInspection && INSPECTION_TOOLS.has(call.name);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
-      if (!tool) {
+      let contentHash: string | undefined;
+      if (refused) {
+        summary = `${call.name} paused — make the edit or say what's blocking you`;
+        payload = WITHDRAWAL_DIRECTIVE;
+        debugLog(`[reika:debug] round=${i} refused ${call.name} (inspection withdrawn)\n`);
+      } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
         try {
@@ -527,15 +661,34 @@ export async function runTurn(opts: {
           payload = result.payload;
           diff = result.diff;
           command = result.command;
+          contentHash = result.contentHash;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
+      }
+      // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
+      // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
+      // and the live/aged label depends on round order), but only emitted under the flag.
+      if (!refused && call.name === 'read' && contentHash) {
+        const { cls, repeats } = readTrace.record(
+          String(call.args.path ?? ''),
+          Number(call.args.offset ?? 1),
+          contentHash,
+          i,
+        );
+        debugLog(
+          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
+        );
       }
       // Loop-breaker: weak models re-issue the same read/grep/bash and stall on the identical
       // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
       // on path+offset so window-varying re-reads still count); mutating tools reset the memory
       // so a read-after-edit isn't flagged. Skipped for unknown tools (nothing produced).
-      if (tool) payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
+      if (tool && !refused)
+        payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
+      // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
+      // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
+      if (MUTATING_TOOLS.has(call.name)) editingStarted = true;
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
       const toolMsg: Message = {
         role: 'tool',
