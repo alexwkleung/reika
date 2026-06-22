@@ -177,15 +177,15 @@ function ContextLine({
   );
 }
 
-// Muted dark backgrounds — readable on dark terminals (default fg over a dim
-// red/green tint). Standard ANSI `red`/`green` bgs are too saturated and obscure
-// the text. Values tuned similar to GitHub's dark-theme diff line backgrounds.
-const REMOVED_BG = '#3a1f1f';
-const ADDED_BG = '#1f3a26';
-// Slightly brighter variants for the intra-line word-level highlight, so changed
-// words stand out from the line's base background.
-const REMOVED_HIGHLIGHT_BG = '#6a2828';
-const ADDED_HIGHLIGHT_BG = '#2e6a3c';
+// Dark backgrounds — readable on dark terminals (default fg over a red/green
+// tint). Kept dark enough that the light foreground stays legible, but more
+// saturated than a flat muted tint so the green/red reads clearly.
+const REMOVED_BG = '#5a1d1d';
+const ADDED_BG = '#14532a';
+// Brighter variants for the intra-line word-level highlight, so changed words
+// stand out from the line's base background.
+const REMOVED_HIGHLIGHT_BG = '#8a2a2a';
+const ADDED_HIGHLIGHT_BG = '#1f7a42';
 
 function PlainChangeLine({
   line,
