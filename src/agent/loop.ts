@@ -16,6 +16,7 @@ import { compactHistory, shouldCompact, compactThreshold } from './compaction.js
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
+import { type Diagnostic, decideTypecheckGate, runTypecheck } from '../check/typecheck.js';
 
 // Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
 // the same result is a no-progress loop. `bash` is included because weak models run `grep`/
@@ -256,6 +257,13 @@ const INSPECTION_TOOLS = new Set(['read', 'grep', 'glob', 'list']);
 // models (observed twice — soft nudge, then ledger); "a weak quant can't call a tool that isn't
 // there" is what actually forces the explore→act transition (the stop-and-commit failure).
 const LOOP_WITHDRAW_AFTER = 2;
+// Post-edit typecheck gate: how many times a turn may be sent back to fix type errors its own
+// edits introduced before it's allowed to finish anyway. The harness verifies so the weak model
+// doesn't have to remember to — but a model that can't clear the errors must commit rather than
+// loop, same bounded-recovery contract as MAX_LENGTH_RETRIES and the loop-withdrawal ladder. 2
+// gives one fix attempt plus a re-check; beyond that, finishing dirty (with a user notice) beats
+// spiralling. See check/typecheck.ts.
+const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out.
 const WITHDRAWAL_DIRECTIVE =
@@ -307,6 +315,10 @@ export async function runTurn(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
+  // Ephemeral, human-only pulse for the post-edit typecheck: true while a check runs, false when it
+  // settles. Drives the busy indicator's label so the user can see the harness verifying in the
+  // dispatch gap. Never touches model-facing history — purely a UI signal.
+  onTypecheck?: (checking: boolean) => void;
   onUsage?: (usage: Usage) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
@@ -367,6 +379,17 @@ export async function runTurn(opts: {
   // edits *harder* to land (observed). So withdrawal is scoped to the pre-edit explore loop; the
   // soft ledger still fires after, since it's harmless and the re-reads are genuinely redundant.
   let editingStarted = false;
+  // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
+  // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
+  // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
+  // introduced. null = not captured (a turn that never edits, a non-TS project, or a checker that
+  // couldn't run) and disables the gate — fail-open. A non-null (possibly empty) array = captured.
+  let typecheckBaseline: Diagnostic[] | null = null;
+  // One-shot guard so the baseline is captured at most once per turn (and a fail-open capture
+  // isn't re-probed on every subsequent edit).
+  let typecheckBaselineAttempted = false;
+  // Consecutive done-gate send-backs this turn. Bounds the fix loop at MAX_TYPECHECK_GATE_ROUNDS.
+  let typecheckGateRounds = 0;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
@@ -390,6 +413,17 @@ export async function runTurn(opts: {
       reasoningRounds: opts.config.reasoningRounds,
       minGenTokens: opts.config.minGenTokens,
     });
+
+  // Run a typecheck while pulsing the UI indicator around it (and clearing on any exit). The
+  // pulse is human-only; the CheckOutcome flows to the gate logic, never to the model.
+  const typecheck = async () => {
+    opts.onTypecheck?.(true);
+    try {
+      return await runTypecheck(opts.bundle.cwd, { signal: opts.signal });
+    } finally {
+      opts.onTypecheck?.(false);
+    }
+  };
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
@@ -617,6 +651,46 @@ export async function runTurn(opts: {
     opts.onMessage(assistantMsg);
 
     if (isFinal) {
+      // Post-edit typecheck gate. If this turn edited (baseline captured) and a final check shows
+      // the edits introduced new type errors, send the model back to fix them instead of letting it
+      // finish on broken code — the harness verifies so the weak model doesn't have to. The model's
+      // premature answer stays in the scrollback (same as the length-retry path); a 'user' message
+      // carries the errors to the model (system messages get dropped by messagesToOpenAI), and a
+      // 'warn' notice tells the human. Bounded by MAX_TYPECHECK_GATE_ROUNDS: past the cap it commits
+      // dirty with a notice rather than looping. Fail-open: no baseline or an unrunnable final check
+      // just lets the turn end.
+      if (typecheckBaseline !== null && !opts.signal?.aborted) {
+        const final = await typecheck();
+        const decision = decideTypecheckGate({
+          baseline: typecheckBaseline,
+          final,
+          gateRounds: typecheckGateRounds,
+          maxRounds: MAX_TYPECHECK_GATE_ROUNDS,
+        });
+        debugLog(
+          `[reika:debug] round=${i} typecheck-gate action=${decision.action} ran=${final.ran} ` +
+            `gateRounds=${typecheckGateRounds}\n`,
+        );
+        if (decision.action === 'retry') {
+          typecheckGateRounds++;
+          opts.history.push({ role: 'user', content: decision.modelMessage });
+          opts.onMessage({ role: 'system', tone: 'warn', content: decision.userNotice });
+          continue;
+        }
+        if (decision.userNotice) {
+          opts.onMessage({ role: 'system', tone: 'warn', content: decision.userNotice });
+        } else if (final.ran) {
+          // Clean pass: leave a subtle, persistent line so the verification is actually visible. The
+          // ephemeral indicator is too fleeting to reliably catch (observed), whereas a scrollback
+          // message — like the error notice — always lands. 'info' tone marks it as a routine
+          // automatic event. Only on a real run, never on a fail-open skip.
+          opts.onMessage({
+            role: 'system',
+            tone: 'info',
+            content: 'Typecheck passed — no new type errors from your edits.',
+          });
+        }
+      }
       if (readTrace.total() > 0) {
         debugLog(`[reika:debug] read-trace-summary ${readTrace.summary()}\n`);
       }
@@ -638,6 +712,21 @@ export async function runTurn(opts: {
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
       let contentHash: string | undefined;
+      // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
+      // applies, so the done-gate diffs against the project's state before any of this turn's edits.
+      // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
+      // local model is saturating the box) and only on turns that actually edit. Fail-open: a
+      // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
+      if (!typecheckBaselineAttempted && tool && !refused && MUTATING_TOOLS.has(call.name)) {
+        typecheckBaselineAttempted = true;
+        const base = await typecheck();
+        typecheckBaseline = base.ran ? base.diagnostics : null;
+        debugLog(
+          `[reika:debug] round=${i} typecheck-baseline ${
+            base.ran ? `${base.diagnostics.length} diags` : `skipped: ${base.reason}`
+          }\n`,
+        );
+      }
       if (refused) {
         summary = `${call.name} paused — make the edit or say what's blocking you`;
         payload = WITHDRAWAL_DIRECTIVE;

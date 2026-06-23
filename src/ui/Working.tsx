@@ -41,7 +41,16 @@ const TICK_MS = 80;
 const SHIMMER_STEP = 2; // ticks per shimmer step (~160ms) — gentle, not strobey.
 const SHIMMER_PAUSE = 6; // dark frames after each sweep so it breathes.
 
-export function Working({ label = 'Working' }: { label?: string }) {
+// `accent` colors the spinner glyph (default = brand magenta). A distinct accent — e.g. cyan while
+// the harness is typechecking — makes a transient state read at a glance rather than as a mere
+// word-swap on an already-spinning indicator.
+export function Working({
+  label = 'Working',
+  accent = theme.accent,
+}: {
+  label?: string;
+  accent?: string;
+}) {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -58,7 +67,7 @@ export function Working({ label = 'Working' }: { label?: string }) {
 
   return (
     <Box marginTop={1}>
-      <Text color={theme.accent}>{FRAMES[frame]}</Text>
+      <Text color={accent}>{FRAMES[frame]}</Text>
       <Text color={theme.muted}> </Text>
       {chars.map((ch, i) => {
         const d = i - pos; // signed distance from the shimmer tip.

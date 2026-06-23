@@ -8,6 +8,7 @@ import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Working } from './Working.js';
 import { Status } from './Status.js';
+import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
@@ -24,6 +25,10 @@ import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 type Mode = 'agent' | 'shell' | 'chat' | 'plan';
+
+// How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
+// still reads. Long enough to perceive, short enough not to imply the check is still running.
+const TYPECHECK_LINGER_MS = 650;
 
 // Only the startup splash lives in the dedicated header <Static>. The compact
 // header (after /cd or /model) flows through the message stream instead — Ink
@@ -48,6 +53,9 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
   const [phase, setPhase] = useState<Phase>('thinking');
+  // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
+  // verification is visible in the dispatch gap. Human-only — never part of model context.
+  const [typechecking, setTypechecking] = useState<boolean>(false);
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
@@ -94,6 +102,10 @@ export function App() {
   const exitArmedRef = useRef(false);
   exitArmedRef.current = exitArmed;
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // A warm incremental typecheck can return in well under a second; without a floor the indicator
+  // flashes too briefly to register. Hold the "Typechecking" state a beat after the check settles so
+  // it's actually perceptible. See onTypecheckChange / resetTypecheck.
+  const typecheckHideTimerRef = useRef<NodeJS.Timeout | null>(null);
   const disarmExit = (): void => {
     if (exitTimerRef.current) {
       clearTimeout(exitTimerRef.current);
@@ -663,10 +675,37 @@ export function App() {
     await submitToModel(augmented, display !== augmented ? display : undefined);
   };
 
+  // Latch the typecheck indicator: show immediately when a check starts, but defer hiding by
+  // TYPECHECK_LINGER_MS so a fast check stays on screen long enough to see. A new check cancels a
+  // pending hide so back-to-back checks read as continuous.
+  const onTypecheckChange = (checking: boolean) => {
+    if (typecheckHideTimerRef.current) {
+      clearTimeout(typecheckHideTimerRef.current);
+      typecheckHideTimerRef.current = null;
+    }
+    if (checking) {
+      setTypechecking(true);
+    } else {
+      typecheckHideTimerRef.current = setTimeout(() => {
+        setTypechecking(false);
+        typecheckHideTimerRef.current = null;
+      }, TYPECHECK_LINGER_MS);
+    }
+  };
+  // Immediate, un-lingered clear for turn boundaries.
+  const resetTypecheck = () => {
+    if (typecheckHideTimerRef.current) {
+      clearTimeout(typecheckHideTimerRef.current);
+      typecheckHideTimerRef.current = null;
+    }
+    setTypechecking(false);
+  };
+
   const submitToModel = async (modelText: string, displayOverride?: string): Promise<void> => {
     if (!config || !bundle) return;
     setStatus('busy');
     setPhase('thinking');
+    resetTypecheck();
     streamingRef.current = '';
     reasoningRef.current = '';
     toolRef.current = '';
@@ -714,6 +753,7 @@ export function App() {
           scheduleToolFlush();
         },
         onPhase: p => setPhase(p),
+        onTypecheck: onTypecheckChange,
         onUsage: u => {
           setLastUsage(u);
           setTotalUsage(t => ({
@@ -753,6 +793,7 @@ export function App() {
       setStreaming('');
       setStreamingReasoning('');
       setStreamingTool('');
+      resetTypecheck();
       setStatus('idle');
       abortRef.current = null;
     }
@@ -789,7 +830,12 @@ export function App() {
           ) : suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
-          {status === 'busy' && pending === null ? <Working /> : null}
+          {status === 'busy' && pending === null ? (
+            <Working
+              label={typechecking ? 'Typechecking' : undefined}
+              accent={typechecking ? theme.info : undefined}
+            />
+          ) : null}
           <Input
             disabled={pending !== null}
             canSubmit={status === 'idle' && pending === null}
