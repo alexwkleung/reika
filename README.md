@@ -1,6 +1,6 @@
 # Reika
 
-Minimalistic coding-agent CLI tuned for small local models. Built on TypeScript + Ink, OpenAI-compatible APIs, with a focus on context discipline.
+Minimal coding-agent CLI tuned for small local models, with a focus on context discipline.
 
 ## Status
 
@@ -219,17 +219,19 @@ Type `/` in the input to see suggestions. Highlights:
 
 ## Architecture
 
-The big design ideas:
+The big ideas:
 
 - **Bootstrap once.** `bundle.cwd`, `bundle.repoMap`, `bundle.fileIndex`, AGENTS.md, project summary are all built once at startup and kept stable across turns. Critical for prompt caching at the provider.
 - **Payload aging.** Tool results carry `summary` + `payload`. Only the latest contiguous block of tool results sends `payload` to the model; older ones collapse to `summary`-only. Keeps history token-bounded without losing information the model just acted on.
 - **Single system-prompt builder.** Parameterized; no duplication across modes.
-- **OpenAI-compatible end-to-end.** Cloud (OpenAI, OpenRouter, Groq, Moonshot/Kimi) and local (llama.cpp, ollama, LM Studio, vLLM) all work.
+- **OpenAI-compatible end-to-end.** Local inference engines and cloud providers all work.
 - **Streaming, abort, approval, subagent** all flow through one `AbortController` and one set of callbacks.
+
+There's more that isn't covered.
 
 ## Design philosophy
 
-Reika is designed for the world where coding agents — not humans — are often the primary editor. Small models in particular have a fixed token budget per turn, so codebase _shape_ directly affects how well an agent can work in it. The conventions here treat that as a first-class design constraint, not an afterthought:
+Reika was initially designed around small models, so the source code itself reflects the shape and constraints when using them in a coding agent:
 
 - **Colocated tests** (`bar.test.ts` next to `bar.ts`) so the model sees both in one directory scan
 - **One concept per file, shallow directory depth** so a unit fits in a single read
@@ -238,15 +240,17 @@ Reika is designed for the world where coding agents — not humans — are often
 - **Comments only for WHY, never WHAT** — the model already reads what
 - **Light on abstraction** — direct code beats three-layer indirection at small-model scales; "rule of three" becomes more like "rule of five"
 
-Most of these are also just good hygiene for humans. What's different is the cost-benefit math: when the reader is an LLM with a token budget, the case for locality, predictability, and explicit naming gets stronger; the case for clever abstraction gets weaker. See `AGENTS.md` for the longer version and the specific conventions that fall out of this stance.
+When the reader is an LLM with a token budget, the case for locality, predictability, and explicit naming gets stronger; the case for clever abstraction gets weaker. See `AGENTS.md` for the longer version.
 
 ## Working caveats
 
-- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=true` for trusted runs. Only "dangerous" commands will force you to manually approve/reject if auto approve is on. So basically yolo mode with safeguards.
-- Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them.
+- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=true` for trusted runs. Only "dangerous" commands will force you to manually approve/reject if auto approve is on. This is basically yolo mode with safeguards.
+- Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them. Furthermore, the subagent will only run if its configured.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
 - Tool calling is most reliable when the model is served with its **native function-calling chat template**. Without one, models fall back to emitting tool calls as text — Reika parses the common dialects (`<tool_call>{json}</tool_call>`, Hermes `<function=…>`, pythonic `fn(k=v)`, and calls leaked into the reasoning channel) as a best-effort fallback, but the native path avoids the malformed/looping/leaked calls those fallbacks exist to catch. If a local model misbehaves on tool use, first check that your server (llama.cpp / Ollama / vLLM / MLX) loads a tools-enabled template for it.
+
+There's more that isn't covered.
 
 ## `.gitignore` is respected
 
@@ -254,4 +258,4 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 ## Inspired by
 
-Inspired by Claude Code, Codex, Crush, OpenCode for the Ink-based UI, slash commands, and approval flow, but is tuned for context discipline at the scale of small models rather than cloud models first.
+Inspired by Claude Code, Codex, Crush, OpenCode, and Pi.
