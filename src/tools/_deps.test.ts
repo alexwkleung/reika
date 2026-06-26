@@ -57,9 +57,13 @@ describe('surfaceImportedDeps', () => {
   }
 
   it('surfaces the installed type entry of an imported dep', async () => {
-    await addPkg('cool', { types: 'index.d.ts' }, {
-      'index.d.ts': 'export declare function doThing(n: number): string;',
-    });
+    await addPkg(
+      'cool',
+      { types: 'index.d.ts' },
+      {
+        'index.d.ts': 'export declare function doThing(n: number): string;',
+      },
+    );
     const out = await surfaceImportedDeps({ cwd }, `import { doThing } from 'cool';`);
     expect(out).toContain('cool');
     expect(out).toContain('node_modules/cool/index.d.ts');
@@ -103,31 +107,43 @@ describe('surfaceImportedDeps', () => {
   });
 
   it('follows a barrel re-export one hop to reach the real declarations', async () => {
-    await addPkg('barrel', { types: 'index.d.ts' }, {
-      'index.d.ts': `export * from './impl.js';`,
-      'impl.d.ts': 'export declare function real(x: number): boolean;',
-    });
+    await addPkg(
+      'barrel',
+      { types: 'index.d.ts' },
+      {
+        'index.d.ts': `export * from './impl.js';`,
+        'impl.d.ts': 'export declare function real(x: number): boolean;',
+      },
+    );
     const out = await surfaceImportedDeps({ cwd }, `import { real } from 'barrel';`);
     expect(out).toContain('real(x: number): boolean');
     expect(out).toContain('// from ./impl.js');
   });
 
   it('keeps a mixed entry’s own declarations alongside followed re-exports', async () => {
-    await addPkg('mixed', { types: 'index.d.ts' }, {
-      'index.d.ts': `export declare const own: string;\nexport * from './more.js';`,
-      'more.d.ts': 'export declare function extra(): void;',
-    });
+    await addPkg(
+      'mixed',
+      { types: 'index.d.ts' },
+      {
+        'index.d.ts': `export declare const own: string;\nexport * from './more.js';`,
+        'more.d.ts': 'export declare function extra(): void;',
+      },
+    );
     const out = await surfaceImportedDeps({ cwd }, `import { own } from 'mixed';`);
     expect(out).toContain('export declare const own: string');
     expect(out).toContain('extra(): void');
   });
 
   it('follows only one hop — a barrel of barrels is not chased recursively', async () => {
-    await addPkg('deep', { types: 'index.d.ts' }, {
-      'index.d.ts': `export * from './a.js';`,
-      'a.d.ts': `export * from './b.js';`,
-      'b.d.ts': 'export declare function buried(): void;',
-    });
+    await addPkg(
+      'deep',
+      { types: 'index.d.ts' },
+      {
+        'index.d.ts': `export * from './a.js';`,
+        'a.d.ts': `export * from './b.js';`,
+        'b.d.ts': 'export declare function buried(): void;',
+      },
+    );
     const out = await surfaceImportedDeps({ cwd }, `import x from 'deep';`);
     expect(out).toContain(`export * from './b.js'`); // a's line is shown
     expect(out).not.toContain('buried'); // but b is never read
@@ -135,9 +151,13 @@ describe('surfaceImportedDeps', () => {
 
   it('condenses a long .d.ts to its export lines', async () => {
     const body = Array.from({ length: 100 }, (_, i) => `// filler ${i}`).join('\n');
-    await addPkg('big', { types: 'index.d.ts' }, {
-      'index.d.ts': `${body}\nexport declare function a(): void;\nexport declare function b(): void;`,
-    });
+    await addPkg(
+      'big',
+      { types: 'index.d.ts' },
+      {
+        'index.d.ts': `${body}\nexport declare function a(): void;\nexport declare function b(): void;`,
+      },
+    );
     const out = await surfaceImportedDeps({ cwd }, `import { a } from 'big';`);
     expect(out).toContain('export declare function a(): void');
     expect(out).not.toContain('filler 50');

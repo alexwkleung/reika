@@ -132,7 +132,8 @@ async function buildSurface(dir: string, entryText: string): Promise<string> {
     if (lines.length > room) truncated = true;
     out.push(`// from ${rel}`, ...lines.slice(0, room));
   }
-  if (truncated || targets.length > MAX_FOLLOW) out.push('// … (truncated; read the file for more)');
+  if (truncated || targets.length > MAX_FOLLOW)
+    out.push('// … (truncated; read the file for more)');
   // If following surfaced nothing useful, fall back to the raw entry.
   return out.length > 0 ? out.join('\n') : condense(entryText);
 }

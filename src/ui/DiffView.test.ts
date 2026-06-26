@@ -74,12 +74,7 @@ describe('parseDiffBlocks', () => {
 
 describe('assignLineNumbers', () => {
   it('numbers context and changes like an editor numbers the file', () => {
-    const blocks = parseDiffBlocks([
-      '  before',
-      '- old line',
-      '+ new line',
-      '  after',
-    ]);
+    const blocks = parseDiffBlocks(['  before', '- old line', '+ new line', '  after']);
     // First diff line is file line 244.
     const { lines, maxLineNo } = assignLineNumbers(blocks, 244);
     expect(lines.map(l => [l.kind, l.lineNo])).toEqual([
