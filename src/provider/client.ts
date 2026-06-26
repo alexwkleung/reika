@@ -1,7 +1,8 @@
-import OpenAI from 'openai';
 import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, Tool, ToolCall, Usage } from '../types.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
+import { streamChatCompletion } from './transport.js';
+import type { ChatCompletionRequest } from './transport.js';
 
 export type ModelResponse = {
   content: string;
@@ -31,10 +32,6 @@ export async function callModel(opts: {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
   }
-  const client = new OpenAI({
-    baseURL: opts.config.baseURL,
-    apiKey: opts.config.apiKey,
-  });
   const messages = messagesToOpenAI(opts.system, opts.history, {
     contextWindow: opts.config.contextWindow,
     calibration: opts.calibration,
@@ -49,28 +46,29 @@ export async function callModel(opts: {
   let usage: Usage | undefined;
   let finishReason: string | undefined;
 
+  const body: ChatCompletionRequest = {
+    model: opts.config.model,
+    messages,
+    ...(opts.tools.length > 0 ? { tools: toolsToOpenAI(opts.tools) } : {}),
+    stream: true,
+    stream_options: { include_usage: true },
+    ...(maxTokens ? { max_tokens: maxTokens } : {}),
+  };
+
   try {
-    const stream = await client.chat.completions.create(
-      {
-        model: opts.config.model,
-        messages,
-        tools: opts.tools.length > 0 ? toolsToOpenAI(opts.tools) : undefined,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(maxTokens ? { max_tokens: maxTokens } : {}),
-      },
-      { signal: opts.signal },
-    );
+    const stream = streamChatCompletion({
+      baseURL: opts.config.baseURL,
+      apiKey: opts.config.apiKey,
+      body,
+      signal: opts.signal,
+    });
 
     for await (const chunk of stream) {
       if (chunk.usage) {
         // Cache-hit accounting is reported under different field names per provider:
         // OpenAI nests it in `prompt_tokens_details.cached_tokens`; DeepSeek exposes
         // a top-level `prompt_cache_hit_tokens`. Accept either; undefined otherwise.
-        const u = chunk.usage as typeof chunk.usage & {
-          prompt_tokens_details?: { cached_tokens?: number | null } | null;
-          prompt_cache_hit_tokens?: number | null;
-        };
+        const u = chunk.usage;
         const cached = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens;
         usage = {
           promptTokens: u.prompt_tokens,
@@ -78,14 +76,9 @@ export async function callModel(opts: {
           ...(cached != null ? { cachedTokens: cached } : {}),
         };
       }
-      const fr = chunk.choices[0]?.finish_reason;
+      const fr = chunk.choices?.[0]?.finish_reason;
       if (fr) finishReason = fr;
-      const delta = chunk.choices[0]?.delta as
-        | ((typeof chunk.choices)[0]['delta'] & {
-            reasoning_content?: string | null;
-            reasoning?: string | null;
-          })
-        | undefined;
+      const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
       if (delta.content) {
         contentParts.push(delta.content);

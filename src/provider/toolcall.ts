@@ -1,5 +1,5 @@
-import type OpenAI from 'openai';
 import type { Message, Tool } from '../types.js';
+import type { ChatMessageParam, ChatTool } from './transport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
@@ -25,7 +25,7 @@ export function messagesToOpenAI(
     reasoningRounds?: number;
     minGenTokens?: number;
   },
-): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+): ChatMessageParam[] {
   const freshFrom = findFreshToolBlockStart(history);
   // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
   // starves the budget over a long multi-round turn, but pruning it too hard makes the
@@ -50,9 +50,7 @@ export function messagesToOpenAI(
     keepReasoningFrom,
     opts,
   );
-  const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: 'system', content: systemContent },
-  ];
+  const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (msg.role === 'user') {
@@ -79,7 +77,7 @@ export function messagesToOpenAI(
       if (msg.reasoning && i >= keepReasoningFrom) {
         param.reasoning_content = msg.reasoning;
       }
-      out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+      out.push(param as unknown as ChatMessageParam);
     } else if (msg.role === 'tool') {
       const fresh = i >= freshFrom && msg.payload;
       const content = fresh
@@ -92,7 +90,7 @@ export function messagesToOpenAI(
         content,
       };
       if (toolName) param.name = toolName;
-      out.push(param as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam);
+      out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
   }
@@ -223,7 +221,7 @@ function findToolNameForCall(history: Message[], callId: string): string | undef
   return undefined;
 }
 
-export function toolsToOpenAI(tools: Tool[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
+export function toolsToOpenAI(tools: Tool[]): ChatTool[] {
   return tools.map(t => ({
     type: 'function',
     function: {
