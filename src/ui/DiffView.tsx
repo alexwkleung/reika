@@ -130,7 +130,13 @@ export function assignLineNumbers(
       const lineNo = oldNo + i;
       note(lineNo);
       if (i < pairedCount) {
-        lines.push({ kind: 'paired', text: block.removed[i], other: block.added[i], side: 'removed', lineNo });
+        lines.push({
+          kind: 'paired',
+          text: block.removed[i],
+          other: block.added[i],
+          side: 'removed',
+          lineNo,
+        });
       } else {
         lines.push({ kind: 'plain', text: block.removed[i], side: 'removed', lineNo });
       }
@@ -140,7 +146,13 @@ export function assignLineNumbers(
       const lineNo = newNo + i;
       note(lineNo);
       if (i < pairedCount) {
-        lines.push({ kind: 'paired', text: block.added[i], other: block.removed[i], side: 'added', lineNo });
+        lines.push({
+          kind: 'paired',
+          text: block.added[i],
+          other: block.removed[i],
+          side: 'added',
+          lineNo,
+        });
       } else {
         lines.push({ kind: 'plain', text: block.added[i], side: 'added', lineNo });
       }

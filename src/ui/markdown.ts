@@ -16,8 +16,8 @@ const TAB_WIDTH = 2;
 // Passing chalk methods directly causes the extra args to be string-joined onto
 // the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
 const terminalExtension = markedTerminal(
-    {
-      codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
+  {
+    codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
     heading: (text: string) => chalk.bold(text),
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),
@@ -75,17 +75,20 @@ const terminalExtension = markedTerminal(
     tableOptions: { style: { head: ['cyan'], border: ['grey'] } },
     // Wrap at terminal width minus the App's paddingX gutter on both sides.
     // marked-terminal then breaks on word boundaries instead of Ink character-wrapping.
-      width: Math.max(40, (process.stdout.columns || 80) - 2),
-      // marked-terminal does its own fenced-code highlighting via cli-highlight and
-      // ignores any `code` renderer override; the theme must be supplied through
-      // this second `highlightOptions` argument instead.
-    },
-    // @types/marked-terminal types this arg for the old `cardinal` highlighter,
-    // but at runtime marked-terminal forwards it straight to cli-highlight's
-    // `highlight()`, which is what actually renders fenced code. Cast past the
-    // stale types.
-    { theme: codeTheme, ignoreIllegals: true } as unknown as Parameters<typeof markedTerminal>[1],
-  ) as unknown as { renderer: Record<string, (...args: unknown[]) => string>; useNewRenderer: boolean };
+    width: Math.max(40, (process.stdout.columns || 80) - 2),
+    // marked-terminal does its own fenced-code highlighting via cli-highlight and
+    // ignores any `code` renderer override; the theme must be supplied through
+    // this second `highlightOptions` argument instead.
+  },
+  // @types/marked-terminal types this arg for the old `cardinal` highlighter,
+  // but at runtime marked-terminal forwards it straight to cli-highlight's
+  // `highlight()`, which is what actually renders fenced code. Cast past the
+  // stale types.
+  { theme: codeTheme, ignoreIllegals: true } as unknown as Parameters<typeof markedTerminal>[1],
+) as unknown as {
+  renderer: Record<string, (...args: unknown[]) => string>;
+  useNewRenderer: boolean;
+};
 
 // marked-terminal hardcodes a left indent (`this.tab`) on fenced code blocks
 // inside its internal `code` renderer, which the options object can't reach.
