@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { compactHistory, shouldCompact, compactThreshold } from './compaction.js';
+import {
+  compactHistory,
+  shouldCompact,
+  compactThreshold,
+  distillPlanHandoff,
+} from './compaction.js';
 
 describe('shouldCompact', () => {
   it('is false without a context window', () => {
@@ -185,5 +190,144 @@ describe('compactHistory', () => {
     // meta echo is dropped rather than preserved verbatim as "the original request".
     expect(history[0].role).toBe('compaction');
     expect((history[0] as { content: string }).content).not.toContain('/help');
+  });
+});
+
+// A plan-mode history: one user request, a couple of read rounds, then the converged plan
+// (marked planFinal, the anchor). `payloadA`/`payloadB` are distinctive so verbatim-vs-summary
+// retention is observable in the digest.
+const payloadA = 'PAYLOAD_A'.repeat(20);
+const payloadB = 'PAYLOAD_B'.repeat(20);
+function planHistory(): Message[] {
+  return [
+    { role: 'user', content: 'add a feature' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
+    },
+    { role: 'tool', callId: 'c1', summary: 'read a.ts', payload: payloadA },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c2', name: 'read', args: { path: 'b.ts' } }],
+    },
+    { role: 'tool', callId: 'c2', summary: 'read b.ts', payload: payloadB },
+    { role: 'assistant', content: '1. edit a.ts\n2. edit b.ts', planFinal: true },
+  ];
+}
+
+describe('distillPlanHandoff', () => {
+  it('folds the exploration, keeping the request and the plan verbatim', () => {
+    const history = planHistory();
+    const { folded, reason } = distillPlanHandoff(history, 16384, 1, 0);
+    expect(folded).toBeGreaterThan(0);
+    expect(reason).toBe('folded');
+    // Request pinned at the front, plan kept verbatim as the anchor at the back, exactly one
+    // compaction message between them.
+    expect(history[0]).toMatchObject({ role: 'user', content: 'add a feature' });
+    const last = history[history.length - 1];
+    expect(last).toMatchObject({ role: 'assistant', planFinal: true });
+    expect((last as { content: string }).content).toBe('1. edit a.ts\n2. edit b.ts');
+    expect(history.filter(m => m.role === 'compaction')).toHaveLength(1);
+    expect(history[1].role).toBe('compaction');
+  });
+
+  it('indexes the files examined and carries recent findings verbatim under a generous budget', () => {
+    const history = planHistory();
+    distillPlanHandoff(history, 16384, 1, 0);
+    const digest = (history[1] as { content: string }).content;
+    expect(digest).toContain('Files examined:');
+    expect(digest).toContain('a.ts');
+    expect(digest).toContain('b.ts');
+    // Generous budget → the read payloads survive verbatim in the digest.
+    expect(digest).toContain(payloadB);
+    expect(digest).toContain(payloadA);
+  });
+
+  it('degrades older findings to summary-only under a tight findings budget', () => {
+    const history = planHistory();
+    // Tiny window + tiny fraction → the findings budget can't hold the raw payloads.
+    distillPlanHandoff(history, 100, 1, 0, 0.05);
+    const digest = (history[1] as { content: string }).content;
+    expect(digest).toContain('shown as summary only');
+    expect(digest).not.toContain(payloadA);
+  });
+
+  it('is a no-op when there is no plan-final marker (ordinary agent turn)', () => {
+    const history = [...turn(1, 'a.ts'), ...turn(2, 'b.ts')];
+    const before = history.length;
+    expect(distillPlanHandoff(history, 16384, 1, 0)).toEqual({ folded: 0, reason: 'no-marker' });
+    expect(history).toHaveLength(before);
+  });
+
+  it('is a no-op when the plan was written with no exploration in front of it', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'plan', planFinal: true },
+    ];
+    expect(distillPlanHandoff(history, 16384, 1, 0)).toEqual({ folded: 0, reason: 'empty-span' });
+  });
+
+  it('is idempotent — a second pass over an already-distilled history does nothing', () => {
+    const history = planHistory();
+    expect(distillPlanHandoff(history, 16384, 1, 0).folded).toBeGreaterThan(0);
+    expect(distillPlanHandoff(history, 16384, 1, 0)).toEqual({
+      folded: 0,
+      reason: 'already-distilled',
+    });
+  });
+
+  it('anchors on the most recent plan when the plan was refined twice', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'task' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
+      },
+      { role: 'tool', callId: 'c1', summary: 'read a.ts', payload: payloadA },
+      { role: 'assistant', content: 'OLD PLAN', planFinal: true },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c2', name: 'read', args: { path: 'b.ts' } }],
+      },
+      { role: 'tool', callId: 'c2', summary: 'read b.ts', payload: payloadB },
+      { role: 'assistant', content: 'NEW PLAN', planFinal: true },
+    ];
+    distillPlanHandoff(history, 16384, 1, 0);
+    // The newest plan is the live anchor; the earlier one is folded away (superseded, not pinned).
+    const last = history[history.length - 1];
+    expect((last as { content: string }).content).toBe('NEW PLAN');
+    expect(history.filter(m => m.role === 'compaction')).toHaveLength(1);
+    expect(history.some(m => m.role === 'assistant' && m.content === 'OLD PLAN')).toBe(false);
+    // The digest still indexes files read across the whole exploration, including pre-old-plan.
+    expect((history[1] as { content: string }).content).toContain('a.ts');
+  });
+
+  it('carries a compaction that fired during plan mode forward into the digest', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'task' },
+      { role: 'compaction', content: 'PLAN-MODE PRIOR RECAP' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
+      },
+      { role: 'tool', callId: 'c1', summary: 'read a.ts', payload: payloadA },
+      { role: 'assistant', content: 'plan', planFinal: true },
+    ];
+    distillPlanHandoff(history, 16384, 1, 0);
+    expect((history[1] as { content: string }).content).toContain('PLAN-MODE PRIOR RECAP');
+  });
+
+  it('still folds when the window is unknown (positional-salience benefit)', () => {
+    const history = planHistory();
+    const { folded } = distillPlanHandoff(history, undefined, 1, 0);
+    expect(folded).toBeGreaterThan(0);
+    expect(history[1].role).toBe('compaction');
+    // No window → everything kept verbatim.
+    expect((history[1] as { content: string }).content).toContain(payloadA);
   });
 });

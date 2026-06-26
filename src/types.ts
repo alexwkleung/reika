@@ -20,6 +20,10 @@ export type Message =
       durationMs?: number;
       sources?: string[];
       nested?: boolean;
+      // Set only on the plan-mode force-write final message — the verbatim anchor the
+      // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
+      // set in agent or chat mode.
+      planFinal?: boolean;
     }
   | {
       role: 'tool';
