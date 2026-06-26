@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -208,5 +208,59 @@ describe('detectTsProject', () => {
 
   it('returns null when there is no tsconfig.json', async () => {
     expect(await detectTsProject(cwd)).toBeNull();
+  });
+
+  it('walks up from the edited file to the nearest ancestor tsconfig.json', async () => {
+    // Monorepo shape: no root tsconfig, one inside the package being edited.
+    const pkgDir = join(cwd, 'packages', 'web');
+    await mkdir(join(pkgDir, 'src'), { recursive: true });
+    await writeFile(join(pkgDir, 'tsconfig.json'), '{}', 'utf8');
+    expect(await detectTsProject(cwd, 'packages/web/src/foo.ts')).toBe(
+      join(pkgDir, 'tsconfig.json'),
+    );
+  });
+
+  it('prefers the nearest tsconfig.json when several are ancestors', async () => {
+    const pkgDir = join(cwd, 'packages', 'web');
+    await mkdir(join(pkgDir, 'src'), { recursive: true });
+    await writeFile(join(cwd, 'tsconfig.json'), '{}', 'utf8');
+    await writeFile(join(pkgDir, 'tsconfig.json'), '{}', 'utf8');
+    expect(await detectTsProject(cwd, 'packages/web/src/foo.ts')).toBe(
+      join(pkgDir, 'tsconfig.json'),
+    );
+  });
+
+  it('is bounded at the project root: never resolves a tsconfig above cwd', async () => {
+    // tsconfig lives in the PARENT of the project root; an edit path that escapes upward must not
+    // reach it — the walk clamps to the root and finds nothing.
+    const root = join(cwd, 'project');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(cwd, 'tsconfig.json'), '{}', 'utf8'); // above `root`
+    expect(await detectTsProject(root, '../x.ts')).toBeNull();
+  });
+
+  it('honors the REIKA_TSCONFIG override when it resolves to a real file', async () => {
+    await writeFile(join(cwd, 'tsconfig.web.json'), '{}', 'utf8');
+    const prev = process.env.REIKA_TSCONFIG;
+    process.env.REIKA_TSCONFIG = 'tsconfig.web.json';
+    try {
+      // No plain tsconfig.json exists; the override wins.
+      expect(await detectTsProject(cwd)).toBe(join(cwd, 'tsconfig.web.json'));
+    } finally {
+      if (prev === undefined) delete process.env.REIKA_TSCONFIG;
+      else process.env.REIKA_TSCONFIG = prev;
+    }
+  });
+
+  it('falls through to detection when REIKA_TSCONFIG points at a missing file', async () => {
+    await writeFile(join(cwd, 'tsconfig.json'), '{}', 'utf8');
+    const prev = process.env.REIKA_TSCONFIG;
+    process.env.REIKA_TSCONFIG = 'tsconfig.does-not-exist.json';
+    try {
+      expect(await detectTsProject(cwd)).toBe(join(cwd, 'tsconfig.json'));
+    } finally {
+      if (prev === undefined) delete process.env.REIKA_TSCONFIG;
+      else process.env.REIKA_TSCONFIG = prev;
+    }
   });
 });

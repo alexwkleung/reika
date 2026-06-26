@@ -16,7 +16,12 @@ import { compactHistory, shouldCompact, compactThreshold } from './compaction.js
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
-import { type Diagnostic, decideTypecheckGate, runTypecheck } from '../check/typecheck.js';
+import {
+  type Diagnostic,
+  decideTypecheckGate,
+  detectTsProject,
+  runTypecheck,
+} from '../check/typecheck.js';
 
 // Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
 // the same result is a no-progress loop. `bash` is included because weak models run `grep`/
@@ -388,6 +393,10 @@ export async function runTurn(opts: {
   // One-shot guard so the baseline is captured at most once per turn (and a fail-open capture
   // isn't re-probed on every subsequent edit).
   let typecheckBaselineAttempted = false;
+  // The tsconfig governing this turn's edits, resolved once (walk-up from the first edited file,
+  // bounded at cwd) at baseline capture and reused for the final check, so both diff the same
+  // config. undefined = not yet resolved / nothing found → runTypecheck falls back to detection.
+  let typecheckTsconfig: string | undefined;
   // Consecutive done-gate send-backs this turn. Bounds the fix loop at MAX_TYPECHECK_GATE_ROUNDS.
   let typecheckGateRounds = 0;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
@@ -419,7 +428,10 @@ export async function runTurn(opts: {
   const typecheck = async () => {
     opts.onTypecheck?.(true);
     try {
-      return await runTypecheck(opts.bundle.cwd, { signal: opts.signal });
+      return await runTypecheck(opts.bundle.cwd, {
+        signal: opts.signal,
+        tsconfigPath: typecheckTsconfig,
+      });
     } finally {
       opts.onTypecheck?.(false);
     }
@@ -719,6 +731,15 @@ export async function runTurn(opts: {
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
       if (!typecheckBaselineAttempted && tool && !refused && MUTATING_TOOLS.has(call.name)) {
         typecheckBaselineAttempted = true;
+        // Resolve the governing tsconfig from the file being edited (walk-up, bounded at cwd) so a
+        // monorepo subpackage edit is checked against that package's config, not just a root one —
+        // and so the baseline and the final check pin the same config. null → undefined leaves the
+        // closure on its detection fallback (which agrees: no config found = gate stays off).
+        typecheckTsconfig =
+          (await detectTsProject(
+            opts.bundle.cwd,
+            typeof call.args.path === 'string' ? call.args.path : undefined,
+          )) ?? undefined;
         const base = await typecheck();
         typecheckBaseline = base.ran ? base.diagnostics : null;
         debugLog(
