@@ -9,6 +9,12 @@ const CHARS_PER_TOKEN = 4;
 // tokenizes denser than the heuristic — and so the recap can't grow without bound.
 const KEEP_FRACTION = 0.3;
 const RECAP_FRACTION = 0.1;
+// Fraction of the available window kept as verbatim findings when distilling a plan→agent handoff.
+// Lightweight by default: the executing agent has read tools, so re-reading a file mid-execution is
+// cheap and self-correcting, whereas carrying every explored file verbatim defeats the point —
+// freeing the window so the plan stays salient and the agent's own edit/verify loop has room. Raise
+// toward KEEP_FRACTION on larger (24k+) windows where re-reads cost more than the spare room saves.
+const HANDOFF_FINDINGS_FRACTION = 0.15;
 // Per-entry text budget inside the recap.
 const MAX_TEXT = 240;
 // Slack against estimate error: trigger compaction slightly before the prompt would
@@ -184,4 +190,134 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
 function trunc(s: string): string {
   const flat = s.replace(/\s+/g, ' ').trim();
   return flat.length > MAX_TEXT ? flat.slice(0, MAX_TEXT - 1) + '…' : flat;
+}
+
+// The actual findings — tool results (file contents, search matches) carry the concrete facts a
+// grounded plan needs (real paths, the exact line to change). The model's per-turn reasoning is
+// mostly narration ("let me look at X"); without the findings the transform hallucinates paths and
+// reverts to generic boilerplate. We reframe the results as static *reference material* rather than
+// a conversation, so they ground the plan without re-creating "let me read one more file" momentum.
+// Findings within a char budget so the transform request fits the window. On a large task the
+// model may read far more than the window holds; grant full payloads newest-first (the most recent
+// reads are usually the ones the converged plan rests on) until the budget is spent, and degrade
+// older reads to summary-only. The model keeps a navigable map of everything plus full grounding
+// for the recent files — graceful degradation instead of a 400. Lives here (not loop.ts) so the
+// handoff distillation below can reuse it without an import cycle (loop → compaction).
+export function gatherPlanFindings(history: Message[], charBudget: number): string {
+  const tools = history.filter((m): m is Message & { role: 'tool' } => m.role === 'tool');
+  const full = new Set<Message>();
+  let used = 0;
+  for (let i = tools.length - 1; i >= 0; i--) {
+    const body = tools[i].payload?.trim();
+    if (!body) continue;
+    const cost = tools[i].summary.length + body.length + 8;
+    if (used + cost > charBudget) break;
+    full.add(tools[i]);
+    used += cost;
+  }
+  let summarized = 0;
+  const parts = tools.map(m => {
+    const body = m.payload?.trim();
+    if (body && full.has(m)) return `── ${m.summary}\n${body}`;
+    if (body) summarized++;
+    return `── ${m.summary}`;
+  });
+  if (summarized > 0) {
+    parts.unshift(
+      `(reika: ${summarized} earlier file read(s) shown as summary only to fit the context window)`,
+    );
+  }
+  return parts.join('\n\n');
+}
+
+// Fold the plan-mode exploration that precedes a written plan into a single compaction message, in
+// place, so the agent turn that executes the plan sees the plan verbatim (the anchor) plus a compact
+// findings digest instead of the full raw read/grep transcript. On the small windows reika targets
+// that transcript otherwise competes with the agent's own edit/verify loop and pushes the plan back
+// until it's compacted away or attended to weakly. Keeps (a) the original request verbatim at index 0
+// and (b) the plan-final assistant message verbatim — everything between is distilled. Mirrors
+// compactHistory: mutates the per-turn model copy of history, leaving UI scrollback untouched, so it
+// re-runs deterministically each turn. A no-op (folded=0) when there's no plan-final marker (every
+// normal agent turn), an empty span, or an already-distilled span (idempotent on re-runs); `reason`
+// names which so a silent zero is classifiable during the experiment's A/B, not guessed at.
+export type HandoffOutcome = {
+  folded: number;
+  reason: 'folded' | 'no-marker' | 'empty-span' | 'already-distilled';
+};
+
+export function distillPlanHandoff(
+  history: Message[],
+  contextWindow: number | undefined,
+  calibration = 1,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+  findingsBudgetFraction = HANDOFF_FINDINGS_FRACTION,
+): HandoffOutcome {
+  // The converged plan we anchor on: the most recent plan-final message. Its absence is what makes
+  // this a no-op on ordinary agent turns (the marker is set only at plan-mode force-write).
+  let planIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'assistant' && m.planFinal) {
+      planIdx = i;
+      break;
+    }
+  }
+  if (planIdx < 0) return { folded: 0, reason: 'no-marker' };
+
+  // Pin the original request at index 0 exactly as compactHistory does; fold only what follows it,
+  // up to (but excluding) the plan message. A leading slash-command echo (meta) is not the task.
+  const first = history[0];
+  const spanStart = first && first.role === 'user' && !first.meta ? 1 : 0;
+  // Plan written with no exploration in front of it — nothing to fold.
+  if (planIdx <= spanStart) return { folded: 0, reason: 'empty-span' };
+  const span = history.slice(spanStart, planIdx);
+  // Already distilled (the span is just a prior compaction message): nothing to fold. This is the
+  // idempotency guard for the re-run each agent turn does on a freshly re-seeded history.
+  if (span.every(m => m.role === 'compaction')) return { folded: 0, reason: 'already-distilled' };
+
+  // Budget mirrors loop.ts's transform budget: a fraction of the available window, in chars,
+  // divided by the learned char→token calibration so the fraction holds in real tokens. No window
+  // known → keep everything verbatim (the positional-salience benefit still applies).
+  const calib = calibration > 0 ? calibration : 1;
+  const findingsBudget = contextWindow
+    ? Math.floor(
+        (availTokens(contextWindow, minGen) * CHARS_PER_TOKEN * findingsBudgetFraction) / calib,
+      )
+    : Number.MAX_SAFE_INTEGER;
+
+  const digest = buildHandoffDigest(span, findingsBudget);
+  history.splice(spanStart, span.length, { role: 'compaction', content: digest });
+  return { folded: span.length, reason: 'folded' };
+}
+
+// Deterministic plan-handoff digest: a one-line index of files examined during planning (so the
+// agent knows what's already been seen without the raw payloads), any prior compaction recap in the
+// span carried forward (so a compaction that fired *during* plan mode isn't dropped), then the
+// findings themselves — newest reads verbatim within budget, older ones summary-only — via
+// gatherPlanFindings.
+function buildHandoffDigest(span: Message[], findingsBudget: number): string {
+  const files = new Set<string>();
+  const priorRecaps: string[] = [];
+  for (const m of span) {
+    if (m.role === 'compaction') {
+      priorRecaps.push(m.content);
+    } else if (m.role === 'assistant') {
+      for (const tc of m.toolCalls ?? []) {
+        const p = tc.args.path;
+        if (typeof p === 'string') files.add(p);
+      }
+    }
+  }
+  const out: string[] = ['Plan-mode exploration (distilled at handoff).'];
+  if (files.size > 0) {
+    // Cap the file list the same way buildRecap does, so the index can't grow unbounded.
+    const sorted = [...files].sort();
+    const shown = sorted.slice(0, 25).join(', ');
+    const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
+    out.push(`Files examined: ${shown}${extra}`);
+  }
+  if (priorRecaps.length > 0) out.push(priorRecaps.join('\n\n'));
+  const findings = gatherPlanFindings(span, findingsBudget);
+  if (findings.trim()) out.push(`Findings:\n${findings}`);
+  return out.join('\n\n');
 }

@@ -12,7 +12,13 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
-import { compactHistory, shouldCompact, compactThreshold } from './compaction.js';
+import {
+  compactHistory,
+  shouldCompact,
+  compactThreshold,
+  gatherPlanFindings,
+  distillPlanHandoff,
+} from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -104,6 +110,12 @@ const PLAN_HARD_CEILING = 12;
 // reasoning+plan in one shot while still leaving ample window for grounding. The truncation-retry
 // remains the backstop for an unusually long generation.
 const PLAN_WRITE_RESERVE_TOKENS = 4096;
+// EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
+// a compact digest at the start of each agent turn, so the plan stays salient instead of being
+// buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
+// a clean A/B; independent of REIKA_PLAN_EXPERIMENT (which only sets the *starting* mode, so reusing
+// it would skip distillation whenever plan mode is reached via /plan). Strict no-op when off.
+const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
 
 // EXPERIMENT (plan mode): the force-write turn is a *transformation*, not another exploration
 // round. Asking the exploring model to "stop and write prose" fights its action prior and lets
@@ -133,43 +145,6 @@ function gatherPlanAnalysis(history: Message[]): string {
     .map(m => m.reasoning?.trim() || m.content?.trim() || '')
     .filter(Boolean)
     .join('\n\n');
-}
-
-// The actual findings — tool results (file contents, search matches) carry the concrete facts a
-// grounded plan needs (real paths, the exact line to change). The model's per-turn reasoning is
-// mostly narration ("let me look at X"); without the findings the transform hallucinates paths and
-// reverts to generic boilerplate. We reframe the results as static *reference material* rather than
-// a conversation, so they ground the plan without re-creating "let me read one more file" momentum.
-// Findings within a char budget so the transform request fits the window. On a large task the
-// model may read far more than the window holds; grant full payloads newest-first (the most recent
-// reads are usually the ones the converged plan rests on) until the budget is spent, and degrade
-// older reads to summary-only. The model keeps a navigable map of everything plus full grounding
-// for the recent files — graceful degradation instead of a 400.
-function gatherPlanFindings(history: Message[], charBudget: number): string {
-  const tools = history.filter((m): m is Message & { role: 'tool' } => m.role === 'tool');
-  const full = new Set<Message>();
-  let used = 0;
-  for (let i = tools.length - 1; i >= 0; i--) {
-    const body = tools[i].payload?.trim();
-    if (!body) continue;
-    const cost = tools[i].summary.length + body.length + 8;
-    if (used + cost > charBudget) break;
-    full.add(tools[i]);
-    used += cost;
-  }
-  let summarized = 0;
-  const parts = tools.map(m => {
-    const body = m.payload?.trim();
-    if (body && full.has(m)) return `── ${m.summary}\n${body}`;
-    if (body) summarized++;
-    return `── ${m.summary}`;
-  });
-  if (summarized > 0) {
-    parts.unshift(
-      `(reika: ${summarized} earlier file read(s) shown as summary only to fit the context window)`,
-    );
-  }
-  return parts.join('\n\n');
 }
 
 // The single synthetic user turn sent on the force-write call: task + the findings (as reference)
@@ -437,6 +412,24 @@ export async function runTurn(opts: {
     }
   };
 
+  // EXPERIMENT (plan→agent handoff): one-shot pre-pass before the round loop. Folds the plan-mode
+  // exploration that produced the plan into a compact digest so the executing agent sees the plan
+  // verbatim plus findings, not the full transcript. Operates on the per-turn opts.history copy
+  // (UI scrollback untouched), recomputed deterministically each turn; a cheap no-op without a
+  // plan-final marker (every ordinary agent turn) and idempotent on re-runs. Runs before the
+  // in-loop shouldCompact so that compaction sees the already-shrunk history.
+  if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
+    const { folded, reason } = distillPlanHandoff(
+      opts.history,
+      window,
+      calibration,
+      opts.config.minGenTokens,
+    );
+    // Log every agent turn (debug-gated), including the no-op: a bare folded=0 is otherwise
+    // indistinguishable from "feature never ran", which the A/B needs to tell apart.
+    debugLog(`[reika:debug] plan-handoff folded=${folded} reason=${reason}\n`);
+  }
+
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
       commitAborted(opts, '', turnStart, fetchedUrls);
@@ -658,6 +651,11 @@ export async function runTurn(opts: {
       reasoning: response.reasoning,
       ...(isFinal ? { durationMs: Date.now() - turnStart } : {}),
       ...(isFinal && fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+      // Mark the converged plan so a later agent turn can pin it and fold the exploration that
+      // produced it (agent/compaction.ts distillPlanHandoff). Any final message in plan mode IS
+      // the plan — whether the model self-terminated or was force-written — so mark on the mode,
+      // not on planForceWrite (which would miss naturally-completed plans, the common case).
+      ...(opts.promptMode === 'plan' && isFinal ? { planFinal: true } : {}),
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
