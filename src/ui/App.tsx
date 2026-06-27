@@ -352,7 +352,11 @@ export function App() {
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
     const hasWarnings = !!req.warnings && req.warnings.length > 0;
-    if (sessionAutoApproveRef.current && !hasWarnings) {
+    // 'safe' (env) and the session toggle both auto-approve ordinary actions, but a flagged
+    // dangerous command still falls through to the prompt. 'bypass' never reaches here —
+    // requestApproval is undefined in that mode (see runTurn wiring below).
+    const envSafe = config?.autoApprove === 'safe';
+    if ((sessionAutoApproveRef.current || envSafe) && !hasWarnings) {
       setApprovals(a => ({ ...a, approved: a.approved + 1 }));
       return Promise.resolve(true);
     }
@@ -556,11 +560,12 @@ export function App() {
         break;
       }
       case 'approvals': {
-        const envOn = config?.autoApprove === true;
+        const envMode = config?.autoApprove ?? 'off';
+        const envOn = envMode !== 'off';
         const target = args.trim().toLowerCase();
         if (target === 'on' || target === 'off') {
           if (envOn) {
-            response = `auto-approve is forced on by REIKA_AUTO_APPROVE; session toggle has no effect.`;
+            response = `auto-approve is forced to '${envMode}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
             break;
           }
           setSessionAutoApprove(target === 'on');
@@ -571,13 +576,21 @@ export function App() {
           response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
           break;
         }
-        const effective = envOn || sessionAutoApprove;
+        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'.
+        const effectiveMode = envOn ? envMode : sessionAutoApprove ? 'safe' : 'off';
+        const desc =
+          effectiveMode === 'bypass'
+            ? 'bypass — everything runs without confirmation, including dangerous commands'
+            : effectiveMode === 'safe'
+              ? 'safe — ordinary actions auto-run; dangerous commands still prompt'
+              : 'off — every action asks first';
         response = [
-          `auto-approve: ${effective ? 'on' : 'off'}`,
-          `  source: ${envOn ? 'REIKA_AUTO_APPROVE (env)' : sessionAutoApprove ? 'session toggle' : '(disabled)'}`,
+          `auto-approve: ${effectiveMode}`,
+          `  ${desc}`,
+          `  source: ${envOn ? `REIKA_AUTO_APPROVE=${envMode} (env)` : sessionAutoApprove ? 'session toggle' : '(disabled)'}`,
           '',
           envOn
-            ? 'env REIKA_AUTO_APPROVE forces on; session toggle is shadowed'
+            ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
             : 'toggle with /approvals on or /approvals off',
         ].join('\n');
         break;
@@ -725,7 +738,7 @@ export function App() {
         tools: mode === 'chat' ? chatToolsList : mode === 'plan' ? planTools() : tools,
         payloads,
         signal: controller.signal,
-        requestApproval: config.autoApprove ? undefined : requestApproval,
+        requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
         promptMode: mode === 'chat' ? 'chat' : mode === 'plan' ? 'plan' : 'agent',
         onMessage: msg => {
           if (msg.role === 'assistant') {
@@ -858,7 +871,13 @@ export function App() {
             contextTokens={lastUsage?.promptTokens ?? estimatedContext}
             contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
             cachedTokens={lastUsage?.cachedTokens}
-            autoApprove={config?.autoApprove || sessionAutoApprove}
+            autoApprove={
+              config?.autoApprove === 'bypass'
+                ? 'bypass'
+                : config?.autoApprove === 'safe' || sessionAutoApprove
+                  ? 'safe'
+                  : undefined
+            }
             modeTag={mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />

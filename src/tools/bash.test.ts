@@ -21,9 +21,78 @@ describe('detectDangerousPatterns — destructive commands', () => {
       'Force push to remote',
     );
   });
+});
 
-  it('does not flag a plain git push', () => {
-    expect(detectDangerousPatterns('git push origin main')).toEqual([]);
+describe('detectDangerousPatterns — workflow policy', () => {
+  it('flags git commit', () => {
+    expect(detectDangerousPatterns('git commit -m "wip"')).toContain(
+      'Git commit (records to version history)',
+    );
+  });
+
+  it('flags git commit --amend', () => {
+    expect(detectDangerousPatterns('git commit --amend --no-edit')).toContain(
+      'Git commit (records to version history)',
+    );
+  });
+
+  it('flags a plain git push (publishing work, not just force push)', () => {
+    expect(detectDangerousPatterns('git push origin main')).toContain(
+      'Git push (publishes commits to remote)',
+    );
+  });
+
+  it('flags a force push for both reasons (destructive + policy)', () => {
+    const hits = detectDangerousPatterns('git push --force origin main');
+    expect(hits).toContain('Force push to remote');
+    expect(hits).toContain('Git push (publishes commits to remote)');
+  });
+
+  it('does NOT flag read-only git commands', () => {
+    expect(detectDangerousPatterns('git status')).toEqual([]);
+    expect(detectDangerousPatterns('git log --oneline')).toEqual([]);
+    expect(detectDangerousPatterns('git diff HEAD~1')).toEqual([]);
+  });
+
+  it('flags gh pr create and merge', () => {
+    expect(detectDangerousPatterns('gh pr create --fill')).toContain(
+      'GitHub PR create/merge (outward-facing)',
+    );
+    expect(detectDangerousPatterns('gh pr merge 42 --squash')).toContain(
+      'GitHub PR create/merge (outward-facing)',
+    );
+  });
+
+  it('flags gh release create', () => {
+    expect(detectDangerousPatterns('gh release create v1.0.0')).toContain(
+      'GitHub release create (publishes)',
+    );
+  });
+
+  it('flags hf upload', () => {
+    expect(detectDangerousPatterns('hf upload my/repo ./model')).toContain(
+      'Hugging Face upload (publishes to hub)',
+    );
+  });
+
+  it('does NOT flag read-only gh/hf commands', () => {
+    expect(detectDangerousPatterns('gh pr view 42')).toEqual([]);
+    expect(detectDangerousPatterns('gh run list')).toEqual([]);
+    expect(detectDangerousPatterns('hf download my/repo')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — remote deletions (destructive)', () => {
+  it('flags gh repo delete', () => {
+    expect(detectDangerousPatterns('gh repo delete owner/name --yes')).toContain(
+      'Delete GitHub repo (irreversible remote)',
+    );
+  });
+
+  it('flags hf repo delete', () => {
+    expect(detectDangerousPatterns('hf repo delete my/repo')).toContain(
+      'Delete Hugging Face repo (irreversible remote)',
+    );
   });
 });
 

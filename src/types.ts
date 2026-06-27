@@ -142,6 +142,13 @@ export type Profile = {
   minGenTokens?: number;
 };
 
+// How much runs without a confirmation prompt.
+//   'off'    — confirm every mutating action (the session toggle may still raise this to 'safe').
+//   'safe'   — auto-approve ordinary actions, but commands flagged dangerous (see bash.ts danger
+//              patterns) still prompt. The warnings break-glass.
+//   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
+export type AutoApproveMode = 'off' | 'safe' | 'bypass';
+
 export type Config = {
   baseURL: string;
   apiKey: string;
@@ -152,7 +159,7 @@ export type Config = {
   models: string[];
   maxTurns: number;
   repoMapBudget: number;
-  autoApprove: boolean;
+  autoApprove: AutoApproveMode;
   subagentModel?: string;
   subagentBaseURL?: string;
   subagentApiKey?: string;
