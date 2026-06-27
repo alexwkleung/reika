@@ -31,9 +31,12 @@ const RULES: Array<[RegExp, string]> = [
   // provisioningProfile=<name|path>. Left visible for the harmless non-values
   // null/none so we don't add confusing noise.
   [/(provisioningProfile=)(?!(?:null|none)\b)\S+/gi, `$1${REDACTED}`],
-  // Notarization / signing key=value fields (electron-builder log style).
+  // Notarization / signing key=value fields (electron-builder log style). The
+  // bare `identity=`/`identityName=` keys cover electron-builder's `signing`
+  // line, whose value is a single-token fingerprint or short name that the
+  // identity-phrase rule above (which needs a "(TEAMID)" parenthetical) misses.
   [
-    /\b(appleId|appleIdPassword|appleApiKey|appleApiKeyId|appleApiIssuer|teamId|ascProvider|installerIdentity)=\S+/gi,
+    /\b(appleId|appleIdPassword|appleApiKey|appleApiKeyId|appleApiIssuer|teamId|ascProvider|identity|identityName|installerIdentity)=\S+/gi,
     `$1=${REDACTED}`,
   ],
   // Notarization CLI flags: --apple-id <v>, --team-id=<v>, etc. The (?!-) guard

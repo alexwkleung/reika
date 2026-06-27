@@ -45,6 +45,16 @@ describe('redactSecrets', () => {
     );
   });
 
+  it("redacts the bare identity= field in electron-builder's signing line", () => {
+    expect(
+      redactSecrets(
+        'signing file=App.app platform=darwin type=distribution identity=ABC123DEF456 provisioningProfile=none',
+      ),
+    ).toBe(
+      'signing file=App.app platform=darwin type=distribution identity=<redacted> provisioningProfile=none',
+    );
+  });
+
   it('redacts a provisioningProfile value but leaves null visible', () => {
     expect(redactSecrets('provisioningProfile=MyApp_Dev.provisionprofile')).toBe(
       'provisioningProfile=<redacted>',
