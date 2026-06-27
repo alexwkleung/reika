@@ -188,7 +188,7 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - **Agent** (default): input goes to the model; it can call tools
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
 - **Chat**: `/chat` to enter — pure chat with the model. No filesystem/shell tools registered (only `search` and `fetch_url` if configured). Conversation history is fully isolated from agent mode — switching back and forth keeps each side's history independent. `/agent` returns. Status bar shows a `chat` tag when active.
-- **Plan**: `/plan` to enter — read-only exploration. Only `read`/`list`/`grep`/`glob` are registered (no `edit`/`write`/`bash`), so the model can't change anything; it explores and ends by writing a numbered, file-specific plan. Unlike chat, history is **shared** with agent mode, so the flow is `/plan` → it writes the plan → `/agent` to execute it with the plan already in context. `REIKA_PLAN_EXPERIMENT=1` starts the session in plan mode. `/agent` returns. Status bar shows a `plan` tag when active.
+- **Plan**: `/plan` to enter — read-only exploration. Only `read`/`list`/`grep`/`glob` are registered (no `edit`/`write`/`bash`), so the model can't change anything; it explores and ends by writing a numbered, file-specific plan. Unlike chat, history is **shared** with agent mode, so the flow is `/plan` → it writes the plan → `/implement` (or `/agent` then a prompt) to execute it with the plan already in context. `REIKA_PLAN_EXPERIMENT=1` starts the session in plan mode. `/agent` returns. Status bar shows a `plan` tag when active.
 
 ## Slash commands
 
@@ -200,6 +200,7 @@ Type `/` in the input to see suggestions. Highlights:
 | `/new` / `/clear`                       | Reset conversation, tokens, mode                                                |
 | `/cd <path>`                            | Change cwd (re-indexes repo map). Tilde works.                                  |
 | `/shell` / `/chat` / `/plan` / `/agent` | Switch modes (shell / chat / plan / back to agent)                              |
+| `/implement [guidance]`                 | From plan mode: switch to agent and execute the plan above (optional guidance)  |
 | `/model` / `/cwd` / `/tokens`           | Show current values                                                             |
 | `/approvals [on\|off]`                  | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
 | `/stats`                                | Full session summary (duration, turns, tools, files modified, approvals)        |

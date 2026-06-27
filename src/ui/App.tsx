@@ -18,6 +18,7 @@ import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
+import { buildImplementPrompt } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
@@ -453,6 +454,35 @@ export function App() {
       switchMode(name, banner, echo);
       return;
     }
+    if (name === 'implement') {
+      // Shortcut for the plan→agent handoff: flip to agent mode and submit "execute the plan
+      // above" so the user doesn't have to /agent then hand-write the prompt. The plan sits in
+      // `messages` from prior renders, so it's in the history slice submitToModel sends; with
+      // REIKA_PLAN_HANDOFF=1 the loop folds the exploration into a digest automatically.
+      if (mode === 'shell' || mode === 'chat') {
+        setMessages(prev => [
+          ...prev,
+          echo,
+          {
+            role: 'system',
+            content: `/implement isn't available in ${mode} mode — use it from plan mode (or agent mode) to execute a plan.`,
+          },
+        ]);
+        return;
+      }
+      if (mode === 'plan') {
+        setMode('agent');
+        setMessages(prev => [
+          ...prev,
+          { role: 'system', content: 'Agent mode — implementing the plan above.' },
+        ]);
+      }
+      // The user bubble renders as `/implement` (displayOverride) while the model receives the
+      // built prompt; 'agent' forces this turn's tools + promptMode regardless of the not-yet-
+      // flushed mode state.
+      await submitToModel(buildImplementPrompt(args), raw, 'agent');
+      return;
+    }
     if (name === 'cd') {
       const target = args.trim();
       if (!target) {
@@ -494,6 +524,7 @@ export function App() {
           '  /shell             enter shell mode (raw bash, no model)',
           '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
           '  /agent             return to agent mode',
+          '  /implement         switch to agent mode and execute the plan above',
           '  /model             show current model and base URL',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
@@ -714,8 +745,16 @@ export function App() {
     setTypechecking(false);
   };
 
-  const submitToModel = async (modelText: string, displayOverride?: string): Promise<void> => {
+  const submitToModel = async (
+    modelText: string,
+    displayOverride?: string,
+    // For this turn only: overrides which mode's tools + prompt are used, bypassing the `mode`
+    // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
+    // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
+    modeOverride?: Mode,
+  ): Promise<void> => {
     if (!config || !bundle) return;
+    const activeMode = modeOverride ?? mode;
     setStatus('busy');
     setPhase('thinking');
     resetTypecheck();
@@ -735,11 +774,11 @@ export function App() {
         bundle,
         config: resolveProfile(config, activeProfile),
         // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
-        tools: mode === 'chat' ? chatToolsList : mode === 'plan' ? planTools() : tools,
+        tools: activeMode === 'chat' ? chatToolsList : activeMode === 'plan' ? planTools() : tools,
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
-        promptMode: mode === 'chat' ? 'chat' : mode === 'plan' ? 'plan' : 'agent',
+        promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
         onMessage: msg => {
           if (msg.role === 'assistant') {
             streamingRef.current = '';
