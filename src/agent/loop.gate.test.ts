@@ -62,7 +62,7 @@ function makeConfig(): Config {
     models: ['test'],
     maxTurns: 10,
     repoMapBudget: 1000,
-    autoApprove: true,
+    autoApprove: 'bypass',
     subagentMaxTurns: 5,
     profiles: {},
     minGenTokens: 1024,

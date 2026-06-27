@@ -136,6 +136,25 @@ function buildCommandDisplay(
   return { text: command, outputTail: lineTail.join('\n'), outputTruncated };
 }
 
+// Workflow-policy commands: not destructive (a commit is local and reversible, a push is
+// recoverable), but they record or publish work, and the user generally wants to stay in the
+// loop rather than have the agent do it autonomously. These funnel through the same warnings
+// mechanism as the destructive patterns below — so under 'safe' auto-approve they force a
+// prompt, and only explicit 'bypass' lets them run unattended. Kept as a separate constant
+// from the genuinely-dangerous patterns so the safety/policy distinction stays visible.
+const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /\bgit\s+commit\b/, label: 'Git commit (records to version history)' },
+  // Bare push; force push is also flagged separately below as a destructive pattern.
+  { re: /\bgit\s+push\b/, label: 'Git push (publishes commits to remote)' },
+  // Outward-facing GitHub/HF actions. Scoped to the publishing subcommands so read-only
+  // invocations (gh pr view, gh run list, hf download) don't trip the gate — blanket gh/hf
+  // matching would fire on reads and erode the signal. Remote *deletions* are destructive,
+  // not policy, so they live in DANGER_PATTERNS below.
+  { re: /\bgh\s+pr\s+(?:create|merge)\b/, label: 'GitHub PR create/merge (outward-facing)' },
+  { re: /\bgh\s+release\s+create\b/, label: 'GitHub release create (publishes)' },
+  { re: /\bhf\s+upload\b/, label: 'Hugging Face upload (publishes to hub)' },
+];
+
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   {
     re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
@@ -152,6 +171,8 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgit\s+branch\s+-D\b/, label: 'Force-delete git branch' },
   { re: /\bgit\s+reset\s+--hard\b/, label: 'Hard reset (discards uncommitted changes)' },
   { re: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'Force-clean untracked files' },
+  { re: /\bgh\s+repo\s+delete\b/, label: 'Delete GitHub repo (irreversible remote)' },
+  { re: /\bhf\s+repo\s+delete\b/, label: 'Delete Hugging Face repo (irreversible remote)' },
   { re: /\bchmod\s+[0-7]*777\b/, label: 'Open permissions (chmod 777)' },
   { re: /\brm\s+[^&;|]*\.env\b/, label: 'Deleting environment file (.env)' },
   { re: />\s*\/dev\/sd[a-z]\b/, label: 'Writing to raw disk device' },
@@ -191,6 +212,7 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
     re: /\bgem\s+install\b(?![^|;&]*--user\b)/,
     label: 'Gem install (system-level unless --user)',
   },
+  ...POLICY_PATTERNS,
 ];
 
 export function detectDangerousPatterns(command: string): string[] {

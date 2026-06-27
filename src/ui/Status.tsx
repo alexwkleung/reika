@@ -24,7 +24,7 @@ export function Status({
   contextTokens?: number | null;
   contextWindow?: number;
   cachedTokens?: number;
-  autoApprove?: boolean;
+  autoApprove?: 'safe' | 'bypass';
   modeTag?: string;
   exitArmed?: boolean;
 }) {
@@ -55,7 +55,9 @@ export function Status({
       ) : null}
       {autoApprove ? (
         <>
-          <Text color={theme.warning}>auto approve</Text>
+          <Text color={autoApprove === 'bypass' ? theme.error : theme.warning}>
+            {autoApprove === 'bypass' ? 'bypass' : 'auto approve'}
+          </Text>
           <Text color={theme.muted}>{' · '}</Text>
         </>
       ) : null}

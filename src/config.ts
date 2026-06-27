@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { Config, Profile } from './types.js';
+import type { AutoApproveMode, Config, Profile } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
@@ -51,8 +51,7 @@ export function loadConfig(): Config {
     minGenTokens,
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
-    autoApprove:
-      process.env.REIKA_AUTO_APPROVE === 'true' || process.env.REIKA_AUTO_APPROVE === '1',
+    autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
@@ -111,6 +110,27 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
 
 function emptyToUndefined(s: string | undefined): string | undefined {
   return s && s.trim() !== '' ? s : undefined;
+}
+
+// REIKA_AUTO_APPROVE controls how much runs without a confirmation prompt:
+//   'safe' (also 'true'/'1') — auto-approve ordinary actions; commands flagged dangerous
+//                              (see bash.ts danger patterns) still prompt.
+//   'bypass' (also 'yolo')   — approve everything, including dangerous commands. True yolo.
+//   anything else / unset    — 'off': confirm every action.
+// 'true'/'1' map to 'safe' (not 'bypass') so the common opt-in keeps the safety net; full
+// bypass has to be asked for by name.
+function parseAutoApprove(raw: string | undefined): AutoApproveMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case 'safe':
+    case 'true':
+    case '1':
+      return 'safe';
+    case 'bypass':
+    case 'yolo':
+      return 'bypass';
+    default:
+      return 'off';
+  }
 }
 
 // Catch the common footgun of including the endpoint path in the base URL.
