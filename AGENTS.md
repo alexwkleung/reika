@@ -78,6 +78,8 @@ This is how `search` + `fetch_url` are wired. Two providers implement `SearchPro
 2. Handle in `App.tsx`'s `handleCommand` switch
 3. Update the `/help` text inline in `App.tsx` so users see it
 
+A command that both **switches mode and submits to the model in one tick** (e.g. `/implement`, which flips to agent mode and runs "execute the plan above") must pass an explicit mode to `submitToModel`'s `modeOverride` param — the `setMode` call hasn't flushed yet, so `submitToModel`'s `mode` closure would still read the old mode and pick the wrong tools/`promptMode`.
+
 ## Adding UI
 
 - Components: `.tsx` in `src/ui/`
@@ -129,7 +131,7 @@ Four runtime modes. Each affects what input does and what context is preserved.
 | `agent` (default) | Runs through model + agent system prompt                                      | `defaultTools(config)` — full set                            | shared with shell + plan                                                     |
 | `shell`           | Runs as bash directly (no model)                                              | n/a                                                          | shared with agent — shell output becomes part of agent's context             |
 | `chat`            | Runs through model + lean chat system prompt (no tool-use rules, no repo map) | `chatTools(config)` — knowledge-only (`search`, `fetch_url`) | **isolated** — separate `messages` array, stashed/restored on mode switch    |
-| `plan`            | Runs through model + plan system prompt; read-only, ends in a written plan    | `planTools()` — read-only (`read`/`list`/`grep`/`glob`)      | shared with agent — `/plan` explore → `/agent` executes with plan in context |
+| `plan`            | Runs through model + plan system prompt; read-only, ends in a written plan    | `planTools()` — read-only (`read`/`list`/`grep`/`glob`)      | shared with agent — `/plan` explore → `/implement` (or `/agent`) executes with plan in context |
 
 Implementation: a single `messages` state holds the active mode's history. When the user crosses the chat boundary (agent/shell/plan ↔ chat), `stashedMessagesRef` saves the outgoing side and restores the incoming side's prior history. Switching among agent, shell, and plan does not stash — they share one history (so a plan carries into agent execution); only chat is isolated. `/new` clears only the current mode's history (the other side's stash survives).
 
