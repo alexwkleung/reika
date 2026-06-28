@@ -59,9 +59,13 @@ const SPIN_MIN_CHARS = 1200; // don't judge short thinking
 const SPIN_WINDOW = 12000; // trailing window (~3000 tokens) — wide enough to span several spiral cycles
 const SPIN_RATIO = 0.3;
 
-export function liveSpinSignal(reasoning: string): boolean {
-  if (reasoning.length < SPIN_MIN_CHARS) return false;
-  return selfRepeatRatio(reasoning.slice(-SPIN_WINDOW)) >= SPIN_RATIO;
+// Returns both the verdict and the windowed ratio — the ratio is logged (REIKA_DEBUG) so the
+// threshold can be tuned against real values rather than guessed. ratio is 0 for blocks too short
+// to judge.
+export function liveSpinSignal(reasoning: string): { spinning: boolean; ratio: number } {
+  if (reasoning.length < SPIN_MIN_CHARS) return { spinning: false, ratio: 0 };
+  const ratio = selfRepeatRatio(reasoning.slice(-SPIN_WINDOW));
+  return { spinning: ratio >= SPIN_RATIO, ratio };
 }
 
 // Jaccard overlap of k-grams between two rounds' reasoning. High across consecutive rounds (with no

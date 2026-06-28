@@ -56,8 +56,10 @@ describe('crossRoundSimilarity', () => {
 });
 
 describe('liveSpinSignal', () => {
-  it('does not flag short reasoning, however repetitive', () => {
-    expect(liveSpinSignal('wait reconsider '.repeat(5))).toBe(false); // under the min length
+  it('does not flag short reasoning, however repetitive (ratio 0 under min length)', () => {
+    const r = liveSpinSignal('wait reconsider '.repeat(5));
+    expect(r.spinning).toBe(false);
+    expect(r.ratio).toBe(0);
   });
 
   it('does not flag long healthy reasoning', () => {
@@ -67,13 +69,15 @@ describe('liveSpinSignal', () => {
       (_, n) => `step ${n} examines a distinct concern number ${n} in the codebase and resolves it.`,
     ).join(' ');
     expect(healthy.length).toBeGreaterThan(1200);
-    expect(liveSpinSignal(healthy)).toBe(false);
+    expect(liveSpinSignal(healthy).spinning).toBe(false);
   });
 
   it('flags a long block whose trailing window degenerates into a repeated span', () => {
     const lead = 'first some genuine and varied analysis of the problem at hand goes here. '.repeat(20);
     const spiral = 'wait let me reconsider this carefully actually the answer is clearly '.repeat(40);
-    expect(liveSpinSignal(lead + spiral)).toBe(true);
+    const r = liveSpinSignal(lead + spiral);
+    expect(r.spinning).toBe(true);
+    expect(r.ratio).toBeGreaterThan(0.3);
   });
 
   it('flags paragraph-recycling whose period exceeds the old small window', () => {
@@ -89,7 +93,7 @@ describe('liveSpinSignal', () => {
       block += `Consideration number ${n} explores a separate distinct angle ${n} on the layout. `;
       block += para; // the same paragraph recycled every cycle
     }
-    expect(liveSpinSignal(block)).toBe(true);
+    expect(liveSpinSignal(block).spinning).toBe(true);
   });
 });
 
