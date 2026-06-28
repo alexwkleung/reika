@@ -75,6 +75,22 @@ describe('liveSpinSignal', () => {
     const spiral = 'wait let me reconsider this carefully actually the answer is clearly '.repeat(40);
     expect(liveSpinSignal(lead + spiral)).toBe(true);
   });
+
+  it('flags paragraph-recycling whose period exceeds the old small window', () => {
+    // The real failure case: a ~400-char paragraph recycled, separated by ~400 chars of filler, so
+    // the period (~800 chars) is larger than the old 2400 window would reliably catch but the wide
+    // window sees the recycling. Distinct fillers keep it from being a trivial verbatim loop.
+    const para =
+      'But actually I think the issue is that the textarea is using inset zero which makes it fill ' +
+      'the entire container and the padding right creates space for the gutter but if the text is ' +
+      'very long it might still overflow into the gutter area because the padding is not enough here. ';
+    let block = '';
+    for (let n = 0; n < 8; n++) {
+      block += `Consideration number ${n} explores a separate distinct angle ${n} on the layout. `;
+      block += para; // the same paragraph recycled every cycle
+    }
+    expect(liveSpinSignal(block)).toBe(true);
+  });
 });
 
 describe('ReasoningTrace', () => {

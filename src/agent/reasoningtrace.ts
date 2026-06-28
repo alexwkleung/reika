@@ -45,11 +45,19 @@ export function selfRepeatRatio(text: string): number {
 // automated abort. Mid-stream we can't know whether a model will escape a *semantic* spiral, so we
 // don't guess and cut; we surface a soft signal and let the human (who can glance at the thinking)
 // decide to abort or wait. True only when the block is long enough to judge AND its trailing window
-// is verbatim-repetitive. Tuned to flag clear churn without crying wolf: healthy long reasoning
-// measured ~0.2 self-repeat over a whole block, so 0.5 over a trailing window has clear headroom.
+// is repetitive.
+//
+// The window must be LARGE: real reasoning spirals recycle whole paragraphs with a period of ~1-2k
+// chars, so a small window sees only one copy of each and reads ~0 (measured: a paragraph-recycling
+// spiral was 0.10 over a 2400-char window but 0.27 over the full block). A 12k window spans several
+// cycles while still reflecting *recent* behavior (so it clears if the model breaks out). The
+// threshold is lower than a pure decoder loop (~0.8) because paragraph-recycling sits ~0.27+ early
+// and climbs as it cycles; 0.3 catches it after a couple cycles while clearing the ~0.19 healthy
+// high-water mark. A false "may be looping" is cheap here (the human just glances), so this leans
+// sensitive on purpose.
 const SPIN_MIN_CHARS = 1200; // don't judge short thinking
-const SPIN_WINDOW = 2400; // trailing window (~600 tokens) — local repetition, not the whole block
-const SPIN_RATIO = 0.5;
+const SPIN_WINDOW = 12000; // trailing window (~3000 tokens) — wide enough to span several spiral cycles
+const SPIN_RATIO = 0.3;
 
 export function liveSpinSignal(reasoning: string): boolean {
   if (reasoning.length < SPIN_MIN_CHARS) return false;
