@@ -147,7 +147,17 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // ratio) is left alone. The one place mid-stream abort is sound; without it the only backstop is the
 // max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
 // independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
-const MAX_VERBATIM_RECOVERIES = 1;
+// 2 (not 1) so the force-write *recovery round* is itself abort-protected — a deeply-stuck model
+// spirals in the force-write too, and the first budget unit is spent cutting the original spiral.
+const MAX_VERBATIM_RECOVERIES = 2;
+// Absolute reasoning-length backstop (chars): cut a single uninterrupted reasoning block past this
+// REGARDLESS of ratio. Catches a low-repetition *semantic* spiral (ratio ~0.3) that the ratio curve
+// won't — which is exactly what a spiraling force-write looks like. 32000 ≈ 8000 tokens, ~2x the
+// healthy single-block max, so genuine long deliberation is untouched. The force-write round uses a
+// tighter ceil: a transform legitimately reasons only a few hundred tokens (observed ~300-400t), so
+// anything near 3000t there is stuck and there's no reason to let it run to 8000.
+const REASONING_HARD_CEIL = 32000;
+const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
@@ -742,15 +752,21 @@ export async function runTurn(opts: {
                 `ratio=${ratio.toFixed(2)} chars=${roundReasoning.length}\n`,
             );
           }
-          // Degenerate reasoning → cut the stream now rather than burn the rest of the window. The
-          // bar is length-aware (high for a short block = verbatim only; lower for a pathologically
-          // long one = a stuck semantic spiral). Only while we still have a recovery budget this turn.
+          // Degenerate reasoning → cut the stream now rather than burn the rest of the window. Two
+          // ways to trip it: (a) length-aware ratio (high bar for a short block = verbatim only,
+          // lower as it grows = a repetitive spiral); or (b) an absolute length ceil regardless of
+          // ratio, which catches a LOW-repetition semantic spiral the ratio curve misses (e.g. a
+          // spiraling force-write at ratio ~0.3). The force-write round uses a tighter ceil. Only
+          // while a recovery budget remains this turn.
           const abortAt = verbatimAbortThreshold(roundReasoning.length);
-          if (canAbortVerbatim && !verbatimAborted && ratio >= abortAt) {
+          const hardCeil = planForceWrite ? FORCE_WRITE_REASONING_CEIL : REASONING_HARD_CEIL;
+          const tooLong = roundReasoning.length >= hardCeil;
+          if (canAbortVerbatim && !verbatimAborted && (ratio >= abortAt || tooLong)) {
             verbatimAborted = true;
             debugLog(
-              `[reika:debug] verbatim-abort round=${i} ratio=${ratio.toFixed(2)} ` +
-                `threshold=${abortAt.toFixed(2)} chars=${roundReasoning.length}\n`,
+              `[reika:debug] verbatim-abort round=${i} reason=${tooLong ? 'length' : 'ratio'} ` +
+                `ratio=${ratio.toFixed(2)} threshold=${abortAt.toFixed(2)} ceil=${hardCeil} ` +
+                `chars=${roundReasoning.length}\n`,
             );
             callAbort.abort();
           }
@@ -816,22 +832,41 @@ export async function runTurn(opts: {
     if (verbatimAborted) {
       verbatimRecoveries++;
       opts.onReasoningStatus?.(false);
-      opts.onMessage({
-        role: 'system',
-        tone: 'warn',
-        content: 'Reasoning was repeating itself — stopped it.',
-      });
-      if (opts.promptMode === 'plan') {
+      // Plan mode, first cut on a normal exploration round → write the plan from the findings already
+      // gathered (the clean recovery). NOT when the force-write itself spiraled (planForceWrite) — a
+      // model this stuck loops in the transform too, so re-triggering it would just loop.
+      if (
+        opts.promptMode === 'plan' &&
+        !planForceWrite &&
+        verbatimRecoveries < MAX_VERBATIM_RECOVERIES
+      ) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: 'Reasoning was repeating itself — writing the plan from what was gathered.',
+        });
         forceVerbatimPlanWrite = true;
-      } else {
+        continue;
+      }
+      // Agent/chat, first cut within budget → nudge to act on what it has.
+      if (opts.promptMode !== 'plan' && verbatimRecoveries < MAX_VERBATIM_RECOVERIES) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: 'Reasoning was repeating itself — stopped it.',
+        });
         opts.history.push({
           role: 'user',
           content:
             '(your reasoning was repeating the same text and was stopped — decide from what you ' +
             'already have and call a tool or give the answer concisely, without long reasoning)',
         });
+        continue;
       }
-      continue;
+      // The force-write itself spiraled, or the recovery budget is spent: stop honestly rather than
+      // loop or commit spiral garbage as a "plan". This model is stuck on this task; say so.
+      commitSpiralStop(opts, turnStart, fetchedUrls);
+      return;
     }
 
     // In plan force-write mode the request carried no tools, but some local models still emit
@@ -1148,6 +1183,36 @@ function commitAborted(
     role: 'assistant',
     content,
     ...(reasoning ? { reasoning } : {}),
+    durationMs: Date.now() - turnStart,
+    ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+  };
+  opts.history.push(m);
+  opts.onMessage(m);
+}
+
+// Honest terminal stop when reasoning keeps spiraling even through recovery (the force-write looped,
+// or the recovery budget is spent). Better than committing spiral garbage as a "plan" or running to
+// the token wall. Names the files examined so the user has a handle on what was done. Deliberately
+// not marked planFinal — it isn't a plan, so the plan→agent handoff won't treat it as one.
+function commitSpiralStop(
+  opts: { history: Message[]; onMessage: (m: Message) => void },
+  turnStart: number,
+  fetchedUrls: Set<string>,
+): void {
+  const files = new Set<string>();
+  for (const m of opts.history) {
+    if (m.role !== 'assistant') continue;
+    for (const tc of m.toolCalls ?? []) {
+      if (typeof tc.args.path === 'string') files.add(tc.args.path);
+    }
+  }
+  const examined = files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
+  const m: Message = {
+    role: 'assistant',
+    content:
+      `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
+      `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
+      `rephrasing or narrowing it, or use a stronger model.`,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
