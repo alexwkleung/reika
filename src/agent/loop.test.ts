@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flagRepeatedCall, buildAgentLoopLedger } from './loop.js';
+import { flagRepeatedCall, buildAgentLoopLedger, shouldWithdrawInspection } from './loop.js';
 
 // Convenience: read calls keyed on path+offset.
 const read = (
@@ -171,5 +171,72 @@ describe('buildAgentLoopLedger', () => {
     expect(ledger).toContain('f0.ts');
     expect(ledger).toContain('f7.ts');
     expect(ledger).not.toContain('f8.ts'); // sliced at 8
+  });
+
+  it('adds a "complete → say so and stop" out to the withdrawn directive (post-edit loops)', () => {
+    const hard = buildAgentLoopLedger([{ path: 'a.ts', offset: 1, repeats: 3 }], true);
+    expect(hard).toContain('if the change is already complete');
+  });
+
+  it('falls back to a generic message for a reasoning loop with no tight read repeat', () => {
+    // The agent-mode reasoning-loop arm passes an empty `looping` (each read paged a fresh region /
+    // the same grep kept returning 0 matches, so ReadTrace saw no repeat). The ledger must still fire
+    // a stop directive without naming any file, and keep the blocker escape for the can't-find case.
+    const soft = buildAgentLoopLedger([], false);
+    expect(soft).toContain('repeated the same reasoning and searches');
+    expect(soft).not.toContain('identical bytes'); // file-specific phrasing suppressed
+    expect(soft).toContain('a symbol your searches');
+    expect(soft).not.toContain('PAUSED');
+
+    const hard = buildAgentLoopLedger([], true);
+    expect(hard).toContain('repeated the same reasoning and searches');
+    expect(hard).toContain('PAUSED');
+    expect(hard).toContain('Make the edit');
+  });
+});
+
+describe('shouldWithdrawInspection', () => {
+  const base = { reasoningLoop: false, editingStarted: false, editRecovery: false };
+
+  it('does not withdraw before the loop has persisted LOOP_WITHDRAW_AFTER rounds', () => {
+    expect(
+      shouldWithdrawInspection({ ...base, loopActiveRounds: 1, reasoningLoop: true }),
+    ).toBe(false);
+  });
+
+  it('withdraws a pre-edit read loop (the original explore→act case)', () => {
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 2 })).toBe(true);
+  });
+
+  it('exempts a read loop once editing has begun (edit-recovery re-reads)', () => {
+    expect(
+      shouldWithdrawInspection({ ...base, loopActiveRounds: 5, editingStarted: true }),
+    ).toBe(false);
+  });
+
+  it('withdraws a reasoning loop even post-edit — re-reading rumination is not edit-recovery', () => {
+    // The yumi case: model edited 5×, then looped re-reading router.ts at crossSim=1.0; the old
+    // `!editingStarted` gate kept withdrawal off and it never broke out.
+    expect(
+      shouldWithdrawInspection({
+        ...base,
+        loopActiveRounds: 2,
+        reasoningLoop: true,
+        editingStarted: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('does NOT withdraw a reasoning loop during edit-recovery — it needs reading to fix old_string', () => {
+    // The chat.ts case: failed edit (old_string not in file) + crossSim=1.0; withdrawing reading only
+    // forces more failing edits. The edit-recovery dead-end is handled by the graceful stop instead.
+    expect(
+      shouldWithdrawInspection({
+        loopActiveRounds: 4,
+        reasoningLoop: true,
+        editingStarted: true,
+        editRecovery: true,
+      }),
+    ).toBe(false);
   });
 });

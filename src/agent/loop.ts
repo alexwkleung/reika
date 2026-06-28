@@ -20,6 +20,7 @@ import {
   distillPlanHandoff,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { selfRepeatRatio, ReasoningTrace } from './reasoningtrace.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -110,6 +111,18 @@ const PLAN_HARD_CEILING = 12;
 // reasoning+plan in one shot while still leaving ample window for grounding. The truncation-retry
 // remains the backstop for an unusually long generation.
 const PLAN_WRITE_RESERVE_TOKENS = 4096;
+// EXPERIMENT (reasoning-loop break, Layer 2): force a plan-mode commit when the model's reasoning
+// goes cross-round circular — re-deriving the same analysis instead of converging. Gated behind
+// REIKA_REASONING_LOOP so it can be A/B'd; strict no-op when off (the ReasoningTrace still records
+// for the debug diagnostic, but its verdict is never acted on). Calibrated from real transcripts:
+// healthy runs topped out at crossSim ~0.21 even on long reasoning rounds, while the observed loop
+// locked at crossSim=1.00 — so 0.6 sits in the wide dead zone between them. A streak of 2 fires one
+// round after the loop locks (the lock was observed to happen within a round of onset), trading one
+// wasted round for near-zero false-positive risk. n=1 on the trigger so far — confirm over more runs
+// ([[testing-small-models-needs-multiple-runs]]) before hardwiring (or lowering) these.
+const REASONING_LOOP_THRESHOLD = 0.6;
+const REASONING_LOOP_STREAK = 2;
+const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
 // buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
@@ -247,37 +260,79 @@ const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out.
 const WITHDRAWAL_DIRECTIVE =
-  '(reika: inspection tools (read/grep/glob/list) are paused because you have re-read the same ' +
-  'content repeatedly without making a change. You already have what you need. Make the edit the ' +
-  'task requires with the edit/write tools, or if something specific is blocking you, say what it ' +
-  'is. Reading and searching are unavailable until you make progress.)';
+  '(reika: inspection tools (read/grep/glob/list) are paused because you have repeated the same ' +
+  'reads or searches without making progress. You already have what you need. Make the edit the ' +
+  'task requires with the edit/write tools, state what is specifically blocking you, or — if the ' +
+  'change is already complete — say so and stop. Reading and searching are unavailable until you ' +
+  'make progress.)';
+
+// Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop
+// has stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), but the edit-recovery
+// exemption is asymmetric by loop type:
+//   - read loop (reasoningLoop=false): suppressed once editing has begun, because a post-edit re-read
+//     is usually edit-recovery — re-fetching exact bytes to rebuild old_string after compaction aged
+//     them — not gratuitous looping. Withdrawing read there pushes the model onto bash-grep and makes
+//     edits harder to land (the original [[reika-agent-loop-breaking]] finding).
+//   - reasoning loop (reasoningLoop=true): withdraws even post-edit, because crossSim≈1.0 while
+//     RE-READING/searching is rumination (observed: edited 5×, then looped re-reading router.ts in a
+//     rotation — the old `!editingStarted` gate wrongly left withdrawal off and it never broke out).
+//   - EXCEPT edit-recovery (editRecovery=true, an unresolved failed edit): NOT withdrawn even though
+//     the reasoning is looping. A model failing the same edit (old_string not in the file) needs to
+//     READ to rebuild old_string — pausing inspection only forces more failing edits (observed: it
+//     oscillated edit-fail ↔ re-read at crossSim=1.0). High crossSim does NOT distinguish rumination
+//     from edit-recovery — the failed-edit signal does. The edit-recovery dead-end gets a graceful
+//     stop (see runTurn), not withdrawal.
+export function shouldWithdrawInspection(opts: {
+  loopActiveRounds: number;
+  reasoningLoop: boolean;
+  editingStarted: boolean;
+  editRecovery: boolean;
+}): boolean {
+  if (opts.loopActiveRounds < LOOP_WITHDRAW_AFTER) return false;
+  if (opts.editRecovery) return false;
+  return opts.reasoningLoop || !opts.editingStarted;
+}
 
 // Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
-// read loop. The per-payload nudge (flagRepeatedCall) can't break a period >= 2 loop on a one-round
+// loop — either a tight read repeat (ReadTrace.loopingReads, which names the files via `looping`) or
+// cross-round reasoning rumination (caller passes an empty `looping`, so the message names the symptom
+// generically). The per-payload nudge (flagRepeatedCall) can't break a period >= 2 loop on a one-round
 // liveness window — it ages out before the loop returns to that call — so the signal must live in
 // the system suffix, which is regenerated each round and never ages. Emitted ONLY while a loop is
-// active (ReadTrace.loopingReads), so a healthy turn never sees it. The "or state what is blocking
-// you" escape is load-bearing: it gives a cornered model an out that isn't a premature wrong edit.
-// `withdrawn` adds the harder line once we've escalated to pulling the inspection tools.
+// active, so a healthy turn never sees it. The "or state what is blocking you" escape is load-bearing:
+// it gives a cornered model an out that isn't a premature wrong edit (e.g. naming a symbol its
+// searches can't find — exactly the observed 0-match grep loop). `withdrawn` adds the harder line
+// once we've escalated to pulling the inspection tools.
 export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false): string {
   const files = looping
     .slice(0, 8)
     .map(l => (l.offset > 1 ? `${l.path}:L${l.offset}` : l.path))
     .join(', ');
-  const lines = [
-    '',
-    '--- reika status (auto-generated — not user input) ---',
-    `You have re-read the same file(s) several times this turn and the content has not changed: ${files}.`,
-  ];
+  const lines = ['', '--- reika status (auto-generated — not user input) ---'];
+  // `looping` is empty for a pure reasoning loop (cross-round rumination, where each read pages a
+  // fresh region or re-runs the same fruitless search so ReadTrace sees no repeat) — name the symptom
+  // generically there; name the specific files when there's a tight read repeat to point at.
+  lines.push(
+    files
+      ? `You have re-read the same file(s) several times this turn and the content has not changed: ${files}.`
+      : 'You have repeated the same reasoning and searches several times this turn without converging on the task.',
+  );
   if (withdrawn) {
     lines.push(
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
-      'tools, or state specifically what is still blocking you.',
+      'tools, state specifically what is still blocking you, or — if the change is already complete —',
+      'say so and stop.',
     );
-  } else {
+  } else if (files) {
     lines.push(
       'Re-reading them returns identical bytes — it will not surface anything new. Stop gathering and',
       'either make the change the task needs, or state specifically what is still blocking you.',
+    );
+  } else {
+    lines.push(
+      'Repeating them will not surface anything new. Decide from what you already have: make the change',
+      'the task needs, or state specifically what is blocking you — for example, a symbol your searches',
+      'cannot find.',
     );
   }
   return lines.join('\n');
@@ -359,6 +414,13 @@ export async function runTurn(opts: {
   // edits *harder* to land (observed). So withdrawal is scoped to the pre-edit explore loop; the
   // soft ledger still fires after, since it's harmless and the re-reads are genuinely redundant.
   let editingStarted = false;
+  // Edit-recovery state for the reasoning-loop dead-end: true while the model's most recent edit
+  // FAILED (e.g. old_string not in the file) with no successful edit since. A failed edit needs a
+  // re-read to recover, so withdrawal is suppressed here; if it persists alongside a reasoning loop
+  // (the model retrying an edit it can't apply, ignoring the failure), the turn stops gracefully
+  // rather than looping. lastFailedEditFile names the file for that report.
+  let lastEditFailed = false;
+  let lastFailedEditFile = '';
   // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
   // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
   // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
@@ -382,6 +444,14 @@ export async function runTurn(opts: {
   // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
   // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
   const readTrace = new ReadTrace();
+  // Cross-round reasoning-loop detector (Layer 2). Records each round's reasoning to spot the model
+  // re-deriving the same analysis instead of converging. Always recorded (cheap, and the debug
+  // diagnostic reads it); its verdict only drives a force-commit when REASONING_LOOP_BREAK is set.
+  // See agent/reasoningtrace.ts.
+  const reasoningTrace = new ReasoningTrace();
+  // Whether the detector currently sees a sustained reasoning loop. Set after each round's model
+  // call (from round i-1's reasoning); read at the top of round i to decide the force-commit.
+  let reasoningLoopActive = false;
 
   const window = opts.config.contextWindow;
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
@@ -440,9 +510,19 @@ export async function runTurn(opts: {
     // Up to the cap: append the ledger + escalating nudge to the exploration prompt. At the cap:
     // switch to the transform — a tool-less call over a synthetic task+notes context, NOT the
     // exploration history. callHistory/callTools below are what actually get sent.
+    // Force the plan write when exploration has stalled (novelty), run too long (ceiling), or — when
+    // enabled — the reasoning has gone cross-round circular. The reasoning-loop arm catches the case
+    // the novelty proxy misses: tool results that look new each round keep planStaleRounds reset while
+    // the reasoning is identical (the observed crossSim=1.00 loop). reasoningLoopActive reflects round
+    // i-1 here (set after that round's call), so a loop confirmed at i-1 force-writes at i.
     const planForceWrite =
       opts.promptMode === 'plan' &&
-      (planStaleRounds >= PLAN_STALL_ROUNDS || i >= PLAN_HARD_CEILING);
+      (planStaleRounds >= PLAN_STALL_ROUNDS ||
+        i >= PLAN_HARD_CEILING ||
+        (REASONING_LOOP_BREAK && reasoningLoopActive));
+    if (planForceWrite && REASONING_LOOP_BREAK && reasoningLoopActive) {
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop\n`);
+    }
     // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
     // lifts as soon as the loop clears. Never set in plan mode (which has its own force-write).
@@ -452,26 +532,67 @@ export async function runTurn(opts: {
         ? buildPlanWritePrompt()
         : baseSystem + '\n\n' + buildPlanLedger(opts.history, i);
     } else {
-      // Agent/chat: surface a persistent stop directive only while a read loop is active. ReadTrace
-      // reflects rounds 0..i-1 here (it's updated during dispatch), so a loop confirmed at round
-      // i-1 appears in round i's system. Reset to baseSystem otherwise, so a recovered model — or a
-      // turn that never looped — isn't nagged. Chat mode has no reads, so this is always baseSystem.
+      // Agent/chat: surface a persistent stop directive while a loop is active. Two independent
+      // signals drive the same ladder:
+      //  - a tight read repeat (ReadTrace), reflecting rounds 0..i-1 (updated during dispatch); and
+      //  - when enabled, cross-round reasoning rumination (reasoningLoopActive, from round i-1). This
+      //    catches what ReadTrace can't: a model paging fresh regions of a huge file / re-running the
+      //    same 0-match grep forever — every read is `unique`, so loopingReads stays empty, but the
+      //    reasoning is byte-identical (observed crossSim=1.00 from round 14 while it scanned a
+      //    2149-line file looking for a symbol that did not exist). Reset to baseSystem otherwise, so
+      //    a recovered model — or a turn that never looped — isn't nagged. Chat mode has neither.
       const looping = readTrace.loopingReads(
         i,
         LOOP_RECENT_ROUNDS,
         LOOP_AGED_REPEATS,
         LOOP_LIVE_REPEATS,
       );
-      loopActiveRounds = looping.length > 0 ? loopActiveRounds + 1 : 0;
-      // Scope to the explore→act transition: never withdraw once editing has begun (see editingStarted).
-      withdrawInspection = !editingStarted && loopActiveRounds >= LOOP_WITHDRAW_AFTER;
-      system =
-        looping.length > 0
-          ? baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection)
-          : baseSystem;
-      if (withdrawInspection) {
+      const reasoningLoop = REASONING_LOOP_BREAK && reasoningLoopActive;
+      const loopDetected = looping.length > 0 || reasoningLoop;
+      loopActiveRounds = loopDetected ? loopActiveRounds + 1 : 0;
+      // A read loop keeps the edit-recovery exemption (no withdrawal once editing has begun); a
+      // reasoning loop withdraws too — UNLESS there's an unresolved failed edit, where the model needs
+      // reading to recover and withdrawal would only force more failing edits. See shouldWithdrawInspection.
+      withdrawInspection = shouldWithdrawInspection({
+        loopActiveRounds,
+        reasoningLoop,
+        editingStarted,
+        editRecovery: lastEditFailed,
+      });
+      // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
+      // model retrying an edit it can't apply (old_string isn't in the file — typically a plan that
+      // references code that doesn't exist there). It ignores the failure message (crossSim≈1.0) and
+      // re-reading never produces a matching old_string, so neither the ledger nor withdrawal recovers
+      // it (observed: it oscillated edit-fail ↔ re-read for 17+ rounds). Stop the turn with a clear
+      // report instead — bounded recovery, like the length/typecheck caps.
+      if (
+        reasoningLoop &&
+        lastEditFailed &&
+        loopActiveRounds >= LOOP_WITHDRAW_AFTER
+      ) {
+        debugLog(`[reika:debug] round=${i} edit-recovery-stuck file=${lastFailedEditFile}\n`);
+        const stuck: Message = {
+          role: 'assistant',
+          content:
+            `I kept trying to edit \`${lastFailedEditFile}\` but the text I expected isn't in the ` +
+            `file, so the change can't be applied as planned — the plan may reference code that ` +
+            `doesn't exist there. I've stopped instead of looping. Please confirm the change belongs ` +
+            `in that file, or point me at the right location.`,
+          durationMs: Date.now() - turnStart,
+          ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+        };
+        opts.history.push(stuck);
+        opts.onMessage(stuck);
+        return;
+      }
+      system = loopDetected
+        ? baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection)
+        : baseSystem;
+      if (loopDetected) {
         debugLog(
-          `[reika:debug] round=${i} inspection-withdrawn loopActiveRounds=${loopActiveRounds}\n`,
+          `[reika:debug] round=${i} loop-active reads=${looping.length} reasoning=${reasoningLoop} ` +
+            `loopActiveRounds=${loopActiveRounds} withdrawn=${withdrawInspection} ` +
+            `editRecovery=${lastEditFailed}\n`,
         );
       }
     }
@@ -595,6 +716,23 @@ export async function runTurn(opts: {
     // already withdrew — withdrawing tools from the *request* alone doesn't stop an in-band caller.
     const toolCalls = planForceWrite ? [] : (response.toolCalls ?? []);
     const isFinal = toolCalls.length === 0;
+
+    // Record this round's reasoning for the Layer-2 loop detector and refresh the active flag (read
+    // by the next round's force-commit decision). Detection always runs; the action is gated above by
+    // REASONING_LOOP_BREAK. The debug line classifies the thinking-block failure mode: selfRepeat
+    // high (+ finishReason=length) = Layer 1 verbatim degeneration; crossSim/streak high while never
+    // finalizing = Layer 2 rumination. Model-invisible. See reasoningtrace.ts.
+    const rsn = response.reasoning ?? '';
+    const { sim, streak } = reasoningTrace.record(rsn, REASONING_LOOP_THRESHOLD);
+    reasoningLoopActive = streak >= REASONING_LOOP_STREAK;
+    if (debugEnabled()) {
+      debugLog(
+        `[reika:debug] reasoning-loop round=${i} selfRepeat=${selfRepeatRatio(rsn).toFixed(2)} ` +
+          `crossSim=${sim.toFixed(2)} streak=${streak} active=${reasoningLoopActive} ` +
+          `finishReason=${response.finishReason ?? '?'} final=${isFinal} ` +
+          `reasoning≈${Math.round(rsn.length / 4)}t\n`,
+      );
+    }
 
     // Generation cut off mid-thought with no tool call (backstop firing, or a spiral
     // hitting the cap): record the partial for the user, nudge the model to continue
@@ -787,6 +925,11 @@ export async function runTurn(opts: {
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
         );
+      } else if (debugEnabled() && !refused && call.name !== 'read') {
+        // Non-read tool calls have no read-trace line, so a reasoning loop circling on grep/glob/list
+        // (the observed case, where read-trace was silent but payloads kept growing) is otherwise
+        // invisible. Log name + summary so a looping transcript reveals exactly what it's stuck on.
+        debugLog(`[reika:debug] tool-call round=${i} ${call.name} ${summary}\n`);
       }
       // Loop-breaker: weak models re-issue the same read/grep/bash and stall on the identical
       // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
@@ -796,7 +939,18 @@ export async function runTurn(opts: {
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
-      if (MUTATING_TOOLS.has(call.name)) editingStarted = true;
+      if (MUTATING_TOOLS.has(call.name)) {
+        editingStarted = true;
+        // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
+        // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
+        // stop. `Edited …` is the success prefix from tools/edit.ts; anything else is a non-apply.
+        if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
+          lastEditFailed = false;
+        } else if (summary.startsWith('Edit failed')) {
+          lastEditFailed = true;
+          if (typeof call.args.path === 'string') lastFailedEditFile = call.args.path;
+        }
+      }
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
       const toolMsg: Message = {
         role: 'tool',
