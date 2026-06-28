@@ -20,7 +20,12 @@ import {
   distillPlanHandoff,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
-import { selfRepeatRatio, ReasoningTrace, liveSpinSignal } from './reasoningtrace.js';
+import {
+  selfRepeatRatio,
+  ReasoningTrace,
+  liveSpinSignal,
+  verbatimAbortThreshold,
+} from './reasoningtrace.js';
 import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -121,8 +126,16 @@ const PLAN_WRITE_RESERVE_TOKENS = 4096;
 // round after the loop locks (the lock was observed to happen within a round of onset), trading one
 // wasted round for near-zero false-positive risk. n=1 on the trigger so far — confirm over more runs
 // ([[testing-small-models-needs-multiple-runs]]) before hardwiring (or lowering) these.
+//
+// Two-tier activation by similarity strength. The streak-2 wait is the conservative path for the
+// 0.6-0.9 band, where a single high round could be coincidental. But near-IDENTICAL reasoning two
+// rounds running is never coincidental — the model is provably stuck — so above REASONING_LOOP_IMMEDIATE
+// we fire at streak 1, the earliest a cross-round signal can (you need one comparison to know it
+// repeated). 0.9 sits clear of the observed transient near-misses that self-resolved (~0.75), so it
+// only short-circuits a real lock, not a model about to break out.
 const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
+const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // EXPERIMENT (plan→agent grounding): when a plan is finalized, verify the symbols/paths it names
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
@@ -134,15 +147,25 @@ const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
 // Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
 // need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
 const REASONING_SPIN_DEBOUNCE = 400;
-// Auto-abort a reasoning stream that has degenerated into near-verbatim repetition — a decoder loop
-// that is provably stuck and will never escape (distinct from a semantic spiral, which we can't judge
-// mid-stream and so only HINT at). 0.75 over the spin window is unreachable by healthy reasoning
-// (~0.19) or even a moderate paragraph-recycling spiral (~0.3), so cutting here is high-precision —
-// the one place mid-stream abort is sound. Without it the only backstop is the max_tokens wall, which
-// can be ~17k tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT, independent of
-// the always-on soft hint. Bounded per turn so the abort→recover cycle can't itself loop.
-const REASONING_VERBATIM_RATIO = 0.75;
-const MAX_VERBATIM_RECOVERIES = 1;
+// Auto-abort a reasoning stream that's stuck — either a near-verbatim decoder loop (provably stuck at
+// any length) or a long block that's gone moderately repetitive (a semantic spiral, which we won't
+// judge at normal length but which past a pathological length is clearly not deliberation). The bar
+// is length-aware (verbatimAbortThreshold): 0.75 below ~healthy-max length, scaling toward 0.4 as the
+// block grows, so it never touches a normal-length block and genuinely-long DISTINCT reasoning (low
+// ratio) is left alone. The one place mid-stream abort is sound; without it the only backstop is the
+// max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
+// independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
+// 2 (not 1) so the force-write *recovery round* is itself abort-protected — a deeply-stuck model
+// spirals in the force-write too, and the first budget unit is spent cutting the original spiral.
+const MAX_VERBATIM_RECOVERIES = 2;
+// Absolute reasoning-length backstop (chars): cut a single uninterrupted reasoning block past this
+// REGARDLESS of ratio. Catches a low-repetition *semantic* spiral (ratio ~0.3) that the ratio curve
+// won't — which is exactly what a spiraling force-write looks like. 32000 ≈ 8000 tokens, ~2x the
+// healthy single-block max, so genuine long deliberation is untouched. The force-write round uses a
+// tighter ceil: a transform legitimately reasons only a few hundred tokens (observed ~300-400t), so
+// anything near 3000t there is stuck and there's no reason to let it run to 8000.
+const REASONING_HARD_CEIL = 32000;
+const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
@@ -186,12 +209,20 @@ function gatherPlanAnalysis(history: Message[]): string {
 // the reference, do not invent" is load-bearing — small models otherwise fall back to generic
 // React/CSS priors with made-up paths. `budgetChars` bounds the whole turn so a large task that
 // read more than the window holds degrades to partial grounding rather than overflowing (400).
-function buildPlanTransformInput(history: Message[], budgetChars: number): string {
+export function buildPlanTransformInput(
+  history: Message[],
+  budgetChars: number,
+  dropAnalysis = false,
+): string {
   const task = (
     history.find((m): m is Message & { role: 'user' } => m.role === 'user' && !m.meta)?.content ??
     ''
   ).slice(0, 2000);
-  const analysisRaw = gatherPlanAnalysis(history);
+  // When the force-write was loop-triggered, the accumulated reasoning IS the spiral — feeding it back
+  // as "your analysis" can re-prime the loop at the transform level. Drop it and rebuild the plan from
+  // the findings (clean grounding) instead. For a normal (converged) force-write the analysis carries
+  // the conclusion (Fix-5: the model often reaches the answer, then ruminates), so keep it then.
+  const analysisRaw = dropAnalysis ? '' : gatherPlanAnalysis(history);
   // Keep the most recent analysis (where the converged plan lives) within a fixed cap.
   const analysis = analysisRaw.length > 4000 ? `…${analysisRaw.slice(-4000)}` : analysisRaw;
   const findingsBudget = Math.max(2000, budgetChars - task.length - analysis.length - 600);
@@ -534,7 +565,7 @@ export async function runTurn(opts: {
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
-      commitAborted(opts, '', turnStart, fetchedUrls);
+      commitAborted(opts, '', undefined, turnStart, fetchedUrls);
       return;
     }
     opts.onPhase?.('thinking');
@@ -553,10 +584,15 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    // Was the force-write triggered by a LOOP (reasoning-loop or verbatim abort) rather than normal
+    // convergence (novelty stall / ceiling)? If so the accumulated analysis IS the spiral, so the
+    // transform drops it and rebuilds from findings instead of feeding the loop back to itself.
+    const planForceWriteLoopTriggered =
+      (REASONING_LOOP_BREAK && reasoningLoopActive) || forceVerbatimPlanWrite;
     if (planForceWrite && (REASONING_LOOP_BREAK && reasoningLoopActive)) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop\n`);
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop analysis=dropped\n`);
     } else if (planForceWrite && forceVerbatimPlanWrite) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort\n`);
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort analysis=dropped\n`);
     }
     // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
@@ -649,7 +685,11 @@ export async function runTurn(opts: {
       ? [
           {
             role: 'user',
-            content: buildPlanTransformInput(opts.history, planTransformBudget),
+            content: buildPlanTransformInput(
+              opts.history,
+              planTransformBudget,
+              planForceWriteLoopTriggered,
+            ),
           } as Message,
         ]
       : opts.history;
@@ -737,12 +777,20 @@ export async function runTurn(opts: {
                 `ratio=${ratio.toFixed(2)} chars=${roundReasoning.length}\n`,
             );
           }
-          // Verbatim degeneration → cut the stream now rather than burn the rest of the window. Only
-          // at the high-confidence ratio, and only while we still have a recovery budget for this turn.
-          if (canAbortVerbatim && !verbatimAborted && ratio >= REASONING_VERBATIM_RATIO) {
+          // Degenerate reasoning → cut the stream now rather than burn the rest of the window. Two
+          // ways to trip it: (a) length-aware ratio (high bar for a short block = verbatim only,
+          // lower as it grows = a repetitive spiral); or (b) an absolute length ceil regardless of
+          // ratio, which catches a LOW-repetition semantic spiral the ratio curve misses (e.g. a
+          // spiraling force-write at ratio ~0.3). The force-write round uses a tighter ceil. Only
+          // while a recovery budget remains this turn.
+          const abortAt = verbatimAbortThreshold(roundReasoning.length);
+          const hardCeil = planForceWrite ? FORCE_WRITE_REASONING_CEIL : REASONING_HARD_CEIL;
+          const tooLong = roundReasoning.length >= hardCeil;
+          if (canAbortVerbatim && !verbatimAborted && (ratio >= abortAt || tooLong)) {
             verbatimAborted = true;
             debugLog(
-              `[reika:debug] verbatim-abort round=${i} ratio=${ratio.toFixed(2)} ` +
+              `[reika:debug] verbatim-abort round=${i} reason=${tooLong ? 'length' : 'ratio'} ` +
+                `ratio=${ratio.toFixed(2)} threshold=${abortAt.toFixed(2)} ceil=${hardCeil} ` +
                 `chars=${roundReasoning.length}\n`,
             );
             callAbort.abort();
@@ -796,7 +844,7 @@ export async function runTurn(opts: {
     );
 
     if (opts.signal?.aborted) {
-      commitAborted(opts, response.content, turnStart, fetchedUrls);
+      commitAborted(opts, response.content, response.reasoning, turnStart, fetchedUrls);
       return;
     }
 
@@ -809,22 +857,41 @@ export async function runTurn(opts: {
     if (verbatimAborted) {
       verbatimRecoveries++;
       opts.onReasoningStatus?.(false);
-      opts.onMessage({
-        role: 'system',
-        tone: 'warn',
-        content: 'Reasoning was repeating itself — stopped it.',
-      });
-      if (opts.promptMode === 'plan') {
+      // Plan mode, first cut on a normal exploration round → write the plan from the findings already
+      // gathered (the clean recovery). NOT when the force-write itself spiraled (planForceWrite) — a
+      // model this stuck loops in the transform too, so re-triggering it would just loop.
+      if (
+        opts.promptMode === 'plan' &&
+        !planForceWrite &&
+        verbatimRecoveries < MAX_VERBATIM_RECOVERIES
+      ) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: 'Reasoning was repeating itself — writing the plan from what was gathered.',
+        });
         forceVerbatimPlanWrite = true;
-      } else {
+        continue;
+      }
+      // Agent/chat, first cut within budget → nudge to act on what it has.
+      if (opts.promptMode !== 'plan' && verbatimRecoveries < MAX_VERBATIM_RECOVERIES) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: 'Reasoning was repeating itself — stopped it.',
+        });
         opts.history.push({
           role: 'user',
           content:
             '(your reasoning was repeating the same text and was stopped — decide from what you ' +
             'already have and call a tool or give the answer concisely, without long reasoning)',
         });
+        continue;
       }
-      continue;
+      // The force-write itself spiraled, or the recovery budget is spent: stop honestly rather than
+      // loop or commit spiral garbage as a "plan". This model is stuck on this task; say so.
+      commitSpiralStop(opts, turnStart, fetchedUrls);
+      return;
     }
 
     // In plan force-write mode the request carried no tools, but some local models still emit
@@ -841,7 +908,10 @@ export async function runTurn(opts: {
     // finalizing = Layer 2 rumination. Model-invisible. See reasoningtrace.ts.
     const rsn = response.reasoning ?? '';
     const { sim, streak } = reasoningTrace.record(rsn, REASONING_LOOP_THRESHOLD);
-    reasoningLoopActive = streak >= REASONING_LOOP_STREAK;
+    // Fire on a sustained streak, OR immediately on a near-identical round (no point waiting out the
+    // streak when the reasoning is provably stuck). See REASONING_LOOP_IMMEDIATE.
+    reasoningLoopActive =
+      streak >= REASONING_LOOP_STREAK || (streak >= 1 && sim >= REASONING_LOOP_IMMEDIATE);
     if (debugEnabled()) {
       debugLog(
         `[reika:debug] reasoning-loop round=${i} selfRepeat=${selfRepeatRatio(rsn).toFixed(2)} ` +
@@ -1113,16 +1183,64 @@ export async function runTurn(opts: {
   opts.onMessage(exhausted);
 }
 
+// Chars of partial reasoning kept on a manual abort — enough that a follow-up nudge has the model's
+// recent thinking to build on, capped so a long (possibly spiraling) block can't bloat history.
+const ABORTED_REASONING_CAP = 4000;
+
 function commitAborted(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   partial: string,
+  partialReasoning: string | undefined,
   turnStart: number,
   fetchedUrls: Set<string>,
 ): void {
   const content = partial ? `${partial}\n\n(aborted)` : '(aborted)';
+  // Keep the partial reasoning (capped, most-recent) on the aborted message. On a mid-reasoning
+  // ctrl-c the content is empty, so without this the turn commits a bare "(aborted)" and the model's
+  // thinking is lost — a follow-up nudge then starts from nothing, which is exactly when manual
+  // recovery is weakest (early turns). Committing it gives the next turn something to build on. (The
+  // verbatim auto-abort path deliberately does NOT keep it — that reasoning is spiral garbage and it
+  // recovers from findings instead.)
+  const trimmed = partialReasoning?.trim();
+  const reasoning = trimmed
+    ? trimmed.length > ABORTED_REASONING_CAP
+      ? `…${trimmed.slice(-ABORTED_REASONING_CAP)}`
+      : trimmed
+    : undefined;
   const m: Message = {
     role: 'assistant',
     content,
+    ...(reasoning ? { reasoning } : {}),
+    durationMs: Date.now() - turnStart,
+    ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+  };
+  opts.history.push(m);
+  opts.onMessage(m);
+}
+
+// Honest terminal stop when reasoning keeps spiraling even through recovery (the force-write looped,
+// or the recovery budget is spent). Better than committing spiral garbage as a "plan" or running to
+// the token wall. Names the files examined so the user has a handle on what was done. Deliberately
+// not marked planFinal — it isn't a plan, so the plan→agent handoff won't treat it as one.
+function commitSpiralStop(
+  opts: { history: Message[]; onMessage: (m: Message) => void },
+  turnStart: number,
+  fetchedUrls: Set<string>,
+): void {
+  const files = new Set<string>();
+  for (const m of opts.history) {
+    if (m.role !== 'assistant') continue;
+    for (const tc of m.toolCalls ?? []) {
+      if (typeof tc.args.path === 'string') files.add(tc.args.path);
+    }
+  }
+  const examined = files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
+  const m: Message = {
+    role: 'assistant',
+    content:
+      `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
+      `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
+      `rephrasing or narrowing it, or use a stronger model.`,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };

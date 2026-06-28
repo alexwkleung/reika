@@ -68,6 +68,26 @@ export function liveSpinSignal(reasoning: string): { spinning: boolean; ratio: n
   return { spinning: ratio >= SPIN_RATIO, ratio };
 }
 
+// Length-aware auto-abort threshold. A pure decoder loop (verbatim, ~0.9) is stuck at any length, so
+// require the high bar early. But a LONG block that's only moderately repetitive is also stuck — a
+// semantic spiral circles at ~0.4-0.5, far below 0.75, yet a 12k-token block at 0.45 is not healthy
+// deliberation. So once a single uninterrupted block grows past any healthy length, lower the bar:
+// the length gate is what makes the lower ratio SAFE (it never applies to a normal-length block, and
+// genuinely-long DISTINCT reasoning keeps a low ratio and is left alone — that's the discriminator a
+// blunt token cap lacks). Returns the ratio a block of this char-length must reach to be auto-cut.
+// Tune the curve against the REIKA_DEBUG `verbatim-abort`/`reasoning-spin` ratios on real spirals.
+const VERBATIM_LEN_LO = 16000; // ~4000 tokens — above any healthy block; at/below, verbatim-only (0.75)
+const VERBATIM_LEN_HI = 28000; // ~7000 tokens — by here a long block needs only moderate repetition
+const VERBATIM_RATIO_HI = 0.75; // bar at/below LEN_LO (true decoder loop)
+const VERBATIM_RATIO_LO = 0.4; // floor at/above LEN_HI (long + moderately repetitive = stuck)
+
+export function verbatimAbortThreshold(reasoningChars: number): number {
+  if (reasoningChars <= VERBATIM_LEN_LO) return VERBATIM_RATIO_HI;
+  if (reasoningChars >= VERBATIM_LEN_HI) return VERBATIM_RATIO_LO;
+  const t = (reasoningChars - VERBATIM_LEN_LO) / (VERBATIM_LEN_HI - VERBATIM_LEN_LO);
+  return VERBATIM_RATIO_HI - t * (VERBATIM_RATIO_HI - VERBATIM_RATIO_LO);
+}
+
 // Jaccard overlap of k-grams between two rounds' reasoning. High across consecutive rounds (with no
 // progress) means the model is re-deriving the same analysis instead of converging (Layer 2). 0 when
 // either side is too short to shingle.

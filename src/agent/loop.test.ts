@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { flagRepeatedCall, buildAgentLoopLedger, shouldWithdrawInspection } from './loop.js';
+import type { Message } from '../types.js';
+import {
+  flagRepeatedCall,
+  buildAgentLoopLedger,
+  shouldWithdrawInspection,
+  buildPlanTransformInput,
+} from './loop.js';
 
 // Convenience: read calls keyed on path+offset.
 const read = (
@@ -238,5 +244,35 @@ describe('shouldWithdrawInspection', () => {
         editRecovery: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe('buildPlanTransformInput', () => {
+  const history: Message[] = [
+    { role: 'user', content: 'add web search to the composer' },
+    {
+      role: 'assistant',
+      content: '',
+      reasoning: 'CIRCULAR REASONING that kept spiraling on the same point over and over',
+      toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
+    },
+    { role: 'tool', callId: 'c1', summary: 'Read a.ts', payload: 'FILE CONTENTS HERE' },
+  ];
+
+  it('keeps the analysis on a normal (converged) force-write', () => {
+    const out = buildPlanTransformInput(history, 100000, false);
+    expect(out).toContain('Your analysis:');
+    expect(out).toContain('CIRCULAR REASONING');
+    expect(out).toContain('FILE CONTENTS HERE'); // findings present
+    expect(out).toContain('add web search to the composer'); // task present
+  });
+
+  it('drops the analysis on a loop-triggered force-write — no spiral fed back', () => {
+    const out = buildPlanTransformInput(history, 100000, true);
+    expect(out).not.toContain('Your analysis:');
+    expect(out).not.toContain('CIRCULAR REASONING');
+    // but the clean grounding (findings + task) is still there to rebuild from
+    expect(out).toContain('FILE CONTENTS HERE');
+    expect(out).toContain('add web search to the composer');
   });
 });
