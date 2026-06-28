@@ -24,6 +24,26 @@ export type PlanReferences = { symbols: string[]; paths: string[] };
 // A backticked span that looks like a file path: has a directory separator and a file extension.
 const PATH_LIKE = /^[\w./@~-]+\/[\w./@-]+\.\w+$/;
 const IDENT = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+// Strong create-intent verbs on a path's line mean the plan is CREATING that file, so a "not found"
+// is expected, not a hallucination — suppress the flag. Deliberately excludes "add": "add X to
+// foo.ts" is a MODIFY of an existing file, and a hallucinated modify-target is exactly the
+// failed-edit loop we must still catch. Symbols are never suppressed this way (all stay flagged).
+const CREATE_VERB =
+  /\b(create|creates|creating|scaffold|scaffolds|generate|generates|introduce)\b|\bnew (file|module|component|hook|util|helper|class)\b/i;
+// Test/spec paths are almost always new in a plan ("add tests in …"); treat them as create-intent so
+// a planned new test file isn't flagged. Low-risk: suppressing a test-file flag rarely hides a real
+// loop (the loops centered on source files / symbols, not tests).
+const TEST_FILE = /(\.test\.|\.spec\.|__tests__\/|\/tests?\/)/;
+
+// Whether a path reference is introduced as something the plan will CREATE (so a missing result is
+// expected). True if it's a test/spec path, or the line it appears on carries a strong create verb.
+function isCreateIntent(text: string, index: number, path: string): boolean {
+  if (TEST_FILE.test(path)) return true;
+  const lineStart = text.lastIndexOf('\n', index) + 1;
+  let lineEnd = text.indexOf('\n', index);
+  if (lineEnd < 0) lineEnd = text.length;
+  return CREATE_VERB.test(text.slice(lineStart, lineEnd));
+}
 
 // "Code-y" identifier: camelCase / PascalCase-with-internal-cap / snake_case / $-form. This filters
 // plain backticked English ("enabled", "true", "the panel") while keeping streamUnifiedAsk,
@@ -50,6 +70,9 @@ export function extractPlanReferences(planText: string): PlanReferences {
   for (const m of withoutFences.matchAll(/`([^`\n]+)`/g)) {
     const span = m[1].trim();
     if (PATH_LIKE.test(span)) {
+      // Skip paths the plan introduces as NEW — flagging a file it says to create is noise. A modify
+      // target ("add X to foo.ts") is NOT suppressed: a hallucinated existing file must still surface.
+      if (isCreateIntent(withoutFences, m.index ?? 0, span)) continue;
       if (!seenPath.has(span)) {
         seenPath.add(span);
         paths.push(span);

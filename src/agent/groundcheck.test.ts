@@ -51,6 +51,25 @@ describe('extractPlanReferences', () => {
     const { symbols } = extractPlanReferences('`fooBar` then `fooBar` then `bazQux`');
     expect(symbols).toEqual(['fooBar', 'bazQux']);
   });
+
+  it('suppresses create-intent and test-file paths (planned new files are not flagged)', () => {
+    const plan =
+      '1. Create a module in `packages/core/src/syntax-highlight.ts` that does X.\n' +
+      '5. Add tests in `packages/core/src/__tests__/syntax-highlight.test.ts`.';
+    const { paths } = extractPlanReferences(plan);
+    expect(paths).toEqual([]); // both are new files the plan creates
+  });
+
+  it('still flags a modify-target path — "add X to foo.ts" must not be suppressed', () => {
+    // This is the failed-edit loop case: a hallucinated existing file must still surface.
+    const { paths } = extractPlanReferences('Add web search to `packages/server/src/http/chat.ts`.');
+    expect(paths).toEqual(['packages/server/src/http/chat.ts']);
+  });
+
+  it('keeps flagging symbols regardless of create-intent verbs on the line', () => {
+    const { symbols } = extractPlanReferences('Create a helper that calls `resultsOverlayRef`.');
+    expect(symbols).toContain('resultsOverlayRef');
+  });
 });
 
 describe('buildGroundingNote', () => {
