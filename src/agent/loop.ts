@@ -20,7 +20,12 @@ import {
   distillPlanHandoff,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
-import { selfRepeatRatio, ReasoningTrace, liveSpinSignal } from './reasoningtrace.js';
+import {
+  selfRepeatRatio,
+  ReasoningTrace,
+  liveSpinSignal,
+  verbatimAbortThreshold,
+} from './reasoningtrace.js';
 import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -134,14 +139,14 @@ const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
 // Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
 // need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
 const REASONING_SPIN_DEBOUNCE = 400;
-// Auto-abort a reasoning stream that has degenerated into near-verbatim repetition — a decoder loop
-// that is provably stuck and will never escape (distinct from a semantic spiral, which we can't judge
-// mid-stream and so only HINT at). 0.75 over the spin window is unreachable by healthy reasoning
-// (~0.19) or even a moderate paragraph-recycling spiral (~0.3), so cutting here is high-precision —
-// the one place mid-stream abort is sound. Without it the only backstop is the max_tokens wall, which
-// can be ~17k tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT, independent of
-// the always-on soft hint. Bounded per turn so the abort→recover cycle can't itself loop.
-const REASONING_VERBATIM_RATIO = 0.75;
+// Auto-abort a reasoning stream that's stuck — either a near-verbatim decoder loop (provably stuck at
+// any length) or a long block that's gone moderately repetitive (a semantic spiral, which we won't
+// judge at normal length but which past a pathological length is clearly not deliberation). The bar
+// is length-aware (verbatimAbortThreshold): 0.75 below ~healthy-max length, scaling toward 0.4 as the
+// block grows, so it never touches a normal-length block and genuinely-long DISTINCT reasoning (low
+// ratio) is left alone. The one place mid-stream abort is sound; without it the only backstop is the
+// max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
+// independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
 const MAX_VERBATIM_RECOVERIES = 1;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
@@ -534,7 +539,7 @@ export async function runTurn(opts: {
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
-      commitAborted(opts, '', turnStart, fetchedUrls);
+      commitAborted(opts, '', undefined, turnStart, fetchedUrls);
       return;
     }
     opts.onPhase?.('thinking');
@@ -737,13 +742,15 @@ export async function runTurn(opts: {
                 `ratio=${ratio.toFixed(2)} chars=${roundReasoning.length}\n`,
             );
           }
-          // Verbatim degeneration → cut the stream now rather than burn the rest of the window. Only
-          // at the high-confidence ratio, and only while we still have a recovery budget for this turn.
-          if (canAbortVerbatim && !verbatimAborted && ratio >= REASONING_VERBATIM_RATIO) {
+          // Degenerate reasoning → cut the stream now rather than burn the rest of the window. The
+          // bar is length-aware (high for a short block = verbatim only; lower for a pathologically
+          // long one = a stuck semantic spiral). Only while we still have a recovery budget this turn.
+          const abortAt = verbatimAbortThreshold(roundReasoning.length);
+          if (canAbortVerbatim && !verbatimAborted && ratio >= abortAt) {
             verbatimAborted = true;
             debugLog(
               `[reika:debug] verbatim-abort round=${i} ratio=${ratio.toFixed(2)} ` +
-                `chars=${roundReasoning.length}\n`,
+                `threshold=${abortAt.toFixed(2)} chars=${roundReasoning.length}\n`,
             );
             callAbort.abort();
           }
@@ -796,7 +803,7 @@ export async function runTurn(opts: {
     );
 
     if (opts.signal?.aborted) {
-      commitAborted(opts, response.content, turnStart, fetchedUrls);
+      commitAborted(opts, response.content, response.reasoning, turnStart, fetchedUrls);
       return;
     }
 
@@ -1113,16 +1120,34 @@ export async function runTurn(opts: {
   opts.onMessage(exhausted);
 }
 
+// Chars of partial reasoning kept on a manual abort — enough that a follow-up nudge has the model's
+// recent thinking to build on, capped so a long (possibly spiraling) block can't bloat history.
+const ABORTED_REASONING_CAP = 4000;
+
 function commitAborted(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   partial: string,
+  partialReasoning: string | undefined,
   turnStart: number,
   fetchedUrls: Set<string>,
 ): void {
   const content = partial ? `${partial}\n\n(aborted)` : '(aborted)';
+  // Keep the partial reasoning (capped, most-recent) on the aborted message. On a mid-reasoning
+  // ctrl-c the content is empty, so without this the turn commits a bare "(aborted)" and the model's
+  // thinking is lost — a follow-up nudge then starts from nothing, which is exactly when manual
+  // recovery is weakest (early turns). Committing it gives the next turn something to build on. (The
+  // verbatim auto-abort path deliberately does NOT keep it — that reasoning is spiral garbage and it
+  // recovers from findings instead.)
+  const trimmed = partialReasoning?.trim();
+  const reasoning = trimmed
+    ? trimmed.length > ABORTED_REASONING_CAP
+      ? `…${trimmed.slice(-ABORTED_REASONING_CAP)}`
+      : trimmed
+    : undefined;
   const m: Message = {
     role: 'assistant',
     content,
+    ...(reasoning ? { reasoning } : {}),
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };

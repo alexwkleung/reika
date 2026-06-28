@@ -4,6 +4,7 @@ import {
   crossRoundSimilarity,
   ReasoningTrace,
   liveSpinSignal,
+  verbatimAbortThreshold,
 } from './reasoningtrace.js';
 
 // A spread of distinct words so healthy prose never accidentally repeats an 8-gram.
@@ -114,6 +115,26 @@ describe('liveSpinSignal', () => {
     const r = liveSpinSignal(recycling);
     expect(r.spinning).toBe(true); // ≥ 0.3 → gets the soft hint
     expect(r.ratio).toBeLessThan(0.75); // but below the auto-abort threshold
+  });
+});
+
+describe('verbatimAbortThreshold', () => {
+  it('requires the high (verbatim-only) bar for a normal-length block', () => {
+    expect(verbatimAbortThreshold(0)).toBe(0.75);
+    expect(verbatimAbortThreshold(16000)).toBe(0.75); // at/below the length floor
+  });
+
+  it('lowers the bar toward the floor as a single block grows pathologically long', () => {
+    expect(verbatimAbortThreshold(40000)).toBe(0.4); // at/above the upper length
+    const mid = verbatimAbortThreshold(22000); // between the two lengths
+    expect(mid).toBeLessThan(0.75);
+    expect(mid).toBeGreaterThan(0.4);
+  });
+
+  it('is monotonically non-increasing in length', () => {
+    const lens = [0, 16000, 20000, 24000, 28000, 50000];
+    const ts = lens.map(verbatimAbortThreshold);
+    for (let i = 1; i < ts.length; i++) expect(ts[i]).toBeLessThanOrEqual(ts[i - 1]);
   });
 });
 
