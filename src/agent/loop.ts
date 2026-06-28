@@ -687,21 +687,27 @@ export async function runTurn(opts: {
     opts.onContextEstimate?.(Math.round(sentEstimate * calibration));
     // Live reasoning-spin hint (human-only): accumulate THIS round's reasoning and, debounced every
     // SPIN_DEBOUNCE chars, flag when it looks like it's spinning so the UI can prompt abort-or-wait.
-    // Per-round state, reset here; the wrapper falls through to the plain delta callback when no UI
-    // listener is attached, so it's zero-cost otherwise. Cleared after the call (block done).
+    // Per-round state, reset here. Active when a UI listener is attached OR REIKA_DEBUG is on (so a
+    // headless debug run still logs the signal + ratio for threshold tuning); otherwise it falls
+    // through to the plain delta callback, zero-cost. Cleared after the call (block done).
     let roundReasoning = '';
     let spinCheckedAt = 0;
     let spinning = false;
-    const onReasoningDelta = opts.onReasoningStatus
+    const trackSpin = !!opts.onReasoningStatus || debugEnabled();
+    const onReasoningDelta = trackSpin
       ? (delta: string): void => {
           opts.onReasoningDelta?.(delta);
           roundReasoning += delta;
           if (roundReasoning.length - spinCheckedAt < REASONING_SPIN_DEBOUNCE) return;
           spinCheckedAt = roundReasoning.length;
-          const next = liveSpinSignal(roundReasoning);
+          const { spinning: next, ratio } = liveSpinSignal(roundReasoning);
           if (next !== spinning) {
             spinning = next;
-            opts.onReasoningStatus!(next);
+            opts.onReasoningStatus?.(next);
+            debugLog(
+              `[reika:debug] reasoning-spin ${next ? 'on' : 'off'} round=${i} ` +
+                `ratio=${ratio.toFixed(2)} chars=${roundReasoning.length}\n`,
+            );
           }
         }
       : opts.onReasoningDelta;
@@ -726,8 +732,13 @@ export async function runTurn(opts: {
     });
 
     // Reasoning block is done streaming — clear any lingering spin hint so it doesn't bleed into the
-    // tool/answer phase (the UI also clears at turn boundaries; this is the per-round clear).
-    if (spinning) opts.onReasoningStatus?.(false);
+    // tool/answer phase (the UI also clears at turn boundaries; this is the per-round clear). If it
+    // was still flagged at block end, log it: the model ended a spiraling block (natural stop or the
+    // max_tokens cap), which is worth seeing next to the round-level reasoning-loop line.
+    if (spinning) {
+      opts.onReasoningStatus?.(false);
+      debugLog(`[reika:debug] reasoning-spin off round=${i} (block ended while flagged)\n`);
+    }
 
     if (response.usage) opts.onUsage?.(response.usage);
 
