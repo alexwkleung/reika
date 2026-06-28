@@ -38,9 +38,17 @@ export function messagesToOpenAI(
   // Compaction recaps fold into the single leading system block (rather than a second
   // system message mid-array) for the widest chat-template compatibility.
   const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
-  const systemContent = recaps.length
-    ? `${system}\n\n# Earlier conversation (compacted)\n\n${recaps.join('\n\n')}`
-    : system;
+  // Will any real user turn reach the model? Meta (slash-command echo) turns are skipped below, and
+  // compaction folds user turns into the recap — so a heavily-compacted long turn can end up with
+  // ZERO user messages. Some chat templates hard-raise on that ("No user query found in messages",
+  // observed on a 35B served by llama.cpp right after a mid-turn compaction → 400). Keep folding the
+  // recap into the system block normally, but when there'd be no user turn at all, surface the recap
+  // as a user message instead so the request always contains one.
+  const hasUserTurn = history.some(m => m.role === 'user' && !m.meta);
+  const recapText = recaps.length
+    ? `# Earlier conversation (compacted)\n\n${recaps.join('\n\n')}`
+    : '';
+  const systemContent = recapText && hasUserTurn ? `${system}\n\n${recapText}` : system;
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
   const perPayloadCap = freshPayloadCharCap(
@@ -51,6 +59,12 @@ export function messagesToOpenAI(
     opts,
   );
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
+  // Compaction left no user turn — surface the recap as the user message so a user-requiring
+  // template still renders. (Normal case: hasUserTurn is true and the recap stayed in the system
+  // block above.) Carries the original task too, since buildRecap records "- User: <task>".
+  if (recapText && !hasUserTurn) {
+    out.push({ role: 'user', content: recapText });
+  }
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (msg.role === 'user') {
@@ -93,6 +107,12 @@ export function messagesToOpenAI(
       out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
+  }
+  // Final backstop: if somehow still no user message (e.g. an all-meta history with no recap), inject
+  // a minimal one right after the system block so a user-requiring template doesn't 400. Cheap
+  // insurance; not hit in the normal flow (which always has a user turn or a recap).
+  if (!out.some(m => m.role === 'user')) {
+    out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
   return out;
 }

@@ -278,6 +278,41 @@ describe('messagesToOpenAI', () => {
     expect(out[1]).toEqual({ role: 'user', content: 'now do this' });
   });
 
+  it('surfaces the recap as a user turn when compaction left no user message', () => {
+    // A heavily-compacted long turn: every user turn folded into the recap, only a meta echo +
+    // assistant/tool remain. Some chat templates 400 without a user message ("No user query found").
+    const history: Message[] = [
+      { role: 'user', content: '/implement', meta: true },
+      { role: 'compaction', content: 'RECAP incl. - User: add web search' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'read', args: {} }],
+      },
+      { role: 'tool', callId: 'c1', summary: 'r1' },
+    ];
+    const out = messagesToOpenAI('BASE', history);
+    const users = out.filter(m => m.role === 'user');
+    expect(users).toHaveLength(1); // the request must contain a user turn
+    expect(users[0].content).toContain('add web search'); // recap (carrying the task) surfaced as user
+    // The recap is NOT also duplicated into the system block in this fallback path.
+    expect(out[0].role).toBe('system');
+    expect(out[0].content).not.toContain('RECAP');
+  });
+
+  it('injects a minimal user turn when there is no user message and no recap', () => {
+    const history: Message[] = [
+      { role: 'user', content: '/stats', meta: true },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c1', summary: 'r1' },
+    ];
+    const out = messagesToOpenAI('BASE', history);
+    const users = out.filter(m => m.role === 'user');
+    expect(users).toHaveLength(1);
+    expect(users[0].content).toBe('(continue)');
+    expect(out[1]).toEqual({ role: 'user', content: '(continue)' }); // right after system
+  });
+
   it('keeps reasoning_content only on the most recent tool-call round', () => {
     const history: Message[] = [
       { role: 'user', content: 'go' },
