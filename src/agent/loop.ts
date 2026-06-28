@@ -20,7 +20,7 @@ import {
   distillPlanHandoff,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
-import { selfRepeatRatio, ReasoningTrace } from './reasoningtrace.js';
+import { selfRepeatRatio, ReasoningTrace, liveSpinSignal } from './reasoningtrace.js';
 import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -131,6 +131,9 @@ const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // carried verbatim into the executing agent turn. Gated for A/B; strict no-op when off. See
 // agent/groundcheck.ts and [[reika-reasoning-loop-break]].
 const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
+// Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
+// need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
+const REASONING_SPIN_DEBOUNCE = 400;
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
 // buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
@@ -362,6 +365,12 @@ export async function runTurn(opts: {
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
   onTypecheck?: (checking: boolean) => void;
+  // Ephemeral, human-only hint that the current reasoning block looks like it may be spinning (long
+  // AND locally repetitive). Drives a busy-indicator relabel so the user can decide to abort or wait
+  // — a soft signal, never an automated cutoff (mid-stream we can't know if a semantic spiral will
+  // escape, so we don't guess; the human judges). Never touches model-facing history. See
+  // agent/reasoningtrace.ts liveSpinSignal.
+  onReasoningStatus?: (spinning: boolean) => void;
   onUsage?: (usage: Usage) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
@@ -676,13 +685,33 @@ export async function runTurn(opts: {
     }
     const sentEstimate = rawEstimate(callHistory, callTools);
     opts.onContextEstimate?.(Math.round(sentEstimate * calibration));
+    // Live reasoning-spin hint (human-only): accumulate THIS round's reasoning and, debounced every
+    // SPIN_DEBOUNCE chars, flag when it looks like it's spinning so the UI can prompt abort-or-wait.
+    // Per-round state, reset here; the wrapper falls through to the plain delta callback when no UI
+    // listener is attached, so it's zero-cost otherwise. Cleared after the call (block done).
+    let roundReasoning = '';
+    let spinCheckedAt = 0;
+    let spinning = false;
+    const onReasoningDelta = opts.onReasoningStatus
+      ? (delta: string): void => {
+          opts.onReasoningDelta?.(delta);
+          roundReasoning += delta;
+          if (roundReasoning.length - spinCheckedAt < REASONING_SPIN_DEBOUNCE) return;
+          spinCheckedAt = roundReasoning.length;
+          const next = liveSpinSignal(roundReasoning);
+          if (next !== spinning) {
+            spinning = next;
+            opts.onReasoningStatus!(next);
+          }
+        }
+      : opts.onReasoningDelta;
     const response = await callModel({
       system,
       history: callHistory,
       tools: callTools,
       config: opts.config,
       onContentDelta: opts.onContentDelta,
-      onReasoningDelta: opts.onReasoningDelta,
+      onReasoningDelta,
       signal: opts.signal,
       calibration,
       // Per-turn backstop: cap generation to the room actually left in the window so a
@@ -695,6 +724,10 @@ export async function runTurn(opts: {
         userMaxTokens: opts.config.maxTokens,
       }),
     });
+
+    // Reasoning block is done streaming — clear any lingering spin hint so it doesn't bleed into the
+    // tool/answer phase (the UI also clears at turn boundaries; this is the per-round clear).
+    if (spinning) opts.onReasoningStatus?.(false);
 
     if (response.usage) opts.onUsage?.(response.usage);
 

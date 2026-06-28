@@ -41,6 +41,21 @@ export function selfRepeatRatio(text: string): number {
   return dup / sh.length;
 }
 
+// Live "is this reasoning block spinning?" heuristic for the human-in-the-loop UI hint — NOT an
+// automated abort. Mid-stream we can't know whether a model will escape a *semantic* spiral, so we
+// don't guess and cut; we surface a soft signal and let the human (who can glance at the thinking)
+// decide to abort or wait. True only when the block is long enough to judge AND its trailing window
+// is verbatim-repetitive. Tuned to flag clear churn without crying wolf: healthy long reasoning
+// measured ~0.2 self-repeat over a whole block, so 0.5 over a trailing window has clear headroom.
+const SPIN_MIN_CHARS = 1200; // don't judge short thinking
+const SPIN_WINDOW = 2400; // trailing window (~600 tokens) — local repetition, not the whole block
+const SPIN_RATIO = 0.5;
+
+export function liveSpinSignal(reasoning: string): boolean {
+  if (reasoning.length < SPIN_MIN_CHARS) return false;
+  return selfRepeatRatio(reasoning.slice(-SPIN_WINDOW)) >= SPIN_RATIO;
+}
+
 // Jaccard overlap of k-grams between two rounds' reasoning. High across consecutive rounds (with no
 // progress) means the model is re-deriving the same analysis instead of converging (Layer 2). 0 when
 // either side is too short to shingle.

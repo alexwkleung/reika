@@ -57,6 +57,10 @@ export function App() {
   // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
   // verification is visible in the dispatch gap. Human-only — never part of model context.
   const [typechecking, setTypechecking] = useState<boolean>(false);
+  // True while the current reasoning block looks like it may be spinning (long AND repetitive).
+  // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
+  // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
+  const [reasoningSpin, setReasoningSpin] = useState<boolean>(false);
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
@@ -758,6 +762,7 @@ export function App() {
     setStatus('busy');
     setPhase('thinking');
     resetTypecheck();
+    setReasoningSpin(false);
     streamingRef.current = '';
     reasoningRef.current = '';
     toolRef.current = '';
@@ -804,8 +809,13 @@ export function App() {
           toolRef.current += chunk;
           scheduleToolFlush();
         },
-        onPhase: p => setPhase(p),
+        onPhase: p => {
+          // Leaving the thinking phase ends the reasoning block — clear any spin hint.
+          if (p !== 'thinking') setReasoningSpin(false);
+          setPhase(p);
+        },
         onTypecheck: onTypecheckChange,
+        onReasoningStatus: setReasoningSpin,
         onUsage: u => {
           setLastUsage(u);
           setTotalUsage(t => ({
@@ -846,6 +856,7 @@ export function App() {
       setStreamingReasoning('');
       setStreamingTool('');
       resetTypecheck();
+      setReasoningSpin(false);
       setStatus('idle');
       abortRef.current = null;
     }
@@ -884,8 +895,15 @@ export function App() {
           ) : null}
           {status === 'busy' && pending === null ? (
             <Working
-              label={typechecking ? 'Typechecking' : undefined}
-              accent={typechecking ? theme.info : undefined}
+              // Typecheck (a definite harness action) takes priority over the soft spin hint.
+              label={
+                typechecking
+                  ? 'Typechecking'
+                  : reasoningSpin
+                    ? 'Thinking — may be looping (ctrl-c to abort)'
+                    : undefined
+              }
+              accent={typechecking ? theme.info : reasoningSpin ? theme.warning : undefined}
             />
           ) : null}
           <Input

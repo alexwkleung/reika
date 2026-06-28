@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { selfRepeatRatio, crossRoundSimilarity, ReasoningTrace } from './reasoningtrace.js';
+import {
+  selfRepeatRatio,
+  crossRoundSimilarity,
+  ReasoningTrace,
+  liveSpinSignal,
+} from './reasoningtrace.js';
 
 // A spread of distinct words so healthy prose never accidentally repeats an 8-gram.
 const HEALTHY =
@@ -47,6 +52,28 @@ describe('crossRoundSimilarity', () => {
 
   it('is 0 when either side is too short to shingle', () => {
     expect(crossRoundSimilarity(HEALTHY, 'short')).toBe(0);
+  });
+});
+
+describe('liveSpinSignal', () => {
+  it('does not flag short reasoning, however repetitive', () => {
+    expect(liveSpinSignal('wait reconsider '.repeat(5))).toBe(false); // under the min length
+  });
+
+  it('does not flag long healthy reasoning', () => {
+    // Distinct sentences padded past the min length stay well under the ratio.
+    const healthy = Array.from(
+      { length: 80 },
+      (_, n) => `step ${n} examines a distinct concern number ${n} in the codebase and resolves it.`,
+    ).join(' ');
+    expect(healthy.length).toBeGreaterThan(1200);
+    expect(liveSpinSignal(healthy)).toBe(false);
+  });
+
+  it('flags a long block whose trailing window degenerates into a repeated span', () => {
+    const lead = 'first some genuine and varied analysis of the problem at hand goes here. '.repeat(20);
+    const spiral = 'wait let me reconsider this carefully actually the answer is clearly '.repeat(40);
+    expect(liveSpinSignal(lead + spiral)).toBe(true);
   });
 });
 
