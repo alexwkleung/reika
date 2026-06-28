@@ -126,8 +126,16 @@ const PLAN_WRITE_RESERVE_TOKENS = 4096;
 // round after the loop locks (the lock was observed to happen within a round of onset), trading one
 // wasted round for near-zero false-positive risk. n=1 on the trigger so far — confirm over more runs
 // ([[testing-small-models-needs-multiple-runs]]) before hardwiring (or lowering) these.
+//
+// Two-tier activation by similarity strength. The streak-2 wait is the conservative path for the
+// 0.6-0.9 band, where a single high round could be coincidental. But near-IDENTICAL reasoning two
+// rounds running is never coincidental — the model is provably stuck — so above REASONING_LOOP_IMMEDIATE
+// we fire at streak 1, the earliest a cross-round signal can (you need one comparison to know it
+// repeated). 0.9 sits clear of the observed transient near-misses that self-resolved (~0.75), so it
+// only short-circuits a real lock, not a model about to break out.
 const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
+const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // EXPERIMENT (plan→agent grounding): when a plan is finalized, verify the symbols/paths it names
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
@@ -883,7 +891,10 @@ export async function runTurn(opts: {
     // finalizing = Layer 2 rumination. Model-invisible. See reasoningtrace.ts.
     const rsn = response.reasoning ?? '';
     const { sim, streak } = reasoningTrace.record(rsn, REASONING_LOOP_THRESHOLD);
-    reasoningLoopActive = streak >= REASONING_LOOP_STREAK;
+    // Fire on a sustained streak, OR immediately on a near-identical round (no point waiting out the
+    // streak when the reasoning is provably stuck). See REASONING_LOOP_IMMEDIATE.
+    reasoningLoopActive =
+      streak >= REASONING_LOOP_STREAK || (streak >= 1 && sim >= REASONING_LOOP_IMMEDIATE);
     if (debugEnabled()) {
       debugLog(
         `[reika:debug] reasoning-loop round=${i} selfRepeat=${selfRepeatRatio(rsn).toFixed(2)} ` +
