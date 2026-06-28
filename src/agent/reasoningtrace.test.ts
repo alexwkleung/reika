@@ -95,6 +95,26 @@ describe('liveSpinSignal', () => {
     }
     expect(liveSpinSignal(block).spinning).toBe(true);
   });
+
+  it('separates verbatim degeneration (auto-abort tier) from heavy recycling (hint tier)', () => {
+    // A verbatim decoder loop saturates the ratio (>0.75 — the auto-abort threshold in loop.ts);
+    // measured ~0.9 on a real transcript. Even HEAVY paragraph-recycling (distinct fillers between
+    // repeats) stays in the hint band below 0.75, so the auto-cut never fires on a non-verbatim spiral.
+    const verbatim = 'the exact same sentence over and over with no variation at all right here now. '.repeat(30);
+    expect(liveSpinSignal(verbatim).ratio).toBeGreaterThan(0.75);
+
+    const para =
+      'But actually I think the issue is that the textarea uses inset zero to fill the container and ' +
+      'the padding creates the gutter space but long text overflows anyway here in this layout. ';
+    let recycling = '';
+    for (let n = 0; n < 8; n++) {
+      recycling += `Consideration number ${n} explores a wholly separate ${n} concern about spacing. `;
+      recycling += para;
+    }
+    const r = liveSpinSignal(recycling);
+    expect(r.spinning).toBe(true); // ≥ 0.3 → gets the soft hint
+    expect(r.ratio).toBeLessThan(0.75); // but below the auto-abort threshold
+  });
 });
 
 describe('ReasoningTrace', () => {

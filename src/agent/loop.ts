@@ -134,6 +134,16 @@ const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
 // Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
 // need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
 const REASONING_SPIN_DEBOUNCE = 400;
+// Auto-abort a reasoning stream that has degenerated into near-verbatim repetition — a decoder loop
+// that is provably stuck and will never escape (distinct from a semantic spiral, which we can't judge
+// mid-stream and so only HINT at). 0.75 over the spin window is unreachable by healthy reasoning
+// (~0.19) or even a moderate paragraph-recycling spiral (~0.3), so cutting here is high-precision —
+// the one place mid-stream abort is sound. Without it the only backstop is the max_tokens wall, which
+// can be ~17k tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT, independent of
+// the always-on soft hint. Bounded per turn so the abort→recover cycle can't itself loop.
+const REASONING_VERBATIM_RATIO = 0.75;
+const MAX_VERBATIM_RECOVERIES = 1;
+const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
 // buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
@@ -424,6 +434,11 @@ export async function runTurn(opts: {
   // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
   // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
   let loopActiveRounds = 0;
+  // Verbatim auto-abort bookkeeping: how many times this turn we've cut a degenerate reasoning stream
+  // (bounded by MAX_VERBATIM_RECOVERIES so the cut→recover cycle can't loop), and a one-shot flag set
+  // when a plan-mode cut should force the plan write on the next iteration. See VERBATIM_ABORT.
+  let verbatimRecoveries = 0;
+  let forceVerbatimPlanWrite = false;
   // Whether the model has made any edit/write this turn. Tool withdrawal exists to force the
   // explore→act transition; once the model has acted, that job is done. After the first edit a
   // re-read is usually edit-recovery (re-fetching exact bytes to build old_string after the content
@@ -536,9 +551,12 @@ export async function runTurn(opts: {
       opts.promptMode === 'plan' &&
       (planStaleRounds >= PLAN_STALL_ROUNDS ||
         i >= PLAN_HARD_CEILING ||
-        (REASONING_LOOP_BREAK && reasoningLoopActive));
-    if (planForceWrite && REASONING_LOOP_BREAK && reasoningLoopActive) {
+        (REASONING_LOOP_BREAK && reasoningLoopActive) ||
+        forceVerbatimPlanWrite);
+    if (planForceWrite && (REASONING_LOOP_BREAK && reasoningLoopActive)) {
       debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop\n`);
+    } else if (planForceWrite && forceVerbatimPlanWrite) {
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort\n`);
     }
     // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
@@ -693,7 +711,17 @@ export async function runTurn(opts: {
     let roundReasoning = '';
     let spinCheckedAt = 0;
     let spinning = false;
-    const trackSpin = !!opts.onReasoningStatus || debugEnabled();
+    let verbatimAborted = false;
+    // Combined abort signal for this round's call: aborts on user ctrl-c (forwarded from opts.signal)
+    // OR on a verbatim auto-abort (below). callModel gets THIS signal; the loop's own user-abort
+    // checks still read the original opts.signal, so the two causes stay distinguishable afterward.
+    const callAbort = new AbortController();
+    if (opts.signal) {
+      if (opts.signal.aborted) callAbort.abort();
+      else opts.signal.addEventListener('abort', () => callAbort.abort(), { once: true });
+    }
+    const canAbortVerbatim = VERBATIM_ABORT && verbatimRecoveries < MAX_VERBATIM_RECOVERIES;
+    const trackSpin = !!opts.onReasoningStatus || debugEnabled() || canAbortVerbatim;
     const onReasoningDelta = trackSpin
       ? (delta: string): void => {
           opts.onReasoningDelta?.(delta);
@@ -709,6 +737,16 @@ export async function runTurn(opts: {
                 `ratio=${ratio.toFixed(2)} chars=${roundReasoning.length}\n`,
             );
           }
+          // Verbatim degeneration → cut the stream now rather than burn the rest of the window. Only
+          // at the high-confidence ratio, and only while we still have a recovery budget for this turn.
+          if (canAbortVerbatim && !verbatimAborted && ratio >= REASONING_VERBATIM_RATIO) {
+            verbatimAborted = true;
+            debugLog(
+              `[reika:debug] verbatim-abort round=${i} ratio=${ratio.toFixed(2)} ` +
+                `chars=${roundReasoning.length}\n`,
+            );
+            callAbort.abort();
+          }
         }
       : opts.onReasoningDelta;
     const response = await callModel({
@@ -718,7 +756,7 @@ export async function runTurn(opts: {
       config: opts.config,
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
-      signal: opts.signal,
+      signal: callAbort.signal,
       calibration,
       // Per-turn backstop: cap generation to the room actually left in the window so a
       // spiraling small/quantized model can't run to the context end. The cap only fires
@@ -760,6 +798,33 @@ export async function runTurn(opts: {
     if (opts.signal?.aborted) {
       commitAborted(opts, response.content, turnStart, fetchedUrls);
       return;
+    }
+
+    // Verbatim auto-abort recovery: we cut a degenerate (near-verbatim) reasoning stream. This is NOT
+    // a user abort (checked above on the original opts.signal). Discard the spiral reasoning — it's
+    // garbage and would only bloat context — and recover by mode: plan mode force-writes the plan from
+    // the findings already gathered (the clean, validated recovery); agent/chat nudges the model to
+    // act on what it has. Bounded by MAX_VERBATIM_RECOVERIES (canAbortVerbatim above), so after the
+    // budget is spent a re-spiral runs to the max_tokens wall and the length-retry path takes over.
+    if (verbatimAborted) {
+      verbatimRecoveries++;
+      opts.onReasoningStatus?.(false);
+      opts.onMessage({
+        role: 'system',
+        tone: 'warn',
+        content: 'Reasoning was repeating itself — stopped it.',
+      });
+      if (opts.promptMode === 'plan') {
+        forceVerbatimPlanWrite = true;
+      } else {
+        opts.history.push({
+          role: 'user',
+          content:
+            '(your reasoning was repeating the same text and was stopped — decide from what you ' +
+            'already have and call a tool or give the answer concisely, without long reasoning)',
+        });
+      }
+      continue;
     }
 
     // In plan force-write mode the request carried no tools, but some local models still emit
