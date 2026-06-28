@@ -21,6 +21,7 @@ import {
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { selfRepeatRatio, ReasoningTrace } from './reasoningtrace.js';
+import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -123,6 +124,13 @@ const PLAN_WRITE_RESERVE_TOKENS = 4096;
 const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
+// EXPERIMENT (plan→agent grounding): when a plan is finalized, verify the symbols/paths it names
+// actually exist in the codebase and append an advisory listing any that don't — the upstream cause
+// of the agent loops is plans referencing code that isn't there (0-match grep loops, edits whose
+// old_string is in no file). The note rides in the plan message, so it's visible to the user and
+// carried verbatim into the executing agent turn. Gated for A/B; strict no-op when off. See
+// agent/groundcheck.ts and [[reika-reasoning-loop-break]].
+const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
 // buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
@@ -778,6 +786,23 @@ export async function runTurn(opts: {
     let assistantContent = response.content;
     if (planForceWrite && !response.content?.trim()) {
       assistantContent = response.reasoning?.trim() || gatherPlanAnalysis(opts.history);
+    }
+
+    // Plan→agent grounding: when a plan is finalized, verify the symbols/paths it names exist in the
+    // codebase and append an advisory for any that don't, so the executing agent (which inherits this
+    // message) is warned up front rather than looping on phantom references. Runs once, at plan
+    // commit. Strict no-op when the flag is off or the plan is clean. See agent/groundcheck.ts.
+    if (PLAN_VERIFY && opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
+      const refs = extractPlanReferences(assistantContent);
+      if (refs.symbols.length > 0 || refs.paths.length > 0) {
+        const missing = await verifyPlanReferences(opts.bundle.cwd, opts.bundle.ignore, refs);
+        const note = buildGroundingNote(missing);
+        debugLog(
+          `[reika:debug] round=${i} plan-verify refs=${refs.symbols.length + refs.paths.length} ` +
+            `missing=${missing.missingSymbols.length + missing.missingPaths.length}\n`,
+        );
+        if (note) assistantContent = (assistantContent ?? '') + note;
+      }
     }
 
     const assistantMsg: Message = {
