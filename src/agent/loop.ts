@@ -209,12 +209,20 @@ function gatherPlanAnalysis(history: Message[]): string {
 // the reference, do not invent" is load-bearing — small models otherwise fall back to generic
 // React/CSS priors with made-up paths. `budgetChars` bounds the whole turn so a large task that
 // read more than the window holds degrades to partial grounding rather than overflowing (400).
-function buildPlanTransformInput(history: Message[], budgetChars: number): string {
+export function buildPlanTransformInput(
+  history: Message[],
+  budgetChars: number,
+  dropAnalysis = false,
+): string {
   const task = (
     history.find((m): m is Message & { role: 'user' } => m.role === 'user' && !m.meta)?.content ??
     ''
   ).slice(0, 2000);
-  const analysisRaw = gatherPlanAnalysis(history);
+  // When the force-write was loop-triggered, the accumulated reasoning IS the spiral — feeding it back
+  // as "your analysis" can re-prime the loop at the transform level. Drop it and rebuild the plan from
+  // the findings (clean grounding) instead. For a normal (converged) force-write the analysis carries
+  // the conclusion (Fix-5: the model often reaches the answer, then ruminates), so keep it then.
+  const analysisRaw = dropAnalysis ? '' : gatherPlanAnalysis(history);
   // Keep the most recent analysis (where the converged plan lives) within a fixed cap.
   const analysis = analysisRaw.length > 4000 ? `…${analysisRaw.slice(-4000)}` : analysisRaw;
   const findingsBudget = Math.max(2000, budgetChars - task.length - analysis.length - 600);
@@ -576,10 +584,15 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    // Was the force-write triggered by a LOOP (reasoning-loop or verbatim abort) rather than normal
+    // convergence (novelty stall / ceiling)? If so the accumulated analysis IS the spiral, so the
+    // transform drops it and rebuilds from findings instead of feeding the loop back to itself.
+    const planForceWriteLoopTriggered =
+      (REASONING_LOOP_BREAK && reasoningLoopActive) || forceVerbatimPlanWrite;
     if (planForceWrite && (REASONING_LOOP_BREAK && reasoningLoopActive)) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop\n`);
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop analysis=dropped\n`);
     } else if (planForceWrite && forceVerbatimPlanWrite) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort\n`);
+      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort analysis=dropped\n`);
     }
     // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
@@ -672,7 +685,11 @@ export async function runTurn(opts: {
       ? [
           {
             role: 'user',
-            content: buildPlanTransformInput(opts.history, planTransformBudget),
+            content: buildPlanTransformInput(
+              opts.history,
+              planTransformBudget,
+              planForceWriteLoopTriggered,
+            ),
           } as Message,
         ]
       : opts.history;
