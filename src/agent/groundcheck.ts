@@ -140,9 +140,12 @@ async function scan(
 export function buildGroundingNote(missing: { missingSymbols: string[]; missingPaths: string[] }): string {
   const items = [...missing.missingPaths, ...missing.missingSymbols];
   if (items.length === 0) return '';
+  // Backtick each item so markdown rendering in the TUI leaves it literal — an unbackticked
+  // `__tests__` path otherwise renders as bold "tests", showing the user a mangled name.
+  const list = items.map(s => `\`${s}\``).join(', ');
   return (
     '\n\n--- reika: plan grounding check (auto-generated) ---\n' +
-    `These names in the plan were not found in the codebase: ${items.join(', ')}. ` +
+    `These names in the plan were not found in the codebase: ${list}. ` +
     'They may be intended as NEW code, or renamed/misremembered. Before editing, confirm the real ' +
     'names against the actual files — do not loop searching for them if they are not there.'
   );

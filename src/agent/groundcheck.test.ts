@@ -67,6 +67,9 @@ describe('buildGroundingNote', () => {
     expect(note).toContain('src/gone.ts');
     expect(note).toContain('not found');
     expect(note).toContain('do not loop');
+    // Items are backticked so markdown rendering won't mangle underscores/asterisks.
+    expect(note).toContain('`streamUnifiedAsk`');
+    expect(note).toContain('`src/gone.ts`');
   });
 });
 
