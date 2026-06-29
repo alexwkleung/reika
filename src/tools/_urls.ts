@@ -140,11 +140,19 @@ export function buildPlanUrlNote(results: UrlGroundingResult[]): string {
   );
 }
 
-// Shared core: fetch the URLs in `text` not already grounded this turn, emit the user-facing receipt,
-// and return the raw results for a caller-specific note. Strict no-op (returns []) when the flag is
-// off or nothing new is named. Marks every candidate seen — resolved or not — so a URL isn't
-// re-fetched on a later edit. Fetches run in parallel, so wall-clock is one timeout, not N. Both
-// entry points below share this; they differ only in how they render the results into a note.
+// A grounding outcome: `note` is the text to inject (model-facing snippets for the edit path, a
+// flag-only advisory for the plan path); `notice` is the user-facing receipt the caller emits as a
+// scrollback line AFTER the action it describes. Both undefined when nothing was grounded.
+export type UrlGroundingOutcome = {
+  note?: string;
+  notice?: { tone: 'info' | 'warn'; content: string };
+};
+
+// Shared core: fetch the URLs in `text` not already grounded this turn and return the raw results.
+// Strict no-op (returns []) when the flag is off or nothing new is named. Marks every candidate seen
+// — resolved or not — so a URL isn't re-fetched on a later edit. Fetches run in parallel, so
+// wall-clock is one timeout, not N. Both entry points below share this; they differ only in how they
+// render the results into a note. Emits nothing itself: the caller owns where the receipt lands.
 async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGroundingResult[]> {
   if (process.env.REIKA_URL_GROUNDING !== '1') return [];
   const seen = ctx.groundedUrls;
@@ -154,29 +162,25 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
   if (candidates.length === 0) return [];
   candidates.forEach(u => seen?.add(u));
 
-  const results = await Promise.all(
-    candidates.map(async url => ({ url, res: await extractUrl(url) })),
-  );
-  // Tell the user it ran (and how it went) — a network fetch on its behalf shouldn't be invisible.
-  const notice = buildUrlGroundingNotice(results);
-  if (notice) ctx.onNotice?.(notice);
-  return results;
+  return Promise.all(candidates.map(async url => ({ url, res: await extractUrl(url) })));
 }
 
-// Ground the http(s) URLs a write/edit introduces. Returns a model-facing note with a snippet of
-// each real page (or undefined when nothing was grounded), injected into the tool result.
-export async function groundUrls(ctx: ToolContext, newText: string): Promise<string | undefined> {
-  return buildUrlGroundingNote(await groundCandidates(ctx, newText)) || undefined;
+// Ground the http(s) URLs a write/edit introduces. The note carries a snippet of each real page (for
+// the model); the notice is the user's receipt. The tool puts the note on its payload and the notice
+// on its ToolResult, so the loop renders the receipt after the edit chip.
+export async function groundUrls(ctx: ToolContext, newText: string): Promise<UrlGroundingOutcome> {
+  const results = await groundCandidates(ctx, newText);
+  return { note: buildUrlGroundingNote(results) || undefined, notice: buildUrlGroundingNotice(results) };
 }
 
 // Ground the http(s) URLs a finalized plan names — the plan-commit analogue of the symbol/path
-// groundcheck. Returns a flag-only note listing the unreachable ones (or undefined when all
-// resolved / none named), appended to the plan so it's inherited verbatim by the agent turn. Catches
-// URLs that live only in a plan or prose and never reach a write, where groundUrls would never see
-// them.
+// groundcheck. The note is a flag-only advisory listing the unreachable ones (appended to the plan so
+// it's inherited verbatim by the agent turn); the notice is the user's receipt. Catches URLs that
+// live only in a plan or prose and never reach a write, where groundUrls would never see them.
 export async function groundUrlsForPlan(
   ctx: ToolContext,
   planText: string,
-): Promise<string | undefined> {
-  return buildPlanUrlNote(await groundCandidates(ctx, planText)) || undefined;
+): Promise<UrlGroundingOutcome> {
+  const results = await groundCandidates(ctx, planText);
+  return { note: buildPlanUrlNote(results) || undefined, notice: buildUrlGroundingNotice(results) };
 }

@@ -46,15 +46,16 @@ export const writeTool: Tool = {
     // Ground what this new file introduces: surface the real installed API of any dependency it
     // imports, and fetch any URL it names — so the model corrects an assumed shape or a dead link
     // instead of building on a hallucinated one. Independent, so run concurrently.
-    const [depPayload, urlPayload] = await Promise.all([
+    const [depPayload, url] = await Promise.all([
       surfaceImportedDeps(ctx, content),
       groundUrls(ctx, content),
     ]);
-    const payload = [depPayload, urlPayload].filter(Boolean).join('\n\n') || undefined;
+    const payload = [depPayload, url.note].filter(Boolean).join('\n\n') || undefined;
     return {
       summary: `Wrote ${rel} (+${added})`,
       diff: { text: diffText, path: rel, added, removed: 0, startLine: 1 },
       ...(payload ? { payload } : {}),
+      ...(url.notice ? { notice: url.notice } : {}),
     };
   },
 };

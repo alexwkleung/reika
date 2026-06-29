@@ -68,6 +68,11 @@ export type ToolResult = {
   // without a second disk read. Keyed on the full file (not the slice) so a window-varying
   // re-read of the same region still hashes identically. See agent/readtrace.ts.
   contentHash?: string;
+  // A user-facing receipt for a harness side effect the tool performed (e.g. URL grounding fetching
+  // a link). The loop emits it as a standalone `system` scrollback line AFTER the tool's own chip,
+  // so it reads as a follow-on to the action rather than being stuffed in front of it. `warn` for an
+  // outcome worth noticing (a dead link), `info` for a quiet "this ran".
+  notice?: { tone: 'info' | 'warn'; content: string };
 };
 
 export type ApprovalRequest = {
@@ -102,11 +107,6 @@ export type ToolContext = {
   groundedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
-  // Surface a persistent, user-visible note about a harness side effect the tool performed on the
-  // model's behalf — e.g. URL grounding fetching a link (tools/_urls.ts). The loop bridges this to a
-  // nested `system` scrollback line so the action isn't invisible; `warn` flags an outcome the user
-  // should notice (an unreachable link), `info` is a quiet "this ran" receipt.
-  onNotice?: (notice: { tone: 'info' | 'warn'; content: string }) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
   // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/
   // install isn't killed prematurely. Undefined falls back to the bash tool's own default.

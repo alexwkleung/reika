@@ -131,25 +131,25 @@ describe('groundUrls', () => {
   it('is a strict no-op when the flag is off', async () => {
     delete process.env.REIKA_URL_GROUNDING;
     const out = await groundUrls({ cwd: '/tmp' }, 'see https://example.com');
-    expect(out).toBeUndefined();
+    expect(out).toEqual({ note: undefined, notice: undefined });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('returns undefined when the text names no URL', async () => {
+  it('returns nothing when the text names no URL', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     const out = await groundUrls({ cwd: '/tmp' }, 'const x = 1;');
-    expect(out).toBeUndefined();
+    expect(out).toEqual({ note: undefined, notice: undefined });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('fetches an introduced URL and returns a grounding note', async () => {
+  it('fetches an introduced URL and returns a model-facing note', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       mockOk('<html><body><article>real content here</article></body></html>'),
     );
     const out = await groundUrls({ cwd: '/tmp' }, "fetch('https://api.example.com/v1')");
-    expect(out).toContain('✓ https://api.example.com/v1 — resolved');
-    expect(out).toContain('real content here');
+    expect(out.note).toContain('✓ https://api.example.com/v1 — resolved');
+    expect(out.note).toContain('real content here');
   });
 
   it('marks URLs seen so a follow-up edit does not re-fetch', async () => {
@@ -158,24 +158,21 @@ describe('groundUrls', () => {
     const groundedUrls = new Set<string>();
     await groundUrls({ cwd: '/tmp', groundedUrls }, 'https://example.com/a');
     const second = await groundUrls({ cwd: '/tmp', groundedUrls }, 'https://example.com/a');
-    expect(second).toBeUndefined();
+    expect(second).toEqual({ note: undefined, notice: undefined });
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 
-  it('emits a user-visible onNotice when grounding runs', async () => {
+  it('returns a user-facing receipt for the loop to place after the chip', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk('<article>x</article>'));
-    const onNotice = vi.fn();
-    await groundUrls({ cwd: '/tmp', onNotice }, 'https://example.com/page');
-    expect(onNotice).toHaveBeenCalledTimes(1);
-    expect(onNotice).toHaveBeenCalledWith({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
+    const out = await groundUrls({ cwd: '/tmp' }, 'https://example.com/page');
+    expect(out.notice).toEqual({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
   });
 
-  it('does not emit onNotice when grounding is a no-op (no URLs)', async () => {
+  it('returns no receipt when grounding is a no-op (no URLs)', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
-    const onNotice = vi.fn();
-    await groundUrls({ cwd: '/tmp', onNotice }, 'const x = 1;');
-    expect(onNotice).not.toHaveBeenCalled();
+    const out = await groundUrls({ cwd: '/tmp' }, 'const x = 1;');
+    expect(out.notice).toBeUndefined();
   });
 
   it('caps the number of URLs fetched per call', async () => {
@@ -241,47 +238,33 @@ describe('groundUrlsForPlan', () => {
   it('is a strict no-op when the flag is off', async () => {
     delete process.env.REIKA_URL_GROUNDING;
     const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'use https://cdn.example.com/lib.js');
-    expect(out).toBeUndefined();
+    expect(out).toEqual({ note: undefined, notice: undefined });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('returns no plan note when the named URL resolves, but still emits the receipt', async () => {
+  it('returns no plan note when the named URL resolves, but still returns the receipt', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockStatus(true));
-    const onNotice = vi.fn();
-    const out = await groundUrlsForPlan(
-      { cwd: '/tmp', onNotice },
-      'load https://cdn.example.com/three.min.js',
-    );
-    expect(out).toBeUndefined();
-    expect(onNotice).toHaveBeenCalledWith({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
+    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'load https://cdn.example.com/three.min.js');
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toEqual({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
   });
 
   it('flags a plan URL that does not resolve', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockStatus(false, 404));
-    const onNotice = vi.fn();
-    const out = await groundUrlsForPlan(
-      { cwd: '/tmp', onNotice },
-      'load https://cdn.example.com/typo.js',
-    );
-    expect(out).toContain('did not resolve');
-    expect(out).toContain('`https://cdn.example.com/typo.js`');
-    expect(onNotice).toHaveBeenCalledWith(
-      expect.objectContaining({ tone: 'warn' }),
-    );
+    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'load https://cdn.example.com/typo.js');
+    expect(out.note).toContain('did not resolve');
+    expect(out.note).toContain('`https://cdn.example.com/typo.js`');
+    expect(out.notice?.tone).toBe('warn');
   });
 
   it('does not flag a plan URL when offline — info receipt, no false dead-link warning', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('fetch failed'));
-    const onNotice = vi.fn();
-    const out = await groundUrlsForPlan(
-      { cwd: '/tmp', onNotice },
-      'load https://cdn.example.com/three.min.js',
-    );
-    expect(out).toBeUndefined();
-    expect(onNotice).toHaveBeenCalledWith(
+    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'load https://cdn.example.com/three.min.js');
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toEqual(
       expect.objectContaining({ tone: 'info', content: expect.stringContaining("couldn't verify") }),
     );
   });

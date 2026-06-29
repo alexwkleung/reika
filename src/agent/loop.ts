@@ -1018,18 +1018,15 @@ export async function runTurn(opts: {
     // — which the edit/write grounder would never see. So at plan commit, fetch the URLs the plan
     // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
     // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
-    // tools. Strict no-op when the flag is off; the onNotice receipt surfaces via the same bridge.
-    // Defer the receipt: groundUrlsForPlan emits via onNotice synchronously, but the plan message
-    // isn't pushed until below. Capture it and emit AFTER the plan, non-nested, so it lands as an
-    // end-of-turn status line — not tucked under the unrelated prior tool (a read/list), which is
-    // what nesting it here would do (the grounding is about the plan, not that read).
-    let planUrlNotice: { tone: 'info' | 'warn'; content: string } | undefined;
+    // tools. Strict no-op when the flag is off.
+    // Hold the receipt until after the plan message is pushed below, so it lands as a standalone
+    // end-of-turn line — not tucked under the unrelated prior tool (a read/list). The grounding is
+    // about the plan, not that read.
+    let planUrlNotice: ToolResult['notice'];
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
-      const urlNote = await groundUrlsForPlan(
-        { cwd: opts.bundle.cwd, groundedUrls, onNotice: n => (planUrlNotice = n) },
-        assistantContent,
-      );
-      if (urlNote) assistantContent = assistantContent + urlNote;
+      const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
+      if (url.note) assistantContent = assistantContent + url.note;
+      planUrlNotice = url.notice;
     }
 
     const assistantMsg: Message = {
@@ -1116,6 +1113,7 @@ export async function runTurn(opts: {
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
       let contentHash: string | undefined;
+      let toolNotice: ToolResult['notice'];
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
       // applies, so the done-gate diffs against the project's state before any of this turn's edits.
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
@@ -1157,10 +1155,6 @@ export async function runTurn(opts: {
             groundedUrls,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
-            // Bridge a tool's harness-side-effect note (e.g. URL grounding) to a nested system line,
-            // so a silent fetch leaves visible, persistent evidence it ran. Same channel compaction
-            // and the typecheck gate use; nested so it sits under the edit chip that triggered it.
-            onNotice: n => opts.onMessage({ role: 'system', tone: n.tone, content: n.content, nested: true }),
             spawnSubagent: makeSpawnSubagent(opts),
             bashTimeoutMs: opts.config.bashTimeoutMs,
           });
@@ -1169,6 +1163,7 @@ export async function runTurn(opts: {
           diff = result.diff;
           command = result.command;
           contentHash = result.contentHash;
+          toolNotice = result.notice;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -1224,6 +1219,11 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
+      // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
+      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it.
+      if (toolNotice) {
+        opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
+      }
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.

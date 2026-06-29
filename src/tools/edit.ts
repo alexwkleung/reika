@@ -107,7 +107,7 @@ export const editTool: Tool = {
     // Scan only the replacement text: these fire when the model introduces an import or a URL,
     // grounding the dep on its real API and the URL on its real (or non-existent) content rather
     // than an assumed shape. Independent, so fetch them concurrently.
-    const [depPayload, urlPayload] = await Promise.all([
+    const [depPayload, url] = await Promise.all([
       surfaceImportedDeps(ctx, effectiveNew),
       groundUrls(ctx, effectiveNew),
     ]);
@@ -116,11 +116,12 @@ export const editTool: Tool = {
     // size cap keeps the cost trivial and is where multi-site edits actually cluster; large files
     // fall back to the diff region (model re-reads only if it needs a distant block).
     const refreshed = refreshedFile(rel, next);
-    const payload = [depPayload, urlPayload, refreshed].filter(Boolean).join('\n\n') || undefined;
+    const payload = [depPayload, url.note, refreshed].filter(Boolean).join('\n\n') || undefined;
     return {
       summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
       diff: { text: diffText, path: rel, added, removed, startLine },
       ...(payload ? { payload } : {}),
+      ...(url.notice ? { notice: url.notice } : {}),
     };
   },
 };
