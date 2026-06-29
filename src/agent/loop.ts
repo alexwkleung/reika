@@ -302,6 +302,13 @@ const INSPECTION_TOOLS = new Set(['read', 'grep', 'glob', 'list']);
 // models (observed twice — soft nudge, then ledger); "a weak quant can't call a tool that isn't
 // there" is what actually forces the explore→act transition (the stop-and-commit failure).
 const LOOP_WITHDRAW_AFTER = 2;
+// Rounds a reasoning loop must persist before the agent turn is terminally stopped. Withdrawal pulls
+// read/grep/glob/list but NOT bash — a verification-spiraling model escapes via `bash tail/grep/wc`
+// and loops to maxTurns (observed: model finished the file, then ran `tail -5` with byte-identical
+// reasoning every round). Rather than chase every escape tool, end the turn once a confirmed
+// reasoning loop has ignored the ledger+withdrawal for this many rounds — the agent-mode analogue of
+// plan mode's commitSpiralStop. 4 = withdrawal at 2 + two rounds to break out before giving up.
+const LOOP_TERMINAL_AFTER = 4;
 // Post-edit typecheck gate: how many times a turn may be sent back to fix type errors its own
 // edits introduced before it's allowed to finish anyway. The harness verifies so the weak model
 // doesn't have to remember to — but a model that can't clear the errors must commit rather than
@@ -654,6 +661,19 @@ export async function runTurn(opts: {
         };
         opts.history.push(stuck);
         opts.onMessage(stuck);
+        return;
+      }
+      // Reasoning-loop dead-end (agent mode's commitSpiralStop): a confirmed reasoning loop that has
+      // ignored the ledger AND survived withdrawal for LOOP_TERMINAL_AFTER rounds. Withdrawal only
+      // pulls read/grep/glob/list, so a model spiraling via `bash` (e.g. re-running `tail`/`grep` to
+      // "verify") routes around it and would otherwise run to maxTurns. End the turn instead — the
+      // work it did (if any) is already on disk; say so honestly rather than loop.
+      if (reasoningLoop && loopActiveRounds >= LOOP_TERMINAL_AFTER) {
+        debugLog(
+          `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
+            `edited=${editingStarted}\n`,
+        );
+        commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
         return;
       }
       system = loopDetected
@@ -1241,6 +1261,42 @@ function commitSpiralStop(
       `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
       `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
       `rephrasing or narrowing it, or use a stronger model.`,
+    durationMs: Date.now() - turnStart,
+    ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+  };
+  opts.history.push(m);
+  opts.onMessage(m);
+}
+
+// Agent-mode terminal stop for a reasoning loop that survived the ledger + withdrawal (escaping via
+// bash). Ends the turn honestly rather than running to maxTurns. If the turn made edits, the work is
+// already on disk — frame it as "done but stopped re-checking" and name the edited files; otherwise
+// it's a stuck-without-progress stop. Mirrors commitSpiralStop (plan mode).
+function commitAgentLoopStop(
+  opts: { history: Message[]; onMessage: (m: Message) => void },
+  turnStart: number,
+  fetchedUrls: Set<string>,
+  edited: boolean,
+): void {
+  const files = new Set<string>();
+  for (const m of opts.history) {
+    if (m.role !== 'assistant') continue;
+    for (const tc of m.toolCalls ?? []) {
+      if ((tc.name === 'edit' || tc.name === 'write') && typeof tc.args.path === 'string') {
+        files.add(tc.args.path);
+      }
+    }
+  }
+  const fileList = files.size > 0 ? ` to ${[...files].slice(0, 8).join(', ')}` : '';
+  const content = edited
+    ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
+      `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
+      `anything's off.`
+    : `I kept repeating the same step without making progress, so I've stopped rather than loop. Let ` +
+      `me know how you'd like to proceed.`;
+  const m: Message = {
+    role: 'assistant',
+    content,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
