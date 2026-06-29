@@ -40,51 +40,86 @@ export function extractUrls(source: string): string[] {
 
 export type UrlGroundingResult = { url: string; res: UrlExtraction };
 
-// Build the grounding note from fetched results. Pure (no network) so the formatting is testable in
-// isolation. Returns '' when there's nothing to report, so the caller appends nothing. A ✗ (did not
-// resolve) is the high-signal case — a likely-hallucinated link — and is stated as an instruction to
-// fix; a ✓ carries a whitespace-collapsed snippet so the model can confirm the page matches intent.
+// Per-URL verdict, accounting for whether the machine is even online:
+//   reachable  — resolved (2xx).
+//   dead       — a real bad link: the server answered with an error (4xx/5xx), OR the request got no
+//                response BUT something else in the batch reached a server, proving we're online (so
+//                a no-response here is a bad host, not a dead network).
+//   unverified — got no response and we have NO proof of connectivity (e.g. the machine is offline).
+//                Could be a bad host or could be the network — so we don't flag it as invented. This
+//                is what stops an offline run from false-flagging every URL.
+export type UrlVerdict = 'reachable' | 'dead' | 'unverified';
+
+// Did any fetch in the batch reach a server (resolve, or get an HTTP error status)? That's proof the
+// machine has connectivity, which is what lets us treat an unanswered request as a genuine bad host
+// rather than a possibly-offline one.
+function batchOnline(results: UrlGroundingResult[]): boolean {
+  return results.some(r => r.res.ok || r.res.reached);
+}
+
+function verdictOf(res: UrlExtraction, online: boolean): UrlVerdict {
+  if (res.ok) return 'reachable';
+  if (res.reached || online) return 'dead';
+  return 'unverified';
+}
+
+// Build the model-facing grounding note (edit/write path). Pure (no network) so formatting is
+// testable in isolation. Returns '' when there's nothing to report. A ✗ (server-confirmed dead, or a
+// bad host while online) is the high-signal case and is stated as an instruction to fix; a ✓ carries
+// a whitespace-collapsed snippet; a ? (couldn't reach, maybe offline) is reported honestly as
+// unverified, NOT as invented — so the model isn't told to "fix" a link that may be fine.
 export function buildUrlGroundingNote(results: UrlGroundingResult[]): string {
   if (results.length === 0) return '';
+  const online = batchOnline(results);
   const lines = results.map(({ url, res }) => {
-    if (!res.ok) {
+    if (res.ok) {
+      const snippet = res.content.replace(/\s+/g, ' ').trim().slice(0, MAX_SNIPPET_CHARS);
+      return snippet ? `✓ ${url} — resolved: ${snippet}…` : `✓ ${url} — resolved (no extractable text).`;
+    }
+    if (verdictOf(res, online) === 'dead') {
       return `✗ ${url} — did NOT resolve (${res.error}). Verify this URL is correct; do not assume it works.`;
     }
-    const snippet = res.content.replace(/\s+/g, ' ').trim().slice(0, MAX_SNIPPET_CHARS);
-    return snippet ? `✓ ${url} — resolved: ${snippet}…` : `✓ ${url} — resolved (no extractable text).`;
+    return `? ${url} — no response (${res.error}); could not verify (the network may be down).`;
   });
   return (
     'URL grounding — fetched the URL(s) this change introduces, on your behalf. A ✗ means the link ' +
     'does not resolve (likely wrong or invented) — fix it before relying on it. A ✓ shows a snippet ' +
-    'of the real page so you can confirm it matches your intent.\n\n' +
+    'of the real page so you can confirm it matches your intent. A ? means it could not be reached at ' +
+    'all (possibly an offline machine) — left unverified, not assumed wrong.\n\n' +
     lines.join('\n')
   );
 }
 
 // Build the user-facing notice for a grounding run — distinct from the model-facing note above: the
-// model gets the snippets, the user gets a short receipt that the harness fetched on its behalf and
-// how it went. `warn` when any link was unreachable (the case worth noticing — a likely-bad URL),
-// `info` otherwise (a quiet "this ran"). Returns undefined for an empty run (caller emits nothing).
+// user gets a short receipt that the harness fetched on its behalf and how it went. `warn` only when
+// a link is genuinely dead (the actionable case); a batch that only failed to connect (no proof of
+// connectivity) is reported as a quiet `info` "couldn't verify" — never a false dead-link alarm on
+// an offline machine. Returns undefined for an empty run (caller emits nothing).
 export function buildUrlGroundingNotice(
   results: UrlGroundingResult[],
 ): { tone: 'info' | 'warn'; content: string } | undefined {
   if (results.length === 0) return undefined;
   const n = results.length;
   const links = `${n} link${n === 1 ? '' : 's'}`;
-  const unreachable = results.filter(r => !r.res.ok);
-  if (unreachable.length === 0) {
-    return { tone: 'info', content: `Grounded ${links} — all reachable.` };
+  const online = batchOnline(results);
+  const dead = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'dead');
+  const unverified = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'unverified');
+  if (dead.length > 0) {
+    // Name the dead ones (capped) — that's the actionable detail; the rest is a count.
+    const named = dead
+      .slice(0, 2)
+      .map(r => (r.res.ok ? '' : `${r.url} (${r.res.error})`))
+      .join(', ');
+    const more = dead.length > 2 ? `, +${dead.length - 2} more` : '';
+    return { tone: 'warn', content: `Grounded ${links} — ${dead.length} unreachable: ${named}${more}.` };
   }
-  // Name the unreachable ones (capped) — that's the actionable detail; the rest is a count.
-  const named = unreachable
-    .slice(0, 2)
-    .map(r => (r.res.ok ? '' : `${r.url} (${r.res.error})`))
-    .join(', ');
-  const more = unreachable.length > 2 ? `, +${unreachable.length - 2} more` : '';
-  return {
-    tone: 'warn',
-    content: `Grounded ${links} — ${unreachable.length} unreachable: ${named}${more}.`,
-  };
+  if (unverified.length > 0) {
+    return {
+      tone: 'info',
+      content: `Grounded ${links} — couldn't verify ${unverified.length} (no response; network may be down).`,
+    };
+  }
+  return { tone: 'info', content: `Grounded ${links} — all reachable.` };
 }
 
 // Flag-only note for a finalized plan, mirroring groundcheck.ts's symbol/path advisory: lists the
@@ -92,9 +127,12 @@ export function buildUrlGroundingNotice(
 // resolved — a plan needs dead links called out, not page contents pasted in (that's the edit-path
 // note's job). URLs are backticked so the TUI markdown leaves them literal.
 export function buildPlanUrlNote(results: UrlGroundingResult[]): string {
-  const unreachable = results.filter(r => !r.res.ok);
-  if (unreachable.length === 0) return '';
-  const list = unreachable.map(r => (r.res.ok ? '' : `\`${r.url}\` (${r.res.error})`)).join(', ');
+  const online = batchOnline(results);
+  // Only flag genuinely-dead links — never the 'unverified' (couldn't-reach, maybe-offline) ones, so
+  // a plan written on an offline machine isn't stamped with phantom "invented URL" warnings.
+  const dead = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'dead');
+  if (dead.length === 0) return '';
+  const list = dead.map(r => (r.res.ok ? '' : `\`${r.url}\` (${r.res.error})`)).join(', ');
   return (
     '\n\n--- reika: plan URL check (auto-generated) ---\n' +
     `These URLs named in the plan did not resolve: ${list}. ` +

@@ -132,12 +132,12 @@ describe('extractUrl — harness-callable extraction', () => {
       text: async () => '',
     } as unknown as Response);
     const result = await extractUrl('https://example.com/missing');
-    expect(result).toEqual({ ok: false, error: '404 Not Found' });
+    expect(result).toEqual({ ok: false, reached: true, error: '404 Not Found' });
   });
 
   it('returns {ok:false} with the error message on a network failure', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
     const result = await extractUrl('https://unreachable.example');
-    expect(result).toEqual({ ok: false, error: 'ECONNREFUSED' });
+    expect(result).toEqual({ ok: false, reached: false, error: 'ECONNREFUSED' });
   });
 });

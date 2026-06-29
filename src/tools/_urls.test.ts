@@ -59,7 +59,7 @@ describe('buildUrlGroundingNote', () => {
 
   it('flags a non-resolving URL as an instruction to fix', () => {
     const note = buildUrlGroundingNote([
-      { url: 'https://nope.example/x', res: { ok: false, error: '404 Not Found' } },
+      { url: 'https://nope.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
     ]);
     expect(note).toContain('✗ https://nope.example/x — did NOT resolve (404 Not Found)');
     expect(note).toMatch(/do not assume it works/i);
@@ -82,12 +82,31 @@ describe('buildUrlGroundingNotice', () => {
   it('warns and names the unreachable URL(s)', () => {
     const notice = buildUrlGroundingNotice([
       { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
-      { url: 'https://bad.example/x', res: { ok: false, error: '404 Not Found' } },
+      { url: 'https://bad.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
     ]);
     expect(notice?.tone).toBe('warn');
     expect(notice?.content).toBe(
       'Grounded 2 links — 1 unreachable: https://bad.example/x (404 Not Found).',
     );
+  });
+
+  it('does NOT warn when nothing reached a server (possibly offline) — info, not a false alarm', () => {
+    const notice = buildUrlGroundingNotice([
+      { url: 'https://a.example', res: { ok: false, reached: false, error: 'fetch failed' } },
+    ]);
+    expect(notice).toEqual({
+      tone: 'info',
+      content: "Grounded 1 link — couldn't verify 1 (no response; network may be down).",
+    });
+  });
+
+  it('treats a no-response link as dead when the batch proves connectivity', () => {
+    const notice = buildUrlGroundingNotice([
+      { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      { url: 'https://invented.host', res: { ok: false, reached: false, error: 'ENOTFOUND' } },
+    ]);
+    expect(notice?.tone).toBe('warn');
+    expect(notice?.content).toContain('https://invented.host (ENOTFOUND)');
   });
 });
 
@@ -180,11 +199,19 @@ describe('buildPlanUrlNote', () => {
   it('lists only the unreachable URLs, backticked', () => {
     const note = buildPlanUrlNote([
       { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
-      { url: 'https://bad.example/x', res: { ok: false, error: '404 Not Found' } },
+      { url: 'https://bad.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
     ]);
     expect(note).toContain('plan URL check');
     expect(note).toContain('`https://bad.example/x` (404 Not Found)');
     expect(note).not.toContain('ok.example');
+  });
+
+  it('does not flag a no-response link when nothing proves connectivity (offline-safe)', () => {
+    expect(
+      buildPlanUrlNote([
+        { url: 'https://cdn.example.com/lib.js', res: { ok: false, reached: false, error: 'fetch failed' } },
+      ]),
+    ).toBe('');
   });
 });
 
@@ -242,6 +269,20 @@ describe('groundUrlsForPlan', () => {
     expect(out).toContain('`https://cdn.example.com/typo.js`');
     expect(onNotice).toHaveBeenCalledWith(
       expect.objectContaining({ tone: 'warn' }),
+    );
+  });
+
+  it('does not flag a plan URL when offline — info receipt, no false dead-link warning', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('fetch failed'));
+    const onNotice = vi.fn();
+    const out = await groundUrlsForPlan(
+      { cwd: '/tmp', onNotice },
+      'load https://cdn.example.com/three.min.js',
+    );
+    expect(out).toBeUndefined();
+    expect(onNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'info', content: expect.stringContaining("couldn't verify") }),
     );
   });
 });

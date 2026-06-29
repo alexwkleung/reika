@@ -7,7 +7,12 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 export type UrlExtraction =
   | { ok: true; content: string; extractedChars: number }
-  | { ok: false; error: string };
+  // `reached` distinguishes "the server answered, with an error status" (reached: true — a 4xx/5xx,
+  // a definitively bad URL) from "the request never got a response" (reached: false — DNS failure,
+  // refused connection, timeout, or no internet at all). The two are indistinguishable in `error`
+  // text but mean very different things to a grounder: a 404 is a real dead link; a thrown request
+  // might just be an offline machine, so it must not be reported as an invented URL on its own.
+  | { ok: false; reached: boolean; error: string };
 
 // Fetch an http(s) URL and extract its main content to truncated markdown. Network + extraction
 // ONLY — no validation, budget accounting, or source bookkeeping; every caller owns those (the
@@ -20,7 +25,7 @@ export async function extractUrl(url: string): Promise<UrlExtraction> {
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    if (!res.ok) return { ok: false, reached: true, error: `${res.status} ${res.statusText}` };
     const html = await res.text();
     const dom = new JSDOM(html, { url });
     const result = await Defuddle(dom, url, { markdown: true });
@@ -32,7 +37,7 @@ export async function extractUrl(url: string): Promise<UrlExtraction> {
         : content;
     return { ok: true, content: trimmed, extractedChars: content.length };
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    return { ok: false, reached: false, error: (e as Error).message };
   } finally {
     clearTimeout(timer);
   }
