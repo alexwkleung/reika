@@ -26,7 +26,12 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
-import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
+import {
+  extractPlanReferences,
+  verifyPlanReferences,
+  buildGroundingNote,
+  shouldSuppressGrounding,
+} from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -1004,10 +1009,13 @@ export async function runTurn(opts: {
       const refs = extractPlanReferences(assistantContent);
       if (refs.symbols.length > 0 || refs.paths.length > 0) {
         const missing = await verifyPlanReferences(opts.bundle.cwd, opts.bundle.ignore, refs);
-        const note = buildGroundingNote(missing);
+        // Suppress the note when nearly everything is missing — a greenfield/external-lib pattern
+        // where the flags are noise, not signal. See agent/groundcheck.ts shouldSuppressGrounding.
+        const suppressed = shouldSuppressGrounding(missing, refs);
+        const note = suppressed ? '' : buildGroundingNote(missing);
         debugLog(
           `[reika:debug] round=${i} plan-verify refs=${refs.symbols.length + refs.paths.length} ` +
-            `missing=${missing.missingSymbols.length + missing.missingPaths.length}\n`,
+            `missing=${missing.missingSymbols.length + missing.missingPaths.length} suppressed=${suppressed}\n`,
         );
         if (note) assistantContent = (assistantContent ?? '') + note;
       }

@@ -173,3 +173,25 @@ export function buildGroundingNote(missing: { missingSymbols: string[]; missingP
     'names against the actual files — do not loop searching for them if they are not there.'
   );
 }
+
+// When most of a plan's references are missing, the note stops discriminating. On a greenfield repo
+// (or one leaning on external/CDN libs like Three.js) every symbol is "missing" — it's new, or lives
+// in no local file — so a list of N "verify these" items is noise that costs window tokens and trains
+// the agent to ignore the note, blunting it for the case that matters (one hallucinated symbol
+// against a backdrop of real ones). Suppress the whole note when the missing fraction is high AND
+// there are enough missing to be a bulk/greenfield pattern rather than a precise hit. This only ever
+// shows FEWER flags — it can never invent a warning, so it adds no false positive; the only cost is
+// possibly not flagging a real miss when the rate is already too high to discriminate (and the small,
+// high-signal case — a few missing against many found — is deliberately left untouched).
+const SUPPRESS_MIN_MISSING = 4;
+const SUPPRESS_FRACTION = 0.8;
+
+export function shouldSuppressGrounding(
+  missing: { missingSymbols: string[]; missingPaths: string[] },
+  refs: PlanReferences,
+): boolean {
+  const total = refs.symbols.length + refs.paths.length;
+  if (total === 0) return false;
+  const missingCount = missing.missingSymbols.length + missing.missingPaths.length;
+  return missingCount >= SUPPRESS_MIN_MISSING && missingCount / total >= SUPPRESS_FRACTION;
+}

@@ -6,6 +6,7 @@ import {
   extractPlanReferences,
   verifyPlanReferences,
   buildGroundingNote,
+  shouldSuppressGrounding,
 } from './groundcheck.js';
 
 describe('extractPlanReferences', () => {
@@ -89,6 +90,42 @@ describe('buildGroundingNote', () => {
     // Items are backticked so markdown rendering won't mangle underscores/asterisks.
     expect(note).toContain('`streamUnifiedAsk`');
     expect(note).toContain('`src/gone.ts`');
+  });
+});
+
+describe('shouldSuppressGrounding', () => {
+  const refsOf = (symbols: string[], paths: string[] = []) => ({ symbols, paths });
+
+  it('suppresses when nearly everything is missing (greenfield / external-lib pattern)', () => {
+    const refs = refsOf(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+    const missing = { missingSymbols: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'], missingPaths: [] };
+    expect(shouldSuppressGrounding(missing, refs)).toBe(true);
+  });
+
+  it('keeps the note for a single missing symbol — the high-signal case', () => {
+    const refs = refsOf(['A']);
+    expect(shouldSuppressGrounding({ missingSymbols: ['A'], missingPaths: [] }, refs)).toBe(false);
+  });
+
+  it('keeps the note when a few are missing against a backdrop of many found', () => {
+    const refs = refsOf(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']);
+    expect(shouldSuppressGrounding({ missingSymbols: ['a'], missingPaths: [] }, refs)).toBe(false);
+    // Half missing still has a backdrop — not suppressed.
+    expect(
+      shouldSuppressGrounding({ missingSymbols: ['a', 'b', 'c', 'd', 'e', 'f'], missingPaths: [] }, refs),
+    ).toBe(false);
+  });
+
+  it('requires both a high fraction AND enough missing — small all-missing plans stay flagged', () => {
+    const refs = refsOf(['A', 'B', 'C']);
+    // 3/3 missing is 100% but below the absolute floor, so the precise small-plan note survives.
+    expect(
+      shouldSuppressGrounding({ missingSymbols: ['A', 'B', 'C'], missingPaths: [] }, refs),
+    ).toBe(false);
+  });
+
+  it('is false when there are no references at all', () => {
+    expect(shouldSuppressGrounding({ missingSymbols: [], missingPaths: [] }, refsOf([]))).toBe(false);
   });
 });
 
