@@ -1019,14 +1019,14 @@ export async function runTurn(opts: {
     // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
     // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
     // tools. Strict no-op when the flag is off; the onNotice receipt surfaces via the same bridge.
+    // Defer the receipt: groundUrlsForPlan emits via onNotice synchronously, but the plan message
+    // isn't pushed until below. Capture it and emit AFTER the plan, non-nested, so it lands as an
+    // end-of-turn status line — not tucked under the unrelated prior tool (a read/list), which is
+    // what nesting it here would do (the grounding is about the plan, not that read).
+    let planUrlNotice: { tone: 'info' | 'warn'; content: string } | undefined;
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
       const urlNote = await groundUrlsForPlan(
-        {
-          cwd: opts.bundle.cwd,
-          groundedUrls,
-          onNotice: n =>
-            opts.onMessage({ role: 'system', tone: n.tone, content: n.content, nested: true }),
-        },
+        { cwd: opts.bundle.cwd, groundedUrls, onNotice: n => (planUrlNotice = n) },
         assistantContent,
       );
       if (urlNote) assistantContent = assistantContent + urlNote;
@@ -1049,6 +1049,10 @@ export async function runTurn(opts: {
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
+    // The plan-grounding receipt goes out after the plan, as a standalone line (not nested).
+    if (planUrlNotice) {
+      opts.onMessage({ role: 'system', tone: planUrlNotice.tone, content: planUrlNotice.content });
+    }
 
     if (isFinal) {
       // Post-edit typecheck gate. If this turn edited (baseline captured) and a final check shows
