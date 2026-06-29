@@ -306,9 +306,14 @@ const LOOP_WITHDRAW_AFTER = 2;
 // read/grep/glob/list but NOT bash — a verification-spiraling model escapes via `bash tail/grep/wc`
 // and loops to maxTurns (observed: model finished the file, then ran `tail -5` with byte-identical
 // reasoning every round). Rather than chase every escape tool, end the turn once a confirmed
-// reasoning loop has ignored the ledger+withdrawal for this many rounds — the agent-mode analogue of
-// plan mode's commitSpiralStop. 4 = withdrawal at 2 + two rounds to break out before giving up.
-const LOOP_TERMINAL_AFTER = 4;
+// reasoning loop has been through the ledger+withdrawal and still persists — the agent-mode analogue
+// of plan mode's commitSpiralStop. 3 is the FLOOR: the soft ledger (loopActiveRounds=1) and the
+// withdrawal (=2, whose ledger already says "if complete, say so and stop") each get exactly one
+// round to work — both genuinely recover other loop types (a search loop pivots once read is pulled)
+// — then terminal at =3. Can't go lower: terminal at =2 would fire BEFORE the withdrawn call runs,
+// skipping withdrawal entirely. A model that heeds either step resets loopActiveRounds, so terminal
+// only fires on a loop that ignored both.
+const LOOP_TERMINAL_AFTER = 3;
 // Post-edit typecheck gate: how many times a turn may be sent back to fix type errors its own
 // edits introduced before it's allowed to finish anyway. The harness verifies so the weak model
 // doesn't have to remember to — but a model that can't clear the errors must commit rather than
