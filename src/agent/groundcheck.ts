@@ -48,7 +48,7 @@ function isCreateIntent(text: string, index: number, path: string): boolean {
 // "Code-y" identifier: camelCase / PascalCase-with-internal-cap / snake_case / $-form. This filters
 // plain backticked English ("enabled", "true", "the panel") while keeping streamUnifiedAsk,
 // forceWebSearch, WebSearchToggle, use_chat. Deliberately conservative — an all-lowercase single
-// word like `tavily` is NOT treated as a symbol (we'd rather under-flag than warn on a real word).
+// word like `cascade` is NOT treated as a symbol (we'd rather under-flag than warn on a real word).
 function looksLikeSymbol(t: string): boolean {
   if (t.length < 3) return false;
   if (/[_$]/.test(t)) return true; // snake_case / $form

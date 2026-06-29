@@ -56,7 +56,6 @@ export function loadConfig(): Config {
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
     subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
-    tavilyApiKey: emptyToUndefined(process.env.REIKA_TAVILY_API_KEY),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
