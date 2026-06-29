@@ -1026,6 +1026,7 @@ export async function runTurn(opts: {
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
       const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
       if (url.note) assistantContent = assistantContent + url.note;
+      if (url.notice) debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
       planUrlNotice = url.notice;
     }
 
@@ -1220,9 +1221,11 @@ export async function runTurn(opts: {
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
       // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
-      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it.
+      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
+      // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
       if (toolNotice) {
         opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
+        debugLog(`[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`);
       }
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
