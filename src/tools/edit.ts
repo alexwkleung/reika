@@ -3,6 +3,7 @@ import { resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
+import { groundUrls } from './_urls.js';
 
 export const editTool: Tool = {
   name: 'edit',
@@ -103,19 +104,24 @@ export const editTool: Tool = {
     const line = text.slice(0, start).split('\n').length;
     const added = countPrefixed(diffText, '+ ');
     const removed = countPrefixed(diffText, '- ');
-    // Scan only the replacement text: this fires when the model introduces an import,
-    // grounding it on the dependency's real API rather than an assumed shape.
-    const depPayload = await surfaceImportedDeps(ctx, effectiveNew);
+    // Scan only the replacement text: these fire when the model introduces an import or a URL,
+    // grounding the dep on its real API and the URL on its real (or non-existent) content rather
+    // than an assumed shape. Independent, so fetch them concurrently.
+    const [depPayload, url] = await Promise.all([
+      surfaceImportedDeps(ctx, effectiveNew),
+      groundUrls(ctx, effectiveNew),
+    ]);
     // Hand back the post-edit file (small files only) so a follow-up edit to the same file is built
     // from current bytes instead of a now-stale read — collapsing the re-read-after-edit loop. The
     // size cap keeps the cost trivial and is where multi-site edits actually cluster; large files
     // fall back to the diff region (model re-reads only if it needs a distant block).
     const refreshed = refreshedFile(rel, next);
-    const payload = [depPayload, refreshed].filter(Boolean).join('\n\n') || undefined;
+    const payload = [depPayload, url.note, refreshed].filter(Boolean).join('\n\n') || undefined;
     return {
       summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
       diff: { text: diffText, path: rel, added, removed, startLine },
       ...(payload ? { payload } : {}),
+      ...(url.notice ? { notice: url.notice } : {}),
     };
   },
 };

@@ -68,6 +68,11 @@ export type ToolResult = {
   // without a second disk read. Keyed on the full file (not the slice) so a window-varying
   // re-read of the same region still hashes identically. See agent/readtrace.ts.
   contentHash?: string;
+  // A user-facing receipt for a harness side effect the tool performed (e.g. URL grounding fetching
+  // a link). The loop emits it as a standalone `system` scrollback line AFTER the tool's own chip,
+  // so it reads as a follow-on to the action rather than being stuffed in front of it. `warn` for an
+  // outcome worth noticing (a dead link), `info` for a quiet "this ran".
+  notice?: { tone: 'info' | 'warn'; content: string };
 };
 
 export type ApprovalRequest = {
@@ -96,6 +101,10 @@ export type ToolContext = {
   // tool result this turn (see tools/_deps.ts). edit/write consult and extend it so each
   // imported dep is grounded at most once per turn — bounded bloat, no re-injection.
   resolvedDeps?: Set<string>;
+  // http(s) URLs already grounded (fetched on the model's behalf) this turn (see tools/_urls.ts).
+  // Same per-turn dedupe contract as resolvedDeps: each URL a write/edit introduces is fetched at
+  // most once, so a follow-up edit to the same file doesn't re-fetch it.
+  groundedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;

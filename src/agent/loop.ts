@@ -26,7 +26,13 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
-import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
+import {
+  extractPlanReferences,
+  verifyPlanReferences,
+  buildGroundingNote,
+  shouldSuppressGrounding,
+} from './groundcheck.js';
+import { groundUrlsForPlan } from '../tools/_urls.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -464,6 +470,9 @@ export async function runTurn(opts: {
   // dep is grounded at most once per turn (tools/_deps.ts). Per-turn like fetchedUrls: a
   // fresh turn may have lost the surface to compaction, so re-grounding then is fine.
   const resolvedDeps = new Set<string>();
+  // URLs grounded (fetched on the model's behalf) this turn, so a URL a write/edit introduces is
+  // fetched at most once per turn. Per-turn like resolvedDeps. See tools/_urls.ts.
+  const groundedUrls = new Set<string>();
   // Notify the user at most once per turn that compaction kicked in, even if it runs
   // again across the turn's tool rounds.
   let notifiedCompaction = false;
@@ -1000,13 +1009,33 @@ export async function runTurn(opts: {
       const refs = extractPlanReferences(assistantContent);
       if (refs.symbols.length > 0 || refs.paths.length > 0) {
         const missing = await verifyPlanReferences(opts.bundle.cwd, opts.bundle.ignore, refs);
-        const note = buildGroundingNote(missing);
+        // Suppress the note when nearly everything is missing — a greenfield/external-lib pattern
+        // where the flags are noise, not signal. See agent/groundcheck.ts shouldSuppressGrounding.
+        const suppressed = shouldSuppressGrounding(missing, refs);
+        const note = suppressed ? '' : buildGroundingNote(missing);
         debugLog(
           `[reika:debug] round=${i} plan-verify refs=${refs.symbols.length + refs.paths.length} ` +
-            `missing=${missing.missingSymbols.length + missing.missingPaths.length}\n`,
+            `missing=${missing.missingSymbols.length + missing.missingPaths.length} suppressed=${suppressed}\n`,
         );
         if (note) assistantContent = (assistantContent ?? '') + note;
       }
+    }
+
+    // Plan→agent URL grounding (REIKA_URL_GROUNDING, the same flag as the write/edit path): a plan
+    // can recommend a URL that never reaches a write — a plan-only workflow, or a docs link in prose
+    // — which the edit/write grounder would never see. So at plan commit, fetch the URLs the plan
+    // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
+    // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
+    // tools. Strict no-op when the flag is off.
+    // Hold the receipt until after the plan message is pushed below, so it lands as a standalone
+    // end-of-turn line — not tucked under the unrelated prior tool (a read/list). The grounding is
+    // about the plan, not that read.
+    let planUrlNotice: ToolResult['notice'];
+    if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
+      const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
+      if (url.note) assistantContent = assistantContent + url.note;
+      if (url.notice) debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
+      planUrlNotice = url.notice;
     }
 
     const assistantMsg: Message = {
@@ -1026,6 +1055,10 @@ export async function runTurn(opts: {
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
+    // The plan-grounding receipt goes out after the plan, as a standalone line (not nested).
+    if (planUrlNotice) {
+      opts.onMessage({ role: 'system', tone: planUrlNotice.tone, content: planUrlNotice.content });
+    }
 
     if (isFinal) {
       // Post-edit typecheck gate. If this turn edited (baseline captured) and a final check shows
@@ -1089,6 +1122,7 @@ export async function runTurn(opts: {
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
       let contentHash: string | undefined;
+      let toolNotice: ToolResult['notice'];
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
       // applies, so the done-gate diffs against the project's state before any of this turn's edits.
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
@@ -1127,6 +1161,7 @@ export async function runTurn(opts: {
             webBudget,
             fetchedUrls,
             resolvedDeps,
+            groundedUrls,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
@@ -1137,6 +1172,7 @@ export async function runTurn(opts: {
           diff = result.diff;
           command = result.command;
           contentHash = result.contentHash;
+          toolNotice = result.notice;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -1192,6 +1228,13 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
+      // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
+      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
+      // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
+      if (toolNotice) {
+        opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
+        debugLog(`[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`);
+      }
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.
