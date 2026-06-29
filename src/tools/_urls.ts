@@ -61,6 +61,32 @@ export function buildUrlGroundingNote(results: UrlGroundingResult[]): string {
   );
 }
 
+// Build the user-facing notice for a grounding run — distinct from the model-facing note above: the
+// model gets the snippets, the user gets a short receipt that the harness fetched on its behalf and
+// how it went. `warn` when any link was unreachable (the case worth noticing — a likely-bad URL),
+// `info` otherwise (a quiet "this ran"). Returns undefined for an empty run (caller emits nothing).
+export function buildUrlGroundingNotice(
+  results: UrlGroundingResult[],
+): { tone: 'info' | 'warn'; content: string } | undefined {
+  if (results.length === 0) return undefined;
+  const n = results.length;
+  const links = `${n} link${n === 1 ? '' : 's'}`;
+  const unreachable = results.filter(r => !r.res.ok);
+  if (unreachable.length === 0) {
+    return { tone: 'info', content: `Grounded ${links} — all reachable.` };
+  }
+  // Name the unreachable ones (capped) — that's the actionable detail; the rest is a count.
+  const named = unreachable
+    .slice(0, 2)
+    .map(r => (r.res.ok ? '' : `${r.url} (${r.res.error})`))
+    .join(', ');
+  const more = unreachable.length > 2 ? `, +${unreachable.length - 2} more` : '';
+  return {
+    tone: 'warn',
+    content: `Grounded ${links} — ${unreachable.length} unreachable: ${named}${more}.`,
+  };
+}
+
 // Ground the http(s) URLs a write/edit introduces: fetch the ones not already grounded this turn and
 // return a note block for the tool result (or undefined when there's nothing to ground). Marks every
 // candidate seen — resolved or not — so a URL isn't re-fetched on each subsequent edit. Fetches run
@@ -77,5 +103,8 @@ export async function groundUrls(ctx: ToolContext, newText: string): Promise<str
   const results = await Promise.all(
     candidates.map(async url => ({ url, res: await extractUrl(url) })),
   );
+  // Tell the user it ran (and how it went) — a network fetch on its behalf shouldn't be invisible.
+  const notice = buildUrlGroundingNotice(results);
+  if (notice) ctx.onNotice?.(notice);
   return buildUrlGroundingNote(results) || undefined;
 }

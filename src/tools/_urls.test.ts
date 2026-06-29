@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildUrlGroundingNote, extractUrls, groundUrls } from './_urls.js';
+import {
+  buildUrlGroundingNote,
+  buildUrlGroundingNotice,
+  extractUrls,
+  groundUrls,
+} from './_urls.js';
 
 describe('extractUrls', () => {
   it('finds http(s) URLs and dedupes', () => {
@@ -59,6 +64,31 @@ describe('buildUrlGroundingNote', () => {
   });
 });
 
+describe('buildUrlGroundingNotice', () => {
+  it('returns undefined for an empty run', () => {
+    expect(buildUrlGroundingNotice([])).toBeUndefined();
+  });
+
+  it('reports info + all-reachable when every URL resolved', () => {
+    const notice = buildUrlGroundingNotice([
+      { url: 'https://a.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      { url: 'https://b.example', res: { ok: true, content: 'y', extractedChars: 1 } },
+    ]);
+    expect(notice).toEqual({ tone: 'info', content: 'Grounded 2 links — all reachable.' });
+  });
+
+  it('warns and names the unreachable URL(s)', () => {
+    const notice = buildUrlGroundingNotice([
+      { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      { url: 'https://bad.example/x', res: { ok: false, error: '404 Not Found' } },
+    ]);
+    expect(notice?.tone).toBe('warn');
+    expect(notice?.content).toBe(
+      'Grounded 2 links — 1 unreachable: https://bad.example/x (404 Not Found).',
+    );
+  });
+});
+
 describe('groundUrls', () => {
   const original = process.env.REIKA_URL_GROUNDING;
   const originalFetch = globalThis.fetch;
@@ -109,6 +139,22 @@ describe('groundUrls', () => {
     const second = await groundUrls({ cwd: '/tmp', groundedUrls }, 'https://example.com/a');
     expect(second).toBeUndefined();
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it('emits a user-visible onNotice when grounding runs', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk('<article>x</article>'));
+    const onNotice = vi.fn();
+    await groundUrls({ cwd: '/tmp', onNotice }, 'https://example.com/page');
+    expect(onNotice).toHaveBeenCalledTimes(1);
+    expect(onNotice).toHaveBeenCalledWith({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
+  });
+
+  it('does not emit onNotice when grounding is a no-op (no URLs)', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    const onNotice = vi.fn();
+    await groundUrls({ cwd: '/tmp', onNotice }, 'const x = 1;');
+    expect(onNotice).not.toHaveBeenCalled();
   });
 
   it('caps the number of URLs fetched per call', async () => {

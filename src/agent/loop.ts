@@ -1133,6 +1133,10 @@ export async function runTurn(opts: {
             groundedUrls,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
+            // Bridge a tool's harness-side-effect note (e.g. URL grounding) to a nested system line,
+            // so a silent fetch leaves visible, persistent evidence it ran. Same channel compaction
+            // and the typecheck gate use; nested so it sits under the edit chip that triggered it.
+            onNotice: n => opts.onMessage({ role: 'system', tone: n.tone, content: n.content, nested: true }),
             spawnSubagent: makeSpawnSubagent(opts),
             bashTimeoutMs: opts.config.bashTimeoutMs,
           });

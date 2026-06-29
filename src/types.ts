@@ -102,6 +102,11 @@ export type ToolContext = {
   groundedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
+  // Surface a persistent, user-visible note about a harness side effect the tool performed on the
+  // model's behalf — e.g. URL grounding fetching a link (tools/_urls.ts). The loop bridges this to a
+  // nested `system` scrollback line so the action isn't invisible; `warn` flags an outcome the user
+  // should notice (an unreachable link), `info` is a quiet "this ran" receipt.
+  onNotice?: (notice: { tone: 'info' | 'warn'; content: string }) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
   // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/
   // install isn't killed prematurely. Undefined falls back to the bash tool's own default.
