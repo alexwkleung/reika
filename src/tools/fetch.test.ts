@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchUrlTool } from './fetch.js';
+import { extractUrl, fetchUrlTool } from './fetch.js';
 import type { WebBudget } from '../types.js';
 
 const originalFetch = globalThis.fetch;
@@ -105,5 +105,39 @@ describe('fetch_url tool — budget enforcement', () => {
     await fetchUrlTool.run({ url: 'https://example.com' }, { cwd: '/tmp', fetchedUrls });
     await fetchUrlTool.run({ url: 'https://example.com' }, { cwd: '/tmp', fetchedUrls });
     expect(fetchedUrls.size).toBe(1);
+  });
+});
+
+// Direct coverage of the shared extraction helper the fetch_url tool wraps and harness-driven
+// URL grounders (phase 1b) call without going through the tool — no budget/validation here, just
+// the network + extraction contract.
+describe('extractUrl — harness-callable extraction', () => {
+  it('returns ok with content and pre-truncation char count', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<html><body><article>hello world</article></body></html>'),
+    );
+    const result = await extractUrl('https://example.com');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.content).toContain('hello world');
+      expect(result.extractedChars).toBe(result.content.length);
+    }
+  });
+
+  it('returns {ok:false} with status text on a non-OK response', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: async () => '',
+    } as unknown as Response);
+    const result = await extractUrl('https://example.com/missing');
+    expect(result).toEqual({ ok: false, error: '404 Not Found' });
+  });
+
+  it('returns {ok:false} with the error message on a network failure', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+    const result = await extractUrl('https://unreachable.example');
+    expect(result).toEqual({ ok: false, error: 'ECONNREFUSED' });
   });
 });
