@@ -87,6 +87,12 @@ A command that both **switches mode and submits to the model in one tick** (e.g.
 - Lift state to `App.tsx` for cross-component features (suggestions, approval, mode)
 - Bordered boxes use `borderStyle="round"` consistently
 
+### Persistent vs ephemeral signals
+
+Match the signal's lifetime to whether the user **must** see it. A signal the user has to notice — a harness action with a side effect (a URL fetched on the model's behalf), an outcome that changes what they should trust (the typecheck gate sending the model back, an unreachable link) — belongs in a **persistent scrollback line**, emitted as a `system` message via `onMessage` (`tone: 'info' | 'warn'`, `nested: true` to sit it under the action that caused it). It survives in history, so a glance up the transcript reconstructs what happened — a spinner state that's already gone can't. The split both the typecheck gate and URL grounding use: the model-facing detail goes into history/tool payload, the user-facing receipt goes out as a `system` notice.
+
+Reserve **ephemeral** UI (spinner text, a transient pulse like the typecheck "checking…" indicator) for _in-progress_ status that's meaningless once the action finishes — never for the result. If a user could reasonably ask "did that even run?" after the fact, it wasn't persistent enough.
+
 ### Ink wrapping pitfalls
 
 Two interactions to watch for when content can wrap:
