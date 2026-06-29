@@ -19,6 +19,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'tokens', desc: 'show token usage this session' },
   { name: 'skills', desc: 'list available skills (loaded from skills dirs)' },
   { name: 'stats', desc: 'show full session summary' },
+  {
+    name: 'save',
+    desc: 'save the full conversation to ~/.config/reika/history (--raw skips redaction)',
+  },
   { name: 'exit', desc: 'exit Reika' },
   { name: 'quit', desc: 'alias of /exit' },
 ];

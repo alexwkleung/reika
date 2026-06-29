@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -14,6 +14,7 @@ import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
+import { saveTranscript, TRANSCRIPT_VERSION } from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
@@ -517,6 +518,49 @@ export function App() {
       return;
     }
 
+    if (name === 'save') {
+      if (!config || !bundle) return;
+      const raw = args.trim().toLowerCase() === '--raw';
+      const msgs = messagesRef.current;
+      if (msgs.length === 0) {
+        setMessages(prev => [...prev, echo, { role: 'system', content: 'Nothing to save yet.' }]);
+        return;
+      }
+      // Use the active profile's model/base so the saved meta reflects what was actually running,
+      // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
+      const profile = config.profiles[activeProfileRef.current] ?? config.profiles.default;
+      try {
+        const { jsonlPath, txtPath } = await saveTranscript(
+          join(homedir(), '.config', 'reika', 'history'),
+          msgs,
+          {
+            version: TRANSCRIPT_VERSION,
+            savedAt: new Date().toISOString(),
+            model: profile.model,
+            baseURL: profile.baseURL,
+            cwd: bundle.cwd,
+            messageCount: msgs.length,
+          },
+          { redact: !raw },
+        );
+        setMessages(prev => [
+          ...prev,
+          echo,
+          {
+            role: 'system',
+            content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
+          },
+        ]);
+      } catch (e) {
+        setMessages(prev => [
+          ...prev,
+          echo,
+          { role: 'error', content: `save failed: ${(e as Error).message}` },
+        ]);
+      }
+      return;
+    }
+
     let response: string;
     switch (name) {
       case 'help':
@@ -533,6 +577,7 @@ export function App() {
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
+          '  /save              save the full conversation to history (--raw skips redaction)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
         ].join('\n');

@@ -60,7 +60,7 @@ Config sources, in precedence order (higher wins):
 | `REIKA_API_KEY`               | `no-key`                   | Cloud API key (any non-empty for local)                                                                                                                                                                                                                                                                                                   |
 | `REIKA_MAX_TURNS`             | `12`                       | Tool-call iterations per user turn                                                                                                                                                                                                                                                                                                        |
 | `REIKA_REPO_MAP_BUDGET`       | `3200`                     | Chars allotted to repo map in system prompt                                                                                                                                                                                                                                                                                               |
-| `REIKA_AUTO_APPROVE`          | `off`                      | Approval mode. `safe` (or `true`/`1`) auto-approves edit/write/bash but still prompts for dangerous commands; `bypass` (or `yolo`) skips all prompts; `off` confirms everything                                                                                                                                                            |
+| `REIKA_AUTO_APPROVE`          | `off`                      | Approval mode. `safe` (or `true`/`1`) auto-approves edit/write/bash but still prompts for dangerous commands; `bypass` (or `yolo`) skips all prompts; `off` confirms everything                                                                                                                                                           |
 | `REIKA_SUBAGENT_MODEL`        | _falls back to main_       | Override model for subagents                                                                                                                                                                                                                                                                                                              |
 | `REIKA_SUBAGENT_BASE_URL`     | _falls back_               | Override server for subagents                                                                                                                                                                                                                                                                                                             |
 | `REIKA_SUBAGENT_API_KEY`      | _falls back_               | Override key for subagents                                                                                                                                                                                                                                                                                                                |
@@ -194,19 +194,20 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 
 Type `/` in the input to see suggestions. Highlights:
 
-| Command                                 | What                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------- |
-| `/help`                                 | List all commands                                                               |
-| `/new` / `/clear`                       | Reset conversation, tokens, mode                                                |
-| `/cd <path>`                            | Change cwd (re-indexes repo map). Tilde works.                                  |
-| `/shell` / `/chat` / `/plan` / `/agent` | Switch modes (shell / chat / plan / back to agent)                              |
-| `/implement [guidance]`                 | From plan mode: switch to agent and execute the plan above (optional guidance)  |
-| `/model` / `/cwd` / `/tokens`           | Show current values                                                             |
-| `/approvals [on\|off]`                  | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.   |
-| `/stats`                                | Full session summary (duration, turns, tools, files modified, approvals)        |
-| `/skills`                               | List available skills (loaded from skill dirs at startup)                       |
-| `/exit` / `/quit`                       | Exit (prints session summary first)                                             |
-| `@<path>`                               | In agent mode, inlines a file as context. Tab autocomplete from the file index. |
+| Command                                 | What                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`                                 | List all commands                                                                                                               |
+| `/new` / `/clear`                       | Reset conversation, tokens, mode                                                                                                |
+| `/cd <path>`                            | Change cwd (re-indexes repo map). Tilde works.                                                                                  |
+| `/shell` / `/chat` / `/plan` / `/agent` | Switch modes (shell / chat / plan / back to agent)                                                                              |
+| `/implement [guidance]`                 | From plan mode: switch to agent and execute the plan above (optional guidance)                                                  |
+| `/model` / `/cwd` / `/tokens`           | Show current values                                                                                                             |
+| `/approvals [on\|off]`                  | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                   |
+| `/stats`                                | Full session summary (duration, turns, tools, files modified, approvals)                                                        |
+| `/save [--raw]`                         | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim. |
+| `/skills`                               | List available skills (loaded from skill dirs at startup)                                                                       |
+| `/exit` / `/quit`                       | Exit (prints session summary first)                                                                                             |
+| `@<path>`                               | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                 |
 
 ## Scripts
 
