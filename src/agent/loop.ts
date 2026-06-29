@@ -27,6 +27,7 @@ import {
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
 import { extractPlanReferences, verifyPlanReferences, buildGroundingNote } from './groundcheck.js';
+import { groundUrlsForPlan } from '../tools/_urls.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -1010,6 +1011,25 @@ export async function runTurn(opts: {
         );
         if (note) assistantContent = (assistantContent ?? '') + note;
       }
+    }
+
+    // Plan→agent URL grounding (REIKA_URL_GROUNDING, the same flag as the write/edit path): a plan
+    // can recommend a URL that never reaches a write — a plan-only workflow, or a docs link in prose
+    // — which the edit/write grounder would never see. So at plan commit, fetch the URLs the plan
+    // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
+    // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
+    // tools. Strict no-op when the flag is off; the onNotice receipt surfaces via the same bridge.
+    if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
+      const urlNote = await groundUrlsForPlan(
+        {
+          cwd: opts.bundle.cwd,
+          groundedUrls,
+          onNotice: n =>
+            opts.onMessage({ role: 'system', tone: n.tone, content: n.content, nested: true }),
+        },
+        assistantContent,
+      );
+      if (urlNote) assistantContent = assistantContent + urlNote;
     }
 
     const assistantMsg: Message = {

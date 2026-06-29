@@ -87,17 +87,33 @@ export function buildUrlGroundingNotice(
   };
 }
 
-// Ground the http(s) URLs a write/edit introduces: fetch the ones not already grounded this turn and
-// return a note block for the tool result (or undefined when there's nothing to ground). Marks every
-// candidate seen — resolved or not — so a URL isn't re-fetched on each subsequent edit. Fetches run
-// in parallel, so wall-clock is one fetch timeout, not N.
-export async function groundUrls(ctx: ToolContext, newText: string): Promise<string | undefined> {
-  if (process.env.REIKA_URL_GROUNDING !== '1') return undefined;
+// Flag-only note for a finalized plan, mirroring groundcheck.ts's symbol/path advisory: lists the
+// URLs the plan named that did NOT resolve (likely wrong or invented). Returns '' when every URL
+// resolved — a plan needs dead links called out, not page contents pasted in (that's the edit-path
+// note's job). URLs are backticked so the TUI markdown leaves them literal.
+export function buildPlanUrlNote(results: UrlGroundingResult[]): string {
+  const unreachable = results.filter(r => !r.res.ok);
+  if (unreachable.length === 0) return '';
+  const list = unreachable.map(r => (r.res.ok ? '' : `\`${r.url}\` (${r.res.error})`)).join(', ');
+  return (
+    '\n\n--- reika: plan URL check (auto-generated) ---\n' +
+    `These URLs named in the plan did not resolve: ${list}. ` +
+    'They may be wrong or invented — verify them before relying on them; do not write a dead link.'
+  );
+}
+
+// Shared core: fetch the URLs in `text` not already grounded this turn, emit the user-facing receipt,
+// and return the raw results for a caller-specific note. Strict no-op (returns []) when the flag is
+// off or nothing new is named. Marks every candidate seen — resolved or not — so a URL isn't
+// re-fetched on a later edit. Fetches run in parallel, so wall-clock is one timeout, not N. Both
+// entry points below share this; they differ only in how they render the results into a note.
+async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGroundingResult[]> {
+  if (process.env.REIKA_URL_GROUNDING !== '1') return [];
   const seen = ctx.groundedUrls;
-  const candidates = extractUrls(newText)
+  const candidates = extractUrls(text)
     .filter(u => !seen?.has(u))
     .slice(0, MAX_URLS);
-  if (candidates.length === 0) return undefined;
+  if (candidates.length === 0) return [];
   candidates.forEach(u => seen?.add(u));
 
   const results = await Promise.all(
@@ -106,5 +122,23 @@ export async function groundUrls(ctx: ToolContext, newText: string): Promise<str
   // Tell the user it ran (and how it went) — a network fetch on its behalf shouldn't be invisible.
   const notice = buildUrlGroundingNotice(results);
   if (notice) ctx.onNotice?.(notice);
-  return buildUrlGroundingNote(results) || undefined;
+  return results;
+}
+
+// Ground the http(s) URLs a write/edit introduces. Returns a model-facing note with a snippet of
+// each real page (or undefined when nothing was grounded), injected into the tool result.
+export async function groundUrls(ctx: ToolContext, newText: string): Promise<string | undefined> {
+  return buildUrlGroundingNote(await groundCandidates(ctx, newText)) || undefined;
+}
+
+// Ground the http(s) URLs a finalized plan names — the plan-commit analogue of the symbol/path
+// groundcheck. Returns a flag-only note listing the unreachable ones (or undefined when all
+// resolved / none named), appended to the plan so it's inherited verbatim by the agent turn. Catches
+// URLs that live only in a plan or prose and never reach a write, where groundUrls would never see
+// them.
+export async function groundUrlsForPlan(
+  ctx: ToolContext,
+  planText: string,
+): Promise<string | undefined> {
+  return buildPlanUrlNote(await groundCandidates(ctx, planText)) || undefined;
 }

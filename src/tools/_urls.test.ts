@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildPlanUrlNote,
   buildUrlGroundingNote,
   buildUrlGroundingNotice,
   extractUrls,
   groundUrls,
+  groundUrlsForPlan,
 } from './_urls.js';
 
 describe('extractUrls', () => {
@@ -163,5 +165,83 @@ describe('groundUrls', () => {
     const text = 'https://a.example https://b.example https://c.example';
     await groundUrls({ cwd: '/tmp' }, text);
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+});
+
+describe('buildPlanUrlNote', () => {
+  it('returns empty when every URL resolved (no dead links to flag)', () => {
+    expect(
+      buildPlanUrlNote([
+        { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      ]),
+    ).toBe('');
+  });
+
+  it('lists only the unreachable URLs, backticked', () => {
+    const note = buildPlanUrlNote([
+      { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      { url: 'https://bad.example/x', res: { ok: false, error: '404 Not Found' } },
+    ]);
+    expect(note).toContain('plan URL check');
+    expect(note).toContain('`https://bad.example/x` (404 Not Found)');
+    expect(note).not.toContain('ok.example');
+  });
+});
+
+describe('groundUrlsForPlan', () => {
+  const original = process.env.REIKA_URL_GROUNDING;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+  afterEach(() => {
+    if (original === undefined) delete process.env.REIKA_URL_GROUNDING;
+    else process.env.REIKA_URL_GROUNDING = original;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function mockStatus(ok: boolean, status = 200): Response {
+    return {
+      ok,
+      status,
+      statusText: ok ? 'OK' : 'Not Found',
+      text: async () => '<article>doc</article>',
+    } as unknown as Response;
+  }
+
+  it('is a strict no-op when the flag is off', async () => {
+    delete process.env.REIKA_URL_GROUNDING;
+    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'use https://cdn.example.com/lib.js');
+    expect(out).toBeUndefined();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns no plan note when the named URL resolves, but still emits the receipt', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockStatus(true));
+    const onNotice = vi.fn();
+    const out = await groundUrlsForPlan(
+      { cwd: '/tmp', onNotice },
+      'load https://cdn.example.com/three.min.js',
+    );
+    expect(out).toBeUndefined();
+    expect(onNotice).toHaveBeenCalledWith({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
+  });
+
+  it('flags a plan URL that does not resolve', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockStatus(false, 404));
+    const onNotice = vi.fn();
+    const out = await groundUrlsForPlan(
+      { cwd: '/tmp', onNotice },
+      'load https://cdn.example.com/typo.js',
+    );
+    expect(out).toContain('did not resolve');
+    expect(out).toContain('`https://cdn.example.com/typo.js`');
+    expect(onNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: 'warn' }),
+    );
   });
 });
