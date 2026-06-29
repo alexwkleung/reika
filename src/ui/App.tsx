@@ -12,6 +12,7 @@ import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
+import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from '../store/transcript.js';
@@ -839,6 +840,18 @@ export function App() {
           if (msg.role === 'tool') {
             toolRef.current = '';
             setStreamingTool('');
+            // Keep `@` autocomplete current with files the model writes this turn,
+            // so a just-created file is attachable without a restart or /cd. The
+            // diff path is relative (write/edit emit `relative(cwd, …)`), matching
+            // fileIndex. addFileToIndex no-ops on existing/filtered paths.
+            const written = msg.diff?.path;
+            if (written) {
+              setBundle(prev => {
+                if (!prev) return prev;
+                const next = addFileToIndex(prev.fileIndex, written, prev.ignore);
+                return next === prev.fileIndex ? prev : { ...prev, fileIndex: next };
+              });
+            }
           }
           setMessages(prev => [...prev, msg]);
         },
