@@ -9,7 +9,6 @@ import { bashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
 import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
-import { TavilyProvider } from '../search/tavily.js';
 import { SearxngProvider } from '../search/searxng.js';
 import type { SearchProvider } from '../search/types.js';
 
@@ -51,8 +50,8 @@ export function chatTools(config?: Config): Tool[] {
 }
 
 function makeSearchProvider(config?: Config): SearchProvider | undefined {
-  // SearXNG takes precedence over Tavily when both are configured — local-first.
+  // SearXNG only — local-first, no third-party tool-use APIs. The SearchProvider
+  // interface stays vendor-neutral so another provider can be slotted in here later.
   if (config?.searxngUrl) return new SearxngProvider(config.searxngUrl);
-  if (config?.tavilyApiKey) return new TavilyProvider(config.tavilyApiKey);
   return undefined;
 }

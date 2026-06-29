@@ -173,7 +173,6 @@ export type Config = {
   subagentBaseURL?: string;
   subagentApiKey?: string;
   subagentMaxTurns: number;
-  tavilyApiKey?: string;
   searxngUrl?: string;
   profiles: Record<string, Profile>;
   maxTokens?: number;

@@ -66,9 +66,9 @@ When a tool wraps an external service (web search, GitHub, etc.):
 - Put the provider abstraction in its own subdir (e.g. `src/search/types.ts` with `SearchProvider` interface; per-provider adapters next to it)
 - The tool file (`src/tools/search.ts`) is a thin factory that takes a provider and returns a `Tool`
 - Register conditionally in `defaultTools(config)` based on which credentials are present
-- Multiple providers for the same role (Tavily, SearXNG, Brave, Exa…) implement the same interface; switching is config-only, no tool-layer changes
+- Multiple providers for the same role (SearXNG, Brave, Exa…) could implement the same interface; switching is config-only, no tool-layer changes
 
-This is how `search` + `fetch_url` are wired. Two providers implement `SearchProvider`: `SearxngProvider` (self-hosted, local-first) and `TavilyProvider` (cloud, AI-optimized snippets). SearXNG takes precedence when both `REIKA_SEARXNG_URL` and `REIKA_TAVILY_API_KEY` are set. If neither is set, neither tool registers and the system prompt stays lean.
+This is how `search` + `fetch_url` are wired. `SearxngProvider` (self-hosted, local-first) implements `SearchProvider`. Reika deliberately ships only the local-first provider — no third-party tool-use APIs — but the interface stays vendor-neutral so another provider can be slotted into `makeSearchProvider` later. If `REIKA_SEARXNG_URL` is unset, neither tool registers and the system prompt stays lean.
 
 **Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
 
@@ -274,7 +274,7 @@ Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they alw
 - `src/ui/suggest.ts` — command + file autocomplete matching
 - `src/ui/summary.ts` — session stats derivation
 - `src/agent/mentions.ts` — `@filepath` expansion
-- `src/search/tavily.ts`, `searxng.ts` — provider request shape + response normalization (fetch mocked)
+- `src/search/searxng.ts` — provider request shape + response normalization (fetch mocked)
 
 **Not covered (deliberately):** UI components (Ink testing is awkward; evals own end-to-end behavior), tools that wrap node fs/process (read/list/grep/edit/write/bash — shallow wrappers), the agent loop itself (evals territory).
 
