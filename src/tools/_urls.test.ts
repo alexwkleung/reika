@@ -20,6 +20,22 @@ describe('extractUrls', () => {
   it('rejects a scheme with no host', () => {
     expect(extractUrls('https:// nothing here')).toEqual([]);
   });
+
+  it('finds URLs embedded in script/link tags and attributes', () => {
+    const html = '<script src="https://cdn.example.com/three.min.js"></script>';
+    expect(extractUrls(html)).toEqual(['https://cdn.example.com/three.min.js']);
+    expect(extractUrls("<link href='https://cdn.example.com/x.css'>")).toEqual([
+      'https://cdn.example.com/x.css',
+    ]);
+  });
+
+  it('skips a URL carrying a template-literal interpolation', () => {
+    expect(extractUrls('const u = `https://api.example.com/${id}/items`;')).toEqual([]);
+    // …but still grounds a literal URL sitting alongside it.
+    expect(
+      extractUrls('fetch(`https://api.example.com/${id}`); // base https://api.example.com/health'),
+    ).toEqual(['https://api.example.com/health']);
+  });
 });
 
 describe('buildUrlGroundingNote', () => {

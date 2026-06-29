@@ -28,6 +28,11 @@ export function extractUrls(source: string): string[] {
   const urls = new Set<string>();
   for (const m of source.matchAll(URL_RE)) {
     const url = m[0].replace(/[.,;:!?]+$/, '');
+    // A URL carrying a template-literal interpolation (`https://api/${id}`) is not a literal
+    // address — fetching it verbatim just 404s and emits a false ✗. Skip it; literal URLs around it
+    // still ground. One-directional like the rest of this module: a skipped URL is silent, a
+    // mangled fetch is noise.
+    if (url.includes('${')) continue;
     if (url.length > 'https://'.length) urls.add(url);
   }
   return [...urls];
