@@ -96,6 +96,10 @@ export type ToolContext = {
   // tool result this turn (see tools/_deps.ts). edit/write consult and extend it so each
   // imported dep is grounded at most once per turn — bounded bloat, no re-injection.
   resolvedDeps?: Set<string>;
+  // http(s) URLs already grounded (fetched on the model's behalf) this turn (see tools/_urls.ts).
+  // Same per-turn dedupe contract as resolvedDeps: each URL a write/edit introduces is fetched at
+  // most once, so a follow-up edit to the same file doesn't re-fetch it.
+  groundedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;

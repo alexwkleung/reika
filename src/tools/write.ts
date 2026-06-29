@@ -3,6 +3,7 @@ import { dirname, resolve, relative } from 'node:path';
 import type { Tool } from '../types.js';
 import { buildWriteDiff } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
+import { groundUrls } from './_urls.js';
 
 export const writeTool: Tool = {
   name: 'write',
@@ -42,9 +43,14 @@ export const writeTool: Tool = {
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content, 'utf8');
     const added = diffText.split('\n').filter(l => l.startsWith('+ ')).length;
-    // Ground any dependency this new file imports: surface its real installed API so the
-    // model corrects an assumed shape instead of building on a hallucinated one.
-    const payload = await surfaceImportedDeps(ctx, content);
+    // Ground what this new file introduces: surface the real installed API of any dependency it
+    // imports, and fetch any URL it names — so the model corrects an assumed shape or a dead link
+    // instead of building on a hallucinated one. Independent, so run concurrently.
+    const [depPayload, urlPayload] = await Promise.all([
+      surfaceImportedDeps(ctx, content),
+      groundUrls(ctx, content),
+    ]);
+    const payload = [depPayload, urlPayload].filter(Boolean).join('\n\n') || undefined;
     return {
       summary: `Wrote ${rel} (+${added})`,
       diff: { text: diffText, path: rel, added, removed: 0, startLine: 1 },

@@ -464,6 +464,9 @@ export async function runTurn(opts: {
   // dep is grounded at most once per turn (tools/_deps.ts). Per-turn like fetchedUrls: a
   // fresh turn may have lost the surface to compaction, so re-grounding then is fine.
   const resolvedDeps = new Set<string>();
+  // URLs grounded (fetched on the model's behalf) this turn, so a URL a write/edit introduces is
+  // fetched at most once per turn. Per-turn like resolvedDeps. See tools/_urls.ts.
+  const groundedUrls = new Set<string>();
   // Notify the user at most once per turn that compaction kicked in, even if it runs
   // again across the turn's tool rounds.
   let notifiedCompaction = false;
@@ -1127,6 +1130,7 @@ export async function runTurn(opts: {
             webBudget,
             fetchedUrls,
             resolvedDeps,
+            groundedUrls,
             requestApproval: opts.requestApproval,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
