@@ -36,6 +36,20 @@ export function selfRepeatRatio(text: string): number {
   return dup / sh.length;
 }
 
+// The distinct k-grams that recur within a single block — the span a verbatim (Layer-1) spiral is
+// re-emitting. Layer-1 analogue of ReasoningTrace.repeatedShingles (which is cross-round). The logit
+// recovery mines these for bias tokens when a degenerate block is being discarded at verbatim-abort
+// time. Empty for text too short to shingle (nothing repeats).
+export function repeatedSelfShingles(text: string): string[] {
+  const seen = new Set<string>();
+  const repeated = new Set<string>();
+  for (const s of shingles(text)) {
+    if (seen.has(s)) repeated.add(s);
+    else seen.add(s);
+  }
+  return [...repeated];
+}
+
 // Live "is this reasoning block spinning?" heuristic for the human-in-the-loop UI hint — NOT an
 // automated abort. Mid-stream we can't know whether a model will escape a *semantic* spiral, so we
 // don't guess and cut; we surface a soft signal and let the human (who can glance at the thinking)
