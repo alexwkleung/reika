@@ -182,6 +182,33 @@ describe('ReasoningTrace', () => {
     expect(t.record(undefined, T).streak).toBe(0);
   });
 
+  // Paraphrases A: keeps A's first ~22 words, then drifts — Jaccard lands in the warm band
+  // (>= T*0.5, < T) rather than at/above the fire threshold. The streak tests assert that band
+  // as a precondition so a mis-constructed string fails loudly rather than silently passing.
+  const WARM =
+    'the user wants a toggle in settings so we open the panel and add a switch ' +
+    'bound to a new config flag but we should defer this entire effort to a later milestone';
+
+  it('catches an echo of a round two back that a prev-only comparison would miss', () => {
+    const t = new ReasoningTrace();
+    t.record(A, T); // window: [A]
+    t.record(B, T); // an intervening distinct round; prev-only would see B and reset
+    const r = t.record(A, T); // A again — echoes two rounds back, not the immediate prior (B)
+    expect(r.sim).toBeCloseTo(1, 5); // windowed max finds the A two back
+    expect(r.streak).toBe(1); // counts as a loop round despite the intervening B
+  });
+
+  it('holds the streak through a single paraphrased (warm) dip instead of zeroing', () => {
+    // Precondition: WARM is similar-but-not-firing relative to A.
+    expect(crossRoundSimilarity(A, WARM)).toBeGreaterThanOrEqual(T * 0.5);
+    expect(crossRoundSimilarity(A, WARM)).toBeLessThan(T);
+    const t = new ReasoningTrace();
+    t.record(A, T);
+    expect(t.record(A, T).streak).toBe(1); // identical → streak builds
+    expect(t.record(WARM, T).streak).toBe(1); // warm dip HOLDS at 1 (a hard reset would zero it)
+    expect(t.record(A, T).streak).toBe(2); // next clear match resumes building → fires at >= 2
+  });
+
   it('exposes the recurring shingles while looping and clears them on break', () => {
     const t = new ReasoningTrace();
     t.record(A, T);
