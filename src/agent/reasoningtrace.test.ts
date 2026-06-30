@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   selfRepeatRatio,
+  repeatedSelfShingles,
   crossRoundSimilarity,
   ReasoningTrace,
   liveSpinSignal,
@@ -31,6 +32,24 @@ describe('selfRepeatRatio', () => {
     const ratio = selfRepeatRatio(HEALTHY + ' ' + HEALTHY);
     expect(ratio).toBeGreaterThan(0.3);
     expect(ratio).toBeLessThan(0.7);
+  });
+});
+
+describe('repeatedSelfShingles', () => {
+  it('returns the k-grams re-emitted within one block (the Layer-1 span)', () => {
+    const span = 'wait let me reconsider this carefully actually the answer is clearly ';
+    const repeated = repeatedSelfShingles(span.repeat(4));
+    expect(repeated.length).toBeGreaterThan(0);
+    // Each recurring shingle is drawn verbatim from the re-emitted span.
+    expect(repeated.every(s => `${span}${span}`.includes(s))).toBe(true);
+  });
+
+  it('is empty for healthy non-repeating reasoning', () => {
+    expect(repeatedSelfShingles(HEALTHY)).toEqual([]);
+  });
+
+  it('is empty for text too short to shingle', () => {
+    expect(repeatedSelfShingles('too short to form a shingle')).toEqual([]);
   });
 });
 

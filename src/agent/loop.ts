@@ -23,6 +23,7 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import {
   selfRepeatRatio,
+  repeatedSelfShingles,
   ReasoningTrace,
   liveSpinSignal,
   verbatimAbortThreshold,
@@ -151,6 +152,10 @@ const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
 // the case where biased tokens are filler, not the work. See agent/logitrecovery.ts.
 const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY === '1';
+// Milder bias for the plan-mode force-write than the agent terminal's default (−4): that round writes
+// the deliverable (the plan), so it's more output-sensitive — a polluted-but-not-spiraling plan would
+// ship, where the agent round's pollution only collapses to a stop. Conservative; tune via A/B.
+const PLAN_LOGIT_BIAS = -3;
 // EXPERIMENT (plan→agent grounding): when a plan is finalized, verify the symbols/paths it names
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
 // of the agent loops is plans referencing code that isn't there (0-match grep loops, edits whose
@@ -532,6 +537,10 @@ export async function runTurn(opts: {
   // when a plan-mode cut should force the plan write on the next iteration. See VERBATIM_ABORT.
   let verbatimRecoveries = 0;
   let forceVerbatimPlanWrite = false;
+  // The intra-block repeated span captured from a degenerate reasoning block at verbatim-abort, stashed
+  // so the next round's plan force-write can bias off it (the block itself is discarded). Empty unless a
+  // verbatim abort just set forceVerbatimPlanWrite. See the plan force-write branch + logitrecovery.ts.
+  let verbatimRepeatedSpan: string[] = [];
   // Whether the model has made any edit/write this turn. Tool withdrawal exists to force the
   // explore→act transition; once the model has acted, that job is done. After the first edit a
   // re-read is usually edit-recovery (re-fetching exact bytes to build old_string after the content
@@ -680,9 +689,46 @@ export async function runTurn(opts: {
     // lifts as soon as the loop clears. Never set in plan mode (which has its own force-write).
     let withdrawInspection = false;
     if (opts.promptMode === 'plan') {
-      system = planForceWrite
-        ? buildPlanWritePrompt()
-        : baseSystem + '\n\n' + buildPlanLedger(opts.history, i);
+      if (planForceWrite) {
+        system = buildPlanWritePrompt();
+        // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
+        // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
+        // here on the round that writes the plan. Gated to a LOOP-triggered force-write
+        // (planForceWriteLoopTriggered) — never the novelty/ceiling convergence, where there's no rut
+        // and biasing would only pollute a healthy plan. One-shot (logitRecoveryTried). Unlike the
+        // agent terminal, a null bias just proceeds with the unbiased force-write (the force-write is
+        // the real recovery; the bias is an enhancement), rather than stopping.
+        if (LOGIT_RECOVERY && planForceWriteLoopTriggered && !logitRecoveryTried) {
+          logitRecoveryTried = true;
+          const span = forceVerbatimPlanWrite
+            ? verbatimRepeatedSpan // intra-block span from the aborted block (Layer 1)
+            : reasoningTrace.repeatedShingles(); // cross-round rumination (Layer 2)
+          const bias = await buildRuminationLogitBias({
+            baseURL: opts.config.baseURL,
+            apiKey: opts.config.apiKey,
+            shingles: span,
+            toolNames: opts.tools.map(t => t.name),
+            signal: opts.signal,
+            bias: PLAN_LOGIT_BIAS,
+          });
+          if (bias) {
+            logitBias = bias;
+            debugLog(
+              `[reika:debug] round=${i} logit-recovery (plan force-write) tokens=${Object.keys(bias).length}\n`,
+            );
+            opts.onMessage({
+              role: 'system',
+              tone: 'info',
+              content: `Recovering: nudging the plan write off a repeated reasoning span.`,
+            });
+            opts.onRecovering?.(true); // live pulse; cleared after the call returns
+          } else {
+            debugLog(`[reika:debug] round=${i} logit-recovery (plan force-write) unavailable\n`);
+          }
+        }
+      } else {
+        system = baseSystem + '\n\n' + buildPlanLedger(opts.history, i);
+      }
     } else {
       // Agent/chat: surface a persistent stop directive while a loop is active. Two independent
       // signals drive the same ladder:
@@ -1037,6 +1083,9 @@ export async function runTurn(opts: {
           tone: 'warn',
           content: 'Reasoning was repeating itself — writing the plan from what was gathered.',
         });
+        // Capture the repeated span now — the degenerate block is discarded after this, but the plan
+        // force-write next round can bias off it (logit recovery). No-op if logit recovery is off.
+        verbatimRepeatedSpan = repeatedSelfShingles(roundReasoning);
         forceVerbatimPlanWrite = true;
         continue;
       }

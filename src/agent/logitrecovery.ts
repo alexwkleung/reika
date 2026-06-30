@@ -145,6 +145,9 @@ export async function buildRuminationLogitBias(opts: {
   shingles: string[];
   toolNames: string[];
   signal?: AbortSignal;
+  // Bias magnitude override. Defaults to BIAS_VALUE; plan mode passes a milder value because that
+  // recovery round writes the deliverable (the plan), so it's more output-sensitive. See loop.ts.
+  bias?: number;
 }): Promise<Record<number, number> | null> {
   const words = selectBiasWords(opts.shingles, { max: BIAS_WORD_MAX, minLen: BIAS_WORD_MIN_LEN });
   if (words.length === 0) return null;
@@ -155,7 +158,7 @@ export async function buildRuminationLogitBias(opts: {
   // Exempt the tool names' entry tokens so the biased round can still NAME a tool it needs to call.
   const exempt = new Set(await firstTokenIds(opts, opts.toolNames));
 
-  const bias = buildLogitBias({ entryIds, exempt, bias: BIAS_VALUE, cap: BIAS_CAP });
+  const bias = buildLogitBias({ entryIds, exempt, bias: opts.bias ?? BIAS_VALUE, cap: BIAS_CAP });
   return Object.keys(bias).length > 0 ? bias : null;
 }
 

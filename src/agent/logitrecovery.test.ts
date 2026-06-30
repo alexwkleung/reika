@@ -59,6 +59,19 @@ describe('buildRuminationLogitBias', () => {
     expect(bias![114]).toBeUndefined(); // 'r' (read) exempted
   });
 
+  it('honors a milder bias override (plan-mode uses a gentler value)', async () => {
+    vi.stubGlobal('fetch', fakeTokenizer());
+    const bias = await buildRuminationLogitBias({
+      baseURL: 'http://x/v1',
+      apiKey: '',
+      shingles: ['overflow gutter padding layout overflow gutter padding inset'],
+      toolNames: ['read'],
+      bias: -3,
+    });
+    expect(bias).not.toBeNull();
+    expect(bias![111]).toBe(-3); // 'o' (overflow) at the overridden magnitude
+  });
+
   it('returns null when the backend cannot tokenize (no /tokenize)', async () => {
     vi.stubGlobal(
       'fetch',
