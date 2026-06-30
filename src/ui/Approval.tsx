@@ -8,6 +8,12 @@ import { highlightCode } from './highlight.js';
 export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
 export type ApprovalChoice = 0 | 1 | 2;
 
+// The popup renders as the top half of one continuous frame whose bottom half is
+// the input box (see Input's `attachedAbove`): `borderBottom={false}` + the input
+// dropping its top border merges them into a single outline, so the prompt reads
+// as part of the input region rather than a card floating above it. The frame
+// stays neutral (no borderColor) to match the input; caution is signalled inside
+// via themed `▲` warning lines, not a colored border.
 export function Approval({
   request,
   selectedIndex,
@@ -20,13 +26,19 @@ export function Approval({
   return (
     <Box
       borderStyle="round"
-      borderColor={theme.warning}
+      borderBottom={false}
       flexDirection="column"
       paddingX={1}
       paddingY={1}
       marginTop={1}
     >
-      <Text bold>{`${request.tool}  ${request.subject}`}</Text>
+      {/* One Text with nested runs (not siblings): on wrap Ink drops the char at
+          a sibling boundary, which would clip a long subject. Mirrors the chat's
+          tool-call line — `• Bash` in tool grey, the subject receding in muted. */}
+      <Text>
+        <Text bold color={theme.tool}>{`• ${capitalize(request.tool)}`}</Text>
+        <Text color={theme.secondary}>{`  ${request.subject}`}</Text>
+      </Text>
       <Box flexDirection="column" marginTop={1}>
         {isCommand ? (
           <CommandPreview command={request.preview} />
@@ -41,11 +53,8 @@ export function Approval({
       </Box>
       {warnings.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text bold color="red">
-            {'WARNING'}
-          </Text>
           {warnings.map((w, i) => (
-            <Text key={i} bold>{`  · ${w}`}</Text>
+            <Text key={i} bold color={theme.warning}>{`▲ ${w}`}</Text>
           ))}
         </Box>
       ) : null}
@@ -53,12 +62,14 @@ export function Approval({
         {APPROVAL_OPTIONS.map((label, i) => {
           const selected = i === selectedIndex;
           return (
-            <Box key={i}>
+            <Text key={i}>
               <Text bold color={selected ? theme.accent : undefined}>
                 {selected ? '› ' : '  '}
               </Text>
-              <Text bold={selected}>{label}</Text>
-            </Box>
+              <Text bold={selected} color={selected ? theme.accent : undefined}>
+                {label}
+              </Text>
+            </Text>
           );
         })}
       </Box>
@@ -77,10 +88,14 @@ function CommandPreview({ command }: { command: string }) {
     <>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text color="green">{i === 0 ? '$ ' : '  '}</Text>
+          <Text color={theme.success}>{i === 0 ? '$ ' : '  '}</Text>
           <Text>{highlightCode(line, 'bash')}</Text>
         </Box>
       ))}
     </>
   );
+}
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
 }

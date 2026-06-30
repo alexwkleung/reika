@@ -22,6 +22,7 @@ export function Input({
   placeholder,
   suggesting,
   history,
+  attachedAbove,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -30,6 +31,11 @@ export function Input({
   canSubmit: boolean;
   mode: 'agent' | 'shell' | 'chat' | 'plan';
   placeholder?: string;
+  // True while an approval popup is shown directly above: the popup omits its
+  // bottom border and we omit our top border + top margin, so the two boxes
+  // merge into one continuous frame (the prompt reads as part of the input
+  // region rather than a card floating above it).
+  attachedAbove?: boolean;
   // True while the completion/approval overlay owns Up/Down (App navigates it);
   // we leave the arrows alone then instead of moving the cursor between lines.
   suggesting: boolean;
@@ -268,7 +274,12 @@ export function Input({
   const showPlaceholder = !value && !!placeholder && !disabled;
 
   return (
-    <Box borderStyle="round" paddingX={1} marginTop={1}>
+    <Box
+      borderStyle="round"
+      borderTop={!attachedAbove}
+      paddingX={1}
+      marginTop={attachedAbove ? 0 : 1}
+    >
       <Text>{promptText}</Text>
       {showPlaceholder ? (
         <Box>
