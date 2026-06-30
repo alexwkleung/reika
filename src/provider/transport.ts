@@ -40,6 +40,11 @@ export type ChatCompletionRequest = {
   stream: true;
   stream_options?: { include_usage?: boolean };
   max_tokens?: number;
+  // Per-token logit offsets (token id → additive bias), applied for one request. Used only by the
+  // last-resort rumination recovery to gently down-weight a looping model's repeated tokens before
+  // the honest stop. Honored by llama.cpp/vllm; silently ignored by backends that don't support it
+  // (e.g. Ollama's OpenAI shim) — harmless, the recovery is gated on /tokenize being reachable.
+  logit_bias?: Record<number, number>;
 };
 
 // A streamed delta chunk. Field unions cover provider variants:
@@ -239,5 +244,46 @@ export async function* streamChatCompletion(opts: {
     }
   } finally {
     reader.releaseLock();
+  }
+}
+
+// llama.cpp serves a native `/tokenize` at the server ROOT, not under `/v1` (unlike chat/completions,
+// which the SDK appends `/chat/completions` to). Strip a trailing `/v1` so the same configured baseURL
+// reaches both.
+function tokenizeEndpoint(baseURL: string): string {
+  return `${baseURL.replace(/\/+$/, '').replace(/\/v1$/, '')}/tokenize`;
+}
+
+// Tokenize text into the model's vocab ids via llama.cpp's `/tokenize`. Returns null on any failure —
+// a non-llama.cpp backend (no such endpoint), a non-2xx, a shape we don't recognize, or a network
+// error — so the caller treats "can't tokenize" as "logit-bias recovery unavailable" and falls
+// through to the honest stop. Never throws; this is a best-effort last resort, not a hot path.
+export async function tokenize(opts: {
+  baseURL: string;
+  apiKey: string;
+  content: string;
+  signal?: AbortSignal;
+}): Promise<number[] | null> {
+  try {
+    const res = await fetch(tokenizeEndpoint(opts.baseURL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+      },
+      // add_special:false so no BOS/special token is prepended — the first returned id is the actual
+      // first token of the content, which the bias logic relies on (the "entry token" of a word).
+      body: JSON.stringify({ content: opts.content, add_special: false }),
+      signal: opts.signal,
+    });
+    if (!res.ok) return null;
+    // Default llama.cpp shape is `{ tokens: number[] }`. (With `with_pieces` it's objects — we don't
+    // request that, so plain numbers.) Anything else → treat as unsupported.
+    const data = (await res.json()) as { tokens?: unknown };
+    if (!Array.isArray(data.tokens)) return null;
+    const ids = data.tokens.filter((t): t is number => typeof t === 'number');
+    return ids.length > 0 ? ids : null;
+  } catch {
+    return null;
   }
 }

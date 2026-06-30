@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
-import type { Tool } from '../types.js';
+import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
 import { groundUrls } from './_urls.js';
@@ -72,7 +72,13 @@ export const editTool: Tool = {
         };
       }
       if (fuzzy.status === 'none') {
-        return { summary: `Edit failed: old_string not found in ${rel}.${fuzzy.hint}` };
+        return {
+          summary: `Edit failed: old_string not found in ${rel}.${fuzzy.hint}`,
+          // Surface the structured divergence the hint was built from, so the agent loop can ground a
+          // recovery round on it (see agent/loop.ts buildEditRecoveryLedger) instead of re-parsing the
+          // summary string. `absent` here means re-reading won't help — the target isn't in the file.
+          editFailure: withPath(fuzzy.failure, rel),
+        };
       }
       start = fuzzy.start;
       matchLen = fuzzy.len;
@@ -161,7 +167,16 @@ type FuzzyResult =
   | { status: 'unique'; start: number; len: number; newStr: string }
   | { status: 'multiple'; lines: number[] }
   | { status: 'mixed'; line: string }
-  | { status: 'none'; hint: string };
+  | { status: 'none'; hint: string; failure: EditFailureCore };
+
+// EditFailure minus the path (the tool attaches that in `run`). See types.ts EditFailure.
+type EditFailureCore =
+  | { kind: 'absent' }
+  | { kind: 'diverged'; divergentLine: number; expected: string; actual: string; excerpt: string };
+
+function withPath(core: EditFailureCore, path: string): EditFailure {
+  return core.kind === 'absent' ? { kind: 'absent', path } : { ...core, path };
+}
 
 // Whitespace-insensitive line-block match. Compares old_string against the file
 // line-by-line on trimmed content, so leading/trailing indentation differences
@@ -199,7 +214,12 @@ function fuzzyLineMatch(text: string, oldStr: string, newStr: string): FuzzyResu
   }
 
   if (starts.length === 0) {
-    return { status: 'none', hint: notFoundHint(fileLines, oldLines, oldTrim) };
+    const closest = locateClosest(fileLines, oldTrim);
+    return {
+      status: 'none',
+      hint: formatNotFoundHint(closest, oldLines, oldTrim),
+      failure: closestToFailure(closest, fileLines, oldTrim),
+    };
   }
   if (starts.length > 1) {
     return { status: 'multiple', lines: starts.map(s => s + 1) };
@@ -245,20 +265,28 @@ function leadingWs(s: string): string {
   return m ? m[0] : '';
 }
 
-// Point the model at the likely spot when even the tolerant match fails, so it
-// can correct in one retry instead of probing with cat/sed. When the block's
-// anchor line exists, locate the best-aligned candidate and report exactly which
-// line diverged and what the file actually has there — the costly thing for a
-// weak model to discover on its own.
-function notFoundHint(fileLines: string[], oldLines: string[], oldTrim: string[]): string {
+type Closest =
+  | { found: false }
+  | {
+      found: true;
+      start: number; // 0-based file line the candidate block begins on
+      matched: number; // leading block lines that matched before divergence
+      divergentLine: number; // 1-based file line that first differs
+      expected: string; // old_string's content on that line (trimmed)
+      actual: string; // the file's content there (trimmed)
+    };
+
+// Locate the best-aligned candidate block when even the whitespace-tolerant match fails: file lines
+// whose content equals old_string's anchor (first non-blank line), aligned so the anchor sits at its
+// position within the block, keeping whichever candidate matched the most leading lines — the model's
+// likely intended spot. `found:false` means nothing aligns even ignoring whitespace (the target isn't
+// in the file). Shared by the model-facing hint and the structured EditFailure.
+function locateClosest(fileLines: string[], oldTrim: string[]): Closest {
   const i0 = oldTrim.findIndex(t => t !== '');
-  if (i0 === -1) return '';
+  if (i0 === -1) return { found: false };
   const anchor = oldTrim[i0];
   const n = oldTrim.length;
 
-  // Candidate block starts: file lines whose content equals the anchor, aligned
-  // so the anchor sits at its position within the block. Keep the candidate that
-  // matched the most leading lines — that's the model's likely intended spot.
   let best: { start: number; matched: number } | null = null;
   for (let a = 0; a < fileLines.length; a++) {
     if (fileLines[a].trim() !== anchor) continue;
@@ -268,15 +296,65 @@ function notFoundHint(fileLines: string[], oldLines: string[], oldTrim: string[]
     while (matched < n && fileLines[s + matched]?.trim() === oldTrim[matched]) matched++;
     if (!best || matched > best.matched) best = { start: s, matched };
   }
-
-  if (!best) return ' No line matches it even ignoring whitespace; re-read the file.';
+  if (!best) return { found: false };
 
   const k = best.matched;
-  const divLine = best.start + k + 1;
-  const expected = oldTrim[k] ?? '';
-  const actual = fileLines[best.start + k]?.trim() ?? '(end of file)';
+  return {
+    found: true,
+    start: best.start,
+    matched: k,
+    divergentLine: best.start + k + 1,
+    expected: oldTrim[k] ?? '',
+    actual: fileLines[best.start + k]?.trim() ?? '(end of file)',
+  };
+}
+
+// Point the model at the likely spot when even the tolerant match fails, so it can correct in one
+// retry instead of probing with cat/sed — the costly thing for a weak model to discover on its own.
+function formatNotFoundHint(closest: Closest, oldLines: string[], oldTrim: string[]): string {
+  const i0 = oldTrim.findIndex(t => t !== '');
+  if (i0 === -1) return '';
+  if (!closest.found) return ' No line matches it even ignoring whitespace; re-read the file.';
   return (
-    ` Closest match starts at line ${best.start + 1} ("${oldLines[i0].trim()}")` +
-    ` but line ${divLine} differs: expected "${expected}", file has "${actual}". Re-read there and copy verbatim.`
+    ` Closest match starts at line ${closest.start + 1} ("${oldLines[i0].trim()}")` +
+    ` but line ${closest.divergentLine} differs: expected "${closest.expected}", file has "${closest.actual}". Re-read there and copy verbatim.`
   );
+}
+
+// Same divergence as the hint, as data the agent loop can lift into a non-aging recovery directive.
+function closestToFailure(
+  closest: Closest,
+  fileLines: string[],
+  oldTrim: string[],
+): EditFailureCore {
+  if (!closest.found) return { kind: 'absent' };
+  return {
+    kind: 'diverged',
+    divergentLine: closest.divergentLine,
+    expected: closest.expected,
+    actual: closest.actual,
+    excerpt: blockExcerpt(fileLines, closest.start, oldTrim.length, closest.divergentLine),
+  };
+}
+
+// Verbatim, line-numbered current text around the closest block (same `│` gutter the read tool and
+// refreshedFile use, so the model copies it identically). One line of margin; capped, and re-centered
+// on the divergent line when the block is large so the line the model must fix is always shown.
+const EXCERPT_MAX_LINES = 40;
+function blockExcerpt(
+  fileLines: string[],
+  blockStart: number,
+  blockLen: number,
+  divergentLine: number,
+): string {
+  let from = Math.max(0, blockStart - 1);
+  let to = Math.min(fileLines.length, blockStart + blockLen + 1);
+  if (to - from > EXCERPT_MAX_LINES) {
+    from = Math.max(0, divergentLine - 1 - Math.floor(EXCERPT_MAX_LINES / 2));
+    to = Math.min(fileLines.length, from + EXCERPT_MAX_LINES);
+  }
+  return fileLines
+    .slice(from, to)
+    .map((l, idx) => `${String(from + idx + 1).padStart(5, ' ')}│${l}`)
+    .join('\n');
 }

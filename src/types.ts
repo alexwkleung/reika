@@ -73,7 +73,29 @@ export type ToolResult = {
   // so it reads as a follow-on to the action rather than being stuffed in front of it. `warn` for an
   // outcome worth noticing (a dead link), `info` for a quiet "this ran".
   notice?: { tone: 'info' | 'warn'; content: string };
+  // Structured non-apply outcome from `edit`. The tool already computes the closest matching block
+  // and the exact divergent line for its summary hint; surfacing it as data lets the agent loop lift
+  // that grounding into a persistent, non-aging recovery directive (the summary string rides in the
+  // tool result, which ages out under compaction) and tell a recoverable content divergence
+  // ('diverged') from a genuinely-absent anchor ('absent'). See tools/edit.ts and agent/loop.ts
+  // buildEditRecoveryLedger.
+  editFailure?: EditFailure;
 };
+
+// See ToolResult.editFailure. 'absent': old_string matches nothing in the file even ignoring
+// whitespace (the target isn't there — re-reading can't help; a plan likely references code that
+// doesn't exist). 'diverged': the anchor block exists and one line differs — mechanically
+// recoverable, which is the only case the loop spends a grounded recovery round on.
+export type EditFailure =
+  | { kind: 'absent'; path: string }
+  | {
+      kind: 'diverged';
+      path: string;
+      divergentLine: number; // 1-based file line where old_string first disagrees with the file
+      expected: string; // what old_string has on that line (trimmed)
+      actual: string; // what the file actually has there (trimmed)
+      excerpt: string; // verbatim, line-numbered current text around the block — copyable
+    };
 
 export type ApprovalRequest = {
   tool: string;

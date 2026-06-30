@@ -14,12 +14,7 @@
 const SHINGLE_K = 8;
 
 function shingles(text: string, k = SHINGLE_K): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .filter(Boolean);
+  const words = text.toLowerCase().replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   if (words.length < k) return [];
   const out: string[] = [];
   for (let i = 0; i + k <= words.length; i++) out.push(words.slice(i, i + k).join(' '));
@@ -110,6 +105,11 @@ export function crossRoundSimilarity(a: string, b: string): number {
 export class ReasoningTrace {
   private prev: string | undefined;
   private streak = 0;
+  // The k-grams shared by the two most recent rounds when they were similar enough to count as a
+  // loop — i.e. the actual ruminated content. Captured during record() (the Jaccard already finds
+  // the intersection) so the last-resort logit recovery can derive bias tokens from what's recurring
+  // rather than re-deriving it. Empty whenever the last round broke the streak. See agent/logitrecovery.ts.
+  private repeated: string[] = [];
 
   // Record one round's reasoning (call once per round, in order) and return the similarity vs the
   // previous round plus the resulting consecutive-high streak. An empty round (a pure tool-call turn
@@ -117,9 +117,25 @@ export class ReasoningTrace {
   // sustain a false loop; the observed loops emit non-empty reasoning every round.
   record(reasoning: string | undefined, threshold: number): { sim: number; streak: number } {
     const text = reasoning ?? '';
-    const sim = this.prev !== undefined ? crossRoundSimilarity(this.prev, text) : 0;
+    // Compute the Jaccard from the two shingle sets directly (same value crossRoundSimilarity returns)
+    // so we can keep the intersection — the recurring k-grams — without a second pass.
+    const prevSet = this.prev !== undefined ? new Set(shingles(this.prev)) : null;
+    const curSet = new Set(shingles(text));
+    let sim = 0;
+    let inter: string[] = [];
+    if (prevSet && prevSet.size > 0 && curSet.size > 0) {
+      inter = [...curSet].filter(s => prevSet.has(s));
+      sim = inter.length / (prevSet.size + curSet.size - inter.length);
+    }
     this.streak = sim >= threshold ? this.streak + 1 : 0;
+    this.repeated = this.streak > 0 ? inter : [];
     this.prev = text;
     return { sim, streak: this.streak };
+  }
+
+  // The recurring k-grams behind the current streak (empty when not looping). The logit recovery
+  // mines these for the tokens to down-weight on its one biased round.
+  repeatedShingles(): string[] {
+    return this.repeated;
   }
 }

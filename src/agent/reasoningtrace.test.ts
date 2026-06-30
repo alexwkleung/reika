@@ -67,15 +67,20 @@ describe('liveSpinSignal', () => {
     // Distinct sentences padded past the min length stay well under the ratio.
     const healthy = Array.from(
       { length: 80 },
-      (_, n) => `step ${n} examines a distinct concern number ${n} in the codebase and resolves it.`,
+      (_, n) =>
+        `step ${n} examines a distinct concern number ${n} in the codebase and resolves it.`,
     ).join(' ');
     expect(healthy.length).toBeGreaterThan(1200);
     expect(liveSpinSignal(healthy).spinning).toBe(false);
   });
 
   it('flags a long block whose trailing window degenerates into a repeated span', () => {
-    const lead = 'first some genuine and varied analysis of the problem at hand goes here. '.repeat(20);
-    const spiral = 'wait let me reconsider this carefully actually the answer is clearly '.repeat(40);
+    const lead = 'first some genuine and varied analysis of the problem at hand goes here. '.repeat(
+      20,
+    );
+    const spiral = 'wait let me reconsider this carefully actually the answer is clearly '.repeat(
+      40,
+    );
     const r = liveSpinSignal(lead + spiral);
     expect(r.spinning).toBe(true);
     expect(r.ratio).toBeGreaterThan(0.3);
@@ -101,7 +106,8 @@ describe('liveSpinSignal', () => {
     // A verbatim decoder loop saturates the ratio (>0.75 — the auto-abort threshold in loop.ts);
     // measured ~0.9 on a real transcript. Even HEAVY paragraph-recycling (distinct fillers between
     // repeats) stays in the hint band below 0.75, so the auto-cut never fires on a non-verbatim spiral.
-    const verbatim = 'the exact same sentence over and over with no variation at all right here now. '.repeat(30);
+    const verbatim =
+      'the exact same sentence over and over with no variation at all right here now. '.repeat(30);
     expect(liveSpinSignal(verbatim).ratio).toBeGreaterThan(0.75);
 
     const para =
@@ -174,5 +180,18 @@ describe('ReasoningTrace', () => {
     expect(t.record(A, T).streak).toBe(1);
     expect(t.record('', T).streak).toBe(0);
     expect(t.record(undefined, T).streak).toBe(0);
+  });
+
+  it('exposes the recurring shingles while looping and clears them on break', () => {
+    const t = new ReasoningTrace();
+    t.record(A, T);
+    expect(t.repeatedShingles()).toEqual([]); // first round, no prior to intersect
+    t.record(A, T); // identical → looping
+    const repeated = t.repeatedShingles();
+    expect(repeated.length).toBeGreaterThan(0);
+    // The recurring k-grams are drawn from the ruminated text itself.
+    expect(repeated.every(s => A.toLowerCase().includes(s))).toBe(true);
+    t.record(B, T); // fresh reasoning breaks the loop
+    expect(t.repeatedShingles()).toEqual([]);
   });
 });

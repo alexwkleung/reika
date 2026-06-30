@@ -3,6 +3,7 @@ import type { Message } from '../types.js';
 import {
   flagRepeatedCall,
   buildAgentLoopLedger,
+  buildEditRecoveryLedger,
   shouldWithdrawInspection,
   buildPlanTransformInput,
 } from './loop.js';
@@ -201,13 +202,38 @@ describe('buildAgentLoopLedger', () => {
   });
 });
 
+describe('buildEditRecoveryLedger', () => {
+  it('quotes the exact divergence and embeds the verbatim excerpt', () => {
+    const ledger = buildEditRecoveryLedger({
+      kind: 'diverged',
+      path: 'src/a.css',
+      divergentLine: 3,
+      expected: 'color: blue;',
+      actual: 'color: red;',
+      excerpt: '    2│  font-size: 13px;\n    3│  color: red;',
+    });
+    expect(ledger).toContain('src/a.css');
+    expect(ledger).toContain('line 3');
+    expect(ledger).toContain('"color: blue;"'); // what the model expected
+    expect(ledger).toContain('"color: red;"'); // what the file actually has
+    expect(ledger).toContain('3│  color: red;'); // verbatim copyable bytes
+    expect(ledger).toContain('character-for-character'); // the single instruction
+    // Offers the honest out so a cornered model stops instead of retrying a wrong anchor.
+    expect(ledger).toContain('stop');
+  });
+
+  it('returns empty for an absent failure (nothing to ground on)', () => {
+    expect(buildEditRecoveryLedger({ kind: 'absent', path: 'src/a.css' })).toBe('');
+  });
+});
+
 describe('shouldWithdrawInspection', () => {
   const base = { reasoningLoop: false, editingStarted: false, editRecovery: false };
 
   it('does not withdraw before the loop has persisted LOOP_WITHDRAW_AFTER rounds', () => {
-    expect(
-      shouldWithdrawInspection({ ...base, loopActiveRounds: 1, reasoningLoop: true }),
-    ).toBe(false);
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 1, reasoningLoop: true })).toBe(
+      false,
+    );
   });
 
   it('withdraws a pre-edit read loop (the original explore→act case)', () => {
@@ -215,9 +241,9 @@ describe('shouldWithdrawInspection', () => {
   });
 
   it('exempts a read loop once editing has begun (edit-recovery re-reads)', () => {
-    expect(
-      shouldWithdrawInspection({ ...base, loopActiveRounds: 5, editingStarted: true }),
-    ).toBe(false);
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 5, editingStarted: true })).toBe(
+      false,
+    );
   });
 
   it('withdraws a reasoning loop even post-edit — re-reading rumination is not edit-recovery', () => {
