@@ -461,6 +461,12 @@ export async function runTurn(opts: {
   // escape, so we don't guess; the human judges). Never touches model-facing history. See
   // agent/reasoningtrace.ts liveSpinSignal.
   onReasoningStatus?: (spinning: boolean) => void;
+  // Discard the in-flight reasoning *preview* (the live "Thinking" block) — fired when a degenerate
+  // reasoning stream is cut and recovered. The cut reasoning is garbage we never commit, so hiding it
+  // (rather than leaving the long looped block sitting below the recovery notice, where it buries the
+  // notice and the next round's reasoning appends onto it) makes the notice visible and lets the
+  // recovery round stream into a fresh block. UI-only; never touches model-facing history. See #55.
+  onReasoningReset?: () => void;
   onUsage?: (usage: Usage) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
@@ -991,6 +997,9 @@ export async function runTurn(opts: {
     if (verbatimAborted) {
       verbatimRecoveries++;
       opts.onReasoningStatus?.(false);
+      // The cut reasoning is degenerate and never committed; hide its live preview so the recovery
+      // notice below isn't buried under it and the recovery round streams into a fresh block (#55).
+      opts.onReasoningReset?.();
       // Plan mode, first cut on a normal exploration round → write the plan from the findings already
       // gathered (the clean recovery). NOT when the force-write itself spiraled (planForceWrite) — a
       // model this stuck loops in the transform too, so re-triggering it would just loop.

@@ -874,6 +874,14 @@ export function App() {
         },
         onTypecheck: onTypecheckChange,
         onReasoningStatus: setReasoningSpin,
+        onReasoningReset: () => {
+          // Loop-break recovery: drop the degenerate looped reasoning's live preview so the recovery
+          // notice is visible and the next round streams into a fresh Thinking block instead of
+          // appending onto the looped text (#55).
+          reasoningRef.current = '';
+          setStreamingReasoning('');
+          setReasoningSpin(false);
+        },
         onUsage: u => {
           setLastUsage(u);
           setTotalUsage(t => ({
