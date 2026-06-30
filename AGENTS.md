@@ -4,15 +4,15 @@ This file is loaded automatically by Reika when it runs in this directory. Conve
 
 ## Project
 
-Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud.
+Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud. Tuned for low quantization/small local models, with a focus on context discipline and capability alignment.
 
 ## Design rationale: agent-first ergonomics
 
 ### Reika source code specific
 
-Reika is meant to be edited by small local models, frequently dogfooding itself. That constraint shapes a number of choices that would otherwise be pure style preferences. The pattern: optimize for "how cheaply can an LLM with limited context understand and modify a unit in isolation."
+Reika initially was intended to be edited by small local models and dogfooding itself. However, while this isn't always the case, the constraint still holds strong and shapes the number of choices that would otherwise be pure style preferences. The pattern: optimize for "how cheaply can an LLM with limited context understand and modify a unit in isolation.".
 
-Reika initially was intended to be edited by small local models and dogfooding itself. However, while this isn't always the case, the constraint still holds strong and shapes the number of choices that would otherwise be pure style preferences. The pattern: optimize for "how cheaply can an LLM with limited context understand and modify a unit in isolation."
+Some conventions and source code will look noisy when manually auditing. That is expected because of our applied constraints, preferences, and intentions for Reika. So it may break out of traditional patterns in favor of optimizing for our problem/goals without going overboard.
 
 - **Colocated tests** (`bar.test.ts` next to `bar.ts`) — when the model edits `bar.ts`, the test file appears in the same directory listing. With a separate `tests/` tree, models often miss the tests entirely and break them silently.
 - **One concept per file, shallow directory depth (≤3–4 levels)** — a 5000-line file forces partial reads and lost context. Deep nesting adds path-traversal cost to every lookup.

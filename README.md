@@ -1,6 +1,19 @@
 # Reika
 
-Minimal coding-agent CLI tuned for small local models, with a focus on context discipline.
+Minimal coding-agent CLI tuned for low quantization/small local models, with a focus on context discipline and capability alignment.
+
+## Why
+
+Many coding agents were specifically made for frontier/SOTA models and not intended to be optimized for local models, specifically small and low quantization ones. Whether you can only run small or heavily quantized models due to hardware or VRAM constraints, Reika attempts to fill in the gap to make them usable. The keyword specifically is usable. Not more intelligent.
+
+### The Challenge
+
+The challenges for Reika are not one particular thing but rather a series of pain points and problems:
+
+- Understanding the least complex but an agnostic way to provide utility for low quantization and small models in an agentic coding context. There is a ceiling of course, especially in regards to intelligence which can't be fixed via the harness.
+- Context management on constrained systems and models that degrade over time.
+- Handling of looping and spirals.
+- Harness and model ceiling constraints as they correlate with each other.
 
 ## Status
 
@@ -20,7 +33,7 @@ Mostly testing 20B-35B range models with low quantization of Q2-Q4 via llama.cpp
 
 ## Note
 
-Although Reika can work with smaller models, the output and quality will vary during agentic coding compared to pure chat.
+Although Reika can work with small and low quantization models, the output and quality will vary during agentic coding compared to pure chat.
 
 ## Quick start
 
@@ -123,18 +136,18 @@ Conversation history persists across switches; if styles clash, run `/new` first
 
 The agent has these tools. Optional tools register only when their config is present:
 
-| Tool        | What                                                               | Approval?              | Optional?                                              |
-| ----------- | ------------------------------------------------------------------ | ---------------------- | ------------------------------------------------------ |
-| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                                                      |
-| `list`      | List files in a directory (depth-limited)                          | no                     | —                                                      |
-| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                                                      |
-| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                                                      |
-| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                                                      |
-| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                                                      |
-| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                                                      |
-| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                                                      |
-| `search`    | Web search (returns title + URL + snippet, up to 8)                | no                     | requires `REIKA_SEARXNG_URL`                           |
-| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | registered alongside `search`                          |
+| Tool        | What                                                               | Approval?              | Optional?                     |
+| ----------- | ------------------------------------------------------------------ | ---------------------- | ----------------------------- |
+| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                             |
+| `list`      | List files in a directory (depth-limited)                          | no                     | —                             |
+| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                             |
+| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                             |
+| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                             |
+| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                             |
+| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                             |
+| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                             |
+| `search`    | Web search (returns title + URL + snippet, up to 8)                | no                     | requires `REIKA_SEARXNG_URL`  |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | registered alongside `search` |
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 
@@ -233,7 +246,7 @@ There's more that isn't covered.
 
 ## Design philosophy
 
-Reika was initially designed around small models, so the source code itself reflects the shape and constraints when using them in a coding agent:
+Reika was initially designed around small models, so the source code itself reflects the shape and constraints when using them in a coding agent.
 
 - **Colocated tests** (`bar.test.ts` next to `bar.ts`) so the model sees both in one directory scan
 - **One concept per file, shallow directory depth** so a unit fits in a single read
