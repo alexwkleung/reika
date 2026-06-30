@@ -455,6 +455,10 @@ export async function runTurn(opts: {
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
   onTypecheck?: (checking: boolean) => void;
+  // Ephemeral, human-only pulse for a loop-recovery round (edit re-grounding or the logit-bias nudge):
+  // true while that one round runs, false when it settles. Drives the busy indicator's label so the
+  // in-progress intervention is visible; the durable record is the persistent system receipt, not this.
+  onRecovering?: (active: boolean) => void;
   // Ephemeral, human-only hint that the current reasoning block looks like it may be spinning (long
   // AND locally repetitive). Drives a busy-indicator relabel so the user can decide to abort or wait
   // — a soft signal, never an automated cutoff (mid-stream we can't know if a semantic spiral will
@@ -728,6 +732,14 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} edit-recovery-grounding file=${lastEditFailure.path} ` +
               `line=${lastEditFailure.divergentLine}\n`,
           );
+          // Persistent receipt: a failed edit started looping and the harness is re-grounding it on
+          // the file's exact bytes for one round. User-must-see — it explains the next round's shift.
+          opts.onMessage({
+            role: 'system',
+            tone: 'info',
+            content: `Recovering: re-grounding a repeated failed edit to ${lastEditFailure.path} on the file's exact text.`,
+          });
+          opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
           // fall through: don't stop — the grounded directive is injected into `system` below.
         } else {
           const file = lastEditFailure?.path;
@@ -772,6 +784,14 @@ export async function runTurn(opts: {
             debugLog(
               `[reika:debug] round=${i} logit-recovery tokens=${Object.keys(bias).length}\n`,
             );
+            // Persistent receipt: the harness is spending its one biased round to nudge the model off
+            // a reasoning loop. User-must-see — it's a logit-level intervention that shapes the output.
+            opts.onMessage({
+              role: 'system',
+              tone: 'info',
+              content: `Recovering: nudging the model off a reasoning loop (one biased round before stopping).`,
+            });
+            opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
             // fall through: don't stop — the biased round runs below with the loop ledger still set.
           } else {
             debugLog(`[reika:debug] round=${i} logit-recovery unavailable — stopping\n`);
@@ -956,6 +976,10 @@ export async function runTurn(opts: {
       // undefined otherwise, so a normal turn's request is byte-identical to before.
       logitBias,
     });
+
+    // The recovery round (if this was one) has now run — clear the live "recovering" pulse. Idempotent
+    // and unconditional: a no-op on every normal round, so it can't leak the indicator into the next.
+    opts.onRecovering?.(false);
 
     // Reasoning block is done streaming — clear any lingering spin hint so it doesn't bleed into the
     // tool/answer phase (the UI also clears at turn boundaries; this is the per-round clear). If it

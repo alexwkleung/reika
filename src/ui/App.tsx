@@ -59,6 +59,10 @@ export function App() {
   // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
   // verification is visible in the dispatch gap. Human-only — never part of model context.
   const [typechecking, setTypechecking] = useState<boolean>(false);
+  // True during a one-round loop-recovery intervention (edit re-grounding or the logit-bias nudge), so
+  // the busy indicator shows it's actively recovering. Human-only — the durable record is the system
+  // receipt in scrollback.
+  const [recovering, setRecovering] = useState<boolean>(false);
   // True while the current reasoning block looks like it may be spinning (long AND repetitive).
   // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
   // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
@@ -873,6 +877,7 @@ export function App() {
           setPhase(p);
         },
         onTypecheck: onTypecheckChange,
+        onRecovering: setRecovering,
         onReasoningStatus: setReasoningSpin,
         onReasoningReset: () => {
           // Loop-break recovery: drop the degenerate looped reasoning's live preview so the recovery
@@ -961,15 +966,20 @@ export function App() {
           ) : null}
           {status === 'busy' && pending === null ? (
             <Working
-              // Typecheck (a definite harness action) takes priority over the soft spin hint.
+              // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
+              // hint — they're things the harness is actively doing, not a maybe.
               label={
                 typechecking
                   ? 'Typechecking'
-                  : reasoningSpin
-                    ? 'Thinking — may be looping (ctrl-c to abort)'
-                    : undefined
+                  : recovering
+                    ? 'Recovering from a loop'
+                    : reasoningSpin
+                      ? 'Thinking — may be looping (ctrl-c to abort)'
+                      : undefined
               }
-              accent={typechecking ? theme.info : reasoningSpin ? theme.warning : undefined}
+              accent={
+                typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
+              }
             />
           ) : null}
           <Input
