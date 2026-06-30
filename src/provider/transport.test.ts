@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { createSSEDecoder } from './transport.js';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { createSSEDecoder, tokenize } from './transport.js';
 import type { ChatCompletionChunk, SSEEvent } from './transport.js';
 
 const enc = new TextEncoder();
@@ -98,5 +98,49 @@ describe('createSSEDecoder', () => {
       'data: {"choices":[{"delta":{"content":"b"}}]}\n\n';
     const out = chunks(decodeAll(text));
     expect(out.map(c => c.choices?.[0]?.delta?.content)).toEqual(['a', 'b']);
+  });
+});
+
+describe('tokenize', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts to /tokenize at the server root, stripping a trailing /v1', async () => {
+    const fetchMock = vi.fn(
+      async (_url: string) => new Response(JSON.stringify({ tokens: [1, 2, 3] }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const ids = await tokenize({
+      baseURL: 'http://localhost:8080/v1',
+      apiKey: '',
+      content: ' word',
+    });
+    expect(ids).toEqual([1, 2, 3]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8080/tokenize');
+  });
+
+  it('returns null on a non-2xx (endpoint absent on this backend)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 404 })),
+    );
+    expect(await tokenize({ baseURL: 'http://x/v1', apiKey: '', content: 'a' })).toBeNull();
+  });
+
+  it('returns null on an unrecognized response shape', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ nope: 1 }), { status: 200 })),
+    );
+    expect(await tokenize({ baseURL: 'http://x/v1', apiKey: '', content: 'a' })).toBeNull();
+  });
+
+  it('returns null on a network error rather than throwing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('ECONNREFUSED');
+      }),
+    );
+    expect(await tokenize({ baseURL: 'http://x/v1', apiKey: '', content: 'a' })).toBeNull();
   });
 });

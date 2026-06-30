@@ -28,6 +28,9 @@ export async function callModel(opts: {
   // Per-turn generation backstop computed by the caller (window − prompt − margin).
   // Falls back to the profile's fixed REIKA_MAX_TOKENS when not provided.
   maxTokens?: number;
+  // One-shot per-token logit offsets for the last-resort rumination recovery (see agent/logitrecovery.ts).
+  // Set only on the single biased recovery round; absent on every normal turn.
+  logitBias?: Record<number, number>;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -53,6 +56,9 @@ export async function callModel(opts: {
     stream: true,
     stream_options: { include_usage: true },
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
+    ...(opts.logitBias && Object.keys(opts.logitBias).length > 0
+      ? { logit_bias: opts.logitBias }
+      : {}),
   };
 
   try {

@@ -166,4 +166,49 @@ describe('editTool edge cases', () => {
       expect(result.summary).toMatch(/re-read/);
     });
   });
+
+  // Structured editFailure — same divergence the hint string describes, as data the agent loop lifts
+  // into a non-aging recovery directive (agent/loop.ts buildEditRecoveryLedger).
+  describe('structured editFailure', () => {
+    it('reports a diverged failure with the exact line, expected/actual, and a verbatim excerpt', async () => {
+      await write('a.css', '.box {\n  font-size: 13px;\n  color: red;\n}\n');
+      const result = await editTool.run(
+        {
+          path: 'a.css',
+          old_string: '  font-size: 13px;\n  color: blue;', // file has red, not blue
+          new_string: '  font-size: 14px;\n  color: blue;',
+        },
+        ctx(),
+      );
+      expect(result.editFailure).toEqual({
+        kind: 'diverged',
+        path: 'a.css',
+        divergentLine: 3,
+        expected: 'color: blue;',
+        actual: 'color: red;',
+        excerpt: expect.stringContaining('color: red;'),
+      });
+      // The excerpt is line-numbered so the model can copy from it verbatim.
+      expect((result.editFailure as { excerpt: string }).excerpt).toMatch(/3│  color: red;/);
+    });
+
+    it('reports an absent failure when nothing matches even loosely', async () => {
+      await write('a.css', '.box {\n  font-size: 13px;\n}\n');
+      const result = await editTool.run(
+        { path: 'a.css', old_string: '  background: pink;', new_string: '  background: teal;' },
+        ctx(),
+      );
+      expect(result.editFailure).toEqual({ kind: 'absent', path: 'a.css' });
+    });
+
+    it('leaves editFailure undefined for an ambiguous (multiple-match) failure', async () => {
+      await write('a.css', '  font-size: 13px;\n  font-size: 13px;\n');
+      const result = await editTool.run(
+        { path: 'a.css', old_string: '\tfont-size: 13px;', new_string: '\tfont-size: 14px;' },
+        ctx(),
+      );
+      expect(result.summary).toMatch(/multiple times/);
+      expect(result.editFailure).toBeUndefined();
+    });
+  });
 });

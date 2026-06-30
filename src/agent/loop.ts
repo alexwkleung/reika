@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   Config,
   ContextBundle,
+  EditFailure,
   Message,
   Tool,
   ToolResult,
@@ -26,6 +27,7 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
+import { buildRuminationLogitBias } from './logitrecovery.js';
 import {
   extractPlanReferences,
   verifyPlanReferences,
@@ -143,6 +145,12 @@ const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
+// EXPERIMENT (Tier 2 logit recovery): one biased round before the rumination terminal stop, gently
+// down-weighting the loop's recurring tokens to nudge the model off the rut. Gated for A/B; strict
+// no-op when off, and self-gating on /tokenize being reachable (so non-llama.cpp backends just stop
+// honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
+// the case where biased tokens are filler, not the work. See agent/logitrecovery.ts.
+const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY === '1';
 // EXPERIMENT (plan→agent grounding): when a plan is finalized, verify the symbols/paths it names
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
 // of the agent loops is plans referencing code that isn't there (0-match grep loops, edits whose
@@ -408,6 +416,29 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
   return lines.join('\n');
 }
 
+// Persistent, non-aging recovery directive for a `diverged` edit failure (anchor present, one line
+// off) that has started looping. The edit tool already reports the divergence in its result summary,
+// but that string ages out under compaction before a period >= 2 loop returns to it — the same reason
+// the loop ledger lives in the regenerated system suffix rather than a per-call nudge. This lifts the
+// exact divergence AND the verbatim current bytes into the suffix and frames the single fix the model
+// must make: copy old_string character-for-character from the text shown. Emitted for one round only.
+export function buildEditRecoveryLedger(failure: EditFailure): string {
+  if (failure.kind !== 'diverged') return '';
+  return [
+    '',
+    '--- reika status (auto-generated — not user input) ---',
+    `Your edit to ${failure.path} failed because line ${failure.divergentLine} does not match your ` +
+      `old_string: you expected "${failure.expected}", but the file actually has "${failure.actual}".`,
+    'Re-reading will not change this — here is the current text of that region, verbatim:',
+    '',
+    failure.excerpt,
+    '',
+    'Make ONE edit whose old_string is copied character-for-character from the text above (the part ' +
+      'after the line-number gutter), so it matches the file exactly. If the change does not belong ' +
+      'here after all, say so and stop instead of retrying.',
+  ].join('\n');
+}
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -502,9 +533,20 @@ export async function runTurn(opts: {
   // FAILED (e.g. old_string not in the file) with no successful edit since. A failed edit needs a
   // re-read to recover, so withdrawal is suppressed here; if it persists alongside a reasoning loop
   // (the model retrying an edit it can't apply, ignoring the failure), the turn stops gracefully
-  // rather than looping. lastFailedEditFile names the file for that report.
+  // rather than looping. lastEditFailure carries the structured divergence (when the edit tool
+  // produced one) so the grounded recovery round can quote it; undefined for failures without one
+  // (multiple/mixed matches, or a successful edit clearing the state).
   let lastEditFailed = false;
-  let lastFailedEditFile = '';
+  let lastEditFailure: EditFailure | undefined;
+  // One-shot guard for the grounded edit-recovery round: a `diverged` failure (anchor present, one
+  // line off) gets exactly ONE round with the divergence lifted into the system suffix before the
+  // dead-end stop — the same "each tier gets one round" discipline as the rumination ladder. Set when
+  // that round fires so a still-looping turn falls through to the stop instead of grounding forever.
+  let editRecoveryGroundingTried = false;
+  // One-shot guard for the Tier 2 logit-recovery round (REIKA_LOGIT_RECOVERY): the rumination
+  // dead-end gets exactly ONE biased round before the terminal stop. Set when it fires so a
+  // still-looping turn falls through to commitAgentLoopStop instead of biasing every round.
+  let logitRecoveryTried = false;
   // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
   // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
   // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
@@ -591,6 +633,10 @@ export async function runTurn(opts: {
     }
     opts.onPhase?.('thinking');
 
+    // One-shot per-token bias for this round, set only by the Tier 2 logit recovery at the rumination
+    // dead-end below; undefined on every normal round. Threaded into callModel for this iteration.
+    let logitBias: Record<number, number> | undefined;
+
     // Up to the cap: append the ledger + escalating nudge to the exploration prompt. At the cap:
     // switch to the transform — a tool-less call over a synthetic task+notes context, NOT the
     // exploration history. callHistory/callTools below are what actually get sent.
@@ -610,10 +656,14 @@ export async function runTurn(opts: {
     // transform drops it and rebuilds from findings instead of feeding the loop back to itself.
     const planForceWriteLoopTriggered =
       (REASONING_LOOP_BREAK && reasoningLoopActive) || forceVerbatimPlanWrite;
-    if (planForceWrite && (REASONING_LOOP_BREAK && reasoningLoopActive)) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=reasoning-loop analysis=dropped\n`);
+    if (planForceWrite && REASONING_LOOP_BREAK && reasoningLoopActive) {
+      debugLog(
+        `[reika:debug] round=${i} plan-force-write trigger=reasoning-loop analysis=dropped\n`,
+      );
     } else if (planForceWrite && forceVerbatimPlanWrite) {
-      debugLog(`[reika:debug] round=${i} plan-force-write trigger=verbatim-abort analysis=dropped\n`);
+      debugLog(
+        `[reika:debug] round=${i} plan-force-write trigger=verbatim-abort analysis=dropped\n`,
+      );
     }
     // Loop-break escalation: when a confirmed agent-mode loop persists past the ledger, withdraw the
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
@@ -652,30 +702,44 @@ export async function runTurn(opts: {
         editRecovery: lastEditFailed,
       });
       // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
-      // model retrying an edit it can't apply (old_string isn't in the file — typically a plan that
-      // references code that doesn't exist there). It ignores the failure message (crossSim≈1.0) and
-      // re-reading never produces a matching old_string, so neither the ledger nor withdrawal recovers
-      // it (observed: it oscillated edit-fail ↔ re-read for 17+ rounds). Stop the turn with a clear
-      // report instead — bounded recovery, like the length/typecheck caps.
-      if (
-        reasoningLoop &&
-        lastEditFailed &&
-        loopActiveRounds >= LOOP_WITHDRAW_AFTER
-      ) {
-        debugLog(`[reika:debug] round=${i} edit-recovery-stuck file=${lastFailedEditFile}\n`);
-        const stuck: Message = {
-          role: 'assistant',
-          content:
-            `I kept trying to edit \`${lastFailedEditFile}\` but the text I expected isn't in the ` +
-            `file, so the change can't be applied as planned — the plan may reference code that ` +
-            `doesn't exist there. I've stopped instead of looping. Please confirm the change belongs ` +
-            `in that file, or point me at the right location.`,
-          durationMs: Date.now() - turnStart,
-          ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
-        };
-        opts.history.push(stuck);
-        opts.onMessage(stuck);
-        return;
+      // model retrying an edit it can't apply. It ignores the failure message (crossSim≈1.0) and
+      // re-reading on its own never produces a matching old_string (observed: it oscillated
+      // edit-fail ↔ re-read for 17+ rounds). Two sub-cases, split by the structured failure:
+      //  - `diverged` (anchor present, one line off): mechanically recoverable. Spend ONE grounded
+      //    round first — the exact divergence + verbatim current bytes lifted into the non-aging system
+      //    suffix (the tool's own hint rides in the tool result, which ages out under compaction). The
+      //    one-shot guard (editRecoveryGroundingTried) then lets a still-looping turn fall through to
+      //    the stop next round, the same bounded "one round per tier" discipline as the rumination ladder.
+      //  - otherwise (`absent`, or a failure type with no structured divergence): re-reading can't
+      //    produce a matching old_string — the target isn't in the file (a plan referencing code that
+      //    doesn't exist there) — so grounding is futile. Stop now with a clear report.
+      let editRecoveryGrounding: EditFailure | undefined;
+      if (reasoningLoop && lastEditFailed && loopActiveRounds >= LOOP_WITHDRAW_AFTER) {
+        if (lastEditFailure?.kind === 'diverged' && !editRecoveryGroundingTried) {
+          editRecoveryGrounding = lastEditFailure;
+          editRecoveryGroundingTried = true;
+          debugLog(
+            `[reika:debug] round=${i} edit-recovery-grounding file=${lastEditFailure.path} ` +
+              `line=${lastEditFailure.divergentLine}\n`,
+          );
+          // fall through: don't stop — the grounded directive is injected into `system` below.
+        } else {
+          const file = lastEditFailure?.path;
+          debugLog(`[reika:debug] round=${i} edit-recovery-stuck file=${file ?? '?'}\n`);
+          const stuck: Message = {
+            role: 'assistant',
+            content:
+              `I kept trying to edit ${file ? `\`${file}\`` : 'the file'} but the text I expected ` +
+              `isn't in the file, so the change can't be applied as planned — the plan may reference ` +
+              `code that doesn't exist there. I've stopped instead of looping. Please confirm the ` +
+              `change belongs in that file, or point me at the right location.`,
+            durationMs: Date.now() - turnStart,
+            ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
+          };
+          opts.history.push(stuck);
+          opts.onMessage(stuck);
+          return;
+        }
       }
       // Reasoning-loop dead-end (agent mode's commitSpiralStop): a confirmed reasoning loop that has
       // ignored the ledger AND survived withdrawal for LOOP_TERMINAL_AFTER rounds. Withdrawal only
@@ -683,16 +747,49 @@ export async function runTurn(opts: {
       // "verify") routes around it and would otherwise run to maxTurns. End the turn instead — the
       // work it did (if any) is already on disk; say so honestly rather than loop.
       if (reasoningLoop && loopActiveRounds >= LOOP_TERMINAL_AFTER) {
-        debugLog(
-          `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
-            `edited=${editingStarted}\n`,
-        );
-        commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
-        return;
+        // Tier 2 last resort (REIKA_LOGIT_RECOVERY): before the honest stop, spend ONE biased round —
+        // mine the loop's recurring tokens and down-weight their entry tokens so the model is nudged
+        // off the rut. This site is structurally pure rumination (an unresolved failed edit would have
+        // stopped/grounded at the earlier edit-recovery dead-end), so the biased tokens are filler,
+        // not the work. Fail-open: flag off, already tried, or no /tokenize → stop exactly as before.
+        if (LOGIT_RECOVERY && !logitRecoveryTried) {
+          logitRecoveryTried = true;
+          const bias = await buildRuminationLogitBias({
+            baseURL: opts.config.baseURL,
+            apiKey: opts.config.apiKey,
+            shingles: reasoningTrace.repeatedShingles(),
+            toolNames: opts.tools.map(t => t.name),
+            signal: opts.signal,
+          });
+          if (bias) {
+            logitBias = bias;
+            debugLog(
+              `[reika:debug] round=${i} logit-recovery tokens=${Object.keys(bias).length}\n`,
+            );
+            // fall through: don't stop — the biased round runs below with the loop ledger still set.
+          } else {
+            debugLog(`[reika:debug] round=${i} logit-recovery unavailable — stopping\n`);
+            commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+            return;
+          }
+        } else {
+          debugLog(
+            `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
+              `edited=${editingStarted}\n`,
+          );
+          commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+          return;
+        }
       }
-      system = loopDetected
-        ? baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection)
-        : baseSystem;
+      // The grounded edit-recovery directive is more specific and actionable than the generic loop
+      // ledger, so it replaces it for the one round it fires.
+      if (editRecoveryGrounding) {
+        system = baseSystem + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
+      } else if (loopDetected) {
+        system = baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
+      } else {
+        system = baseSystem;
+      }
       if (loopDetected) {
         debugLog(
           `[reika:debug] round=${i} loop-active reads=${looping.length} reasoning=${reasoningLoop} ` +
@@ -849,6 +946,9 @@ export async function runTurn(opts: {
         promptTokens: Math.round(sentEstimate * calibration),
         userMaxTokens: opts.config.maxTokens,
       }),
+      // Set only on the one-shot Tier 2 logit-recovery round (see the rumination dead-end above);
+      // undefined otherwise, so a normal turn's request is byte-identical to before.
+      logitBias,
     });
 
     // Reasoning block is done streaming — clear any lingering spin hint so it doesn't bleed into the
@@ -1034,7 +1134,8 @@ export async function runTurn(opts: {
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
       const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
       if (url.note) assistantContent = assistantContent + url.note;
-      if (url.notice) debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
+      if (url.notice)
+        debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
       planUrlNotice = url.notice;
     }
 
@@ -1123,6 +1224,7 @@ export async function runTurn(opts: {
       let command: ToolResult['command'];
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
+      let editFailure: EditFailure | undefined;
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
       // applies, so the done-gate diffs against the project's state before any of this turn's edits.
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
@@ -1173,6 +1275,7 @@ export async function runTurn(opts: {
           command = result.command;
           contentHash = result.contentHash;
           toolNotice = result.notice;
+          editFailure = result.editFailure;
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -1211,9 +1314,12 @@ export async function runTurn(opts: {
         // stop. `Edited …` is the success prefix from tools/edit.ts; anything else is a non-apply.
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
+          lastEditFailure = undefined;
         } else if (summary.startsWith('Edit failed')) {
           lastEditFailed = true;
-          if (typeof call.args.path === 'string') lastFailedEditFile = call.args.path;
+          // editFailure is set only for the not-found case; other failures (multiple/mixed) leave it
+          // undefined, which the dead-end treats as "not groundable" and stops as before.
+          lastEditFailure = editFailure;
         }
       }
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
@@ -1233,7 +1339,9 @@ export async function runTurn(opts: {
       // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
       if (toolNotice) {
         opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
-        debugLog(`[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`);
+        debugLog(
+          `[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`,
+        );
       }
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
@@ -1302,7 +1410,8 @@ function commitSpiralStop(
       if (typeof tc.args.path === 'string') files.add(tc.args.path);
     }
   }
-  const examined = files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
+  const examined =
+    files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
   const m: Message = {
     role: 'assistant',
     content:
