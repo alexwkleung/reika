@@ -83,6 +83,23 @@ export function verbatimAbortThreshold(reasoningChars: number): number {
   return VERBATIM_RATIO_HI - t * (VERBATIM_RATIO_HI - VERBATIM_RATIO_LO);
 }
 
+// How many recent rounds the cross-round detector compares each new round against (not just the
+// immediately prior one). A rumination spiral often echoes a round two or three back while the
+// consecutive pair dips below threshold on a paraphrased round — comparing against a small window of
+// recent rounds and taking the strongest match catches that echo where a prev-only comparison is
+// blind. Kept small: a wider window is more chances to coincidentally overlap, i.e. more false-
+// positive surface. k stays at 8 (model-agnostic base rate) — only the comparison span widens.
+const REASONING_LOOP_WINDOW = 3;
+
+// Leaky-streak band. A single sub-threshold round must not erase the evidence of a spiral the way a
+// hard reset does (observed: a 0.57 round then a 0.33 round zeroed a real loop before it could fire).
+// A round whose similarity stays at/above threshold*HOLD is still substantially overlapping — well
+// above the ~0.2 healthy 8-gram base rate — so treat it as noise *within* the loop and HOLD the
+// streak rather than reset; only a genuinely novel round (below the band) resets. Holding never
+// *builds* a streak — only an at-/above-threshold round increments — so this loosens forgetting, not
+// the bar to fire.
+const STREAK_HOLD_FACTOR = 0.5;
+
 // Jaccard overlap of k-grams between two rounds' reasoning. High across consecutive rounds (with no
 // progress) means the model is re-deriving the same analysis instead of converging (Layer 2). 0 when
 // either side is too short to shingle.
@@ -96,40 +113,64 @@ export function crossRoundSimilarity(a: string, b: string): number {
 }
 
 // Stateful Layer-2 detector: records each round's reasoning in order and tracks the consecutive
-// streak of rounds whose reasoning is >= `threshold` similar to the prior round. A sustained streak
-// is rumination — the model re-deriving the same analysis round after round instead of converging.
-// This catches a loop the novelty proxy (loop.ts planStaleRounds / seenReadOnly) is structurally
-// blind to: in the observed failure the tool *results* looked new each round (so the novelty cap kept
-// resetting) while the *reasoning* was byte-identical (crossSim=1.00). selfRepeatRatio is the Layer-1
-// (intra-stream degeneration) signal and is independent of this. See loop.ts for the wiring.
+// streak of rounds whose reasoning is >= `threshold` similar to any of the last few rounds. A
+// sustained streak is rumination — the model re-deriving the same analysis round after round instead
+// of converging. This catches a loop the novelty proxy (loop.ts planStaleRounds / seenReadOnly) is
+// structurally blind to: in the observed failure the tool *results* looked new each round (so the
+// novelty cap kept resetting) while the *reasoning* was byte-identical (crossSim=1.00). Two refinements
+// over a naive prev-only/hard-reset detector — both keep k at 8 (model-agnostic), only the comparison
+// span and the reset rule change: a small recent-round *window* (REASONING_LOOP_WINDOW) catches a
+// spiral that echoes a round two or three back, and a *leaky* streak (STREAK_HOLD_FACTOR) survives a
+// single paraphrased dip instead of zeroing on it. selfRepeatRatio is the Layer-1 (intra-stream
+// degeneration) signal and is independent of this. See loop.ts for the wiring.
 export class ReasoningTrace {
-  private prev: string | undefined;
+  // Shingle sets of the last REASONING_LOOP_WINDOW rounds, oldest first. Each new round is compared
+  // against all of them (max Jaccard); the buffer evicts the oldest once full.
+  private window: Set<string>[] = [];
   private streak = 0;
-  // The k-grams shared by the two most recent rounds when they were similar enough to count as a
-  // loop — i.e. the actual ruminated content. Captured during record() (the Jaccard already finds
-  // the intersection) so the last-resort logit recovery can derive bias tokens from what's recurring
-  // rather than re-deriving it. Empty whenever the last round broke the streak. See agent/logitrecovery.ts.
+  // The k-grams shared by the current round and its strongest recent match when they were similar
+  // enough to count as a loop — i.e. the actual ruminated content. Captured during record() (the
+  // Jaccard already finds the intersection) so the last-resort logit recovery can derive bias tokens
+  // from what's recurring rather than re-deriving it. Empty whenever the last round broke the streak.
+  // See agent/logitrecovery.ts.
   private repeated: string[] = [];
 
-  // Record one round's reasoning (call once per round, in order) and return the similarity vs the
-  // previous round plus the resulting consecutive-high streak. An empty round (a pure tool-call turn
-  // with no thinking) yields sim 0 and resets the streak — conservative, so a momentary gap can't
-  // sustain a false loop; the observed loops emit non-empty reasoning every round.
+  // Record one round's reasoning (call once per round, in order) and return the strongest similarity
+  // vs the last few rounds plus the resulting streak. An empty round (a pure tool-call turn with no
+  // thinking) yields sim 0 and resets the streak — conservative, so a momentary gap can't sustain a
+  // false loop; the observed loops emit non-empty reasoning every round.
   record(reasoning: string | undefined, threshold: number): { sim: number; streak: number } {
     const text = reasoning ?? '';
-    // Compute the Jaccard from the two shingle sets directly (same value crossRoundSimilarity returns)
-    // so we can keep the intersection — the recurring k-grams — without a second pass.
-    const prevSet = this.prev !== undefined ? new Set(shingles(this.prev)) : null;
     const curSet = new Set(shingles(text));
+
+    // Strongest Jaccard against any round in the window, keeping that round's intersection — the
+    // recurring k-grams — for the logit recovery, without a second pass. Comparing against a window
+    // (not just the prior round) registers an echo of a round two or three back even when the
+    // consecutive pair dipped on a paraphrased round.
     let sim = 0;
     let inter: string[] = [];
-    if (prevSet && prevSet.size > 0 && curSet.size > 0) {
-      inter = [...curSet].filter(s => prevSet.has(s));
-      sim = inter.length / (prevSet.size + curSet.size - inter.length);
+    if (curSet.size > 0) {
+      for (const prevSet of this.window) {
+        if (prevSet.size === 0) continue;
+        const shared = [...curSet].filter(s => prevSet.has(s));
+        const j = shared.length / (prevSet.size + curSet.size - shared.length);
+        if (j > sim) {
+          sim = j;
+          inter = shared;
+        }
+      }
     }
-    this.streak = sim >= threshold ? this.streak + 1 : 0;
+
+    // Leaky streak: increment on a clear match, HOLD through a still-substantially-overlapping round
+    // (>= threshold*HOLD) so one paraphrased dip can't zero a real loop, and reset only when the
+    // round is genuinely novel. See STREAK_HOLD_FACTOR.
+    if (sim >= threshold) this.streak++;
+    else if (sim < threshold * STREAK_HOLD_FACTOR) this.streak = 0;
     this.repeated = this.streak > 0 ? inter : [];
-    this.prev = text;
+
+    this.window.push(curSet);
+    if (this.window.length > REASONING_LOOP_WINDOW) this.window.shift();
+
     return { sim, streak: this.streak };
   }
 
