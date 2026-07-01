@@ -984,7 +984,7 @@ export function App() {
           ) : null}
           <Input
             disabled={pending !== null}
-            attachedAbove={pending !== null}
+            attachedAbove={pending !== null || suggestionState !== null}
             canSubmit={status === 'idle' && pending === null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
