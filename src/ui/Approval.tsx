@@ -1,4 +1,3 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import type { ApprovalRequest } from '../types.js';
 import { theme } from './theme.js';

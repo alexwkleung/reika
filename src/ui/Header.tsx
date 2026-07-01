@@ -1,4 +1,3 @@
-import React from 'react';
 import { homedir } from 'node:os';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';

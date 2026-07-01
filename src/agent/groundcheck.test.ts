@@ -27,10 +27,7 @@ describe('extractPlanReferences', () => {
     const { paths, symbols } = extractPlanReferences(
       'Edit `packages/server/src/http/chat.ts` and `src/atoms/web-search-atoms.ts`.',
     );
-    expect(paths).toEqual([
-      'packages/server/src/http/chat.ts',
-      'src/atoms/web-search-atoms.ts',
-    ]);
+    expect(paths).toEqual(['packages/server/src/http/chat.ts', 'src/atoms/web-search-atoms.ts']);
     expect(symbols).toHaveLength(0);
   });
 
@@ -63,7 +60,9 @@ describe('extractPlanReferences', () => {
 
   it('still flags a modify-target path — "add X to foo.ts" must not be suppressed', () => {
     // This is the failed-edit loop case: a hallucinated existing file must still surface.
-    const { paths } = extractPlanReferences('Add web search to `packages/server/src/http/chat.ts`.');
+    const { paths } = extractPlanReferences(
+      'Add web search to `packages/server/src/http/chat.ts`.',
+    );
     expect(paths).toEqual(['packages/server/src/http/chat.ts']);
   });
 
@@ -112,7 +111,10 @@ describe('shouldSuppressGrounding', () => {
     expect(shouldSuppressGrounding({ missingSymbols: ['a'], missingPaths: [] }, refs)).toBe(false);
     // Half missing still has a backdrop — not suppressed.
     expect(
-      shouldSuppressGrounding({ missingSymbols: ['a', 'b', 'c', 'd', 'e', 'f'], missingPaths: [] }, refs),
+      shouldSuppressGrounding(
+        { missingSymbols: ['a', 'b', 'c', 'd', 'e', 'f'], missingPaths: [] },
+        refs,
+      ),
     ).toBe(false);
   });
 
@@ -125,7 +127,9 @@ describe('shouldSuppressGrounding', () => {
   });
 
   it('is false when there are no references at all', () => {
-    expect(shouldSuppressGrounding({ missingSymbols: [], missingPaths: [] }, refsOf([]))).toBe(false);
+    expect(shouldSuppressGrounding({ missingSymbols: [], missingPaths: [] }, refsOf([]))).toBe(
+      false,
+    );
   });
 });
 

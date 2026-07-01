@@ -52,7 +52,10 @@ describe('buildUrlGroundingNote', () => {
 
   it('marks a resolving URL with a collapsed snippet', () => {
     const note = buildUrlGroundingNote([
-      { url: 'https://example.com', res: { ok: true, content: 'hello   world\n\nfoo', extractedChars: 18 } },
+      {
+        url: 'https://example.com',
+        res: { ok: true, content: 'hello   world\n\nfoo', extractedChars: 18 },
+      },
     ]);
     expect(note).toContain('✓ https://example.com — resolved: hello world foo…');
   });
@@ -125,7 +128,12 @@ describe('groundUrls', () => {
   });
 
   function mockOk(html: string): Response {
-    return { ok: true, status: 200, statusText: 'OK', text: async () => html } as unknown as Response;
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => html,
+    } as unknown as Response;
   }
 
   it('is a strict no-op when the flag is off', async () => {
@@ -154,7 +162,9 @@ describe('groundUrls', () => {
 
   it('marks URLs seen so a follow-up edit does not re-fetch', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk('<article>x</article>'));
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<article>x</article>'),
+    );
     const groundedUrls = new Set<string>();
     await groundUrls({ cwd: '/tmp', groundedUrls }, 'https://example.com/a');
     const second = await groundUrls({ cwd: '/tmp', groundedUrls }, 'https://example.com/a');
@@ -164,7 +174,9 @@ describe('groundUrls', () => {
 
   it('returns a user-facing receipt for the loop to place after the chip', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk('<article>x</article>'));
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<article>x</article>'),
+    );
     const out = await groundUrls({ cwd: '/tmp' }, 'https://example.com/page');
     expect(out.notice).toEqual({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
   });
@@ -177,7 +189,9 @@ describe('groundUrls', () => {
 
   it('caps the number of URLs fetched per call', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk('<article>x</article>'));
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<article>x</article>'),
+    );
     const text = 'https://a.example https://b.example https://c.example';
     await groundUrls({ cwd: '/tmp' }, text);
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
@@ -206,7 +220,10 @@ describe('buildPlanUrlNote', () => {
   it('does not flag a no-response link when nothing proves connectivity (offline-safe)', () => {
     expect(
       buildPlanUrlNote([
-        { url: 'https://cdn.example.com/lib.js', res: { ok: false, reached: false, error: 'fetch failed' } },
+        {
+          url: 'https://cdn.example.com/lib.js',
+          res: { ok: false, reached: false, error: 'fetch failed' },
+        },
       ]),
     ).toBe('');
   });
@@ -245,7 +262,10 @@ describe('groundUrlsForPlan', () => {
   it('returns no plan note when the named URL resolves, but still returns the receipt', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockStatus(true));
-    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'load https://cdn.example.com/three.min.js');
+    const out = await groundUrlsForPlan(
+      { cwd: '/tmp' },
+      'load https://cdn.example.com/three.min.js',
+    );
     expect(out.note).toBeUndefined();
     expect(out.notice).toEqual({ tone: 'info', content: 'Grounded 1 link — all reachable.' });
   });
@@ -262,10 +282,16 @@ describe('groundUrlsForPlan', () => {
   it('does not flag a plan URL when offline — info receipt, no false dead-link warning', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('fetch failed'));
-    const out = await groundUrlsForPlan({ cwd: '/tmp' }, 'load https://cdn.example.com/three.min.js');
+    const out = await groundUrlsForPlan(
+      { cwd: '/tmp' },
+      'load https://cdn.example.com/three.min.js',
+    );
     expect(out.note).toBeUndefined();
     expect(out.notice).toEqual(
-      expect.objectContaining({ tone: 'info', content: expect.stringContaining("couldn't verify") }),
+      expect.objectContaining({
+        tone: 'info',
+        content: expect.stringContaining("couldn't verify"),
+      }),
     );
   });
 });
