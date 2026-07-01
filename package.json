@@ -1,7 +1,7 @@
 {
   "name": "reika",
   "version": "0.0.1",
-  "description": "Minimal coding agent CLI tuned for low quantization and small local models.",
+  "description": "Coding agent CLI for small local models, tuned for low quantization.",
   "type": "module",
   "bin": {
     "reika": "./dist/cli.js"
