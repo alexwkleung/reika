@@ -1,6 +1,6 @@
 # Reika
 
-Minimal coding-agent CLI tuned for low quantization/small local models, with a focus on context discipline and capability alignment.
+Minimal coding agent CLI tuned for low quantization and small local models, with a focus on context discipline and capability alignment.
 
 ## Why
 
