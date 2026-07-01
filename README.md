@@ -1,10 +1,12 @@
 # Reika
 
-Minimal coding agent CLI tuned for low quantization and small local models, with a focus on context discipline and capability alignment.
+A coding agent CLI for small local models — tuned for low quantization, with a focus on context discipline and capability alignment.
 
 ## Why
 
 Many coding agents were specifically made for frontier/SOTA models and not intended to be optimized for local models, specifically small and low quantization ones. Whether you can only run small or heavily quantized models due to hardware or VRAM constraints, Reika attempts to fill in the gap to make them usable. The keyword specifically is usable. Not more intelligent.
+
+In this context, "small" means roughly 8B and up: 8/9B models hold their weight and stay usable, while 14–35B is the effective sweet spot for agentic coding. Anything below 7B can work for certain narrow, well-scoped cases, but as of writing it shouldn't be considered a viable option for agentic coding.
 
 ### The Challenge
 

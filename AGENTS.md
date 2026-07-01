@@ -4,7 +4,7 @@ This file is loaded automatically by Reika when it runs in this directory. Conve
 
 ## Project
 
-Reika is a minimal coding-agent CLI. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud. Tuned for low quantization/small local models, with a focus on context discipline and capability alignment.
+Reika is a coding-agent CLI for small local models. TypeScript strict, ES modules, single-file-per-concern. Built around the assumption that _every token of context counts_ — designed first for small local models, and scales up to cloud. Tuned for low quantization, with a focus on context discipline and capability alignment.
 
 ## Design rationale: agent-first ergonomics
 
