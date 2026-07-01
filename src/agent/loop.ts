@@ -186,6 +186,21 @@ const MAX_VERBATIM_RECOVERIES = 2;
 const REASONING_HARD_CEIL = 32000;
 const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
+// EXPERIMENT (converge retry): instead of giving up the moment the model can't converge — a plan-mode
+// force-write that spiraled, or an agent reasoning loop that reached its terminal — spend ONE more
+// *steered* attempt first: a strong, failure-naming directive ("you looped and kept re-questioning
+// yourself; commit to one analysis/action and do it") rather than a cold stop. Capped at
+// MAX_CONVERGE_RETRIES, and in plan mode the retry round gets a tighter reasoning ceil so a re-spiral
+// is cut fast — cheap-to-fail. Worst case is unchanged (the same honest stop fires once the budget is
+// spent); we just insert a best-effort push before it. Motivated by a manual finding: a third retry
+// with exactly this steer converged where two unsteered attempts (one logit-biased) spiraled — the
+// natural-language steer reaches the behavioral self-questioning spiral that token bias can't. Strict
+// no-op when off. See AGENTS.md "Loop breaking".
+const CONVERGE_RETRY = process.env.REIKA_CONVERGE_RETRY === '1';
+const MAX_CONVERGE_RETRIES = 1; // one strong push; the user can retry fully after. Bump later if worth it.
+// Tighter reasoning ceil for a steered plan-mode retry than a normal force-write (12000): if the steer
+// is ignored and it re-spirals, cut it fast (~2k tokens) rather than burning the full force-write ceil.
+const STEER_RETRY_REASONING_CEIL = 8000;
 // EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
 // a compact digest at the start of each agent turn, so the plan stays salient instead of being
 // buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
@@ -199,17 +214,44 @@ const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
 // the cap we discard the exploration history (and its read-momentum) and feed the model only the
 // task + its own accumulated reasoning, with no tools, asking it to convert that into a plan.
 // "Summarize your analysis into a plan" is a task weak models do far better than "decide to stop".
-function buildPlanWritePrompt(): string {
+export function buildPlanWritePrompt(steer = false): string {
   // Deliberately positive and permissive. Heavy negative constraints ("output ONLY … no preamble,
   // no code") make ruminating thinking models burn their whole generation budget litigating the
   // rules instead of writing — they cut off mid-plan and retry. A short snippet or preamble is fine;
   // the only thing that matters is a grounded, file-specific plan.
-  return [
+  const lines = [
     'You are in PLAN MODE. Exploration is finished and you have no tools.',
     'The next message has the original request and your exploration notes (file contents + analysis).',
     'Write a numbered implementation plan from them. For each step, name the file and the change to',
     'make — a short code snippet is fine. Keep every step grounded in the notes: use their exact file',
     'paths and identifiers, and do not invent paths, filenames, or class names.',
+  ];
+  // Steered retry (CONVERGE_RETRY): the prior force-write looped. Name the failure mode the way that
+  // empirically broke the loop ("don't overcomplicate / don't keep questioning yourself") — a strong
+  // last push before the honest stop. Kept short; this round also runs under a tighter reasoning ceil.
+  if (steer) {
+    lines.push(
+      '',
+      'Your previous attempt to write this plan looped and kept re-questioning itself. Do NOT',
+      'overcomplicate this. Commit to ONE analysis: do not re-explore, do not weigh alternatives, and',
+      'do not repeatedly second-guess yourself. State the cause in a sentence or two and write the plan',
+      'directly. Shorter is better.',
+    );
+  }
+  return lines.join('\n');
+}
+
+// Steered directive appended to the agent-mode system suffix on the one converge-retry round before
+// commitAgentLoopStop. Agent analogue of buildPlanWritePrompt's steer: names the self-questioning
+// spiral and pushes the model to commit to an action, echoing the phrasing that broke the loop in
+// practice. Exported + pure for tests.
+export function buildConvergeSteer(): string {
+  return [
+    '--- reika status (auto-generated — not user input) ---',
+    'You have repeated the same step without converging — re-questioning your approach instead of',
+    'acting. Do NOT overcomplicate this. Commit to ONE concrete action now: make the edit the task',
+    'needs, or give the final answer. Do not deliberate further, do not re-read or re-check, and do',
+    'not keep second-guessing yourself — act on what you already have.',
   ].join('\n');
 }
 
@@ -566,6 +608,12 @@ export async function runTurn(opts: {
   // dead-end gets exactly ONE biased round before the terminal stop. Set when it fires so a
   // still-looping turn falls through to commitAgentLoopStop instead of biasing every round.
   let logitRecoveryTried = false;
+  // Converge-retry bookkeeping (CONVERGE_RETRY): how many steered last-push attempts this turn has
+  // spent (bounded by MAX_CONVERGE_RETRIES). steerRetryActive is true only during a plan-mode steered
+  // force-write retry — it appends the steer to the force-write prompt, tightens that round's reasoning
+  // ceil, and keeps the retry abort-protected so a re-spiral is still cut. See CONVERGE_RETRY.
+  let convergeRetries = 0;
+  let steerRetryActive = false;
   // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
   // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
   // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
@@ -690,7 +738,7 @@ export async function runTurn(opts: {
     let withdrawInspection = false;
     if (opts.promptMode === 'plan') {
       if (planForceWrite) {
-        system = buildPlanWritePrompt();
+        system = buildPlanWritePrompt(steerRetryActive);
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
         // here on the round that writes the plan. Gated to a LOOP-triggered force-write
@@ -811,12 +859,29 @@ export async function runTurn(opts: {
       // "verify") routes around it and would otherwise run to maxTurns. End the turn instead — the
       // work it did (if any) is already on disk; say so honestly rather than loop.
       if (reasoningLoop && loopActiveRounds >= LOOP_TERMINAL_AFTER) {
-        // Tier 2 last resort (REIKA_LOGIT_RECOVERY): before the honest stop, spend ONE biased round —
-        // mine the loop's recurring tokens and down-weight their entry tokens so the model is nudged
-        // off the rut. This site is structurally pure rumination (an unresolved failed edit would have
-        // stopped/grounded at the earlier edit-recovery dead-end), so the biased tokens are filler,
-        // not the work. Fail-open: flag off, already tried, or no /tokenize → stop exactly as before.
-        if (LOGIT_RECOVERY && !logitRecoveryTried) {
+        // Converge retry (REIKA_CONVERGE_RETRY) — strongest lever first: spend ONE steered round before
+        // the stop, a failure-naming directive (buildConvergeSteer) to commit and act, appended to this
+        // round's system suffix. Capped at MAX_CONVERGE_RETRIES; loopActiveRounds is NOT reset, so if
+        // the loop persists the terminal fires again next round and (budget spent) falls through to the
+        // logit round / honest stop. The natural-language steer reaches the behavioral self-questioning
+        // spiral that token-level bias can't.
+        if (CONVERGE_RETRY && convergeRetries < MAX_CONVERGE_RETRIES) {
+          convergeRetries++;
+          system += '\n\n' + buildConvergeSteer();
+          opts.onMessage({
+            role: 'system',
+            tone: 'warn',
+            content: 'Still looping — one focused attempt to commit and act before stopping.',
+          });
+          opts.onRecovering?.(true); // live pulse; cleared after the call returns
+          debugLog(`[reika:debug] round=${i} converge-retry (agent) attempt=${convergeRetries}\n`);
+          // fall through: the steered round runs below with the steer appended to system.
+        } else if (LOGIT_RECOVERY && !logitRecoveryTried) {
+          // Tier 2 last resort (REIKA_LOGIT_RECOVERY): before the honest stop, spend ONE biased round —
+          // mine the loop's recurring tokens and down-weight their entry tokens so the model is nudged
+          // off the rut. This site is structurally pure rumination (an unresolved failed edit would have
+          // stopped/grounded at the earlier edit-recovery dead-end), so the biased tokens are filler,
+          // not the work. Fail-open: flag off, already tried, or no /tokenize → stop exactly as before.
           logitRecoveryTried = true;
           const bias = await buildRuminationLogitBias({
             baseURL: opts.config.baseURL,
@@ -963,7 +1028,11 @@ export async function runTurn(opts: {
       if (opts.signal.aborted) callAbort.abort();
       else opts.signal.addEventListener('abort', () => callAbort.abort(), { once: true });
     }
-    const canAbortVerbatim = VERBATIM_ABORT && verbatimRecoveries < MAX_VERBATIM_RECOVERIES;
+    // steerRetryActive keeps the one steered force-write retry abort-protected even after the normal
+    // recovery budget is spent, so an ignored steer is still cut (cheap-to-fail) rather than running
+    // to the max_tokens wall.
+    const canAbortVerbatim =
+      VERBATIM_ABORT && (verbatimRecoveries < MAX_VERBATIM_RECOVERIES || steerRetryActive);
     const trackSpin = !!opts.onReasoningStatus || debugEnabled() || canAbortVerbatim;
     const onReasoningDelta = trackSpin
       ? (delta: string): void => {
@@ -987,7 +1056,11 @@ export async function runTurn(opts: {
           // spiraling force-write at ratio ~0.3). The force-write round uses a tighter ceil. Only
           // while a recovery budget remains this turn.
           const abortAt = verbatimAbortThreshold(roundReasoning.length);
-          const hardCeil = planForceWrite ? FORCE_WRITE_REASONING_CEIL : REASONING_HARD_CEIL;
+          const hardCeil = planForceWrite
+            ? steerRetryActive
+              ? STEER_RETRY_REASONING_CEIL
+              : FORCE_WRITE_REASONING_CEIL
+            : REASONING_HARD_CEIL;
           const tooLong = roundReasoning.length >= hardCeil;
           if (canAbortVerbatim && !verbatimAborted && (ratio >= abortAt || tooLong)) {
             verbatimAborted = true;
@@ -1104,8 +1177,24 @@ export async function runTurn(opts: {
         });
         continue;
       }
-      // The force-write itself spiraled, or the recovery budget is spent: stop honestly rather than
-      // loop or commit spiral garbage as a "plan". This model is stuck on this task; say so.
+      // The force-write itself spiraled. Before the honest stop, spend ONE steered retry: re-run the
+      // force-write with a strong "commit, stop re-questioning" directive (buildPlanWritePrompt(steer))
+      // and a tighter reasoning ceil (cheap-to-fail). Capped at MAX_CONVERGE_RETRIES; falls through to
+      // the stop once spent. forceVerbatimPlanWrite is already true, so the next round re-force-writes.
+      if (CONVERGE_RETRY && opts.promptMode === 'plan' && convergeRetries < MAX_CONVERGE_RETRIES) {
+        convergeRetries++;
+        steerRetryActive = true;
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: 'Still looping — one more focused attempt with a tighter steer before stopping.',
+        });
+        opts.onRecovering?.(true);
+        debugLog(`[reika:debug] round=${i} converge-retry (plan) attempt=${convergeRetries}\n`);
+        continue;
+      }
+      // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
+      // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
       commitSpiralStop(opts, turnStart, fetchedUrls);
       return;
     }

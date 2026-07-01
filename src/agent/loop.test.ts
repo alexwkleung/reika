@@ -4,6 +4,8 @@ import {
   flagRepeatedCall,
   buildAgentLoopLedger,
   buildEditRecoveryLedger,
+  buildPlanWritePrompt,
+  buildConvergeSteer,
   shouldWithdrawInspection,
   buildPlanTransformInput,
 } from './loop.js';
@@ -224,6 +226,33 @@ describe('buildEditRecoveryLedger', () => {
 
   it('returns empty for an absent failure (nothing to ground on)', () => {
     expect(buildEditRecoveryLedger({ kind: 'absent', path: 'src/a.css' })).toBe('');
+  });
+});
+
+describe('buildPlanWritePrompt', () => {
+  it('omits the steer by default (normal force-write)', () => {
+    const p = buildPlanWritePrompt();
+    expect(p).toContain('PLAN MODE');
+    expect(p).not.toMatch(/overcomplicate|re-questioning|second-guess/i);
+  });
+
+  it('appends the converge-retry steer when asked, on top of the base prompt', () => {
+    const p = buildPlanWritePrompt(true);
+    expect(p).toContain('PLAN MODE'); // base instruction still present
+    expect(p).toMatch(/overcomplicate/i); // the proven phrasing
+    expect(p).toMatch(/looped and kept re-questioning/i);
+    expect(p).toMatch(/commit to one analysis/i);
+  });
+});
+
+describe('buildConvergeSteer', () => {
+  it('names the self-questioning spiral and pushes the model to commit and act', () => {
+    const s = buildConvergeSteer();
+    expect(s).toContain('--- reika status'); // a status directive, not user input
+    expect(s).toMatch(/overcomplicate/i);
+    expect(s).toMatch(/commit to one concrete action/i);
+    expect(s).toMatch(/make the edit|final answer/i); // the two acceptable exits
+    expect(s).toMatch(/second-guess|re-question/i); // names the failure mode
   });
 });
 
