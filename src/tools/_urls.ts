@@ -74,7 +74,9 @@ export function buildUrlGroundingNote(results: UrlGroundingResult[]): string {
   const lines = results.map(({ url, res }) => {
     if (res.ok) {
       const snippet = res.content.replace(/\s+/g, ' ').trim().slice(0, MAX_SNIPPET_CHARS);
-      return snippet ? `✓ ${url} — resolved: ${snippet}…` : `✓ ${url} — resolved (no extractable text).`;
+      return snippet
+        ? `✓ ${url} — resolved: ${snippet}…`
+        : `✓ ${url} — resolved (no extractable text).`;
     }
     if (verdictOf(res, online) === 'dead') {
       return `✗ ${url} — did NOT resolve (${res.error}). Verify this URL is correct; do not assume it works.`;
@@ -111,7 +113,10 @@ export function buildUrlGroundingNotice(
       .map(r => (r.res.ok ? '' : `${r.url} (${r.res.error})`))
       .join(', ');
     const more = dead.length > 2 ? `, +${dead.length - 2} more` : '';
-    return { tone: 'warn', content: `Grounded ${links} — ${dead.length} unreachable: ${named}${more}.` };
+    return {
+      tone: 'warn',
+      content: `Grounded ${links} — ${dead.length} unreachable: ${named}${more}.`,
+    };
   }
   if (unverified.length > 0) {
     return {
@@ -170,7 +175,10 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
 // on its ToolResult, so the loop renders the receipt after the edit chip.
 export async function groundUrls(ctx: ToolContext, newText: string): Promise<UrlGroundingOutcome> {
   const results = await groundCandidates(ctx, newText);
-  return { note: buildUrlGroundingNote(results) || undefined, notice: buildUrlGroundingNotice(results) };
+  return {
+    note: buildUrlGroundingNote(results) || undefined,
+    notice: buildUrlGroundingNotice(results),
+  };
 }
 
 // Ground the http(s) URLs a finalized plan names — the plan-commit analogue of the symbol/path

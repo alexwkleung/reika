@@ -1,4 +1,3 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import { diffWordsWithSpace } from 'diff';
 import { theme } from './theme.js';

@@ -160,7 +160,10 @@ async function scan(
 // Build the advisory appended to a plan when references don't resolve. Returns '' when everything
 // checks out (the common case), so the caller appends nothing. Framed as "verify, may be new" — a
 // plan legitimately introduces new symbols, so this can never be a hard error, only a heads-up.
-export function buildGroundingNote(missing: { missingSymbols: string[]; missingPaths: string[] }): string {
+export function buildGroundingNote(missing: {
+  missingSymbols: string[];
+  missingPaths: string[];
+}): string {
   const items = [...missing.missingPaths, ...missing.missingSymbols];
   if (items.length === 0) return '';
   // Backtick each item so markdown rendering in the TUI leaves it literal — an unbackticked

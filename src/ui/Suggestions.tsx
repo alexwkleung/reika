@@ -1,4 +1,3 @@
-import React from 'react';
 import { Box, Text } from 'ink';
 import type { SuggestionState } from './suggest.js';
 import { theme } from './theme.js';

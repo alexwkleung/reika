@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
 import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';

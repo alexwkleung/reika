@@ -1,4 +1,4 @@
-import React from 'react';
+import type { ReactElement } from 'react';
 import { Box, Static, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import type { Message } from '../types.js';
@@ -138,7 +138,7 @@ function MessageView({ msg }: { msg: Message }) {
   return inner;
 }
 
-function renderMessage(msg: Message): React.ReactElement | null {
+function renderMessage(msg: Message): ReactElement | null {
   if (msg.role === 'user') {
     return <UserBubble text={msg.display ?? msg.content} />;
   }
