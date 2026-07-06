@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { Message, ToolCall } from '../types.js';
 import { redactSecrets } from '../ui/redact.js';
+import { formatDurationMs } from '../ui/format.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
@@ -109,7 +110,7 @@ function renderMessageTxt(msg: Message): string | null {
         parts.push(`Sources: ${msg.sources.join(', ')}`);
       }
       if (msg.durationMs !== undefined)
-        parts.push(`■ Worked for ${formatDuration(msg.durationMs)}`);
+        parts.push(`■ Worked for ${formatDurationMs(msg.durationMs)}`);
       // An assistant turn can be reasoning + a tool call with no prose; never collapse to empty.
       return parts.length > 0 ? parts.join('\n\n') : null;
     }
@@ -221,12 +222,4 @@ function capitalize(s: string): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${s}s`;
 }
