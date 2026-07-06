@@ -40,7 +40,9 @@ export function PlanProgress({ steps }: { steps: PlanStep[] }) {
   const nextIdx = visible.findIndex(s => !s.done && !s.waived);
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={theme.accent}>
+      {/* Header in the plan teal (same hue as the status bar's plan tag) so the panel reads as
+          plan state at a glance — and so ▸ stays the panel's single accent/focus element. */}
+      <Text color={theme.modePlan}>
         Plan {done}/{steps.length}
         {waived > 0 ? <Text color={theme.muted}> · {waived} waived</Text> : null}
       </Text>
