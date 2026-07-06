@@ -259,6 +259,35 @@ analysis across rounds (and a `repeat_penalty` can't suppress what's no longer i
 Keeping a small recent window is the balance — raise the env var to trade tokens for
 chain-of-thought continuity, lower it under context pressure.
 
+**Prefix-stable mode (`REIKA_PREFIX_STABLE=1`, default off, experimental — issue #69).** The
+layers above buy window room by _rewriting earlier request bytes_: payload aging rewrites the
+previous round's tool messages every round, reasoning pruning drops older `reasoning_content`
+mid-history, and the regenerated ledgers/nudges mutate the system block. Every such rewrite
+invalidates the inference engine's prompt-prefix cache from that byte on — and SWA/hybrid-memory
+models can't partially restore at all, so ANY divergence re-processes the FULL prompt (observed
+~3 min/request on a 35B at 17k tokens). When on (requires `REIKA_CONTEXT_WINDOW`; silently
+inactive without one), requests stay **append-only between shrink events**: payloads stay live
+with byte-frozen renders (`Message.rendered`, stamped only on the real call path — estimates
+never stamp, so freezing doesn't depend on debug timing) until the calibrated estimate crosses
+the same threshold compaction uses, then `batchAgePayloads` (`compaction.ts`) sheds them
+oldest-first down to a 0.7 watermark in the _same_ request compaction fires in — one amortized
+cache invalidation instead of one per round, with the active roundtrip always protected.
+Reasoning retention follows the same sticky boundary (`reasoningAged`) instead of last-N-rounds,
+and the per-round ledgers/nudges ride a transient trailing user message instead of the system
+suffix (their "auto-generated — not user input" headers carry the framing). Aging marks are set
+on the shared message objects deliberately — unlike compaction's per-turn splice — so liveness
+and frozen bytes carry across turns and the next turn's first request stays prefix-aligned.
+The trade: requests sit fuller on average (slightly slower decode; more stale payload in the
+model's view — the per-round collapse was accidentally also noise discipline for weak models),
+in exchange for near-zero prefill on cached rounds. Note `ReadTrace`'s dup-live/dup-aged split
+still assumes one-round liveness, so under the flag its classification is conservative (a loop
+on still-live content fires one repeat later). Bench with the always-available `prefix-cache`
+REIKA_DEBUG line (`agent/prefixtrace.ts`): it classifies each request's divergence from the
+previous one (`append-only` / `system-changed` / `mid-history` / `shrunk`) with the stable-byte
+fraction — flag off you'll see `mid-history` every round; flag on should be `append-only` with
+occasional `shrunk`. Same experimental discipline: constants and helpers together, clearly
+marked.
+
 ## .gitignore is honored
 
 Bootstrap loads `.gitignore` (and `.git/info/exclude`) into an `Ignore` instance on `bundle.ignore`. Any walker that touches the filesystem MUST consult it: `buildFileIndex` (fdir exclude+filter), `buildRepoMap` (manual walk), `list` / `grep` / `glob` tools (via `ctx.ignore`). New walkers added to tools or context modules MUST do the same — otherwise the agent burns exploration on build outputs.
