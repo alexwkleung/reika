@@ -7,6 +7,8 @@ import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Working } from './Working.js';
+import { PlanProgress, planProgressRows } from './PlanProgress.js';
+import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
@@ -67,6 +69,10 @@ export function App() {
   // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
   // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
   const [reasoningSpin, setReasoningSpin] = useState<boolean>(false);
+  // Checklist of the plan currently being implemented (#71), snapshotted from the loop's
+  // deterministic tracker. Non-null only after an agent turn found a written plan in history;
+  // persists between turns so the user can see what's left before continuing. Human-only.
+  const [planSteps, setPlanSteps] = useState<PlanStep[] | null>(null);
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
@@ -425,6 +431,7 @@ export function App() {
 
     if (name === 'clear' || name === 'new') {
       setMessages([]);
+      setPlanSteps(null);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       setLastUsage(null);
       setEstimatedContext(null);
@@ -819,6 +826,10 @@ export function App() {
     setStreaming('');
     setStreamingReasoning('');
     setStreamingTool('');
+    // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written plan
+    // is in history) restores it. A turn with no tracked plan leaves the panel gone — no stale
+    // checklist lingering after the conversation moves on.
+    setPlanSteps(null);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -878,6 +889,9 @@ export function App() {
         },
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
+        // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
+        // re-render.
+        onPlanProgress: steps => setPlanSteps(steps.map(s => ({ ...s }))),
         onReasoningStatus: setReasoningSpin,
         onReasoningReset: () => {
           // Loop-break recovery: drop the degenerate looped reasoning's live preview so the recovery
@@ -958,7 +972,9 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
+            chromeRows={planSteps && mode === 'agent' ? planProgressRows(planSteps) : 0}
           />
+          {planSteps && mode === 'agent' ? <PlanProgress steps={planSteps} /> : null}
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />
           ) : suggestionState ? (
