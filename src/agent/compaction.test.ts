@@ -5,6 +5,8 @@ import {
   shouldCompact,
   compactThreshold,
   distillPlanHandoff,
+  batchAgePayloads,
+  AGE_LOW_FRACTION,
 } from './compaction.js';
 
 describe('shouldCompact', () => {
@@ -329,5 +331,74 @@ describe('distillPlanHandoff', () => {
     expect(history[1].role).toBe('compaction');
     // No window → everything kept verbatim.
     expect((history[1] as { content: string }).content).toContain(payloadA);
+  });
+});
+
+// EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): batch payload aging.
+describe('batchAgePayloads', () => {
+  const round = (id: string, payload: string, reasoning?: string): Message[] => [
+    {
+      role: 'assistant',
+      content: '',
+      ...(reasoning ? { reasoning } : {}),
+      toolCalls: [{ id, name: 'read', args: {} }],
+    },
+    { role: 'tool', callId: id, summary: `${id}`, payload, rendered: `${id}\n\n${payload}` },
+  ];
+  // A state-sensitive stand-in for the request estimate: live payloads and unaged reasoning count
+  // in full, aged ones at (roughly) summary cost — so marking visibly shrinks it.
+  const estimateOf = (history: Message[]) => (): number =>
+    history.reduce((n, m) => {
+      if (m.role === 'tool') return n + (m.aged ? m.summary.length : (m.payload?.length ?? 0));
+      if (m.role === 'assistant') return n + (m.reasoningAged ? 0 : (m.reasoning?.length ?? 0));
+      return n;
+    }, 0);
+
+  it('is a no-op below the compaction threshold', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(50))];
+    expect(batchAgePayloads(history, estimateOf(history), 1000, 0)).toBe(0);
+    expect((history[2] as Message & { role: 'tool' }).aged).toBeUndefined();
+  });
+
+  it('ages oldest-first down to the low watermark and clears frozen renders', () => {
+    // threshold = (1000 − 0) × 0.9 = 900; estimate starts at 3 × 400 = 1200.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'x'.repeat(400)),
+      ...round('b', 'y'.repeat(400)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    const marked = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(marked).toBeGreaterThan(0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    // Oldest aged (render cleared), trailing block protected.
+    expect(tools[0].aged).toBe(true);
+    expect(tools[0].rendered).toBeUndefined();
+    expect(tools[2].aged).toBeUndefined();
+    expect(tools[2].rendered).toBeDefined();
+    expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
+  });
+
+  it('never ages the active roundtrip, even when the target is unreachable', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'x'.repeat(5000), 'r'.repeat(5000)),
+    ];
+    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    const tool = history[2] as Message & { role: 'tool' };
+    const assistant = history[1] as Message & { role: 'assistant' };
+    expect(tool.aged).toBeUndefined();
+    expect(assistant.reasoningAged).toBeUndefined();
+  });
+
+  it('drops old reasoning in the same sweep as old payloads', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'x'.repeat(400), 'r'.repeat(400)),
+      ...round('b', 'y'.repeat(400)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect((history[1] as Message & { role: 'assistant' }).reasoningAged).toBe(true);
   });
 });
