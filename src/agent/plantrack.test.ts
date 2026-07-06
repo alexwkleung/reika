@@ -107,6 +107,81 @@ describe('parsePlanSteps', () => {
     expect(steps[1].commands).toEqual(['npm test']);
   });
 
+  it('parses dash-delimited step headings and bare command lines', () => {
+    // The observed shape: bold "Step N — Title" headings (no ./):( delimiter), detail bullets, and
+    // an unmarked command block. Without the dash form no steps parse at all, so bullet-only mode
+    // promoted the detail bullets as the whole plan and the commands were invisible.
+    const steps = parsePlanSteps(
+      [
+        "Here's the plan:",
+        '',
+        '**Step 1 — Tighten workspace dropdown item gap**',
+        '',
+        '- File: `packages/ui/src/styles.css`, line 262',
+        '- Change `margin-bottom: 3px` → `margin-bottom: 1px`',
+        '',
+        '**Step 2 — Run the standard routine**',
+        '',
+        'npm run typecheck --workspaces --if-present',
+        'npm run lint',
+        'npm test -w @kana/server -w @kana/ui',
+        '',
+        '(No test changes needed — this is a pure CSS tweak.)',
+      ].join('\n'),
+    );
+    expect(steps.map(s => s.text)).toEqual([
+      'Tighten workspace dropdown item gap',
+      'Run the standard routine',
+    ]);
+    expect(steps[0].paths).toEqual(['packages/ui/src/styles.css']);
+    expect(steps[0].snippets).toContain('margin-bottom: 3px');
+    expect(steps[0].commands).toEqual([]);
+    expect(steps[1].commands).toEqual([
+      'npm run typecheck --workspaces --if-present',
+      'npm run lint',
+      'npm test -w @kana/server -w @kana/ui',
+    ]);
+  });
+
+  it('accepts em/en dash and hyphen step delimiters but only with the Step keyword', () => {
+    expect(parsePlanSteps('## Step 1 – Do the thing')[0].text).toBe('Do the thing');
+    expect(parsePlanSteps('Step 1 - Do the thing')[0].text).toBe('Do the thing');
+    // A bare "1 — option" line is prose comparison shape, not a step.
+    expect(parsePlanSteps('1 — cheap option\n2 — fast option')).toEqual([]);
+  });
+
+  it('extracts commands from shell-ish fences but never from tagged code fences', () => {
+    const steps = parsePlanSteps(
+      [
+        '1. Add the worker to `src/util.ts`',
+        '```go',
+        'go func() {',
+        '```',
+        '2. Run the checks',
+        '```',
+        '$ npm run lint',
+        'npm test -w @kana/ui',
+        '```',
+      ].join('\n'),
+    );
+    expect(steps).toHaveLength(2);
+    expect(steps[0].commands).toEqual([]);
+    expect(steps[1].commands).toEqual(['npm run lint', 'npm test -w @kana/ui']);
+  });
+
+  it('never extracts commands from prose starting with English runner words', () => {
+    const steps = parsePlanSteps(
+      '1. Update `src/a.ts`\ngo to the settings page and verify\nmake sure the tests pass',
+    );
+    expect(steps[0].commands).toEqual([]);
+  });
+
+  it('promotes bare-command bullets like backticked ones', () => {
+    const steps = parsePlanSteps('1. Edit `src/a.ts`\n- npm run lint');
+    expect(steps).toHaveLength(2);
+    expect(steps[1].commands).toEqual(['npm run lint']);
+  });
+
   it('renumbers ordinally when sections restart the written numbering', () => {
     // The observed failure shape: a heading-styled work step plus a "Verification" section whose
     // ordered list restarts at 1. All of it tracks, with unique step numbers — the work step must
