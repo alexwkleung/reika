@@ -40,7 +40,17 @@ export type Message =
   // automatic event (compaction), 'warn' = an automatic recovery the user should notice
   // (truncation retry). Distinguishes harness-generated notices from each other and from
   // the user's own input.
-  | { role: 'system'; content: string; tone?: 'info' | 'warn'; nested?: boolean }
+  | {
+      role: 'system';
+      content: string;
+      tone?: 'info' | 'warn';
+      nested?: boolean;
+      // Set only on the plan done-gate's give-up notice: the step numbers waived after the model
+      // was bounced once and finished anyway. The plan tracker recomputes from history each turn
+      // (agent/plantrack.ts seedPlanProgress), so the waiver must ride a message to survive —
+      // without it every later turn would re-bounce the same adjudicated step.
+      planWaived?: number[];
+    }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
   // messagesToOpenAI); the UI keeps the full scrollback separately.

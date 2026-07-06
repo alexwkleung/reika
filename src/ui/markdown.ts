@@ -111,6 +111,20 @@ export function renderMarkdown(content: string): string {
   }
 }
 
+// Inline-only rendering for single-line UI rows (the plan checklist): codespans/bold/italic get
+// their terminal styling but no block layout runs — no reflow, no wrapping newlines, so the row
+// stays one line and Ink's truncation owns the width. Same sentinel caveat as the listitem
+// override above. Chalk rewrites inner close codes when nested, so the styled spans return to the
+// wrapping Ink <Text> color afterwards instead of resetting to the terminal default.
+export function renderInlineMarkdown(text: string): string {
+  try {
+    const inline = marked.parseInline(text, { async: false });
+    return (typeof inline === 'string' ? inline : text).replace(COLON_SENTINEL, ':');
+  } catch {
+    return text;
+  }
+}
+
 // Strip the most common markdown markers without applying any styling. Used for
 // reasoning text so it stays in flat muted color (no syntax-highlight escape from
 // code blocks). Edge cases like links/tables/fences degrade to the prior literal-text

@@ -14,11 +14,16 @@ export function Scrollback({
   streaming,
   streamingReasoning,
   streamingTool,
+  chromeRows = 0,
 }: {
   messages: Message[];
   streaming: string;
   streamingReasoning: string;
   streamingTool: string;
+  // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
+  // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
+  // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
+  chromeRows?: number;
 }) {
   // The live (non-Static) region must never grow taller than the viewport: Ink can't
   // erase a frame taller than the screen, which is what produces the "duplicated
@@ -26,7 +31,7 @@ export function Scrollback({
   // block shows only its tail, sized so the blocks together fit the viewport. Full text
   // lands in <Static> when the message commits, where the terminal scrolls it natively.
   const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
-  const budget = liveTailBudget(active);
+  const budget = liveTailBudget(active, chromeRows);
 
   return (
     <>
@@ -49,12 +54,12 @@ export function Scrollback({
 // active stream blocks plus the fixed chrome must stay strictly under it. Reserve
 // chrome (input/status/working + the Box margins), a per-block overhead (each block's
 // marginTop plus its header/"…" line), and one safety row, then split what's left.
-function liveTailBudget(activeBlocks: number): number {
+function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
   const rows = process.stdout.rows || 24;
   const CHROME = 8;
   const PER_BLOCK_OVERHEAD = 3;
   const SAFETY = 2;
-  const avail = rows - CHROME - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
+  const avail = rows - CHROME - extraChromeRows - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
   return Math.max(3, Math.floor(avail / activeBlocks));
 }
 

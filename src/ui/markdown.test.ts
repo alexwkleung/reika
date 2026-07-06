@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
+import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 
 describe('stripReasoningMarkdown', () => {
   it('strips bold markers', () => {
@@ -46,6 +46,27 @@ describe('stripReasoningMarkdown', () => {
 
   it('does not confuse italic regex with bold (no false match on **)', () => {
     expect(stripReasoningMarkdown('**hello**')).toBe('hello');
+  });
+});
+
+describe('renderInlineMarkdown', () => {
+  it('styles inline markers without leaving raw syntax and stays single-line', () => {
+    const out = renderInlineMarkdown('Add `favorites` to **PlayerState** in `src/state.ts`');
+    expect(out).toContain('favorites');
+    expect(out).toContain('src/state.ts');
+    expect(out).not.toContain('`');
+    expect(out).not.toContain('**');
+    expect(out).not.toContain('\n');
+  });
+
+  it('restores colons inside codespans (no leaked sentinel)', () => {
+    const out = renderInlineMarkdown('read `src/a.ts:120` first');
+    expect(out).toContain('src/a.ts:120');
+    expect(out).not.toContain('COLON');
+  });
+
+  it('leaves plain text unchanged', () => {
+    expect(renderInlineMarkdown('just plain text')).toBe('just plain text');
   });
 });
 
