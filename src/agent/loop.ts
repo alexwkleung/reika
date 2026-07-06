@@ -20,6 +20,7 @@ import {
   gatherPlanFindings,
   distillPlanHandoff,
   batchAgePayloads,
+  AGE_LOW_FRACTION,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
@@ -1086,6 +1087,7 @@ export async function runTurn(opts: {
     // one oldest-first batch when the estimate crosses the same threshold compaction uses — and do
     // it immediately before the compaction check so the two rewrites land in the SAME request (one
     // amortized prefix-cache invalidation, not two on consecutive rounds).
+    let agedThisRound = false;
     if (prefixStable && window && !planForceWrite) {
       const marked = batchAgePayloads(
         opts.history,
@@ -1093,16 +1095,30 @@ export async function runTurn(opts: {
         window,
         opts.config.minGenTokens,
       );
+      agedThisRound = marked > 0;
       if (marked > 0) {
         debugLog(`[reika:debug] round=${i} prefix-stable batch-age marked=${marked}\n`);
       }
     }
+    // Aging stops at the protected tail, so on a small window (system prompt + the active round's
+    // reads can be most of it) it may land just UNDER the compaction threshold without reaching the
+    // low watermark — and the next round's growth immediately re-fires a shrink event: consecutive
+    // full re-processes, the exact pattern this mode exists to prevent (observed as back-to-back
+    // batch-age rounds on a 24k window). This round is already paying the invalidation, so when
+    // aging fired but couldn't reach the watermark, pull compaction into the SAME event instead of
+    // letting the shrink straddle two requests. Never triggers on a quiet (append-only) round.
+    const agedButAboveWatermark =
+      agedThisRound &&
+      !!window &&
+      rawEstimate() * calibration >
+        compactThreshold(window, opts.config.minGenTokens) * AGE_LOW_FRACTION;
     // Force-write sends the tiny synthetic context, not opts.history, so there is nothing to
     // compact — skip it. Otherwise collapse the oldest turns if the estimate crosses the threshold.
     if (
       !planForceWrite &&
       window &&
-      shouldCompact(rawEstimate() * calibration, window, opts.config.minGenTokens)
+      (shouldCompact(rawEstimate() * calibration, window, opts.config.minGenTokens) ||
+        agedButAboveWatermark)
     ) {
       const removed = compactHistory(opts.history, window, calibration, opts.config.minGenTokens);
       debugLog(`[reika:debug] round=${i} compaction removed=${removed}\n`);

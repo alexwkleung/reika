@@ -271,7 +271,11 @@ with byte-frozen renders (`Message.rendered`, stamped only on the real call path
 never stamp, so freezing doesn't depend on debug timing) until the calibrated estimate crosses
 the same threshold compaction uses, then `batchAgePayloads` (`compaction.ts`) sheds them
 oldest-first down to a 0.7 watermark in the _same_ request compaction fires in — one amortized
-cache invalidation instead of one per round, with the active roundtrip always protected.
+cache invalidation instead of one per round, with the active roundtrip always protected. When
+aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
+the system prompt + the active round's reads are most of it), compaction is pulled into the same
+event — otherwise the estimate hovers just under the threshold and the next round immediately
+re-fires, i.e. consecutive full re-processes (observed on a 24k window).
 Reasoning retention follows the same sticky boundary (`reasoningAged`) instead of last-N-rounds,
 and the per-round ledgers/nudges ride a transient trailing user message instead of the system
 suffix (their "auto-generated — not user input" headers carry the framing). Aging marks are set
