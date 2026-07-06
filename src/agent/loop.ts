@@ -382,14 +382,82 @@ const LOOP_TERMINAL_AFTER = 3;
 // gives one fix attempt plus a re-check; beyond that, finishing dirty (with a user notice) beats
 // spiralling. See check/typecheck.ts.
 const MAX_TYPECHECK_GATE_ROUNDS = 2;
+// Floor on the learned calibration when it drives the COMPACTION decision (not the UI gauge). The
+// calibration = real-tokens / char-4-estimate; a prose-heavy session drives it below 1 (~0.9), which
+// makes the trigger assume content is even sparser than the char/4 baseline. That optimism is what let
+// a dense turn (SVG/CSS/code in the kept reasoning, ~1.6 chars/token) sail past compaction and 400 the
+// window (see provider/toolcall.ts CAP_DENSITY_FLOOR). Flooring at 1 removes only the below-baseline
+// optimism — it never assumes SPARSER than char/4 — so compaction fires at least at the heuristic
+// threshold. Dense-content *safety* is the cap's job (the hard guarantee); this just fires compaction
+// sooner so the cap has to truncate less often. Deliberately not the cap's 2.5 floor: that would
+// compact at ~40% of a normal prose window and waste most of the context.
+const COMPACTION_CALIBRATION_FLOOR = 1;
+// Shell commands that only READ — the ones a withdrawn model uses to keep circling via bash. Kept to
+// commands with no in-place-write mode reachable without a flag isReadOnlyShell already rejects.
+const READ_ONLY_SHELL = new Set([
+  'grep',
+  'rg',
+  'egrep',
+  'fgrep',
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'ls',
+  'find',
+  'sort',
+  'uniq',
+  'cut',
+  'nl',
+  'column',
+  'stat',
+  'tree',
+  'basename',
+  'dirname',
+  'realpath',
+  'which',
+  'type',
+  'pwd',
+  'echo',
+  'sed',
+  'awk',
+]);
+
+// True only when we're CONFIDENT a bash command is pure read-only inspection — the "grep via bash"
+// escape a withdrawn model uses to keep looping. Conservative by design: any write signal (output
+// redirection, tee, sed/find in-place or destructive modes) or an unrecognized command anywhere in
+// the pipeline returns false, so mutating/build bash (npm, git, mkdir) is never refused. False
+// negatives (a bash-grep slips through) are cheap — the terminal stop still catches it; a false
+// positive (blocking a real build mid-loop) is the expensive mistake, so we avoid it. Pure + exported.
+export function isReadOnlyShell(command: string): boolean {
+  const c = command.trim();
+  if (!c) return false;
+  // Strip quoted regions first: a grep pattern like "a\|b" or ">" carries shell metacharacters (| and
+  // >) that are DATA, not a pipe/redirection — splitting or write-checking on them would misread a
+  // read-only grep as a pipeline or a write. Command names are never quoted, so this loses nothing we
+  // check. Malformed/nested quotes just leave junk that fails the command-name test → allowed (safe).
+  const bare = c.replace(/"[^"]*"|'[^']*'/g, ' ');
+  // Any sign of a write: file redirection, tee, sed -i, find -exec/-delete. Bail to "not read-only".
+  if (/[>]|(^|\s)tee(\s|$)|(^|\s)-i\b|(^|\s)-exec\b|(^|\s)-delete\b/.test(bare)) return false;
+  // Every pipeline/chain segment must start with a read-only command. Leading `cd <path>` hops (the
+  // observed loops prefix these) are stripped; an empty remainder is not read-only.
+  const segments = bare
+    .split(/\|\||&&|;|\|/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  const meaningful = segments.filter(s => !/^cd\s/.test(s));
+  if (meaningful.length === 0) return false;
+  return meaningful.every(s => READ_ONLY_SHELL.has(s.split(/\s+/)[0]));
+}
+
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out.
 const WITHDRAWAL_DIRECTIVE =
-  '(reika: inspection tools (read/grep/glob/list) are paused because you have repeated the same ' +
-  'reads or searches without making progress. You already have what you need. Make the edit the ' +
-  'task requires with the edit/write tools, state what is specifically blocking you, or — if the ' +
-  'change is already complete — say so and stop. Reading and searching are unavailable until you ' +
-  'make progress.)';
+  '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
+  'are paused because you have repeated the same reads or searches without making progress. You ' +
+  'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
+  'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
+  'Reading and searching are unavailable until you make progress.)';
 
 // Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop
 // has stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), but the edit-recovery
@@ -965,6 +1033,10 @@ export async function runTurn(opts: {
     // Keep the request under the window: if the calibrated estimate crosses the threshold,
     // collapse the oldest turns into a recap before calling. Compaction mutates this turn's
     // history copy; the UI scrollback is untouched, so the user keeps the full log.
+    // Pessimistic calibration for the compaction decision (never below the char/4 baseline). The UI
+    // gauge (onContextEstimate below) keeps the raw learned value; only the compact-or-not choice and
+    // how much to fold use this floored one. See COMPACTION_CALIBRATION_FLOOR.
+    const compactCalibration = Math.max(calibration, COMPACTION_CALIBRATION_FLOOR);
     if (debugEnabled()) {
       const e = rawEstimate();
       // Raw composition of the stored history (pre-aging), to see what dominates the request.
@@ -981,9 +1053,9 @@ export async function runTurn(opts: {
       debugLog(
         `[reika:debug] round=${i} mode=${opts.promptMode ?? 'agent'} histLen=${opts.history.length} ` +
           `forceWrite=${planForceWrite} estimate=${e} calib=${calibration.toFixed(3)} ` +
-          `adjusted=${Math.round(e * calibration)} ` +
+          `adjusted=${Math.round(e * compactCalibration)} ` +
           `threshold=${window ? Math.round(compactThreshold(window, opts.config.minGenTokens)) : 'n/a'} ` +
-          `willCompact=${window ? shouldCompact(e * calibration, window, opts.config.minGenTokens) : false} ` +
+          `willCompact=${window ? shouldCompact(e * compactCalibration, window, opts.config.minGenTokens) : false} ` +
           `sys≈${Math.round(system.length / 4)}t reasoning≈${Math.round(rsnChars / 4)}t ` +
           `summaries≈${Math.round(sumChars / 4)}t payloads≈${Math.round(payChars / 4)}t ` +
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
@@ -994,9 +1066,14 @@ export async function runTurn(opts: {
     if (
       !planForceWrite &&
       window &&
-      shouldCompact(rawEstimate() * calibration, window, opts.config.minGenTokens)
+      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens)
     ) {
-      const removed = compactHistory(opts.history, window, calibration, opts.config.minGenTokens);
+      const removed = compactHistory(
+        opts.history,
+        window,
+        compactCalibration,
+        opts.config.minGenTokens,
+      );
       debugLog(`[reika:debug] round=${i} compaction removed=${removed}\n`);
       if (removed > 0 && !notifiedCompaction) {
         notifiedCompaction = true;
@@ -1387,8 +1464,13 @@ export async function runTurn(opts: {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
       // Loop break: refuse a withdrawn inspection call at dispatch — covers the in-band caller that
-      // routes around the omitted tool list. No execution, no content; just the directive.
-      const refused = withdrawInspection && INSPECTION_TOOLS.has(call.name);
+      // routes around the omitted tool list. No execution, no content; just the directive. A read-only
+      // `bash grep/cat/tail …` is refused too: it's the escape a withdrawn model routes to when
+      // read/grep/glob/list are pulled (mutating/build bash still runs, so real work is unaffected).
+      // See isReadOnlyShell.
+      const refusedBashGrep =
+        call.name === 'bash' && isReadOnlyShell(String(call.args.command ?? ''));
+      const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -1421,9 +1503,16 @@ export async function runTurn(opts: {
         );
       }
       if (refused) {
-        summary = `${call.name} paused — make the edit or say what's blocking you`;
+        // Name the refusal honestly: a read-only bash call is "shell inspection", not "bash" (only
+        // read-only bash is paused; a build/git bash would have run).
+        const label = refusedBashGrep ? 'shell inspection' : call.name;
+        summary = `${label} paused — make the edit or say what's blocking you`;
         payload = WITHDRAWAL_DIRECTIVE;
-        debugLog(`[reika:debug] round=${i} refused ${call.name} (inspection withdrawn)\n`);
+        debugLog(
+          `[reika:debug] round=${i} refused ${call.name}${
+            refusedBashGrep ? ' (bash-grep)' : ''
+          } (inspection withdrawn)\n`,
+        );
       } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
