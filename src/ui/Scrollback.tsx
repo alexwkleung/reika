@@ -8,6 +8,7 @@ import { scrubPaths } from './paths.js';
 import { redactSecrets } from './redact.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
+import { formatDurationMs } from './format.js';
 
 export function Scrollback({
   messages,
@@ -202,7 +203,7 @@ function renderMessage(msg: Message): ReactElement | null {
                 stop/done glyph) and an anchor of color on an otherwise inert line. */}
             <Text>
               <Text color={theme.accent}>{'■ '}</Text>
-              <Text color={theme.muted}>{`Worked for ${formatDuration(msg.durationMs)}`}</Text>
+              <Text color={theme.muted}>{`Worked for ${formatDurationMs(msg.durationMs)}`}</Text>
             </Text>
           </Box>
         ) : null}
@@ -410,12 +411,4 @@ function truncate(s: string, max: number): string {
 // paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6.
 function diffViewWidth(): number {
   return Math.max(20, (process.stdout.columns || 80) - 6);
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${s}s`;
 }
