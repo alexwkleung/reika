@@ -12,7 +12,7 @@ import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
-import { loadConfig, resolveProfile } from '../config.js';
+import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
@@ -96,11 +96,9 @@ export function App() {
     resolve: (allow: boolean) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
-  // REIKA_PLAN_EXPERIMENT=1 starts the session in plan mode (A/B convenience); /plan and /agent
-  // toggle it at any time regardless.
-  const [mode, setMode] = useState<Mode>(
-    process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent',
-  );
+  // REIKA_DEFAULT_MODE picks the launch mode (agent/plan/vibe; REIKA_PLAN_EXPERIMENT=1 is the
+  // legacy alias for plan). /plan, /vibe and /agent still toggle it at any time regardless.
+  const [mode, setMode] = useState<Mode>(resolveDefaultMode);
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
