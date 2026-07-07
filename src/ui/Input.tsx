@@ -29,7 +29,7 @@ export function Input({
   onSubmit: (value: string) => void;
   disabled: boolean;
   canSubmit: boolean;
-  mode: 'agent' | 'shell' | 'chat' | 'plan';
+  mode: 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
   placeholder?: string;
   // True while an approval popup is shown directly above: the popup omits its
   // bottom border and we omit our top border + top margin, so the two boxes

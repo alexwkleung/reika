@@ -206,25 +206,26 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - **Plan**: `/plan` to enter — read-only exploration. Only `read`/`list`/`grep`/`glob` are registered (no `edit`/`write`/`bash`), so the model can't change anything; it explores and ends by writing a numbered, file-specific plan. Unlike chat, history is **shared** with agent mode, so the flow is `/plan` → it writes the plan → `/implement` (or `/agent` then a prompt) to execute it with the plan already in context. `REIKA_PLAN_EXPERIMENT=1` starts the session in plan mode. `/agent` returns. Status bar shows a `plan` tag when active.
   - **Plan checklist**: while a written plan is being implemented, the UI shows its numbered steps as a live checklist and checks steps off from harness-observed facts — never the model's own claim of progress. Three deterministic signals: a successful `edit`/`write` to a file the step names; a step-quoted code snippet appearing in a successful edit's diff (so a plan that names the wrong file still checks off when the model edits the right one — the receipt says so); and a successful (exit-0) `bash` run containing the step's quoted command (so "run typecheck/tests" steps complete). Progress is recomputed from history each turn, so it survives across turns. Steps with none of these signals display but can't auto-check.
   - `REIKA_PLAN_ALIGN=1` (experimental) adds model-facing pressure on top of the tracking: the checklist rides the system prompt every round of an implementing turn (so the plan can't age out of context), and a turn that tries to finish with observable steps unchecked is sent back once with the unfinished steps quoted. If it finishes anyway, the leftovers are marked waived (`~`) — adjudicated once, never re-asked on later turns.
+- **Vibe**: `/vibe` to enter — the full plan→implement pipeline on every prompt. Each prompt first runs as a plan-mode turn (read-only tools, same convergence machinery), and if it ends with a written plan, the plan is implemented immediately as a normal agent turn — no `/implement` needed. A plan phase that is aborted (ctrl-c) or dead-ends without a plan stops there; nothing chains. Approvals are untouched: the implement phase prompts for edits and commands exactly like agent mode, so `REIKA_AUTO_APPROVE` / `/approvals` remain the only things that change what auto-runs. Probably not the mode for maximum quality — it exists to watch a local model go end-to-end on its own. `/agent` returns. Status bar shows a `vibe` tag when active.
 
 ## Slash commands
 
 Type `/` in the input to see suggestions. Highlights:
 
-| Command                                 | What                                                                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `/help`                                 | List all commands                                                                                                               |
-| `/new` / `/clear`                       | Reset conversation, tokens, mode                                                                                                |
-| `/cd <path>`                            | Change cwd (re-indexes repo map). Tilde works.                                                                                  |
-| `/shell` / `/chat` / `/plan` / `/agent` | Switch modes (shell / chat / plan / back to agent)                                                                              |
-| `/implement [guidance]`                 | From plan mode: switch to agent and execute the plan above (optional guidance)                                                  |
-| `/model` / `/cwd` / `/tokens`           | Show current values                                                                                                             |
-| `/approvals [on\|off]`                  | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                   |
-| `/stats`                                | Full session summary (duration, turns, tools, files modified, approvals)                                                        |
-| `/save [--raw]`                         | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim. |
-| `/skills`                               | List available skills (loaded from skill dirs at startup)                                                                       |
-| `/exit` / `/quit`                       | Exit (prints session summary first)                                                                                             |
-| `@<path>`                               | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                 |
+| Command                                           | What                                                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`                                           | List all commands                                                                                                               |
+| `/new` / `/clear`                                 | Reset conversation, tokens, mode                                                                                                |
+| `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                  |
+| `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                       |
+| `/implement [guidance]`                           | From plan mode: switch to agent and execute the plan above (optional guidance)                                                  |
+| `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                             |
+| `/approvals [on\|off]`                            | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                   |
+| `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                        |
+| `/save [--raw]`                                   | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim. |
+| `/skills`                                         | List available skills (loaded from skill dirs at startup)                                                                       |
+| `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                             |
+| `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                 |
 
 ## Scripts
 

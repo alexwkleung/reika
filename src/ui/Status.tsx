@@ -78,6 +78,8 @@ function modeColor(mode: string): string {
   switch (mode) {
     case 'plan':
       return theme.modePlan;
+    case 'vibe':
+      return theme.modeVibe;
     case 'chat':
       return theme.modeChat;
     case 'shell':
