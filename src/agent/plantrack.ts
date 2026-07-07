@@ -100,15 +100,26 @@ const COMMAND_SPAN =
 // because a falsely-extracted command makes a prose step gate-enforceable but never checkable.
 const BARE_COMMAND =
   /^(npm|npx|pnpm|yarn|bun|node|cargo|python3?|pytest|vitest|jest|tsc|eslint|prettier|git)\s+\S/;
+// Non-terminating command shapes — dev servers and watch modes (`npm run dev`, `vite preview`,
+// `--watch`). They never exit on their own, so an exit-0 `Ran:` can never be observed and the step
+// they belong to ("verify visually in the dev server" — a HUMAN step) would be gate-enforceable but
+// forever unchecked: guaranteed bounce-then-waive noise. Excluded from every extraction context.
+// \b also matches inside hyphenated scripts (dev-server); a one-shot script named `dev-build` is
+// wrongly excluded, which only under-checks (the safe direction).
+const NONTERMINATING_COMMAND = /\b(dev|start|serve|watch|preview)\b/;
+
+function isTrackableCommand(c: string): boolean {
+  return !NONTERMINATING_COMMAND.test(c);
+}
 
 // Normalize a candidate command line — strip a bullet/number marker and a `$ ` prompt — and return
-// the collapsed command, or null if the line doesn't read as one.
+// the collapsed command, or null if the line doesn't read as one (or can't terminate).
 function commandLineOf(line: string): string | null {
   const t = line
     .trim()
     .replace(/^(?:[-*•]|\d{1,2}[.)])\s+/, '')
     .replace(/^\$\s+/, '');
-  return BARE_COMMAND.test(t) ? collapseWhitespace(t) : null;
+  return BARE_COMMAND.test(t) && isTrackableCommand(t) ? collapseWhitespace(t) : null;
 }
 
 // Fence languages whose content is a command list rather than example code. A tagged code fence
@@ -169,7 +180,7 @@ function extractStepRefs(body: string): {
       continue;
     }
     if (COMMAND_SPAN.test(raw)) {
-      addCommand(collapseWhitespace(raw));
+      if (isTrackableCommand(raw)) addCommand(collapseWhitespace(raw));
       continue;
     }
     if (
@@ -193,10 +204,12 @@ function extractStepRefs(body: string): {
 // A top-level bullet line. `+` is deliberately excluded — unfenced diff lines start with it.
 const BULLET_START = /^\s{0,3}[-*•]\s+(\S.*)$/;
 
-// Whether a line quotes a shell command inline — the promotion test for bullets (below).
+// Whether a line quotes a trackable shell command inline — the promotion test for bullets (below).
+// A dev-server/watch command doesn't promote: its bullet is a human instruction, not a work item.
 function lineQuotesCommand(text: string): boolean {
   for (const m of text.matchAll(/`([^`\n]+)`/g)) {
-    if (COMMAND_SPAN.test(m[1].trim())) return true;
+    const raw = m[1].trim();
+    if (COMMAND_SPAN.test(raw) && isTrackableCommand(raw)) return true;
   }
   return false;
 }

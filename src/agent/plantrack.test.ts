@@ -176,6 +176,38 @@ describe('parsePlanSteps', () => {
     expect(steps[0].commands).toEqual([]);
   });
 
+  it('never extracts non-terminating commands, so human verify-steps stay unenforced', () => {
+    // The observed shape: a "verify visually" step quoting `npm run dev`. A dev server never exits,
+    // so extracting it would make the step gate-enforceable but forever unchecked — guaranteed
+    // bounce-then-waive noise on a step only a human can do.
+    const steps = parsePlanSteps(
+      [
+        '1. Tighten workspace dropdown gap (`packages/ui/src/styles.css`):',
+        '2. Run typecheck + lint:',
+        'npm run typecheck --workspaces --if-present',
+        'npm run lint',
+        '3. Run UI tests:',
+        'npm test -w @kana/ui',
+        '4. Verify visually in dev server:',
+        'npm run dev -w @kana/web',
+      ].join('\n'),
+    );
+    expect(steps).toHaveLength(4);
+    expect(steps[1].commands).toEqual([
+      'npm run typecheck --workspaces --if-present',
+      'npm run lint',
+    ]);
+    expect(steps[2].commands).toEqual(['npm test -w @kana/ui']);
+    expect(steps[3].commands).toEqual([]);
+  });
+
+  it('excludes watch/serve shapes in backticked and bullet contexts too', () => {
+    const steps = parsePlanSteps('1. Run `npm test --watch` while iterating\n- npm run serve');
+    expect(steps).toHaveLength(1);
+    expect(steps[0].commands).toEqual([]);
+    expect(steps[0].snippets).toEqual([]);
+  });
+
   it('promotes bare-command bullets like backticked ones', () => {
     const steps = parsePlanSteps('1. Edit `src/a.ts`\n- npm run lint');
     expect(steps).toHaveLength(2);
