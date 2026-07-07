@@ -1,5 +1,6 @@
 import type { Message, Usage } from '../types.js';
 import { scrubPaths } from './paths.js';
+import { formatElapsed } from './format.js';
 
 export type Approvals = {
   approved: number;
@@ -47,7 +48,7 @@ export function buildSummary(
   return [
     'Session summary',
     '─'.repeat(40),
-    `Duration:        ${formatDuration(elapsed)}`,
+    `Duration:        ${formatElapsed(elapsed)}`,
     `Turns:           ${userTurns} user · ${assistantTurns} assistant`,
     `Tools:           ${totalTools}${breakdown}`,
     `Subagents:       ${subagentCount}`,
@@ -67,13 +68,4 @@ export function buildSummary(
 export function hasActivity(messages: Message[]): boolean {
   // Slash-command echoes (meta) aren't real work — a session that only ran commands has no summary.
   return messages.some(m => m.role === 'user' && !m.nested && !m.meta);
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
 }

@@ -47,6 +47,10 @@ export const MAX_PLAN_GATE_ROUNDS = 1;
 // checklist became only the verification items). Indented numbering is a sub-list inside a step,
 // not a new step. Two digits cap keeps prose years ("2026.") out.
 const STEP_START = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*)?(?:step\s+)?(\d{1,2})[.):](?:\*\*)?\s+(\S.*)$/i;
+// The dash-delimited heading variant: `Step 1 — Title` (em/en dash or hyphen). Requires the literal
+// "step" keyword, unlike the punctuation forms above — a bare "1 — cheap option" shape is common in
+// prose comparisons and would over-match.
+const STEP_DASH = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*)?step\s+(\d{1,2})\s*[—–-]\s*(\S.*)$/i;
 // Path-like tokens. With a slash we trust the shape (groundcheck's PATH_LIKE stance); without one,
 // a bare `name.ext` is only a file if the extension is a common source/config kind — otherwise
 // backticked property access (`theme.accent`, `opts.config`) would read as files.
@@ -90,6 +94,38 @@ function normalizePath(p: string): string {
 // A backticked span that reads as a shell command: starts with a common runner and has arguments.
 const COMMAND_SPAN =
   /^(npm|npx|pnpm|yarn|bun|node|make|cargo|go|python3?|pytest|vitest|jest|tsc|eslint|prettier|git)\s+\S/;
+// The bare-line variant: `npm run lint` sitting unbackticked on its own line in a step body — the
+// "standard routine" blocks plans write with no markup at all. Stricter than COMMAND_SPAN: it drops
+// the runners that are also English words (`go to the settings page`, `make sure the tests pass`),
+// because a falsely-extracted command makes a prose step gate-enforceable but never checkable.
+const BARE_COMMAND =
+  /^(npm|npx|pnpm|yarn|bun|node|cargo|python3?|pytest|vitest|jest|tsc|eslint|prettier|git)\s+\S/;
+// Non-terminating command shapes — dev servers and watch modes (`npm run dev`, `vite preview`,
+// `--watch`). They never exit on their own, so an exit-0 `Ran:` can never be observed and the step
+// they belong to ("verify visually in the dev server" — a HUMAN step) would be gate-enforceable but
+// forever unchecked: guaranteed bounce-then-waive noise. Excluded from every extraction context.
+// \b also matches inside hyphenated scripts (dev-server); a one-shot script named `dev-build` is
+// wrongly excluded, which only under-checks (the safe direction).
+const NONTERMINATING_COMMAND = /\b(dev|start|serve|watch|preview)\b/;
+
+function isTrackableCommand(c: string): boolean {
+  return !NONTERMINATING_COMMAND.test(c);
+}
+
+// Normalize a candidate command line — strip a bullet/number marker and a `$ ` prompt — and return
+// the collapsed command, or null if the line doesn't read as one (or can't terminate).
+function commandLineOf(line: string): string | null {
+  const t = line
+    .trim()
+    .replace(/^(?:[-*•]|\d{1,2}[.)])\s+/, '')
+    .replace(/^\$\s+/, '');
+  return BARE_COMMAND.test(t) && isTrackableCommand(t) ? collapseWhitespace(t) : null;
+}
+
+// Fence languages whose content is a command list rather than example code. A tagged code fence
+// (```go, ```ts) must NOT contribute commands — `go func() {` would read as a `go` run.
+const SHELL_FENCE_LANGS = new Set(['', 'sh', 'bash', 'zsh', 'shell', 'console', 'text']);
+const FENCE_BLOCK = /```([^\n`]*)\n([\s\S]*?)```/g;
 // Content snippets must be real code fragments, not bare identifiers: an identifier (`parseThing`,
 // `opts.config.model`) recurs across files (imports, call sites) and would mis-match, so a snippet
 // needs a char outside identifier/dot shape (space, colon, brace, arrow…) and some length.
@@ -120,7 +156,22 @@ function extractStepRefs(body: string): {
       paths.push(p);
     }
   };
-  for (const m of body.matchAll(/`([^`\n]+)`/g)) {
+  const addCommand = (c: string) => {
+    if (!commands.includes(c)) commands.push(c);
+  };
+  // Shell-ish fences in the step body contribute COMMANDS only (a "run the checks" step often
+  // fences its command list), never paths/snippets — example code is full of incidental
+  // identifiers (the groundcheck stance). Tagged code fences contribute nothing.
+  for (const f of body.matchAll(FENCE_BLOCK)) {
+    if (!SHELL_FENCE_LANGS.has(f[1].trim().split(/\s+/)[0].toLowerCase())) continue;
+    for (const line of f[2].split('\n')) {
+      const c = commandLineOf(line);
+      if (c) addCommand(c);
+    }
+  }
+  // Everything below works on the fence-stripped body: fenced numbering/paths must stay invisible.
+  const noFences = body.replace(/```[\s\S]*?```/g, ' ');
+  for (const m of noFences.matchAll(/`([^`\n]+)`/g)) {
     const raw = m[1].trim();
     const span = raw.replace(/:\d+(?::\d+)?$/, '');
     const ext = FILE_SPAN.exec(span)?.[1];
@@ -129,8 +180,7 @@ function extractStepRefs(body: string): {
       continue;
     }
     if (COMMAND_SPAN.test(raw)) {
-      const c = collapseWhitespace(raw);
-      if (!commands.includes(c)) commands.push(c);
+      if (isTrackableCommand(raw)) addCommand(collapseWhitespace(raw));
       continue;
     }
     if (
@@ -142,38 +192,59 @@ function extractStepRefs(body: string): {
       snippets.push(raw);
     }
   }
-  for (const m of body.replace(/`[^`\n]*`/g, ' ').matchAll(BARE_PATH)) addPath(m[1]);
+  // Bare command lines (no backticks, no fence): `npm run lint` on its own line.
+  for (const line of noFences.split('\n')) {
+    const c = commandLineOf(line);
+    if (c) addCommand(c);
+  }
+  for (const m of noFences.replace(/`[^`\n]*`/g, ' ').matchAll(BARE_PATH)) addPath(m[1]);
   return { paths, snippets, commands };
 }
 
 // A top-level bullet line. `+` is deliberately excluded — unfenced diff lines start with it.
 const BULLET_START = /^\s{0,3}[-*•]\s+(\S.*)$/;
 
-// Whether a line quotes a shell command inline — the promotion test for bullets (below).
+// Whether a line quotes a trackable shell command inline — the promotion test for bullets (below).
+// A dev-server/watch command doesn't promote: its bullet is a human instruction, not a work item.
 function lineQuotesCommand(text: string): boolean {
   for (const m of text.matchAll(/`([^`\n]+)`/g)) {
-    if (COMMAND_SPAN.test(m[1].trim())) return true;
+    const raw = m[1].trim();
+    if (COMMAND_SPAN.test(raw) && isTrackableCommand(raw)) return true;
   }
   return false;
 }
 
-// Parse a written plan into steps. Fenced code blocks are stripped first (example snippets carry
-// incidental numbering and paths); each step's body runs to the next step-start line, so paths
-// named in a step's sub-bullets still attach to it. `n` is ORDINAL (position in the plan), not the
+// Parse a written plan into steps. Fence state informs structure — numbering and bullets inside a
+// fence are snippet content, never steps — but bodies KEEP their fence lines so extractStepRefs can
+// mine shell fences for commands. Each step's body runs to the next step-start line, so paths named
+// in a step's sub-bullets still attach to it. `n` is ORDINAL (position in the plan), not the
 // written number: plans routinely restart numbering per section ("Step 1: …" then a Verification
 // list starting back at 1.), and n must be unique — it keys the waive marker (planWaived) and every
 // gate/ledger/receipt reference. The step text disambiguates for the model when the display number
 // drifts from a section-relative written one.
 //
 // Bullets: a top-level bullet normally merges into the preceding step's body (it's a detail of that
-// step) — EXCEPT a bullet quoting a shell command, which is promoted to its own step. Unpromoted, a
-// trailing "Test checks: • npm test …" section would attach its commands to the last numbered step,
-// so running the tests would mis-check THAT step (observed), and the checks themselves would never
-// show as work items. And when the plan has no numbered lines at all, its top-level bullets ARE the
-// plan — all of them promote — since otherwise a bullet-formatted plan gets no tracking at all.
+// step) — EXCEPT a bullet carrying a shell command (backticked or bare), which is promoted to its
+// own step. Unpromoted, a trailing "Test checks: • npm test …" section would attach its commands to
+// the last numbered step, so running the tests would mis-check THAT step (observed), and the checks
+// themselves would never show as work items. And when the plan has no numbered lines at all, its
+// top-level bullets ARE the plan — all of them promote — since otherwise a bullet-formatted plan
+// gets no tracking at all.
 export function parsePlanSteps(planText: string): PlanStep[] {
-  const lines = planText.replace(/```[\s\S]*?```/g, '').split('\n');
-  const hasNumbered = lines.some(l => STEP_START.test(l));
+  const lines = planText.split('\n');
+  let f = false;
+  const fenced = lines.map(line => {
+    if (/^\s{0,3}```/.test(line)) {
+      f = !f;
+      return true;
+    }
+    return f;
+  });
+  const stepStartText = (line: string): string | null => {
+    const m = STEP_START.exec(line) ?? STEP_DASH.exec(line);
+    return m ? m[2] : null;
+  };
+  const hasNumbered = lines.some((l, i) => !fenced[i] && stepStartText(l) !== null);
   const steps: PlanStep[] = [];
   let body: string[] = [];
   const closeStep = () => {
@@ -182,10 +253,18 @@ export function parsePlanSteps(planText: string): PlanStep[] {
     }
     body = [];
   };
-  for (const line of lines) {
-    const m = STEP_START.exec(line);
-    const b = m ? null : BULLET_START.exec(line);
-    const text = m ? m[2] : b && (!hasNumbered || lineQuotesCommand(b[1])) ? b[1] : null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let text: string | null = null;
+    if (!fenced[i]) {
+      text = stepStartText(line);
+      if (text === null) {
+        const b = BULLET_START.exec(line);
+        if (b && (!hasNumbered || lineQuotesCommand(b[1]) || commandLineOf(b[1]) !== null)) {
+          text = b[1];
+        }
+      }
+    }
     if (text !== null) {
       closeStep();
       steps.push({
