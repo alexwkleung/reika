@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig, resolveProfile } from './config.js';
+import { loadConfig, resolveDefaultMode, resolveProfile } from './config.js';
 
 const ENV_KEYS = [
   'REIKA_MODEL',
@@ -27,6 +27,8 @@ const ENV_KEYS = [
   'REIKA_KIMI_MIN_GEN_TOKENS',
   'REIKA_GPT4_MIN_GEN_TOKENS',
   'REIKA_MINIMAL_MIN_GEN_TOKENS',
+  'REIKA_DEFAULT_MODE',
+  'REIKA_PLAN_EXPERIMENT',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -398,5 +400,45 @@ describe('reasoningRounds', () => {
     process.env.REIKA_MODEL = 'm';
     process.env.REIKA_REASONING_ROUNDS = '0';
     expect(loadConfig().reasoningRounds).toBe(1);
+  });
+});
+
+describe('resolveDefaultMode', () => {
+  it('defaults to agent when unset', () => {
+    expect(resolveDefaultMode()).toBe('agent');
+  });
+
+  it('reads agent, plan, and vibe, case- and whitespace-insensitively', () => {
+    process.env.REIKA_DEFAULT_MODE = 'plan';
+    expect(resolveDefaultMode()).toBe('plan');
+    process.env.REIKA_DEFAULT_MODE = ' Vibe ';
+    expect(resolveDefaultMode()).toBe('vibe');
+    process.env.REIKA_DEFAULT_MODE = 'AGENT';
+    expect(resolveDefaultMode()).toBe('agent');
+  });
+
+  it('falls back to agent on an unrecognized value', () => {
+    process.env.REIKA_DEFAULT_MODE = 'yolo';
+    expect(resolveDefaultMode()).toBe('agent');
+  });
+
+  it('excludes chat and shell — not launchable modes', () => {
+    process.env.REIKA_DEFAULT_MODE = 'chat';
+    expect(resolveDefaultMode()).toBe('agent');
+    process.env.REIKA_DEFAULT_MODE = 'shell';
+    expect(resolveDefaultMode()).toBe('agent');
+  });
+
+  it('treats REIKA_PLAN_EXPERIMENT=1 as the legacy alias for plan', () => {
+    process.env.REIKA_PLAN_EXPERIMENT = '1';
+    expect(resolveDefaultMode()).toBe('plan');
+  });
+
+  it('lets an explicit REIKA_DEFAULT_MODE beat REIKA_PLAN_EXPERIMENT', () => {
+    process.env.REIKA_PLAN_EXPERIMENT = '1';
+    process.env.REIKA_DEFAULT_MODE = 'vibe';
+    expect(resolveDefaultMode()).toBe('vibe');
+    process.env.REIKA_DEFAULT_MODE = 'agent';
+    expect(resolveDefaultMode()).toBe('agent');
   });
 });

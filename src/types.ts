@@ -201,6 +201,11 @@ export type Profile = {
 //   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
 export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 
+// Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
+// eligible — chat isolates history and shell bypasses the model entirely, so neither makes
+// sense as a launch default.
+export type DefaultMode = 'agent' | 'plan' | 'vibe';
+
 export type Config = {
   baseURL: string;
   apiKey: string;

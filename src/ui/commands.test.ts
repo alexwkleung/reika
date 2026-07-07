@@ -1,11 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, buildImplementPrompt } from './commands.js';
+import { COMMANDS, buildImplementPrompt, planWritten } from './commands.js';
+import type { Message } from '../types.js';
 
 describe('COMMANDS — /implement', () => {
   it('is registered so it autocompletes and shows in suggestions', () => {
     const implement = COMMANDS.find(c => c.name === 'implement');
     expect(implement).toBeDefined();
     expect(implement?.desc).toMatch(/agent mode/i);
+  });
+});
+
+describe('COMMANDS — /vibe', () => {
+  it('is registered so it autocompletes and shows in suggestions', () => {
+    const vibe = COMMANDS.find(c => c.name === 'vibe');
+    expect(vibe).toBeDefined();
+    expect(vibe?.desc).toMatch(/plan/i);
+  });
+});
+
+describe('planWritten', () => {
+  it('finds the planFinal marker on an assistant message', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'add a flag' },
+      { role: 'assistant', content: '1. Edit src/config.ts …', planFinal: true },
+    ];
+    expect(planWritten(msgs)).toBe(true);
+  });
+
+  it('is false for a turn with no finalized plan (e.g. aborted mid-exploration)', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'add a flag' },
+      { role: 'assistant', content: '(aborted)' },
+    ];
+    expect(planWritten(msgs)).toBe(false);
+  });
+
+  it('ignores plan-looking text that lacks the marker — the signal is the harness stamp, not content', () => {
+    const msgs: Message[] = [{ role: 'assistant', content: '1. Edit src/config.ts\n2. Run tests' }];
+    expect(planWritten(msgs)).toBe(false);
   });
 });
 
