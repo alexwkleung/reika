@@ -1,3 +1,5 @@
+import type { Message } from '../types.js';
+
 export type CommandSpec = {
   name: string;
   desc: string;
@@ -11,6 +13,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'shell', desc: 'enter shell mode (raw bash, no model)' },
   { name: 'chat', desc: 'enter chat mode (no filesystem/shell tools; isolated context)' },
   { name: 'plan', desc: 'enter plan mode (read-only exploration; ends with a written plan)' },
+  { name: 'vibe', desc: 'enter vibe mode (every prompt plans first, then implements the plan)' },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },
   { name: 'model', desc: 'show current model and base URL' },
@@ -36,4 +39,11 @@ export function buildImplementPrompt(extra: string): string {
     'Implement the plan above. Work through it step by step, making the edits to the files it names.';
   const trimmed = extra.trim();
   return trimmed ? `${base}\n\nAdditional guidance: ${trimmed}` : base;
+}
+
+// Whether a turn produced a finalized plan — the marker loop.ts stamps on a plan-mode turn's
+// closing assistant message. Vibe mode gates its implement phase on this, so an aborted or
+// dead-ended plan turn never chains into edits.
+export function planWritten(messages: Message[]): boolean {
+  return messages.some(m => m.role === 'assistant' && !!m.planFinal);
 }

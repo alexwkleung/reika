@@ -12,7 +12,7 @@ import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
-import { loadConfig, resolveProfile } from '../config.js';
+import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
@@ -22,14 +22,14 @@ import { runTurn } from '../agent/loop.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
-import { buildImplementPrompt } from './commands.js';
+import { buildImplementPrompt, planWritten } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
-type Mode = 'agent' | 'shell' | 'chat' | 'plan';
+type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
 
 // How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
@@ -96,11 +96,9 @@ export function App() {
     resolve: (allow: boolean) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
-  // REIKA_PLAN_EXPERIMENT=1 starts the session in plan mode (A/B convenience); /plan and /agent
-  // toggle it at any time regardless.
-  const [mode, setMode] = useState<Mode>(
-    process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent',
-  );
+  // REIKA_DEFAULT_MODE picks the launch mode (agent/plan/vibe; REIKA_PLAN_EXPERIMENT=1 is the
+  // legacy alias for plan). /plan, /vibe and /agent still toggle it at any time regardless.
+  const [mode, setMode] = useState<Mode>(resolveDefaultMode);
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -459,7 +457,13 @@ export function App() {
       setMessages(prev => [...prev, echo, { role: 'system', content }]);
       return;
     }
-    if (name === 'shell' || name === 'agent' || name === 'chat' || name === 'plan') {
+    if (
+      name === 'shell' ||
+      name === 'agent' ||
+      name === 'chat' ||
+      name === 'plan' ||
+      name === 'vibe'
+    ) {
       const banner =
         name === 'shell'
           ? 'Shell mode. Commands run directly in cwd. /agent to return.'
@@ -467,7 +471,9 @@ export function App() {
             ? 'Chat mode. Filesystem and shell tools disabled. Conversation isolated from agent. /agent to return.'
             : name === 'plan'
               ? 'Plan mode — read-only exploration; will end with a written plan. /agent to execute it.'
-              : 'Agent mode.';
+              : name === 'vibe'
+                ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
+                : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
     }
@@ -583,6 +589,7 @@ export function App() {
           '  /cd <path>         change cwd (re-indexes repo map)',
           '  /shell             enter shell mode (raw bash, no model)',
           '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
+          '  /vibe              enter vibe mode (every prompt plans first, then implements)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
           '  /model             show current model and base URL',
@@ -715,7 +722,13 @@ export function App() {
           setMessages(prev => [...prev, echo]);
           const extra = args.trim();
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
-          await submitToModel(prompt, raw);
+          // Skills follow the active mode's prompt handling, so in vibe mode they
+          // plan-then-implement like any other prompt.
+          if (modeRef.current === 'vibe') {
+            await runVibeTurn(prompt, raw);
+          } else {
+            await submitToModel(prompt, raw);
+          }
           return;
         }
         response = `Unknown command: /${name}. Try /help.`;
@@ -777,6 +790,10 @@ export function App() {
       return;
     }
     const { augmented, display } = await expandMentions(trimmed, bundle.cwd);
+    if (modeRef.current === 'vibe') {
+      await runVibeTurn(augmented, display !== augmented ? display : undefined);
+      return;
+    }
     await submitToModel(augmented, display !== augmented ? display : undefined);
   };
 
@@ -813,8 +830,15 @@ export function App() {
     // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
     // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
     modeOverride?: Mode,
-  ): Promise<void> => {
-    if (!config || !bundle) return;
+    // Explicit model-facing history for this turn, replacing the `messages` closure. Needed by
+    // vibe mode's chained implement turn — the plan turn's messages are in React state but the
+    // closure captured pre-plan state, so the chain threads them through here instead.
+    historyOverride?: Message[],
+  ): Promise<Message[]> => {
+    // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
+    // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
+    const appended: Message[] = [];
+    if (!config || !bundle) return appended;
     const activeMode = modeOverride ?? mode;
     setStatus('busy');
     setPhase('thinking');
@@ -836,7 +860,7 @@ export function App() {
       await runTurn({
         userInput: modelText,
         userDisplay: displayOverride,
-        history: messages.slice(),
+        history: (historyOverride ?? messages).slice(),
         bundle,
         config: resolveProfile(config, activeProfile),
         // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
@@ -846,6 +870,7 @@ export function App() {
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
         promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
         onMessage: msg => {
+          appended.push(msg);
           if (msg.role === 'assistant') {
             streamingRef.current = '';
             reasoningRef.current = '';
@@ -945,6 +970,33 @@ export function App() {
       setStatus('idle');
       abortRef.current = null;
     }
+    return appended;
+  };
+
+  // Vibe mode (#45): one prompt runs the full plan→implement pipeline. Phase 1 is a normal
+  // plan-mode turn (read-only tools, plan prompt); if it ends with a written plan, phase 2
+  // executes it immediately as a normal agent turn (the same prompt /implement submits).
+  // Approval wiring is untouched — each phase asks exactly as its underlying mode would, so
+  // REIKA_AUTO_APPROVE / the session toggle stay the sole source of truth for what auto-runs.
+  const runVibeTurn = async (modelText: string, displayOverride?: string): Promise<void> => {
+    const base = messages.slice();
+    const planMsgs = await submitToModel(modelText, displayOverride, 'plan', base);
+    // No planFinal marker means the plan phase was aborted (ctrl-c) or dead-ended — never
+    // chain edits off a turn that didn't actually commit a plan.
+    if (!planWritten(planMsgs)) {
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'system',
+          content: 'vibe: the plan phase ended without a written plan — skipping implementation.',
+        },
+      ]);
+      return;
+    }
+    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent', [
+      ...base,
+      ...planMsgs,
+    ]);
   };
 
   if (status === 'error') {
@@ -972,9 +1024,13 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
-            chromeRows={planSteps && mode === 'agent' ? planProgressRows(planSteps) : 0}
+            chromeRows={
+              planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
+            }
           />
-          {planSteps && mode === 'agent' ? <PlanProgress steps={planSteps} /> : null}
+          {planSteps && (mode === 'agent' || mode === 'vibe') ? (
+            <PlanProgress steps={planSteps} />
+          ) : null}
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />
           ) : suggestionState ? (
@@ -1009,7 +1065,11 @@ export function App() {
             onChange={onInputChange}
             onSubmit={onSubmit}
             placeholder={
-              mode === 'shell' ? 'Run a shell command' : 'Type / for commands, @ to attach files'
+              mode === 'shell'
+                ? 'Run a shell command'
+                : mode === 'vibe'
+                  ? 'Describe a change — it plans first, then implements'
+                  : 'Type / for commands, @ to attach files'
             }
           />
           <Status
