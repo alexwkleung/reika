@@ -6,6 +6,7 @@ import {
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
   buildConvergeSteer,
+  buildSteadySystem,
   shouldWithdrawInspection,
   buildPlanTransformInput,
 } from './loop.js';
@@ -253,6 +254,58 @@ describe('buildConvergeSteer', () => {
     expect(s).toMatch(/commit to one concrete action/i);
     expect(s).toMatch(/make the edit|final answer/i); // the two acceptable exits
     expect(s).toMatch(/second-guess|re-question/i); // names the failure mode
+  });
+});
+
+describe('buildSteadySystem', () => {
+  const explored: Message[] = [
+    { role: 'user', content: 'do the thing' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
+    },
+    { role: 'tool', callId: 'c1', summary: 'read a.ts' },
+  ];
+
+  it('agent mode with no plan steps is the bare base prompt', () => {
+    expect(
+      buildSteadySystem({
+        baseSystem: 'BASE',
+        promptMode: 'agent',
+        history: explored,
+        round: 0,
+        planSteps: null,
+      }),
+    ).toBe('BASE');
+  });
+
+  it('plan mode appends the exploration ledger with round-driven escalation', () => {
+    const at = (round: number): string =>
+      buildSteadySystem({
+        baseSystem: 'BASE',
+        promptMode: 'plan',
+        history: explored,
+        round,
+        planSteps: null,
+      });
+    expect(at(0)).toContain('Files examined: a.ts');
+    expect(at(0)).not.toContain('STOP. Call no more tools.');
+    expect(at(3)).toMatch(/explored across 3 rounds/);
+    expect(at(6)).toContain('STOP. Call no more tools.');
+    // The ledger is a system suffix on top of the base prompt.
+    expect(at(0).startsWith('BASE\n\n')).toBe(true);
+  });
+
+  it('plan mode with nothing explored nudges toward a first tool call', () => {
+    const s = buildSteadySystem({
+      baseSystem: 'BASE',
+      promptMode: 'plan',
+      history: [{ role: 'user', content: 'plan it' }],
+      round: 0,
+      planSteps: null,
+    });
+    expect(s).toContain('Nothing examined yet');
   });
 });
 

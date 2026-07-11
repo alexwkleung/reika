@@ -366,6 +366,57 @@ function buildPlanLedger(history: Message[], round: number): string {
   return lines.join('\n');
 }
 
+// Steady-state system for round `round` — the base prompt plus the deterministic non-loop
+// ledgers (plan mode's exploration ledger; the PLAN_ALIGN progress checklist). The round loop
+// appends its loop/recovery ledgers on top of this. At round 0 of a fresh turn all loop state
+// is empty, so this IS the round-0 system — which is what lets the speculative KV warm
+// (agent/warm.ts) reproduce it outside runTurn without drift.
+export function buildSteadySystem(opts: {
+  baseSystem: string;
+  promptMode?: PromptMode;
+  history: Message[];
+  round: number;
+  planSteps: PlanStep[] | null;
+}): string {
+  if (opts.promptMode === 'plan') {
+    return opts.baseSystem + '\n\n' + buildPlanLedger(opts.history, opts.round);
+  }
+  const planLedger =
+    PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
+      ? '\n\n' + buildPlanProgressLedger(opts.planSteps)
+      : '';
+  return opts.baseSystem + planLedger;
+}
+
+// Reproduce runTurn's exact round-0 request prefix outside the loop, for the speculative KV
+// warm (agent/warm.ts): the same pre-round-0 history transform (plan→agent handoff
+// distillation, flag-gated) and the same steady round-0 system. Lives here to share the
+// module-private flags and stay in lockstep with the pre-pass in runTurn below. Mutates
+// `history` in place (splice-only — message objects are never touched), exactly like that
+// pre-pass, so callers pass their own copy. The ledger builders never read a trailing user
+// message, so the history-without-user this receives yields the same system runTurn computes
+// after pushing one.
+export function buildRoundZeroPrefix(opts: {
+  history: Message[];
+  bundle: ContextBundle;
+  promptMode: PromptMode;
+  contextWindow?: number;
+  calibration: number;
+  minGenTokens: number;
+}): string {
+  if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
+    distillPlanHandoff(opts.history, opts.contextWindow, opts.calibration, opts.minGenTokens);
+  }
+  const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
+  return buildSteadySystem({
+    baseSystem: buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode }),
+    promptMode: opts.promptMode,
+    history: opts.history,
+    round: 0,
+    planSteps,
+  });
+}
+
 // Confirmed-loop thresholds, split by class (see ReadTrace.loopingReads). dup-aged: the content
 // aged out, so a single re-read can be a rational refetch — only 3+ identical passes is a loop.
 // dup-live: the content is still in context, so re-reading it is never a refetch — 2 is already a
@@ -825,7 +876,13 @@ export async function runTurn(opts: {
           }
         }
       } else {
-        system = baseSystem + '\n\n' + buildPlanLedger(opts.history, i);
+        system = buildSteadySystem({
+          baseSystem,
+          promptMode: 'plan',
+          history: opts.history,
+          round: i,
+          planSteps: null,
+        });
       }
     } else {
       // Agent/chat: surface a persistent stop directive while a loop is active. Two independent
@@ -968,22 +1025,25 @@ export async function runTurn(opts: {
           return;
         }
       }
-      // Plan alignment (REIKA_PLAN_ALIGN): while unchecked steps remain, the checklist rides the
-      // regenerated system suffix — like the loop ledgers, it never enters history, so compaction
-      // can't age the plan out from under a long implementation run.
-      const planLedger =
-        PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)
-          ? '\n\n' + buildPlanProgressLedger(planSteps)
-          : '';
+      // Steady base for this round: baseSystem plus the PLAN_ALIGN checklist while unchecked
+      // steps remain (the checklist rides the regenerated system suffix — like the loop ledgers,
+      // it never enters history, so compaction can't age the plan out from under a long
+      // implementation run).
+      const steady = buildSteadySystem({
+        baseSystem,
+        promptMode: opts.promptMode,
+        history: opts.history,
+        round: i,
+        planSteps,
+      });
       // The grounded edit-recovery directive is more specific and actionable than the generic loop
       // ledger, so it replaces it for the one round it fires.
       if (editRecoveryGrounding) {
-        system = baseSystem + planLedger + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
+        system = steady + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
       } else if (loopDetected) {
-        system =
-          baseSystem + planLedger + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
+        system = steady + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
       } else {
-        system = baseSystem + planLedger;
+        system = steady;
       }
       if (loopDetected) {
         debugLog(
