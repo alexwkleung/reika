@@ -19,6 +19,7 @@ import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
+import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
@@ -114,6 +115,9 @@ export function App() {
   const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
+  // submit. Ref-held — the warmer is invisible plumbing and must never trigger a render.
+  const warmerRef = useRef(createPrefixWarmer());
   const exitArmedRef = useRef(false);
   exitArmedRef.current = exitArmed;
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -355,10 +359,34 @@ export function App() {
   };
 
   const onInputChange = (value: string): void => {
+    // First keystroke of a new prompt (empty→non-empty, read against the pre-render ref) while
+    // idle: speculatively warm the server's KV cache with the prefix the submit will send.
+    // Skips '/'-input (commands never reach the model) and shell mode. Repeat edges on the same
+    // prefix dedupe inside the warmer; strict no-op unless REIKA_WARM=1.
+    const edge = inputValueRef.current === '' && value !== '';
     setInputValue(value);
     if (!bundle) {
       setSuggestionState(null);
       return;
+    }
+    if (
+      edge &&
+      config &&
+      statusRef.current === 'idle' &&
+      !value.startsWith('/') &&
+      modeRef.current !== 'shell'
+    ) {
+      const m = modeRef.current;
+      warmerRef.current.onEdge({
+        history: messagesRef.current,
+        bundle,
+        config: resolveProfile(config, activeProfileRef.current),
+        // Same mapping as submitToModel below; vibe's first internal turn is a plan turn, so
+        // it warms the plan prefix.
+        tools: m === 'chat' ? chatToolsList : m === 'plan' || m === 'vibe' ? planTools() : tools,
+        promptMode: m === 'chat' ? 'chat' : m === 'plan' || m === 'vibe' ? 'plan' : 'agent',
+        calibration: calibrationRef.current,
+      });
     }
     const next = computeSuggestions(value, bundle.fileIndex, bundle.skills);
     setSuggestionState(next);
@@ -775,6 +803,10 @@ export function App() {
 
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
+    // Free the server slot for the real request (the engine keeps already-processed KV in its
+    // slot cache on disconnect, so an interrupted warm still pays off). Unconditional: slash
+    // commands (/cd re-bundles, /model switches) and shell submits also land here.
+    warmerRef.current.cancel('submit');
     setInputValue('');
     setSuggestionState(null);
     const trimmed = input.trim();
