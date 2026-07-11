@@ -57,6 +57,22 @@ describe('parsePlanSteps', () => {
     expect(steps[0].paths).toEqual(['src/a.ts']);
   });
 
+  it('extracts bare absolute paths and matches them against relative edit paths', () => {
+    // The observed shape: a plan naming files by absolute path with no backticks
+    // ("Modify renderRow function in /home/user/projects/app/web/src/scripts/rows.ts:").
+    // Unextracted, the step carries no path signal and the (relative-path) edit never checks it.
+    const steps = parsePlanSteps(
+      [
+        '1. Modify renderRow function in /home/user/projects/app/web/src/scripts/rows.ts:',
+        '2. Add CSS styles in `/home/user/projects/app/web/src/styles/global.css` (or existing stylesheet)',
+      ].join('\n'),
+    );
+    expect(steps[0].paths).toEqual(['/home/user/projects/app/web/src/scripts/rows.ts']);
+    expect(steps[1].paths).toEqual(['/home/user/projects/app/web/src/styles/global.css']);
+    expect(applyEdit(steps, 'web/src/scripts/rows.ts')).toEqual({ index: 0, by: 'path' });
+    expect(applyEdit(steps, 'web/src/styles/global.css')).toEqual({ index: 1, by: 'path' });
+  });
+
   it('parses heading- and bold-styled step lines', () => {
     const steps = parsePlanSteps(
       ['## Step 1: Tighten spacing', '**Step 2: Verify**', '**3.** Ship it'].join('\n'),
