@@ -53,8 +53,12 @@ const STEP_START = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*)?(?:step\s+)?(\d{1,2})[.):](?:
 const STEP_DASH = /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*)?step\s+(\d{1,2})\s*[—–-]\s*(\S.*)$/i;
 // Path-like tokens. With a slash we trust the shape (groundcheck's PATH_LIKE stance); without one,
 // a bare `name.ext` is only a file if the extension is a common source/config kind — otherwise
-// backticked property access (`theme.accent`, `opts.config`) would read as files.
-const BARE_PATH = /(?:^|[\s('"[])((?:[\w.@~-]+\/)+[\w.@~-]+\.[A-Za-z]\w{0,7})/g;
+// backticked property access (`theme.accent`, `opts.config`) would read as files. The optional
+// leading `/` accepts absolute paths (plans regularly write `/Users/…/repo/src/x.ts` unbackticked);
+// without it the capture must start on a word char and an absolute path extracts as NOTHING, so the
+// step carries no path signal and its edit can never check it off. Matching is already
+// absolute-safe (pathsMatch's segment-suffix rule maps it onto the relative edit path).
+const BARE_PATH = /(?:^|[\s('"[])(\/?(?:[\w.@~-]+\/)+[\w.@~-]+\.[A-Za-z]\w{0,7})/g;
 const FILE_SPAN = /^[\w./@~-]+\.([A-Za-z]\w{0,7})$/;
 const KNOWN_EXTS = new Set([
   'ts',
