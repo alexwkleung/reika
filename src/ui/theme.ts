@@ -18,7 +18,8 @@ export const theme = {
   // read at a glance (without clashing with the yellow warning); the secondary
   // modes sit back in grey.
   modeAgent: '#d7a8d7', // soft magenta, echoes inlineCode — the default workhorse
-  modePlan: '#8fd0c8', // soft teal-cyan
+  modePlan: '#8fd0c8', // soft teal-cyan; also the plan-checklist header (PlanProgress) — teal = plan everywhere
+  modeVibe: '#b4aee0', // soft periwinkle between plan teal and agent magenta — vibe runs both phases
   modeChat: '#a0a0a0', // slightly lighter than muted — secondary, recedes
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
 } as const;

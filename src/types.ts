@@ -40,7 +40,17 @@ export type Message =
   // automatic event (compaction), 'warn' = an automatic recovery the user should notice
   // (truncation retry). Distinguishes harness-generated notices from each other and from
   // the user's own input.
-  | { role: 'system'; content: string; tone?: 'info' | 'warn'; nested?: boolean }
+  | {
+      role: 'system';
+      content: string;
+      tone?: 'info' | 'warn';
+      nested?: boolean;
+      // Set only on the plan done-gate's give-up notice: the step numbers waived after the model
+      // was bounced once and finished anyway. The plan tracker recomputes from history each turn
+      // (agent/plantrack.ts seedPlanProgress), so the waiver must ride a message to survive —
+      // without it every later turn would re-bounce the same adjudicated step.
+      planWaived?: number[];
+    }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
   // messagesToOpenAI); the UI keeps the full scrollback separately.
@@ -179,6 +189,11 @@ export type Profile = {
 //              patterns) still prompt. The warnings break-glass.
 //   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
 export type AutoApproveMode = 'off' | 'safe' | 'bypass';
+
+// Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
+// eligible — chat isolates history and shell bypasses the model entirely, so neither makes
+// sense as a launch default.
+export type DefaultMode = 'agent' | 'plan' | 'vibe';
 
 export type Config = {
   baseURL: string;

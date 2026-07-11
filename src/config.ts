@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AutoApproveMode, Config, Profile } from './types.js';
+import type { AutoApproveMode, Config, DefaultMode, Profile } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
@@ -129,6 +129,27 @@ function parseAutoApprove(raw: string | undefined): AutoApproveMode {
       return 'bypass';
     default:
       return 'off';
+  }
+}
+
+// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', or 'vibe'.
+// An unrecognized value falls back to 'agent' — fail-open, since a startup warning would have
+// nowhere safe to go (stderr corrupts the Ink frame). REIKA_PLAN_EXPERIMENT=1 is the older,
+// narrower spelling of REIKA_DEFAULT_MODE=plan, kept as an alias; an explicit REIKA_DEFAULT_MODE
+// wins when both are set.
+// Reads process.env directly rather than riding Config: App needs the value in its first-render
+// state initializer, before the async config load resolves. The dotenv side effect above makes
+// .env values visible by then.
+export function resolveDefaultMode(): DefaultMode {
+  switch ((process.env.REIKA_DEFAULT_MODE ?? '').trim().toLowerCase()) {
+    case 'agent':
+      return 'agent';
+    case 'plan':
+      return 'plan';
+    case 'vibe':
+      return 'vibe';
+    default:
+      return process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent';
   }
 }
 

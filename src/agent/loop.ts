@@ -36,6 +36,17 @@ import {
   shouldSuppressGrounding,
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
+import {
+  seedPlanProgress,
+  applyEdit as applyPlanEdit,
+  applyCommand as applyPlanCommand,
+  buildPlanProgressLedger,
+  decidePlanGate,
+  waiveUnchecked,
+  MAX_PLAN_GATE_ROUNDS,
+  type PlanStep,
+} from './plantrack.js';
+import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -207,6 +218,21 @@ const STEER_RETRY_REASONING_CEIL = 8000;
 // a clean A/B; independent of REIKA_PLAN_EXPERIMENT (which only sets the *starting* mode, so reusing
 // it would skip distillation whenever plan mode is reached via /plan). Strict no-op when off.
 const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
+// EXPERIMENT (plan alignment, #68): during agent turns that execute a written plan, keep the
+// harness-tracked step checklist in the system suffix each round (buildPlanProgressLedger) and
+// bounce a turn that tries to finish with file-bearing steps unchecked (decidePlanGate, the plan
+// analogue of the typecheck gate). The *tracking* is always on and deterministic (it feeds the UI
+// checklist); this flag gates only the model-facing pressure, off by default for a clean A/B.
+const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
+// EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
+// blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
+// a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
+// old_string is a guess (the handoff digest keeps the plan, not file bytes), and when it misses the
+// model burns the failure round and sometimes spirals; a withheld round costs one read it needed
+// anyway. Fail-open (a re-issued edit runs as-is), suspended while inspection tools are withdrawn
+// (the directed read would be refused — deadlock), and plan-scoped because that is where the
+// observed failure lives; ordinary turns keep refreshedFile + edit-recovery. See agent/readfirst.ts.
+const READ_FIRST = process.env.REIKA_READ_FIRST === '1';
 
 // EXPERIMENT (plan mode): the force-write turn is a *transformation*, not another exploration
 // round. Asking the exploring model to "stop and write prose" fights its action prior and lets
@@ -596,6 +622,11 @@ export async function runTurn(opts: {
   priorCalibration?: number;
   onCalibration?: (factor: number) => void;
   onToolProgress?: (chunk: string) => void;
+  // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
+  // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
+  // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
+  // done-gate are gated behind REIKA_PLAN_ALIGN). The array is the loop's live tracker — copy it.
+  onPlanProgress?: (steps: PlanStep[]) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   signal?: AbortSignal;
   promptMode?: PromptMode;
@@ -697,6 +728,8 @@ export async function runTurn(opts: {
   let typecheckTsconfig: string | undefined;
   // Consecutive done-gate send-backs this turn. Bounds the fix loop at MAX_TYPECHECK_GATE_ROUNDS.
   let typecheckGateRounds = 0;
+  // Consecutive plan done-gate send-backs this turn. Bounds the plan gate at MAX_PLAN_GATE_ROUNDS.
+  let planGateRounds = 0;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
@@ -705,6 +738,10 @@ export async function runTurn(opts: {
   // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
   // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
   const readTrace = new ReadTrace();
+  // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
+  // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
+  // Recorded unconditionally (cheap); only the READ_FIRST flag lets it withhold anything.
+  const readFirst = new ReadFirstGate(opts.bundle.cwd);
   // Cross-round reasoning-loop detector (Layer 2). Records each round's reasoning to spot the model
   // re-deriving the same analysis instead of converging. Always recorded (cheap, and the debug
   // diagnostic reads it); its verdict only drives a force-commit when REASONING_LOOP_BREAK is set.
@@ -759,6 +796,19 @@ export async function runTurn(opts: {
     // Log every agent turn (debug-gated), including the no-op: a bare folded=0 is otherwise
     // indistinguishable from "feature never ran", which the A/B needs to tell apart.
     debugLog(`[reika:debug] plan-handoff folded=${folded} reason=${reason}\n`);
+  }
+
+  // Plan progress (#68/#71): rebuild the step checklist from history — the latest written plan with
+  // every successful edit/write after it replayed — so progress carries across turns with no stored
+  // state (the same recompute-each-turn discipline as the distillation above). null on plan-less
+  // histories, i.e. every ordinary agent turn.
+  const planSteps: PlanStep[] | null =
+    opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
+  if (planSteps) {
+    opts.onPlanProgress?.(planSteps);
+    debugLog(
+      `[reika:debug] plan-track steps=${planSteps.length} done=${planSteps.filter(s => s.done).length}\n`,
+    );
   }
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
@@ -986,14 +1036,22 @@ export async function runTurn(opts: {
           return;
         }
       }
+      // Plan alignment (REIKA_PLAN_ALIGN): while unchecked steps remain, the checklist rides the
+      // regenerated system suffix — like the loop ledgers, it never enters history, so compaction
+      // can't age the plan out from under a long implementation run.
+      const planLedger =
+        PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)
+          ? '\n\n' + buildPlanProgressLedger(planSteps)
+          : '';
       // The grounded edit-recovery directive is more specific and actionable than the generic loop
       // ledger, so it replaces it for the one round it fires.
       if (editRecoveryGrounding) {
-        system = baseSystem + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
+        system = baseSystem + planLedger + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
       } else if (loopDetected) {
-        system = baseSystem + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
+        system =
+          baseSystem + planLedger + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
       } else {
-        system = baseSystem;
+        system = baseSystem + planLedger;
       }
       if (loopDetected) {
         debugLog(
@@ -1450,6 +1508,48 @@ export async function runTurn(opts: {
           });
         }
       }
+      // Plan done-gate (REIKA_PLAN_ALIGN): the plan analogue of the typecheck gate above. An
+      // implementing turn (it edited) that stops with file-bearing steps unchecked gets sent back
+      // once with the unfinished steps quoted; past the budget it finishes with an honest notice.
+      // Gated on editingStarted so a read-only turn — a question about the plan, not an
+      // implementation pass — is never bounced. Runs only after the typecheck gate has settled
+      // (its `continue` above precedes this), so the two bounded gates can't interleave.
+      if (
+        PLAN_ALIGN &&
+        planSteps &&
+        editingStarted &&
+        opts.promptMode === 'agent' &&
+        !opts.signal?.aborted
+      ) {
+        const gate = decidePlanGate({
+          steps: planSteps,
+          gateRounds: planGateRounds,
+          maxRounds: MAX_PLAN_GATE_ROUNDS,
+        });
+        debugLog(
+          `[reika:debug] round=${i} plan-gate action=${gate.action} gateRounds=${planGateRounds}\n`,
+        );
+        if (gate.action === 'retry' && gate.modelMessage) {
+          planGateRounds++;
+          opts.history.push({ role: 'user', content: gate.modelMessage });
+          opts.onMessage({ role: 'system', tone: 'warn', content: gate.userNotice ?? '' });
+          continue;
+        }
+        if (gate.action === 'waive') {
+          // Budget spent: adjudicate the leftovers instead of leaving them pending, so later turns
+          // don't re-bounce steps the model was already asked about. The waived numbers ride the
+          // notice message (planWaived) — that's what lets the stateless per-turn recompute
+          // (seedPlanProgress) restore the waiver.
+          const waived = waiveUnchecked(planSteps);
+          opts.onPlanProgress?.(planSteps);
+          opts.onMessage({
+            role: 'system',
+            tone: 'warn',
+            content: gate.userNotice ?? '',
+            planWaived: waived,
+          });
+        }
+      }
       if (readTrace.total() > 0) {
         debugLog(`[reika:debug] read-trace-summary ${readTrace.summary()}\n`);
       }
@@ -1471,6 +1571,20 @@ export async function runTurn(opts: {
       const refusedBashGrep =
         call.name === 'bash' && isReadOnlyShell(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
+      // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
+      // Only while executing a written plan (planSteps), never while inspection is withdrawn (the
+      // directed read would itself be refused), and only when the edit could actually run (tool
+      // resolved). shouldBounce records the bounce, so a re-issued edit to the same path — or one
+      // that ran and failed — always passes: fail-open by construction, and edit-recovery is never
+      // re-bounced back to a read.
+      const bouncedBlindEdit =
+        READ_FIRST &&
+        planSteps !== null &&
+        !withdrawInspection &&
+        call.name === 'edit' &&
+        tool !== undefined &&
+        typeof call.args.path === 'string' &&
+        readFirst.shouldBounce(call.args.path);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -1478,12 +1592,20 @@ export async function runTurn(opts: {
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
+      // Check-off receipt for a plan step this call completed; emitted after the tool chip below.
+      let planCheckoff: string | undefined;
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
       // applies, so the done-gate diffs against the project's state before any of this turn's edits.
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
       // local model is saturating the box) and only on turns that actually edit. Fail-open: a
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
-      if (!typecheckBaselineAttempted && tool && !refused && MUTATING_TOOLS.has(call.name)) {
+      if (
+        !typecheckBaselineAttempted &&
+        tool &&
+        !refused &&
+        !bouncedBlindEdit &&
+        MUTATING_TOOLS.has(call.name)
+      ) {
         typecheckBaselineAttempted = true;
         // Resolve the governing tsconfig from the file being edited (walk-up, bounded at cwd) so a
         // monorepo subpackage edit is checked against that package's config, not just a root one —
@@ -1513,6 +1635,11 @@ export async function runTurn(opts: {
             refusedBashGrep ? ' (bash-grep)' : ''
           } (inspection withdrawn)\n`,
         );
+      } else if (bouncedBlindEdit) {
+        const blindPath = String(call.args.path);
+        summary = `edit paused — read ${blindPath} first, then re-issue the edit`;
+        payload = buildReadFirstDirective(blindPath);
+        debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath}\n`);
       } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
@@ -1544,6 +1671,9 @@ export async function runTurn(opts: {
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
       // and the live/aged label depends on round order), but only emitted under the flag.
       if (!refused && call.name === 'read' && contentHash) {
+        // Read-first (#72): the model now holds this file's bytes (or knows its true length, for an
+        // offset-past-end read) — edits to it are grounded for the rest of the turn.
+        readFirst.ground(String(call.args.path ?? ''));
         const { cls, repeats } = readTrace.record(
           String(call.args.path ?? ''),
           Number(call.args.offset ?? 1),
@@ -1563,11 +1693,13 @@ export async function runTurn(opts: {
       // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
       // on path+offset so window-varying re-reads still count); mutating tools reset the memory
       // so a read-after-edit isn't flagged. Skipped for unknown tools (nothing produced).
-      if (tool && !refused)
+      if (tool && !refused && !bouncedBlindEdit)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
-      if (MUTATING_TOOLS.has(call.name)) {
+      // A BOUNCED edit doesn't: the harness withheld it, nothing ran, and the directed read that
+      // follows must stay eligible for the normal read-loop ladder if the model spins instead.
+      if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         editingStarted = true;
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
@@ -1575,11 +1707,48 @@ export async function runTurn(opts: {
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
           lastEditFailure = undefined;
+          // Read-first (#72): a successful edit/write grounds its path — the result carries the
+          // post-edit bytes (refreshedFile / the diff), so follow-up edits to it are not blind.
+          if (typeof call.args.path === 'string') readFirst.ground(call.args.path);
+          // Plan progress (#71): a successful edit/write checks a pending step off — by path when
+          // the plan named this file, else by content when a step-quoted snippet appears in the
+          // diff (the plan named the wrong file; the model edited the right one). Harness-observed
+          // facts, not the model's own claim of progress. The receipt is stashed and emitted AFTER
+          // the tool chip below (same placement rule as toolNotice).
+          if (planSteps) {
+            const match = applyPlanEdit(planSteps, diff?.path ?? summary.split(' ')[1], diff?.text);
+            if (match) {
+              opts.onPlanProgress?.(planSteps);
+              const done = planSteps.filter(s => s.done).length;
+              const via =
+                match.by === 'content'
+                  ? ' — matched by edit content; the plan names another file'
+                  : '';
+              planCheckoff =
+                done === planSteps.length
+                  ? `Plan complete — all ${planSteps.length} steps checked off.`
+                  : `Plan step ${planSteps[match.index].n} checked off (${done}/${planSteps.length})${via}.`;
+            }
+          }
         } else if (summary.startsWith('Edit failed')) {
           lastEditFailed = true;
           // editFailure is set only for the not-found case; other failures (multiple/mixed) leave it
           // undefined, which the dead-end treats as "not groundable" and stops as before.
           lastEditFailure = editFailure;
+        }
+      }
+      // Command steps ("run typecheck/tests"): a successful bash run (exit 0, the `Ran:` prefix)
+      // whose command contains the step's quoted command checks it off — previously these steps
+      // could never complete and dragged the checklist down after a green run.
+      if (planSteps && call.name === 'bash' && summary.startsWith('Ran: ') && command?.text) {
+        const idx = applyPlanCommand(planSteps, command.text);
+        if (idx >= 0) {
+          opts.onPlanProgress?.(planSteps);
+          const done = planSteps.filter(s => s.done).length;
+          planCheckoff =
+            done === planSteps.length
+              ? `Plan complete — all ${planSteps.length} steps checked off.`
+              : `Plan step ${planSteps[idx].n} checked off (${done}/${planSteps.length}) — command ran.`;
         }
       }
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
@@ -1602,6 +1771,12 @@ export async function runTurn(opts: {
         debugLog(
           `[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`,
         );
+      }
+      // The plan check-off receipt follows the edit's result line for the same reason: it's a
+      // persistent record of a harness side effect of that edit (signal-lifetime rule — the
+      // checklist panel is ephemeral, this line is what reconstructs the run afterwards).
+      if (planCheckoff) {
+        opts.onMessage({ role: 'system', tone: 'info', content: planCheckoff });
       }
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a

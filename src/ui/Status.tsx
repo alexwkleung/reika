@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink';
 import type { Usage } from '../types.js';
 import { theme } from './theme.js';
+import { formatElapsed } from './format.js';
 
 export function Status({
   model,
@@ -78,6 +79,8 @@ function modeColor(mode: string): string {
   switch (mode) {
     case 'plan':
       return theme.modePlan;
+    case 'vibe':
+      return theme.modeVibe;
     case 'chat':
       return theme.modeChat;
     case 'shell':
@@ -107,16 +110,6 @@ export function formatContext(contextTokens?: number | null, contextWindow?: num
 export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
   if (cachedTokens == null || !contextTokens) return '';
   return ` · cache ${Math.round((cachedTokens / contextTokens) * 100)}%`;
-}
-
-export function formatElapsed(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  if (h > 0) return `${h}h ${pad(m)}m ${pad(s)}s`;
-  if (m > 0) return `${m}m ${pad(s)}s`;
-  return `${s}s`;
 }
 
 export function kFormat(n: number): string {

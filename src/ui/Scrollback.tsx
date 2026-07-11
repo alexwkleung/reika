@@ -8,17 +8,23 @@ import { scrubPaths } from './paths.js';
 import { redactSecrets } from './redact.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
+import { formatDurationMs } from './format.js';
 
 export function Scrollback({
   messages,
   streaming,
   streamingReasoning,
   streamingTool,
+  chromeRows = 0,
 }: {
   messages: Message[];
   streaming: string;
   streamingReasoning: string;
   streamingTool: string;
+  // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
+  // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
+  // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
+  chromeRows?: number;
 }) {
   // The live (non-Static) region must never grow taller than the viewport: Ink can't
   // erase a frame taller than the screen, which is what produces the "duplicated
@@ -26,7 +32,7 @@ export function Scrollback({
   // block shows only its tail, sized so the blocks together fit the viewport. Full text
   // lands in <Static> when the message commits, where the terminal scrolls it natively.
   const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
-  const budget = liveTailBudget(active);
+  const budget = liveTailBudget(active, chromeRows);
 
   return (
     <>
@@ -49,12 +55,12 @@ export function Scrollback({
 // active stream blocks plus the fixed chrome must stay strictly under it. Reserve
 // chrome (input/status/working + the Box margins), a per-block overhead (each block's
 // marginTop plus its header/"…" line), and one safety row, then split what's left.
-function liveTailBudget(activeBlocks: number): number {
+function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
   const rows = process.stdout.rows || 24;
   const CHROME = 8;
   const PER_BLOCK_OVERHEAD = 3;
   const SAFETY = 2;
-  const avail = rows - CHROME - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
+  const avail = rows - CHROME - extraChromeRows - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
   return Math.max(3, Math.floor(avail / activeBlocks));
 }
 
@@ -197,7 +203,7 @@ function renderMessage(msg: Message): ReactElement | null {
                 stop/done glyph) and an anchor of color on an otherwise inert line. */}
             <Text>
               <Text color={theme.accent}>{'■ '}</Text>
-              <Text color={theme.muted}>{`Worked for ${formatDuration(msg.durationMs)}`}</Text>
+              <Text color={theme.muted}>{`Worked for ${formatDurationMs(msg.durationMs)}`}</Text>
             </Text>
           </Box>
         ) : null}
@@ -405,12 +411,4 @@ function truncate(s: string, max: number): string {
 // paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6.
 function diffViewWidth(): number {
   return Math.max(20, (process.stdout.columns || 80) - 6);
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${s}s`;
 }
