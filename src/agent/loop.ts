@@ -965,6 +965,7 @@ export async function runTurn(opts: {
       // pulls read/grep/glob/list, so a model spiraling via `bash` (e.g. re-running `tail`/`grep` to
       // "verify") routes around it and would otherwise run to maxTurns. End the turn instead — the
       // work it did (if any) is already on disk; say so honestly rather than loop.
+      let steerConvergeRound = false;
       if (reasoningLoop && loopActiveRounds >= LOOP_TERMINAL_AFTER) {
         // Converge retry (REIKA_CONVERGE_RETRY) — strongest lever first: spend ONE steered round before
         // the stop, a failure-naming directive (buildConvergeSteer) to commit and act, appended to this
@@ -974,7 +975,7 @@ export async function runTurn(opts: {
         // spiral that token-level bias can't.
         if (CONVERGE_RETRY && convergeRetries < MAX_CONVERGE_RETRIES) {
           convergeRetries++;
-          system += '\n\n' + buildConvergeSteer();
+          steerConvergeRound = true; // appended below, AFTER the steady/ledger composition (#83)
           opts.onMessage({
             role: 'system',
             tone: 'warn',
@@ -1044,6 +1045,13 @@ export async function runTurn(opts: {
         system = steady + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
       } else {
         system = steady;
+      }
+      // The converge steer rides on top of the composed system (steady + loop ledger — a loop is
+      // necessarily active when the terminal fires). It must land after the composition above:
+      // appending it earlier gets silently discarded by the reassignment (#83 — the agent-mode
+      // steer never reached the model from its introduction until this fix).
+      if (steerConvergeRound) {
+        system += '\n\n' + buildConvergeSteer();
       }
       if (loopDetected) {
         debugLog(
