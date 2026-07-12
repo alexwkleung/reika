@@ -183,7 +183,7 @@ Weak/quantized local models loop in two distinct places — repeating **tool cal
 
 **Withdrawal asymmetry** (`shouldWithdrawInspection`): a read loop keeps the **edit-recovery exemption** — no withdrawal once editing has begun, because a post-edit re-read is usually re-fetching exact bytes to rebuild `old_string`, not gratuitous looping. A reasoning loop withdraws even post-edit (high crossSim while re-reading is rumination, not recovery) — EXCEPT during edit-recovery itself (an unresolved failed edit genuinely needs reading). The **edit-recovery dead-end** — a reasoning loop on top of a failed edit — splits on the structured failure the edit tool returns (`ToolResult.editFailure`, computed from the same divergence its hint string already reports). A **`diverged`** failure (the anchor block exists, one line differs) is mechanically recoverable, so it gets ONE grounded round first: `buildEditRecoveryLedger` lifts the exact divergence plus the verbatim current bytes into the non-aging system suffix and asks for a single character-for-character fix — the tool's own hint rides in the tool _result_, which ages out under compaction before a period-≥2 loop returns to it, the same reason the loop ledger lives in the regenerated suffix. An **`absent`** failure (`old_string` in no file, typically a plan referencing code that doesn't exist) can't be conjured by re-reading, so it stops immediately. Both bounded like the length/typecheck caps; the grounded round is one-shot (`editRecoveryGroundingTried`) so a still-looping turn falls through to the report next round.
 
-**Agent-mode terminal stop** (`commitAgentLoopStop`, the agent analogue of plan's `commitSpiralStop`): withdrawal only pulls read/grep/glob/list, NOT bash — so a model in a _post-completion verification spiral_ (finished the work, then loops "is it complete? let me check" running `bash tail/grep/wc` with byte-identical reasoning) routes around withdrawal and would run to `maxTurns`. Rather than chase every escape tool, once a confirmed reasoning loop has been through the ledger + withdrawal and still persists `LOOP_TERMINAL_AFTER` rounds (3 — the floor: ledger=1 and withdrawal=2 each get one round, since both genuinely recover _other_ loop types, then terminal at 3; can't go to 2 without skipping the withdrawn call), the turn ends honestly — "made changes to X, edits saved, review them" if it edited, else a stuck-without-progress stop. Self-correcting: heeding either step resets the counter, so terminal only fires on a loop that ignored both. No separate "steer to finish" guard is added on purpose: the withdrawn ledger already says "if complete, say so and stop"; this stuck class ignores it (can't act on directives), and a forced wrap-up call would just re-spiral (it's structurally the force-write) — the terminal writes the completion the model couldn't. This is a third spiral _shape_: can't-find (→ withdrawal forces act/declare), can't-edit (→ edit-recovery dead-end report), and can't-stop (post-completion → terminal report).
+**Agent-mode terminal stop** (`commitAgentLoopStop`, the agent analogue of plan's `commitSpiralStop`): withdrawal pulls read/grep/glob/list AND refuses read-only bash (`grep`/`cat`/`tail`/… classified by `isReadOnlyShell` at dispatch; mutating/build bash still runs, so real work is unaffected) — this closes the escape where a model in a _post-completion verification spiral_ routed around the omitted tools by running `bash grep` with byte-identical reasoning. Withdrawal still can't gate a loop that spirals on `edit` or on mutating bash, so once a confirmed reasoning loop has been through the ledger + withdrawal and still persists `LOOP_TERMINAL_AFTER` rounds (3 — the floor: ledger=1 and withdrawal=2 each get one round, since both genuinely recover _other_ loop types, then terminal at 3; can't go to 2 without skipping the withdrawn call), the turn ends honestly — "made changes to X, edits saved, review them" if it edited, else a stuck-without-progress stop. Self-correcting: heeding either step resets the counter, so terminal only fires on a loop that ignored both. No separate "steer to finish" guard is added on purpose: the withdrawn ledger already says "if complete, say so and stop"; this stuck class ignores it (can't act on directives), and a forced wrap-up call would just re-spiral (it's structurally the force-write) — the terminal writes the completion the model couldn't. This is a third spiral _shape_: can't-find (→ withdrawal forces act/declare), can't-edit (→ edit-recovery dead-end report), and can't-stop (post-completion → terminal report).
 
 **Logit recovery — last resort before the terminal stop** (`REIKA_LOGIT_RECOVERY=1`, experimental; only does anything when reasoning-loop detection is also on, since it fires at that terminal). Before `commitAgentLoopStop`, spend ONE biased round: `logitrecovery.ts` mines the loop's recurring 8-grams (`ReasoningTrace.repeatedShingles`, the intersection it already computes for the Jaccard), tokenizes the top ~12 distinctive words' **entry tokens**, and sends a mild one-shot `logit_bias` (−4, capped at 24 ids, tool-name tokens exempted) to gently down-weight the model's own rut without banning anything. Two things make this safe rather than reckless: it fires at a site that is **structurally pure rumination** (an unresolved failed edit would have stopped/grounded at the earlier edit-recovery dead-end, so the repeated tokens here are filler, not the work — the loop-tokens-≡-work-tokens trap that makes `logit_bias` dangerous on edit loops doesn't apply); and its failure mode collapses to the honest stop — if the biased round still loops, the turn ends exactly as it would have, never as a confident wrong action. The bias is mild + one-shot + capped + tool-exempt precisely so a failed nudge degrades to a no-op, not pollution.
 
@@ -224,15 +224,33 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
 - **Fit-to-window payload cap** (`toolcall.ts`): fresh tool payloads are truncated to the
   room left after everything else, so a single big tool result can't overflow. The room left
   reserves `minGenTokens` for the model's reply — the same generation reserve compaction and
-  the backstop use (see below). Non-fresh content is measured with the _learned_ calibration;
-  the fresh allowance is converted to chars with a pessimistic floor (`CAP_DENSITY_FLOOR`) so
-  a sudden dense dump can't overflow while calibration lags. The truncation marker says
-  "context limit, not a command error" on purpose — without it, models loop re-running with
-  different shell flags.
+  the backstop use (see below). **Both** the non-fresh subtraction and the fresh-allowance
+  conversion use a pessimistic density floor (`CAP_DENSITY_FLOOR`, 2.5 ≈ 1.6 chars/token) so the
+  built request can't overflow while calibration lags — this is a hard guarantee, not a heuristic.
+  Non-fresh used to be counted at the _learned_ average on the theory it's prose-ish; a real turn
+  disproved it — 400'd a 24.5k window because dense content (SVG path data / CSS / code in the kept
+  reasoning) tokenized ~1.6 chars/token, 2.5× the char/4 estimate, and under-counting the _fixed
+  overhead_ (system + tool-def JSON + reasoning), not just payloads, over-allocated the fresh budget.
+  The truncation marker says "context limit, not a command error" on purpose — without it, models
+  loop re-running with different shell flags.
+- **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
+  `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
+  earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read
+  payloads within a round) to a back-reference, so raw repetition never accumulates in context to
+  prime a loop — deterministic, keep-first, and it frees the stubbed dup's window budget for the
+  survivors. Benched **null** on multi-file coding turns (payload-aging already collapses cross-round
+  re-reads to summaries, so the surviving dedup surface is rare); kept as cheap riskless optionality
+  for a summary-trail-heavy workload. Strict no-op when off.
 - **Compaction** (`compaction.ts`): once the calibrated estimate crosses
   `(window − minGenTokens) × 0.9` — i.e. when the prompt would leave less than the generation
   reserve (plus slack) — the oldest turns fold into one recap message (merged into the system
-  block), keeping recent turns verbatim. It snaps the keep-boundary _back_ over `tool` messages
+  block), keeping recent turns verbatim. The compaction _decision_ (and how much to fold) floors the
+  learned calibration at 1 (`COMPACTION_CALIBRATION_FLOOR`): a prose-heavy session drives the factor
+  below 1, which would let a dense turn sail past the threshold un-compacted (the same 400 as above)
+  — flooring at 1 never assumes content sparser than the char/4 baseline. Dense-content _safety_ is
+  the cap's job (the guarantee); this just fires compaction sooner so the cap truncates less. The UI
+  fill gauge keeps the raw learned factor; only the compact-or-not choice uses the floored one.
+  It snaps the keep-boundary _back_ over `tool` messages
   to a tool-call-group start (so no tool result is orphaned from its `tool_call`) and pins the
   original user task verbatim, recapping only what follows. Snapping back rather than forward to
   a user message is what lets it compact _within_ a single long turn — e.g. a read-heavy
