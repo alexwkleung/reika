@@ -11,10 +11,33 @@ const BUDGET_SAFETY = 0.9;
 // Floor on the calibration used *for the cap* (calibration = real tokens per estimate ≈
 // 4/chars-per-token). The learned average is trained on whatever the session has seen
 // (often prose-heavy reasoning, ~3.5 chars/token) and badly under-counts a sudden dump of
-// dense content like build logs or minified code (~2–2.5 chars/token). Since the cap is a
-// safety backstop and truncation is recoverable, assume the dense worst case here so a
-// single tool dump can't overflow the window while calibration is still catching up.
-const CAP_DENSITY_FLOOR = 2.0;
+// dense content. Since the cap is a safety backstop and truncation is recoverable, assume
+// the dense worst case here so a single tool dump can't overflow the window while calibration
+// is still catching up. 2.5 (not 2.0): a multi-file UI turn carrying SVG path data + CSS +
+// code in the kept reasoning was observed tokenizing at ~1.6 chars/token — real 25,389 tok
+// vs a 9,941 char/4 estimate (2.5×), which sailed past compaction and 400'd a 24,576 window.
+// 4/2.5 = 1.6 chars per budget-token covers that worst case.
+const CAP_DENSITY_FLOOR = 2.5;
+
+// EXPERIMENT (REIKA_DEDUP_PAYLOADS): content-identity dedup of tool messages — the "deny the
+// attractor" context-hygiene layer. A weak/low-bit model is a pattern-completer, so identical content
+// repeated in the context (see agent/reasoningtrace.ts) raises the odds the model repeats too;
+// collapsing that repetition before it feeds back removes the fuel a loop needs, one step EARLIER than
+// the reactive read-trace ledger (which only nags once the loop is already forming). Deterministic and
+// model-agnostic — it changes only what is re-serialized, never sampling, so it carries none of the
+// operator-provenance risk the sampling levers do. Strict no-op when off. See dedupToolContent.
+const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS === '1';
+// Replaces a stubbed FRESH payload (an identical full result still simultaneously in context — a
+// parallel or in-band re-read of one file within a single round). The summary is kept, so the model
+// still sees what the result was; only the duplicated body is dropped.
+const DEDUP_PAYLOAD_STUB =
+  '(reika: identical to an earlier result above — body omitted, you already have it)';
+// Replaces a stubbed AGED summary (a byte-identical "Read A lines …" line repeating down the trail
+// across rounds — the cross-round pattern that survives payload-aging, since aging only collapses the
+// payload, not the summary). The originating tool_call args above still name the target, so dropping
+// the duplicated summary loses nothing but the repetition itself.
+const DEDUP_TRAIL_STUB = '(reika: repeat of an earlier identical result — omitted)';
+const NO_STUBS: ReadonlySet<number> = new Set();
 
 export function messagesToOpenAI(
   system: string,
@@ -27,6 +50,9 @@ export function messagesToOpenAI(
   },
 ): ChatMessageParam[] {
   const freshFrom = findFreshToolBlockStart(history);
+  // Content-identity dedup (deny-the-attractor). Computed once, before the window cap below, so a
+  // stubbed payload frees its budget for the surviving copies rather than being counted then dropped.
+  const stubbed = DEDUP_PAYLOADS ? dedupToolContent(history, freshFrom) : NO_STUBS;
   // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
   // starves the budget over a long multi-round turn, but pruning it too hard makes the
   // model re-derive the same analysis across rounds. Keep the last N tool-call rounds (the
@@ -56,6 +82,7 @@ export function messagesToOpenAI(
     history,
     freshFrom,
     keepReasoningFrom,
+    stubbed,
     opts,
   );
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
@@ -94,9 +121,18 @@ export function messagesToOpenAI(
       out.push(param as unknown as ChatMessageParam);
     } else if (msg.role === 'tool') {
       const fresh = i >= freshFrom && msg.payload;
-      const content = fresh
-        ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
-        : msg.summary;
+      let content: string;
+      if (stubbed.has(i)) {
+        // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
+        // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
+        // bare back-reference (its summary is the very thing repeating). tool_call_id pairing is
+        // untouched, so the provider still matches every call to a response.
+        content = fresh ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}` : DEDUP_TRAIL_STUB;
+      } else {
+        content = fresh
+          ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
+          : msg.summary;
+      }
       const toolName = findToolNameForCall(history, msg.callId);
       const param: Record<string, unknown> = {
         role: 'tool',
@@ -115,6 +151,28 @@ export function messagesToOpenAI(
     out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
   return out;
+}
+
+// Indices of tool messages whose serialized content byte-identically repeats an earlier tool
+// message's — the later copies are pure repetition. Keep-first: the earliest (still-in-context)
+// occurrence stays whole and every repeat becomes a back-reference, so the model sees each distinct
+// result exactly once. The signature is exactly what WOULD be serialized for that message (a fresh
+// message serializes its payload; an aged one its summary), prefixed by kind so a payload can never
+// collide with a summary. Two scales fall out of the one rule: simultaneous full-payload dups within a
+// round (fresh↔fresh on the payload) and the aged summary trail across rounds (aged↔aged on the
+// summary). Pure + exported for tests. See DEDUP_PAYLOADS.
+export function dedupToolContent(history: Message[], freshFrom: number): Set<number> {
+  const firstSeen = new Map<string, number>();
+  const stubbed = new Set<number>();
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.role !== 'tool') continue;
+    const fresh = i >= freshFrom && m.payload;
+    const sig = fresh ? `p:${m.payload}` : `s:${m.summary}`;
+    if (firstSeen.has(sig)) stubbed.add(i);
+    else firstSeen.set(sig, i);
+  }
+  return stubbed;
 }
 
 // Start index of the trailing block of tool messages — tool messages at or after
@@ -136,6 +194,7 @@ function freshPayloadCharCap(
   history: Message[],
   freshFrom: number,
   keepReasoningFrom: number,
+  stubbed: ReadonlySet<number>,
   opts?: { contextWindow?: number; calibration?: number; minGenTokens?: number },
 ): number | undefined {
   const cw = opts?.contextWindow;
@@ -145,10 +204,13 @@ function freshPayloadCharCap(
   const reserve =
     opts?.minGenTokens && opts.minGenTokens > 0 ? opts.minGenTokens : DEFAULT_MIN_GEN_TOKENS;
   const learned = opts?.calibration && opts.calibration > 0 ? opts.calibration : 1;
-  // The floor is only for converting the *fresh* allowance to chars — the non-fresh content
-  // is already-seen and well-described by the learned average, so applying the worst-case
-  // density to the whole budget (as a naive cap would) needlessly shrinks the effective
-  // window and truncates tool output even when there's plenty of real room.
+  // Both the fresh-allowance conversion AND the non-fresh subtraction use the pessimistic floor.
+  // Non-fresh content was originally counted at the learned average on the theory it's prose-ish
+  // and well-described — but the observed 400 leaked partly through it: the system block carries
+  // dense tool-definition JSON and the kept reasoning quoted SVG path data / CSS, so fixed overhead
+  // tokenizes far denser than the prose average too. Under-counting it over-allocates to fresh and
+  // overflows. Over-counting only bites when the window is already tight (exactly when we want to be
+  // conservative); a roomy turn's small tool result still clears the reduced budget untruncated.
   const capCalib = Math.max(learned, CAP_DENSITY_FLOOR);
 
   let freshCount = 0;
@@ -156,8 +218,14 @@ function freshPayloadCharCap(
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (i >= freshFrom && m.role === 'tool' && m.payload) {
-      freshCount++;
-      nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
+      if (stubbed.has(i)) {
+        // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
+        // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
+        nonFreshChars += m.summary.length + DEDUP_PAYLOAD_STUB.length + 2;
+      } else {
+        freshCount++;
+        nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
+      }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
       nonFreshChars += nonFreshChars0(m, i >= keepReasoningFrom);
@@ -165,10 +233,10 @@ function freshPayloadCharCap(
   }
   if (freshCount === 0) return undefined;
 
-  // Work in real tokens: budget the prompt, subtract the (accurately-estimated) non-fresh
+  // Work in real tokens: budget the prompt, subtract the (pessimistically-estimated) non-fresh
   // content, and convert what's left for fresh payloads back to chars pessimistically.
   const promptTokenBudget = (cw - reserve) * BUDGET_SAFETY;
-  const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * learned;
+  const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * capCalib;
   const freshTokenBudget = promptTokenBudget - nonFreshTokens;
   if (freshTokenBudget <= 0) return 0;
   const freshCharBudget = (freshTokenBudget * CHARS_PER_TOKEN) / capCalib;

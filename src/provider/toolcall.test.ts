@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { messagesToOpenAI } from './toolcall.js';
+import { dedupToolContent, messagesToOpenAI } from './toolcall.js';
 
 // Total serialized characters of a built request — content plus tool_call JSON.
 function requestChars(out: unknown[]): number {
@@ -119,6 +119,29 @@ describe('messagesToOpenAI', () => {
     expect(tool?.content).toContain('to fit the context window');
     // The invariant that matters: the serialized request never exceeds the window.
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  it('caps so the request fits the window even at worst-case (dense) token density', () => {
+    // Regression for the observed 400: a dense multi-file turn (SVG path data / CSS / code in the
+    // kept reasoning, ~1.6 chars/token) overflowed a 24,576 window because the cap assumed a looser
+    // density. The invariant: the built request, counted at the pessimistic CAP_DENSITY_FLOOR (2.5,
+    // i.e. ~1.6 chars/token), must still fit the window — requestChars * 2.5/4 <= window. A moderate
+    // system (dense tool-def surrogate) exercises the non-fresh-at-pessimistic-density path too.
+    const window = 24576;
+    const system = 'S'.repeat(10_000);
+    const big = 'Z'.repeat(200_000);
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c', summary: 's', payload: big },
+    ];
+    const out = messagesToOpenAI(system, history, { contextWindow: window, calibration: 0.9 });
+    const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+      content?: string;
+    };
+    expect(tool?.content).toContain('to fit the context window'); // cap fired
+    // Real tokens at the worst plausible density stay within the window (the no-400 guarantee).
+    expect(requestChars(out) * (2.5 / 4)).toBeLessThanOrEqual(window);
   });
 
   it('keeps both the head and the tail when truncating (conclusion survives)', () => {
@@ -369,5 +392,81 @@ describe('messagesToOpenAI', () => {
       .map(m => (m as { reasoning_content?: string }).reasoning_content);
     // Oldest round pruned; the last two kept.
     expect(reasonings).toEqual([undefined, 'think 2', 'think 3']);
+  });
+
+  it('does not dedup repeated tool content when the flag is off (default)', () => {
+    // Two aged, byte-identical read summaries. With REIKA_DEDUP_PAYLOADS unset, both survive verbatim
+    // — the dedup layer is strictly opt-in.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'a', summary: 'Read A lines 1-5 of 5', payload: 'AAA' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'b', summary: 'Read A lines 1-5 of 5', payload: 'AAA' },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'done' },
+    ];
+    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+      tool_call_id?: string;
+      content?: string;
+    }>;
+    expect(out.find(m => m.tool_call_id === 'a')?.content).toBe('Read A lines 1-5 of 5');
+    expect(out.find(m => m.tool_call_id === 'b')?.content).toBe('Read A lines 1-5 of 5');
+  });
+});
+
+describe('dedupToolContent', () => {
+  const tool = (callId: string, summary: string, payload?: string): Message => ({
+    role: 'tool',
+    callId,
+    summary,
+    ...(payload !== undefined ? { payload } : {}),
+  });
+
+  it('flags nothing when every tool result is distinct', () => {
+    const history: Message[] = [
+      tool('a', 'Read A lines 1-5 of 5', 'AAA'),
+      tool('b', 'Read B lines 1-5 of 5', 'BBB'),
+    ];
+    expect([...dedupToolContent(history, 0)]).toEqual([]);
+  });
+
+  it('collapses simultaneous identical fresh payloads (parallel re-read), keeping the first', () => {
+    // freshFrom=0 → both fresh, signature is the payload; the second identical one is the repeat.
+    const history: Message[] = [
+      tool('a', 'Read A lines 1-10 of 10', 'IDENTICAL'),
+      tool('b', 'Read A lines 1-10 of 10', 'IDENTICAL'),
+    ];
+    expect([...dedupToolContent(history, 0)]).toEqual([1]);
+  });
+
+  it('collapses a repeated aged summary trail, keeping the first', () => {
+    // freshFrom past the end → all aged, signature is the summary. The trail "Read A / Read A" is the
+    // cross-round pattern that survives payload-aging; the later copy is stubbed.
+    const history: Message[] = [
+      tool('a', 'Read A lines 1-10 of 10', 'AAA'),
+      { role: 'assistant', content: 'x' },
+      tool('b', 'Read A lines 1-10 of 10', 'AAA'),
+    ];
+    expect([...dedupToolContent(history, 99)]).toEqual([2]);
+  });
+
+  it('does not dedup a fresh payload against an aged summary (different serialized forms)', () => {
+    // Even with identical bytes, the aged copy serializes its summary and the fresh copy its payload —
+    // different content, so the kind-prefixed signature must keep them apart.
+    const history: Message[] = [
+      tool('old', 'SAME', 'SAME'),
+      tool('new', 'SAME', 'SAME'),
+    ];
+    expect([...dedupToolContent(history, 1)]).toEqual([]);
+  });
+
+  it('ignores non-tool messages', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'dup' },
+      { role: 'assistant', content: 'dup' },
+      tool('a', 'Read A', 'AAA'),
+    ];
+    expect([...dedupToolContent(history, 0)]).toEqual([]);
   });
 });
