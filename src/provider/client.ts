@@ -2,7 +2,7 @@ import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, Tool, ToolCall, Usage } from '../types.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
-import type { ChatCompletionRequest } from './transport.js';
+import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
 export type ModelResponse = {
   content: string;
@@ -31,6 +31,17 @@ export async function callModel(opts: {
   // One-shot per-token logit offsets for the last-resort rumination recovery (see agent/logitrecovery.ts).
   // Set only on the single biased recovery round; absent on every normal turn.
   logitBias?: Record<number, number>;
+  // EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): prefix-stable serialization + a transient
+  // harness note as the final user message instead of a system suffix. See provider/toolcall.ts.
+  prefixStable?: boolean;
+  trailingNote?: string;
+  // Override the freeze-on-serialize default below. The speculative KV warm (agent/warm.ts)
+  // passes false: only the turn's real call may stamp `rendered` bytes — a warm serializes the
+  // same frozen bytes read-only, so a throwaway request can never mutate shared history.
+  stampRenders?: boolean;
+  // Debug hook: called with the exact serialized request messages before sending, so the loop's
+  // prefix-divergence instrumentation measures what the engine actually receives.
+  onRequest?: (messages: ChatMessageParam[]) => void;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -40,7 +51,12 @@ export async function callModel(opts: {
     calibration: opts.calibration,
     reasoningRounds: opts.config.reasoningRounds,
     minGenTokens: opts.config.minGenTokens,
+    prefixStable: opts.prefixStable,
+    // The real call is the one that freezes live-payload bytes (estimates and warms never do).
+    stampRenders: opts.stampRenders ?? opts.prefixStable,
+    trailingNote: opts.trailingNote,
   });
+  opts.onRequest?.(messages);
   const maxTokens = opts.maxTokens ?? opts.config.maxTokens;
 
   const contentParts: string[] = [];

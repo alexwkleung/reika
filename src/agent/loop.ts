@@ -19,8 +19,11 @@ import {
   compactThreshold,
   gatherPlanFindings,
   distillPlanHandoff,
+  batchAgePayloads,
+  AGE_LOW_FRACTION,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { PrefixTrace } from './prefixtrace.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -224,6 +227,18 @@ const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
 // analogue of the typecheck gate). The *tracking* is always on and deterministic (it feeds the UI
 // checklist); this flag gates only the model-facing pressure, off by default for a clean A/B.
 const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
+// EXPERIMENT (prefix-stable context, #69): keep consecutive requests append-only between shrink
+// events so the inference engine's prompt-prefix cache stays valid. Three per-round prefix
+// rewriters move to event-driven or tail-positioned equivalents: payload aging becomes sticky +
+// batched (compaction.ts batchAgePayloads), reasoning pruning follows the same sticky boundary,
+// and the regenerated ledgers/nudges ride a transient trailing user message instead of a system
+// suffix (a system change invalidates the cache from token 0; the tail is rewritten every round
+// anyway). Rationale: every mid-history byte change forces the engine to re-process from that
+// point — and SWA/hybrid-memory models (no partial-prefix restore) re-process the WHOLE prompt on
+// ANY divergence, observed at ~3 min/request on a 35B. Requires REIKA_CONTEXT_WINDOW (sticky
+// liveness needs the batch-aging watermark to bound it); silently inactive without one. Off by
+// default for A/B; strict no-op when off.
+const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE === '1';
 // EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
 // blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
 // a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
@@ -366,11 +381,13 @@ function buildPlanLedger(history: Message[], round: number): string {
   return lines.join('\n');
 }
 
-// Steady-state system for round `round` — the base prompt plus the deterministic non-loop
-// ledgers (plan mode's exploration ledger; the PLAN_ALIGN progress checklist). The round loop
-// appends its loop/recovery ledgers on top of this. At round 0 of a fresh turn all loop state
-// is empty, so this IS the round-0 system — which is what lets the speculative KV warm
-// (agent/warm.ts) reproduce it outside runTurn without drift.
+// Steady-state (prefix-stable OFF) system for round `round` — the base prompt plus the
+// deterministic non-loop ledgers (plan mode's exploration ledger; the PLAN_ALIGN progress
+// checklist). The round loop layers its loop/recovery ledgers on the same base (the agent path
+// composes the identical parts inline so it can route them to the trailing note under
+// REIKA_PREFIX_STABLE). At round 0 of a fresh turn all loop state is empty, so flag-off this IS
+// the round-0 system — which is what lets the speculative KV warm (agent/warm.ts) reproduce it
+// outside runTurn; the drift tests in warm.test.ts hold the two compositions together.
 export function buildSteadySystem(opts: {
   baseSystem: string;
   promptMode?: PromptMode;
@@ -388,14 +405,23 @@ export function buildSteadySystem(opts: {
   return opts.baseSystem + planLedger;
 }
 
+// Whether the prefix-stable experiment governs requests for this window config — the same
+// condition runTurn uses (REIKA_PREFIX_STABLE needs a known window for its sticky watermarks).
+// Exported so the warm path (agent/warm.ts) serializes its request under the same regime.
+export function prefixStableActive(contextWindow?: number): boolean {
+  return PREFIX_STABLE && !!contextWindow;
+}
+
 // Reproduce runTurn's exact round-0 request prefix outside the loop, for the speculative KV
 // warm (agent/warm.ts): the same pre-round-0 history transform (plan→agent handoff
-// distillation, flag-gated) and the same steady round-0 system. Lives here to share the
+// distillation, flag-gated) and the same round-0 system. Lives here to share the
 // module-private flags and stay in lockstep with the pre-pass in runTurn below. Mutates
 // `history` in place (splice-only — message objects are never touched), exactly like that
 // pre-pass, so callers pass their own copy. The ledger builders never read a trailing user
 // message, so the history-without-user this receives yields the same system runTurn computes
-// after pushing one.
+// after pushing one. Under REIKA_PREFIX_STABLE the ledgers ride the transient trailing note
+// instead of the system block (which the warm never sends — the note lands after the warm's
+// whole prefix), so the round-0 system is the bare base prompt.
 export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
@@ -407,9 +433,11 @@ export function buildRoundZeroPrefix(opts: {
   if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
     distillPlanHandoff(opts.history, opts.contextWindow, opts.calibration, opts.minGenTokens);
   }
+  const baseSystem = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
+  if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
   return buildSteadySystem({
-    baseSystem: buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode }),
+    baseSystem,
     promptMode: opts.promptMode,
     history: opts.history,
     round: 0,
@@ -803,6 +831,16 @@ export async function runTurn(opts: {
   let reasoningLoopActive = false;
 
   const window = opts.config.contextWindow;
+  // Prefix-stable mode is self-gating on a known window: sticky payload liveness without the
+  // batch-aging watermark would grow requests unbounded, so no window → default behavior.
+  const prefixStable = PREFIX_STABLE && !!window;
+  // The per-round harness note (ledgers/nudges) when prefix-stable moves it out of the system
+  // suffix: sent as a transient trailing user message, regenerated each round, never in history.
+  let roundSuffix: string | undefined;
+  // Prefix-divergence instrumentation (REIKA_DEBUG-only): measures, per request, how much of the
+  // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
+  // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
+  const prefixTrace = new PrefixTrace();
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
   // JSON and CJK tokenize denser). Calibrate it against the provider's reported
   // promptTokens so the compaction trigger fires at the *real* threshold, not a heuristic
@@ -815,6 +853,8 @@ export async function runTurn(opts: {
       calibration,
       reasoningRounds: opts.config.reasoningRounds,
       minGenTokens: opts.config.minGenTokens,
+      prefixStable,
+      trailingNote: roundSuffix,
     });
 
   // Run a typecheck while pulsing the UI indicator around it (and clearing on any exit). The
@@ -872,6 +912,9 @@ export async function runTurn(opts: {
     // One-shot per-token bias for this round, set only by the Tier 2 logit recovery at the rumination
     // dead-end below; undefined on every normal round. Threaded into callModel for this iteration.
     let logitBias: Record<number, number> | undefined;
+    // Regenerated per round like `system`; the branches below set it when prefix-stable moves a
+    // ledger/nudge to the tail. rawEstimate reads it, so reset before any estimate this round.
+    roundSuffix = undefined;
 
     // Up to the cap: append the ledger + escalating nudge to the exploration prompt. At the cap:
     // switch to the transform — a tool-less call over a synthetic task+notes context, NOT the
@@ -905,6 +948,9 @@ export async function runTurn(opts: {
     // inspection tools this round to force the explore→act transition. Recomputed each round, so it
     // lifts as soon as the loop clears. Never set in plan mode (which has its own force-write).
     let withdrawInspection = false;
+    // Converge retry requested for this round (agent terminal). Composed into the suffix below —
+    // NOT appended to `system` directly, which the suffix composition would overwrite.
+    let convergeSteerNow = false;
     if (opts.promptMode === 'plan') {
       if (planForceWrite) {
         system = buildPlanWritePrompt(steerRetryActive);
@@ -943,6 +989,11 @@ export async function runTurn(opts: {
             debugLog(`[reika:debug] round=${i} logit-recovery (plan force-write) unavailable\n`);
           }
         }
+      } else if (prefixStable) {
+        // The ledger changes every round (files examined, escalating pressure); in the system
+        // suffix that re-processes the whole prompt each round. As the tail note it costs nothing.
+        system = baseSystem;
+        roundSuffix = buildPlanLedger(opts.history, i).trimStart();
       } else {
         system = buildSteadySystem({
           baseSystem,
@@ -1033,7 +1084,6 @@ export async function runTurn(opts: {
       // pulls read/grep/glob/list, so a model spiraling via `bash` (e.g. re-running `tail`/`grep` to
       // "verify") routes around it and would otherwise run to maxTurns. End the turn instead — the
       // work it did (if any) is already on disk; say so honestly rather than loop.
-      let steerConvergeRound = false;
       if (reasoningLoop && loopActiveRounds >= LOOP_TERMINAL_AFTER) {
         // Converge retry (REIKA_CONVERGE_RETRY) — strongest lever first: spend ONE steered round before
         // the stop, a failure-naming directive (buildConvergeSteer) to commit and act, appended to this
@@ -1043,7 +1093,7 @@ export async function runTurn(opts: {
         // spiral that token-level bias can't.
         if (CONVERGE_RETRY && convergeRetries < MAX_CONVERGE_RETRIES) {
           convergeRetries++;
-          steerConvergeRound = true; // appended below, AFTER the steady/ledger composition (#83)
+          convergeSteerNow = true; // composed into the suffix below, LAST (#83)
           opts.onMessage({
             role: 'system',
             tone: 'warn',
@@ -1094,32 +1144,37 @@ export async function runTurn(opts: {
           return;
         }
       }
-      // Steady base for this round: baseSystem plus the PLAN_ALIGN checklist while unchecked
-      // steps remain (the checklist rides the regenerated system suffix — like the loop ledgers,
-      // it never enters history, so compaction can't age the plan out from under a long
-      // implementation run).
-      const steady = buildSteadySystem({
-        baseSystem,
-        promptMode: opts.promptMode,
-        history: opts.history,
-        round: i,
-        planSteps,
-      });
+      // Plan alignment (REIKA_PLAN_ALIGN): while unchecked steps remain, the checklist rides the
+      // regenerated per-round suffix — like the loop ledgers, it never enters history, so
+      // compaction can't age the plan out from under a long implementation run. Flag-off, this
+      // composition produces exactly buildSteadySystem(...) + ledgers — the warm path
+      // (buildRoundZeroPrefix) reproduces round 0 through that helper, and the drift tests in
+      // warm.test.ts lock the two together.
+      const suffixParts: string[] = [];
+      if (PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)) {
+        suffixParts.push(buildPlanProgressLedger(planSteps));
+      }
       // The grounded edit-recovery directive is more specific and actionable than the generic loop
       // ledger, so it replaces it for the one round it fires.
       if (editRecoveryGrounding) {
-        system = steady + '\n\n' + buildEditRecoveryLedger(editRecoveryGrounding);
+        suffixParts.push(buildEditRecoveryLedger(editRecoveryGrounding));
       } else if (loopDetected) {
-        system = steady + '\n\n' + buildAgentLoopLedger(looping, withdrawInspection);
-      } else {
-        system = steady;
+        suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection));
       }
-      // The converge steer rides on top of the composed system (steady + loop ledger — a loop is
-      // necessarily active when the terminal fires). It must land after the composition above:
-      // appending it earlier gets silently discarded by the reassignment (#83 — the agent-mode
-      // steer never reached the model from its introduction until this fix).
-      if (steerConvergeRound) {
-        system += '\n\n' + buildConvergeSteer();
+      // Last, so the strongest directive sits closest to generation. (Composed here rather than
+      // `system +=` in the terminal branch above, which this composition used to overwrite — the
+      // steer previously never reached a request; #83.)
+      if (convergeSteerNow) suffixParts.push(buildConvergeSteer());
+      const suffix = suffixParts.map(p => '\n\n' + p).join('');
+      if (prefixStable) {
+        // Tail note instead of system suffix: a ledger appearing/changing/clearing in the system
+        // block invalidates the engine's prefix cache from token 0; the tail is rewritten every
+        // round anyway. The builders' own "auto-generated — not user input" headers keep a
+        // user-role note from reading as user input.
+        system = baseSystem;
+        roundSuffix = suffix ? suffix.trimStart() : undefined;
+      } else {
+        system = baseSystem + suffix;
       }
       if (loopDetected) {
         debugLog(
@@ -1187,12 +1242,46 @@ export async function runTurn(opts: {
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
       );
     }
+    // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in
+    // one oldest-first batch when the estimate crosses the same threshold compaction uses — and do
+    // it immediately before the compaction check so the two rewrites land in the SAME request (one
+    // amortized prefix-cache invalidation, not two on consecutive rounds).
+    let agedThisRound = false;
+    if (prefixStable && window && !planForceWrite) {
+      const marked = batchAgePayloads(
+        opts.history,
+        // compactCalibration, not the raw learned factor: batch aging replaces the per-round
+        // collapse as the shrink mechanism, so it must fire under the same floored trigger as
+        // compaction — a low learned calibration deferring the shrink until overflow is exactly
+        // what the floor exists to prevent.
+        () => rawEstimate() * compactCalibration,
+        window,
+        opts.config.minGenTokens,
+      );
+      agedThisRound = marked > 0;
+      if (marked > 0) {
+        debugLog(`[reika:debug] round=${i} prefix-stable batch-age marked=${marked}\n`);
+      }
+    }
+    // Aging stops at the protected tail, so on a small window (system prompt + the active round's
+    // reads can be most of it) it may land just UNDER the compaction threshold without reaching the
+    // low watermark — and the next round's growth immediately re-fires a shrink event: consecutive
+    // full re-processes, the exact pattern this mode exists to prevent (observed as back-to-back
+    // batch-age rounds on a 24k window). This round is already paying the invalidation, so when
+    // aging fired but couldn't reach the watermark, pull compaction into the SAME event instead of
+    // letting the shrink straddle two requests. Never triggers on a quiet (append-only) round.
+    const agedButAboveWatermark =
+      agedThisRound &&
+      !!window &&
+      rawEstimate() * compactCalibration >
+        compactThreshold(window, opts.config.minGenTokens) * AGE_LOW_FRACTION;
     // Force-write sends the tiny synthetic context, not opts.history, so there is nothing to
     // compact — skip it. Otherwise collapse the oldest turns if the estimate crosses the threshold.
     if (
       !planForceWrite &&
       window &&
-      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens)
+      (shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
+        agedButAboveWatermark)
     ) {
       const removed = compactHistory(
         opts.history,
@@ -1297,6 +1386,23 @@ export async function runTurn(opts: {
       // Set only on the one-shot Tier 2 logit-recovery round (see the rumination dead-end above);
       // undefined otherwise, so a normal turn's request is byte-identical to before.
       logitBias,
+      prefixStable,
+      trailingNote: roundSuffix,
+      // Prefix-divergence line (issue #69): where this request stopped matching the previous one,
+      // and which mechanism class broke it. Measured on the exact serialized request.
+      onRequest: debugEnabled()
+        ? msgs => {
+            const d = prefixTrace.record(msgs);
+            const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+            debugLog(
+              `[reika:debug] prefix-cache round=${i} cause=${d.cause} ` +
+                `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
+                `msgs=${d.stableMessages}/${d.totalMessages}` +
+                (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                `\n`,
+            );
+          }
+        : undefined,
     });
 
     // The recovery round (if this was one) has now run — clear the live "recovering" pulse. Idempotent

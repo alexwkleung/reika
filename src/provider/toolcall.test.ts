@@ -454,10 +454,7 @@ describe('dedupToolContent', () => {
   it('does not dedup a fresh payload against an aged summary (different serialized forms)', () => {
     // Even with identical bytes, the aged copy serializes its summary and the fresh copy its payload —
     // different content, so the kind-prefixed signature must keep them apart.
-    const history: Message[] = [
-      tool('old', 'SAME', 'SAME'),
-      tool('new', 'SAME', 'SAME'),
-    ];
+    const history: Message[] = [tool('old', 'SAME', 'SAME'), tool('new', 'SAME', 'SAME')];
     expect([...dedupToolContent(history, 1)]).toEqual([]);
   });
 
@@ -468,5 +465,107 @@ describe('dedupToolContent', () => {
       tool('a', 'Read A', 'AAA'),
     ];
     expect([...dedupToolContent(history, 0)]).toEqual([]);
+  });
+});
+
+// EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): prefix-stable serialization — sticky payload
+// liveness, byte-frozen renders, sticky reasoning retention, and the trailing harness note.
+describe('messagesToOpenAI prefix-stable', () => {
+  const toolRound = (id: string, payload?: string): Message[] => [
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id, name: 'read', args: {} }],
+    },
+    { role: 'tool', callId: id, summary: `${id} summary`, ...(payload ? { payload } : {}) },
+  ];
+
+  it('keeps payloads live outside the trailing block instead of collapsing to summary', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...toolRound('old', 'OLD PAYLOAD'),
+      ...toolRound('fresh', 'FRESH PAYLOAD'),
+    ];
+    const out = messagesToOpenAI('sys', history, { prefixStable: true });
+    const tools = out.filter(m => m.role === 'tool') as Array<{ content: string }>;
+    expect(tools[0].content).toContain('OLD PAYLOAD');
+    expect(tools[1].content).toContain('FRESH PAYLOAD');
+  });
+
+  it('collapses an aged payload to summary-only', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...toolRound('old', 'OLD PAYLOAD'),
+      ...toolRound('fresh', 'FRESH PAYLOAD'),
+    ];
+    (history[2] as Message & { role: 'tool' }).aged = true;
+    const out = messagesToOpenAI('sys', history, { prefixStable: true });
+    const tools = out.filter(m => m.role === 'tool') as Array<{ content: string }>;
+    expect(tools[0].content).toBe('old summary');
+    expect(tools[1].content).toContain('FRESH PAYLOAD');
+  });
+
+  it('stamps rendered bytes only when stampRenders is set (never on estimates)', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'PAYLOAD')];
+    const toolMsg = history[2] as Message & { role: 'tool' };
+    messagesToOpenAI('sys', history, { prefixStable: true });
+    expect(toolMsg.rendered).toBeUndefined();
+    messagesToOpenAI('sys', history, { prefixStable: true, stampRenders: true });
+    expect(toolMsg.rendered).toContain('PAYLOAD');
+  });
+
+  it('reuses stamped bytes verbatim even when the cap would now truncate differently', () => {
+    const bigPayload = 'X'.repeat(4000);
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', bigPayload)];
+    const toolMsg = history[2] as Message & { role: 'tool' };
+    // First real call: no window pressure — payload rendered in full and stamped.
+    messagesToOpenAI('sys', history, { prefixStable: true, stampRenders: true });
+    const stamped = toolMsg.rendered!;
+    expect(stamped).toContain(bigPayload);
+    // Later call under a tiny window that would truncate hard: the frozen bytes must not change,
+    // or the mid-history rewrite invalidates the engine's prefix cache.
+    const out = messagesToOpenAI('sys', history, {
+      prefixStable: true,
+      stampRenders: true,
+      contextWindow: 1024,
+      minGenTokens: 256,
+    });
+    expect(toolMsg.rendered).toBe(stamped);
+    const tool = out.find(m => m.role === 'tool') as { content: string };
+    expect(tool.content).toBe(stamped);
+  });
+
+  it('keeps reasoning until reasoningAged is set, regardless of round distance', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { ...toolRound('r1')[0], reasoning: 'think 1' } as Message,
+      toolRound('r1')[1],
+      { ...toolRound('r2')[0], reasoning: 'think 2' } as Message,
+      toolRound('r2')[1],
+    ];
+    const out = messagesToOpenAI('sys', history, { prefixStable: true, reasoningRounds: 1 });
+    const reasonings = out
+      .filter(m => m.role === 'assistant')
+      .map(m => (m as { reasoning_content?: string }).reasoning_content);
+    expect(reasonings).toEqual(['think 1', 'think 2']);
+    (history[1] as Message & { role: 'assistant' }).reasoningAged = true;
+    const out2 = messagesToOpenAI('sys', history, { prefixStable: true, reasoningRounds: 1 });
+    const reasonings2 = out2
+      .filter(m => m.role === 'assistant')
+      .map(m => (m as { reasoning_content?: string }).reasoning_content);
+    expect(reasonings2).toEqual([undefined, 'think 2']);
+  });
+
+  it('appends the trailing note as the final user message', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+    const out = messagesToOpenAI('sys', history, { trailingNote: '--- reika status ---' });
+    const last = out[out.length - 1] as { role: string; content: string };
+    expect(last).toEqual({ role: 'user', content: '--- reika status ---' });
+  });
+
+  it('counts the trailing note as the user message a user-requiring template needs', () => {
+    const out = messagesToOpenAI('sys', [], { trailingNote: 'note' });
+    expect(out.filter(m => m.role === 'user')).toHaveLength(1);
+    expect((out[1] as { content: string }).content).toBe('note');
   });
 });

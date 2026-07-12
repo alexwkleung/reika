@@ -24,6 +24,10 @@ export type Message =
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
       planFinal?: boolean;
+      // EXPERIMENT (REIKA_PREFIX_STABLE): reasoning dropped from requests by batch aging. Sticky
+      // on the shared message object so the boundary — and the inference engine's prompt-cache
+      // prefix — holds across rounds and turns. See agent/compaction.ts batchAgePayloads.
+      reasoningAged?: boolean;
     }
   | {
       role: 'tool';
@@ -31,6 +35,13 @@ export type Message =
       summary: string;
       payload?: string;
       payloadId?: string;
+      // EXPERIMENT (REIKA_PREFIX_STABLE): `aged` = payload collapsed to summary by batch aging
+      // (sticky; replaces the per-round trailing-block collapse while the flag is on). `rendered` =
+      // the exact bytes this payload was first serialized with, reused verbatim while live so a
+      // drifting payload cap can't rewrite mid-history bytes and invalidate the engine's prefix
+      // cache; cleared when the message ages. See provider/toolcall.ts + agent/compaction.ts.
+      aged?: boolean;
+      rendered?: string;
       diff?: { text: string; path: string; added: number; removed: number; startLine?: number };
       command?: { text: string; outputTail: string; outputTruncated: boolean };
       nested?: boolean;

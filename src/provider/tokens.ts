@@ -25,13 +25,18 @@ export function estimateRequestTokens(
     calibration?: number;
     reasoningRounds?: number;
     minGenTokens?: number;
+    prefixStable?: boolean;
+    trailingNote?: string;
   },
 ): number {
+  // stampRenders deliberately unset: estimates must not freeze payload bytes (see toolcall.ts).
   const messages = messagesToOpenAI(system, history, {
     contextWindow: opts?.contextWindow,
     calibration: opts?.calibration,
     reasoningRounds: opts?.reasoningRounds,
     minGenTokens: opts?.minGenTokens,
+    prefixStable: opts?.prefixStable,
+    trailingNote: opts?.trailingNote,
   });
   const toolDefs = tools.length > 0 ? toolsToOpenAI(tools) : [];
   // A small per-message envelope (role/delimiters) the chat template adds on top of

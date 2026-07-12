@@ -47,12 +47,30 @@ export function messagesToOpenAI(
     calibration?: number;
     reasoningRounds?: number;
     minGenTokens?: number;
+    // EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): serialize for prompt-prefix stability. Payload
+    // liveness becomes sticky (`m.aged`, set only by batch aging) instead of trailing-block-only,
+    // reasoning retention becomes sticky (`m.reasoningAged`) instead of last-N-rounds, and a live
+    // payload's bytes are frozen via `m.rendered` — so between shrink events consecutive requests
+    // are append-only and the inference engine's prompt cache stays valid. See agent/compaction.ts
+    // batchAgePayloads for the aging side.
+    prefixStable?: boolean;
+    // Persist `m.rendered` stamps while serializing. True only on the real call path (client.ts):
+    // estimates must not stamp, or WHEN a payload freezes would depend on estimate timing (which
+    // varies with debug logging) instead of deterministically on the request that first sent it.
+    stampRenders?: boolean;
+    // Transient per-round harness note (loop ledgers / nudges) appended as the FINAL user message
+    // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
+    // from token 0; a tail message costs nothing. Never enters history.
+    trailingNote?: string;
   },
 ): ChatMessageParam[] {
-  const freshFrom = findFreshToolBlockStart(history);
+  const prefixStable = !!opts?.prefixStable;
+  const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
   // Content-identity dedup (deny-the-attractor). Computed once, before the window cap below, so a
   // stubbed payload frees its budget for the surviving copies rather than being counted then dropped.
-  const stubbed = DEDUP_PAYLOADS ? dedupToolContent(history, freshFrom) : NO_STUBS;
+  // Bypassed under prefix-stable: a stub decision flipping when a later duplicate arrives would
+  // rewrite mid-history bytes — the exact prefix-cache invalidation that mode exists to prevent.
+  const stubbed = DEDUP_PAYLOADS && !prefixStable ? dedupToolContent(history, freshFrom) : NO_STUBS;
   // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
   // starves the budget over a long multi-round turn, but pruning it too hard makes the
   // model re-derive the same analysis across rounds. Keep the last N tool-call rounds (the
@@ -115,23 +133,35 @@ export function messagesToOpenAI(
           },
         }));
       }
-      if (msg.reasoning && i >= keepReasoningFrom) {
+      if (msg.reasoning && (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom)) {
         param.reasoning_content = msg.reasoning;
       }
       out.push(param as unknown as ChatMessageParam);
     } else if (msg.role === 'tool') {
-      const fresh = i >= freshFrom && msg.payload;
       let content: string;
-      if (stubbed.has(i)) {
-        // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
-        // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
-        // bare back-reference (its summary is the very thing repeating). tool_call_id pairing is
-        // untouched, so the provider still matches every call to a response.
-        content = fresh ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}` : DEDUP_TRAIL_STUB;
+      if (prefixStable) {
+        if (msg.payload && !msg.aged) {
+          // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
+          const rendered =
+            msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, perPayloadCap)}`;
+          if (opts?.stampRenders) msg.rendered = rendered;
+          content = rendered;
+        } else {
+          content = msg.summary;
+        }
       } else {
-        content = fresh
-          ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
-          : msg.summary;
+        const fresh = i >= freshFrom && msg.payload;
+        if (stubbed.has(i)) {
+          // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
+          // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
+          // bare back-reference (its summary is the very thing repeating). tool_call_id pairing is
+          // untouched, so the provider still matches every call to a response.
+          content = fresh ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}` : DEDUP_TRAIL_STUB;
+        } else {
+          content = fresh
+            ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
+            : msg.summary;
+        }
       }
       const toolName = findToolNameForCall(history, msg.callId);
       const param: Record<string, unknown> = {
@@ -143,6 +173,12 @@ export function messagesToOpenAI(
       out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
+  }
+  // The transient harness note rides at the very END: the tail is rewritten every round anyway (new
+  // tool results), so a note here is free for the prefix cache — and recency-adjacent, where a small
+  // model attends hardest. It also counts as the user message a user-requiring template needs.
+  if (opts?.trailingNote) {
+    out.push({ role: 'user', content: opts.trailingNote });
   }
   // Final backstop: if somehow still no user message (e.g. an all-meta history with no recap), inject
   // a minimal one right after the system block so a user-requiring template doesn't 400. Cheap
@@ -176,8 +212,9 @@ export function dedupToolContent(history: Message[], freshFrom: number): Set<num
 }
 
 // Start index of the trailing block of tool messages — tool messages at or after
-// this index keep their payloads; earlier ones collapse to summary.
-function findFreshToolBlockStart(history: Message[]): number {
+// this index keep their payloads; earlier ones collapse to summary. Exported for
+// batch aging (agent/compaction.ts), which must never age the active round's results.
+export function findFreshToolBlockStart(history: Message[]): number {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role !== 'tool') return i + 1;
   }
@@ -195,10 +232,16 @@ function freshPayloadCharCap(
   freshFrom: number,
   keepReasoningFrom: number,
   stubbed: ReadonlySet<number>,
-  opts?: { contextWindow?: number; calibration?: number; minGenTokens?: number },
+  opts?: {
+    contextWindow?: number;
+    calibration?: number;
+    minGenTokens?: number;
+    prefixStable?: boolean;
+  },
 ): number | undefined {
   const cw = opts?.contextWindow;
   if (!cw) return undefined;
+  const prefixStable = !!opts?.prefixStable;
   // Reserve the same generation room the backstop and compaction use, so a fresh tool
   // dump can't leave a thinking model with no tokens to respond in. See provider/budget.ts.
   const reserve =
@@ -217,7 +260,16 @@ function freshPayloadCharCap(
   let nonFreshChars = systemContent.length;
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
-    if (i >= freshFrom && m.role === 'tool' && m.payload) {
+    if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
+      if (m.rendered !== undefined) {
+        // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
+        // that have never been sent split what's left.
+        nonFreshChars += m.rendered.length;
+      } else {
+        freshCount++;
+        nonFreshChars += m.summary.length + 2;
+      }
+    } else if (!prefixStable && i >= freshFrom && m.role === 'tool' && m.payload) {
       if (stubbed.has(i)) {
         // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
         // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
@@ -228,7 +280,10 @@ function freshPayloadCharCap(
       }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
-      nonFreshChars += nonFreshChars0(m, i >= keepReasoningFrom);
+      const includeReasoning = prefixStable
+        ? !(m.role === 'assistant' && m.reasoningAged)
+        : i >= keepReasoningFrom;
+      nonFreshChars += nonFreshChars0(m, includeReasoning);
     }
   }
   if (freshCount === 0) return undefined;

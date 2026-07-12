@@ -1,6 +1,6 @@
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import type { PromptMode } from './prompt.js';
-import { buildRoundZeroPrefix } from './loop.js';
+import { buildRoundZeroPrefix, prefixStableActive } from './loop.js';
 import { shouldCompact } from './compaction.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { callModel } from '../provider/client.js';
@@ -91,6 +91,7 @@ export function shouldSkipWarm(
     calibration: ctx.calibration,
     reasoningRounds: ctx.config.reasoningRounds,
     minGenTokens: ctx.config.minGenTokens,
+    prefixStable: prefixStableActive(ctx.config.contextWindow),
   });
   const projected = (estimate + USER_MSG_ALLOWANCE_TOKENS) * ctx.calibration;
   if (shouldCompact(projected, ctx.config.contextWindow, ctx.config.minGenTokens)) {
@@ -140,6 +141,9 @@ export function createPrefixWarmer(): PrefixWarmer {
             `histLen=${history.length}`,
         );
         // callModel returns (not throws) on abort, so the aborted path lands in .then too.
+        // Under REIKA_PREFIX_STABLE the warm serializes with the same frozen-byte semantics as
+        // the real call (no trailing note — that lands after the warm's whole prefix), but must
+        // never stamp `rendered` on shared history: freezing is the real call's job.
         void callModel({
           system,
           history,
@@ -148,6 +152,8 @@ export function createPrefixWarmer(): PrefixWarmer {
           calibration: ctx.calibration,
           maxTokens: 1,
           signal: controller.signal,
+          prefixStable: prefixStableActive(ctx.config.contextWindow),
+          stampRenders: false,
         })
           .then(res => {
             if (inflight?.controller === controller) inflight = null;

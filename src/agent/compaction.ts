@@ -1,5 +1,6 @@
 import type { Message } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
+import { findFreshToolBlockStart } from '../provider/toolcall.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
 const CHARS_PER_TOKEN = 4;
@@ -88,6 +89,57 @@ export function compactHistory(
   const recap = buildRecap(history.slice(recapStart, keepFrom), avail, calib);
   history.splice(recapStart, keepFrom - recapStart, { role: 'compaction', content: recap });
   return keepFrom - recapStart;
+}
+
+// EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): batch payload aging. In prefix-stable mode payloads
+// stay live (byte-frozen via `rendered`) instead of collapsing to summary the round after they
+// arrive — so between shrink events consecutive requests are append-only and the inference engine's
+// prompt-prefix cache holds, instead of re-processing from the aging boundary every round (or, on
+// SWA/hybrid-memory models, re-processing the FULL prompt every round). The cost is paid here, in
+// one batch: when the request estimate crosses the same threshold compaction uses, age oldest-first
+// (payloads to summary, old reasoning dropped) down to a lower watermark — one amortized
+// cache invalidation instead of a per-round one, with hysteresis so it doesn't re-fire immediately.
+// Marks are set on the shared message objects ON PURPOSE (unlike compactHistory's per-turn splice):
+// the next user turn re-seeds history from the same objects, so liveness and the frozen bytes carry
+// across turns and the new turn's first request stays prefix-aligned with the previous one.
+export const AGE_LOW_FRACTION = 0.7;
+
+export function batchAgePayloads(
+  history: Message[],
+  estimate: () => number, // calibrated request-token estimate; re-read after each mark
+  contextWindow: number,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+): number {
+  const threshold = compactThreshold(contextWindow, minGen);
+  if (estimate() <= threshold) return 0;
+  const target = threshold * AGE_LOW_FRACTION;
+  // Never age the active round: the trailing tool block is what the model is about to act on, and
+  // the assistant message that issued those calls keeps its reasoning (some providers require the
+  // active roundtrip's reasoning_content — see toolcall.ts).
+  const protect = protectedTailStart(history);
+  let marked = 0;
+  for (let i = 0; i < protect; i++) {
+    if (estimate() <= target) break;
+    const m = history[i];
+    if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
+      m.reasoningAged = true;
+      marked++;
+    } else if (m.role === 'tool' && m.payload && !m.aged) {
+      m.aged = true;
+      delete m.rendered;
+      marked++;
+    }
+  }
+  return marked;
+}
+
+// Index of the assistant message that issued the trailing tool block's calls (or the final
+// assistant message when the history ends without tool results) — everything from there on is the
+// active roundtrip and must not be aged.
+function protectedTailStart(history: Message[]): number {
+  let i = findFreshToolBlockStart(history) - 1;
+  while (i >= 0 && history[i].role !== 'assistant') i--;
+  return i >= 0 ? i : 0;
 }
 
 // Approximate the characters a message contributes to a request (at rest: tool payloads
