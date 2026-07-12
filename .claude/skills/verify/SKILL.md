@@ -30,6 +30,7 @@ A ~60-line node http server on `/v1/chat/completions` returning SSE
 (`data: {choices:[{delta:...}]}`, a usage frame with `prompt_tokens_details.cached_tokens`,
 then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 (max_tokens, roles, last content) — that log is the primary evidence. Gotchas:
+
 - Detect client aborts with `res.on('close')` + `!res.writableEnded`; `req.on('close')`
   fires on request-body completion in modern Node, not on disconnect.
 - Delay the stream ~400ms so in-flight cancellation paths are observable.
