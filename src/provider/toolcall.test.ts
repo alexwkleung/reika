@@ -61,6 +61,25 @@ describe('messagesToOpenAI', () => {
     expect(toolMsg.name).toBe('grep');
   });
 
+  it('resolves `name` round-locally when providers reuse tool-call ids across rounds', () => {
+    // Provider-issued ids are only unique per response (llama.cpp/qq2 emit `call_0` every round).
+    // A global first-match labeled every result with the OLDEST round's tool — observed in the
+    // field as grep and read results all serializing with name='edit'.
+    const round = (name: string, summary: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name, args: {} }] },
+      { role: 'tool', callId: 'call_0', summary },
+    ];
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('edit', 'Edit failed: old_string not found in a.css'),
+      ...round('grep', 'Found 9 matches for /x/'),
+      ...round('read', 'Read a.css lines 1-10 of 20'),
+    ];
+    const out = messagesToOpenAI('sys', history);
+    const names = out.filter(m => m.role === 'tool').map(m => (m as { name?: string }).name);
+    expect(names).toEqual(['edit', 'grep', 'read']);
+  });
+
   it('includes the payload in the fresh tool block but only summary in older ones', () => {
     const history: Message[] = [
       { role: 'user', content: 'turn 1' },
@@ -260,6 +279,158 @@ describe('messagesToOpenAI', () => {
     const tool = out.find(m => m.tool_call_id === 'c');
     expect(tool?.content).toContain(small);
     expect(tool?.content).not.toContain('to fit the context window');
+  });
+
+  // Newest-read protection: the freshest read is the model's edit source — old_string can only
+  // be assembled from bytes it actually saw, so gutting it produces the read→edit-fail→re-read
+  // spiral captured in the qq2 harness-bug evidence (req-010/012/015).
+  describe('newest-read protection (edit-source fidelity)', () => {
+    const readRound = (id: string, payload: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: { path: 'a' } }] },
+      { role: 'tool', callId: id, summary: `Read a lines 1-50 of 476`, payload },
+    ];
+    const contentFor = (out: unknown[], id: string): string =>
+      (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+        .content;
+
+    it('sends a small newest read verbatim even when the budget prices it at zero (req-012 regression)', () => {
+      // Captured bug: a 30.7k-char system prompt on a small window drove the pessimistic fresh
+      // budget negative, so a 2,229-char recovery read was sent as marker-only — zero bytes of
+      // content. The model could never assemble a valid old_string and spiralled.
+      const system = 'S'.repeat(31_000);
+      const payload = 'const line = 1;\n'.repeat(140); // ~2.2k chars, like the captured re-read
+      const history: Message[] = [{ role: 'user', content: 'implement' }, ...readRound('r', payload)];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      expect(contentFor(out, 'r')).toContain(payload);
+      expect(contentFor(out, 'r')).not.toContain('omitted');
+    });
+
+    it('gives the newest read priority and caps the other fresh payloads instead', () => {
+      const readPayload = 'x = 1\n'.repeat(500); // 3k chars — the edit source
+      const bashPayload = 'Z'.repeat(100_000);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'b', name: 'bash', args: {} },
+            { id: 'r', name: 'read', args: { path: 'a' } },
+          ],
+        },
+        { role: 'tool', callId: 'b', summary: 'Ran: build (100000 bytes output)', payload: bashPayload },
+        { role: 'tool', callId: 'r', summary: 'Read a lines 1-500 of 500', payload: readPayload },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'r')).toContain(readPayload); // verbatim
+      expect(contentFor(out, 'r')).not.toContain('omitted');
+      expect(contentFor(out, 'b')).toContain('to fit the context window'); // bash pays instead
+      expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+    });
+
+    it('protects only the NEWEST read — an older fresh read still splits the cap', () => {
+      const oldPayload = 'O'.repeat(60_000);
+      const newPayload = 'y = 2\n'.repeat(500);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'r1', name: 'read', args: { path: 'a' } },
+            { id: 'r2', name: 'read', args: { path: 'b' } },
+          ],
+        },
+        { role: 'tool', callId: 'r1', summary: 'Read a lines 1-999 of 999', payload: oldPayload },
+        { role: 'tool', callId: 'r2', summary: 'Read b lines 1-500 of 500', payload: newPayload },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'r2')).toContain(newPayload);
+      expect(contentFor(out, 'r1')).toContain('to fit the context window');
+      expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+    });
+
+    it('does not protect a read too large for the floor when the budget has no room (no-400 guarantee)', () => {
+      // Protection is for small recovery reads; a huge read under a starved budget must still be
+      // capped — overflow safety wins at scale.
+      const system = 'S'.repeat(31_000);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        ...readRound('r', 'Z'.repeat(100_000)),
+      ];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      expect(contentFor(out, 'r')).toContain('to fit the context window');
+      expect(requestChars(out) * (2.5 / 4)).toBeLessThanOrEqual(16384 + 31_000 * (2.5 / 4));
+    });
+
+    it('still protects the newest read when provider tool-call ids collide across rounds (qq2 field failure)', () => {
+      // llama.cpp/qq2 emit `call_0` for EVERY single-call round — ids are only unique per
+      // response. A global id→name lookup resolved every result to the oldest `call_0` round (an
+      // edit), so the newest read was never recognized as a read and went out fully omitted
+      // despite being 561 chars — the model re-read repeatedly and received zero bytes each time.
+      const system = 'S'.repeat(31_000);
+      const payload = '.track-duration {\n  color: var(--x);\n}\n'.repeat(14); // ~0.5k, like the captured re-read
+      const history: Message[] = [
+        { role: 'user', content: 'implement' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'edit', args: {} }] },
+        { role: 'tool', callId: 'call_0', summary: 'Edit failed: old_string not found in a.css' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'read', args: {} }] },
+        { role: 'tool', callId: 'call_0', summary: 'Read a.css lines 515-534 of 2376', payload },
+      ];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const tools = out.filter(m => m.role === 'tool') as Array<{ content: string; name?: string }>;
+      expect(tools[1].content).toContain(payload); // verbatim — protection recognized the read
+      expect(tools[1].content).not.toContain('omitted');
+    });
+
+    it('applies protection to the first prefix-stable render too', () => {
+      const system = 'S'.repeat(31_000);
+      const payload = 'const z = 3;\n'.repeat(170);
+      const history: Message[] = [{ role: 'user', content: 'go' }, ...readRound('r', payload)];
+      const out = messagesToOpenAI(system, history, {
+        contextWindow: 16384,
+        prefixStable: true,
+        stampRenders: true,
+      });
+      expect(contentFor(out, 'r')).toContain(payload);
+      expect((history[2] as Message & { role: 'tool' }).rendered).toContain(payload);
+    });
+  });
+
+  describe('omission marker (edit-safety wording)', () => {
+    it('warns at the cut point never to span the gap with an edit old_string', () => {
+      // The marker already sits AT the cut; it must also tell the model the hidden middle is
+      // unknowable — otherwise it builds an old_string across the hole and the edit fails.
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+        { role: 'tool', callId: 'c', summary: 's', payload: 'Z'.repeat(100_000) },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+        content?: string;
+      };
+      expect(tool?.content).toContain('old_string');
+      expect(tool?.content).toContain('omitted here');
+    });
+
+    it('says the WHOLE output was omitted when the budget is fully exhausted', () => {
+      // cap 0 used to render "…[marker]…\n\nOutput continues:" around two empty slices — which
+      // reads as tool output, not as an omission.
+      const system = 'S'.repeat(31_000);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
+        { role: 'tool', callId: 'c', summary: 'Ran: build (5000 bytes output)', payload: 'Z'.repeat(5000) },
+      ];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+        content?: string;
+      };
+      expect(tool?.content).toContain('entire output');
+      expect(tool?.content).toContain('to fit the context window');
+      expect(tool?.content).not.toContain('Output continues');
+    });
   });
 
   it('skips error and system messages (UI-only)', () => {

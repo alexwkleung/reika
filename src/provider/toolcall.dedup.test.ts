@@ -122,4 +122,60 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
     expect(contentFor(out, 'a').length).toBeGreaterThan(contentFor(controlOut, 'a').length * 1.5);
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
   });
+
+  it('never collapses a repeated failure to an outcome-neutral stub (qq2 req-013 regression)', () => {
+    // Captured bug: the model retried a failed edit; the second, byte-identical "Edit failed"
+    // summary (summary-only → never "fresh") deduped to "(… omitted)" — and the model, seeing no
+    // outcome, concluded the retry succeeded. The repeat stub must carry the outcome verbatim.
+    const fail =
+      'Edit failed: old_string not found in src/scripts/discover.ts. No line matches it even ignoring whitespace';
+    const history: Message[] = [
+      { role: 'user', content: 'implement the plan' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'e1', name: 'edit', args: {} }] },
+      { role: 'tool', callId: 'e1', summary: fail },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'e2', name: 'edit', args: {} }] },
+      { role: 'tool', callId: 'e2', summary: fail },
+    ];
+    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+      tool_call_id?: string;
+      content?: string;
+    }>;
+    const first = out.find(m => m.tool_call_id === 'e1');
+    const repeat = out.find(m => m.tool_call_id === 'e2');
+    expect(first?.content).toBe(fail);
+    // The repeat is still marked as a repeat (the anti-loop signal)…
+    expect(repeat?.content).toContain('repeat of an earlier identical result');
+    // …but the outcome must survive: the model has to see the edit failed AGAIN.
+    expect(repeat?.content).toContain('Edit failed');
+    expect(repeat?.content).toContain('old_string not found');
+  });
+
+  it('preserves outcome-bearing summaries from every tool in the repeat stub', () => {
+    const outcomes = [
+      'Bash failed: npm test (exit 1)',
+      'Bash timeout: sleep 999 (killed after 30s)',
+      'Bash declined by user: rm -rf dist',
+      'Fetch budget exceeded for this turn (max 3). Summarize what you have or split into multiple turns.',
+      'Invalid regex: Unterminated group',
+      'No results for "flux capacitor"',
+      'Found 0 matches for /missing_symbol/',
+      'Read src/a.ts: offset 900 past end of file (100 lines)',
+      'Write failed: src/a.ts already exists; use edit instead',
+    ];
+    for (const summary of outcomes) {
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }] },
+        { role: 'tool', callId: 'c1', summary },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'bash', args: {} }] },
+        { role: 'tool', callId: 'c2', summary },
+      ];
+      const out = messagesToOpenAI('sys', history) as unknown as Array<{
+        tool_call_id?: string;
+        content?: string;
+      }>;
+      const repeat = out.find(m => m.tool_call_id === 'c2');
+      expect(repeat?.content, summary).toContain(summary);
+    }
+  });
 });
