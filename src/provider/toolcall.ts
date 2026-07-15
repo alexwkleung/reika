@@ -190,7 +190,7 @@ export function messagesToOpenAI(
           content = fresh ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}` : msg.summary;
         }
       }
-      const toolName = findToolNameForCall(history, msg.callId);
+      const toolName = findToolNameForCall(history, i);
       const param: Record<string, unknown> = {
         role: 'tool',
         tool_call_id: msg.callId,
@@ -257,7 +257,7 @@ function newestLiveReadIndex(
       ? !m.aged && m.rendered === undefined
       : i >= freshFrom && !stubbed.has(i);
     if (!live) continue;
-    if (findToolNameForCall(history, m.callId) === 'read') return i;
+    if (findToolNameForCall(history, i) === 'read') return i;
   }
   return -1;
 }
@@ -448,11 +448,21 @@ function capPayload(payload: string, cap: number | undefined): string {
   );
 }
 
-function findToolNameForCall(history: Message[], callId: string): string | undefined {
-  for (const msg of history) {
-    if (msg.role !== 'assistant' || !msg.toolCalls) continue;
-    const match = msg.toolCalls.find(tc => tc.id === callId);
-    if (match) return match.name;
+// Resolve which tool produced the tool message at `toolIdx` — by matching its callId within its
+// OWN round only. Provider-issued ids are only unique per response (llama.cpp/qq2 emit `call_0`
+// for every single-call round), so a global first-match pins every result to the OLDEST round
+// that used the id: observed in the field as every tool result serializing with name='edit' and
+// newest-read protection never firing (the read's callId resolved to an ancient edit call). A
+// result's round is the nearest preceding assistant message that carries toolCalls — results
+// follow their round contiguously, so scanning backward cannot land on a different round first.
+function findToolNameForCall(history: Message[], toolIdx: number): string | undefined {
+  const msg = history[toolIdx];
+  if (msg.role !== 'tool') return undefined;
+  for (let i = toolIdx - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'assistant' || !m.toolCalls) continue;
+    // Not found in its own round → unmatched; returning a name from an older round would lie.
+    return m.toolCalls.find(tc => tc.id === msg.callId)?.name;
   }
   return undefined;
 }

@@ -61,6 +61,25 @@ describe('messagesToOpenAI', () => {
     expect(toolMsg.name).toBe('grep');
   });
 
+  it('resolves `name` round-locally when providers reuse tool-call ids across rounds', () => {
+    // Provider-issued ids are only unique per response (llama.cpp/qq2 emit `call_0` every round).
+    // A global first-match labeled every result with the OLDEST round's tool — observed in the
+    // field as grep and read results all serializing with name='edit'.
+    const round = (name: string, summary: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name, args: {} }] },
+      { role: 'tool', callId: 'call_0', summary },
+    ];
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('edit', 'Edit failed: old_string not found in a.css'),
+      ...round('grep', 'Found 9 matches for /x/'),
+      ...round('read', 'Read a.css lines 1-10 of 20'),
+    ];
+    const out = messagesToOpenAI('sys', history);
+    const names = out.filter(m => m.role === 'tool').map(m => (m as { name?: string }).name);
+    expect(names).toEqual(['edit', 'grep', 'read']);
+  });
+
   it('includes the payload in the fresh tool block but only summary in older ones', () => {
     const history: Message[] = [
       { role: 'user', content: 'turn 1' },
@@ -342,6 +361,26 @@ describe('messagesToOpenAI', () => {
       const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
       expect(contentFor(out, 'r')).toContain('to fit the context window');
       expect(requestChars(out) * (2.5 / 4)).toBeLessThanOrEqual(16384 + 31_000 * (2.5 / 4));
+    });
+
+    it('still protects the newest read when provider tool-call ids collide across rounds (qq2 field failure)', () => {
+      // llama.cpp/qq2 emit `call_0` for EVERY single-call round — ids are only unique per
+      // response. A global id→name lookup resolved every result to the oldest `call_0` round (an
+      // edit), so the newest read was never recognized as a read and went out fully omitted
+      // despite being 561 chars — the model re-read repeatedly and received zero bytes each time.
+      const system = 'S'.repeat(31_000);
+      const payload = '.track-duration {\n  color: var(--x);\n}\n'.repeat(14); // ~0.5k, like the captured re-read
+      const history: Message[] = [
+        { role: 'user', content: 'implement' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'edit', args: {} }] },
+        { role: 'tool', callId: 'call_0', summary: 'Edit failed: old_string not found in a.css' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'read', args: {} }] },
+        { role: 'tool', callId: 'call_0', summary: 'Read a.css lines 515-534 of 2376', payload },
+      ];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const tools = out.filter(m => m.role === 'tool') as Array<{ content: string; name?: string }>;
+      expect(tools[1].content).toContain(payload); // verbatim — protection recognized the read
+      expect(tools[1].content).not.toContain('omitted');
     });
 
     it('applies protection to the first prefix-stable render too', () => {
