@@ -37,7 +37,26 @@ const DEDUP_PAYLOAD_STUB =
 // payload, not the summary). The originating tool_call args above still name the target, so dropping
 // the duplicated summary loses nothing but the repetition itself.
 const DEDUP_TRAIL_STUB = '(reika: repeat of an earlier identical result — omitted)';
+// An outcome-bearing summary (a failure / decline / empty-result line) must NEVER collapse to the
+// neutral trail stub: a summary-only result is never "fresh" (fresh requires a payload), so a
+// repeated "Edit failed" in the ACTIVE round deduped to "(… omitted)" — and the model, told
+// nothing about the outcome, concluded its retry succeeded (captured: qq2 harness-bug evidence,
+// req-013). The repeat framing is kept — "you got this exact result again" is itself an anti-loop
+// signal — but the outcome rides along verbatim. Matching errs generous: a false positive merely
+// keeps a summary the stub would have dropped; a false negative hides a failure.
+const OUTCOME_SUMMARY_RE =
+  /\b(fail(ed|ure)?|error|invalid|declined|denied|timed?\s?out|exceeded|not found|no (results?|match(es)?)|past end|found 0|listed 0)\b/i;
 const NO_STUBS: ReadonlySet<number> = new Set();
+
+// Fix for the read→edit-fail→re-read spiral (qq2 evidence, req-012): the newest fresh read is the
+// model's edit source — old_string can only be assembled from bytes it actually saw, so a gutted
+// read makes every subsequent edit fail unrecoverably. When the computed fresh budget says there
+// is no room (the pessimistic CAP_DENSITY_FLOOR priced a 2,229-char recovery read at zero), still
+// send the newest read verbatim up to this many chars: the 10% BUDGET_SAFETY slack plus the
+// floor's own overestimate of non-fresh content absorb it in practice, and a rare overflow is
+// recoverable (truncation retry) while the spiral is not. Reads larger than this fall back to the
+// shared cap — overflow safety wins at scale.
+const PROTECTED_READ_FLOOR_CHARS = 4096;
 
 export function messagesToOpenAI(
   system: string,
@@ -93,14 +112,18 @@ export function messagesToOpenAI(
     ? `# Earlier conversation (compacted)\n\n${recaps.join('\n\n')}`
     : '';
   const systemContent = recapText && hasUserTurn ? `${system}\n\n${recapText}` : system;
+  // The newest live read is the model's edit source — candidate for verbatim protection (see
+  // PROTECTED_READ_FLOOR_CHARS). Whether protection actually holds is the cap's call below.
+  const protectedIdx = newestLiveReadIndex(history, freshFrom, stubbed, prefixStable);
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
-  const perPayloadCap = freshPayloadCharCap(
+  const { cap: perPayloadCap, protectVerbatim } = freshPayloadCharCap(
     systemContent,
     history,
     freshFrom,
     keepReasoningFrom,
     stubbed,
+    protectedIdx,
     opts,
   );
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
@@ -142,8 +165,8 @@ export function messagesToOpenAI(
       if (prefixStable) {
         if (msg.payload && !msg.aged) {
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
-          const rendered =
-            msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, perPayloadCap)}`;
+          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          const rendered = msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, cap)}`;
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
         } else {
@@ -154,13 +177,17 @@ export function messagesToOpenAI(
         if (stubbed.has(i)) {
           // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
           // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
-          // bare back-reference (its summary is the very thing repeating). tool_call_id pairing is
-          // untouched, so the provider still matches every call to a response.
-          content = fresh ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}` : DEDUP_TRAIL_STUB;
-        } else {
+          // bare back-reference (its summary is the very thing repeating) — UNLESS the summary
+          // carries an outcome, which must survive the stub (see OUTCOME_SUMMARY_RE). tool_call_id
+          // pairing is untouched, so the provider still matches every call to a response.
           content = fresh
-            ? `${msg.summary}\n\n${capPayload(msg.payload!, perPayloadCap)}`
-            : msg.summary;
+            ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}`
+            : OUTCOME_SUMMARY_RE.test(msg.summary)
+              ? `(reika: repeat of an earlier identical result — same outcome again: ${msg.summary})`
+              : DEDUP_TRAIL_STUB;
+        } else {
+          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          content = fresh ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}` : msg.summary;
         }
       }
       const toolName = findToolNameForCall(history, msg.callId);
@@ -211,6 +238,30 @@ export function dedupToolContent(history: Message[], freshFrom: number): Set<num
   return stubbed;
 }
 
+// Index of the newest tool message whose payload will be serialized live this request AND whose
+// originating call was a `read` — the edit source the cap must not gut (see
+// PROTECTED_READ_FLOOR_CHARS). A dedup-stubbed read is skipped: its body was dropped precisely
+// because the identical bytes are already in context. Returns -1 when no live read exists.
+function newestLiveReadIndex(
+  history: Message[],
+  freshFrom: number,
+  stubbed: ReadonlySet<number>,
+  prefixStable: boolean,
+): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'tool' || !m.payload) continue;
+    // "Live" mirrors the serialization rules: prefix-stable sends any unaged payload, but an
+    // already-stamped rendering is frozen — protection can only shape a first render.
+    const live = prefixStable
+      ? !m.aged && m.rendered === undefined
+      : i >= freshFrom && !stubbed.has(i);
+    if (!live) continue;
+    if (findToolNameForCall(history, m.callId) === 'read') return i;
+  }
+  return -1;
+}
+
 // Start index of the trailing block of tool messages — tool messages at or after
 // this index keep their payloads; earlier ones collapse to summary. Exported for
 // batch aging (agent/compaction.ts), which must never age the active round's results.
@@ -224,23 +275,29 @@ export function findFreshToolBlockStart(history: Message[]): number {
 // Per-payload character budget for the fresh tool block, computed to *fit the window*:
 // take the prompt's char budget (window minus response headroom, converted from tokens
 // via the learned calibration), subtract everything else in the request, and split what
-// remains across the fresh payloads. Returns undefined (no cap) when the context window
-// is unknown; 0 collapses payloads to summary-only when nothing else leaves room.
+// remains across the fresh payloads. `cap` undefined (no cap) when the context window is
+// unknown; 0 collapses payloads to summary-only when nothing else leaves room.
+// `protectVerbatim` reports whether the message at protectedIdx (the newest live read) is
+// exempt from the cap: yes when it fits the fresh budget whole, or — budget notwithstanding —
+// when it is at most PROTECTED_READ_FLOOR_CHARS; a larger read that doesn't fit joins the
+// shared split instead (overflow safety wins at scale).
 function freshPayloadCharCap(
   systemContent: string,
   history: Message[],
   freshFrom: number,
   keepReasoningFrom: number,
   stubbed: ReadonlySet<number>,
+  protectedIdx: number,
   opts?: {
     contextWindow?: number;
     calibration?: number;
     minGenTokens?: number;
     prefixStable?: boolean;
   },
-): number | undefined {
+): { cap: number | undefined; protectVerbatim: boolean } {
   const cw = opts?.contextWindow;
-  if (!cw) return undefined;
+  // No window: nothing is capped, so protection is moot (capPayload passes everything through).
+  if (!cw) return { cap: undefined, protectVerbatim: false };
   const prefixStable = !!opts?.prefixStable;
   // Reserve the same generation room the backstop and compaction use, so a fresh tool
   // dump can't leave a thinking model with no tokens to respond in. See provider/budget.ts.
@@ -258,6 +315,9 @@ function freshPayloadCharCap(
 
   let freshCount = 0;
   let nonFreshChars = systemContent.length;
+  // Payload length of the protected read (0 = none in the live set). Held out of the shared
+  // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
+  let protectedChars = 0;
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
@@ -265,6 +325,9 @@ function freshPayloadCharCap(
         // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
         // that have never been sent split what's left.
         nonFreshChars += m.rendered.length;
+      } else if (i === protectedIdx) {
+        protectedChars = m.payload.length;
+        nonFreshChars += m.summary.length + 2;
       } else {
         freshCount++;
         nonFreshChars += m.summary.length + 2;
@@ -274,6 +337,9 @@ function freshPayloadCharCap(
         // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
         // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
         nonFreshChars += m.summary.length + DEDUP_PAYLOAD_STUB.length + 2;
+      } else if (i === protectedIdx) {
+        protectedChars = m.payload.length;
+        nonFreshChars += m.summary.length + 2;
       } else {
         freshCount++;
         nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
@@ -286,16 +352,29 @@ function freshPayloadCharCap(
       nonFreshChars += nonFreshChars0(m, includeReasoning);
     }
   }
-  if (freshCount === 0) return undefined;
-
   // Work in real tokens: budget the prompt, subtract the (pessimistically-estimated) non-fresh
   // content, and convert what's left for fresh payloads back to chars pessimistically.
   const promptTokenBudget = (cw - reserve) * BUDGET_SAFETY;
   const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * capCalib;
-  const freshTokenBudget = promptTokenBudget - nonFreshTokens;
-  if (freshTokenBudget <= 0) return 0;
+  let freshTokenBudget = promptTokenBudget - nonFreshTokens;
+  // The protected read is allocated FIRST — verbatim if it fits the whole fresh budget, and
+  // verbatim regardless of budget up to the floor (the spiral is unrecoverable; a rare overflow
+  // is not — see PROTECTED_READ_FLOOR_CHARS). Only a large read that doesn't fit falls back
+  // into the shared split. Everything else divides what remains, which may be nothing.
+  let protectVerbatim = false;
+  if (protectedChars > 0) {
+    const protectedTokens = (protectedChars / CHARS_PER_TOKEN) * capCalib;
+    if (protectedTokens <= freshTokenBudget || protectedChars <= PROTECTED_READ_FLOOR_CHARS) {
+      protectVerbatim = true;
+      freshTokenBudget -= protectedTokens;
+    } else {
+      freshCount++;
+    }
+  }
+  if (freshCount === 0) return { cap: undefined, protectVerbatim };
+  if (freshTokenBudget <= 0) return { cap: 0, protectVerbatim };
   const freshCharBudget = (freshTokenBudget * CHARS_PER_TOKEN) / capCalib;
-  return Math.floor(freshCharBudget / freshCount);
+  return { cap: Math.floor(freshCharBudget / freshCount), protectVerbatim };
 }
 
 // Index from which reasoning_content is kept: the start of the Nth-most-recent tool-call
@@ -344,13 +423,27 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
 const HEAD_FRACTION = 0.4;
 function capPayload(payload: string, cap: number | undefined): string {
   if (cap === undefined || payload.length <= cap) return payload;
+  // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two
+  // empty slices — "Output continues:" over nothing reads as tool output, not as an omission.
+  if (cap <= 0) {
+    return (
+      `[reika: entire output (${payload.length} chars) omitted to fit the context window — a ` +
+      `context-size limit, not a command error; re-running won't help. Work from the summary ` +
+      `line above, or read a narrower line range.]`
+    );
+  }
   const head = Math.floor(cap * HEAD_FRACTION);
   const tail = cap - head;
   const omitted = payload.length - cap;
+  // The marker sits AT the cut and must warn about edits: the model cannot know what the hidden
+  // middle says, so an old_string spanning this gap is guaranteed not to match the real file
+  // (qq2 evidence, req-010/012/015 — the read→edit-fail spiral).
   return (
     `${payload.slice(0, head)}\n\n` +
-    `[reika: ${omitted} chars omitted from the middle to fit the context window — a ` +
-    `context-size limit, not a command error; re-running won't help. Output continues:]\n\n` +
+    `[reika: ${omitted} chars omitted here — the middle of this output is hidden to fit the ` +
+    `context window; a context-size limit, not a command error; re-running won't help. Never ` +
+    `build an edit old_string from text spanning this gap; read a narrower line range to see ` +
+    `the hidden part. Output continues:]\n\n` +
     `${payload.slice(payload.length - tail)}`
   );
 }
