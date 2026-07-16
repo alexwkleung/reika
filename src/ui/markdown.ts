@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { theme } from './theme.js';
-import { codeTheme } from './highlight.js';
+import { codeTheme, resolveLanguage } from './highlight.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
 // in its source) and restores it in a final pass. See the listitem override.
@@ -94,9 +94,20 @@ const terminalExtension = markedTerminal(
 // inside its internal `code` renderer, which the options object can't reach.
 // Wrap the produced renderer to strip that injected indent back off each line so
 // code blocks align flush with paragraphs instead of sitting `TAB_WIDTH` spaces in.
+// Also rewrite fence languages highlight.js doesn't know (```astro, ```svelte) to
+// plaintext here: highlight.js console.error()s a warning before throwing, which
+// Ink folds into the frame as chat spam, and marked-terminal's catch falls back
+// to chalk.yellow for the whole block.
 const renderCode = terminalExtension.renderer.code;
 const stripTabIndent = new RegExp(`^ {${TAB_WIDTH}}`, 'gm');
 terminalExtension.renderer.code = function (this: unknown, ...args: unknown[]): string {
+  const [token, lang] = args;
+  if (token && typeof token === 'object') {
+    const t = token as { lang?: string };
+    t.lang = resolveLanguage(t.lang);
+  } else if (typeof lang === 'string' || lang === undefined) {
+    args[1] = resolveLanguage(lang);
+  }
   return renderCode.apply(this, args).replace(stripTabIndent, '');
 };
 

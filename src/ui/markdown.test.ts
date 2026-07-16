@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import chalk from 'chalk';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { highlightCode, resolveLanguage } from './highlight.js';
 import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 
 describe('stripReasoningMarkdown', () => {
@@ -115,5 +117,41 @@ describe('renderMarkdown lists', () => {
     const out = renderMarkdown('1. `git:status`\n2. plain');
     expect(out).toContain('git:status');
     expect(out).not.toContain('*#COLON|*');
+  });
+});
+
+describe('unsupported fence languages', () => {
+  // marked-terminal skips highlighting entirely at chalk.level 0 (non-TTY test
+  // run), which would make these tests vacuous — force colors on.
+  const savedLevel = chalk.level;
+  afterEach(() => {
+    chalk.level = savedLevel;
+    vi.restoreAllMocks();
+  });
+
+  it('renders an unknown language without console spam or the yellow fallback', () => {
+    chalk.level = 3;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = renderMarkdown('```astro\n<button onclick={() => toggle()}>x</button>\n```');
+    // highlight.js console.error()s "Could not find the language …" before
+    // throwing; Ink folds that into the frame as chat spam.
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(out).toContain('toggle()');
+    // marked-terminal's catch fallback paints the whole block chalk.yellow.
+    expect(out).not.toContain('[33m');
+  });
+
+  it('highlightCode falls back to plaintext for unknown languages without console spam', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = highlightCode('const x = 1;', 'astro');
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(out).toContain('const x = 1;');
+  });
+
+  it('resolveLanguage keeps supported names and auto-detect, rewrites unknown ones', () => {
+    expect(resolveLanguage('ts')).toBe('ts');
+    expect(resolveLanguage('astro')).toBe('plaintext');
+    expect(resolveLanguage('')).toBe('');
+    expect(resolveLanguage(undefined)).toBe('');
   });
 });
