@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { highlight, plain, type Theme } from 'cli-highlight';
+import { highlight, plain, supportsLanguage, type Theme } from 'cli-highlight';
 
 // A clean, dark-background syntax theme. cli-highlight's DEFAULT_THEME leans on
 // raw ANSI red/blue/green (strings AND regexps in pure red, keywords in pure
@@ -59,13 +59,28 @@ export const codeTheme: Theme = {
   default: plain,
 };
 
+// highlight.js console.error()s a "Could not find the language" warning *before*
+// throwing on an unregistered language, and Ink folds console output into the
+// rendered frame — so an unknown language must never reach the highlighter.
+// Unsupported names (```astro, ```svelte) become plaintext; empty stays empty so
+// cli-highlight's auto-detection keeps handling unlabeled fences as before.
+// supportsLanguage is alias-aware via hljs.getLanguage under the hood.
+export function resolveLanguage(language: string | undefined): string {
+  if (!language) return '';
+  return supportsLanguage(language) ? language : 'plaintext';
+}
+
 // Single entry point for syntax highlighting across the UI (diffs, approvals,
 // markdown code fences). Returns the input unchanged on empty/illegal input so
 // callers never have to guard.
 export function highlightCode(code: string, language: string): string {
   if (!code.trim()) return code;
   try {
-    return highlight(code, { language, ignoreIllegals: true, theme: codeTheme });
+    return highlight(code, {
+      language: resolveLanguage(language),
+      ignoreIllegals: true,
+      theme: codeTheme,
+    });
   } catch {
     return code;
   }
