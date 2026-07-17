@@ -15,10 +15,17 @@ const MAX_FILE_SUGGESTIONS = 8;
 
 export type SkillEntry = { name: string; description: string };
 
+// A switchable /model argument: the profile key the command accepts plus the
+// model it resolves to (shown when the key alone doesn't say — named profiles,
+// 'default'). Structurally a subset of models.ts's ModelTarget so App can pass
+// those straight through.
+export type ModelSuggestTarget = { name: string; model: string };
+
 export function computeSuggestions(
   value: string,
   fileIndex: string[],
   skills: SkillEntry[] = [],
+  modelTargets: ModelSuggestTarget[] = [],
 ): SuggestionState | null {
   if (value.startsWith('/') && !value.includes(' ') && !value.includes('\n')) {
     const partial = value.slice(1).toLowerCase();
@@ -35,6 +42,28 @@ export function computeSuggestions(
       }));
     const items: Suggestion[] = [...builtIns, ...skillItems];
     if (items.length === 0) return null;
+    return { kind: 'command', items, partial: value };
+  }
+
+  // `/model <partial>` completes against switchable model/profile names. The
+  // match is anchored to a single argument so `/model qwen extra` gets no menu,
+  // and spaces only — a pasted newline is a multi-line buffer, not an argument.
+  const modelArg = /^\/model +(\S*)$/i.exec(value);
+  if (modelArg) {
+    const partial = modelArg[1].toLowerCase();
+    const items = modelTargets
+      .filter(t => t.name.startsWith(partial) || t.model.toLowerCase().startsWith(partial))
+      .map(t => ({
+        value: `/model ${t.name}`,
+        // Auto-registered model entries have name === lowercased model — the
+        // mapping suffix would just repeat the key, so it's only shown when
+        // the name doesn't already say which model you'd get.
+        display:
+          t.name === t.model.toLowerCase() ? `/model ${t.name}` : `/model ${t.name}  —  ${t.model}`,
+      }));
+    if (items.length === 0) return null;
+    // partial = the whole value: acceptSuggestion replaces the full line with
+    // the completed command.
     return { kind: 'command', items, partial: value };
   }
 

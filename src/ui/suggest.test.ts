@@ -63,6 +63,56 @@ describe('computeSuggestions — commands', () => {
   });
 });
 
+describe('computeSuggestions — /model arguments', () => {
+  const TARGETS = [
+    { name: 'qwen2.5-coder', model: 'Qwen2.5-Coder' },
+    { name: 'glm-4', model: 'GLM-4' },
+    { name: 'big', model: 'deepseek-chat' },
+  ];
+
+  it('lists all targets after "/model "', () => {
+    const state = computeSuggestions('/model ', [], [], TARGETS);
+    expect(state?.kind).toBe('command');
+    expect(state?.items.map(i => i.value)).toEqual([
+      '/model qwen2.5-coder',
+      '/model glm-4',
+      '/model big',
+    ]);
+  });
+
+  it('filters by name prefix', () => {
+    const state = computeSuggestions('/model gl', [], [], TARGETS);
+    expect(state?.items.map(i => i.value)).toEqual(['/model glm-4']);
+  });
+
+  it('matches the model a profile points at, not just its name', () => {
+    const state = computeSuggestions('/model deep', [], [], TARGETS);
+    expect(state?.items.map(i => i.value)).toEqual(['/model big']);
+  });
+
+  it('shows the mapping only when the name does not spell the model', () => {
+    const state = computeSuggestions('/model ', [], [], TARGETS);
+    const displays = state?.items.map(i => i.display) ?? [];
+    expect(displays).toContain('/model qwen2.5-coder');
+    expect(displays).toContain('/model big  —  deepseek-chat');
+  });
+
+  it('returns null with no match or a second argument', () => {
+    expect(computeSuggestions('/model xyzzy', [], [], TARGETS)).toBeNull();
+    expect(computeSuggestions('/model glm-4 extra', [], [], TARGETS)).toBeNull();
+  });
+
+  it('a newline is a multi-line buffer, not an argument separator', () => {
+    expect(computeSuggestions('/model\n', [], [], TARGETS)).toBeNull();
+  });
+
+  it('accept replaces the whole line with the completed command', () => {
+    const state = computeSuggestions('/model gl', [], [], TARGETS);
+    const next = acceptSuggestion('/model gl', state!.items[0], state!.partial);
+    expect(next).toBe('/model glm-4');
+  });
+});
+
 describe('computeSuggestions — file mentions', () => {
   it('returns file suggestions for trailing @', () => {
     const state = computeSuggestions('look at @', FILE_INDEX);
