@@ -23,6 +23,8 @@ import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
+import { ModelSelect } from './ModelSelect.js';
+import { buildModelTargets, type ModelTarget } from './models.js';
 import { buildImplementPrompt, planWritten } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
@@ -108,6 +110,10 @@ export function App() {
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
   const [suggestionSelected, setSuggestionSelected] = useState(0);
+  // Interactive /model picker (bare /model). Modal like Approval: the input is
+  // disabled while it's open and the arrow keys drive the list.
+  const [modelSelect, setModelSelect] = useState<ModelTarget[] | null>(null);
+  const [modelSelected, setModelSelected] = useState(0);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
@@ -150,6 +156,10 @@ export function App() {
   suggestionStateRef.current = suggestionState;
   const suggestionSelectedRef = useRef(0);
   suggestionSelectedRef.current = suggestionSelected;
+  const modelSelectRef = useRef<ModelTarget[] | null>(null);
+  modelSelectRef.current = modelSelect;
+  const modelSelectedRef = useRef(0);
+  modelSelectedRef.current = modelSelected;
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   // Stash for the inactive side of the chat/agent boundary. Shell shares with agent.
@@ -255,6 +265,23 @@ export function App() {
     return () => clearInterval(id);
   }, [status, pending]);
 
+  // Switch the active profile and record it in scrollback — shared by
+  // `/model <name>` and the interactive picker's enter. The optional echo is
+  // the command line that triggered it (the picker already echoed on open).
+  const applyModelSwitch = (target: string, echo?: Message): void => {
+    if (!config) return;
+    const next = config.profiles[target];
+    if (!next) return;
+    const kind = config.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
+    setActiveProfile(target);
+    setMessages(prev => [
+      ...prev,
+      ...(echo ? [echo] : []),
+      ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
+      { role: 'system' as const, content: `Switched to ${kind} '${target}' (${next.model})` },
+    ]);
+  };
+
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       const hadPending = pendingRef.current !== null;
@@ -268,6 +295,11 @@ export function App() {
         return;
       }
       if (hadPending) return;
+      // An open /model picker closes first, like esc.
+      if (modelSelectRef.current) {
+        setModelSelect(null);
+        return;
+      }
       // Idle. A non-empty input clears first — catches the common accidental tap.
       if (inputValueRef.current.length > 0) {
         setInputValue('');
@@ -317,6 +349,23 @@ export function App() {
         pendingRef.current.resolve(false);
         setPending(null);
       }
+      return;
+    }
+    const ms = modelSelectRef.current;
+    if (ms) {
+      if (key.upArrow) {
+        setModelSelected(i => Math.max(0, i - 1));
+      } else if (key.downArrow) {
+        setModelSelected(i => Math.min(ms.length - 1, i + 1));
+      } else if (key.return) {
+        const sel = ms[modelSelectedRef.current];
+        setModelSelect(null);
+        if (sel) applyModelSwitch(sel.name);
+      } else if (key.escape) {
+        setModelSelect(null);
+      }
+      // Modal: the input is disabled while the picker is open, so no other key
+      // has anywhere to go.
       return;
     }
     const sug = suggestionStateRef.current;
@@ -388,7 +437,12 @@ export function App() {
         calibration: calibrationRef.current,
       });
     }
-    const next = computeSuggestions(value, bundle.fileIndex, bundle.skills);
+    const next = computeSuggestions(
+      value,
+      bundle.fileIndex,
+      bundle.skills,
+      config ? buildModelTargets(config, activeProfileRef.current) : [],
+    );
     setSuggestionState(next);
     setSuggestionSelected(0);
   };
@@ -620,7 +674,7 @@ export function App() {
           '  /vibe              enter vibe mode (every prompt plans first, then implements)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
-          '  /model             show current model and base URL',
+          '  /model [name]      pick a model/profile (interactive without a name)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -634,7 +688,6 @@ export function App() {
           response = 'config not loaded';
           break;
         }
-        const modelKeys = config.models.map(m => m.toLowerCase());
         const target = args.trim().toLowerCase();
         if (target) {
           if (!config.profiles[target]) {
@@ -642,49 +695,23 @@ export function App() {
             response = `Unknown model/profile: ${target}. Available: ${avail}`;
             break;
           }
-          setActiveProfile(target);
-          const next = config.profiles[target];
-          const kind = modelKeys.includes(target) ? 'model' : 'profile';
-          setMessages(prev => [
-            ...prev,
-            echo,
-            ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
-            { role: 'system', content: `Switched to ${kind} '${target}' (${next.model})` },
-          ]);
+          applyModelSwitch(target, echo);
           return;
         }
-        const current = config.profiles[activeProfile] ?? config.profiles.default;
-        const lines = [
-          `current: ${activeProfile}`,
-          `model:    ${current.model}`,
-          `base:     ${current.baseURL}`,
-        ];
-        if (config.subagentModel && config.subagentModel !== current.model) {
-          lines.push(`subagent: ${config.subagentModel}`);
-        }
-        // Models served by the default base URL. The first is active when activeProfile
-        // is still 'default'; otherwise the marker follows the selected model name.
-        const modelList = config.models
-          .map((m, i) => {
-            const active =
-              activeProfile === m.toLowerCase() || (activeProfile === 'default' && i === 0);
-            return `  ${active ? '›' : ' '} ${m}`;
-          })
-          .join('\n');
-        lines.push('', 'models (default base url):', modelList);
-        // Named profiles only — exclude 'default' and the auto-registered model entries.
-        const namedProfiles = Object.entries(config.profiles).filter(
-          ([n]) => n !== 'default' && !modelKeys.includes(n),
-        );
-        if (namedProfiles.length > 0) {
-          const profileList = namedProfiles
-            .map(([n, p]) => `  ${n === activeProfile ? '›' : ' '} ${n} → ${p.model}`)
-            .join('\n');
-          lines.push('', 'profiles:', profileList);
-        }
-        lines.push('', 'switch with /model <name>');
-        response = lines.join('\n');
-        break;
+        // Bare /model opens the interactive picker, cursor parked on the
+        // active entry. The echo lands now so the command shows in scrollback
+        // even if the picker is dismissed.
+        const targets = buildModelTargets(config, activeProfile);
+        setMessages(prev => [...prev, echo]);
+        // Deferred past the current keypress dispatch: Ink hands the same
+        // Enter to every useInput handler, and the submit re-renders in
+        // between — opening synchronously would let the picker's own handler
+        // see that Enter and instantly select the first entry.
+        queueMicrotask(() => {
+          setModelSelect(targets);
+          setModelSelected(Math.max(0, targets.findIndex(t => t.active)));
+        });
+        return;
       }
       case 'approvals': {
         const envMode = config?.autoApprove ?? 'off';
@@ -1065,6 +1092,19 @@ export function App() {
           ) : null}
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />
+          ) : modelSelect ? (
+            <ModelSelect
+              targets={modelSelect}
+              selectedIndex={modelSelected}
+              currentModel={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
+              baseURL={config?.baseURL ?? ''}
+              subagent={
+                config?.subagentModel &&
+                config.subagentModel !== (config.profiles[activeProfile]?.model ?? config.model)
+                  ? config.subagentModel
+                  : undefined
+              }
+            />
           ) : suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
@@ -1087,8 +1127,8 @@ export function App() {
             />
           ) : null}
           <Input
-            disabled={pending !== null}
-            attachedAbove={pending !== null || suggestionState !== null}
+            disabled={pending !== null || modelSelect !== null}
+            attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
             canSubmit={status === 'idle' && pending === null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
