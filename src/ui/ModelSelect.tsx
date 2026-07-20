@@ -27,7 +27,9 @@ export function ModelSelect({
   return (
     <Box borderStyle="round" borderBottom={false} flexDirection="column" paddingX={1} marginTop={1}>
       <Text>
-        <Text bold color={theme.tool}>{'• Model'}</Text>
+        <Text bold color={theme.tool}>
+          {'• Model'}
+        </Text>
         <Text color={theme.secondary}>{`  ${currentModel}`}</Text>
       </Text>
       <Text color={theme.muted}>{`  base: ${baseURL}`}</Text>
@@ -36,11 +38,14 @@ export function ModelSelect({
         {targets.map((t, i) => {
           const selected = i === selectedIndex;
           // Auto-registered model entries read best as the bare model name; a
-          // named profile shows its mapping. A profile living on another base
-          // URL says so — that's the detail that makes switching to it a
-          // different thing than switching models on the default server.
+          // named profile shows its mapping. Ad-hoc entries (a /model name not
+          // in the config) are keyed by their own lowercased model, so the
+          // mapping would be noise — bare name plus the off-config marker. A
+          // profile living on another base URL says so — that's the detail that
+          // makes switching to it a different thing than switching models on
+          // the default server.
           const offBase = t.kind === 'profile' && t.baseURL !== baseURL;
-          const label = t.kind === 'profile' ? `${t.name} → ${t.model}` : t.model;
+          const label = t.kind === 'profile' && !t.adhoc ? `${t.name} → ${t.model}` : t.model;
           // One Text with nested runs (not siblings): on wrap Ink drops the
           // char at a sibling boundary, which would clip a long label.
           return (
@@ -52,6 +57,7 @@ export function ModelSelect({
                 {truncate(label, maxDisplay)}
               </Text>
               {offBase ? <Text color={theme.muted}>{`  @ ${t.baseURL}`}</Text> : null}
+              {t.adhoc ? <Text color={theme.muted}>{'  (not in config)'}</Text> : null}
               {t.active ? <Text color={theme.muted}>{'  (current)'}</Text> : null}
             </Text>
           );

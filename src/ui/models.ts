@@ -8,6 +8,9 @@ export type ModelTarget = {
   baseURL: string;
   kind: 'model' | 'profile';
   active: boolean;
+  // Registered at runtime by `/model <name>` for a model not in the config; the
+  // picker marks these so switching back to one is a deliberate off-config act.
+  adhoc?: boolean;
 };
 
 // The switchable models/profiles, in the same order the old printed list used:
@@ -38,6 +41,7 @@ export function buildModelTargets(
       baseURL: p.baseURL,
       kind: 'profile',
       active: name === activeProfile,
+      ...(p.adhoc ? { adhoc: true } : {}),
     });
   }
   return targets;
