@@ -76,4 +76,25 @@ describe('buildModelTargets', () => {
     });
     expect(targets[0].active).toBe(false);
   });
+
+  it('carries the adhoc flag for runtime-registered models', () => {
+    const targets = buildModelTargets(
+      {
+        models: ['local-model'],
+        profiles: {
+          default: profile('local-model'),
+          'foo-32b': { ...profile('Foo-32B'), adhoc: true },
+        },
+      },
+      'foo-32b',
+    );
+    expect(targets.map(t => t.name)).toEqual(['default', 'foo-32b']);
+    expect(targets[1]).toMatchObject({
+      kind: 'profile',
+      model: 'Foo-32B',
+      adhoc: true,
+      active: true,
+    });
+    expect(targets[0].adhoc).toBeUndefined();
+  });
 });

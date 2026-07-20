@@ -152,6 +152,7 @@ Then in-session:
 - `/model` — show the current selection and list available models (default base URL) and named profiles
 - `/model kimi-k2` — switch to a model on the default base URL (model name only swaps)
 - `/model kimi` — switch to a named profile (model + endpoint + key swap as a unit)
+- `/model some-new-model` — a name that isn't in your config still switches: it rides the current base URL/key, so you can test a model without touching `.env`. The switch message and picker flag it as `(not in config)`
 - `/new` — resets to default
 
 Conversation history persists across switches; if styles clash, run `/new` first. Token counter accumulates across models/profiles for a single session bill.

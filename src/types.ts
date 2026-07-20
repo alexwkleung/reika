@@ -192,6 +192,10 @@ export type Profile = {
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
   minGenTokens?: number;
+  // Registered at runtime by `/model <name>` for a model that isn't in the config:
+  // connection settings are inherited from the profile active at switch time. The flag
+  // keeps the UI honest about the model being off-config (switch message, picker marker).
+  adhoc?: boolean;
 };
 
 // How much runs without a confirmation prompt.

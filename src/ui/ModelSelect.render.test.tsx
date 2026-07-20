@@ -42,6 +42,27 @@ describe('ModelSelect', () => {
     expect(frame).toContain('enter switch');
   });
 
+  it('renders an ad-hoc entry as its bare model with the off-config marker', () => {
+    const targets: ModelTarget[] = [
+      ...TARGETS,
+      {
+        name: 'foo-32b',
+        model: 'Foo-32B',
+        baseURL: BASE,
+        kind: 'profile',
+        active: true,
+        adhoc: true,
+      },
+    ];
+    const { lastFrame } = render(
+      <ModelSelect targets={targets} selectedIndex={0} currentModel="Foo-32B" baseURL={BASE} />,
+    );
+    const frame = lastFrame() ?? '';
+    // Bare model name, not the `foo-32b → Foo-32B` mapping a named profile gets.
+    expect(frame).not.toContain('foo-32b →');
+    expect(frame).toMatch(/Foo-32B\s+\(not in config\)\s+\(current\)/);
+  });
+
   it('omits the subagent line when not provided', () => {
     const { lastFrame } = render(
       <ModelSelect

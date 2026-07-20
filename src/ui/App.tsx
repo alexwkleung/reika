@@ -268,17 +268,24 @@ export function App() {
   // Switch the active profile and record it in scrollback — shared by
   // `/model <name>` and the interactive picker's enter. The optional echo is
   // the command line that triggered it (the picker already echoed on open).
-  const applyModelSwitch = (target: string, echo?: Message): void => {
-    if (!config) return;
-    const next = config.profiles[target];
+  // `cfg` overrides the config state for the same-render case where the caller just
+  // registered an ad-hoc profile via setConfig and the closure hasn't caught up.
+  const applyModelSwitch = (target: string, echo?: Message, cfg: Config | null = config): void => {
+    if (!cfg) return;
+    const next = cfg.profiles[target];
     if (!next) return;
-    const kind = config.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
+    const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
       ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
-      { role: 'system' as const, content: `Switched to ${kind} '${target}' (${next.model})` },
+      {
+        role: 'system' as const,
+        content: next.adhoc
+          ? `Switched to model '${next.model}' — not in your config; using it anyway on ${next.baseURL}`
+          : `Switched to ${kind} '${target}' (${next.model})`,
+      },
     ]);
   };
 
@@ -674,7 +681,7 @@ export function App() {
           '  /vibe              enter vibe mode (every prompt plans first, then implements)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
-          '  /model [name]      pick a model/profile (interactive without a name)',
+          '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -691,9 +698,31 @@ export function App() {
         const target = args.trim().toLowerCase();
         if (target) {
           if (!config.profiles[target]) {
-            const avail = Object.keys(config.profiles).join(', ');
-            response = `Unknown model/profile: ${target}. Available: ${avail}`;
-            break;
+            // A config model can lack its own profile only in the single-model case
+            // (loadProfiles registers auto-profiles from two models up); its switch
+            // target is 'default', same as buildModelTargets maps it.
+            if (config.models.some(m => m.toLowerCase() === target)) {
+              applyModelSwitch('default', echo);
+              return;
+            }
+            // A name not in the config still switches (#96): testing a model that's
+            // up on the current server shouldn't require touching .env. Register it
+            // as an ad-hoc profile inheriting the active profile's connection
+            // settings — being a real profile means the picker, completion, and
+            // resolveProfile all see it; the adhoc flag keeps the UI honest that
+            // it's off-config. Casing as typed: the key lowercases like every
+            // profile key, but the server gets the model string verbatim.
+            const inherit = config.profiles[activeProfileRef.current] ?? config.profiles.default;
+            const withAdhoc = {
+              ...config,
+              profiles: {
+                ...config.profiles,
+                [target]: { ...inherit, model: args.trim(), adhoc: true },
+              },
+            };
+            setConfig(withAdhoc);
+            applyModelSwitch(target, echo, withAdhoc);
+            return;
           }
           applyModelSwitch(target, echo);
           return;
@@ -709,7 +738,12 @@ export function App() {
         // see that Enter and instantly select the first entry.
         queueMicrotask(() => {
           setModelSelect(targets);
-          setModelSelected(Math.max(0, targets.findIndex(t => t.active)));
+          setModelSelected(
+            Math.max(
+              0,
+              targets.findIndex(t => t.active),
+            ),
+          );
         });
         return;
       }

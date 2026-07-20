@@ -16,7 +16,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'vibe', desc: 'enter vibe mode (every prompt plans first, then implements the plan)' },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },
-  { name: 'model', desc: 'pick a model/profile interactively (/model <name> switches directly)' },
+  {
+    name: 'model',
+    desc: 'pick a model/profile interactively (/model <name> switches directly, even to a model not in your config)',
+  },
   { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
