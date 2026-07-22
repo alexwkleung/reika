@@ -299,7 +299,10 @@ describe('messagesToOpenAI', () => {
       // content. The model could never assemble a valid old_string and spiralled.
       const system = 'S'.repeat(31_000);
       const payload = 'const line = 1;\n'.repeat(140); // ~2.2k chars, like the captured re-read
-      const history: Message[] = [{ role: 'user', content: 'implement' }, ...readRound('r', payload)];
+      const history: Message[] = [
+        { role: 'user', content: 'implement' },
+        ...readRound('r', payload),
+      ];
       const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
       expect(contentFor(out, 'r')).toContain(payload);
       expect(contentFor(out, 'r')).not.toContain('omitted');
@@ -318,7 +321,12 @@ describe('messagesToOpenAI', () => {
             { id: 'r', name: 'read', args: { path: 'a' } },
           ],
         },
-        { role: 'tool', callId: 'b', summary: 'Ran: build (100000 bytes output)', payload: bashPayload },
+        {
+          role: 'tool',
+          callId: 'b',
+          summary: 'Ran: build (100000 bytes output)',
+          payload: bashPayload,
+        },
         { role: 'tool', callId: 'r', summary: 'Read a lines 1-500 of 500', payload: readPayload },
       ];
       const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
@@ -421,7 +429,12 @@ describe('messagesToOpenAI', () => {
       const history: Message[] = [
         { role: 'user', content: 'go' },
         { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
-        { role: 'tool', callId: 'c', summary: 'Ran: build (5000 bytes output)', payload: 'Z'.repeat(5000) },
+        {
+          role: 'tool',
+          callId: 'c',
+          summary: 'Ran: build (5000 bytes output)',
+          payload: 'Z'.repeat(5000),
+        },
       ];
       const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
       const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
