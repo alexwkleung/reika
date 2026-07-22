@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, buildImplementPrompt, planWritten } from './commands.js';
+import { COMMANDS, MODE_CYCLE, buildImplementPrompt, nextMode, planWritten } from './commands.js';
 import type { Message } from '../types.js';
+
+describe('nextMode — Shift+Tab cycling', () => {
+  it('cycles agent → plan → vibe → chat → shell → agent', () => {
+    expect(nextMode('agent')).toBe('plan');
+    expect(nextMode('plan')).toBe('vibe');
+    expect(nextMode('vibe')).toBe('chat');
+    expect(nextMode('chat')).toBe('shell');
+    expect(nextMode('shell')).toBe('agent');
+  });
+
+  it('visits every mode exactly once per lap', () => {
+    const seen = new Set<string>();
+    let m = MODE_CYCLE[0];
+    for (let i = 0; i < MODE_CYCLE.length; i++) {
+      seen.add(m);
+      m = nextMode(m);
+    }
+    expect(m).toBe(MODE_CYCLE[0]);
+    expect(seen.size).toBe(MODE_CYCLE.length);
+  });
+});
 
 describe('COMMANDS — /implement', () => {
   it('is registered so it autocompletes and shows in suggestions', () => {

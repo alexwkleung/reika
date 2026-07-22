@@ -50,7 +50,7 @@ export function Status({
       {modeTag ? (
         <>
           <Text color={modeColor(modeTag)}>{modeTag}</Text>
-          <Text color={theme.muted}>{' · '}</Text>
+          <Text color={theme.muted}>{' (shift+tab to cycle) · '}</Text>
         </>
       ) : null}
       {autoApprove ? (

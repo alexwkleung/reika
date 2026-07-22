@@ -25,14 +25,13 @@ import { expandMentions } from '../agent/mentions.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
-import { buildImplementPrompt, planWritten } from './commands.js';
+import { buildImplementPrompt, nextMode, planWritten, type Mode } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
-type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
 
 // How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
@@ -375,6 +374,13 @@ export function App() {
       // has anywhere to go.
       return;
     }
+    // Shift+Tab cycles agent → plan → vibe → chat → shell. Only while idle — mode picks the
+    // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
+    // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
+    if (key.tab && key.shift) {
+      if (statusRef.current === 'idle') transitionMode(nextMode(modeRef.current), []);
+      return;
+    }
     const sug = suggestionStateRef.current;
     if (sug && sug.items.length > 0) {
       if (key.upArrow) {
@@ -476,6 +482,28 @@ export function App() {
     });
   };
 
+  // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
+  // lands after any restored history (the command echo + banner for /chat et al., nothing
+  // for cycling — the status-bar mode tag is that path's feedback).
+  const transitionMode = (next: Mode, trailing: Message[]): void => {
+    const currentIsChat = modeRef.current === 'chat';
+    const nextIsChat = next === 'chat';
+    if (currentIsChat !== nextIsChat) {
+      // Crossing the chat boundary — save current array, restore the other side's stash
+      const stash = stashedMessagesRef.current;
+      if (currentIsChat) {
+        stash.chat = messagesRef.current;
+      } else {
+        stash.agent = messagesRef.current;
+      }
+      const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
+      setMessages([...restored, ...trailing]);
+    } else if (trailing.length > 0) {
+      setMessages(prev => [...prev, ...trailing]);
+    }
+    setMode(next);
+  };
+
   const switchMode = (next: Mode, banner: string, echo: Message): void => {
     if (next === mode) {
       setMessages(prev => [...prev, echo, { role: 'system', content: `Already in ${next} mode.` }]);
@@ -489,23 +517,7 @@ export function App() {
       ]);
       return;
     }
-    const currentIsChat = mode === 'chat';
-    const nextIsChat = next === 'chat';
-    const switchMsg: Message = { role: 'system', content: banner };
-    if (currentIsChat !== nextIsChat) {
-      // Crossing the chat boundary — save current array, restore the other side's stash
-      const stash = stashedMessagesRef.current;
-      if (currentIsChat) {
-        stash.chat = messagesRef.current;
-      } else {
-        stash.agent = messagesRef.current;
-      }
-      const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
-      setMessages([...restored, echo, switchMsg]);
-    } else {
-      setMessages(prev => [...prev, echo, switchMsg]);
-    }
-    setMode(next);
+    transitionMode(next, [echo, { role: 'system', content: banner }]);
   };
 
   const handleCommand = async (raw: string): Promise<void> => {
@@ -688,6 +700,7 @@ export function App() {
           '  /save              save the full conversation to history (--raw skips redaction)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
+          '  shift+tab          cycle mode (agent → plan → vibe → chat → shell)',
         ].join('\n');
         break;
       case 'model': {

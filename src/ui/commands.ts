@@ -1,5 +1,15 @@
 import type { Message } from '../types.js';
 
+export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+
+// Shift+Tab cycling order: the model-driven modes first (agent → plan → vibe), then the
+// isolated ones (chat → shell), wrapping back to agent.
+export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'vibe', 'chat', 'shell'];
+
+export function nextMode(current: Mode): Mode {
+  return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
+}
+
 export type CommandSpec = {
   name: string;
   desc: string;
