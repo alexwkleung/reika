@@ -34,11 +34,32 @@ async function summarizeProject(cwd: string): Promise<string> {
   return `Top-level entries: ${visible.join(', ')}`;
 }
 
+// Above this size the instructions file stops being standing context and starts
+// crowding out the conversation on small windows (12KB ≈ 3k tokens), so we fall
+// back to an outline + read pointer instead of the full text.
+const INSTRUCTIONS_BUDGET = 12 * 1024;
+
 async function loadInstructions(cwd: string): Promise<string> {
   for (const name of ['AGENTS.md', 'CLAUDE.md']) {
     try {
-      return await readFile(join(cwd, name), 'utf8');
+      const content = await readFile(join(cwd, name), 'utf8');
+      return content.length > INSTRUCTIONS_BUDGET ? outlineInstructions(content, name) : content;
     } catch {}
   }
   return '';
+}
+
+export function outlineInstructions(content: string, name: string): string {
+  const headings: string[] = [];
+  let inFence = false;
+  for (const line of content.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    else if (!inFence && /^#{1,3} /.test(line)) headings.push(line);
+  }
+  const body = headings.length ? headings.join('\n') : content.slice(0, INSTRUCTIONS_BUDGET);
+  return [
+    `${name} is too large to include in full (${content.length} chars). ${headings.length ? 'Section outline:' : 'Beginning of file:'}`,
+    body,
+    `Read the relevant section of ${name} when its guidance matters for the task.`,
+  ].join('\n');
 }
