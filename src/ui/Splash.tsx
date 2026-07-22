@@ -29,7 +29,7 @@ export function Splash({
   subagent?: string;
 }) {
   const labelWidth = subagent ? 'subagent:  '.length : 'model:    '.length;
-  const tagline = `coding agent for small local models · v${version}`;
+  const tagline = `coding agent for local models · v${version}`;
   // Lead the tagline with a flower (❀) — reika (レイカ) means "beautiful flower".
   // The mark occupies "❀ " = 2 columns, so the rule spans the flower + tagline.
   const rule = '─'.repeat(tagline.length + 2);
