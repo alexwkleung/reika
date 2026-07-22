@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { theme } from './theme.js';
+import type { Mode } from './commands.js';
 
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
@@ -29,7 +30,7 @@ export function Input({
   onSubmit: (value: string) => void;
   disabled: boolean;
   canSubmit: boolean;
-  mode: 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+  mode: Mode;
   placeholder?: string;
   // True while an approval popup is shown directly above: the popup omits its
   // bottom border and we omit our top border + top margin, so the two boxes
