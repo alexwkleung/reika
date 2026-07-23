@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { resolve, relative } from 'node:path';
+import { relative } from 'node:path';
+import { resolveUserPath } from './_paths.js';
 import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -25,7 +26,7 @@ export const editTool: Tool = {
     const path = String(args.path);
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
-    const full = resolve(ctx.cwd, path);
+    const full = resolveUserPath(ctx.cwd, path);
     const rel = relative(ctx.cwd, full) || path;
 
     if (oldStr === '') {

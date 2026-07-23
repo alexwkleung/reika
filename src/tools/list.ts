@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
-import { join, resolve, relative } from 'node:path';
+import { join, relative } from 'node:path';
+import { resolveUserPath } from './_paths.js';
 import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
 import { shouldSkipDir } from './_walk.js';
@@ -19,7 +20,7 @@ export const listTool: Tool = {
   async run(args, ctx) {
     const path = String(args.path ?? '.');
     const depth = Math.max(1, Math.min(5, Number(args.depth ?? 1)));
-    const start = resolve(ctx.cwd, path);
+    const start = resolveUserPath(ctx.cwd, path);
     const out: string[] = [];
     await walk(start, ctx.cwd, ctx.ignore, depth, out);
     const truncated = out.length >= MAX_ENTRIES;

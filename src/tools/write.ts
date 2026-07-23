@@ -1,5 +1,6 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, resolve, relative } from 'node:path';
+import { dirname, relative } from 'node:path';
+import { resolveUserPath } from './_paths.js';
 import type { Tool } from '../types.js';
 import { buildWriteDiff } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -20,7 +21,7 @@ export const writeTool: Tool = {
   async run(args, ctx) {
     const path = String(args.path);
     const content = String(args.content ?? '');
-    const full = resolve(ctx.cwd, path);
+    const full = resolveUserPath(ctx.cwd, path);
     const rel = relative(ctx.cwd, full) || path;
 
     const existing = await stat(full).catch(() => null);

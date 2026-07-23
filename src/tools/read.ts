@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { resolve, relative } from 'node:path';
+import { relative } from 'node:path';
+import { resolveUserPath } from './_paths.js';
 import { createHash } from 'node:crypto';
 import type { Tool } from '../types.js';
 
@@ -21,7 +22,7 @@ export const readTool: Tool = {
     const path = String(args.path);
     const offset = Math.max(1, Number(args.offset ?? 1));
     const limit = Math.max(1, Number(args.limit ?? 300));
-    const full = resolve(ctx.cwd, path);
+    const full = resolveUserPath(ctx.cwd, path);
     const text = await readFile(full, 'utf8');
     // Hash the whole file (not the returned slice) so a window-varying re-read of the same
     // region hashes identically; the loop's ReadTrace uses it to tell an unchanged re-read
