@@ -1,7 +1,8 @@
 // Glob tool — find files by path pattern (no content reading).
 import { fdir } from 'fdir';
 import picomatch from 'picomatch';
-import { relative, resolve } from 'node:path';
+import { relative } from 'node:path';
+import { resolveUserPath } from './_paths.js';
 import type { Tool } from '../types.js';
 
 const MAX_MATCHES = 200;
@@ -29,7 +30,7 @@ export const globTool: Tool = {
     const pattern = String(args.pattern ?? '').trim();
     if (!pattern) return { summary: 'Glob failed: empty pattern' };
     const startPath = String(args.path ?? '.');
-    const start = resolve(ctx.cwd, startPath);
+    const start = resolveUserPath(ctx.cwd, startPath);
     const ig = ctx.ignore;
 
     let isMatch: (path: string) => boolean;

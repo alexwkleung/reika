@@ -1,7 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, resolve, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
+import { resolveUserPath } from './_paths.js';
 import { shouldSkipDir } from './_walk.js';
 
 const MAX_MATCHES = 100;
@@ -10,7 +11,7 @@ const LINE_TRUNC = 300;
 const CONTEXT = 2; // lines of surrounding context emitted above/below each match
 const NULL_BYTE_RE = /\x00/;
 
-type GrepState = { count: number; out: string[] };
+type GrepState = { count: number; out: string[]; scanned: number; excluded: number };
 
 export const grepTool: Tool = {
   name: 'grep',
@@ -23,7 +24,7 @@ export const grepTool: Tool = {
     properties: {
       pattern: { type: 'string', description: 'Regex pattern (JavaScript syntax).' },
       path: { type: 'string', description: 'Directory or file to search. Default cwd.' },
-      include: { type: 'string', description: 'Optional filename suffix filter, e.g. ".ts".' },
+      include: { type: 'string', description: 'Optional filename filter, e.g. ".ts" or "*.ts".' },
     },
     required: ['pattern'],
   },
@@ -31,15 +32,27 @@ export const grepTool: Tool = {
     const pattern = String(args.pattern);
     const startPath = String(args.path ?? '.');
     const include = args.include ? String(args.include) : undefined;
+    // Models often send glob-style filters ("*.css", "**/*.css"); reduce to the
+    // suffix after the last '*' so they behave the same as a plain ".css".
+    const suffix = include ? include.slice(include.lastIndexOf('*') + 1) : undefined;
     let re: RegExp;
     try {
       re = new RegExp(pattern);
     } catch (e) {
       return { summary: `Invalid regex: ${(e as Error).message}` };
     }
-    const start = resolve(ctx.cwd, startPath);
-    const state: GrepState = { count: 0, out: [] };
-    await walk(start, ctx.cwd, ctx.ignore, include, re, state);
+    const start = resolveUserPath(ctx.cwd, startPath);
+    const st = await stat(start).catch(() => null);
+    if (!st) return { summary: `Grep failed: path not found: ${startPath}` };
+    const state: GrepState = { count: 0, out: [], scanned: 0, excluded: 0 };
+    await walk(start, ctx.cwd, ctx.ignore, suffix, re, state);
+    if (state.count === 0 && suffix && state.scanned === 0 && state.excluded > 0) {
+      return {
+        summary:
+          `Found 0 matches — include "${include}" matched none of the ` +
+          `${state.excluded} file(s) under ${startPath}`,
+      };
+    }
     const truncated = state.count >= MAX_MATCHES;
     return {
       summary: `Found ${state.count}${truncated ? '+' : ''} matches for /${pattern}/`,
@@ -52,7 +65,7 @@ async function walk(
   path: string,
   cwd: string,
   ig: Ignore | undefined,
-  include: string | undefined,
+  suffix: string | undefined,
   re: RegExp,
   state: GrepState,
 ): Promise<void> {
@@ -60,7 +73,7 @@ async function walk(
   const st = await stat(path).catch(() => null);
   if (!st) return;
   if (st.isFile()) {
-    await scanFile(path, cwd, ig, include, re, state);
+    await scanFile(path, cwd, ig, suffix, re, state);
     return;
   }
   if (!st.isDirectory()) return;
@@ -72,9 +85,9 @@ async function walk(
       const subPath = join(path, entry.name);
       const relSub = relative(cwd, subPath);
       if (ig && relSub.length > 0 && ig.ignores(relSub + '/')) continue;
-      await walk(subPath, cwd, ig, include, re, state);
+      await walk(subPath, cwd, ig, suffix, re, state);
     } else if (entry.isFile()) {
-      await scanFile(join(path, entry.name), cwd, ig, include, re, state);
+      await scanFile(join(path, entry.name), cwd, ig, suffix, re, state);
     }
   }
 }
@@ -83,13 +96,17 @@ async function scanFile(
   filePath: string,
   cwd: string,
   ig: Ignore | undefined,
-  include: string | undefined,
+  suffix: string | undefined,
   re: RegExp,
   state: GrepState,
 ): Promise<void> {
-  if (include && !filePath.endsWith(include)) return;
+  if (suffix && !filePath.endsWith(suffix)) {
+    state.excluded++;
+    return;
+  }
   const relFile = relative(cwd, filePath);
   if (ig && ig.ignores(relFile)) return;
+  state.scanned++;
   const st = await stat(filePath).catch(() => null);
   if (!st || st.size > MAX_FILE_BYTES) return;
   const text = await readFile(filePath, 'utf8').catch(() => null);

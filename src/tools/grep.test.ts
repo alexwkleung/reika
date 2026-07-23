@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -53,5 +53,35 @@ describe('grepTool', () => {
     await writeFile(join(cwd, 'd.txt'), 'match ' + 'z'.repeat(500), 'utf8');
     const result = await grepTool.run({ pattern: 'match' }, { cwd, ignore: ignore() });
     expect(result.payload ?? '').toContain('…');
+  });
+
+  it('accepts glob-style include filters ("*.css", "**/*.css")', async () => {
+    await mkdir(join(cwd, 'nested'), { recursive: true });
+    await writeFile(join(cwd, 'nested', 'styles.css'), '.kana-sidebar { color: red; }', 'utf8');
+    await writeFile(join(cwd, 'nested', 'app.ts'), 'const sidebar = 1;', 'utf8');
+    for (const include of ['*.css', '**/*.css', '.css']) {
+      const result = await grepTool.run({ pattern: 'sidebar', include }, { cwd, ignore: ignore() });
+      expect(result.summary, `include=${include}`).toMatch(/Found 1 matches/);
+      expect(result.payload ?? '').toContain('styles.css');
+    }
+  });
+
+  it('reports a missing path instead of 0 matches', async () => {
+    const result = await grepTool.run(
+      { pattern: 'sidebar', path: 'no/such/dir' },
+      { cwd, ignore: ignore() },
+    );
+    expect(result.summary).toContain('path not found: no/such/dir');
+    expect(result.summary).not.toContain('Found 0');
+  });
+
+  it('says so when the include filter excluded every file', async () => {
+    await writeFile(join(cwd, 'a.txt'), 'sidebar', 'utf8');
+    await writeFile(join(cwd, 'b.txt'), 'sidebar', 'utf8');
+    const result = await grepTool.run(
+      { pattern: 'sidebar', include: '*.css' },
+      { cwd, ignore: ignore() },
+    );
+    expect(result.summary).toContain('include "*.css" matched none of the 2 file(s)');
   });
 });
