@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { kFormat, formatContext, formatCache, contextFill } from './Status.js';
+import { kFormat, formatContext, formatCache, contextFill, formatPr } from './Status.js';
 
 describe('kFormat', () => {
   it('shows raw numbers below 1k', () => {
@@ -81,6 +81,18 @@ describe('formatContext', () => {
   it('renders nothing before any context exists', () => {
     expect(formatContext(undefined)).toBe('');
     expect(formatContext(0, 128_000)).toBe('');
+  });
+});
+
+describe('formatPr', () => {
+  it('shows the PR the branch is attached to', () => {
+    expect(formatPr(99)).toBe(' · PR: #99');
+  });
+
+  it('renders nothing when the branch has no PR', () => {
+    expect(formatPr(null)).toBe('');
+    expect(formatPr(undefined)).toBe('');
+    expect(formatPr(0)).toBe('');
   });
 });
 

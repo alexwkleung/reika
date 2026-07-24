@@ -10,6 +10,7 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
+import { resolvePr } from './pr.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
@@ -118,6 +119,9 @@ export function App() {
   const [exitRequested, setExitRequested] = useState(false);
   const [exitArmed, setExitArmed] = useState(false);
   const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
+  // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
+  // and whenever the branch has no PR (or `gh` can't tell us).
+  const [pr, setPr] = useState<number | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -263,6 +267,24 @@ export function App() {
     }, 1000);
     return () => clearInterval(id);
   }, [status, pending]);
+
+  // Branch↔PR badge. The poll only shells out to git (cheap, local); the `gh` lookup behind
+  // it is cached per branch, so a branch switch made in another terminal shows up within a
+  // tick without hammering the network. State only changes when the number does, so the
+  // steady-state tick costs no re-render.
+  useEffect(() => {
+    let cancelled = false;
+    const check = async (): Promise<void> => {
+      const next = await resolvePr(process.cwd(), Date.now());
+      if (!cancelled) setPr(next);
+    };
+    void check();
+    const id = setInterval(() => void check(), 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   // Switch the active profile and record it in scrollback — shared by
   // `/model <name>` and the interactive picker's enter. The optional echo is
@@ -1207,6 +1229,7 @@ export function App() {
             contextTokens={lastUsage?.promptTokens ?? estimatedContext}
             contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
             cachedTokens={lastUsage?.cachedTokens}
+            pr={pr}
             autoApprove={
               config?.autoApprove === 'bypass'
                 ? 'bypass'
