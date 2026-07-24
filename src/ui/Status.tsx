@@ -12,6 +12,7 @@ export function Status({
   contextTokens,
   contextWindow,
   cachedTokens,
+  pr,
   autoApprove,
   modeTag,
   exitArmed,
@@ -24,6 +25,7 @@ export function Status({
   contextTokens?: number | null;
   contextWindow?: number;
   cachedTokens?: number;
+  pr?: number | null;
   autoApprove?: 'safe' | 'bypass';
   modeTag?: string;
   exitArmed?: boolean;
@@ -44,6 +46,8 @@ export function Status({
   // Share of the prompt the provider served from cache last call. Absent when the
   // provider doesn't report it.
   const cache = formatCache(cachedTokens, contextTokens);
+  // Which PR the checked-out branch is attached to, when one exists.
+  const prBadge = formatPr(pr);
 
   return (
     <Box>
@@ -64,6 +68,7 @@ export function Status({
       <Text color={theme.muted}>{`${model} · turn ${turns} · ${status}${timer}${tokens}`}</Text>
       {ctx ? <Text color={ctxColor}>{ctx}</Text> : null}
       {cache ? <Text color={theme.muted}>{cache}</Text> : null}
+      {prBadge ? <Text color={theme.secondary}>{prBadge}</Text> : null}
       <Text color={theme.muted}>{' · '}</Text>
       {exitArmed ? (
         <Text color={theme.tool}>press ctrl-c again to exit</Text>
@@ -110,6 +115,11 @@ export function formatContext(contextTokens?: number | null, contextWindow?: num
 export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
   if (cachedTokens == null || !contextTokens) return '';
   return ` · cache ${Math.round((cachedTokens / contextTokens) * 100)}%`;
+}
+
+// ` · PR: #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell).
+export function formatPr(pr?: number | null): string {
+  return pr == null || pr <= 0 ? '' : ` · PR: #${pr}`;
 }
 
 export function kFormat(n: number): string {

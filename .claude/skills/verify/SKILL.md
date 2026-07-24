@@ -52,7 +52,7 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 - Match phrases must be unique to the target output — the status bar ("shift+tab") and
   suggestion descriptions sit in every frame; `Commands:` is a good /help marker.
 - When input lands wrong, don't theorize: temporarily `debugLog` `(input, key.return,
-  value)` at the top of Input's `useInput` to see how each chunk was parsed.
+value)` at the top of Input's `useInput` to see how each chunk was parsed.
 
 ## Flows worth driving
 
