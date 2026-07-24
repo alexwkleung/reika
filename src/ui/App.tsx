@@ -391,10 +391,17 @@ export function App() {
         setSuggestionSelected(i => Math.min(sug.items.length - 1, i + 1));
         return;
       }
-      if (key.tab) {
+      if (key.tab || key.return) {
         const sel = sug.items[suggestionSelectedRef.current];
         if (sel) {
           const next = acceptSuggestion(inputValueRef.current, sel, sug.partial);
+          // Enter on an already-complete buffer means submit, not re-accept —
+          // otherwise every fully-typed command would cost a second Enter.
+          // Input's Return handler no-ops while suggesting, so submit from here.
+          if (key.return && next === inputValueRef.current) {
+            if (statusRef.current === 'idle' && pendingRef.current === null) void onSubmit(next);
+            return;
+          }
           setInputValue(next);
           setSuggestionState(null);
         }

@@ -37,8 +37,9 @@ export function Input({
   // merge into one continuous frame (the prompt reads as part of the input
   // region rather than a card floating above it).
   attachedAbove?: boolean;
-  // True while the completion/approval overlay owns Up/Down (App navigates it);
-  // we leave the arrows alone then instead of moving the cursor between lines.
+  // True while the completion/approval overlay owns Up/Down and Return (App
+  // navigates/accepts); we leave those keys alone then instead of moving the
+  // cursor between lines or submitting.
   suggesting: boolean;
   // Past submissions, oldest→newest, recalled by Up on the first line / Down on
   // the last line (shell-style history).
@@ -156,6 +157,13 @@ export function Input({
       }
 
       if (key.return) {
+        // The suggestion overlay owns Return (App accepts the highlighted item,
+        // or submits when the buffer is already complete). Every keypress hits
+        // both useInput handlers, so without this gate the same Enter would
+        // also submit here. Ordering keeps it correct: this handler (child)
+        // registered first, so it runs before App mutates the overlay state —
+        // the same assumption the `suggesting` Up/Down gate below relies on.
+        if (suggesting) return;
         if (value.endsWith('\\')) {
           update(value.slice(0, -1) + '\n', cursor);
           return;

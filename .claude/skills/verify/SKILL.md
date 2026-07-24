@@ -40,13 +40,19 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 - `set send_slow {1 .12}` and `send -s` — coalesced chunks read as paste and eat the `\r`.
 - Wait for the footer text `"attach files"` before the first keystroke (bootstrap gate),
   then drain a few seconds more.
-- expect only reads pty output during `expect` commands — use a drain loop
-  (`expect -timeout 1 -re {.+}`) between stages or the session log stops at the splash.
+- expect only reads pty output during `expect` commands. Between every send, wait with a
+  timed never-match drain: `expect -timeout 2 -re "ZZZ_NEVER_MATCH_ZZZ" {} timeout {}` —
+  it reads continuously for the full window. `expect -timeout 1 -re {.+}` returns
+  instantly on buffered frames (no wall time passes), and bare `sleep` reads nothing;
+  either way pty backpressure blocks the app and the next send coalesces into a paste
+  chunk whose `\r` becomes an inserted newline instead of a submit.
 - Ctrl+C with a non-empty input clears the input; twice while empty arms+confirms exit.
 - Pane evidence: `log_file`, then strip ANSI with
   `perl -pe 's/\e\[[0-9;?]*[a-zA-Z]//g; s/\r/\n/g'`.
-- Gotcha: after typing `/` (suggestions overlay), a later Enter can be consumed by
-  overlay state instead of submitting — start a fresh session for submit-critical stages.
+- Match phrases must be unique to the target output — the status bar ("shift+tab") and
+  suggestion descriptions sit in every frame; `Commands:` is a good /help marker.
+- When input lands wrong, don't theorize: temporarily `debugLog` `(input, key.return,
+  value)` at the top of Input's `useInput` to see how each chunk was parsed.
 
 ## Flows worth driving
 
