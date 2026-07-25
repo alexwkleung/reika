@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
+import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import { Scrollback } from './Scrollback.js';
 import type { Message } from '../types.js';
@@ -96,6 +97,67 @@ describe('Scrollback system-message tone', () => {
       '❯ Context compacted.',
     );
     expect(frameFor({ role: 'system', content: 'plain note' })).toContain('❯ plain note');
+  });
+});
+
+// Regression: subagent messages render under `marginLeft={4}`, but the blocks that
+// size themselves off `process.stdout.columns` (user bubble, reasoning bar, diff)
+// ignored that indent, so every row was laid out 4 columns wider than its box. Ink
+// wrapped the overflow onto a continuation row — visible as the user's prompt broken
+// into fragments, some rows carrying the grey background with no accent bar.
+describe('Scrollback nested (subagent) messages', () => {
+  const COLS = 60;
+  const INDENT = 4;
+
+  const framePlusApp = (messages: Message[]): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      // Mirror App's own paddingX={1}, which the width math accounts for.
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+        </Box>,
+      );
+      return lastFrame() ?? '';
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  it('keeps every user-bubble row on one line, bar included', () => {
+    const frame = framePlusApp([
+      {
+        role: 'user',
+        content: 'Find every call site of parseConfig and report the file and line for each one.',
+        nested: true,
+      },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  it('keeps every reasoning row behind its bar', () => {
+    const frame = framePlusApp([
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'I should look at the config loader before touching any call sites at all.',
+        nested: true,
+      },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+
+    expect(rows.length).toBeGreaterThan(1); // header + at least one wrapped body row
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
   });
 });
 
