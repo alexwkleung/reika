@@ -346,6 +346,26 @@ Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they alw
 
 **Per-profile `minGenTokens`** (`REIKA_<NAME>_MIN_GEN_TOKENS`): the generation reserve, falling back to the global `REIKA_MIN_GEN_TOKENS` (default 2048). One number drives the cap reserve, the compaction trigger, and the backstop floor — set it larger (6144–8192) on a small-window profile running a reasoning model so compaction fires early enough to leave think-room.
 
+## Attaching images
+
+Issue #49. The terminal never delivers image bytes — a paste is always text — so reika reads the system clipboard itself on **ctrl-v** (not cmd-v: macOS terminals never forward the ⌘ key, and their own cmd-v paste yields nothing for an image). Two capture paths, one interpretation path:
+
+| Path                       | Where                                                          |
+| -------------------------- | -------------------------------------------------------------- |
+| ctrl-v (clipboard)         | `src/ui/clipboard.ts` → `Input.tsx` → `App.tsx` `onPasteImage` |
+| `@shot.png` / dropped path | `src/agent/mentions.ts`                                        |
+
+Both funnel into an `OcrProvider` (`src/ocr/types.ts`) and come out as a text `<image>` block, structurally identical to the `<file>` block a mention produces. **This is why the feature is model-agnostic:** the model only ever sees text, so a text-only local model handles a pasted screenshot exactly as well as a vision one — and `Message.content` stays a `string` end-to-end. A vision fallback would instead need multimodal content parts threaded through `messagesToOpenAI`, compaction, the payload store, and the prefix-stable `rendered` bytes; the `OcrProvider` indirection exists so that can slot in later without touching the call sites.
+
+`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and npm silently skips the non-matching platform packages. Two rules keep Linux working:
+
+1. The import must stay **lazy** (`await import()` inside `try`) — the package's entry point throws when no platform binary matched, so a top-level import would take the whole CLI down instead of degrading.
+2. It goes in `optionalDependencies`, so a failed binary fetch never breaks `npm i -g reika`.
+
+A clipboard paste is OCR'd immediately and parked in a ref keyed by an `[Image N]` marker inserted into the input buffer; `attachImageBlocks` expands live markers at submit. Deleting the marker drops the attachment — the marker is the user's handle on it. Attachments are consumed by the turn that sends them so history recall can't silently re-attach.
+
+Failures are **persistent scrollback notices**, never silent: an attachment that vanishes is indistinguishable from the model ignoring it. `no-text`, `unavailable` and `failed` stay distinct because they warrant different messages. Note that `confidence` from the recognizer is deliberately ignored — it reads ~0.44 on character-perfect extractions, so any threshold would reject good text.
+
 ## Tests (Vitest)
 
 `npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
@@ -354,7 +374,10 @@ Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they alw
 - `src/provider/client.ts` — `sanitizeToolName`, `extractToolCallsFromContent`
 - `src/ui/suggest.ts` — command + file autocomplete matching
 - `src/ui/summary.ts` — session stats derivation
-- `src/agent/mentions.ts` — `@filepath` expansion
+- `src/agent/mentions.ts` — `@filepath` expansion, image-path detection, OCR failure notices
+- `src/agent/attachments.ts` — pasted-image markers + `<image>` block assembly
+- `src/ocr/system.ts` — OCR outcome mapping (stubbed module; the real one is an optional dep)
+- `src/ui/clipboard.ts` — parsing AppleScript's `«data PNGf…»` literal
 - `src/search/searxng.ts` — provider request shape + response normalization (fetch mocked)
 
 **Not covered (deliberately):** UI components (Ink testing is awkward; evals own end-to-end behavior), tools that wrap node fs/process (read/list/grep/edit/write/bash — shallow wrappers), the agent loop itself (evals territory).
