@@ -23,6 +23,9 @@ import { runTurn } from '../agent/loop.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
+import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
+import { systemOcr } from '../ocr/system.js';
+import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
@@ -54,6 +57,17 @@ function expandHome(p: string): string {
   if (p === '~') return homedir();
   if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
   return p;
+}
+
+// The ctrl-v hint earns its place here rather than only on the splash: this is the one surface
+// visible at the moment you actually have a screenshot on the clipboard, and it comes back every
+// time the buffer empties. Dropped when it can't fit — the input box has ~6 columns of chrome
+// (border + padding + prompt) and an over-long placeholder wraps the box to two rows.
+function promptPlaceholder(): string {
+  const base = 'Type / for commands, @ to attach files';
+  if (!clipboardImageSupported()) return base;
+  const withHint = `${base}, ctrl-v for images`;
+  return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
 }
 
 export function App() {
@@ -122,6 +136,14 @@ export function App() {
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
   const [pr, setPr] = useState<number | null>(null);
+  // Text extracted from images pasted this turn, keyed by the `[Image N]` marker sitting in the
+  // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
+  // and re-rendering on paste would fight the Input's own cursor bookkeeping.
+  const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
+  // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
+  // durable record of what got attached is the system notice the paste ends with.
+  const [pasting, setPasting] = useState<string | null>(null);
+  const pasteBusyRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -729,6 +751,7 @@ export function App() {
           '  /save              save the full conversation to history (--raw skips redaction)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
+          '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
           '  shift+tab          cycle mode (agent → plan → vibe → chat → shell)',
         ].join('\n');
         break;
@@ -904,6 +927,83 @@ export function App() {
     }
   };
 
+  // Ctrl+V. Outcomes are all persistent scrollback lines rather than spinner states: the user
+  // pressed a key expecting an attachment, and "nothing happened" has to be distinguishable
+  // from "attached, and here's how much text came out".
+  const onPasteImage = async (): Promise<void> => {
+    const notice = (content: string, tone: 'info' | 'warn'): void => {
+      setMessages(prev => [...prev, { role: 'system', content, tone }]);
+    };
+    if (!clipboardImageSupported()) {
+      notice('Image paste needs system OCR — macOS and Windows only.', 'warn');
+      return;
+    }
+    // Shell mode submits the buffer to bash, which would try to run `[Image 1]` as a command —
+    // there's no model turn for the block to ride along with.
+    if (modeRef.current === 'shell') {
+      notice("Can't attach an image in shell mode.", 'warn');
+      return;
+    }
+    // A second ctrl-v mid-paste would race a duplicate marker in. Ref, not state: the handler
+    // closes over its render's state, so a fast double-press would read a stale `false`.
+    if (pasteBusyRef.current) return;
+    pasteBusyRef.current = true;
+    try {
+      await runPaste(notice);
+    } finally {
+      pasteBusyRef.current = false;
+      setPasting(null);
+    }
+  };
+
+  // The two stages are ~330ms (the pasteboard rendering PNG data) and ~205ms (the recognizer),
+  // neither removable — so they're narrated instead. Naming the current stage beats one generic
+  // spinner: it tells the user whether the wait is the clipboard or the OCR.
+  const runPaste = async (notice: (content: string, tone: 'info' | 'warn') => void) => {
+    setPasting('Reading image from clipboard');
+    const bytes = await readClipboardImage();
+    if (!bytes) {
+      notice('No image on the clipboard.', 'warn');
+      return;
+    }
+    setPasting('Extracting text');
+    const result = await systemOcr(config?.ocrLangs)(bytes);
+    if (!result.ok) {
+      notice(
+        result.reason === 'unavailable'
+          ? 'Image paste needs system OCR — macOS and Windows only.'
+          : result.reason === 'no-text'
+            ? 'No text found in the pasted image.'
+            : `Couldn't read the pasted image: ${result.detail ?? 'OCR failed'}`,
+        'warn',
+      );
+      return;
+    }
+    const marker = nextImageMarker(imageAttachmentsRef.current);
+    imageAttachmentsRef.current = [
+      ...imageAttachmentsRef.current,
+      { marker, text: result.text, source: 'clipboard' },
+    ];
+    // Appended rather than inserted at the cursor: the Input owns cursor state and snaps to the
+    // end on any external value change, so a mid-buffer insert would move the caret anyway.
+    setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
+    notice(
+      `Attached ${marker} — ${result.text.length} chars read from the clipboard image.`,
+      'info',
+    );
+  };
+
+  // The keypress handler is synchronous, so nothing awaits the above. Swallow into an error
+  // line rather than letting a rejection escape as an unhandled promise and kill the TUI.
+  const onPasteImageSafely = (): void => {
+    void onPasteImage().catch((e: unknown) => {
+      setMessages(prev => [
+        ...prev,
+        { role: 'error', content: `Image paste failed: ${(e as Error).message}` },
+      ]);
+    });
+  };
+
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
     // Free the server slot for the real request (the engine keeps already-processed KV in its
@@ -924,12 +1024,25 @@ export function App() {
       await runShell(trimmed);
       return;
     }
-    const { augmented, display } = await expandMentions(trimmed, bundle.cwd);
+    const { augmented, display, notices } = await expandMentions(trimmed, bundle.cwd, {
+      ocr: systemOcr(config.ocrLangs),
+    });
+    if (notices.length > 0) {
+      setMessages(prev => [
+        ...prev,
+        ...notices.map(content => ({ role: 'system' as const, content, tone: 'warn' as const })),
+      ]);
+    }
+    // Clipboard attachments are consumed by the turn that sends them: the marker stays visible in
+    // the bubble, but recalling that text from history later must not silently re-attach an image
+    // the user has moved on from.
+    const modelText = attachImageBlocks(augmented, imageAttachmentsRef.current);
+    imageAttachmentsRef.current = [];
     if (modeRef.current === 'vibe') {
-      await runVibeTurn(augmented, display !== augmented ? display : undefined);
+      await runVibeTurn(modelText, display !== modelText ? display : undefined);
       return;
     }
-    await submitToModel(augmented, display !== augmented ? display : undefined);
+    await submitToModel(modelText, display !== modelText ? display : undefined);
   };
 
   // Latch the typecheck indicator: show immediately when a check starts, but defer hiding by
@@ -1201,6 +1314,10 @@ export function App() {
                 typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
               }
             />
+          ) : pasting ? (
+            // Same spinner while idle: a paste is a harness action with a visible wait, so it
+            // reads like the typecheck gate rather than like the app having stalled.
+            <Working label={pasting} accent={theme.info} />
           ) : null}
           <Input
             disabled={pending !== null || modelSelect !== null}
@@ -1212,12 +1329,13 @@ export function App() {
             value={inputValue}
             onChange={onInputChange}
             onSubmit={onSubmit}
+            onPasteImage={onPasteImageSafely}
             placeholder={
               mode === 'shell'
                 ? 'Run a shell command'
                 : mode === 'vibe'
                   ? 'Describe a change — it plans first, then implements'
-                  : 'Type / for commands, @ to attach files'
+                  : promptPlaceholder()
             }
           />
           <Status

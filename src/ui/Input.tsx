@@ -24,6 +24,7 @@ export function Input({
   suggesting,
   history,
   attachedAbove,
+  onPasteImage,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -44,6 +45,10 @@ export function Input({
   // Past submissions, oldest→newest, recalled by Up on the first line / Down on
   // the last line (shell-style history).
   history: string[];
+  // Ctrl+V: pull an image off the system clipboard. Bound to Ctrl rather than Cmd
+  // because macOS terminals never forward ⌘, and Cmd+V is the terminal's own paste
+  // (which delivers text only — an image on the clipboard arrives as nothing at all).
+  onPasteImage?: () => void;
 }) {
   const [cursor, setCursor] = useState(value.length);
   const [blinkOn, setBlinkOn] = useState(true);
@@ -257,7 +262,7 @@ export function Input({
         else if (input === 'w') {
           const start = wordBackward(value, cursor);
           update(value.slice(0, start) + value.slice(cursor), start);
-        }
+        } else if (input === 'v') onPasteImage?.();
         return;
       }
 

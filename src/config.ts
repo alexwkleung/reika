@@ -64,6 +64,7 @@ export function loadConfig(): Config {
     // Floor at 1 so the active tool-call round always keeps its reasoning (required for
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
+    ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
   };
 }
 
@@ -164,6 +165,14 @@ function validateBaseURL(url: string, source: string): void {
         `Drop the trailing "/chat/completions" — the OpenAI SDK appends it automatically.`,
     );
   }
+}
+
+function parseList(s: string | undefined): string[] | undefined {
+  const items = (s ?? '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 function parseIntOrUndef(s: string | undefined): number | undefined {

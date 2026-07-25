@@ -243,4 +243,8 @@ export type Config = {
   // and full test suites routinely exceed the old 120s; 5 min covers them without letting a
   // hung command hold the agent loop too long.
   bashTimeoutMs: number;
+  // Preferred OCR languages for pasted images (REIKA_OCR_LANGS, BCP-47, comma-separated).
+  // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
+  // first entry.
+  ocrLangs?: string[];
 };
