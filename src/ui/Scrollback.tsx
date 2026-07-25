@@ -135,18 +135,27 @@ function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
   );
 }
 
+// Subagent messages render indented under the parent turn. Blocks that size
+// themselves off process.stdout.columns (the user bubble's padded background
+// rows, the reasoning bar, the diff view) must subtract that indent too —
+// otherwise each row is laid out 4 columns wider than its box and Ink wraps the
+// overflow onto a stray continuation row, breaking the bubble's background into
+// fragments with no bar.
+const NESTED_INDENT = 4;
+
 function MessageView({ msg }: { msg: Message }) {
-  const inner = renderMessage(msg);
+  const nested = 'nested' in msg && !!msg.nested;
+  const inner = renderMessage(msg, nested ? NESTED_INDENT : 0);
   if (inner === null) return null;
-  if ('nested' in msg && msg.nested) {
-    return <Box marginLeft={4}>{inner}</Box>;
+  if (nested) {
+    return <Box marginLeft={NESTED_INDENT}>{inner}</Box>;
   }
   return inner;
 }
 
-function renderMessage(msg: Message): ReactElement | null {
+function renderMessage(msg: Message, indent = 0): ReactElement | null {
   if (msg.role === 'user') {
-    return <UserBubble text={msg.display ?? msg.content} />;
+    return <UserBubble text={msg.display ?? msg.content} indent={indent} />;
   }
   if (msg.role === 'header') {
     return <Header model={msg.model} cwd={msg.cwd} />;
@@ -170,7 +179,7 @@ function renderMessage(msg: Message): ReactElement | null {
     const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} /> : null}
+        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} indent={indent} /> : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>{renderMarkdown(msg.content!)}</Text>
@@ -229,7 +238,7 @@ function renderMessage(msg: Message): ReactElement | null {
             <DiffView
               diff={msg.diff.text}
               path={msg.diff.path}
-              maxWidth={diffViewWidth()}
+              maxWidth={diffViewWidth(indent)}
               startLine={msg.diff.startLine}
             />
           </Box>
@@ -295,9 +304,17 @@ function renderMessage(msg: Message): ReactElement | null {
 // label on top. Shares the user bubble's left-bar visual language but stays
 // understated — colored bar, muted text, no background, and dimmer than the
 // user bar's accent — so it reads as a subordinate aside, not a user message.
-function ReasoningBlock({ text, maxLines }: { text: string; maxLines?: number }) {
+function ReasoningBlock({
+  text,
+  maxLines,
+  indent = 0,
+}: {
+  text: string;
+  maxLines?: number;
+  indent?: number;
+}) {
   const term = process.stdout.columns || 80;
-  const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
+  const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
@@ -333,9 +350,9 @@ function ReasoningBlock({ text, maxLines }: { text: string; maxLines?: number })
 // edge (aligned with the Thinking block's bar), one space of padding after it
 // and a trailing space, plus a blank background row above/below for breathing
 // room.
-function UserBubble({ text }: { text: string }) {
+function UserBubble({ text, indent = 0 }: { text: string; indent?: number }) {
   const term = process.stdout.columns || 80;
-  const avail = Math.max(20, term - 2); // App applies paddingX={1} on each side.
+  const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
   const contentW = Math.max(1, avail - 3); // '▎ ' gutter (2) + trailing space (1).
   const lines = wrapText(text, contentW);
   const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
@@ -408,7 +425,8 @@ function truncate(s: string, max: number): string {
 }
 
 // Available width for diff content inside a tool-result. Subtracts App's
-// paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6.
-function diffViewWidth(): number {
-  return Math.max(20, (process.stdout.columns || 80) - 6);
+// paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6, and the
+// nesting indent when the tool ran inside a subagent.
+function diffViewWidth(indent = 0): number {
+  return Math.max(20, (process.stdout.columns || 80) - 6 - indent);
 }
