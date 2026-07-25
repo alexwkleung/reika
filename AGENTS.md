@@ -357,10 +357,18 @@ Issue #49. The terminal never delivers image bytes — a paste is always text �
 
 Both funnel into an `OcrProvider` (`src/ocr/types.ts`) and come out as a text `<image>` block, structurally identical to the `<file>` block a mention produces. **This is why the feature is model-agnostic:** the model only ever sees text, so a text-only local model handles a pasted screenshot exactly as well as a vision one — and `Message.content` stays a `string` end-to-end. A vision fallback would instead need multimodal content parts threaded through `messagesToOpenAI`, compaction, the payload store, and the prefix-stable `rendered` bytes; the `OcrProvider` indirection exists so that can slot in later without touching the call sites.
 
-`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and npm silently skips the non-matching platform packages. Two rules keep Linux working:
+`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and npm silently skips the non-matching platform packages. It goes in `optionalDependencies`, so a failed binary fetch never breaks `npm i -g reika`.
 
-1. The import must stay **lazy** (`await import()` inside `try`) — the package's entry point throws when no platform binary matched, so a top-level import would take the whole CLI down instead of degrading.
-2. It goes in `optionalDependencies`, so a failed binary fetch never breaks `npm i -g reika`.
+### Why recognition runs in a child process
+
+**reika never loads the native module.** `systemOcr` spawns `node -e` with a tiny worker, pipes the image in on stdin, and reads a JSON envelope back on **fd 3**. Two hard-won reasons, both from real failures:
+
+1. **A native fault is not catchable.** macOS 26's `RecognizeDocumentsRequest` path can fault outright — an observed crash was a `KERN_PROTECTION_FAILURE` on the stack guard page of a `com.apple.root.default-qos.cooperative` thread, inside Apple's own Swift frames (Vision → `librecognize_documents` `formatDocument`/`allLineIDs`). No `try/catch` survives that; in-process it killed the TUI and the user's conversation with it. Out of process it kills a child we can afford to lose, and `parseWorkerResult` turns the signal into a `failed` outcome.
+2. **The library scribbles on stdout and stderr.** It prints `VTEST: error: perform(_:)…` to stdout and `falling back to VNRecognizeTextRequest` to stderr. In-process, stdout noise corrupts the Ink frame. Hence both are `'ignore'`d and the result travels on a private fd the library can't reach.
+
+That stderr line is _routine chatter_, not a cause — never surface it as an error detail. Availability is decided by `createRequire().resolve()`, which reads package metadata without ever dlopening the binary; a platform with no binary is reported by the child as `unavailable`.
+
+Cost is one node startup (~50ms) on a ~530ms clipboard+OCR round trip.
 
 A clipboard paste is OCR'd immediately and parked in a ref keyed by an `[Image N]` marker inserted into the input buffer; `attachImageBlocks` expands live markers at submit. Deleting the marker drops the attachment — the marker is the user's handle on it. Attachments are consumed by the turn that sends them so history recall can't silently re-attach.
 
