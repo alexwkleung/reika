@@ -34,13 +34,20 @@ const EMPTY: PastedUrlExpansion = { blocks: [], notices: [], fetched: [] };
 
 export async function expandPastedUrls(
   input: string,
-  opts: { enabled: boolean },
+  opts: {
+    enabled: boolean;
+    // Fired once with how many URLs are about to be fetched, before the requests go out — the
+    // submit blocks on a network round trip here, and an unnarrated wait reads as a frozen TUI.
+    // Reports the count only; the caller owns the wording.
+    onStart?: (count: number) => void;
+  },
 ): Promise<PastedUrlExpansion> {
   if (!opts.enabled) return EMPTY;
   const all = extractUrls(input);
   if (all.length === 0) return EMPTY;
 
   const urls = all.slice(0, MAX_PASTED_URLS);
+  opts.onStart?.(urls.length);
   const results = await Promise.all(urls.map(url => extractUrl(url)));
 
   const blocks: string[] = [];

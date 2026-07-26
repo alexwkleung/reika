@@ -48,6 +48,25 @@ describe('expandPastedUrls', () => {
     expect(r.notices.some(n => n.text.includes('3 found'))).toBe(true);
   });
 
+  it('reports the fetch count before the requests go out', async () => {
+    const onStart = vi.fn();
+    let startedBeforeFetch = false;
+    extractUrl.mockImplementation(async () => {
+      startedBeforeFetch = onStart.mock.calls.length === 1;
+      return ok('x');
+    });
+    await expandPastedUrls('https://a.com and https://b.com', { enabled: true, onStart });
+    expect(onStart).toHaveBeenCalledExactlyOnceWith(2);
+    expect(startedBeforeFetch).toBe(true);
+  });
+
+  it('does not report a start when there is nothing to fetch', async () => {
+    const onStart = vi.fn();
+    await expandPastedUrls('no links here', { enabled: true, onStart });
+    await expandPastedUrls('https://a.com', { enabled: false, onStart });
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it('truncates a long page and points at fetch_url for the rest', async () => {
     extractUrl.mockResolvedValue(ok('y'.repeat(20_000)));
     const r = await expandPastedUrls('https://example.com', { enabled: true });

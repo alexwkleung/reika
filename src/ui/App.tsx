@@ -155,6 +155,13 @@ export function App() {
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
   const pasteBusyRef = useRef(false);
+  // Same idea for submit-time expansion, which blocks on the network when the prompt carries a
+  // pasted link. Separate from `pasting` so a ctrl-v mid-submit can't clobber either label.
+  const [expanding, setExpanding] = useState<string | null>(null);
+  // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
+  // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
+  // its render's value, so a fast double-press would read a stale `false`.
+  const submitBusyRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -1070,25 +1077,42 @@ export function App() {
       await runShell(trimmed);
       return;
     }
-    const { augmented, display, notices } = await expandMentions(trimmed, bundle.cwd, {
-      ocr: systemOcr(config.ocrLangs),
-    });
-    pendingNoticesRef.current.push(
-      ...notices.map(content => ({ role: 'system' as const, content, tone: 'warn' as const })),
-    );
-    // Scans `trimmed`, never `augmented`: a URL inside an @mention'd file is file content, not a
-    // link the user handed over.
-    const urls = await expandPastedUrls(trimmed, { enabled: config.pasteFetch });
-    pendingNoticesRef.current.push(
-      ...urls.notices.map(n => ({ role: 'system' as const, content: n.text, tone: n.tone })),
-    );
-    // Clipboard attachments are consumed by the turn that sends them: the marker stays visible in
-    // the bubble, but recalling that text from history later must not silently re-attach an image
-    // the user has moved on from.
-    let modelText = attachImageBlocks(augmented, imageAttachmentsRef.current);
-    imageAttachmentsRef.current = [];
-    if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
-    modelText = routeSkill(trimmed, modelText);
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
+    let modelText: string;
+    let display: string;
+    try {
+      const expansion = await expandMentions(trimmed, bundle.cwd, {
+        ocr: systemOcr(config.ocrLangs),
+      });
+      display = expansion.display;
+      pendingNoticesRef.current.push(
+        ...expansion.notices.map(content => ({
+          role: 'system' as const,
+          content,
+          tone: 'warn' as const,
+        })),
+      );
+      // Scans `trimmed`, never the expanded text: a URL inside an @mention'd file is file
+      // content, not a link the user handed over.
+      const urls = await expandPastedUrls(trimmed, {
+        enabled: config.pasteFetch,
+        onStart: count => setExpanding(`Fetching ${count} pasted link${count > 1 ? 's' : ''}`),
+      });
+      pendingNoticesRef.current.push(
+        ...urls.notices.map(n => ({ role: 'system' as const, content: n.text, tone: n.tone })),
+      );
+      // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
+      // in the bubble, but recalling that text from history later must not silently re-attach an
+      // image the user has moved on from.
+      modelText = attachImageBlocks(expansion.augmented, imageAttachmentsRef.current);
+      imageAttachmentsRef.current = [];
+      if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
+      modelText = routeSkill(trimmed, modelText);
+    } finally {
+      setExpanding(null);
+      submitBusyRef.current = false;
+    }
     if (modeRef.current === 'vibe') {
       await runVibeTurn(modelText, display !== modelText ? display : undefined);
       return;
@@ -1371,10 +1395,11 @@ export function App() {
                 typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
               }
             />
-          ) : pasting ? (
-            // Same spinner while idle: a paste is a harness action with a visible wait, so it
-            // reads like the typecheck gate rather than like the app having stalled.
-            <Working label={pasting} accent={theme.info} />
+          ) : (pasting ?? expanding) ? (
+            // Same spinner while idle: a paste, or a submit that has to fetch a pasted link, is a
+            // harness action with a visible wait — it should read like the typecheck gate rather
+            // than like the app having stalled.
+            <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
           ) : null}
           <Input
             disabled={pending !== null || modelSelect !== null}
