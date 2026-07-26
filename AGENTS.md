@@ -68,7 +68,7 @@ When a tool wraps an external service (web search, GitHub, etc.):
 - Register conditionally in `defaultTools(config)` based on which credentials are present
 - Multiple providers for the same role (SearXNG, Brave, Exa…) could implement the same interface; switching is config-only, no tool-layer changes
 
-This is how `search` + `fetch_url` are wired. `SearxngProvider` (self-hosted, local-first) implements `SearchProvider`. Reika deliberately ships only the local-first provider — no third-party tool-use APIs — but the interface stays vendor-neutral so another provider can be slotted into `makeSearchProvider` later. If `REIKA_SEARXNG_URL` is unset, neither tool registers and the system prompt stays lean.
+This is how `search` is wired. `SearxngProvider` (self-hosted, local-first) implements `SearchProvider`. Reika deliberately ships only the local-first provider — no third-party tool-use APIs — but the interface stays vendor-neutral so another provider can be slotted into `makeSearchProvider` later. If `REIKA_SEARXNG_URL` is unset, `search` doesn't register and the system prompt stays lean. `fetch_url` is **not** gated with it — it needs no provider, and the harness hands the model URLs (pasted-link expansion, URL grounding) that it must be able to follow up on.
 
 **Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
 
@@ -398,7 +398,29 @@ Markdown files in `~/.config/reika/skills/` (global) and `<cwd>/.reika/skills/` 
 
 When invoked, the skill body is sent as the user message (verbatim), with any args appended after a blank line. The display in scrollback shows the raw `/skill args` the user typed, not the expanded body. Uses the same `submitToModel` path as regular input, so streaming/abort/approval all work identically.
 
-Filename validation: `[a-z0-9][a-z0-9_-]*` only. Frontmatter (optional) is parsed with a tiny hand-rolled key:value parser — no `js-yaml` dep. Per the rule-of-five heuristic, the parser isn't worth a library until skills grow nested/complex metadata.
+Filename validation: `[a-z0-9][a-z0-9_-]*` only. Frontmatter (optional) is parsed with a tiny hand-rolled key:value parser — no `js-yaml` dep. It understands the block-list form (`key:` then `- item` lines) by folding items into the same comma-joined string the inline form yields, so consumers stay on `Record<string, string>`. Per the rule-of-five heuristic, the parser still isn't worth a library until skills grow genuinely nested metadata.
+
+### Plain-English routing (`skillmatch.ts`)
+
+A `triggers:` frontmatter list routes an ordinary prompt to a skill **without the model choosing**. `matchSkill` scores each skill's trigger phrases (plus its name, an implicit trigger) against the user's raw input as whole-word matches, weights by phrase word count, and returns the single best — null on a tie, since routing by array order would be arbitrary. `App.tsx`'s `routeSkill` runs it at submit and either emits a one-line suggestion (default, once per skill per session) or, under `REIKA_SKILL_AUTO=1`, prepends the body to the prompt with a receipt naming the matched phrases.
+
+Three constraints shaped this, and they're the reason it is **not** a model-callable tool:
+
+1. **A wrong pick costs more here.** At 30B/Q2 on a 16k window, a mis-fired skill body is a large fraction of the budget — where the same mistake on a frontier model is just wasted tokens. Hence the asymmetric thresholds: one trigger earns a suggestion (a line on a turn that runs normally either way), two earn an injection (which rewrites what the model was asked to do).
+2. **Selection must precede the prefix.** A skill invoked mid-loop rewrites the request prefix at round N, invalidating the engine's prefix cache — all-or-nothing on SWA models, the exact cost `REIKA_PREFIX_STABLE` and `REIKA_WARM` exist to avoid. Selecting at submit keeps injection in round 0, where it's just part of the user message.
+3. **Never route on derived text.** Matching runs on the user's own words, never on the expanded model text — a fetched page or an `@`-mentioned file that happens to say "verify" is not a request to run `/verify`.
+
+`shouldAutoInject` also refuses a body over ~15% of the context window (at a pessimistic 2.5 chars/token, same reasoning as `CAP_DENSITY_FLOOR`), and `routeSkill` excludes plan mode — a skill body there competes with the plan prompt and the progress ledger. If deterministic triggers ever prove too brittle, the escape hatch is a **fenced classifier call** (one tool-less round, descriptions only, output constrained to `<skill-name> | none`) — non-determinism quarantined in a side context that can't pollute the main window. Don't reach for a mid-loop skill tool.
+
+## Pasted-URL expansion (`agent/pastedurls.ts`)
+
+The user-side counterpart to URL grounding: a URL the user pastes is fetched by the harness before the turn starts and prepended as a `<url href="…">` block, structurally identical to the `<file>` block a mention produces. Same harness-drives-the-tool principle as `tools/_urls.ts`, opposite direction — there the model wrote a URL and we check it; here the user handed one over and we read it, so the content is in context whether or not a weak model would have called `fetch_url`.
+
+Scope is the user's raw input only: URLs the model produces belong to `_urls.ts`, and URLs inside an `@mention`'d file are file content. Capped at 2 per prompt (matching the grounder) and **8k chars per URL** — tighter than the tool's 64KB payload cap because this content lands in the _user message_, which `toolcall.ts`'s fit-to-window cap does not truncate. Every fetch emits a persistent `system` receipt (an outbound request made on the user's behalf is exactly the must-see signal), and a failure distinguishes `reached` (a real dead link) from no-response (offline), same as the grounder. On by default; `REIKA_PASTE_FETCH=0` opts out.
+
+All three submit-time expansions (unattachable image, pasted URL, routed skill) stage their receipts on `pendingNoticesRef` instead of pushing to `messages` directly, and `submitToModel` flushes them right after the user echo. Same placement rule the URL grounder follows — a receipt is a follow-on to the action, never an announcement in front of it — and nothing can strand in the ref, since `runTurn` emits the user message unconditionally as its first act.
+
+This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatTools` while `search` stays behind `REIKA_SEARXNG_URL`: the harness puts URLs in front of the model that it must be able to follow up on, and fetching a known URL needs no provider or credential.
 
 ## Eval workflow
 

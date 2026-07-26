@@ -22,12 +22,14 @@ export function defaultTools(config?: Config): Tool[] {
     writeTool,
     bashTool,
     subagentTool,
+    // Unconditional, unlike `search`: fetching a known URL needs no provider or credential, and
+    // the harness itself puts URLs in front of the model (pasted-link expansion, URL grounding)
+    // that it must be able to follow up on. Gating it behind the search provider left a reika
+    // without SearXNG unable to read a link the user had just handed it.
+    fetchUrlTool,
   ];
   const search = makeSearchProvider(config);
-  if (search) {
-    tools.push(createSearchTool(search));
-    tools.push(fetchUrlTool);
-  }
+  if (search) tools.push(createSearchTool(search));
   return tools;
 }
 
@@ -40,12 +42,9 @@ export function planTools(): Tool[] {
 
 // Tools available in chat mode — knowledge-only, no filesystem or shell access.
 export function chatTools(config?: Config): Tool[] {
-  const tools: Tool[] = [];
+  const tools: Tool[] = [fetchUrlTool];
   const search = makeSearchProvider(config);
-  if (search) {
-    tools.push(createSearchTool(search));
-    tools.push(fetchUrlTool);
-  }
+  if (search) tools.push(createSearchTool(search));
   return tools;
 }
 

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadSkills, parseFrontmatter } from './skills.js';
+import { loadSkills, parseFrontmatter, parseTriggers } from './skills.js';
 
 describe('parseFrontmatter', () => {
   it('returns empty meta + full body when there is no frontmatter', () => {
@@ -41,6 +41,37 @@ describe('parseFrontmatter', () => {
     const { meta, body } = parseFrontmatter(text);
     expect(meta).toEqual({});
     expect(body).toBe(text);
+  });
+
+  it('folds a block list into the comma-joined form', () => {
+    const text = '---\ntriggers:\n  - verify\n  - "smoke test"\ndescription: x\n---\nbody';
+    const { meta } = parseFrontmatter(text);
+    expect(meta).toEqual({ triggers: 'verify, smoke test', description: 'x' });
+  });
+
+  it('does not treat a dash line as a list item when the key had a value', () => {
+    const text = '---\ndescription: x\n- stray\n---\nbody';
+    const { meta } = parseFrontmatter(text);
+    expect(meta).toEqual({ description: 'x' });
+  });
+});
+
+describe('parseTriggers', () => {
+  it('returns [] for a missing value', () => {
+    expect(parseTriggers(undefined)).toEqual([]);
+    expect(parseTriggers('')).toEqual([]);
+  });
+
+  it('splits, trims, lowercases and dedupes', () => {
+    expect(parseTriggers('Verify, smoke test ,verify')).toEqual(['verify', 'smoke test']);
+  });
+
+  it('strips YAML inline-list brackets', () => {
+    expect(parseTriggers('[verify, deploy]')).toEqual(['verify', 'deploy']);
+  });
+
+  it('drops phrases too short to carry routing signal', () => {
+    expect(parseTriggers('go, ci, deploy')).toEqual(['deploy']);
   });
 });
 
@@ -91,6 +122,19 @@ describe('loadSkills', () => {
     const skills = await loadSkills(cwd);
     expect(skills[0].description).toBe('full branch review');
     expect(skills[0].body).toBe('body here');
+  });
+
+  it('loads triggers from frontmatter and defaults them to []', async () => {
+    await mkdir(join(cwd, '.reika/skills'), { recursive: true });
+    await writeFile(
+      join(cwd, '.reika/skills/verify.md'),
+      '---\ntriggers: smoke test, run the app\n---\nbody',
+      'utf8',
+    );
+    await writeFile(join(cwd, '.reika/skills/plain.md'), 'no frontmatter', 'utf8');
+    const skills = await loadSkills(cwd);
+    expect(skills.find(s => s.name === 'verify')?.triggers).toEqual(['smoke test', 'run the app']);
+    expect(skills.find(s => s.name === 'plain')?.triggers).toEqual([]);
   });
 
   it('falls back to first non-empty line as description without frontmatter', async () => {

@@ -85,7 +85,8 @@ Config sources, in precedence order (higher wins):
 | `REIKA_CONTEXT_WINDOW`        | _unset_                    | Model context window; denominator for the status-line `ctx` fill gauge. Per-profile override available. Unset shows absolute tokens, no %                                                                                                                                                                                                 |
 | `REIKA_MIN_GEN_TOKENS`        | `2048`                     | Generation room reserved from the window. Drives the per-turn `max_tokens` backstop, the payload cap reserve, and the compaction trigger. Per-profile override. ~2048 reasoning-off; 6144–8192 reasoning-on (set 6144 on a 16k thinking model). Needs `REIKA_CONTEXT_WINDOW`                                                              |
 | `REIKA_REASONING_ROUNDS`      | `2`                        | Recent tool-call rounds that keep their reasoning in context (rest pruned). 1 = leanest; higher avoids re-derivation on thinking models, at a token cost                                                                                                                                                                                  |
-| `REIKA_SEARXNG_URL`           | _unset_                    | SearXNG instance URL (self-hosted, local-first); enables `search` + `fetch_url`                                                                                                                                                                                                                                                           |
+| `REIKA_SEARXNG_URL`           | _unset_                    | SearXNG instance URL (self-hosted, local-first); enables the `search` tool. `fetch_url` registers regardless                                                                                                                                                                                                                              |
+| `REIKA_PASTE_FETCH`           | `1`                        | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each). `0` disables — an outbound request per pasted link                                                                                                                                                                                               |
 | `REIKA_MAX_SEARCHES_PER_TURN` | `3`                        | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                                                                                                                                                                                                                          |
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`                        | Cap `fetch_url` calls per user turn                                                                                                                                                                                                                                                                                                       |
 | `REIKA_BASH_TIMEOUT_MS`       | `300000`                   | Wall-clock timeout for a single bash command, ms (raise for slow builds, lower to fail hangs faster)                                                                                                                                                                                                                                      |
@@ -109,6 +110,7 @@ Feature-flagged subsystems, all **off by default** (set to `1` to enable), being
 | `REIKA_LOGIT_RECOVERY` | Spends one last-resort biased round before the terminal reasoning-loop stop: a mild one-shot `logit_bias` (−4, capped, tool-name tokens exempt) down-weighting the loop's own recurring tokens. llama.cpp-only (needs the native `/tokenize` endpoint) and only active when `REIKA_REASONING_LOOP` is also on; degrades to the honest stop if it doesn't help                                                                                                                                                                                                           |
 | `REIKA_CONVERGE_RETRY` | Inserts one steered retry before the honest give-up stop (plan and agent): a strong, failure-naming directive ("you looped and kept re-questioning yourself; commit to one analysis and do it") instead of a cold stop. Capped at one; worst case is unchanged — the same stop fires once the budget is spent                                                                                                                                                                                                                                                           |
 | `REIKA_URL_GROUNDING`  | Fetches http(s) URLs a write/edit (or a finalized plan) introduces, on the model's behalf, and appends a ✓/✗ receipt — catching a plausible-but-wrong link that would otherwise fail silently at runtime. Mirrors the dep grounder: capped (2/call), per-turn deduped, offline-safe (a no-response URL is called dead only when another URL in the batch proved connectivity)                                                                                                                                                                                           |
+| `REIKA_SKILL_AUTO`     | Lets a strongly-matched skill (two `triggers`, or one multi-word phrase) prepend its body to your prompt instead of only being suggested, with a scrollback receipt naming the matched phrases. Selection is deterministic — the model never picks. Refused when the body exceeds ~15% of the context window, and never in plan mode                                                                                                                                                                                                                                    |
 | `REIKA_WARM`           | Speculative KV-cache warming: the first keystroke of a prompt fires a throwaway 1-token request carrying the exact prefix the submit will send (system + history), so a llama.cpp-style server prefills its cache in the typing gap and the real request re-processes only the user message. Fail-open; skipped when the next turn would compact. Best on slow-prefill local setups; a needless (tiny) cost on paid APIs                                                                                                                                                |
 | `REIKA_DEDUP_PAYLOADS` | Replaces older duplicate tool-result payloads in the request with a short stub to reclaim context (`toolcall.ts`). Bypassed while `REIKA_PREFIX_STABLE` is on — a stub flipping on a later duplicate would rewrite mid-history bytes and invalidate the prefix cache                                                                                                                                                                                                                                                                                                    |
 | `REIKA_PREFIX_STABLE`  | Keeps requests append-only between context-shrink events so the inference engine's prompt-prefix cache stays valid: tool payloads stay live and age in one batch at the compaction threshold instead of every round, and loop/plan nudges ride a trailing note instead of the system prompt. Cuts per-round prompt re-processing on llama.cpp (SWA/hybrid-memory models especially, which re-process the whole prompt on any prefix change), at the cost of a fuller context between events. Needs `REIKA_CONTEXT_WINDOW`; takes precedence over `REIKA_DEDUP_PAYLOADS` |
@@ -162,18 +164,18 @@ Conversation history persists across switches; if styles clash, run `/new` first
 
 The agent has these tools. Optional tools register only when their config is present:
 
-| Tool        | What                                                               | Approval?              | Optional?                     |
-| ----------- | ------------------------------------------------------------------ | ---------------------- | ----------------------------- |
-| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                             |
-| `list`      | List files in a directory (depth-limited)                          | no                     | —                             |
-| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                             |
-| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                             |
-| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                             |
-| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                             |
-| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                             |
-| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                             |
-| `search`    | Web search (returns title + URL + snippet, up to 8)                | no                     | requires `REIKA_SEARXNG_URL`  |
-| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | registered alongside `search` |
+| Tool        | What                                                               | Approval?              | Optional?                    |
+| ----------- | ------------------------------------------------------------------ | ---------------------- | ---------------------------- |
+| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                            |
+| `list`      | List files in a directory (depth-limited)                          | no                     | —                            |
+| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                            |
+| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                            |
+| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                            |
+| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                            |
+| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                            |
+| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                            |
+| `search`    | Web search (returns title + URL + snippet, up to 8)                | no                     | requires `REIKA_SEARXNG_URL` |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | always registered            |
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 
@@ -196,6 +198,7 @@ Drop a `*.md` file in a skills directory and it becomes a slash command. Useful 
 ```md
 ---
 description: Review the current branch end-to-end
+triggers: review the branch, code review, look over my changes
 ---
 
 Review the changes on this branch:
@@ -213,6 +216,28 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 - `/review` — sends the file body as your input
 - `/review focus on the API changes` — appends extra args to the body, separated by a blank line
 - `/skills` — list available skills
+
+### Plain-English routing (`triggers`)
+
+You don't have to remember the slash command. `triggers:` lists phrases that route an ordinary prompt to the skill — matched **deterministically in the harness**, never by the model. Writing "review the branch for me" gets you a one-line hint that `/review` exists; the turn runs normally either way.
+
+The frontmatter accepts any YAML list shape (`triggers: a, b`, `triggers: [a, b]`, or a `- ` block list). The skill's own name is always an implicit trigger, so a skill called `verify` routes "verify my changes" with no `triggers:` at all.
+
+Matching rules, in short:
+
+- Whole-word only — a skill named `test` does not fire on "latest"
+- Multi-word phrases score higher than single words; phrases under 3 characters are ignored
+- A tie between two skills suggests neither (routing by array order would be arbitrary)
+- Continuations (`yes`, `ok`, `continue`, `do it`, …) never route
+- A skill is suggested at most once per session — decline it once and it stops asking
+
+**Auto-run (`REIKA_SKILL_AUTO=1`, experimental, off by default):** on a strong match — two triggers, or one multi-word phrase — the skill body is prepended to your prompt instead of just being suggested, with a scrollback receipt naming which phrases matched. Refused when the body would take more than ~15% of the context window, and never in plan mode (a skill body there competes with the plan prompt and progress ledger).
+
+### Pasted URLs
+
+Paste an `http(s)` link into a prompt and Reika fetches it before the turn starts, prepending the extracted content as a `<url href="…">` block — the same mechanism as `@file` mentions, so the model reads the page instead of guessing at it. Up to 2 URLs per prompt, truncated to 8k characters each (`fetch_url` gets the rest). Every fetch leaves a scrollback line, and a dead link is reported as one rather than silently dropped. Set `REIKA_PASTE_FETCH=0` to turn it off — worth doing on an airgapped machine.
+
+Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file content, and links the model writes are handled separately by URL grounding (`REIKA_URL_GROUNDING`).
 
 **Rules:**
 
