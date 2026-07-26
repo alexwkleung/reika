@@ -873,9 +873,12 @@ export function App() {
       default: {
         const skill = bundle?.skills.find(s => s.name === name);
         if (skill) {
-          setMessages(prev => [...prev, echo]);
           const extra = args.trim();
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
+          // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
+          // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
+          // bubble reads `/issue 14` while the model receives the skill body. Pre-appending
+          // would double it. Same pattern as /implement.
           // Skills follow the active mode's prompt handling, so in vibe mode they
           // plan-then-implement like any other prompt.
           if (modeRef.current === 'vibe') {
