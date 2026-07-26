@@ -9,7 +9,7 @@ const OUTPUT_TAIL_LINES = 10;
 export const bashTool: Tool = {
   name: 'bash',
   description:
-    'Execute a shell command in the working directory. Prefer the dedicated tools (read, grep, edit, write, list) when they fit; use bash for build, test, lint, git, and similar workflows.',
+    'Execute a shell command in the working directory. Prefer the dedicated tools (read, grep, edit, write, list) when they fit; use bash for build, test, lint, git/gh, and similar workflows.',
   parameters: {
     type: 'object',
     properties: {
