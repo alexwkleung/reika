@@ -14,7 +14,7 @@ export function QueuedList({ queue }: { queue: QueuedMessage[] }) {
       {queue.map((msg, i) => (
         <Box key={i} width="100%">
           <Text wrap="wrap">
-            <Text color={theme.muted}>[Queued] </Text>
+            <Text color={theme.queued}>[Queued] </Text>
             <Text>{queuedPreview(msg)}</Text>
           </Text>
         </Box>

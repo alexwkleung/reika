@@ -313,11 +313,7 @@ export function Input({
       ) : (
         <Text>{renderWithCursor(value, cursor, !disabled, blinkOn)}</Text>
       )}
-      {!canSubmit && !disabled && value ? (
-        <Box marginLeft={phantomCursorCell ? 0 : 1}>
-          <Text color={theme.muted}>(queued)</Text>
-        </Box>
-      ) : null}
+
     </Box>
   );
 }
