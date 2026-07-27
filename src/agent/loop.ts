@@ -564,31 +564,32 @@ const WITHDRAWAL_DIRECTIVE =
   'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
   'Reading and searching are unavailable until you make progress.)';
 
-// Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop
-// has stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), but the edit-recovery
-// exemption is asymmetric by loop type:
-//   - read loop (reasoningLoop=false): suppressed once editing has begun, because a post-edit re-read
-//     is usually edit-recovery — re-fetching exact bytes to rebuild old_string after compaction aged
-//     them — not gratuitous looping. Withdrawing read there pushes the model onto bash-grep and makes
-//     edits harder to land (the original [[reika-agent-loop-breaking]] finding).
-//   - reasoning loop (reasoningLoop=true): withdraws even post-edit, because crossSim≈1.0 while
-//     RE-READING/searching is rumination (observed: edited 5×, then looped re-reading router.ts in a
-//     rotation — the old `!editingStarted` gate wrongly left withdrawal off and it never broke out).
-//   - EXCEPT edit-recovery (editRecovery=true, an unresolved failed edit): NOT withdrawn even though
-//     the reasoning is looping. A model failing the same edit (old_string not in the file) needs to
-//     READ to rebuild old_string — pausing inspection only forces more failing edits (observed: it
-//     oscillated edit-fail ↔ re-read at crossSim=1.0). High crossSim does NOT distinguish rumination
-//     from edit-recovery — the failed-edit signal does. The edit-recovery dead-end gets a graceful
-//     stop (see runTurn), not withdrawal.
+// Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop has
+// stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), with exactly one
+// exemption: edit-recovery (editRecovery=true, an unresolved failed edit). A model failing the same
+// edit needs to READ to rebuild old_string — pausing inspection only forces more failing edits
+// (observed: it oscillated edit-fail ↔ re-read at crossSim=1.0). That dead-end gets a graceful stop
+// (see runTurn), not withdrawal.
+//
+// There used to be a second exemption — read loops were suppressed once editing had begun, on the
+// theory that a post-edit re-read is usually re-fetching bytes that aged out rather than looping. It
+// was already wrong once (a reasoning loop post-edit never broke out, which is why reasoningLoop was
+// threaded in to override it), and it was wrong again on a kimi-k3 turn that edited five times and
+// then re-read App.tsx lines 600-659 NINE times while withdrawal stayed off, because editingStarted
+// was true and no edit was currently failing.
+//
+// The suppression is redundant with the detector it guards. `loopingReads` already demands 3 identical
+// passes over the same (path, offset) within LOOP_RECENT_ROUNDS — a genuine post-aging refetch is one
+// pass, maybe two, and never recent-and-repeated three times over. Anything that clears that bar is a
+// loop whether or not an edit has landed, and `editRecovery` covers the one case where reading is the
+// legitimate response. So the loop type no longer changes the answer, and neither reasoningLoop nor
+// editingStarted is consulted here any more.
 export function shouldWithdrawInspection(opts: {
   loopActiveRounds: number;
-  reasoningLoop: boolean;
-  editingStarted: boolean;
   editRecovery: boolean;
 }): boolean {
   if (opts.loopActiveRounds < LOOP_WITHDRAW_AFTER) return false;
-  if (opts.editRecovery) return false;
-  return opts.reasoningLoop || !opts.editingStarted;
+  return !opts.editRecovery;
 }
 
 // Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
@@ -1053,13 +1054,11 @@ export async function runTurn(opts: {
       const reasoningLoop = REASONING_LOOP_BREAK && reasoningLoopActive;
       const loopDetected = looping.length > 0 || reasoningLoop;
       loopActiveRounds = loopDetected ? loopActiveRounds + 1 : 0;
-      // A read loop keeps the edit-recovery exemption (no withdrawal once editing has begun); a
-      // reasoning loop withdraws too — UNLESS there's an unresolved failed edit, where the model needs
-      // reading to recover and withdrawal would only force more failing edits. See shouldWithdrawInspection.
+      // Any confirmed loop that survives the ledger withdraws, regardless of type — UNLESS there's an
+      // unresolved failed edit, where the model needs reading to recover and withdrawal would only
+      // force more failing edits. See shouldWithdrawInspection.
       withdrawInspection = shouldWithdrawInspection({
         loopActiveRounds,
-        reasoningLoop,
-        editingStarted,
         editRecovery: lastEditFailed,
       });
       // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
@@ -1889,16 +1888,21 @@ export async function runTurn(opts: {
       // the only slot in the request that is guaranteed live (it is always in the trailing block).
       // When the bytes ARE in context the failure means what it used to — the target genuinely is not
       // there — and the message is left alone.
-      if (
-        editFailure?.kind === 'absent' &&
-        !readFirst.isGrounded(editFailure.path, opts.history, prefixStable)
-      ) {
-        const grounding = buildAbsentGrounding(editFailure);
-        payload = payload ? `${payload}\n\n${grounding}` : grounding;
-        debugLog(
-          `[reika:debug] round=${i} absent-grounding file=${editFailure.path} ` +
-            `at=${editFailure.at ?? 'none'}\n`,
-        );
+      if (editFailure?.kind === 'absent') {
+        // Ask about the REGION when one was located, and fall back to the whole file only when it
+        // wasn't. A live read of App.tsx:560-594 does not mean the model can see line 607 — treating
+        // it as if it did is what let a confabulated edit through ungrounded (observed, kimi-k3).
+        const holds = editFailure.excerpt
+          ? readFirst.holdsRegion(editFailure.path, editFailure.excerpt, opts.history, prefixStable)
+          : readFirst.isGrounded(editFailure.path, opts.history, prefixStable);
+        if (!holds) {
+          const grounding = buildAbsentGrounding(editFailure);
+          payload = payload ? `${payload}\n\n${grounding}` : grounding;
+          debugLog(
+            `[reika:debug] round=${i} absent-grounding file=${editFailure.path} ` +
+              `at=${editFailure.at ?? 'none'}\n`,
+          );
+        }
       }
       // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,

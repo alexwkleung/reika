@@ -43,6 +43,10 @@ const readResponse = (path: string): ModelResponse => ({
   content: '',
   toolCalls: [{ id: 'r1', name: 'read', args: { path } }],
 });
+const rangedReadResponse = (path: string, offset: number, limit: number): ModelResponse => ({
+  content: '',
+  toolCalls: [{ id: 'r1', name: 'read', args: { path, offset, limit } }],
+});
 
 const PLAN = 'The plan:\n1. Edit `src/app.ts` to rename the constant';
 const PLAN_HISTORY: Message[] = [
@@ -256,5 +260,49 @@ describe('read-first gate (integration)', () => {
     // The model has the bytes and its old_string still matches nothing: the target genuinely is not
     // there, which is the original meaning of `absent`. Re-sending the file would teach it nothing.
     expect(failed.payload ?? '').not.toContain('not in your context');
+  });
+
+  // A live read of ONE region does not mean the model can see another. Grounding the whole path on a
+  // partial read is what let a confabulated edit through unhelped (kimi-k3, msg 121: read 560-594,
+  // invented a block at 607, got a bare failure).
+  it('grounds a region the live read did not cover, even though the file is grounded', async () => {
+    await writeFile(
+      join(cwd, 'src', 'wide.ts'),
+      [
+        'export const header = 1;',
+        'export const alpha = 2;',
+        'export const beta = 3;',
+        'export function handler(name: string) {',
+        '  const pendingShell = null;',
+        '  const approvals = { approved: 0 };',
+        '  return pendingShell ?? approvals;',
+        '}',
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    h.scripted.push(
+      // Reads the top of the file only — enough to ground the path, nowhere near the handler.
+      rangedReadResponse('src/wide.ts', 1, 3),
+      // Edits the handler from memory: right vocabulary, wrong bytes.
+      editResponse(
+        'src/wide.ts',
+        '  const pendingShell = undefined;\n  const approvals = { approved: 1 };',
+        '  const pendingShell = undefined;\n  const approvals = { approved: 2 };',
+      ),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [{ role: 'user', content: 'update the handler' }]);
+
+    // Not bounced: the path IS grounded, which is correct for the gate and beside the point here.
+    expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(
+      false,
+    );
+    const failed = messages.find(m => m.role === 'tool' && m.summary.startsWith('Edit failed'));
+    if (failed?.role !== 'tool') throw new Error('expected a tool message');
+    expect(failed.payload).toContain('not in your context');
+    // Handed the region it actually meant, not the region it happened to have read.
+    expect(failed.payload).toContain('const approvals = { approved: 0 };');
+    expect(failed.payload).not.toContain('export const alpha');
   });
 });

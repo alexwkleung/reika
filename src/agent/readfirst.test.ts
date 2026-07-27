@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ReadFirstGate, buildReadFirstDirective, isLive } from './readfirst.js';
+import { ReadFirstGate, buildReadFirstDirective, isLive, probeLine } from './readfirst.js';
 import type { Message } from '../types.js';
 
 const CWD = '/repo';
@@ -139,6 +139,81 @@ describe('ReadFirstGate', () => {
     gate2.ground('src/app.ts', 2);
     aged.aged = true; // batch aging collapsed it to summary-only
     expect(gate2.shouldBounce('src/app.ts', history, true)).toBe(true);
+  });
+});
+
+describe('ReadFirstGate.holdsRegion', () => {
+  const EXCERPT =
+    '  606│\n  607│    if (name === "clear" || name === "new") {\n  608│      setMessages([]);';
+
+  it('is true when a live payload actually contains the region', () => {
+    const gate = new ReadFirstGate(CWD);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts', '  607│    if (name === "clear" || name === "new") {'),
+    );
+    gate.ground('src/app.ts', 2);
+    expect(gate.holdsRegion('src/app.ts', EXCERPT, history)).toBe(true);
+  });
+
+  // The regression: a live read of a DIFFERENT part of the same file marked the whole file grounded,
+  // so an old_string invented for line 607 looked grounded and got no bytes back.
+  it('is false when the live read covers a different part of the same file', () => {
+    const gate = new ReadFirstGate(CWD);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts', '  560│  const [pendingShell, setPendingShell] = useState(null);'),
+    );
+    gate.ground('src/app.ts', 2);
+    // Coarse grounding still passes — that is correct for the gate, and wrong for this question.
+    expect(gate.isGrounded('src/app.ts', history)).toBe(true);
+    expect(gate.holdsRegion('src/app.ts', EXCERPT, history)).toBe(false);
+  });
+
+  it('keeps every piece of a file read in chunks, not just the latest', () => {
+    const gate = new ReadFirstGate(CWD);
+    const history = [
+      { role: 'user', content: 'go' } as Message,
+      assistant(),
+      readResult('src/app.ts', '  607│    if (name === "clear" || name === "new") {'),
+      readResult('src/app.ts', '  900│  const unrelated = 1;'),
+      assistant(),
+    ];
+    gate.ground('src/app.ts', 2);
+    gate.ground('src/app.ts', 3); // a second chunk must not evict the first
+    expect(gate.holdsRegion('src/app.ts', EXCERPT, history)).toBe(true);
+  });
+
+  it('is true for authored content, which has no payload to match against', () => {
+    const gate = new ReadFirstGate(CWD);
+    gate.ground('src/new.ts'); // write
+    expect(gate.holdsRegion('src/new.ts', EXCERPT, dispatching(assistant()))).toBe(true);
+  });
+
+  it('is false when the region has nothing distinctive to match on', () => {
+    const gate = new ReadFirstGate(CWD);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts', 'anything'),
+    );
+    gate.ground('src/app.ts', 2);
+    // Only closing punctuation: no probe, so we re-send rather than assume coverage.
+    expect(gate.holdsRegion('src/app.ts', '  10│  }\n  11│);', history)).toBe(false);
+  });
+});
+
+describe('probeLine', () => {
+  it('strips the gutter and picks the longest distinctive line', () => {
+    expect(probeLine('    5│  const a = 1;\n    6│  const somethingMuchLonger = 2;')).toBe(
+      'const somethingMuchLonger = 2;',
+    );
+  });
+
+  it('returns undefined when nothing clears the length floor', () => {
+    expect(probeLine('   10│  }\n   11│);\n   12│')).toBeUndefined();
   });
 });
 

@@ -28,10 +28,11 @@ import type { Message } from '../types.js';
 // that ran and FAILED can never be re-bounced into its recovery loop (its path is already in the
 // bounced set — the recovery ledger owns that flow).
 export class ReadFirstGate {
-  // path → history index of the tool message whose payload carries that file's bytes, or `null` when
-  // the model authored them. An index rather than a boolean is the whole point: grounding is a fact
-  // about the current request, not about the turn's past.
-  private grounded = new Map<string, number | null>();
+  // path → every history index whose payload carried bytes for that file (`null` = the model authored
+  // them). Indices rather than a boolean are the whole point: grounding is a fact about the current
+  // request, not about the turn's past. A LIST rather than the latest one, because a file is usually
+  // read in pieces — holdsRegion has to ask which of those pieces are still live.
+  private grounded = new Map<string, (number | null)[]>();
   private bounced = new Set<string>();
 
   constructor(private cwd: string) {}
@@ -46,16 +47,43 @@ export class ReadFirstGate {
   // `historyIndex` is the tool message holding the bytes; omit it for authored content (`write`),
   // which never ages out of the model's own call args.
   ground(path: string, historyIndex?: number): void {
-    this.grounded.set(this.norm(path), historyIndex ?? null);
+    const p = this.norm(path);
+    const at = this.grounded.get(p);
+    if (at) at.push(historyIndex ?? null);
+    else this.grounded.set(p, [historyIndex ?? null]);
   }
 
-  // Does the model currently hold this file's bytes? Read-only, no bounce bookkeeping — the edit
-  // failure path asks this to tell a confabulated old_string (bytes absent, so it was written from
-  // memory) apart from a genuinely stale target (bytes present and old_string still matches nothing).
+  // Does the model currently hold ANY of this file's bytes? The gate's own test: a partial read is
+  // judged good enough to let an edit through, since this is a nudge and not a proof.
   isGrounded(path: string, history: Message[], prefixStable = false): boolean {
-    const at = this.grounded.get(this.norm(path));
-    if (at === null) return true; // authored by the model; never ages
-    return at !== undefined && isLive(history, at, prefixStable);
+    return this.entries(path).some(
+      at => at === null || isLive(history, at, prefixStable), // null = authored; never ages
+    );
+  }
+
+  // Does the model hold the bytes of THIS REGION — not merely of the file it lives in? The coarser
+  // isGrounded is right for the gate but wrong for diagnosing a failed edit: a live read of
+  // App.tsx:560-594 marks the whole file grounded, so an old_string invented for line 607 looked
+  // grounded and got no help (observed, kimi-k3). Confabulation is per-region, so the test must be.
+  //
+  // `excerpt` is the region the edit tool located, gutter-numbered. Matching is on a probe line
+  // stripped of its gutter, since the same bytes carry different line numbers depending on where a
+  // read began. No probe (nothing distinctive enough) → false: on an error path the safe direction is
+  // to re-send bytes the model may already have, not to withhold bytes it lacks.
+  holdsRegion(path: string, excerpt: string, history: Message[], prefixStable = false): boolean {
+    const entries = this.entries(path);
+    if (entries.some(at => at === null)) return true; // authored: the model composed these bytes
+    const probe = probeLine(excerpt);
+    if (probe === undefined) return false;
+    return entries.some(at => {
+      if (at === null || !isLive(history, at, prefixStable)) return false;
+      const m = history[at];
+      return m.role === 'tool' && !!m.payload?.includes(probe);
+    });
+  }
+
+  private entries(path: string): (number | null)[] {
+    return this.grounded.get(this.norm(path)) ?? [];
   }
 
   // True exactly once per ungrounded path per turn — and recording the bounce here (a side effect)
@@ -67,6 +95,23 @@ export class ReadFirstGate {
     this.bounced.add(p);
     return true;
   }
+}
+
+// Longest line of a gutter-numbered excerpt, stripped of its `NNNNN│` prefix — the needle for asking
+// whether a payload covers that region. Longest because it is the least likely to appear incidentally
+// somewhere else in the file; short and blank lines (`}`, `);`) match everywhere and prove nothing.
+// Undefined when no line clears MIN_PROBE_CHARS, which is itself the answer: nothing here is
+// distinctive enough to test with. Exported for tests.
+const MIN_PROBE_CHARS = 12;
+export function probeLine(excerpt: string): string | undefined {
+  let best: string | undefined;
+  for (const raw of excerpt.split('\n')) {
+    const line = raw.replace(/^\s*\d+│/, '').trim();
+    if (line.length >= MIN_PROBE_CHARS && (best === undefined || line.length > best.length)) {
+      best = line;
+    }
+  }
+  return best;
 }
 
 // Whether the tool payload at `index` is one the model has actually just been shown. Defers to the
