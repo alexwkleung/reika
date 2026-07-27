@@ -173,9 +173,8 @@ export function Input({
           update(value.slice(0, -1) + '\n', cursor);
           return;
         }
-        // While a turn is streaming the user can keep typing/composing, but the
-        // message can't be sent until the turn finishes or is aborted.
-        if (!canSubmit) return;
+        // Busy is not a dead key: the parent queues the message and replays it
+        // through the normal submit path once the agent is idle again.
         onSubmit(value);
         return;
       }
@@ -286,6 +285,11 @@ export function Input({
   const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
   const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
+  // renderWithCursor appends a phantom inverse-space cell when the block
+  // cursor sits past the last char (or on a newline) and is blinking on. The
+  // queued-hint margin compensates for that cell so the hint and the right
+  // border don't shift as the cursor moves or blinks.
+  const phantomCursorCell = !disabled && blinkOn && (cursor >= value.length || value[cursor] === '\n');
 
   return (
     <Box
@@ -309,6 +313,11 @@ export function Input({
       ) : (
         <Text>{renderWithCursor(value, cursor, !disabled, blinkOn)}</Text>
       )}
+      {!canSubmit && !disabled && value ? (
+        <Box marginLeft={phantomCursorCell ? 0 : 1}>
+          <Text color={theme.muted}>(queued)</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
