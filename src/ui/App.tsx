@@ -24,6 +24,8 @@ import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
+import { expandPastedUrls } from '../agent/pastedurls.js';
+import { matchSkill, shouldAutoInject } from '../skillmatch.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { Suggestions } from './Suggestions.js';
@@ -140,10 +142,26 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
+  // Skills already suggested this session. A hint the user declined once is noise the second
+  // time — and the user who wanted it typed the slash command instead.
+  const suggestedSkillsRef = useRef<Set<string>>(new Set());
+  // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
+  // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
+  // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
+  // action, never as an announcement in front of it. Flushed by submitToModel's user echo, which
+  // runTurn always emits first, so nothing can strand here.
+  const pendingNoticesRef = useRef<Message[]>([]);
   // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
   const pasteBusyRef = useRef(false);
+  // Same idea for submit-time expansion, which blocks on the network when the prompt carries a
+  // pasted link. Separate from `pasting` so a ctrl-v mid-submit can't clobber either label.
+  const [expanding, setExpanding] = useState<string | null>(null);
+  // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
+  // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
+  // its render's value, so a fast double-press would read a stale `false`.
+  const submitBusyRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -1007,6 +1025,38 @@ export function App() {
     });
   };
 
+  // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
+  // words (never the expanded text — a fetched page or an @mention'd file mentioning "verify" is
+  // not a request to run /verify); `modelText` is what actually gets sent, returned unchanged
+  // unless auto-injection fires.
+  const routeSkill = (prompt: string, modelText: string): string => {
+    const match = matchSkill(prompt, bundle?.skills ?? []);
+    if (!match) return modelText;
+    const window = config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow;
+    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
+    // plan-mode prompt and the progress ledger. There it stays a suggestion.
+    const auto =
+      config?.skillAuto === true &&
+      (modeRef.current === 'agent' || modeRef.current === 'vibe') &&
+      shouldAutoInject(match, window);
+    if (auto) {
+      pendingNoticesRef.current.push({
+        role: 'system',
+        content: `Applied skill /${match.skill.name} (matched: ${match.matched.join(', ')})`,
+        tone: 'info',
+      });
+      return `${match.skill.body}\n\n${modelText}`;
+    }
+    if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
+    suggestedSkillsRef.current.add(match.skill.name);
+    pendingNoticesRef.current.push({
+      role: 'system',
+      content: `This looks like /${match.skill.name} — ${match.skill.description}. Run it with /${match.skill.name} to use the skill.`,
+      tone: 'info',
+    });
+    return modelText;
+  };
+
   const onSubmit = async (input: string) => {
     if (!config || !bundle || status !== 'idle') return;
     // Free the server slot for the real request (the engine keeps already-processed KV in its
@@ -1027,20 +1077,42 @@ export function App() {
       await runShell(trimmed);
       return;
     }
-    const { augmented, display, notices } = await expandMentions(trimmed, bundle.cwd, {
-      ocr: systemOcr(config.ocrLangs),
-    });
-    if (notices.length > 0) {
-      setMessages(prev => [
-        ...prev,
-        ...notices.map(content => ({ role: 'system' as const, content, tone: 'warn' as const })),
-      ]);
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
+    let modelText: string;
+    let display: string;
+    try {
+      const expansion = await expandMentions(trimmed, bundle.cwd, {
+        ocr: systemOcr(config.ocrLangs),
+      });
+      display = expansion.display;
+      pendingNoticesRef.current.push(
+        ...expansion.notices.map(content => ({
+          role: 'system' as const,
+          content,
+          tone: 'warn' as const,
+        })),
+      );
+      // Scans `trimmed`, never the expanded text: a URL inside an @mention'd file is file
+      // content, not a link the user handed over.
+      const urls = await expandPastedUrls(trimmed, {
+        enabled: config.pasteFetch,
+        onStart: count => setExpanding(`Fetching ${count} pasted link${count > 1 ? 's' : ''}`),
+      });
+      pendingNoticesRef.current.push(
+        ...urls.notices.map(n => ({ role: 'system' as const, content: n.text, tone: n.tone })),
+      );
+      // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
+      // in the bubble, but recalling that text from history later must not silently re-attach an
+      // image the user has moved on from.
+      modelText = attachImageBlocks(expansion.augmented, imageAttachmentsRef.current);
+      imageAttachmentsRef.current = [];
+      if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
+      modelText = routeSkill(trimmed, modelText);
+    } finally {
+      setExpanding(null);
+      submitBusyRef.current = false;
     }
-    // Clipboard attachments are consumed by the turn that sends them: the marker stays visible in
-    // the bubble, but recalling that text from history later must not silently re-attach an image
-    // the user has moved on from.
-    const modelText = attachImageBlocks(augmented, imageAttachmentsRef.current);
-    imageAttachmentsRef.current = [];
     if (modeRef.current === 'vibe') {
       await runVibeTurn(modelText, display !== modelText ? display : undefined);
       return;
@@ -1143,6 +1215,12 @@ export function App() {
                 return next === prev.fileIndex ? prev : { ...prev, fileIndex: next };
               });
             }
+          }
+          if (msg.role === 'user' && pendingNoticesRef.current.length > 0) {
+            const notices = pendingNoticesRef.current;
+            pendingNoticesRef.current = [];
+            setMessages(prev => [...prev, msg, ...notices]);
+            return;
           }
           setMessages(prev => [...prev, msg]);
         },
@@ -1317,10 +1395,11 @@ export function App() {
                 typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
               }
             />
-          ) : pasting ? (
-            // Same spinner while idle: a paste is a harness action with a visible wait, so it
-            // reads like the typecheck gate rather than like the app having stalled.
-            <Working label={pasting} accent={theme.info} />
+          ) : (pasting ?? expanding) ? (
+            // Same spinner while idle: a paste, or a submit that has to fetch a pasted link, is a
+            // harness action with a visible wait — it should read like the typecheck gate rather
+            // than like the app having stalled.
+            <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
           ) : null}
           <Input
             disabled={pending !== null || modelSelect !== null}

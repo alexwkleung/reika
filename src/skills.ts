@@ -10,6 +10,9 @@ export type Skill = {
   body: string;
   source: 'global' | 'project';
   path: string;
+  // Phrases that route a plain-English prompt to this skill (`triggers:` frontmatter).
+  // Matching is deterministic and lives in skillmatch.ts — the model never picks a skill.
+  triggers: string[];
 };
 
 const GLOBAL_DEFAULT = join(homedir(), '.config', 'reika', 'skills');
@@ -95,7 +98,14 @@ async function readSkill(
     const text = await readFile(path, 'utf8');
     const { meta, body } = parseFrontmatter(text);
     const description = meta.description?.trim() || firstNonEmptyLine(body) || '(no description)';
-    return { name, description, body: body.trim(), source, path };
+    return {
+      name,
+      description,
+      body: body.trim(),
+      source,
+      path,
+      triggers: parseTriggers(meta.triggers),
+    };
   } catch {
     return null;
   }
@@ -114,9 +124,22 @@ export function parseFrontmatter(text: string): { meta: Record<string, string>; 
   const yamlBlock = text.slice(startLen, endIdx);
   const body = text.slice(endIdx + closeLen);
   const meta: Record<string, string> = {};
+  // The block-list form (`key:` then `  - item` lines) is folded into the same comma-joined
+  // string the inline form produces, so consumers stay on Record<string, string> and don't
+  // care which YAML shape the author used. Still not worth a yaml dep — see AGENTS.md.
+  let listKey: string | null = null;
   for (const rawLine of yamlBlock.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
+    if (listKey && line.startsWith('- ')) {
+      const item = line
+        .slice(2)
+        .trim()
+        .replace(/^["'](.*)["']$/, '$1');
+      if (item) meta[listKey] = meta[listKey] ? `${meta[listKey]}, ${item}` : item;
+      continue;
+    }
+    listKey = null;
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
@@ -124,9 +147,27 @@ export function parseFrontmatter(text: string): { meta: Record<string, string>; 
       .slice(colonIdx + 1)
       .trim()
       .replace(/^["'](.*)["']$/, '$1');
-    if (key) meta[key] = value;
+    if (!key) continue;
+    meta[key] = value;
+    if (!value) listKey = key;
   }
   return { meta, body };
+}
+
+// `triggers: verify, smoke test` / `triggers: [verify, smoke test]` / a block list — all reach
+// here as one comma-joined string. Sub-3-char phrases are dropped: they carry no routing signal
+// and would fire on half the prompts in the language.
+export function parseTriggers(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return [
+    ...new Set(
+      raw
+        .replace(/^\[(.*)\]$/, '$1')
+        .split(',')
+        .map(t => t.trim().toLowerCase())
+        .filter(t => t.length >= 3),
+    ),
+  ];
 }
 
 function firstNonEmptyLine(text: string): string | undefined {

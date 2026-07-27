@@ -65,6 +65,8 @@ export function loadConfig(): Config {
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
+    pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
+    skillAuto: process.env.REIKA_SKILL_AUTO === '1',
   };
 }
 

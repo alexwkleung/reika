@@ -56,6 +56,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     maxSearchesPerTurn: 0,
     maxFetchesPerTurn: 0,
     bashTimeoutMs: 5000,
+    pasteFetch: false,
+    skillAuto: false,
     ...overrides,
   };
 }

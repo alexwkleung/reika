@@ -247,4 +247,11 @@ export type Config = {
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
   // first entry.
   ocrLangs?: string[];
+  // Fetch http(s) URLs the user pastes into a prompt before the turn runs (REIKA_PASTE_FETCH=0
+  // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
+  // exists because it's an outbound request on a machine that may be offline or airgapped.
+  pasteFetch: boolean;
+  // Let a confidently-matched skill rewrite the prompt instead of only being suggested
+  // (REIKA_SKILL_AUTO=1, default off, experimental). See skillmatch.ts.
+  skillAuto: boolean;
 };
