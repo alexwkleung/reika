@@ -11,6 +11,7 @@ export const theme = {
   muted: '#808080',
   reasoning: '#6495ed', // cornflower blue: thinking-block bar, dimmer than the accent
   warning: '#e5d49a', // soft pastel yellow — luminous but easy on the eyes, matches the other accents
+  queued: '#e8b87a', // soft pastel orange — queued label, complements the yellow warning
   error: 'red',
   success: 'green',
   userBg: '#303030',

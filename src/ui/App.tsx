@@ -34,6 +34,8 @@ import { buildModelTargets, type ModelTarget } from './models.js';
 import { buildImplementPrompt, nextMode, planWritten, type Mode } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
+import { QueuedList } from './QueuedList.js';
+import { queueReceipt, type QueuedMessage } from './queue.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
@@ -162,6 +164,11 @@ export function App() {
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
   const submitBusyRef = useRef(false);
+  // Messages typed while the agent is busy (or the session is still booting)
+  // wait here and are replayed through the normal onSubmit path in order once
+  // the turn ends. queueRef mirrors queue for sync access inside effects.
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
+  const queueRef = useRef<QueuedMessage[]>([]);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -1057,8 +1064,47 @@ export function App() {
     return modelText;
   };
 
+  // Drain the queue once the agent is idle again. Replays messages in order
+  // through the normal onSubmit path: image attachments go back onto
+  // imageAttachmentsRef and the markers are re-appended to the text so the
+  // regular image pipeline (hasImageMarker → attachImageBlocks) applies.
+  // onSubmit re-seals itself while busy, so a still-busy replay just lands
+  // back on the queue.
+  useEffect(() => {
+    if (status !== 'idle' || pending !== null || queueRef.current.length === 0) return;
+    const [next, ...rest] = queueRef.current;
+    queueRef.current = rest;
+    setQueue(rest);
+    const images = next.images ?? [];
+    imageAttachmentsRef.current = images;
+    const markers = images.map((img) => img.marker).join(' ');
+    void onSubmit(next.content + (markers ? ` ${markers}` : ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, pending, queue]);
+
   const onSubmit = async (input: string) => {
-    if (!config || !bundle || status !== 'idle') return;
+    // While a turn is running (or the session is still booting), don't drop the
+    // message — hold it and replay it through this same path once idle. A
+    // scrollback receipt records what was queued; the ephemeral list above the
+    // input shows the backlog live and clears as the queue drains.
+    if (!config || !bundle || status !== 'idle') {
+      const trimmed = input.trim();
+      const images = imageAttachmentsRef.current;
+      if (!trimmed && images.length === 0) return;
+      const msg: QueuedMessage = {
+        content: trimmed,
+        images: images.length > 0 ? images : undefined,
+      };
+      imageAttachmentsRef.current = [];
+      queueRef.current = [...queueRef.current, msg];
+      setQueue(queueRef.current);
+      setMessages((prev) => [...prev, { role: 'system', content: queueReceipt(msg), tone: 'info' }]);
+      // Clear the box just like the normal submit path does below — the
+      // queued list above the input is now the source of truth for it.
+      setInputValue('');
+      setSuggestionState(null);
+      return;
+    }
     // Free the server slot for the real request (the engine keeps already-processed KV in its
     // slot cache on disconnect, so an interrupted warm still pays off). Unconditional: slash
     // commands (/cd re-bundles, /model switches) and shell submits also land here.
@@ -1401,10 +1447,11 @@ export function App() {
             // than like the app having stalled.
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
           ) : null}
+          <QueuedList queue={queue} />
           <Input
             disabled={pending !== null || modelSelect !== null}
-            attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
             canSubmit={status === 'idle' && pending === null}
+            attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
             mode={mode}
