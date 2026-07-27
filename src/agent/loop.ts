@@ -564,31 +564,32 @@ const WITHDRAWAL_DIRECTIVE =
   'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
   'Reading and searching are unavailable until you make progress.)';
 
-// Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop
-// has stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), but the edit-recovery
-// exemption is asymmetric by loop type:
-//   - read loop (reasoningLoop=false): suppressed once editing has begun, because a post-edit re-read
-//     is usually edit-recovery — re-fetching exact bytes to rebuild old_string after compaction aged
-//     them — not gratuitous looping. Withdrawing read there pushes the model onto bash-grep and makes
-//     edits harder to land (the original [[reika-agent-loop-breaking]] finding).
-//   - reasoning loop (reasoningLoop=true): withdraws even post-edit, because crossSim≈1.0 while
-//     RE-READING/searching is rumination (observed: edited 5×, then looped re-reading router.ts in a
-//     rotation — the old `!editingStarted` gate wrongly left withdrawal off and it never broke out).
-//   - EXCEPT edit-recovery (editRecovery=true, an unresolved failed edit): NOT withdrawn even though
-//     the reasoning is looping. A model failing the same edit (old_string not in the file) needs to
-//     READ to rebuild old_string — pausing inspection only forces more failing edits (observed: it
-//     oscillated edit-fail ↔ re-read at crossSim=1.0). High crossSim does NOT distinguish rumination
-//     from edit-recovery — the failed-edit signal does. The edit-recovery dead-end gets a graceful
-//     stop (see runTurn), not withdrawal.
+// Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop has
+// stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), with exactly one
+// exemption: edit-recovery (editRecovery=true, an unresolved failed edit). A model failing the same
+// edit needs to READ to rebuild old_string — pausing inspection only forces more failing edits
+// (observed: it oscillated edit-fail ↔ re-read at crossSim=1.0). That dead-end gets a graceful stop
+// (see runTurn), not withdrawal.
+//
+// There used to be a second exemption — read loops were suppressed once editing had begun, on the
+// theory that a post-edit re-read is usually re-fetching bytes that aged out rather than looping. It
+// was already wrong once (a reasoning loop post-edit never broke out, which is why reasoningLoop was
+// threaded in to override it), and it was wrong again on a kimi-k3 turn that edited five times and
+// then re-read App.tsx lines 600-659 NINE times while withdrawal stayed off, because editingStarted
+// was true and no edit was currently failing.
+//
+// The suppression is redundant with the detector it guards. `loopingReads` already demands 3 identical
+// passes over the same (path, offset) within LOOP_RECENT_ROUNDS — a genuine post-aging refetch is one
+// pass, maybe two, and never recent-and-repeated three times over. Anything that clears that bar is a
+// loop whether or not an edit has landed, and `editRecovery` covers the one case where reading is the
+// legitimate response. So the loop type no longer changes the answer, and neither reasoningLoop nor
+// editingStarted is consulted here any more.
 export function shouldWithdrawInspection(opts: {
   loopActiveRounds: number;
-  reasoningLoop: boolean;
-  editingStarted: boolean;
   editRecovery: boolean;
 }): boolean {
   if (opts.loopActiveRounds < LOOP_WITHDRAW_AFTER) return false;
-  if (opts.editRecovery) return false;
-  return opts.reasoningLoop || !opts.editingStarted;
+  return !opts.editRecovery;
 }
 
 // Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
@@ -657,6 +658,37 @@ export function buildEditRecoveryLedger(failure: EditFailure): string {
       'after the line-number gutter), so it matches the file exactly. If the change does not belong ' +
       'here after all, say so and stop instead of retrying.',
   ].join('\n');
+}
+
+// Payload attached to an `absent` edit failure when the file's bytes are not in the model's context
+// (see the call site). Rides the tool result rather than the system suffix: unlike the diverged
+// recovery ledger — which must survive several rounds to reach a period-2 loop — this is consumed by
+// the very next round, and the failure result is always live for that round.
+//
+// Says the quiet part explicitly. A model in this state reliably invents an explanation (the observed
+// one: "a formatter must have rewritten the file"), and a rationalization it believes is what turns a
+// one-round correction into a spiral — so the directive names the real cause and forecloses the retry
+// from memory.
+export function buildAbsentGrounding(failure: Extract<EditFailure, { kind: 'absent' }>): string {
+  const head =
+    `(reika: this edit was NOT applied. Your old_string matches nothing in ${failure.path} — not even ` +
+    "ignoring whitespace — and that file's current contents are not in your context, so it was " +
+    'written from memory rather than from the file. Nothing has rewritten the file: do not retry the ' +
+    'same old_string, and do not assume a formatter or linter changed it.';
+  if (failure.excerpt === undefined) {
+    return (
+      `${head} Nothing in the file closely resembles what you sent, so there is no region to show ` +
+      `you — read ${failure.path} before retrying. The change may belong in another file, or to code ` +
+      'that does not exist yet.)'
+    );
+  }
+  return (
+    `${head} The closest region is around line ${failure.at}; here it is verbatim:\n\n` +
+    `${failure.excerpt}\n\n` +
+    'Build your next old_string character-for-character from the text above — only what follows the ' +
+    `\`NNNNN│\` gutter, indentation included. If the change belongs elsewhere, read ${failure.path} ` +
+    'instead of guessing again.)'
+  );
 }
 
 export async function runTurn(opts: {
@@ -1022,13 +1054,11 @@ export async function runTurn(opts: {
       const reasoningLoop = REASONING_LOOP_BREAK && reasoningLoopActive;
       const loopDetected = looping.length > 0 || reasoningLoop;
       loopActiveRounds = loopDetected ? loopActiveRounds + 1 : 0;
-      // A read loop keeps the edit-recovery exemption (no withdrawal once editing has begun); a
-      // reasoning loop withdraws too — UNLESS there's an unresolved failed edit, where the model needs
-      // reading to recover and withdrawal would only force more failing edits. See shouldWithdrawInspection.
+      // Any confirmed loop that survives the ledger withdraws, regardless of type — UNLESS there's an
+      // unresolved failed edit, where the model needs reading to recover and withdrawal would only
+      // force more failing edits. See shouldWithdrawInspection.
       withdrawInspection = shouldWithdrawInspection({
         loopActiveRounds,
-        reasoningLoop,
-        editingStarted,
         editRecovery: lastEditFailed,
       });
       // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
@@ -1746,19 +1776,24 @@ export async function runTurn(opts: {
         call.name === 'bash' && isReadOnlyShell(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
-      // Only while executing a written plan (planSteps), never while inspection is withdrawn (the
-      // directed read would itself be refused), and only when the edit could actually run (tool
-      // resolved). shouldBounce records the bounce, so a re-issued edit to the same path — or one
-      // that ran and failed — always passes: fail-open by construction, and edit-recovery is never
-      // re-bounced back to a read.
+      // Never while inspection is withdrawn (the directed read would itself be refused), and only
+      // when the edit could actually run (tool resolved). shouldBounce records the bounce, so a
+      // re-issued edit to the same path — or one that ran and failed — always passes: fail-open by
+      // construction, and edit-recovery is never re-bounced back to a read.
+      //
+      // No longer scoped to plan execution. That condition was a proxy for "the model probably lacks
+      // the bytes", needed back when grounding was the far looser "has read this path at some point
+      // this turn" — a test so weak that firing it everywhere would have bounced edits the model was
+      // equipped to make. Now that shouldBounce asks the real question (are those bytes in the
+      // request the model just answered — see readfirst.ts isLive), the proxy only loses coverage:
+      // the long unplanned turn is exactly where reads age out beneath the model.
       const bouncedBlindEdit =
         READ_FIRST &&
-        planSteps !== null &&
         !withdrawInspection &&
         call.name === 'edit' &&
         tool !== undefined &&
         typeof call.args.path === 'string' &&
-        readFirst.shouldBounce(call.args.path);
+        readFirst.shouldBounce(call.args.path, opts.history, prefixStable);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -1766,6 +1801,11 @@ export async function runTurn(opts: {
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
+      // Read-first (#72): path this call put file bytes in front of the model for, and whether the
+      // model authored them (`write`) rather than being handed them. Applied once the tool message
+      // exists, since handed-back grounding keys on its history index. See readfirst.ts.
+      let groundsPath: string | undefined;
+      let groundsAuthored = false;
       // Check-off receipt for a plan step this call completed; emitted after the tool chip below.
       let planCheckoff: string | undefined;
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
@@ -1841,13 +1881,37 @@ export async function runTurn(opts: {
           summary = `Tool error: ${(e as Error).message}`;
         }
       }
+      // Ground an `absent` edit failure (#72 follow-up). An old_string that matches nothing — not even
+      // ignoring whitespace — while the file's bytes are NOT in context is confabulation: the model
+      // wrote it from memory. Telling it to "re-read the file" is the one thing that cannot work,
+      // since the read ages out before its next edit; so hand the bytes over in the failure itself,
+      // the only slot in the request that is guaranteed live (it is always in the trailing block).
+      // When the bytes ARE in context the failure means what it used to — the target genuinely is not
+      // there — and the message is left alone.
+      if (editFailure?.kind === 'absent') {
+        // Ask about the REGION when one was located, and fall back to the whole file only when it
+        // wasn't. A live read of App.tsx:560-594 does not mean the model can see line 607 — treating
+        // it as if it did is what let a confabulated edit through ungrounded (observed, kimi-k3).
+        const holds = editFailure.excerpt
+          ? readFirst.holdsRegion(editFailure.path, editFailure.excerpt, opts.history, prefixStable)
+          : readFirst.isGrounded(editFailure.path, opts.history, prefixStable);
+        if (!holds) {
+          const grounding = buildAbsentGrounding(editFailure);
+          payload = payload ? `${payload}\n\n${grounding}` : grounding;
+          debugLog(
+            `[reika:debug] round=${i} absent-grounding file=${editFailure.path} ` +
+              `at=${editFailure.at ?? 'none'}\n`,
+          );
+        }
+      }
       // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
       // and the live/aged label depends on round order), but only emitted under the flag.
       if (!refused && call.name === 'read' && contentHash) {
         // Read-first (#72): the model now holds this file's bytes (or knows its true length, for an
-        // offset-past-end read) — edits to it are grounded for the rest of the turn.
-        readFirst.ground(String(call.args.path ?? ''));
+        // offset-past-end read). Grounding is applied after the tool message is pushed, since it
+        // keys on that message's index — the bytes ground edits only while they are still being sent.
+        groundsPath = String(call.args.path ?? '');
         const { cls, repeats } = readTrace.record(
           String(call.args.path ?? ''),
           Number(call.args.offset ?? 1),
@@ -1881,9 +1945,16 @@ export async function runTurn(opts: {
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
           lastEditFailure = undefined;
-          // Read-first (#72): a successful edit/write grounds its path — the result carries the
-          // post-edit bytes (refreshedFile / the diff), so follow-up edits to it are not blind.
-          if (typeof call.args.path === 'string') readFirst.ground(call.args.path);
+          // Read-first (#72): a successful edit/write grounds its path, but by different routes. An
+          // edit grounds only through the post-edit echo it hands back (tools/edit.ts refreshedFile),
+          // which is size-capped and absent on a large file — so it keys on the message index and
+          // expires with it. A write's content the model composed itself and its own tool_call args
+          // never age, so that grounding is unconditional. (The `diff` grounds nothing either way:
+          // it is a UI field, never serialized into the request.)
+          if (typeof call.args.path === 'string') {
+            groundsPath = call.args.path;
+            groundsAuthored = call.name === 'write';
+          }
           // Plan progress (#71): a successful edit/write checks a pending step off — by path when
           // the plan named this file, else by content when a step-quoted snippet appears in the
           // diff (the plan named the wrong file; the model edited the right one). Harness-observed
@@ -1937,6 +2008,11 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
+      // Read-first (#72): ground the path against the message just pushed, so the gate can later ask
+      // whether those exact bytes are still in the request rather than whether they ever were.
+      if (groundsPath) {
+        readFirst.ground(groundsPath, groundsAuthored ? undefined : opts.history.length - 1);
+      }
       // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
       // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
       // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).

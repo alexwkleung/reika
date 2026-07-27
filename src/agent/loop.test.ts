@@ -3,6 +3,7 @@ import type { Message } from '../types.js';
 import {
   flagRepeatedCall,
   buildAgentLoopLedger,
+  buildAbsentGrounding,
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
   buildConvergeSteer,
@@ -225,8 +226,37 @@ describe('buildEditRecoveryLedger', () => {
     expect(ledger).toContain('stop');
   });
 
-  it('returns empty for an absent failure (nothing to ground on)', () => {
+  it('returns empty for an absent failure (buildAbsentGrounding owns that path)', () => {
     expect(buildEditRecoveryLedger({ kind: 'absent', path: 'src/a.css' })).toBe('');
+  });
+});
+
+describe('buildAbsentGrounding', () => {
+  it('hands over the located region verbatim and forbids retrying from memory', () => {
+    const g = buildAbsentGrounding({
+      kind: 'absent',
+      path: 'src/ui/App.tsx',
+      at: 132,
+      excerpt: '  132│  const [modelSelect, setModelSelect] = useState(null);',
+    });
+    expect(g).toContain('NOT applied');
+    expect(g).toContain('src/ui/App.tsx');
+    expect(g).toContain('not in your context'); // names the real cause
+    expect(g).toContain('line 132');
+    expect(g).toContain('132│  const [modelSelect'); // copyable bytes
+    expect(g).toContain('character-for-character');
+    // Forecloses the rationalization this failure reliably produces, which is what turns a
+    // one-round correction into a spiral.
+    expect(g).toMatch(/formatter/i);
+  });
+
+  it('says so plainly when no region could be located', () => {
+    const g = buildAbsentGrounding({ kind: 'absent', path: 'src/ui/App.tsx' });
+    expect(g).toContain('no region to show');
+    expect(g).toContain('read src/ui/App.tsx');
+    // No invented location, and no excerpt gutter.
+    expect(g).not.toMatch(/line \d/);
+    expect(g).not.toContain('│');
   });
 });
 
@@ -310,48 +340,32 @@ describe('buildSteadySystem', () => {
 });
 
 describe('shouldWithdrawInspection', () => {
-  const base = { reasoningLoop: false, editingStarted: false, editRecovery: false };
+  const base = { editRecovery: false };
 
   it('does not withdraw before the loop has persisted LOOP_WITHDRAW_AFTER rounds', () => {
-    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 1, reasoningLoop: true })).toBe(
-      false,
-    );
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 1 })).toBe(false);
   });
 
   it('withdraws a pre-edit read loop (the original explore→act case)', () => {
     expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 2 })).toBe(true);
   });
 
-  it('exempts a read loop once editing has begun (edit-recovery re-reads)', () => {
-    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 5, editingStarted: true })).toBe(
-      false,
-    );
+  it('withdraws a post-edit read loop — landing an edit does not license re-reading forever', () => {
+    // The kimi-k3 case: five successful edits, then App.tsx:600-659 re-read NINE times with no edit
+    // failing. `editingStarted` kept withdrawal off for the whole tail of the turn. The detector
+    // already demands 3 identical recent passes, which no genuine post-aging refetch reaches.
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 5 })).toBe(true);
   });
 
   it('withdraws a reasoning loop even post-edit — re-reading rumination is not edit-recovery', () => {
-    // The yumi case: model edited 5×, then looped re-reading router.ts at crossSim=1.0; the old
-    // `!editingStarted` gate kept withdrawal off and it never broke out.
-    expect(
-      shouldWithdrawInspection({
-        ...base,
-        loopActiveRounds: 2,
-        reasoningLoop: true,
-        editingStarted: true,
-      }),
-    ).toBe(true);
+    // The yumi case: model edited 5×, then looped re-reading router.ts at crossSim=1.0.
+    expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 2 })).toBe(true);
   });
 
-  it('does NOT withdraw a reasoning loop during edit-recovery — it needs reading to fix old_string', () => {
+  it('does NOT withdraw during edit-recovery — the model needs reading to fix old_string', () => {
     // The chat.ts case: failed edit (old_string not in file) + crossSim=1.0; withdrawing reading only
     // forces more failing edits. The edit-recovery dead-end is handled by the graceful stop instead.
-    expect(
-      shouldWithdrawInspection({
-        loopActiveRounds: 4,
-        reasoningLoop: true,
-        editingStarted: true,
-        editRecovery: true,
-      }),
-    ).toBe(false);
+    expect(shouldWithdrawInspection({ loopActiveRounds: 4, editRecovery: true })).toBe(false);
   });
 });
 

@@ -172,11 +172,11 @@ type FuzzyResult =
 
 // EditFailure minus the path (the tool attaches that in `run`). See types.ts EditFailure.
 type EditFailureCore =
-  | { kind: 'absent' }
+  | { kind: 'absent'; at?: number; excerpt?: string }
   | { kind: 'diverged'; divergentLine: number; expected: string; actual: string; excerpt: string };
 
 function withPath(core: EditFailureCore, path: string): EditFailure {
-  return core.kind === 'absent' ? { kind: 'absent', path } : { ...core, path };
+  return { ...core, path };
 }
 
 // Whitespace-insensitive line-block match. Compares old_string against the file
@@ -310,12 +310,48 @@ function locateClosest(fileLines: string[], oldTrim: string[]): Closest {
   };
 }
 
+// Weakest locator, for when locateClosest finds nothing: not one line of old_string equals any line
+// of the file, so there is no anchor to align on and nothing to diff. Score every window of the file
+// by how many of old_string's distinct identifiers it contains and keep the best — which region was
+// the model probably reaching for. Deliberately crude: it runs only once the precise tiers have
+// failed, and its output is offered as "nearest similar code", never as a match.
+//
+// This is the tier that speaks to confabulation. A model writing old_string from memory rather than
+// from bytes still tends to get the vocabulary right (the real `useState`/`null`/`overrides` of the
+// region) while inventing the exact lines — so token overlap lands in the right neighbourhood
+// exactly when line matching cannot.
+const OVERLAP_MIN_FRACTION = 0.34;
+const OVERLAP_MIN_TOKENS = 2;
+// Identifier-ish, and long enough to carry signal: `if`/`i` co-occur with everything.
+const TOKEN_RE = /[A-Za-z_$][\w$]*/g;
+function distinctTokens(lines: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const l of lines) for (const t of l.match(TOKEN_RE) ?? []) if (t.length >= 3) out.add(t);
+  return out;
+}
+
+function locateByTokenOverlap(fileLines: string[], oldTrim: string[]): number | null {
+  const wanted = distinctTokens(oldTrim);
+  if (wanted.size < OVERLAP_MIN_TOKENS) return null;
+  const need = Math.max(OVERLAP_MIN_TOKENS, Math.ceil(wanted.size * OVERLAP_MIN_FRACTION));
+  const win = Math.max(1, Math.min(oldTrim.length, fileLines.length));
+  const perLine = fileLines.map(l => distinctTokens([l]));
+
+  let best: { start: number; hits: number } | null = null;
+  for (let s = 0; s + win <= fileLines.length; s++) {
+    const seen = new Set<string>();
+    for (let k = 0; k < win; k++) for (const t of perLine[s + k]) if (wanted.has(t)) seen.add(t);
+    if (!best || seen.size > best.hits) best = { start: s, hits: seen.size };
+  }
+  return best && best.hits >= need ? best.start : null;
+}
+
 // Point the model at the likely spot when even the tolerant match fails, so it can correct in one
 // retry instead of probing with cat/sed — the costly thing for a weak model to discover on its own.
 function formatNotFoundHint(closest: Closest, oldLines: string[], oldTrim: string[]): string {
   const i0 = oldTrim.findIndex(t => t !== '');
   if (i0 === -1) return '';
-  if (!closest.found) return ' No line matches it even ignoring whitespace; re-read the file.';
+  if (!closest.found) return ' No line matches it even ignoring whitespace.';
   return (
     ` Closest match starts at line ${closest.start + 1} ("${oldLines[i0].trim()}")` +
     ` but line ${closest.divergentLine} differs: expected "${closest.expected}", file has "${closest.actual}". Re-read there and copy verbatim.`
@@ -328,7 +364,17 @@ function closestToFailure(
   fileLines: string[],
   oldTrim: string[],
 ): EditFailureCore {
-  if (!closest.found) return { kind: 'absent' };
+  if (!closest.found) {
+    // No anchor, so fall to token overlap. The excerpt is carried, not announced: whether the model
+    // needs these bytes depends on what its context already holds, which only the loop knows.
+    const at = locateByTokenOverlap(fileLines, oldTrim);
+    if (at === null) return { kind: 'absent' };
+    return {
+      kind: 'absent',
+      at: at + 1,
+      excerpt: blockExcerpt(fileLines, at, oldTrim.length, at + 1),
+    };
+  }
   return {
     kind: 'diverged',
     divergentLine: closest.divergentLine,

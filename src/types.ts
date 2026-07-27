@@ -104,11 +104,22 @@ export type ToolResult = {
 };
 
 // See ToolResult.editFailure. 'absent': old_string matches nothing in the file even ignoring
-// whitespace (the target isn't there — re-reading can't help; a plan likely references code that
-// doesn't exist). 'diverged': the anchor block exists and one line differs — mechanically
-// recoverable, which is the only case the loop spends a grounded recovery round on.
+// whitespace — no anchor line aligns anywhere. Two very different causes share this shape: the plan
+// references code that never existed, OR the model wrote old_string from memory because the file's
+// bytes are no longer in its context. Only the caller can tell them apart (agent/readfirst.ts
+// isGrounded), which is why the excerpt rides along rather than the failure deciding what to say.
+// 'diverged': the anchor block exists and one line differs — mechanically recoverable, which is the
+// only case the loop spends a grounded recovery round on.
 export type EditFailure =
-  | { kind: 'absent'; path: string }
+  | {
+      kind: 'absent';
+      path: string;
+      // Best-guess 1-based line of the region old_string most resembles, from the weakest locator
+      // (token overlap — there is no matching line to anchor on), plus that region's verbatim,
+      // line-numbered text. Absent when even that finds nothing above its confidence floor.
+      at?: number;
+      excerpt?: string;
+    }
   | {
       kind: 'diverged';
       path: string;

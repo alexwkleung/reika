@@ -156,14 +156,51 @@ describe('editTool edge cases', () => {
 
   // Row 6 — anchor line truly absent (no line matches even when trimmed).
   describe('anchor line absent', () => {
-    it('hints to re-read when nothing matches even loosely', async () => {
+    it('reports the miss without a region when nothing in the file resembles old_string', async () => {
       await write('a.css', '.box {\n  font-size: 13px;\n}\n');
       const result = await editTool.run(
         { path: 'a.css', old_string: '  background: pink;', new_string: '  background: teal;' },
         ctx(),
       );
       expect(result.summary).toMatch(/not found/);
-      expect(result.summary).toMatch(/re-read/);
+      expect(result.summary).toMatch(/even ignoring whitespace/);
+      // Nothing to point at: the summary must not invent a location, and the failure carries no
+      // excerpt for the loop to hand over. What to DO about it is the loop's call, not the tool's —
+      // it depends on whether the model still holds the file's bytes.
+      expect(result.editFailure).toEqual({ kind: 'absent', path: 'a.css' });
+    });
+
+    // The confabulation case: old_string was written from memory, so no line matches — but the
+    // vocabulary is still the region's, which is what the token-overlap tier keys on.
+    it('locates the region by token overlap when no line matches', async () => {
+      await write(
+        'app.ts',
+        [
+          'const initial = 0;',
+          'export function App() {',
+          '  const [pendingShell, setPendingShell] = useState<string | null>(null);',
+          '  const [approvals, setApprovals] = useState({ approved: 0 });',
+          '  return null;',
+          '}',
+        ].join('\n') + '\n',
+      );
+      const result = await editTool.run(
+        {
+          path: 'app.ts',
+          // Never existed — but shares useState/null/string with the real state block.
+          old_string: '  const [resumeNotice, setResumeNotice] = useState<string | null>(null);',
+          new_string: '  const [x, setX] = useState(null);',
+        },
+        ctx(),
+      );
+      expect(result.summary).toMatch(/not found/);
+      const failure = result.editFailure;
+      expect(failure?.kind).toBe('absent');
+      if (failure?.kind !== 'absent') throw new Error('expected an absent failure');
+      // Pointed at the state block, with copyable verbatim bytes and the file's real line numbers.
+      expect(failure.at).toBe(3);
+      expect(failure.excerpt).toContain('pendingShell');
+      expect(failure.excerpt).toMatch(/^\s+3│/m);
     });
   });
 
