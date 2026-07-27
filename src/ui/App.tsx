@@ -605,7 +605,16 @@ export function App() {
     const echo: Message = { role: 'user', content: raw, meta: true };
 
     if (name === 'clear' || name === 'new') {
-      setMessages([]);
+      // Seed the wiped scrollback with a persistent receipt (echo + notice) rather
+      // than leaving it empty — a bare screen after /new is indistinguishable from a
+      // fresh launch, so the user can't tell the reset actually happened. Both sides
+      // of the chat/agent stash go too: a stashed conversation resurfacing on the
+      // next mode switch would make the "new session" a lie.
+      setMessages([
+        echo,
+        { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+      ]);
+      stashedMessagesRef.current = {};
       setPlanSteps(null);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       setLastUsage(null);
