@@ -10,9 +10,10 @@ import { editTool } from '../tools/edit.js';
 import { readTool } from '../tools/read.js';
 
 // Drive the real runTurn loop with a scripted model to exercise the read-first gate end to end
-// (#72): a blind edit during plan execution is withheld once with a read directive; a read (or a
-// prior successful edit) grounds the path; a re-issued edit always runs (fail-open); plan-less
-// turns are untouched. No tsc shim on purpose — the typecheck gate fails open, isolating the gate.
+// (#72): a blind edit is withheld once with a read directive; a live read grounds the path; a
+// re-issued edit always runs (fail-open); and grounding expires with the read's payload, so a stale
+// read no longer passes an edit through. No tsc shim on purpose — the typecheck gate fails open,
+// isolating the gate.
 
 const h = vi.hoisted(() => ({ scripted: [] as ModelResponse[] }));
 vi.mock('../provider/client.js', () => ({
@@ -107,6 +108,9 @@ describe('read-first gate (integration)', () => {
     await mkdir(join(cwd, 'src'), { recursive: true });
     app = join(cwd, 'src', 'app.ts');
     await writeFile(app, 'export const app = 1;\n', 'utf8');
+    // A second real file, so a test that needs an intervening round can use a genuine successful
+    // read rather than leaning on a failed one.
+    await writeFile(join(cwd, 'src', 'other.ts'), 'export const other = 2;\n', 'utf8');
     h.scripted.length = 0;
     vi.mocked(callModel).mockClear();
   });
@@ -174,18 +178,83 @@ describe('read-first gate (integration)', () => {
     expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
   });
 
-  it('does not gate plan-less turns', async () => {
+  it('gates plan-less turns too', async () => {
     h.scripted.push(
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      readResponse('src/app.ts'),
       editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
       finalResponse(),
     );
 
     const { messages } = await run(cwd, [{ role: 'user', content: 'rename the constant' }]);
 
-    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(4);
+    expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(true);
+    expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
+  });
+
+  // The regression: a read grounds its path only while its payload is still being sent. One
+  // intervening round is enough to age it out, and the edit built from it is then a guess — which is
+  // precisely the confabulation the gate exists to intercept.
+  it('bounces an edit whose grounding read has aged out of the request', async () => {
+    h.scripted.push(
+      readResponse('src/app.ts'), // grounds app.ts
+      readResponse('src/other.ts'), // displaces it: app.ts is summary-only from here
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      // Fail-open is unchanged: the re-issued edit applies without another read.
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [{ role: 'user', content: 'rename the constant' }]);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(5);
+    expect(
+      messages.filter(m => m.role === 'tool' && m.summary.startsWith('edit paused')),
+    ).toHaveLength(1);
+    expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
+  });
+
+  // An old_string matching nothing while the file's bytes are absent from context is confabulation.
+  // The failure result is the only guaranteed-live slot in the request, so the bytes ride there.
+  it('grounds an absent edit failure when the model has no live bytes for the file', async () => {
+    h.scripted.push(
+      // Round 1 is bounced by the gate; round 2 re-issues, runs, and misses entirely.
+      editResponse('src/app.ts', 'export const missing = 2;', 'export const other = 3;'),
+      editResponse('src/app.ts', 'export const missing = 2;', 'export const other = 3;'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [{ role: 'user', content: 'rename the constant' }]);
+
+    const failed = messages.find(m => m.role === 'tool' && m.summary.startsWith('Edit failed'));
+    expect(failed).toBeDefined();
+    if (failed?.role !== 'tool') throw new Error('expected a tool message');
+    expect(failed.payload).toContain('not in your context');
+    expect(failed.payload).toContain('written from memory');
+    // Verbatim, copyable, correctly numbered — the bytes the retry must be built from.
+    expect(failed.payload).toContain('1│export const app = 1;');
+    expect(failed.payload).toMatch(/formatter/i);
+    // Nothing applied; the file is untouched.
+    expect(await readFile(app, 'utf8')).toBe('export const app = 1;\n');
+  });
+
+  it('leaves an absent failure alone when the file IS live in context', async () => {
+    h.scripted.push(
+      readResponse('src/app.ts'), // grounds the path, so nothing is bounced and nothing is re-sent
+      editResponse('src/app.ts', 'export const missing = 2;', 'export const other = 3;'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [{ role: 'user', content: 'rename the constant' }]);
+
     expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(
       false,
     );
-    expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
+    const failed = messages.find(m => m.role === 'tool' && m.summary.startsWith('Edit failed'));
+    if (failed?.role !== 'tool') throw new Error('expected a tool message');
+    // The model has the bytes and its old_string still matches nothing: the target genuinely is not
+    // there, which is the original meaning of `absent`. Re-sending the file would teach it nothing.
+    expect(failed.payload ?? '').not.toContain('not in your context');
   });
 });

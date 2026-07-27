@@ -1,44 +1,165 @@
 import { describe, expect, it } from 'vitest';
-import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
+import { ReadFirstGate, buildReadFirstDirective, isLive } from './readfirst.js';
+import type { Message } from '../types.js';
 
 const CWD = '/repo';
 
+// History builders. The gate reads liveness off message positions, so these mirror the shapes the
+// loop actually produces: a round is an assistant message carrying tool_calls, followed by one tool
+// message per call. `dispatching()` closes a history the way it looks mid-dispatch — the assistant
+// has spoken and its results are not in yet, which is exactly when shouldBounce runs.
+type ToolMessage = Extract<Message, { role: 'tool' }>;
+const readResult = (
+  path: string,
+  payload: string | undefined = `bytes of ${path}`,
+): ToolMessage => ({
+  role: 'tool',
+  callId: `t-${path}`,
+  summary: `Read ${path} lines 1-10 of 10`,
+  ...(payload !== undefined ? { payload } : {}),
+});
+const assistant = (content = ''): Message => ({ role: 'assistant', content });
+const dispatching = (...before: Message[]): Message[] => [...before, assistant()];
+
 describe('ReadFirstGate', () => {
-  it('bounces the first edit to an unread path, exactly once', () => {
+  it('bounces the first edit to an ungrounded path, exactly once', () => {
     const gate = new ReadFirstGate(CWD);
-    expect(gate.shouldBounce('src/app.ts')).toBe(true);
+    const history = dispatching({ role: 'user', content: 'go' });
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(true);
     // Re-issued without a read: fail-open, the edit runs as-is.
-    expect(gate.shouldBounce('src/app.ts')).toBe(false);
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(false);
   });
 
-  it('never bounces a path that was read first', () => {
+  it('does not bounce while the read that grounded the path is still live', () => {
     const gate = new ReadFirstGate(CWD);
-    gate.ground('src/app.ts');
-    expect(gate.shouldBounce('src/app.ts')).toBe(false);
+    // Round 1 read; the model is now answering the request that carried it.
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts'),
+    );
+    gate.ground('src/app.ts', 2);
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(false);
   });
 
-  it('grounds via a successful edit/write, so follow-up edits pass', () => {
+  // The regression this gate was rebuilt for: a read stays "read this turn" forever, but its payload
+  // is gone from the request one round later. Grounding must expire with the bytes.
+  it('bounces once the grounding read has aged out of the request', () => {
     const gate = new ReadFirstGate(CWD);
-    expect(gate.shouldBounce('src/app.ts')).toBe(true);
-    // The re-issued edit ran and succeeded; the result carried the post-edit bytes.
-    gate.ground('src/app.ts');
-    expect(gate.shouldBounce('src/app.ts')).toBe(false);
+    gate.ground('src/app.ts', 2);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts'), // index 2 — live only for the next request
+      assistant(),
+      readResult('src/other.ts'), // a later round displaced it
+    );
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(true);
+  });
+
+  it('stays fail-open for a read and an edit issued in the same round', () => {
+    const gate = new ReadFirstGate(CWD);
+    // Mid-dispatch: the assistant's read already ran and was pushed; its edit is being dispatched
+    // now. The model never saw those bytes, but this was always allowed and stays allowed.
+    const history = [
+      { role: 'user', content: 'go' } as Message,
+      assistant(),
+      readResult('src/app.ts'),
+    ];
+    gate.ground('src/app.ts', 2);
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(false);
+  });
+
+  it('never expires grounding the model authored itself (write)', () => {
+    const gate = new ReadFirstGate(CWD);
+    gate.ground('src/new.ts'); // no index — the content came from the model's own call args
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/other.ts'),
+      assistant(),
+      readResult('src/another.ts'),
+    );
+    expect(gate.shouldBounce('src/new.ts', history)).toBe(false);
+  });
+
+  it('does not ground on a result that carried no bytes', () => {
+    const gate = new ReadFirstGate(CWD);
+    // A large file's edit echo is dropped above refreshedFile's size cap, leaving a payload-less
+    // result. Nothing reached the model, so nothing is grounded.
+    const history = dispatching({ role: 'user', content: 'go' }, assistant(), {
+      role: 'tool',
+      callId: 'e1',
+      summary: 'Edited src/big.ts at line 40 (+2 -0)',
+    });
+    gate.ground('src/big.ts', 2);
+    expect(gate.shouldBounce('src/big.ts', history)).toBe(true);
   });
 
   it('tracks paths independently', () => {
     const gate = new ReadFirstGate(CWD);
-    gate.ground('src/a.ts');
-    expect(gate.shouldBounce('src/a.ts')).toBe(false);
-    expect(gate.shouldBounce('src/b.ts')).toBe(true);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/a.ts'),
+    );
+    gate.ground('src/a.ts', 2);
+    expect(gate.shouldBounce('src/a.ts', history)).toBe(false);
+    expect(gate.shouldBounce('src/b.ts', history)).toBe(true);
   });
 
   it('normalizes path spellings to the same file', () => {
     const gate = new ReadFirstGate(CWD);
-    gate.ground('./src/app.ts');
-    expect(gate.shouldBounce('src/app.ts')).toBe(false);
-    expect(gate.shouldBounce('/repo/src/lib.ts')).toBe(true);
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('src/app.ts'),
+    );
+    gate.ground('./src/app.ts', 2);
+    expect(gate.shouldBounce('src/app.ts', history)).toBe(false);
+    expect(gate.shouldBounce('/repo/src/lib.ts', history)).toBe(true);
     // The bounce keyed the normalized form: the relative spelling is the same file.
-    expect(gate.shouldBounce('src/lib.ts')).toBe(false);
+    expect(gate.shouldBounce('src/lib.ts', history)).toBe(false);
+  });
+
+  it('honours prefix-stable liveness, where position does not decide', () => {
+    const gate = new ReadFirstGate(CWD);
+    const aged = readResult('src/app.ts');
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      aged, // index 2, several rounds back — still live until batch aging marks it
+      assistant(),
+      readResult('src/other.ts'),
+    );
+    gate.ground('src/app.ts', 2);
+    expect(gate.shouldBounce('src/app.ts', history, true)).toBe(false);
+
+    const gate2 = new ReadFirstGate(CWD);
+    gate2.ground('src/app.ts', 2);
+    aged.aged = true; // batch aging collapsed it to summary-only
+    expect(gate2.shouldBounce('src/app.ts', history, true)).toBe(true);
+  });
+});
+
+describe('isLive', () => {
+  it('is false for a missing, non-tool, or payload-less message', () => {
+    const history = dispatching({ role: 'user', content: 'go' }, assistant());
+    expect(isLive(history, 99)).toBe(false);
+    expect(isLive(history, 0)).toBe(false);
+    expect(isLive([...history, readResult('a.ts', undefined)], 2)).toBe(false);
+  });
+
+  it('treats only the block preceding the dispatching assistant as live', () => {
+    const history = dispatching(
+      { role: 'user', content: 'go' },
+      assistant(),
+      readResult('a.ts'), // index 2 — an earlier round
+      assistant(),
+      readResult('b.ts'), // index 4 — the block the model just saw
+    );
+    expect(isLive(history, 2)).toBe(false);
+    expect(isLive(history, 4)).toBe(true);
   });
 });
 
@@ -48,5 +169,7 @@ describe('buildReadFirstDirective', () => {
     expect(d).toContain('NOT applied');
     expect(d).toContain('Read src/app.ts first');
     expect(d).toContain('applied as-is');
+    // The absence is a fact about the context, not an accusation about the turn.
+    expect(d).toContain('aged out');
   });
 });

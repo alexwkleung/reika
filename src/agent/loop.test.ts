@@ -3,6 +3,7 @@ import type { Message } from '../types.js';
 import {
   flagRepeatedCall,
   buildAgentLoopLedger,
+  buildAbsentGrounding,
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
   buildConvergeSteer,
@@ -225,8 +226,37 @@ describe('buildEditRecoveryLedger', () => {
     expect(ledger).toContain('stop');
   });
 
-  it('returns empty for an absent failure (nothing to ground on)', () => {
+  it('returns empty for an absent failure (buildAbsentGrounding owns that path)', () => {
     expect(buildEditRecoveryLedger({ kind: 'absent', path: 'src/a.css' })).toBe('');
+  });
+});
+
+describe('buildAbsentGrounding', () => {
+  it('hands over the located region verbatim and forbids retrying from memory', () => {
+    const g = buildAbsentGrounding({
+      kind: 'absent',
+      path: 'src/ui/App.tsx',
+      at: 132,
+      excerpt: '  132│  const [modelSelect, setModelSelect] = useState(null);',
+    });
+    expect(g).toContain('NOT applied');
+    expect(g).toContain('src/ui/App.tsx');
+    expect(g).toContain('not in your context'); // names the real cause
+    expect(g).toContain('line 132');
+    expect(g).toContain('132│  const [modelSelect'); // copyable bytes
+    expect(g).toContain('character-for-character');
+    // Forecloses the rationalization this failure reliably produces, which is what turns a
+    // one-round correction into a spiral.
+    expect(g).toMatch(/formatter/i);
+  });
+
+  it('says so plainly when no region could be located', () => {
+    const g = buildAbsentGrounding({ kind: 'absent', path: 'src/ui/App.tsx' });
+    expect(g).toContain('no region to show');
+    expect(g).toContain('read src/ui/App.tsx');
+    // No invented location, and no excerpt gutter.
+    expect(g).not.toMatch(/line \d/);
+    expect(g).not.toContain('│');
   });
 });
 

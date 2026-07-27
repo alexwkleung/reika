@@ -659,6 +659,37 @@ export function buildEditRecoveryLedger(failure: EditFailure): string {
   ].join('\n');
 }
 
+// Payload attached to an `absent` edit failure when the file's bytes are not in the model's context
+// (see the call site). Rides the tool result rather than the system suffix: unlike the diverged
+// recovery ledger — which must survive several rounds to reach a period-2 loop — this is consumed by
+// the very next round, and the failure result is always live for that round.
+//
+// Says the quiet part explicitly. A model in this state reliably invents an explanation (the observed
+// one: "a formatter must have rewritten the file"), and a rationalization it believes is what turns a
+// one-round correction into a spiral — so the directive names the real cause and forecloses the retry
+// from memory.
+export function buildAbsentGrounding(failure: Extract<EditFailure, { kind: 'absent' }>): string {
+  const head =
+    `(reika: this edit was NOT applied. Your old_string matches nothing in ${failure.path} — not even ` +
+    "ignoring whitespace — and that file's current contents are not in your context, so it was " +
+    'written from memory rather than from the file. Nothing has rewritten the file: do not retry the ' +
+    'same old_string, and do not assume a formatter or linter changed it.';
+  if (failure.excerpt === undefined) {
+    return (
+      `${head} Nothing in the file closely resembles what you sent, so there is no region to show ` +
+      `you — read ${failure.path} before retrying. The change may belong in another file, or to code ` +
+      'that does not exist yet.)'
+    );
+  }
+  return (
+    `${head} The closest region is around line ${failure.at}; here it is verbatim:\n\n` +
+    `${failure.excerpt}\n\n` +
+    'Build your next old_string character-for-character from the text above — only what follows the ' +
+    `\`NNNNN│\` gutter, indentation included. If the change belongs elsewhere, read ${failure.path} ` +
+    'instead of guessing again.)'
+  );
+}
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -1746,19 +1777,24 @@ export async function runTurn(opts: {
         call.name === 'bash' && isReadOnlyShell(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
-      // Only while executing a written plan (planSteps), never while inspection is withdrawn (the
-      // directed read would itself be refused), and only when the edit could actually run (tool
-      // resolved). shouldBounce records the bounce, so a re-issued edit to the same path — or one
-      // that ran and failed — always passes: fail-open by construction, and edit-recovery is never
-      // re-bounced back to a read.
+      // Never while inspection is withdrawn (the directed read would itself be refused), and only
+      // when the edit could actually run (tool resolved). shouldBounce records the bounce, so a
+      // re-issued edit to the same path — or one that ran and failed — always passes: fail-open by
+      // construction, and edit-recovery is never re-bounced back to a read.
+      //
+      // No longer scoped to plan execution. That condition was a proxy for "the model probably lacks
+      // the bytes", needed back when grounding was the far looser "has read this path at some point
+      // this turn" — a test so weak that firing it everywhere would have bounced edits the model was
+      // equipped to make. Now that shouldBounce asks the real question (are those bytes in the
+      // request the model just answered — see readfirst.ts isLive), the proxy only loses coverage:
+      // the long unplanned turn is exactly where reads age out beneath the model.
       const bouncedBlindEdit =
         READ_FIRST &&
-        planSteps !== null &&
         !withdrawInspection &&
         call.name === 'edit' &&
         tool !== undefined &&
         typeof call.args.path === 'string' &&
-        readFirst.shouldBounce(call.args.path);
+        readFirst.shouldBounce(call.args.path, opts.history, prefixStable);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -1766,6 +1802,11 @@ export async function runTurn(opts: {
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
+      // Read-first (#72): path this call put file bytes in front of the model for, and whether the
+      // model authored them (`write`) rather than being handed them. Applied once the tool message
+      // exists, since handed-back grounding keys on its history index. See readfirst.ts.
+      let groundsPath: string | undefined;
+      let groundsAuthored = false;
       // Check-off receipt for a plan step this call completed; emitted after the tool chip below.
       let planCheckoff: string | undefined;
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
@@ -1841,13 +1882,32 @@ export async function runTurn(opts: {
           summary = `Tool error: ${(e as Error).message}`;
         }
       }
+      // Ground an `absent` edit failure (#72 follow-up). An old_string that matches nothing — not even
+      // ignoring whitespace — while the file's bytes are NOT in context is confabulation: the model
+      // wrote it from memory. Telling it to "re-read the file" is the one thing that cannot work,
+      // since the read ages out before its next edit; so hand the bytes over in the failure itself,
+      // the only slot in the request that is guaranteed live (it is always in the trailing block).
+      // When the bytes ARE in context the failure means what it used to — the target genuinely is not
+      // there — and the message is left alone.
+      if (
+        editFailure?.kind === 'absent' &&
+        !readFirst.isGrounded(editFailure.path, opts.history, prefixStable)
+      ) {
+        const grounding = buildAbsentGrounding(editFailure);
+        payload = payload ? `${payload}\n\n${grounding}` : grounding;
+        debugLog(
+          `[reika:debug] round=${i} absent-grounding file=${editFailure.path} ` +
+            `at=${editFailure.at ?? 'none'}\n`,
+        );
+      }
       // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
       // and the live/aged label depends on round order), but only emitted under the flag.
       if (!refused && call.name === 'read' && contentHash) {
         // Read-first (#72): the model now holds this file's bytes (or knows its true length, for an
-        // offset-past-end read) — edits to it are grounded for the rest of the turn.
-        readFirst.ground(String(call.args.path ?? ''));
+        // offset-past-end read). Grounding is applied after the tool message is pushed, since it
+        // keys on that message's index — the bytes ground edits only while they are still being sent.
+        groundsPath = String(call.args.path ?? '');
         const { cls, repeats } = readTrace.record(
           String(call.args.path ?? ''),
           Number(call.args.offset ?? 1),
@@ -1881,9 +1941,16 @@ export async function runTurn(opts: {
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
           lastEditFailure = undefined;
-          // Read-first (#72): a successful edit/write grounds its path — the result carries the
-          // post-edit bytes (refreshedFile / the diff), so follow-up edits to it are not blind.
-          if (typeof call.args.path === 'string') readFirst.ground(call.args.path);
+          // Read-first (#72): a successful edit/write grounds its path, but by different routes. An
+          // edit grounds only through the post-edit echo it hands back (tools/edit.ts refreshedFile),
+          // which is size-capped and absent on a large file — so it keys on the message index and
+          // expires with it. A write's content the model composed itself and its own tool_call args
+          // never age, so that grounding is unconditional. (The `diff` grounds nothing either way:
+          // it is a UI field, never serialized into the request.)
+          if (typeof call.args.path === 'string') {
+            groundsPath = call.args.path;
+            groundsAuthored = call.name === 'write';
+          }
           // Plan progress (#71): a successful edit/write checks a pending step off — by path when
           // the plan named this file, else by content when a step-quoted snippet appears in the
           // diff (the plan named the wrong file; the model edited the right one). Harness-observed
@@ -1937,6 +2004,11 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
+      // Read-first (#72): ground the path against the message just pushed, so the gate can later ask
+      // whether those exact bytes are still in the request rather than whether they ever were.
+      if (groundsPath) {
+        readFirst.ground(groundsPath, groundsAuthored ? undefined : opts.history.length - 1);
+      }
       // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
       // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
       // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
