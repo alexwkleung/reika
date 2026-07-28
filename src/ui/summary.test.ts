@@ -22,6 +22,14 @@ describe('hasActivity', () => {
     const msgs: Message[] = [{ role: 'user', content: 'hi' }];
     expect(hasActivity(msgs)).toBe(true);
   });
+
+  it('returns false for the /new receipt (meta echo + system notice)', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: '/new', meta: true },
+      { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+    ];
+    expect(hasActivity(msgs)).toBe(false);
+  });
 });
 
 describe('buildSummary', () => {
