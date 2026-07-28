@@ -61,6 +61,20 @@ describe('messagesToOpenAI', () => {
     expect(toolMsg.name).toBe('grep');
   });
 
+  it('drops the /new receipt (meta echo + system notice) from the model-facing history', () => {
+    // /new seeds the wiped scrollback with a receipt; both halves must stay UI-only so the
+    // model starts the new session with an empty history (plus the user-turn backstop).
+    const history: Message[] = [
+      { role: 'user', content: '/new', meta: true },
+      { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+    ];
+    const out = messagesToOpenAI('sys', history);
+    expect(out).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '(continue)' },
+    ]);
+  });
+
   it('resolves `name` round-locally when providers reuse tool-call ids across rounds', () => {
     // Provider-issued ids are only unique per response (llama.cpp/qq2 emit `call_0` every round).
     // A global first-match labeled every result with the OLDEST round's tool — observed in the
