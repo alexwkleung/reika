@@ -120,6 +120,23 @@ describe('renderMarkdown lists', () => {
   });
 });
 
+describe('renderMarkdown tables', () => {
+  const table = '| Flag | Default |\n| --- | --- |\n| `REIKA_WARM` | off |';
+
+  it('renders header cells bold white, not cyan', () => {
+    const out = renderMarkdown(table);
+    expect(out).toContain('\u001b[1m\u001b[37m'); // bold + white opener on the header row
+    expect(out).not.toContain('\u001b[36m'); // cyan, the old header color
+  });
+
+  it('keeps the header text intact', () => {
+    const out = renderMarkdown(table);
+    expect(out).toContain('Flag');
+    expect(out).toContain('Default');
+    expect(out).toContain('REIKA_WARM');
+  });
+});
+
 describe('unsupported fence languages', () => {
   // marked-terminal skips highlighting entirely at chalk.level 0 (non-TTY test
   // run), which would make these tests vacuous — force colors on.

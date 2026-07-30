@@ -70,9 +70,9 @@ const terminalExtension = markedTerminal(
     showSectionPrefix: false,
     tab: TAB_WIDTH,
     // cli-table3 defaults its header cells to red, which is hard to read and
-    // reads like an error. Override to a calmer cyan (no bold — bold renders as
-    // harsh bright-cyan that clashes with the magenta inline code); grey border.
-    tableOptions: { style: { head: ['cyan'], border: ['grey'] } },
+    // reads like an error. Bold white keeps the table itself monochrome so the
+    // only color inside it comes from inline code (pastel pink); grey border.
+    tableOptions: { style: { head: ['white', 'bold'], border: ['grey'] } },
     // Wrap at terminal width minus the App's paddingX gutter on both sides.
     // marked-terminal then breaks on word boundaries instead of Ink character-wrapping.
     width: Math.max(40, (process.stdout.columns || 80) - 2),
