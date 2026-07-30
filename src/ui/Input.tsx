@@ -32,7 +32,6 @@ export function Input({
   onChange,
   onSubmit,
   disabled,
-  canSubmit,
   mode,
   placeholder,
   suggesting,
@@ -45,7 +44,6 @@ export function Input({
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   disabled: boolean;
-  canSubmit: boolean;
   mode: Mode;
   placeholder?: string;
   // True while an approval popup is shown directly above: the popup omits its
@@ -356,12 +354,6 @@ export function Input({
   const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
   const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
-  // renderWithCursor appends a phantom inverse-space cell when the block
-  // cursor sits past the last char (or on a newline) and is blinking on. The
-  // queued-hint margin compensates for that cell so the hint and the right
-  // border don't shift as the cursor moves or blinks.
-  const phantomCursorCell =
-    !disabled && blinkOn && (cursor >= value.length || value[cursor] === '\n');
   const view = clampToViewport(value, cursor);
 
   return (

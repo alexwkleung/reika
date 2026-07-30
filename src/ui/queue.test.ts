@@ -11,13 +11,21 @@ describe('queuedPreview', () => {
   });
 
   it('appends an image hint when images are attached', () => {
-    expect(queuedPreview({ content: 'look at this', images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }] })).toBe(
-      'look at this [image]',
-    );
+    expect(
+      queuedPreview({
+        content: 'look at this',
+        images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }],
+      }),
+    ).toBe('look at this [image]');
   });
 
   it('handles an empty message with only an image', () => {
-    expect(queuedPreview({ content: '', images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }] })).toBe(' [image]');
+    expect(
+      queuedPreview({
+        content: '',
+        images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }],
+      }),
+    ).toBe(' [image]');
   });
 });
 
@@ -31,8 +39,11 @@ describe('queueReceipt', () => {
   });
 
   it('notes image attachments after the tag', () => {
-    expect(queueReceipt({ content: 'look', images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }] })).toBe(
-      '[Queued] [image] look',
-    );
+    expect(
+      queueReceipt({
+        content: 'look',
+        images: [{ marker: '[Image #1]', text: 'img', source: 'clipboard' }],
+      }),
+    ).toBe('[Queued] [image] look');
   });
 });

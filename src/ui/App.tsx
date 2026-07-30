@@ -1482,7 +1482,6 @@ export function App() {
           <QueuedList queue={queue} />
           <Input
             disabled={pending !== null || modelSelect !== null}
-            canSubmit={status === 'idle' && pending === null}
             attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}

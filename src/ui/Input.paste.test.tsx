@@ -43,7 +43,6 @@ function Harness({
           : undefined
       }
       disabled={false}
-      canSubmit={true}
       mode="agent"
       suggesting={false}
       history={[]}
