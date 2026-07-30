@@ -31,7 +31,7 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
-import { buildImplementPrompt, nextMode, planWritten, type Mode } from './commands.js';
+import { buildImplementPrompt, nextMode, planWritten, turnMode, type Mode } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
@@ -752,6 +752,7 @@ export function App() {
             baseURL: profile.baseURL,
             cwd: bundle.cwd,
             messageCount: msgs.length,
+            mode: modeRef.current,
           },
           { redact: !raw },
         );
@@ -1241,6 +1242,8 @@ export function App() {
     const appended: Message[] = [];
     if (!config || !bundle) return appended;
     const activeMode = modeOverride ?? mode;
+    // What this turn is recorded as on its prompt, which is not always what it runs as (vibe).
+    const recordedMode = turnMode(modeRef.current, activeMode);
     setStatus('busy');
     setPhase('thinking');
     resetTypecheck();
@@ -1270,7 +1273,10 @@ export function App() {
         signal: controller.signal,
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
         promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
-        onMessage: msg => {
+        onMessage: raw => {
+          // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
+          // saved transcript can say what each turn was. See store/transcript.ts summarizeModes.
+          const msg: Message = raw.role === 'user' ? { ...raw, mode: recordedMode } : raw;
           appended.push(msg);
           if (msg.role === 'assistant') {
             streamingRef.current = '';

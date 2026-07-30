@@ -278,6 +278,8 @@ Type `/` in the input to see suggestions. Highlights:
 | `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                             |
 | `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                 |
 
+A saved transcript records mode alongside the conversation: each turn is labelled with the mode it ran in (`You [plan]:`, and `mode` on the JSONL record), and the header carries the mode at save time plus the whole arc — `# modes: agent (turns 1-3) → plan (turn 4) → agent (turn 5)`. A vibe turn is recorded as `vibe`, not as the plan and agent phases it runs as internally. So a transcript says how the work was done, not just what was said.
+
 ## Scripts
 
 - `npm run dev` — run the CLI with `tsx`

@@ -11,7 +11,19 @@ export type Message =
   // `meta` marks a UI-only echo of a slash command (e.g. `/model`, `/stats`): shown in the
   // scrollback as the user's input but never sent to the model — its system response is
   // already dropped, so a bare command turn would just be redundant context.
-  | { role: 'user'; content: string; display?: string; nested?: boolean; meta?: boolean }
+  | {
+      role: 'user';
+      content: string;
+      display?: string;
+      nested?: boolean;
+      meta?: boolean;
+      // Which mode the turn this prompt opened actually ran in. Stamped by the UI on real turns
+      // only (never on `meta` command echoes, which happen between turns), so a saved transcript
+      // says what each turn was — a plan turn and an agent turn look identical otherwise. Vibe
+      // turns are stamped 'vibe' rather than their internal plan→agent phases. See
+      // store/transcript.ts summarizeModes.
+      mode?: Mode;
+    }
   | {
       role: 'assistant';
       content: string;
@@ -216,10 +228,15 @@ export type Profile = {
 //   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
 export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 
+// What the session is currently doing: which tools and system prompt a turn gets, or (shell)
+// whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
+// messages carry it (see Message['user'].mode); ui/commands.ts re-exports it.
+export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+
 // Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
 // eligible — chat isolates history and shell bypasses the model entirely, so neither makes
 // sense as a launch default.
-export type DefaultMode = 'agent' | 'plan' | 'vibe';
+export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe'>;
 
 export type Config = {
   baseURL: string;

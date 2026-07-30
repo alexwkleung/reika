@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, MODE_CYCLE, buildImplementPrompt, nextMode, planWritten } from './commands.js';
+import {
+  COMMANDS,
+  MODE_CYCLE,
+  buildImplementPrompt,
+  nextMode,
+  planWritten,
+  turnMode,
+} from './commands.js';
 import type { Message } from '../types.js';
 
 describe('nextMode — Shift+Tab cycling', () => {
@@ -20,6 +27,23 @@ describe('nextMode — Shift+Tab cycling', () => {
     }
     expect(m).toBe(MODE_CYCLE[0]);
     expect(seen.size).toBe(MODE_CYCLE.length);
+  });
+});
+
+describe('turnMode — what a turn is recorded as', () => {
+  it('records the mode the turn runs in', () => {
+    expect(turnMode('agent', 'agent')).toBe('agent');
+    expect(turnMode('plan', 'plan')).toBe('plan');
+    expect(turnMode('chat', 'chat')).toBe('chat');
+  });
+
+  it('honours a one-turn override — /implement from plan mode is an agent turn', () => {
+    expect(turnMode('plan', 'agent')).toBe('agent');
+  });
+
+  it('records both vibe phases as vibe, not as the plan/agent turns they run as', () => {
+    expect(turnMode('vibe', 'plan')).toBe('vibe');
+    expect(turnMode('vibe', 'agent')).toBe('vibe');
   });
 });
 
