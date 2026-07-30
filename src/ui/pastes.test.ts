@@ -30,20 +30,15 @@ describe('isLargePaste', () => {
 });
 
 describe('rememberPaste', () => {
-  it('mints a marker naming the line count', () => {
+  it('mints a numbered marker', () => {
     const { marker } = rememberPaste([], lines(400));
-    expect(marker).toBe('[Pasted #1: 400 lines]');
+    expect(marker).toBe('[Pasted text #1]');
   });
 
-  it('names chars when the paste is a single long line', () => {
-    const { marker } = rememberPaste([], 'x'.repeat(2000));
-    expect(marker).toBe('[Pasted #1: 2000 chars]');
-  });
-
-  it('numbers each paste so two of the same size stay distinguishable', () => {
+  it('numbers each paste so two of them stay distinguishable', () => {
     const first = rememberPaste([], lines(20));
     const second = rememberPaste(first.pastes, lines(20));
-    expect(second.marker).toBe('[Pasted #2: 20 lines]');
+    expect(second.marker).toBe('[Pasted text #2]');
     expect(second.pastes).toHaveLength(2);
   });
 
@@ -73,15 +68,17 @@ describe('expandPastes', () => {
   });
 
   it('leaves an unbacked marker literal rather than dropping it', () => {
-    expect(expandPastes('see [Pasted #9: 3 lines]', [])).toBe('see [Pasted #9: 3 lines]');
+    expect(expandPastes('see [Pasted text #9]', [{ marker: '[Pasted text #1]', text: 'x' }])).toBe(
+      'see [Pasted text #9]',
+    );
   });
 
   it('never re-reads pasted text as another marker', () => {
     const pastes = [
-      { marker: '[Pasted #1: 1 lines]', text: '[Pasted #2: 1 lines]' },
-      { marker: '[Pasted #2: 1 lines]', text: 'INNER' },
+      { marker: '[Pasted text #1]', text: '[Pasted text #2]' },
+      { marker: '[Pasted text #2]', text: 'INNER' },
     ];
-    expect(expandPastes('[Pasted #1: 1 lines]', pastes)).toBe('[Pasted #2: 1 lines]');
+    expect(expandPastes('[Pasted text #1]', pastes)).toBe('[Pasted text #2]');
   });
 
   it('treats $-sequences in pasted text as literal', () => {

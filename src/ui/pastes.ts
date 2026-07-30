@@ -2,7 +2,7 @@
 // Ink's dynamic frame, and once that frame is as tall as the viewport Ink switches to its
 // full-repaint path — including `\x1b[3J`, which wipes native scrollback — on every render.
 // The cursor blink alone renders twice a second, so a pasted wall of text leaves the TUI
-// unusable until restart. The buffer holds a short `[Pasted #N: 412 lines]` marker instead;
+// unusable until restart. The buffer holds a short `[Pasted text #N]` marker instead;
 // the real text is parked here and spliced back in at submit.
 
 // A paste at or above either bound becomes a marker. Lines is the bound that matters (rows are
@@ -18,9 +18,8 @@ export const MAX_PASTE_STORE_CHARS = 4_000_000;
 
 export type PastedText = { marker: string; text: string };
 
-// Only ever matches markers this module minted: the id is what maps back to the text, and the
-// summary is free-form so it can describe lines or chars.
-const MARKER_RE = /\[Pasted #(\d+): [^\]\n]*\]/g;
+// Only ever matches markers this module minted; the id is what maps back to the text.
+const MARKER_RE = /\[Pasted text #\d+\]/g;
 
 export function isLargePaste(text: string): boolean {
   return countLines(text) >= PASTE_LINE_THRESHOLD || text.length >= PASTE_CHAR_THRESHOLD;
@@ -31,7 +30,7 @@ export function rememberPaste(
   pastes: PastedText[],
   text: string,
 ): { pastes: PastedText[]; marker: string } {
-  const kept = [...pastes, { marker: nextMarker(pastes, text), text }];
+  const kept = [...pastes, { marker: nextMarker(pastes), text }];
   let total = kept.reduce((n, p) => n + p.text.length, 0);
   while (kept.length > 1 && total > MAX_PASTE_STORE_CHARS) {
     total -= kept.shift()!.text.length;
@@ -48,13 +47,9 @@ export function expandPastes(input: string, pastes: PastedText[]): string {
   return input.replace(MARKER_RE, m => byMarker.get(m) ?? m);
 }
 
-function nextMarker(pastes: PastedText[], text: string): string {
+function nextMarker(pastes: PastedText[]): string {
   const used = pastes.map(p => Number(/#(\d+)/.exec(p.marker)?.[1] ?? 0));
-  const id = Math.max(0, ...used) + 1;
-  const lines = countLines(text);
-  // A one-line paste is here because of its length, so lines would read as "1 line" and hide
-  // exactly the thing that made it big.
-  return lines > 1 ? `[Pasted #${id}: ${lines} lines]` : `[Pasted #${id}: ${text.length} chars]`;
+  return `[Pasted text #${Math.max(0, ...used) + 1}]`;
 }
 
 function countLines(text: string): number {

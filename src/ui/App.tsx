@@ -145,7 +145,7 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
-  // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted #N: …]` marker
+  // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N]` marker
   // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
   // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
   // history or leave sitting in a queued message, and it has to still expand when they do.

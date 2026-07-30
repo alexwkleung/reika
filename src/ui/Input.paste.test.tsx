@@ -62,7 +62,7 @@ describe('large paste handling', () => {
     await tick();
 
     const frame = plain(lastFrame());
-    expect(frame).toContain('[Pasted #1: 400 lines]');
+    expect(frame).toContain('[Pasted text #1]');
     expect(frame).not.toContain('line 399');
   });
 
@@ -78,8 +78,8 @@ describe('large paste handling', () => {
     await tick();
 
     const frame = plain(lastFrame());
-    expect(frame).toContain('[Pasted #1: 32 lines]');
-    expect(frame).not.toContain('[Pasted #2');
+    expect(frame).toContain('[Pasted text #1]');
+    expect(frame).not.toContain('#2');
   });
 
   it('does not submit on a carriage return that is really a chunk boundary', async () => {
@@ -105,7 +105,7 @@ describe('large paste handling', () => {
     stdin.write('\r');
     await tick();
 
-    expect(onSubmit).toHaveBeenCalledWith('[Pasted #1: 20 lines]');
+    expect(onSubmit).toHaveBeenCalledWith('[Pasted text #1]');
   });
 
   it('leaves a small paste in the buffer', async () => {
