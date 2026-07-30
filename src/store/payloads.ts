@@ -16,4 +16,11 @@ export class PayloadStore {
   size(): number {
     return this.items.size;
   }
+
+  // Payloads are only reachable through payloadIds on messages, so once /new wipes the
+  // scrollback and stashes, everything in here is garbage — drop it rather than letting a
+  // long-lived process accumulate every tool payload across sessions.
+  clear(): void {
+    this.items.clear();
+  }
 }

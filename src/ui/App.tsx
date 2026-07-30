@@ -615,6 +615,8 @@ export function App() {
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
       stashedMessagesRef.current = {};
+      // With the messages and stashes gone, no payloadId can reach the store anymore.
+      payloads.clear();
       setPlanSteps(null);
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       setLastUsage(null);
