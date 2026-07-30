@@ -1,6 +1,7 @@
-import type { Message } from '../types.js';
+import type { Message, Mode } from '../types.js';
 
-export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+// Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
+export type { Mode };
 
 // Shift+Tab cycling order: the model-driven modes first (agent → plan → vibe), then the
 // isolated ones (chat → shell), wrapping back to agent.
@@ -8,6 +9,15 @@ export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'vibe', 'chat', 'shell'];
 
 export function nextMode(current: Mode): Mode {
   return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
+}
+
+// The mode a turn is recorded under (stamped on its prompt, then summarized by /save). Normally
+// the mode the turn runs with — including a one-turn override like /implement's, which really is
+// an agent turn taken from plan mode. Vibe is the exception: it drives its two phases through
+// 'plan' and 'agent' overrides, but the session was in vibe mode throughout, and a transcript
+// reading "plan turn, agent turn" would misdescribe how the work was done.
+export function turnMode(current: Mode, active: Mode): Mode {
+  return current === 'vibe' ? 'vibe' : active;
 }
 
 export type CommandSpec = {

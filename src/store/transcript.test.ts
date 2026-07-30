@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import type { Message } from '../types.js';
 import {
   TRANSCRIPT_VERSION,
+  formatModeRuns,
   renderTxt,
   saveTranscript,
   serializeJsonl,
+  summarizeModes,
   type TranscriptMeta,
 } from './transcript.js';
 
@@ -16,8 +18,9 @@ const META: TranscriptMeta = {
   savedAt: '2026-06-28T14:03:12.000Z',
   model: 'qwen2.5-coder',
   baseURL: 'http://localhost:11434/v1',
-  cwd: '/Users/alex/Git/reika',
+  cwd: '/repo',
   messageCount: 0,
+  mode: 'agent',
 };
 
 // One of every variant, so a renderer change that forgets a role is caught.
@@ -106,6 +109,98 @@ describe('renderTxt', () => {
     const msg: Message = { role: 'system', content: 'appleId=me@x.com' };
     expect(renderTxt([msg], META)).not.toContain('me@x.com');
     expect(renderTxt([msg], META, { redact: false })).toContain('me@x.com');
+  });
+});
+
+// A session that starts in agent mode, drops to shell, plans, then implements — the arc the mode
+// timeline exists to record.
+const MIXED_MODES: Message[] = [
+  { role: 'user', content: 'fix the parser', mode: 'agent' },
+  { role: 'assistant', content: 'on it' },
+  { role: 'user', content: 'and the tests', mode: 'agent' },
+  { role: 'shell', command: 'npm test', output: '2 failed' },
+  { role: 'user', content: '/plan', meta: true },
+  { role: 'user', content: 'plan the rewrite', mode: 'plan' },
+  { role: 'user', content: 'do it', mode: 'agent' },
+];
+
+describe('summarizeModes', () => {
+  it('collapses consecutive turns in the same mode into runs, in order', () => {
+    expect(summarizeModes(MIXED_MODES)).toEqual([
+      { mode: 'agent', from: 1, to: 2 },
+      { mode: 'shell', from: 3, to: 3 },
+      { mode: 'plan', from: 4, to: 4 },
+      { mode: 'agent', from: 5, to: 5 },
+    ]);
+  });
+
+  it('does not count command echoes as turns', () => {
+    // The `/plan` echo sits between turns 3 and 4; counting it would push every later turn
+    // number out by one and attribute plan mode to the wrong prompt.
+    const runs = summarizeModes(MIXED_MODES);
+    expect(runs.find(r => r.mode === 'plan')).toEqual({ mode: 'plan', from: 4, to: 4 });
+  });
+
+  it('skips untagged turns instead of guessing, and does not merge across the gap', () => {
+    const runs = summarizeModes([
+      { role: 'user', content: 'a', mode: 'agent' },
+      { role: 'user', content: 'b' },
+      { role: 'user', content: 'c', mode: 'agent' },
+    ]);
+    expect(runs).toEqual([
+      { mode: 'agent', from: 1, to: 1 },
+      { mode: 'agent', from: 3, to: 3 },
+    ]);
+  });
+
+  it('records nothing for a conversation with no turns', () => {
+    expect(summarizeModes([{ role: 'system', content: 'New session' }])).toEqual([]);
+  });
+});
+
+describe('formatModeRuns', () => {
+  it('renders the arc with singular and ranged turn numbers', () => {
+    expect(formatModeRuns(summarizeModes(MIXED_MODES))).toBe(
+      'agent (turns 1-2) → shell (turn 3) → plan (turn 4) → agent (turn 5)',
+    );
+  });
+
+  it('says so when nothing was recorded', () => {
+    expect(formatModeRuns([])).toBe('(none recorded)');
+  });
+});
+
+describe('mode in the saved record', () => {
+  it('puts the save-time mode and the derived timeline in the jsonl meta line', () => {
+    const meta = JSON.parse(serializeJsonl(MIXED_MODES, { ...META, mode: 'plan' }).split('\n')[0]);
+    expect(meta.mode).toBe('plan');
+    expect(meta.modes).toEqual(summarizeModes(MIXED_MODES));
+  });
+
+  it('keeps each turn tagged in the jsonl so a reader never has to count', () => {
+    const lines = serializeJsonl(MIXED_MODES, META).trimEnd().split('\n').slice(1);
+    const parsed = lines.map(l => JSON.parse(l) as Message);
+    expect(parsed.filter(m => m.role === 'user').map(m => (m as { mode?: string }).mode)).toEqual([
+      'agent',
+      'agent',
+      undefined,
+      'plan',
+      'agent',
+    ]);
+  });
+
+  it('headers the txt with the save-time mode and the arc', () => {
+    const txt = renderTxt(MIXED_MODES, { ...META, mode: 'plan' });
+    expect(txt).toContain('# mode:     plan (at save)');
+    expect(txt).toContain(`# modes:    ${formatModeRuns(summarizeModes(MIXED_MODES))}`);
+  });
+
+  it('labels each txt turn with its own mode, and leaves untagged ones bare', () => {
+    const txt = renderTxt(MIXED_MODES, META);
+    expect(txt).toContain('You [agent]:');
+    expect(txt).toContain('You [plan]:');
+    // The `/plan` echo ran between turns — it has no mode of its own to claim.
+    expect(txt).toContain('You:\n  /plan');
   });
 });
 

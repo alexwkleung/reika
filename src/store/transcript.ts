@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import type { Message, ToolCall } from '../types.js';
+import type { Message, Mode, ToolCall } from '../types.js';
 import { redactSecrets } from '../ui/redact.js';
 import { formatDurationMs } from '../ui/format.js';
 
@@ -19,7 +19,56 @@ export type TranscriptMeta = {
   baseURL: string;
   cwd: string;
   messageCount: number;
+  // Mode the session was in when it was saved. The per-turn history is derived, not passed:
+  // `modes` below is computed from the messages themselves so the two can never disagree.
+  mode: Mode;
 };
+
+// One unbroken run of turns in the same mode. `from`/`to` are inclusive 1-based turn numbers over
+// the transcript's model turns and shell commands (the things that count as a turn), so a reader
+// can say "turns 4–6 were plan turns" without walking the messages.
+export type ModeRun = { mode: Mode; from: number; to: number };
+
+// What the serializers write alongside the caller's meta: the mode timeline, derived here so the
+// .jsonl header and the .txt header are the same record.
+type FullMeta = TranscriptMeta & { modes: ModeRun[] };
+
+// Collapse the per-turn modes into consecutive runs, in order. A user message carries the mode its
+// turn ran in (stamped by the UI; command echoes are skipped — they sit between turns and would
+// otherwise attribute a mode switch to the turn before it), and every shell command is a shell
+// turn by definition. Untagged turns — from a transcript saved before turns were stamped, or a
+// nested subagent's — are skipped rather than guessed at.
+export function summarizeModes(messages: Message[]): ModeRun[] {
+  const runs: ModeRun[] = [];
+  let turn = 0;
+  for (const msg of messages) {
+    let mode: Mode | undefined;
+    if (msg.role === 'user' && !msg.meta) {
+      turn += 1;
+      mode = msg.mode;
+    } else if (msg.role === 'shell') {
+      turn += 1;
+      mode = 'shell';
+    } else continue;
+    if (mode === undefined) continue;
+    const last = runs[runs.length - 1];
+    if (last && last.mode === mode && last.to === turn - 1) last.to = turn;
+    else runs.push({ mode, from: turn, to: turn });
+  }
+  return runs;
+}
+
+// `agent (turns 1-3) → plan (turn 4)`. One line, for the .txt header.
+export function formatModeRuns(runs: ModeRun[]): string {
+  if (runs.length === 0) return '(none recorded)';
+  return runs
+    .map(r => `${r.mode} (${r.from === r.to ? `turn ${r.from}` : `turns ${r.from}-${r.to}`})`)
+    .join(' → ');
+}
+
+function withModes(messages: Message[], meta: TranscriptMeta): FullMeta {
+  return { ...meta, modes: summarizeModes(messages) };
+}
 
 type SerializeOptions = {
   // Run string fields through the secret redactor before writing. Default true; the /save
@@ -38,7 +87,7 @@ export function serializeJsonl(
   opts: SerializeOptions = {},
 ): string {
   const redact = opts.redact !== false;
-  const lines = [JSON.stringify(meta)];
+  const lines = [JSON.stringify(withModes(messages, meta))];
   for (const msg of messages) {
     lines.push(JSON.stringify(redact ? redactMessage(msg) : msg));
   }
@@ -61,6 +110,10 @@ export function renderTxt(
     `# base:     ${meta.baseURL}`,
     `# cwd:      ${meta.cwd}`,
     `# messages: ${meta.messageCount}`,
+    `# mode:     ${meta.mode} (at save)`,
+    // The whole arc up front, so a reader knows what kind of session this was before reading it;
+    // each turn below repeats its own mode in the `You [mode]:` label.
+    `# modes:    ${formatModeRuns(summarizeModes(messages))}`,
     `# version:  ${meta.version}`,
     '='.repeat(72),
   ];
@@ -98,7 +151,7 @@ function renderMessageTxt(msg: Message): string | null {
     case 'header':
       return `── ${msg.model} · ${msg.cwd} ──`;
     case 'user':
-      return labelled('You', msg.display ?? msg.content);
+      return labelled(msg.mode ? `You [${msg.mode}]` : 'You', msg.display ?? msg.content);
     case 'assistant': {
       const parts: string[] = [];
       if (msg.reasoning?.trim()) parts.push(labelled('Thinking', msg.reasoning.trim()));
