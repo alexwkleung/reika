@@ -1438,24 +1438,9 @@ export function App() {
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
             <PlanProgress steps={planSteps} />
           ) : null}
-          {pending ? (
-            <Approval request={pending.request} selectedIndex={approvalSelected} />
-          ) : modelSelect ? (
-            <ModelSelect
-              targets={modelSelect}
-              selectedIndex={modelSelected}
-              currentModel={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
-              baseURL={config?.baseURL ?? ''}
-              subagent={
-                config?.subagentModel &&
-                config.subagentModel !== (config.profiles[activeProfile]?.model ?? config.model)
-                  ? config.subagentModel
-                  : undefined
-              }
-            />
-          ) : suggestionState ? (
-            <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
-          ) : null}
+          {/* Spinner and queue sit *above* any overlay, not between it and the input: the
+              overlay drops its bottom border and the input its top one so the two merge into
+              one frame, and anything rendered in that gap lands inside the frame. */}
           {status === 'busy' && pending === null ? (
             <Working
               // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
@@ -1480,6 +1465,24 @@ export function App() {
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
           ) : null}
           <QueuedList queue={queue} />
+          {pending ? (
+            <Approval request={pending.request} selectedIndex={approvalSelected} />
+          ) : modelSelect ? (
+            <ModelSelect
+              targets={modelSelect}
+              selectedIndex={modelSelected}
+              currentModel={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
+              baseURL={config?.baseURL ?? ''}
+              subagent={
+                config?.subagentModel &&
+                config.subagentModel !== (config.profiles[activeProfile]?.model ?? config.model)
+                  ? config.subagentModel
+                  : undefined
+              }
+            />
+          ) : suggestionState ? (
+            <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
+          ) : null}
           <Input
             disabled={pending !== null || modelSelect !== null}
             attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
