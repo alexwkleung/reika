@@ -36,6 +36,7 @@ import { acceptSuggestion, computeSuggestions, type SuggestionState } from './su
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
+import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
 import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
@@ -144,6 +145,11 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
+  // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N +412 lines]` marker
+  // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
+  // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
+  // history or leave sitting in a queued message, and it has to still expand when they do.
+  const pastedTextsRef = useRef<PastedText[]>([]);
   // Skills already suggested this session. A hint the user declined once is noise the second
   // time — and the user who wanted it typed the slash command instead.
   const suggestedSkillsRef = useRef<Set<string>>(new Set());
@@ -909,7 +915,8 @@ export function App() {
       default: {
         const skill = bundle?.skills.find(s => s.name === name);
         if (skill) {
-          const extra = args.trim();
+          // `raw` stays the display, so the bubble shows the marker while the model gets the text.
+          const extra = expandPastes(args.trim(), pastedTextsRef.current);
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
           // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
           // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
@@ -1032,6 +1039,15 @@ export function App() {
     );
   };
 
+  // A paste the Input refuses to hold verbatim: park the text and hand back the marker that
+  // takes its place in the buffer. No scrollback receipt — unlike a clipboard image, the marker
+  // itself is visible in the box and rides into the user bubble, so nothing is silent.
+  const onPasteText = (text: string): string => {
+    const { pastes, marker } = rememberPaste(pastedTextsRef.current, text);
+    pastedTextsRef.current = pastes;
+    return marker;
+  };
+
   // The keypress handler is synchronous, so nothing awaits the above. Swallow into an error
   // line rather than letting a rejection escape as an unhandled promise and kill the TUI.
   const onPasteImageSafely = (): void => {
@@ -1088,7 +1104,7 @@ export function App() {
     setQueue(rest);
     const images = next.images ?? [];
     imageAttachmentsRef.current = images;
-    const markers = images.map((img) => img.marker).join(' ');
+    const markers = images.map(img => img.marker).join(' ');
     void onSubmit(next.content + (markers ? ` ${markers}` : ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, pending, queue]);
@@ -1109,7 +1125,7 @@ export function App() {
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
       setQueue(queueRef.current);
-      setMessages((prev) => [...prev, { role: 'system', content: queueReceipt(msg), tone: 'info' }]);
+      setMessages(prev => [...prev, { role: 'system', content: queueReceipt(msg), tone: 'info' }]);
       // Clear the box just like the normal submit path does below — the
       // queued list above the input is now the source of truth for it.
       setInputValue('');
@@ -1131,7 +1147,7 @@ export function App() {
       return;
     }
     if (modeRef.current === 'shell') {
-      await runShell(trimmed);
+      await runShell(expandPastes(trimmed, pastedTextsRef.current));
       return;
     }
     if (submitBusyRef.current) return;
@@ -1166,6 +1182,11 @@ export function App() {
       imageAttachmentsRef.current = [];
       if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
       modelText = routeSkill(trimmed, modelText);
+      // Last, so everything above reads the user's own words: a marker is the paste's stand-in
+      // for @mention, URL and skill matching alike — text the user pasted is content, not a
+      // request to fetch a link inside it. The marker survives in `display`, keeping the user
+      // bubble (and the input history entry) short while the model gets the full text.
+      modelText = expandPastes(modelText, pastedTextsRef.current);
     } finally {
       setExpanding(null);
       submitBusyRef.current = false;
@@ -1461,7 +1482,6 @@ export function App() {
           <QueuedList queue={queue} />
           <Input
             disabled={pending !== null || modelSelect !== null}
-            canSubmit={status === 'idle' && pending === null}
             attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
@@ -1470,6 +1490,7 @@ export function App() {
             onChange={onInputChange}
             onSubmit={onSubmit}
             onPasteImage={onPasteImageSafely}
+            onPasteText={onPasteText}
             placeholder={
               mode === 'shell'
                 ? 'Run a shell command'

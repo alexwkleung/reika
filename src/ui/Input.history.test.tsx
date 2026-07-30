@@ -26,7 +26,6 @@ function Harness({ seed = [] as string[] }) {
         setValue('');
       }}
       disabled={false}
-      canSubmit={true}
       mode="agent"
       suggesting={false}
       history={history}

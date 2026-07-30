@@ -1,10 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { theme } from './theme.js';
+import { isLargePaste } from './pastes.js';
 import type { Mode } from './commands.js';
 
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
+const DIM_ON = '\x1b[2m';
+const DIM_OFF = '\x1b[22m';
+
+// Ink has no bracketed-paste support, so a paste is just raw stdin — and the terminal splits a
+// large one at arbitrary byte offsets, delivering it as several chunks. Each would otherwise
+// land as its own edit (one render per chunk over a growing buffer), and a fragment that starts
+// at a line break parses as Return and submits mid-paste. So once a chunk looks like a paste,
+// everything arriving within this window joins it and the whole thing is applied on the first
+// quiet tick. Short enough that a paste still feels instant.
+const PASTE_COALESCE_MS = 20;
+// Below this a chunk is typing, or a paste too small to have been split — applied immediately,
+// since deferring every keystroke would make typing feel laggy.
+const PASTE_CHUNK_MIN = 8;
 
 // Home/End escape sequences. Terminals (e.g. iTerm2 with Cmd+Left/Right remapped
 // to send \e[H / \e[F) emit these for line-start/end. Ink's keypress parser
@@ -18,19 +32,18 @@ export function Input({
   onChange,
   onSubmit,
   disabled,
-  canSubmit,
   mode,
   placeholder,
   suggesting,
   history,
   attachedAbove,
   onPasteImage,
+  onPasteText,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   disabled: boolean;
-  canSubmit: boolean;
   mode: Mode;
   placeholder?: string;
   // True while an approval popup is shown directly above: the popup omits its
@@ -49,6 +62,9 @@ export function Input({
   // because macOS terminals never forward ⌘, and Cmd+V is the terminal's own paste
   // (which delivers text only — an image on the clipboard arrives as nothing at all).
   onPasteImage?: () => void;
+  // Hands a large pasted block to App and returns the marker to put in the buffer instead
+  // (see pastes.ts). Without it a paste lands verbatim, which is what breaks the frame.
+  onPasteText?: (text: string) => string;
 }) {
   const [cursor, setCursor] = useState(value.length);
   const [blinkOn, setBlinkOn] = useState(true);
@@ -124,6 +140,38 @@ export function Input({
     onChange(next);
   };
 
+  // A paste being assembled across stdin chunks; `timer` non-null means one is in flight.
+  const pasteRef = useRef<{ text: string; timer: ReturnType<typeof setTimeout> | null }>({
+    text: '',
+    timer: null,
+  });
+
+  // Insert the assembled paste at the cursor, as a marker when it's big enough to break the
+  // frame. Reads the refs rather than the render's `value`/`cursor`: this runs off a timer, a
+  // render or two after the closure that armed it.
+  const flushPaste = (): void => {
+    const { text } = pasteRef.current;
+    pasteRef.current = { text: '', timer: null };
+    if (!text) return;
+    const piece = onPasteText && isLargePaste(text) ? onPasteText(text) : text;
+    const v = valueRef.current;
+    const c = cursorRef.current;
+    update(v.slice(0, c) + piece + v.slice(c), c + piece.length);
+  };
+
+  const collectPaste = (text: string): void => {
+    pasteRef.current.text += text;
+    if (pasteRef.current.timer) clearTimeout(pasteRef.current.timer);
+    pasteRef.current.timer = setTimeout(flushPaste, PASTE_COALESCE_MS);
+  };
+
+  // A paste mid-flight when the component goes away would otherwise fire into a dead tree.
+  useEffect(() => {
+    return () => {
+      if (pasteRef.current.timer) clearTimeout(pasteRef.current.timer);
+    };
+  }, []);
+
   // Replace the buffer with a recalled entry and park the cursor at its end.
   const recall = (index: number | null, text: string): void => {
     goalColRef.current = null;
@@ -156,6 +204,21 @@ export function Input({
 
   useInput(
     (input, key) => {
+      // Mid-paste. Chunk boundaries land anywhere, so whatever arrives inside the window is
+      // paste content — including a fragment Ink parsed as Return (a chunk that begins at a
+      // line break), which is exactly the split that submits half a paste. A ctrl chord can't
+      // be paste content (Ink hands those over as the key name, not the byte); the one that
+      // realistically lands here is ctrl-c, which means abandon the paste.
+      if (pasteRef.current.timer) {
+        if (key.ctrl) {
+          clearTimeout(pasteRef.current.timer);
+          pasteRef.current = { text: '', timer: null };
+          return;
+        }
+        collectPaste(normalizePaste(input));
+        return;
+      }
+
       // Any key other than a bare Up/Down resets the remembered goal column.
       if (!((key.upArrow || key.downArrow) && !key.ctrl && !key.meta)) {
         goalColRef.current = null;
@@ -275,6 +338,12 @@ export function Input({
       if (input && !key.meta && !key.upArrow && !key.downArrow && !key.tab && !key.escape) {
         const text = normalizePaste(input);
         if (!text) return;
+        // Big enough to be a paste the terminal may still be delivering: hold it open for the
+        // rest of the chunks instead of editing the buffer once per chunk.
+        if (text.length >= PASTE_CHUNK_MIN || text.includes('\n')) {
+          collectPaste(text);
+          return;
+        }
         const next = value.slice(0, cursor) + text + value.slice(cursor);
         update(next, cursor + text.length);
       }
@@ -285,11 +354,7 @@ export function Input({
   const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
   const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
-  // renderWithCursor appends a phantom inverse-space cell when the block
-  // cursor sits past the last char (or on a newline) and is blinking on. The
-  // queued-hint margin compensates for that cell so the hint and the right
-  // border don't shift as the cursor moves or blinks.
-  const phantomCursorCell = !disabled && blinkOn && (cursor >= value.length || value[cursor] === '\n');
+  const view = clampToViewport(value, cursor);
 
   return (
     <Box
@@ -311,9 +376,8 @@ export function Input({
           )}
         </Box>
       ) : (
-        <Text>{renderWithCursor(value, cursor, !disabled, blinkOn)}</Text>
+        <Text>{renderWithCursor(view.text, view.cursor, !disabled, blinkOn)}</Text>
       )}
-
     </Box>
   );
 }
@@ -328,6 +392,35 @@ function normalizePaste(input: string): string {
     .replace(/\x1b\[20[01]~/g, '') // bracketed-paste start/end markers
     .replace(/\r\n?/g, '\n') // CRLF or lone CR -> LF
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ''); // other controls (keep \t, \n)
+}
+
+// The box is part of Ink's dynamic frame, which has to stay shorter than the viewport: at or
+// above it Ink repaints the whole terminal — wiping native scrollback — on every render, and the
+// cursor blink alone renders twice a second. A large paste becomes a marker long before it gets
+// here, but a buffer can still outgrow the screen a line at a time, so past that height the box
+// shows a window around the cursor and says how many lines it's hiding. Counts logical lines, not
+// wrapped rows: the wrapped case is bounded by the paste char threshold, and the estimate only
+// has to keep the box off the viewport ceiling.
+export function clampToViewport(
+  value: string,
+  cursor: number,
+  rows = process.stdout.rows || 24,
+): { text: string; cursor: number } {
+  // Everything else the frame carries: the status bar, the working/queued lines, this box's own
+  // border and margin, plus a row of slack.
+  const max = Math.max(3, rows - 10);
+  const lines = value.split('\n');
+  if (lines.length <= max) return { text: value, cursor };
+  const cursorLine = value.slice(0, cursor).split('\n').length - 1;
+  const start = Math.min(Math.max(0, cursorLine - Math.floor(max / 2)), lines.length - max);
+  const offset = lines.slice(0, start).reduce((n, l) => n + l.length + 1, 0);
+  const above = start > 0 ? `${DIM_ON}… ${start} lines above${DIM_OFF}\n` : '';
+  const belowCount = lines.length - start - max;
+  const below = belowCount > 0 ? `\n${DIM_ON}… ${belowCount} lines below${DIM_OFF}` : '';
+  return {
+    text: above + lines.slice(start, start + max).join('\n') + below,
+    cursor: cursor - offset + above.length,
+  };
 }
 
 function renderWithCursor(
