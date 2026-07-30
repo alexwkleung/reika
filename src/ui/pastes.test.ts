@@ -30,15 +30,20 @@ describe('isLargePaste', () => {
 });
 
 describe('rememberPaste', () => {
-  it('mints a numbered marker', () => {
+  it('mints a numbered marker naming the line count', () => {
     const { marker } = rememberPaste([], lines(400));
-    expect(marker).toBe('[Pasted text #1]');
+    expect(marker).toBe('[Pasted text #1 +400 lines]');
   });
 
-  it('numbers each paste so two of them stay distinguishable', () => {
+  it('names chars when the paste is a single long line', () => {
+    const { marker } = rememberPaste([], 'x'.repeat(2000));
+    expect(marker).toBe('[Pasted text #1 +2000 chars]');
+  });
+
+  it('numbers each paste so two of the same size stay distinguishable', () => {
     const first = rememberPaste([], lines(20));
     const second = rememberPaste(first.pastes, lines(20));
-    expect(second.marker).toBe('[Pasted text #2]');
+    expect(second.marker).toBe('[Pasted text #2 +20 lines]');
     expect(second.pastes).toHaveLength(2);
   });
 
@@ -68,17 +73,18 @@ describe('expandPastes', () => {
   });
 
   it('leaves an unbacked marker literal rather than dropping it', () => {
-    expect(expandPastes('see [Pasted text #9]', [{ marker: '[Pasted text #1]', text: 'x' }])).toBe(
-      'see [Pasted text #9]',
+    const pastes = [{ marker: '[Pasted text #1 +2 lines]', text: 'x' }];
+    expect(expandPastes('see [Pasted text #9 +3 lines]', pastes)).toBe(
+      'see [Pasted text #9 +3 lines]',
     );
   });
 
   it('never re-reads pasted text as another marker', () => {
     const pastes = [
-      { marker: '[Pasted text #1]', text: '[Pasted text #2]' },
-      { marker: '[Pasted text #2]', text: 'INNER' },
+      { marker: '[Pasted text #1 +1 lines]', text: '[Pasted text #2 +1 lines]' },
+      { marker: '[Pasted text #2 +1 lines]', text: 'INNER' },
     ];
-    expect(expandPastes('[Pasted text #1]', pastes)).toBe('[Pasted text #2]');
+    expect(expandPastes('[Pasted text #1 +1 lines]', pastes)).toBe('[Pasted text #2 +1 lines]');
   });
 
   it('treats $-sequences in pasted text as literal', () => {

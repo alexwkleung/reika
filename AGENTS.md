@@ -384,7 +384,7 @@ unusable until restart (measured on a 400-line paste: 58 scrollback wipes and 2.
 vs 0 and 170 KB after).
 
 So a paste at or above `PASTE_LINE_THRESHOLD` / `PASTE_CHAR_THRESHOLD` never enters the buffer:
-`App`'s `onPasteText` parks the text and hands back a `[Pasted text #N]` marker to sit in
+`App`'s `onPasteText` parks the text and hands back a `[Pasted text #N +400 lines]` marker to sit in
 its place, and `expandPastes` splices it back at submit — the same marker-plus-payload shape as
 `[Image N]`, and expansion runs **last** so `@`-mentions, pasted-URL fetching and skill routing
 all match on the user's own words rather than on pasted content. The marker survives into

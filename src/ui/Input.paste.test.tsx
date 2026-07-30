@@ -62,7 +62,7 @@ describe('large paste handling', () => {
     await tick();
 
     const frame = plain(lastFrame());
-    expect(frame).toContain('[Pasted text #1]');
+    expect(frame).toContain('[Pasted text #1 +400 lines]');
     expect(frame).not.toContain('line 399');
   });
 
@@ -78,7 +78,7 @@ describe('large paste handling', () => {
     await tick();
 
     const frame = plain(lastFrame());
-    expect(frame).toContain('[Pasted text #1]');
+    expect(frame).toContain('[Pasted text #1 +32 lines]');
     expect(frame).not.toContain('#2');
   });
 
@@ -105,7 +105,7 @@ describe('large paste handling', () => {
     stdin.write('\r');
     await tick();
 
-    expect(onSubmit).toHaveBeenCalledWith('[Pasted text #1]');
+    expect(onSubmit).toHaveBeenCalledWith('[Pasted text #1 +20 lines]');
   });
 
   it('leaves a small paste in the buffer', async () => {
