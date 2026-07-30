@@ -374,6 +374,36 @@ A clipboard paste is OCR'd immediately and parked in a ref keyed by an `[Image N
 
 Failures are **persistent scrollback notices**, never silent: an attachment that vanishes is indistinguishable from the model ignoring it. `no-text`, `unavailable` and `failed` stay distinct because they warrant different messages. Note that `confidence` from the recognizer is deliberately ignored — it reads ~0.44 on character-perfect extractions, so any threshold would reject good text.
 
+## Pasting large text (`ui/pastes.ts`)
+
+Issue #120. The input box lives in Ink's **dynamic** frame, and the rule from `Scrollback.tsx`
+applies to it too: once that frame is as tall as the viewport, Ink repaints the whole terminal —
+`\x1b[3J` included, which wipes native scrollback — on every render, and the cursor blink alone
+renders twice a second. A pasted wall of text therefore doesn't just look bad, it leaves the TUI
+unusable until restart (measured on a 400-line paste: 58 scrollback wipes and 2.4 MB of repaint,
+vs 0 and 170 KB after).
+
+So a paste at or above `PASTE_LINE_THRESHOLD` / `PASTE_CHAR_THRESHOLD` never enters the buffer:
+`App`'s `onPasteText` parks the text and hands back a `[Pasted #N: 400 lines]` marker to sit in
+its place, and `expandPastes` splices it back at submit — the same marker-plus-payload shape as
+`[Image N]`, and expansion runs **last** so `@`-mentions, pasted-URL fetching and skill routing
+all match on the user's own words rather than on pasted content. The marker survives into
+`display`, so the user bubble and the input-history entry stay one line while the model gets the
+full text. Unlike image attachments, pastes are **not** consumed by the turn that sends them: the
+marker is plain text the user can recall from history or leave in a queued message, so the store
+is session-long (bounded by `MAX_PASTE_STORE_CHARS`, oldest dropped first).
+
+Two supporting pieces in `Input.tsx`, both needed because Ink has no bracketed-paste support:
+
+- **Chunk coalescing.** A terminal splits a paste at arbitrary byte offsets (observed: 18 chunks
+  of 1022 bytes for 400 lines). Each chunk would otherwise be its own edit — and a chunk that
+  begins at a line break parses as Return and submits half a paste. Chunks that look like a paste
+  (≥ `PASTE_CHUNK_MIN` or containing a newline) accumulate until `PASTE_COALESCE_MS` of quiet;
+  everything arriving inside that window is paste content, ctrl-c aside.
+- **`clampToViewport`.** The guarantee the threshold alone can't give: past a viewport-derived
+  height the box renders a window around the cursor and says how many lines it's hiding, so no
+  path (repeated sub-threshold pastes, a long typed buffer) can push the frame over the ceiling.
+
 ## Tests (Vitest)
 
 `npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
@@ -384,6 +414,8 @@ Failures are **persistent scrollback notices**, never silent: an attachment that
 - `src/ui/summary.ts` — session stats derivation
 - `src/agent/mentions.ts` — `@filepath` expansion, image-path detection, OCR failure notices
 - `src/agent/attachments.ts` — pasted-image markers + `<image>` block assembly
+- `src/ui/pastes.ts` — large-paste markers + submit-time expansion (`Input.paste.test.tsx` drives
+  the paste path through a rendered Input, the one UI component with real keyboard logic)
 - `src/ocr/system.ts` — OCR outcome mapping (stubbed module; the real one is an optional dep)
 - `src/ui/clipboard.ts` — parsing AppleScript's `«data PNGf…»` literal
 - `src/search/searxng.ts` — provider request shape + response normalization (fetch mocked)
