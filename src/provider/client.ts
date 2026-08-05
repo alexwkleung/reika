@@ -1,5 +1,6 @@
 import { jsonrepair } from 'jsonrepair';
-import type { Config, Message, Tool, ToolCall, Usage } from '../types.js';
+import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
+import { debugLog } from '../debug.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
@@ -13,7 +14,20 @@ export type ModelResponse = {
   // at the token limit (the per-turn backstop firing, or a spiral hitting it) — the loop
   // uses it to recover rather than treat a truncated turn as a real final answer.
   finishReason?: string;
+  // Per-token logprobs for the generated content, when they were requested AND the engine
+  // returned them (issue #134). Absent otherwise — an absent array means "not measured", never
+  // "the model was certain". Only the debug drift instrumentation reads it.
+  sampled?: SampledToken[];
 };
+
+// Session latch: once an engine rejects a request carrying the logprobs fields, stop asking. The
+// degrade below retries that first request without them, so the turn survives; this keeps every
+// later round from paying the same failed round-trip. Exported reset is for tests only.
+let logprobsUnsupported = false;
+
+export function resetLogprobSupport(): void {
+  logprobsUnsupported = false;
+}
 
 export async function callModel(opts: {
   system: string;
@@ -42,6 +56,10 @@ export async function callModel(opts: {
   // Debug hook: called with the exact serialized request messages before sending, so the loop's
   // prefix-divergence instrumentation measures what the engine actually receives.
   onRequest?: (messages: ChatMessageParam[]) => void;
+  // Ask for per-token logprobs with this many top-k alternatives per position (issue #134).
+  // Set only by the debug drift instrumentation; undefined leaves the request byte-identical
+  // to a normal turn.
+  logprobs?: number;
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -62,9 +80,11 @@ export async function callModel(opts: {
   const contentParts: string[] = [];
   const reasoningParts: string[] = [];
   const callsByIndex = new Map<number, { id: string; name: string; args: string }>();
+  const sampled: SampledToken[] = [];
   let usage: Usage | undefined;
   let finishReason: string | undefined;
 
+  const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !logprobsUnsupported;
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -75,17 +95,23 @@ export async function callModel(opts: {
     ...(opts.logitBias && Object.keys(opts.logitBias).length > 0
       ? { logit_bias: opts.logitBias }
       : {}),
+    ...(wantLogprobs ? { logprobs: true, top_logprobs: opts.logprobs } : {}),
   };
 
-  try {
+  // True once a single chunk has been consumed. Gates the logprobs degrade below: retrying after
+  // any content streamed would duplicate it (same rule transport.ts applies to its own retries).
+  let received = false;
+
+  const consume = async (req: ChatCompletionRequest): Promise<void> => {
     const stream = streamChatCompletion({
       baseURL: opts.config.baseURL,
       apiKey: opts.config.apiKey,
-      body,
+      body: req,
       signal: opts.signal,
     });
 
     for await (const chunk of stream) {
+      received = true;
       if (chunk.usage) {
         // Cache-hit accounting is reported under different field names per provider:
         // OpenAI nests it in `prompt_tokens_details.cached_tokens`; DeepSeek exposes
@@ -100,6 +126,19 @@ export async function callModel(opts: {
       }
       const fr = chunk.choices?.[0]?.finish_reason;
       if (fr) finishReason = fr;
+      // Logprobs ride the choice, not the delta, and a chunk can carry them with no delta at all
+      // — so collect before the delta guard. Normalized to SampledToken here (the wire's null
+      // top_logprobs becomes an absent `top`) so nothing downstream handles wire shapes.
+      const lp = chunk.choices?.[0]?.logprobs?.content;
+      if (lp) {
+        for (const t of lp) {
+          sampled.push({
+            token: t.token,
+            logprob: t.logprob,
+            ...(t.top_logprobs && t.top_logprobs.length > 0 ? { top: t.top_logprobs } : {}),
+          });
+        }
+      }
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
       if (delta.content) {
@@ -127,6 +166,25 @@ export async function callModel(opts: {
         }
       }
     }
+  };
+
+  try {
+    try {
+      await consume(body);
+    } catch (e) {
+      // The logprobs fields are the ONLY difference from a normal request, so a failure before a
+      // single chunk arrived is the engine rejecting them (some OpenAI-compatible shims 400 on
+      // top_logprobs, or on logprobs alongside tools). Instrumentation must never cost a turn:
+      // latch the fields off for the session and retry the same request without them.
+      if (!wantLogprobs || received || opts.signal?.aborted) throw e;
+      logprobsUnsupported = true;
+      debugLog(
+        `[reika:debug] logprobs unsupported by backend — retrying without ` +
+          `(${e instanceof Error ? e.message : String(e)})\n`,
+      );
+      const { logprobs: _logprobs, top_logprobs: _topLogprobs, ...plain } = body;
+      await consume(plain);
+    }
   } catch (e) {
     if (opts.signal?.aborted) {
       return {
@@ -135,6 +193,7 @@ export async function callModel(opts: {
         toolCalls: undefined,
         usage,
         finishReason,
+        ...(sampled.length > 0 ? { sampled } : {}),
       };
     }
     throw e;
@@ -161,6 +220,7 @@ export async function callModel(opts: {
     toolCalls: resolved.toolCalls.length > 0 ? resolved.toolCalls : undefined,
     usage,
     finishReason,
+    ...(sampled.length > 0 ? { sampled } : {}),
   };
 }
 
