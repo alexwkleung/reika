@@ -155,6 +155,119 @@ const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bhf\s+upload\b/, label: 'Hugging Face upload (publishes to hub)' },
 ];
 
+// Package management at ANY scope: installs, uninstalls, and registry-fetch-and-run (npx and
+// friends). Every ecosystem runs install-time scripts, so an install is arbitrary code execution
+// chosen by the model, and the package it picks may be hallucinated, typosquatted, or outright
+// malicious. Deliberately not limited to commands that name a package: a bare `npm install`
+// builds from a manifest the model may have just edited, and a lockfile install still runs
+// lifecycle scripts. The global-install patterns stay separate because those also change state
+// outside the project — a global install trips both and reads as both.
+// The trailing (?![\w./-]) keeps the verb a whole token, so `npm run install-hooks` and
+// `cat install.md` don't read as installs.
+const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  {
+    re: /\b(?:npm|pnpm|bun)\s+(?:-{1,2}[\w-]+\s+)*(?:install|i|add|ci)(?![\w./-])/,
+    label: 'Package install (npm/pnpm/bun)',
+  },
+  {
+    re: /\byarn\s+(?:-{1,2}[\w-]+\s+)*(?:install|add)(?![\w./-])/,
+    label: 'Package install (yarn)',
+  },
+  {
+    re: /\b(?:pip|pip3)\s+(?:-{1,2}[\w-]+\s+)*install(?![\w./-])/,
+    label: 'Python package install (pip)',
+  },
+  {
+    re: /\bpython[\d.]*\s+-m\s+pip\s+(?:-{1,2}[\w-]+\s+)*install(?![\w./-])/,
+    label: 'Python package install (pip)',
+  },
+  {
+    re: /\buv\s+(?:pip\s+install|add|sync)(?![\w./-])/,
+    label: 'Python package install (uv)',
+  },
+  {
+    re: /\b(?:poetry|pipenv)\s+(?:install|add)(?![\w./-])/,
+    label: 'Python package install (poetry/pipenv)',
+  },
+  { re: /\bcargo\s+add\b/, label: 'Rust package install (cargo add)' },
+  { re: /\bgo\s+get\b/, label: 'Go module install (go get)' },
+  {
+    re: /\b(?:bundle|composer)\s+(?:install|add|require)(?![\w./-])/,
+    label: 'Package install (bundler/composer)',
+  },
+  {
+    re: /\b(?:apt|apt-get|dnf|yum|zypper|apk|choco|scoop|winget|port)\s+(?:-{1,2}[\w-]+\s+)*(?:install|add)(?![\w./-])/,
+    label: 'System package install (persistent system change)',
+  },
+  { re: /\bpacman\s+-S[yu]*\b/, label: 'System package install (persistent system change)' },
+
+  // Uninstalls — the mirror of an install, and just as much the user's call: the model can rip
+  // out a dependency the project still needs, remove-hooks run the same arbitrary code, and the
+  // system-level ones reach outside the repo entirely.
+  {
+    re: /\b(?:npm|pnpm|bun|yarn)\s+(?:-{1,2}[\w-]+\s+)*(?:uninstall|remove|rm|un)(?![\w./-])/,
+    label: 'Package uninstall (npm/pnpm/yarn/bun)',
+  },
+  {
+    re: /\b(?:pip|pip3)\s+(?:-{1,2}[\w-]+\s+)*uninstall(?![\w./-])/,
+    label: 'Python package uninstall (pip)',
+  },
+  {
+    re: /\bpython[\d.]*\s+-m\s+pip\s+(?:-{1,2}[\w-]+\s+)*uninstall(?![\w./-])/,
+    label: 'Python package uninstall (pip)',
+  },
+  {
+    re: /\b(?:uv|poetry|pipenv)\s+(?:tool\s+)?(?:remove|uninstall)(?![\w./-])/,
+    label: 'Python package uninstall (uv/poetry/pipenv)',
+  },
+  {
+    re: /\b(?:brew|pipx|cargo|gem|composer|bundle|go)\s+(?:uninstall|remove)(?![\w./-])/,
+    label: 'Package uninstall (global tool)',
+  },
+  {
+    re: /\b(?:apt|apt-get|dnf|yum|zypper|apk|choco|scoop|winget|port)\s+(?:-{1,2}[\w-]+\s+)*(?:uninstall|remove|purge|del)(?![\w./-])/,
+    label: 'System package uninstall (persistent system change)',
+  },
+  { re: /\bpacman\s+-R[a-z]*\b/, label: 'System package uninstall (persistent system change)' },
+
+  // Fetch-and-run: no install, same vector. `npx some-cli` downloads a package the model chose
+  // — hallucinated or typosquatted just as easily as one it would have installed — and executes
+  // it immediately, so it gets the same gate.
+  {
+    re: /\b(?:npx|bunx|uvx)(?![\w./-])/,
+    label: 'Remote package execution (npx/bunx/uvx)',
+  },
+  {
+    re: /\b(?:pnpm|yarn)\s+dlx(?![\w./-])|\bpipx\s+run(?![\w./-])/,
+    label: 'Remote package execution (dlx/pipx run)',
+  },
+];
+
+// Fallback for the package managers not worth enumerating (conda, mix, gcloud components, a
+// project's own `make install`): any command whose verb is `install` or `uninstall`. A couple of
+// leading tokens are allowed so wrappers still match (`sudo apt install`, `python -m pip
+// install`), and it is only reported when no specific package pattern fired — see
+// detectDangerousPatterns. Matching is per shell segment, because the verb position is what
+// makes this precise: `grep -rn install src/` passes `install` as an *argument*, and the
+// read-only leads below never install anything, so they are skipped outright.
+const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?![\w./-])/;
+const READ_ONLY_LEAD_RE =
+  /^(?:e?grep|fgrep|rg|ag|ack|find|man|which|type|whereis|cat|bat|less|more|head|tail|awk|sed|echo|printf|ls|wc|git)\b/;
+
+function genericPackageLabel(command: string): string | undefined {
+  for (const segment of command.split(/[;&|]+/)) {
+    const seg = segment.trim();
+    if (!seg || READ_ONLY_LEAD_RE.test(seg)) continue;
+    const m = GENERIC_PACKAGE_RE.exec(seg);
+    if (m) {
+      return m[1]
+        ? 'Uninstall command (removes third-party code)'
+        : 'Install command (fetches and runs third-party code)';
+    }
+  }
+  return undefined;
+}
+
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   {
     re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
@@ -208,10 +321,8 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgo\s+install\b/, label: 'Go install (global $GOBIN)' },
   { re: /\bpipx\s+install\b/, label: 'pipx install (global Python tool)' },
   { re: /\buv\s+tool\s+install\b/, label: 'uv tool install (global Python tool)' },
-  {
-    re: /\bgem\s+install\b(?![^|;&]*--user\b)/,
-    label: 'Gem install (system-level unless --user)',
-  },
+  { re: /\bgem\s+install\b/, label: 'Gem install (Ruby package)' },
+  ...PACKAGE_PATTERNS,
   ...POLICY_PATTERNS,
 ];
 
@@ -219,6 +330,13 @@ export function detectDangerousPatterns(command: string): string[] {
   const hits: string[] = [];
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
+  }
+  // The long-tail fallback only speaks up when nothing more specific did, so a `pip install`
+  // reports one precise label instead of two overlapping ones. Every install/uninstall label
+  // above contains the word, which is what makes this cheap test sufficient.
+  if (!hits.some(h => /install/i.test(h))) {
+    const generic = genericPackageLabel(command);
+    if (generic) hits.push(generic);
   }
   return hits;
 }
