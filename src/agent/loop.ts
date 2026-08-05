@@ -32,6 +32,7 @@ import {
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
 import { buildRuminationLogitBias } from './logitrecovery.js';
+import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
   extractPlanReferences,
   verifyPlanReferences,
@@ -166,6 +167,18 @@ const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
 // honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
 // the case where biased tokens are filler, not the work. See agent/logitrecovery.ts.
 const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY === '1';
+// EXPERIMENT (issue #134, measurement only): ask the engine for per-token logprobs so the drift
+// instrumentation can report the model's REAL predictive entropy instead of the empirical entropy of
+// its own output. Flag-gated because it is the one part of this that changes the request the engine
+// sees (a few extra request fields, and a materially larger SSE payload — top-k candidates on every
+// token); client.ts degrades to a plain request if a backend rejects it. Requires REIKA_DEBUG, since
+// the debug log is the only consumer — without logprobs the text-derived measurements still run, so
+// leaving this off costs the entropy precision, not the drift signal. Nothing here steers the model.
+const ENTROPY_LOGPROBS = process.env.REIKA_ENTROPY === '1';
+// Candidates per position. Small on purpose: the payload cost is per generated token, and 5 covers
+// enough mass on a peaked distribution to be informative (the reading carries `cover` so a heavy
+// unmeasured tail is visible rather than assumed away).
+const ENTROPY_TOP_K = 5;
 // Milder bias for the plan-mode force-write than the agent terminal's default (−4): that round writes
 // the deliverable (the plan), so it's more output-sensitive — a polluted-but-not-spiraling plan would
 // ship, where the agent round's pollution only collapses to a stop. Conservative; tune via A/B.
@@ -873,6 +886,11 @@ export async function runTurn(opts: {
   // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
   // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
   const prefixTrace = new PrefixTrace();
+  // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
+  // far each round's output distribution has moved from the previous round and from the turn's
+  // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
+  // starting point. Model-invisible; measures only. See agent/entropytrace.ts.
+  const entropyTrace = new EntropyTrace();
   // The char-based estimate systematically diverges from a model's real tokenizer (code,
   // JSON and CJK tokenize denser). Calibrate it against the provider's reported
   // promptTokens so the compaction trigger fires at the *real* threshold, not a heuristic
@@ -1418,6 +1436,9 @@ export async function runTurn(opts: {
       logitBias,
       prefixStable,
       trailingNote: roundSuffix,
+      // Measurement only (issue #134), and only when something will read it: the debug log is the
+      // sole consumer, so an un-logged run never pays the larger streaming payload.
+      logprobs: ENTROPY_LOGPROBS && debugEnabled() ? ENTROPY_TOP_K : undefined,
       // Prefix-divergence line (issue #69): where this request stopped matching the previous one,
       // and which mechanism class broke it. Measured on the exact serialized request.
       onRequest: debugEnabled()
@@ -1563,6 +1584,21 @@ export async function runTurn(opts: {
           `finishReason=${response.finishReason ?? '?'} final=${isFinal} ` +
           `reasoning≈${Math.round(rsn.length / 4)}t\n`,
       );
+    }
+
+    // Drift measurements for the same round (issue #134). Sits beside the reasoning-loop line
+    // deliberately: that line gives the categorical verdict, this one the continuous quantities
+    // behind it — a rumination lock should show klPrev collapsing toward 0 as crossSim climbs, and
+    // an entropy collapse is visible here rounds before either detector fires. Purely observational;
+    // no threshold reads these yet, by design.
+    if (debugEnabled()) {
+      const reading = entropyTrace.record({
+        text: `${rsn}\n${response.content}`,
+        sampled: response.sampled,
+      });
+      if (reading) {
+        debugLog(`[reika:debug] entropy round=${i} ${formatEntropyReading(reading)}\n`);
+      }
     }
 
     // Generation cut off mid-thought with no tool call (backstop firing, or a spiral
@@ -1756,6 +1792,10 @@ export async function runTurn(opts: {
       }
       if (readTrace.total() > 0) {
         debugLog(`[reika:debug] read-trace-summary ${readTrace.summary()}\n`);
+      }
+      const entropySummary = entropyTrace.summary();
+      if (entropySummary) {
+        debugLog(`[reika:debug] entropy-summary ${entropySummary}\n`);
       }
       return;
     }

@@ -90,6 +90,20 @@ export type Usage = {
   cachedTokens?: number;
 };
 
+// One generated token as the provider reported it, with the alternatives it was sampled against.
+// Populated only when the request asked for logprobs (REIKA_ENTROPY, issue #134); the drift
+// instrumentation in agent/entropytrace.ts is the sole consumer. `top` is the engine's truncated
+// top-k, so the probabilities it carries do NOT sum to 1 — the missing tail mass is measured, not
+// assumed away. Normalized here (camelCase, non-nullable) so the wire's snake_case/null variants
+// stop at the provider boundary.
+export type SampledToken = {
+  token: string;
+  // Natural log of the probability the model assigned to the token it actually emitted.
+  logprob: number;
+  // The top-k candidates at this position, when the engine returned them (top_logprobs).
+  top?: { token: string; logprob: number }[];
+};
+
 export type ToolResult = {
   summary: string;
   payload?: string;

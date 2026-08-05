@@ -45,6 +45,12 @@ export type ChatCompletionRequest = {
   // the honest stop. Honored by llama.cpp/vllm; silently ignored by backends that don't support it
   // (e.g. Ollama's OpenAI shim) — harmless, the recovery is gated on /tokenize being reachable.
   logit_bias?: Record<number, number>;
+  // Ask the engine to report per-token logprobs for the generated tokens, and the top-k
+  // alternatives at each position. Sent only by the entropy/KL instrumentation (REIKA_ENTROPY,
+  // issue #134). Honored by llama.cpp/vllm/OpenAI; backends that don't support it either ignore
+  // the fields or reject the request, which client.ts degrades from (one retry without them).
+  logprobs?: boolean;
+  top_logprobs?: number;
 };
 
 // A streamed delta chunk. Field unions cover provider variants:
@@ -64,6 +70,18 @@ export type ChatCompletionChunk = {
         function?: { name?: string; arguments?: string };
       }[];
     };
+    // Present only when the request set `logprobs` (and the engine supports it). One entry per
+    // token in this chunk's delta, each with the sampled token's logprob and — when top_logprobs
+    // was requested — the truncated candidate list at that position.
+    logprobs?: {
+      content?:
+        | {
+            token: string;
+            logprob: number;
+            top_logprobs?: { token: string; logprob: number }[] | null;
+          }[]
+        | null;
+    } | null;
     finish_reason?: string | null;
   }[];
   usage?: {
