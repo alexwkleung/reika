@@ -42,6 +42,9 @@ export const fixture: Fixture = {
   prompt:
     'Some modules in src/ define constants named FLAG_*. List every file that defines at least ' +
     'one, by filename. Be exhaustive — I need all of them.',
+  // A capped grep plus a paged read of the saved result runs long on a quantized local model;
+  // the 5-minute default cuts it off mid-recovery and reports a timeout instead of an outcome.
+  timeoutMs: 12 * 60 * 1000,
   assert: ({ messages }) => {
     const path = spilledPath(messages);
     if (!path) {
