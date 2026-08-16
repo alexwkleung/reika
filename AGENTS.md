@@ -273,6 +273,27 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   Size it ~2048 for reasoning-off models, 6144–8192 for reasoning-on thinking models on a
   small window.
 
+**Tool-output spill (`REIKA_SPILL=1`, default off, experimental — `tools/_spill.ts`).** Every
+layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
+cap their inline page (100 matches / 200 paths) and, before this, the rest was simply gone — so a
+model that needed the tail had exactly one move: re-run the search with a different pattern, which
+is the shape most of the observed search loops take (and `glob`'s page is the _lexicographic_ head,
+so a broad pattern shows one early directory and reads as the whole set). When on, the complete
+formatted result is written to a session-scoped temp file (one private 0700 dir per process — reika
+is one process per session — removed on exit; files are `wx`+0600 so a planted symlink can't
+redirect the write) and the inline payload gains a footer naming the path and both follow-up calls.
+Deliberately **no new tool**: the locator points at `read` and `grep`, which the model already uses
+constantly, so following it needs no learned behavior beyond reading a path — the reason this is
+worth trying where an explicit recall tool wouldn't be. The footer lives in the payload, not the
+summary, for the same reason `read`'s "more below" marker does: the summary is what survives
+payload aging, and by then a locator is stale advice. Fail-open throughout (a failed write returns
+the ordinary capped result with an honest "could not be saved" footer — a search must never become
+an error because a temp file didn't land), and a strict no-op when off, including `grep`'s
+collection ceiling: spilling raises the walk's stop from 100 to `SPILL_MAX_MATCHES` (1000) so there
+is a "rest" to save and the count in the summary is a total rather than a floor, which is the one
+real cost here — more scanning on a search broad enough to blow past the inline page. Same
+experimental discipline: constants and helpers together in `_spill.ts`, clearly marked.
+
 **Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
 last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always
 among them — see the cross-provider note) and dropped elsewhere. Unbounded, a thinking model

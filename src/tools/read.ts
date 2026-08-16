@@ -33,7 +33,10 @@ export const readTool: Tool = {
     // line, or the continuation marker below claims "1 more line" pointing at nothing.
     const total =
       lines.length > 1 && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
-    const rel = relative(ctx.cwd, full) || path;
+    // A path outside cwd relativizes to a long `../../..` chain, which a weak model then copies
+    // into its next call; echo what it gave us instead. Common since spill locators live in tmp.
+    const relToCwd = relative(ctx.cwd, full);
+    const rel = relToCwd && !relToCwd.startsWith('..') ? relToCwd : path;
 
     // Reading past EOF returns an empty slice with a nonsensical range; say so plainly
     // instead, so a weak model gets a clear correction rather than a blank to retry against.

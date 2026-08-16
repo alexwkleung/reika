@@ -4,14 +4,31 @@ import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
 import { resolveUserPath } from './_paths.js';
 import { shouldSkipDir } from './_walk.js';
+import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 
 const MAX_MATCHES = 100;
+// Ceiling on matches collected when spilling (REIKA_SPILL). Without it the walk stops dead at
+// MAX_MATCHES, so there is no "rest" to save and the count in the summary is a floor, not a
+// total. The extra scanning is the real cost of an honest count — bounded by this number, and
+// only paid on a search broad enough to blow past the inline page.
+const SPILL_MAX_MATCHES = 1000;
 const MAX_FILE_BYTES = 1_000_000;
 const LINE_TRUNC = 300;
 const CONTEXT = 2; // lines of surrounding context emitted above/below each match
 const NULL_BYTE_RE = /\x00/;
 
-type GrepState = { count: number; out: string[]; scanned: number; excluded: number };
+type GrepState = {
+  count: number;
+  out: string[];
+  scanned: number;
+  excluded: number;
+  limit: number;
+  // Where the inline page ends in `out`, and how many matches it holds — set once the emitted
+  // count first crosses MAX_MATCHES, at a range boundary so a match's context block is never
+  // cut in half. Undefined means everything collected fits inline.
+  inlineEnd?: number;
+  inlineCount?: number;
+};
 
 export const grepTool: Tool = {
   name: 'grep',
@@ -44,7 +61,14 @@ export const grepTool: Tool = {
     const start = resolveUserPath(ctx.cwd, startPath);
     const st = await stat(start).catch(() => null);
     if (!st) return { summary: `Grep failed: path not found: ${startPath}` };
-    const state: GrepState = { count: 0, out: [], scanned: 0, excluded: 0 };
+    const spilling = spillEnabled();
+    const state: GrepState = {
+      count: 0,
+      out: [],
+      scanned: 0,
+      excluded: 0,
+      limit: spilling ? SPILL_MAX_MATCHES : MAX_MATCHES,
+    };
     await walk(start, ctx.cwd, ctx.ignore, suffix, re, state);
     if (state.count === 0 && suffix && state.scanned === 0 && state.excluded > 0) {
       return {
@@ -53,10 +77,24 @@ export const grepTool: Tool = {
           `${state.excluded} file(s) under ${startPath}`,
       };
     }
-    const truncated = state.count >= MAX_MATCHES;
+    const atCeiling = state.count >= state.limit;
+    // Nothing was held back (or spilling is off): the ordinary result, byte-identical to the
+    // pre-spill behavior so the flag is a clean A/B.
+    if (!spilling || state.inlineEnd === undefined) {
+      return {
+        summary: `Found ${state.count}${atCeiling ? '+' : ''} matches for /${pattern}/`,
+        payload: state.out.join('\n'),
+      };
+    }
+    const shown = state.inlineCount ?? MAX_MATCHES;
+    const total = `${state.count}${atCeiling ? '+' : ''}`;
+    const ref = await spillResult('grep-results', state.out.join('\n'));
+    const footer = ref
+      ? buildSpillFooter({ shown, total, unit: 'matches', ref })
+      : buildCappedFooter({ shown, total, unit: 'matches' });
     return {
-      summary: `Found ${state.count}${truncated ? '+' : ''} matches for /${pattern}/`,
-      payload: state.out.join('\n'),
+      summary: `Found ${total} matches for /${pattern}/ — showing ${shown}`,
+      payload: state.out.slice(0, state.inlineEnd).join('\n') + footer,
     };
   },
 };
@@ -69,7 +107,7 @@ async function walk(
   re: RegExp,
   state: GrepState,
 ): Promise<void> {
-  if (state.count >= MAX_MATCHES) return;
+  if (state.count >= state.limit) return;
   const st = await stat(path).catch(() => null);
   if (!st) return;
   if (st.isFile()) {
@@ -79,7 +117,7 @@ async function walk(
   if (!st.isDirectory()) return;
   const entries = await readdir(path, { withFileTypes: true });
   for (const entry of entries) {
-    if (state.count >= MAX_MATCHES) return;
+    if (state.count >= state.limit) return;
     if (entry.isDirectory()) {
       if (shouldSkipDir(entry.name)) continue;
       const subPath = join(path, entry.name);
@@ -117,7 +155,7 @@ async function scanFile(
   // Collect matching line indices, respecting the global match cap.
   const hits: number[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (state.count + hits.length >= MAX_MATCHES) break;
+    if (state.count + hits.length >= state.limit) break;
     if (re.test(lines[i])) hits.push(i);
   }
   if (hits.length === 0) return;
@@ -135,14 +173,20 @@ async function scanFile(
 
   const hitSet = new Set(hits);
   for (let r = 0; r < ranges.length; r++) {
+    // Mark the inline cut before emitting the range that would overflow it, so the page ends on a
+    // whole context block. Only consumed when spilling; harmless bookkeeping otherwise.
+    if (state.inlineEnd === undefined && state.count >= MAX_MATCHES) {
+      state.inlineEnd = state.out.length;
+      state.inlineCount = state.count;
+    }
     if (state.out.length > 0) state.out.push('--');
     const [lo, hi] = ranges[r];
     for (let i = lo; i <= hi; i++) {
       const raw = lines[i];
       const line = raw.length > LINE_TRUNC ? raw.slice(0, LINE_TRUNC) + '…' : raw;
-      const sep = hitSet.has(i) ? ':' : '-';
-      state.out.push(`${relFile}:${i + 1}${sep} ${line}`);
+      const isHit = hitSet.has(i);
+      state.out.push(`${relFile}:${i + 1}${isHit ? ':' : '-'} ${line}`);
+      if (isHit) state.count++;
     }
   }
-  state.count += hits.length;
 }

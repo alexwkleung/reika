@@ -58,4 +58,15 @@ describe('readTool', () => {
     expect(result.payload).toContain('offset=8');
     expect(result.summary).toMatch(/lines 5-7 of 10/);
   });
+  // Spill locators (tools/_spill.ts) live in the OS temp dir, so an out-of-cwd read is the
+  // common case rather than an oddity; a `../../..` chain is what the model would copy next.
+  it('echoes an out-of-cwd path as given instead of a ../ chain', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'reika-read-outside-'));
+    const path = join(outside, 'spilled.txt');
+    await writeFile(path, ['a', 'b', 'c'].join('\n'), 'utf8');
+    const result = await readTool.run({ path }, ctx());
+    expect(result.summary).toContain(path);
+    expect(result.summary).not.toContain('..');
+    await rm(outside, { recursive: true, force: true });
+  });
 });
