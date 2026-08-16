@@ -16,8 +16,10 @@ import { fixture as f2 } from './fixtures/02-grep.js';
 import { fixture as f3 } from './fixtures/03-read.js';
 import { fixture as f4 } from './fixtures/04-edit.js';
 import { fixture as f5 } from './fixtures/05-write.js';
+import { fixture as f6 } from './fixtures/06-grep-spill.js';
+import { fixture as f7 } from './fixtures/07-glob-spill.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {
@@ -88,8 +90,18 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
 }
 
 async function main(): Promise<void> {
+  // `npm run eval -- spill` runs only matching fixtures. A local quantized model takes minutes
+  // per fixture, so re-running one under test shouldn't cost the whole suite.
+  const filters = process.argv.slice(2).filter(a => !a.startsWith('-'));
+  const selected =
+    filters.length > 0 ? FIXTURES.filter(f => filters.some(q => f.name.includes(q))) : FIXTURES;
+  if (selected.length === 0) {
+    process.stdout.write(`no fixture matches ${filters.join(', ')}\n`);
+    process.exit(1);
+  }
+
   const records: RunRecord[] = [];
-  for (const fix of FIXTURES) {
+  for (const fix of selected) {
     process.stdout.write(`  ${fix.name.padEnd(20)} … `);
     try {
       const rec = await runFixture(fix);
