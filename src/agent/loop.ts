@@ -40,6 +40,8 @@ import {
   shouldSuppressGrounding,
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
+import { referencesSpill } from '../tools/_spill.js';
+import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
   applyEdit as applyPlanEdit,
@@ -1897,6 +1899,16 @@ export async function runTurn(opts: {
       } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
+        // The payoff half of the spill ledger (`tools/_spillstats.ts`): a call that names an
+        // artifact we handed out is the model taking the recovery path. Counted here rather than
+        // in the tools because any of them can be the vehicle — `read` and `grep` are what the
+        // footer suggests, but a shell `tail <path>` is following the locator just as much.
+        if (
+          spillStatsEnabled() &&
+          Object.values(call.args).some(v => typeof v === 'string' && referencesSpill(v))
+        ) {
+          recordFollowed({ by: call.name });
+        }
         try {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,

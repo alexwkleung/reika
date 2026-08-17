@@ -4,6 +4,7 @@ import picomatch from 'picomatch';
 import { relative } from 'node:path';
 import { resolveUserPath } from './_paths.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import { recordCapped } from './_spillstats.js';
 import type { Tool } from '../types.js';
 
 const MAX_MATCHES = 200;
@@ -69,6 +70,7 @@ export const globTool: Tool = {
     // below safe: the complete sorted list survives here regardless of what the page shows.
     const ref = await spillResult('glob', files.join('\n'));
     const { page, entries, unreached } = sampleAcrossEntries(files, MAX_MATCHES);
+    recordCapped({ tool: 'glob', total: files.length, shown: page.length, spilled: !!ref });
     const note = samplingNote(entries, unreached);
     const footer = ref
       ? buildSpillFooter({

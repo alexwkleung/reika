@@ -60,11 +60,25 @@ function spillDir(): string {
   throw new Error('could not create a private spill directory');
 }
 
+// Every locator handed to the model this session. Kept so the loop can tell that a tool call is
+// following a locator rather than doing something unrelated — the payoff half of the spill
+// measurement (`_spillstats.ts`). Bounded by the number of over-cap results in a session, which is
+// the quantity being measured precisely because it is small.
+const handedOut = new Set<string>();
+
+// Whether `text` names an artifact we handed out. Substring rather than equality: the model
+// reaches for these inside a shell command (`tail -50 <path>`) as often as in a `read` path arg.
+export function referencesSpill(text: string): boolean {
+  for (const path of handedOut) if (text.includes(path)) return true;
+  return false;
+}
+
 // Reset between tests; also the escape hatch if a session ever wants a fresh directory. The
 // counter resets with it so a fresh directory starts numbering from 1 again.
 export function resetSpillDir(): void {
   dir = undefined;
   seq = 0;
+  handedOut.clear();
 }
 
 // Write `content` to a fresh file and return its locator. `name` is a hint, not a path — it is
@@ -85,6 +99,7 @@ export async function spillResult(name: string, content: string): Promise<SpillR
     // 'wx' + 0600: exclusive and owner-only, so a planted symlink in a shared temp dir can't
     // redirect the write.
     await writeFile(path, content, { flag: 'wx', mode: 0o600 });
+    handedOut.add(path);
     return { path, bytes: Buffer.byteLength(content) };
   } catch {
     return null;
