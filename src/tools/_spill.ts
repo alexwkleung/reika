@@ -73,10 +73,14 @@ export function buildSpillFooter(opts: {
   total: string;
   unit: string;
   ref: SpillRef;
+  // An extra sentence about how the page was chosen, when the caller did something other than
+  // take the head — the model cannot tell a sampled page from a truncated one by looking.
+  note?: string;
 }): string {
   const { shown, total, unit, ref } = opts;
+  const note = opts.note ? `${opts.note} ` : '';
   return (
-    `\n\n(Showing ${shown} of ${total} ${unit}. Full result saved to ${ref.path} — ` +
+    `\n\n(Showing ${shown} of ${total} ${unit}. ${note}Full result saved to ${ref.path} — ` +
     `read that path with offset/limit to page through it, or grep it to narrow. ` +
     `Do not re-run this search to see the rest.)`
   );
@@ -84,9 +88,15 @@ export function buildSpillFooter(opts: {
 
 // The honest fallback when the result was capped but the spill didn't land (disk full, no temp
 // dir). Says the rest is gone rather than pointing at a file that isn't there.
-export function buildCappedFooter(opts: { shown: number; total: string; unit: string }): string {
+export function buildCappedFooter(opts: {
+  shown: number;
+  total: string;
+  unit: string;
+  note?: string;
+}): string {
+  const note = opts.note ? `${opts.note} ` : '';
   return (
-    `\n\n(Showing ${opts.shown} of ${opts.total} ${opts.unit}. The rest could not be saved — ` +
+    `\n\n(Showing ${opts.shown} of ${opts.total} ${opts.unit}. ${note}The rest could not be saved — ` +
     `narrow the pattern or scope to see them.)`
   );
 }

@@ -277,8 +277,9 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
 layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
 cap their inline page (100 matches / 200 paths) and, before this, the rest was simply gone — so a
 model that needed the tail had exactly one move: re-run the search with a different pattern, which
-is the shape most of the observed search loops take (and `glob`'s page is the _lexicographic_ head,
-so a broad pattern shows one early directory and reads as the whole set). When on, the complete
+is the shape most of the observed search loops take (`glob`'s page _was_ the lexicographic head,
+so a broad pattern showed one early directory and read as the whole set — see the sampling note
+below, which spill is what makes safe). When on, the complete
 formatted result is written to a session-scoped temp file (one private 0700 dir per process — reika
 is one process per session — removed on exit; files are `wx`+0600 so a planted symlink can't
 redirect the write) and the inline payload gains a footer naming the path and both follow-up calls.
@@ -289,7 +290,7 @@ summary, for the same reason `read`'s "more below" marker does: the summary is w
 payload aging, and by then a locator is stale advice. Fail-open throughout (a failed write returns
 the ordinary capped result with an honest "could not be saved" footer — a search must never become
 an error because a temp file didn't land), and a strict no-op when off, including `grep`'s
-collection ceiling: spilling raises the walk's stop from 100 to `SPILL_MAX_MATCHES` (1000) so there
+collection ceiling: spilling raises the walk's stop from 100 to `SPILL_MAX_MATCHES` so there
 is a "rest" to save and the count in the summary is a total rather than a floor, which is the one
 real cost here — more scanning on a search broad enough to blow past the inline page. Same
 experimental discipline: constants and helpers together in `_spill.ts`, clearly marked.
@@ -307,6 +308,28 @@ result**, which is structural for glob and occasional for grep, since grep takes
 always be narrowed. So 3x the page for 3x the scan is the trade that survives a one-in-three hit
 rate; 10x did not. Measured on one model family (Q2–Q4 local); a stronger model would likely
 reformulate _more_ readily, not less, so do not expect the grep rate to rise with capability.
+
+**Over-cap glob pages are sampled, not the head** (`glob.ts` `sampleAcrossEntries`). A capped page
+sorted lexicographically is one alphabetical _region_ of the tree, not a view of it: on a 2300-file
+monorepo `**/*.ts` matched 560 files whose 200-path head covered 3 of 5 top-level packages, two
+absent entirely, with nothing saying a region was missing rather than a tail. Slots are dealt
+round-robin so every entry is represented before any gets a second path, and exhausted entries
+redistribute their surplus (that repo's five entries come out at 2 / 73 / 72 / 22 / 31 — the three
+small ones complete, the two large ones splitting what is left). Allocation is round-robin;
+output is **grouped**, not interleaved — a page alternating between packages line by line is harder
+for a small model to read structure from than contiguous sorted runs, and "round-robin" naturally
+reads as interleaved, so there is a test pinning it. It is unconditional rather than a mode for the
+_model's_ sake, not config tidiness: with two modes it cannot tell whether the paths in front of it
+are the sorted head or a cross-tree sample, so it can reason safely about neither, and the cap is
+already the one transition it can see (it is where the footer changes). Sampling is only non-lossy
+because spill keeps the complete sorted list in the artifact — which is why this landed after
+`REIKA_SPILL` and not before. Measured: 6/3/6 tool calls against a baseline of 8/9 on the same
+prompt. What it did **not** do, against prediction, is improve coverage _answers_ — runs still
+omitted a 2-file entry that sampling places on lines 1–2 of the page. Aggregating ~200 paths into a
+correct five-name set is near the model's ceiling at Q2 (byte-identical inputs produced both a
+perfect answer and one with three confabulated directories), and page composition cannot move that.
+The page carrying the information is the deterministic win; whether the model uses it is a separate
+question with a separate answer.
 
 **Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
 last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always

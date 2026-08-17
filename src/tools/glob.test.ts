@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
-import { globTool } from './glob.js';
+import { globTool, sampleAcrossEntries } from './glob.js';
 import { resetSpillDir } from './_spill.js';
 
 let cwd: string;
@@ -96,8 +96,8 @@ describe('globTool spill (REIKA_SPILL)', () => {
     for (const d of spillDirs.splice(0)) await rm(d, { recursive: true, force: true });
   });
 
-  // 300 files split across two top-level dirs. Sorted lexicographically, the 200-path inline
-  // page is entirely `aaa/` — the concentration that makes the dropped tail worth saving.
+  // 300 files split across two top-level dirs, lopsided 250/50. Sorted lexicographically the head
+  // is entirely `aaa/`, which is what the sampled page has to fix and what the off-path still does.
   async function writeManyFiles(): Promise<void> {
     await mkdir(join(cwd, 'aaa'), { recursive: true });
     await mkdir(join(cwd, 'zzz'), { recursive: true });
@@ -119,11 +119,20 @@ describe('globTool spill (REIKA_SPILL)', () => {
 
     expect(result.summary).toBe('Found 300 file(s) matching **/*.ts — showing 200');
     expect(payload).toContain('Showing 200 of 300 paths');
-    // The inline page is all `aaa/`; the tail the model would otherwise never see is in the file.
-    expect(payload).not.toContain('zzz/');
+    expect(payload).toContain('Sampled evenly across all 2 top-level entries');
+    // The page reaches both entries — the lexicographic head would have been 200 files of `aaa/`
+    // with `zzz/` absent entirely. `zzz` has only 50 paths, so it takes 50 slots and `aaa` the rest.
+    const page = payload.slice(0, payload.indexOf('\n\n(Showing')).split('\n');
+    expect(page.filter(p => p.startsWith('zzz/'))).toHaveLength(50);
+    expect(page.filter(p => p.startsWith('aaa/'))).toHaveLength(150);
+    // Grouped, not interleaved: one contiguous run per entry.
+    expect(page.findIndex(p => p.startsWith('zzz/'))).toBe(150);
+    // The complete sorted list survives regardless of what the page shows — this is what makes
+    // sampling safe, since sorted-order questions stay answerable from the artifact.
     const saved = (await readFile(locator!, 'utf8')).split('\n');
     expect(saved).toHaveLength(300);
-    expect(saved.filter(p => p.startsWith('zzz/'))).toHaveLength(50);
+    expect(saved[0]).toBe('aaa/f000.ts');
+    expect(saved[saved.length - 1]).toBe('zzz/f049.ts');
   });
 
   it('is byte-identical to the capped result when the flag is off', async () => {
@@ -142,5 +151,60 @@ describe('globTool spill (REIKA_SPILL)', () => {
     const result = await globTool.run({ pattern: '**/*.ts' }, { cwd, ignore: ignore() });
     expect(result.summary).toMatch(/^Found \d+ file\(s\)/);
     expect(result.payload).not.toContain('saved to');
+  });
+});
+
+describe('sampleAcrossEntries', () => {
+  const tree = (entry: string, n: number) =>
+    Array.from({ length: n }, (_, i) => `${entry}/f${String(i).padStart(3, '0')}.ts`);
+
+  it('represents every entry before any entry gets a second path', () => {
+    const sorted = [...tree('a', 100), ...tree('b', 100), ...tree('c', 1)].sort();
+    const { page, entries, unreached } = sampleAcrossEntries(sorted, 5);
+    expect(entries).toBe(3);
+    expect(unreached).toBe(0);
+    // c has only one path, so the two leftover slots go to a and b.
+    expect(page).toEqual(['a/f000.ts', 'a/f001.ts', 'b/f000.ts', 'b/f001.ts', 'c/f000.ts']);
+  });
+
+  it('emits grouped, not interleaved — allocation is round-robin, output is contiguous', () => {
+    const sorted = [...tree('a', 10), ...tree('b', 10)].sort();
+    const { page } = sampleAcrossEntries(sorted, 6);
+    expect(page).toEqual([
+      'a/f000.ts',
+      'a/f001.ts',
+      'a/f002.ts',
+      'b/f000.ts',
+      'b/f001.ts',
+      'b/f002.ts',
+    ]);
+  });
+
+  it('redistributes slots from exhausted entries instead of wasting them', () => {
+    const sorted = [...tree('a', 1), ...tree('b', 1), ...tree('c', 20)].sort();
+    const { page } = sampleAcrossEntries(sorted, 10);
+    expect(page).toHaveLength(10);
+    expect(page.filter(p => p.startsWith('c/'))).toHaveLength(8);
+  });
+
+  it('reports entries it could not reach when there is less room than entries', () => {
+    const sorted = Array.from({ length: 300 }, (_, i) => `e${String(i).padStart(3, '0')}/f.ts`);
+    const { page, entries, unreached } = sampleAcrossEntries(sorted, 200);
+    expect(entries).toBe(300);
+    expect(unreached).toBe(100);
+    expect(page).toHaveLength(200);
+    expect(page[0]).toBe('e000/f.ts');
+  });
+
+  it('treats a root-level file as its own entry', () => {
+    const sorted = ['README.md', ...tree('src', 50)].sort();
+    const { page } = sampleAcrossEntries(sorted, 4);
+    expect(page).toContain('README.md');
+    expect(page.filter(p => p.startsWith('src/'))).toHaveLength(3);
+  });
+
+  it('returns everything when the limit exceeds the result', () => {
+    const sorted = [...tree('a', 2), ...tree('b', 2)].sort();
+    expect(sampleAcrossEntries(sorted, 100).page).toEqual(sorted);
   });
 });

@@ -64,16 +64,81 @@ export const globTool: Tool = {
         payload: files.slice(0, MAX_MATCHES).join('\n') || '(no matches)',
       };
     }
-    // The crawl already holds every match, so saving the rest costs one write and no extra
-    // walking. Without it the dropped tail is unrecoverable: the inline page is the *lexicographic*
-    // head, so a broad pattern shows one early directory and the model reads that as the whole set.
+    // The crawl already holds every match, so saving the rest costs one write and no extra walking.
+    // Without it the omitted paths are unrecoverable, which is also what makes the sampled page
+    // below safe: the complete sorted list survives here regardless of what the page shows.
     const ref = await spillResult('glob-results', files.join('\n'));
+    const { page, entries, unreached } = sampleAcrossEntries(files, MAX_MATCHES);
+    const note = samplingNote(entries, unreached);
     const footer = ref
-      ? buildSpillFooter({ shown: MAX_MATCHES, total: String(files.length), unit: 'paths', ref })
-      : buildCappedFooter({ shown: MAX_MATCHES, total: String(files.length), unit: 'paths' });
+      ? buildSpillFooter({
+          shown: page.length,
+          total: String(files.length),
+          unit: 'paths',
+          ref,
+          note,
+        })
+      : buildCappedFooter({ shown: page.length, total: String(files.length), unit: 'paths', note });
     return {
-      summary: `Found ${files.length} file(s) matching ${pattern} — showing ${MAX_MATCHES}`,
-      payload: files.slice(0, MAX_MATCHES).join('\n') + footer,
+      summary: `Found ${files.length} file(s) matching ${pattern} — showing ${page.length}`,
+      payload: page.join('\n') + footer,
     };
   },
 };
+
+// An over-cap page is otherwise the *lexicographic* head, which is one alphabetical region of the
+// tree rather than a view of it: measured on a 2300-file monorepo, `**/*.ts` matched 560 files
+// whose 200-path head covered 3 of 5 top-level packages, so two were absent with nothing saying a
+// region was missing rather than a tail. Slots are dealt round-robin so every entry is represented
+// before any gets a second path, but the page is emitted GROUPED — allocation is round-robin,
+// output is not interleaved. A page that alternates between packages line by line is harder for a
+// small model to read structure from than contiguous runs, and grouping costs nothing to keep.
+export function sampleAcrossEntries(
+  sorted: string[],
+  limit: number,
+): { page: string[]; entries: number; unreached: number } {
+  // `sorted` is lexicographic, so first-seen order is already sorted group order.
+  const groups = new Map<string, string[]>();
+  for (const p of sorted) {
+    // A file sitting directly at the search root is its own entry, so root-level files each get a
+    // slot rather than competing as one group.
+    const slash = p.indexOf('/');
+    const key = slash === -1 ? p : p.slice(0, slash + 1);
+    const g = groups.get(key);
+    if (g) g.push(p);
+    else groups.set(key, [p]);
+  }
+  const taken = new Map<string, number>();
+  let total = 0;
+  let dealt = true;
+  while (total < limit && dealt) {
+    dealt = false;
+    for (const [key, paths] of groups) {
+      if (total >= limit) break;
+      const n = taken.get(key) ?? 0;
+      if (n >= paths.length) continue;
+      taken.set(key, n + 1);
+      total++;
+      dealt = true;
+    }
+  }
+  const page: string[] = [];
+  for (const [key, paths] of groups) page.push(...paths.slice(0, taken.get(key) ?? 0));
+  return { page, entries: groups.size, unreached: groups.size - taken.size };
+}
+
+// Says the page is a sample rather than the head, since a model cannot tell the two apart by
+// looking, and points at `path` for depth — sampling trades depth in one entry for breadth, and
+// re-running scoped is how the model buys it back.
+function samplingNote(entries: number, unreached: number): string {
+  if (unreached > 0) {
+    return (
+      `Sampled across ${entries - unreached} of ${entries} top-level entries (more entries than ` +
+      `room); set \`path\` to one to see it properly.`
+    );
+  }
+  return (
+    `Sampled evenly across all ${entries} top-level entries, not the sorted head — ` +
+    `set \`path\` to one for more depth in it.`
+  );
+}
