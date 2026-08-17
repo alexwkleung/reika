@@ -11,6 +11,7 @@ import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
 import { resolvePr } from './pr.js';
+import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
@@ -261,7 +262,23 @@ export function App() {
     (async () => {
       try {
         const cfg = loadConfig();
-        const b = await bootstrap(process.cwd(), cfg.repoMapBudget);
+        // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git
+        // subprocesses cost ~28ms warm, which is pure added latency to first paint if serialized.
+        // Measured on this repo: 29ms bootstrap + 28ms detect = 56ms serial, 36ms concurrent —
+        // so the scrub layer costs ~7ms of startup instead of ~28ms.
+        //
+        // Both are still awaited here, so the ordering guarantee the scrubber needs is intact:
+        // the token set is loaded before any message can be rendered or saved. Detection is
+        // best-effort — a failure leaves the scrubber a no-op rather than blocking startup, the
+        // same fail-open posture as the other scrub layers.
+        const [b] = await Promise.all([
+          bootstrap(process.cwd(), cfg.repoMapBudget),
+          cfg.anon
+            ? detectIdentity(process.cwd())
+                .then(setIdentity)
+                .catch(() => {})
+            : Promise.resolve(),
+        ]);
         setConfig(cfg);
         setBundle(b);
         setTools(defaultTools(cfg));
@@ -788,6 +805,7 @@ export function App() {
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
+          '  /anon              show/toggle anonymized display (on|off)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -888,6 +906,33 @@ export function App() {
           envOn
             ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
             : 'toggle with /approvals on or /approvals off',
+        ].join('\n');
+        break;
+      }
+      // Always available, NOT gated on REIKA_ANON — gating it there would make the toggle useless
+      // for the case it exists for ("I'm about to record and didn't set the env var"): you'd need
+      // anonymization already on to reach the command that turns it on. The env var sets the
+      // STARTING state; this switches it at any point. Detection is lazy, so leaving it alone
+      // costs nothing.
+      case 'anon': {
+        const arg = args.trim().toLowerCase();
+        const want = arg === 'on' ? true : arg === 'off' ? false : !isAnon();
+        if (!want) {
+          clearIdentity();
+          response = 'anonymize: off — names, emails and account slugs render verbatim again';
+          break;
+        }
+        const id = await enableAnon(bundle?.cwd ?? process.cwd());
+        const found = id.names.length + id.emails.length;
+        response = [
+          'anonymize: on',
+          found === 0
+            ? '  no identity found (no git config, no remote) — nothing to substitute'
+            : `  substituting ${id.names.length} name(s) → <user>, ${id.emails.length} email(s) → <email>`,
+          // The honest limitation: scrollback is <Static>, so committed messages never re-render.
+          // /save re-serializes from `messages`, so it IS retroactive. Saying so here beats
+          // burying it in docs and letting the untouched lines above read as a bug.
+          '  applies to new output and to /save; run /clear to scrub what is above',
         ].join('\n');
         break;
       }

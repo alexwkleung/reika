@@ -28,6 +28,7 @@ const CONFIG: Config = {
   bashTimeoutMs: 1000,
   pasteFetch: false,
   skillAuto: false,
+  anon: false,
 };
 
 const BUNDLE: ContextBundle = {

@@ -85,6 +85,7 @@ function makeConfig(): Config {
     bashTimeoutMs: 5000,
     pasteFetch: false,
     skillAuto: false,
+    anon: false,
   };
 }
 

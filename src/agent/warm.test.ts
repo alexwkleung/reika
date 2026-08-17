@@ -58,6 +58,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     bashTimeoutMs: 5000,
     pasteFetch: false,
     skillAuto: false,
+    anon: false,
     ...overrides,
   };
 }
