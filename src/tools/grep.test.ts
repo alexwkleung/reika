@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { grepTool } from './grep.js';
+import { resetSpillDir } from './_spill.js';
 
 let cwd: string;
 
@@ -83,5 +84,94 @@ describe('grepTool', () => {
       { cwd, ignore: ignore() },
     );
     expect(result.summary).toContain('include "*.css" matched none of the 2 file(s)');
+  });
+});
+
+describe('grepTool spill (REIKA_SPILL)', () => {
+  const spillDirs: string[] = [];
+
+  beforeEach(() => {
+    resetSpillDir();
+    process.env.REIKA_SPILL = '1';
+  });
+
+  afterEach(async () => {
+    delete process.env.REIKA_SPILL;
+    resetSpillDir();
+    for (const d of spillDirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  // 7 files x `perFile` matches. Matches are spaced wider than 2xCONTEXT so every one is its own
+  // block (adjacent ones would merge into a single range), and the per-file count puts the
+  // 100-match inline boundary in the middle of a file rather than on a file edge. The default
+  // total (210) sits under SPILL_MAX_MATCHES so the summary can report an exact count.
+  async function writeManyMatches(perFile = 30): Promise<void> {
+    for (let f = 0; f < 7; f++) {
+      const lines: string[] = [];
+      for (let i = 0; i < perFile; i++) {
+        lines.push('needle', 'pad', 'pad', 'pad', 'pad', 'pad', 'pad');
+      }
+      await writeFile(join(cwd, `f${f}.txt`), lines.join('\n'), 'utf8');
+    }
+  }
+
+  it('caps the inline page but saves the full result and points at it', async () => {
+    await writeManyMatches();
+    const result = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    const payload = result.payload ?? '';
+    const locator = /saved to (\S+\.txt)/.exec(payload)?.[1];
+    expect(locator).toBeTruthy();
+    spillDirs.push(dirname(locator!));
+
+    // The summary reports the honest total, not the "100+" floor the walk used to stop at.
+    expect(result.summary).toBe('Found 210 matches for /needle/ — showing 100');
+    // The inline page is bounded; the spill file holds everything.
+    const inlineHits = payload.split('\n').filter(l => /:\d+: /.test(l)).length;
+    expect(inlineHits).toBe(100);
+    const saved = await readFile(locator!, 'utf8');
+    expect(saved.split('\n').filter(l => /:\d+: /.test(l)).length).toBe(210);
+    // The inline page is a true prefix of the saved result — no reformatting between them.
+    expect(saved.startsWith(payload.slice(0, payload.indexOf('\n\n(Showing')))).toBe(true);
+  });
+
+  it('reports a floor rather than a false total once collection hits the ceiling', async () => {
+    await writeManyMatches(60); // 420 > SPILL_MAX_MATCHES
+    const result = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    const payload = result.payload ?? '';
+    spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(payload)![1]));
+    // The walk stopped early, so the count is honest about being a floor — claiming 300 exactly
+    // would assert something the search never established.
+    expect(result.summary).toBe('Found 300+ matches for /needle/ — showing 100');
+    expect(payload).toContain('Showing 100 of 300+ matches');
+  });
+
+  it('never cuts a context block in half', async () => {
+    await writeManyMatches();
+    const result = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    const payload = result.payload ?? '';
+    spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(payload)![1]));
+    const body = payload.slice(0, payload.indexOf('\n\n(Showing'));
+    // Each emitted block is `pad / pad / needle / pad / pad`; a cut mid-block would leave a
+    // trailing context line with no match line after it.
+    for (const block of body.split('\n--\n')) {
+      expect(block.split('\n').filter(l => /:\d+: /.test(l)).length).toBe(1);
+    }
+  });
+
+  it('is byte-identical to the capped result when the flag is off', async () => {
+    await writeManyMatches();
+    const on = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(on.payload ?? '')![1]));
+    delete process.env.REIKA_SPILL;
+    const off = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    expect(off.summary).toBe('Found 100+ matches for /needle/');
+    expect(off.payload).not.toContain('saved to');
+  });
+
+  it('leaves an under-cap result untouched', async () => {
+    await writeFile(join(cwd, 'a.txt'), ['needle', 'x', 'needle'].join('\n'), 'utf8');
+    const result = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    expect(result.summary).toBe('Found 2 matches for /needle/');
+    expect(result.payload).not.toContain('saved to');
   });
 });

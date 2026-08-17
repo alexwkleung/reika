@@ -273,6 +273,41 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   Size it ~2048 for reasoning-off models, 6144–8192 for reasoning-on thinking models on a
   small window.
 
+**Tool-output spill (`REIKA_SPILL=1`, on by default in `.env.example`, experimental — `tools/_spill.ts`).** Every
+layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
+cap their inline page (100 matches / 200 paths) and, before this, the rest was simply gone — so a
+model that needed the tail had exactly one move: re-run the search with a different pattern, which
+is the shape most of the observed search loops take (and `glob`'s page is the _lexicographic_ head,
+so a broad pattern shows one early directory and reads as the whole set). When on, the complete
+formatted result is written to a session-scoped temp file (one private 0700 dir per process — reika
+is one process per session — removed on exit; files are `wx`+0600 so a planted symlink can't
+redirect the write) and the inline payload gains a footer naming the path and both follow-up calls.
+Deliberately **no new tool**: the locator points at `read` and `grep`, which the model already uses
+constantly, so following it needs no learned behavior beyond reading a path — the reason this is
+worth trying where an explicit recall tool wouldn't be. The footer lives in the payload, not the
+summary, for the same reason `read`'s "more below" marker does: the summary is what survives
+payload aging, and by then a locator is stale advice. Fail-open throughout (a failed write returns
+the ordinary capped result with an honest "could not be saved" footer — a search must never become
+an error because a temp file didn't land), and a strict no-op when off, including `grep`'s
+collection ceiling: spilling raises the walk's stop from 100 to `SPILL_MAX_MATCHES` (1000) so there
+is a "rest" to save and the count in the summary is a total rather than a floor, which is the one
+real cost here — more scanning on a search broad enough to blow past the inline page. Same
+experimental discipline: constants and helpers together in `_spill.ts`, clearly marked.
+
+The ceiling is `SPILL_MAX_MATCHES` (300), and it is where the two tools stop being symmetric.
+Glob's spill is free — the crawl already holds every path — while grep's is paid on _every_ search
+broad enough to blow past the inline page, whether or not the model ever opens the artifact. Eval
+runs (`evals/fixtures/06-08`) put that at roughly one time in three when a shell is available:
+asked which files define a symbol, the model answers with `grep -r … | sort -u` in 98 bytes rather
+than paging a saved result, and it is right to — a query that projects the matches down beats
+reading them all. Follow-through rises without a shell (`grep-spill-noshell`, `planTools()`) and is
+3/3 on glob, where "last path alphabetically" has no narrower query that produces it. That is the
+generalization worth keeping: **spill pays off where the query cannot be reshaped to shrink the
+result**, which is structural for glob and occasional for grep, since grep takes a pattern that can
+always be narrowed. So 3x the page for 3x the scan is the trade that survives a one-in-three hit
+rate; 10x did not. Measured on one model family (Q2–Q4 local); a stronger model would likely
+reformulate _more_ readily, not less, so do not expect the grep rate to rise with capability.
+
 **Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
 last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always
 among them — see the cross-provider note) and dropped elsewhere. Unbounded, a thinking model

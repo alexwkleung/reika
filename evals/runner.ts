@@ -6,7 +6,7 @@ import { runTurn } from '../src/agent/loop.js';
 import { loadConfig } from '../src/config.js';
 import { bootstrap } from '../src/context/bootstrap.js';
 import { PayloadStore } from '../src/store/payloads.js';
-import { defaultTools } from '../src/tools/index.js';
+import { defaultTools, planTools } from '../src/tools/index.js';
 import type { Message } from '../src/types.js';
 
 import type { AssertResult, Fixture } from './types.js';
@@ -16,8 +16,11 @@ import { fixture as f2 } from './fixtures/02-grep.js';
 import { fixture as f3 } from './fixtures/03-read.js';
 import { fixture as f4 } from './fixtures/04-edit.js';
 import { fixture as f5 } from './fixtures/05-write.js';
+import { fixture as f6 } from './fixtures/06-grep-spill-aggregable.js';
+import { fixture as f7 } from './fixtures/07-glob-spill.js';
+import { fixture as f8 } from './fixtures/08-grep-spill-noshell.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {
@@ -38,7 +41,7 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
 
     const config = loadConfig();
     const bundle = await bootstrap(cwd, config.repoMapBudget);
-    const tools = defaultTools(config);
+    const tools = fix.tools === 'plan' ? planTools() : defaultTools(config);
     const payloads = new PayloadStore();
     const messages: Message[] = [];
 
@@ -88,9 +91,19 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
 }
 
 async function main(): Promise<void> {
+  // `npm run eval -- spill` runs only matching fixtures. A local quantized model takes minutes
+  // per fixture, so re-running one under test shouldn't cost the whole suite.
+  const filters = process.argv.slice(2).filter(a => !a.startsWith('-'));
+  const selected =
+    filters.length > 0 ? FIXTURES.filter(f => filters.some(q => f.name.includes(q))) : FIXTURES;
+  if (selected.length === 0) {
+    process.stdout.write(`no fixture matches ${filters.join(', ')}\n`);
+    process.exit(1);
+  }
+
   const records: RunRecord[] = [];
-  for (const fix of FIXTURES) {
-    process.stdout.write(`  ${fix.name.padEnd(20)} … `);
+  for (const fix of selected) {
+    process.stdout.write(`  ${fix.name.padEnd(24)} … `);
     try {
       const rec = await runFixture(fix);
       records.push(rec);
