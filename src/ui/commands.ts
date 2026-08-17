@@ -1,4 +1,5 @@
 import type { Message, Mode } from '../types.js';
+import { parsePlanSteps } from '../agent/plantrack.js';
 
 // Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
 export type { Mode };
@@ -64,9 +65,17 @@ export function buildImplementPrompt(extra: string): string {
   return trimmed ? `${base}\n\nAdditional guidance: ${trimmed}` : base;
 }
 
-// Whether a turn produced a finalized plan — the marker loop.ts stamps on a plan-mode turn's
-// closing assistant message. Vibe mode gates its implement phase on this, so an aborted or
-// dead-ended plan turn never chains into edits.
+// Whether a turn produced a plan worth acting on. The `planFinal` marker alone is not that:
+// loop.ts stamps it on ANY final plan-mode message, including a force-write that ended a spiral,
+// so "the plan turn finished" and "there is a plan" are different claims (#126). Requiring at
+// least one parsed step is the same 0-step definition `seedPlanProgress` has always used — a
+// message with no steps yields no checklist, and it should not yield an implementation either.
+//
+// Deliberately no stricter than that (a step naming no file is still a step): a plan can be
+// legitimate without quoting paths, and the failure this guards is a spiral's output, which has
+// no numbered steps at all.
 export function planWritten(messages: Message[]): boolean {
-  return messages.some(m => m.role === 'assistant' && !!m.planFinal);
+  return messages.some(
+    m => m.role === 'assistant' && !!m.planFinal && parsePlanSteps(m.content ?? '').length > 0,
+  );
 }
