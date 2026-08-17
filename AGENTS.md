@@ -163,7 +163,7 @@ Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if pre
 
 If the tool produces a diff (e.g., `edit`, `write`), include it on the `ToolResult` via `diff: { text, path, added, removed }`. The loop attaches it to the tool message, and `Scrollback` renders the diff under the summary via `DiffView` so the user can see what was actually applied. The diff text uses the `+ `/`- `/`  ` line-prefix format produced by `buildEditDiff` / `buildWriteDiff`.
 
-If the tool ran a shell command (e.g., `bash`), include `command: { text, outputTail, outputTruncated }` on the result. The loop attaches it to the tool message; `Scrollback` renders the command as a `$ <command>` line followed by the last ~10 lines / 2KB of output (with a truncation marker if more existed). Used so the user can reconstruct what auto-approved bash calls actually executed and produced.
+If the tool ran a shell command (e.g., `bash`), include `command: { text, outputTail, outputTruncated }` on the result. The loop attaches it to the tool message; `Scrollback` renders the command as a `$ <command>` line followed by the last ~10 lines / 2KB of the run's **end** (preceded by an "earlier output omitted" marker when anything came before). Used so the user can reconstruct what auto-approved bash calls actually executed and produced.
 
 **Auto-approve modes:** `REIKA_AUTO_APPROVE` parses to one of three modes (`config.autoApprove: 'off' | 'safe' | 'bypass'`, see `parseAutoApprove` in `config.ts`). `safe` (also `true`/`1`) auto-approves ordinary actions but lets dangerous-pattern commands fall through to the prompt — the warnings break-glass short-circuits inside `requestApproval`. `bypass` (also `yolo`) skips the gate entirely (App passes `requestApproval: undefined` to `runTurn`), so nothing prompts. `off` confirms everything. The session-level toggle (`/approvals on`, or the "Always (this session)" choice during a prompt) flips `sessionAutoApprove`, which grants the same `safe` behavior. Env always wins; the slash command is a no-op when env forces a mode. Status bar shows a yellow `auto approve` indicator under `safe`, and a red `bypass approvals` indicator under `bypass`.
 
@@ -329,9 +329,18 @@ byte-exact (whole chunks drop off the front, retaining between 4MB and 4MB + one
 a chunk edge is no more a line edge than a byte-exact cut would be. On a run bigger than the window
 the payload is the head and the file is the tail with a gap between, and the footer says so
 ("the middle was dropped") instead of claiming a full result: a model told the file is complete
-will not think to doubt a gap in it. The UI's `outputTail` chip still comes from the payload head,
-deliberately untouched — the locator is a model-facing channel and should not move what the user
-sees under the command.
+will not think to doubt a gap in it.
+
+**The UI chip shows the end of the run too**, from its own small always-on window
+(`UI_TAIL_BYTES`, 4KB) rather than from the spill window — so it is honest with `REIKA_SPILL` off,
+and the user's view does not depend on whether the model's artifact was written. It used to be
+built from the capped payload, which meant a truncated run showed the last ten lines of the first
+64KB: content from the _middle_ of the run, printed where a reader looks for how it ended. Nothing
+about it was false (the marker did say output was omitted) but on `npm test` it showed test 4300 of
+9000 instead of the failure. The omission marker moved above the lines and became
+"…(earlier output omitted)" to match: the tail is the end, so whatever was dropped came before it.
+The two channels now legitimately disagree — the model gets the head plus a locator, the user gets
+the end — which is the right split, since only one of them can follow a path to the rest.
 
 Measured (`evals/fixtures/09-10`, 3 runs each on `kat-coder-qq2`): follow-through is not the
 problem. Five of six spill-on runs reached the artifact, and all three one-shot runs read it as the
