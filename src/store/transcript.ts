@@ -172,8 +172,9 @@ function renderMessageTxt(msg: Message): string | null {
       if (msg.diff) lines.push(indent(msg.diff.text, 4));
       if (msg.command) {
         lines.push(`    $ ${msg.command.text}`);
+        // Marker first: the tail is the end of the run, so the omission is before it, not after.
+        if (msg.command.outputTruncated) lines.push('    …(earlier output omitted)');
         if (msg.command.outputTail) lines.push(indent(msg.command.outputTail, 4));
-        if (msg.command.outputTruncated) lines.push('    …(more output omitted)');
       }
       return lines.join('\n');
     }

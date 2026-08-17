@@ -57,7 +57,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 2. If it mutates files or runs commands, gate it via `ctx.requestApproval` — never skip the gate
 3. Register in `src/tools/index.ts`'s `defaultTools(config)`. If the tool needs a credential or endpoint, branch on the config (env-var-gated registration — keeps the system prompt lean for users who haven't opted in)
 4. Description must be short and action-oriented (small models pay for every token in the system prompt)
-5. Add an eval fixture in `evals/fixtures/` if behavior is testable
+5. Unit-test the logic the wrapper adds (caps, windows, footers — not the syscall), and add an eval fixture only if the question is whether a _model_ uses the tool correctly. See "Choosing a test instrument"
 
 ## Optional tools and provider abstractions
 
@@ -163,7 +163,7 @@ Mutating tools (`edit`, `write`, `bash`) MUST honor `ctx.requestApproval` if pre
 
 If the tool produces a diff (e.g., `edit`, `write`), include it on the `ToolResult` via `diff: { text, path, added, removed }`. The loop attaches it to the tool message, and `Scrollback` renders the diff under the summary via `DiffView` so the user can see what was actually applied. The diff text uses the `+ `/`- `/`  ` line-prefix format produced by `buildEditDiff` / `buildWriteDiff`.
 
-If the tool ran a shell command (e.g., `bash`), include `command: { text, outputTail, outputTruncated }` on the result. The loop attaches it to the tool message; `Scrollback` renders the command as a `$ <command>` line followed by the last ~10 lines / 2KB of output (with a truncation marker if more existed). Used so the user can reconstruct what auto-approved bash calls actually executed and produced.
+If the tool ran a shell command (e.g., `bash`), include `command: { text, outputTail, outputTruncated }` on the result. The loop attaches it to the tool message; `Scrollback` renders the command as a `$ <command>` line followed by the last ~10 lines / 2KB of the run's **end** (preceded by an "earlier output omitted" marker when anything came before). Used so the user can reconstruct what auto-approved bash calls actually executed and produced.
 
 **Auto-approve modes:** `REIKA_AUTO_APPROVE` parses to one of three modes (`config.autoApprove: 'off' | 'safe' | 'bypass'`, see `parseAutoApprove` in `config.ts`). `safe` (also `true`/`1`) auto-approves ordinary actions but lets dangerous-pattern commands fall through to the prompt — the warnings break-glass short-circuits inside `requestApproval`. `bypass` (also `yolo`) skips the gate entirely (App passes `requestApproval: undefined` to `runTurn`), so nothing prompts. `off` confirms everything. The session-level toggle (`/approvals on`, or the "Always (this session)" choice during a prompt) flips `sessionAutoApprove`, which grants the same `safe` behavior. Env always wins; the slash command is a no-op when env forces a mode. Status bar shows a yellow `auto approve` indicator under `safe`, and a red `bypass approvals` indicator under `bypass`.
 
@@ -334,9 +334,18 @@ byte-exact (whole chunks drop off the front, retaining between 4MB and 4MB + one
 a chunk edge is no more a line edge than a byte-exact cut would be. On a run bigger than the window
 the payload is the head and the file is the tail with a gap between, and the footer says so
 ("the middle was dropped") instead of claiming a full result: a model told the file is complete
-will not think to doubt a gap in it. The UI's `outputTail` chip still comes from the payload head,
-deliberately untouched — the locator is a model-facing channel and should not move what the user
-sees under the command.
+will not think to doubt a gap in it.
+
+**The UI chip shows the end of the run too**, from its own small always-on window
+(`UI_TAIL_BYTES`, 4KB) rather than from the spill window — so it is honest with `REIKA_SPILL` off,
+and the user's view does not depend on whether the model's artifact was written. It used to be
+built from the capped payload, which meant a truncated run showed the last ten lines of the first
+64KB: content from the _middle_ of the run, printed where a reader looks for how it ended. Nothing
+about it was false (the marker did say output was omitted) but on `npm test` it showed test 4300 of
+9000 instead of the failure. The omission marker moved above the lines and became
+"…(earlier output omitted)" to match: the tail is the end, so whatever was dropped came before it.
+The two channels now legitimately disagree — the model gets the head plus a locator, the user gets
+the end — which is the right split, since only one of them can follow a path to the rest.
 
 Measured (`evals/fixtures/09-10`, 3 runs each on `kat-coder-qq2`): follow-through is not the
 problem. Five of six spill-on runs reached the artifact, and all three one-shot runs read it as the
@@ -356,6 +365,20 @@ character out of the ~100-character temp path (`…sz0b2wbh…` → `…sz02wbh�
 correctly again. Roughly 100 characters of tmpdir hash + `reika-spill-<pid>-<8 hex>` +
 `<name>-<6 hex>.txt` is a lot of exact copying to ask of a Q2 model, and grep/glob hand out the
 same shape.
+
+**Spill stats (`REIKA_SPILL_STATS=1`, off by default — `tools/_spillstats.ts`)** answer the one
+question the fixtures cannot. An eval shows that a model follows a locator when the answer is only
+in the artifact; it cannot show what share of a real week's `bash` calls exceed 64KB at all, and
+that is what decides whether a retained window is sized right or is provisioned for a case that
+fires twice a month. One JSON line per over-cap result (`tool`, `total`, `shown`, `spilled`, and
+for bash whether the window held the whole run) plus one per call that opens an artifact, appended
+to `~/.config/reika/spill-stats.jsonl`. Sizes and tool names only — never output. Deliberately not
+on `debugLog`: that sink truncates per session (#114) and turns on a flood of unrelated
+diagnostics, and a passive week-long measurement needs a file that costs nothing to leave enabled.
+JSONL rather than a tally because the distribution is the point — "how big" and "how often" need
+the individual sizes. The `capped` events without matching `followed` events are the interesting
+ratio: windows retained for nothing. Bash records its event whether or not `REIKA_SPILL` is on,
+since over-cap frequency is a property of the workload rather than of the flag.
 
 **Over-cap glob pages are sampled, not the head** (`glob.ts` `sampleAcrossEntries`). A capped page
 sorted lexicographically is one alphabetical _region_ of the tree, not a view of it: on a 2300-file
@@ -512,9 +535,46 @@ Two supporting pieces in `Input.tsx`, both needed because Ink has no bracketed-p
   height the box renders a window around the cursor and says how many lines it's hiding, so no
   path (repeated sub-threshold pastes, a long typed buffer) can push the frame over the ceiling.
 
+## Choosing a test instrument
+
+Four instruments, and picking the wrong one is the usual way time gets lost here. **Most questions
+about this repo need no model at all.** The rule of thumb: a log tells you the _mechanism_, and
+repetition tells you the _rate_ — so if the question is "does X happen", instrument it; if it is
+"how often", repeat it; if it is "is this function right", just test it.
+
+| Instrument                                               | Answers                                                             | Cost                       | Picking it wrong looks like                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| **Vitest unit / render test**                            | Given this input, does the module or component do the right thing?  | milliseconds, runs in CI   | Spending a model run to check a string, a slice boundary, or JSX order   |
+| **Eval fixture** (`npm run eval`)                        | Does a real model _use_ the affordance — follow a locator, recover? | minutes per run, needs 3+  | An n=1 conclusion; or evaluating logic that has one deterministic answer |
+| **pty drive** (`.claude/skills/verify`)                  | Does the whole app render and behave this way in a real terminal?   | a few minutes of setup     | Substituting a render test for keyboard, modal, or abort flows           |
+| **Instrumentation** (`REIKA_DEBUG`, `REIKA_SPILL_STATS`) | How often, and how big, in _real_ use?                              | days of passive collection | Trying to infer a rate from a fixture — a corpus you built cannot        |
+
+The boundaries that actually bite:
+
+- **An eval cannot answer a frequency question.** `evals/fixtures/09-10` show a model follows a
+  spill locator when the answer is only in the artifact; nothing in them says what share of a
+  week's `bash` calls exceed 64KB, which is the number that sizes the window. That is why
+  `REIKA_SPILL_STATS` exists — see the spill section.
+- **A render test is not a substitute for driving the app**, only for the part it covers. The
+  bash chip's tail has a render test _and_ was driven end to end, because "does this Box order its
+  children correctly" and "does a real 109KB run reach that Box" are different claims. Reach for
+  the pty when the change is what the user _sees_.
+- **A fixture's corpus is a choice, and it shows.** A cheap script makes re-running free, so a
+  model routes around the artifact and is _right_ to; the same prompt against a 90-second suite
+  would not. Build the arm that removes the escape (`10-bash-spill-oneshot`) rather than reading a
+  route-around as a failure.
+- **Q2–Q3 models have high run-to-run variance** — byte-identical inputs produce 52 / 16 / 6 tool
+  calls. Judge any eval change over 3+ runs; a single run is an anecdote.
+
 ## Tests (Vitest)
 
-`npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
+`npm test` runs the unit suite (~5s, ~1000 tests across ~78 files). What earns a test: pure logic
+with edge cases (parsers, matchers, path math, aging/dedup rules), a bug you just fixed, and any
+_rendered_ output whose shape matters (Ink components have render tests via `ink-testing-library`
+— see `Scrollback.render.test.tsx` for the pattern, including how to pin viewport width).
+
+Representative of the bug-prone core rather than an inventory — the suite is far larger than any
+list worth maintaining here:
 
 - `src/provider/toolcall.ts` — `messagesToOpenAI` (assistant content nulling, tool message `name` field, payload aging)
 - `src/provider/client.ts` — `sanitizeToolName`, `extractToolCallsFromContent`
@@ -528,9 +588,16 @@ Two supporting pieces in `Input.tsx`, both needed because Ink has no bracketed-p
 - `src/ui/clipboard.ts` — parsing AppleScript's `«data PNGf…»` literal
 - `src/search/searxng.ts` — provider request shape + response normalization (fetch mocked)
 
-**Not covered (deliberately):** UI components (Ink testing is awkward; evals own end-to-end behavior), tools that wrap node fs/process (read/list/grep/edit/write/bash — shallow wrappers), the agent loop itself (evals territory).
+**Thin by design, not by policy:** `list.ts`, `write.ts`, and `_walk.ts` are shallow wrappers over
+node fs whose behavior is the syscall's — a test there restates the standard library. Everything
+else in `tools/` has one, because the moment a wrapper grows a cap, a window, or a footer it stops
+being thin (`bash.ts` is the worked example: shallow until it had a payload cap, a tail window and
+a spill footer to get wrong).
 
-**When editing a covered module, run `npm test` before declaring done.** Tests catch regressions evals can't (evals only run when a real model invokes the broken path).
+**When editing a covered module, run `npm test` before declaring done** — and prefer `npm run check`,
+which adds typecheck, lint, and format. Tests catch regressions evals can't: an eval only exercises
+a path when a real model chooses to invoke it, so a broken branch can pass an eval by never
+running.
 
 ## Skills
 
@@ -566,12 +633,25 @@ This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatToo
 
 ## Eval workflow
 
-`npm run eval` runs all fixtures sequentially against the configured model. Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
+`npm run eval` runs all fixtures sequentially against the configured model; `npm run eval -- <substring>`
+runs only matching ones, which is what you want while iterating — a local quantized model takes
+minutes per fixture. `REIKA_MODEL=<id> npm run eval -- <name>` pins the model, and comparing against
+a recorded result means pinning the same one (the spill fixtures were measured on `kat-coder-qq2`).
+Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
 
 1. New file in `evals/fixtures/NN-name.ts` exporting a `Fixture`
 2. Import + add to the `FIXTURES` array in `evals/runner.ts`
 
-Eval timeouts use the same `AbortController` pattern as the user-side abort.
+**Write the assertion's failure reason to be read, not just to fail.** These runs are expensive and
+non-deterministic, so a bare false throws away the run: say what the model did _instead_
+(`_checkerlog.ts` distinguishes "re-ran the command" from "routed around it" from "answered from
+the head"), and report a correct answer reached the wrong way as exactly that. A fixture is a
+record of a finding as much as a gate — several here are expected to fail and are kept for what the
+failure documents (`06-grep-spill-aggregable`).
+
+Eval timeouts use the same `AbortController` pattern as the user-side abort. Budget generously: a
+capped result plus a paged artifact read runs long on a quantized model, and the 5-minute default
+reports a timeout instead of an outcome.
 
 ## Things to avoid
 

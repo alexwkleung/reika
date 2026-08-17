@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import { recordCapped } from './_spillstats.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
 const OUTPUT_TAIL_LINES = 10;
+// Retained for the UI chip's last-lines view. Larger than OUTPUT_TAIL_BYTES so the slice to 10
+// lines always has enough to work with even when lines are long, and small enough to be free.
+const UI_TAIL_BYTES = 4 * 1024;
 // How much output the spill buffer retains. Big enough that an ordinary build or test run spills
 // complete; small enough that a runaway `yes` can't grow the process without bound. Only the
 // retained window is held — the drain itself never stops, which is the whole point.
@@ -90,6 +94,10 @@ export function execStream(
     // case that motivates spilling bash at all — a long test or build run — puts the failure at the
     // end, which is exactly what head-truncation throws away.
     const tail = new TailWindow(SPILL_MAX_BYTES);
+    // A second, tiny window for the UI chip, always on and independent of REIKA_SPILL. The chip
+    // shows the END of a run (see buildCommandDisplay), and a user watching a build deserves that
+    // whether or not the model's artifact was written.
+    const uiTail = new TailWindow(UI_TAIL_BYTES);
     // Every byte the process wrote, retained or not. `totalBytes` stops at the payload cap, so it
     // can't answer "of how many?" once truncation kicks in.
     let rawBytes = 0;
@@ -98,6 +106,7 @@ export function execStream(
       const text = chunk.toString('utf8');
       ctx.onProgress?.(text);
       rawBytes += text.length;
+      uiTail.push(text);
       if (spilling) tail.push(text);
       if (totalBytes >= MAX_PAYLOAD_BYTES) return;
       const remaining = MAX_PAYLOAD_BYTES - totalBytes;
@@ -119,9 +128,9 @@ export function execStream(
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
       const base = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
-      // The UI's tail chip stays built from the payload head, per #139 — the spill locator is a
-      // model-facing channel and shouldn't move what the user sees under the command.
-      const display = buildCommandDisplay(command, rawOutput);
+      // Built from the retained tail, not the payload head: the chip is the user's answer to "how
+      // did it end?", which the head cannot give once a run passes the cap.
+      const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
       // The real size, unconditionally. `totalBytes` stops counting at the payload cap, so with
       // spill off the summary told the model a 234KB run "produced 65536 bytes" — a claim about
       // the command's output, not about how much of it we kept, and false either way. This was
@@ -150,6 +159,19 @@ export function execStream(
           });
         }
       };
+      // Recorded whether or not spilling is on: the question this answers is how often bash
+      // output exceeds the cap at all, which is a property of the workload, not of the flag.
+      if (rawBytes > MAX_PAYLOAD_BYTES) {
+        recordCapped({
+          tool: 'bash',
+          total: rawBytes,
+          shown: totalBytes,
+          spilled: spilling,
+          // Whether the 4MB window held the whole run. A stream of `complete: false` lines is the
+          // evidence that SPILL_MAX_BYTES is too small; none of them means it is generous.
+          complete: spilling ? tail.bytes >= rawBytes : undefined,
+        });
+      }
       // Nothing was held back (or spilling is off): the ordinary result, byte-identical to the
       // pre-spill behavior so the flag is a clean A/B — including staying synchronous.
       if (!spilling || rawBytes <= MAX_PAYLOAD_BYTES) {
@@ -158,7 +180,7 @@ export function execStream(
       }
       void (async () => {
         const complete = tail.bytes >= rawBytes;
-        const ref = await spillResult('bash-output', tail.text());
+        const ref = await spillResult('bash', tail.text());
         const shared = { shown: totalBytes, total: String(rawBytes), unit: 'bytes' };
         done(
           base +
@@ -187,7 +209,7 @@ export function execStream(
       resolve({
         summary: `Bash failed: ${command} (${err.message})`,
         payload: buffer.join('') || err.message,
-        command: buildCommandDisplay(command, buffer.join('') || err.message),
+        command: buildCommandDisplay(command, buffer.join('') || err.message, false),
       });
     });
   });
@@ -209,16 +231,30 @@ function searchHint(command: string, output: string): string {
   );
 }
 
+// The chip under a command in the TUI: its last few lines, and whether anything came before them.
+//
+// `retained` must be the END of the run, not the head the payload keeps. It used to be fed the
+// capped payload, so a truncated command showed the last 10 lines of the first 64KB — content from
+// the MIDDLE of the run, presented where a reader looks for how it ended. Nothing about that was
+// false (the marker did say more was omitted), but on `npm test` it meant showing test 4300 of
+// 9000 instead of the failure. The end is what a human wants for the same reason the model does.
+//
+// `omittedEarlier` covers the bytes dropped before the retained window, which the window itself
+// cannot see — without it a full 4KB window looks indistinguishable from a 4KB run.
 function buildCommandDisplay(
   command: string,
-  output: string,
+  retained: string,
+  omittedEarlier: boolean,
 ): { text: string; outputTail: string; outputTruncated: boolean } {
-  if (!output) return { text: command, outputTail: '', outputTruncated: false };
+  if (!retained) return { text: command, outputTail: '', outputTruncated: false };
   const byteTail =
-    output.length > OUTPUT_TAIL_BYTES ? output.slice(output.length - OUTPUT_TAIL_BYTES) : output;
+    retained.length > OUTPUT_TAIL_BYTES
+      ? retained.slice(retained.length - OUTPUT_TAIL_BYTES)
+      : retained;
   const lines = byteTail.split('\n');
   const lineTail = lines.slice(-OUTPUT_TAIL_LINES);
-  const outputTruncated = output.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
+  const outputTruncated =
+    omittedEarlier || retained.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
   return { text: command, outputTail: lineTail.join('\n'), outputTruncated };
 }
 

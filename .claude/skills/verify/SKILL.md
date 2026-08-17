@@ -70,7 +70,7 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 value)` at the top of Input's `useInput` to see how each chunk was parsed.
 
 - Confirm the keystrokes landed before submitting: `expect -timeout 10 "<the text you
-  typed>"` after the `send -s`, then send `"\r"` on its own. A submit that silently did
+typed>"` after the `send -s`, then send `"\r"` on its own. A submit that silently did
   not happen looks exactly like a model that did not answer.
 
 ## Flows worth driving

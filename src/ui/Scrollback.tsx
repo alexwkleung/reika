@@ -251,10 +251,13 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
             </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
-                <Text color={theme.muted}>{redactSecrets(scrubPaths(msg.command.outputTail))}</Text>
+                {/* Above the lines, not below: these are the LAST lines of the run, so whatever
+                    was dropped came before them. The marker used to sit underneath, which read
+                    correctly when the chip showed the head and would now be backwards. */}
                 {msg.command.outputTruncated ? (
-                  <Text color={theme.muted}>…(more output omitted)</Text>
+                  <Text color={theme.muted}>…(earlier output omitted)</Text>
                 ) : null}
+                <Text color={theme.muted}>{redactSecrets(scrubPaths(msg.command.outputTail))}</Text>
               </Box>
             ) : null}
           </Box>
