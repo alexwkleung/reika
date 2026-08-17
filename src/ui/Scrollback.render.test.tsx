@@ -237,3 +237,38 @@ describe('Scrollback live-region height', () => {
     }
   });
 });
+
+// The command chip's omission marker. `outputTail` is now the END of a run (tools/bash.ts), so the
+// bytes that were dropped came BEFORE it — the marker has to sit above the lines. It used to sit
+// below, which read correctly when the chip showed the head and would now be backwards.
+describe('Scrollback command chip', () => {
+  const chipFrame = (outputTruncated: boolean): string[] => {
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        callId: 't1',
+        summary: 'Ran: npm test',
+        command: { text: 'npm test', outputTail: 'FAIL src/a.test.ts\n1 failed', outputTruncated },
+      },
+    ];
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return (lastFrame() ?? '').split('\n').map(l => l.trim());
+  };
+
+  it('puts the omission marker above the tail, not below it', () => {
+    const lines = chipFrame(true);
+    const marker = lines.findIndex(l => l.includes('earlier output omitted'));
+    const tail = lines.findIndex(l => l.includes('FAIL src/a.test.ts'));
+    expect(marker).toBeGreaterThanOrEqual(0);
+    expect(tail).toBeGreaterThan(marker);
+    expect(lines.join('\n')).not.toContain('more output omitted');
+  });
+
+  it('shows no marker when the whole output is on screen', () => {
+    const lines = chipFrame(false);
+    expect(lines.join('\n')).not.toContain('omitted');
+    expect(lines.some(l => l.includes('FAIL src/a.test.ts'))).toBe(true);
+  });
+});

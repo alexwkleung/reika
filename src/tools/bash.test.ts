@@ -506,3 +506,38 @@ describe('execStream — spill', () => {
     expect(head(on.payload ?? '')).toBe(head(off.payload ?? ''));
   });
 });
+
+// The chip under a command in the TUI. It used to be built from the capped payload, so a truncated
+// run showed the last 10 lines of the first 64KB — the middle of the run, where a reader looks for
+// how it ended. It now comes from a small always-on tail window, independent of REIKA_SPILL.
+describe('execStream — command chip', () => {
+  const cwd = process.cwd();
+
+  it('shows the end of a truncated run, not the end of the payload head', async () => {
+    delete process.env.REIKA_SPILL;
+    const result = await execStream('seq 1 20000', { cwd });
+    const chip = result.command!;
+
+    expect(chip.outputTail.trimEnd().endsWith('20000')).toBe(true);
+    expect(chip.outputTruncated).toBe(true);
+    // The payload still holds the head — the two channels now legitimately disagree, which is the
+    // whole point: the model gets the start (plus a locator), the user gets the end.
+    expect(result.payload).not.toContain('\n20000');
+  });
+
+  it('shows short output whole, with no omission marker', async () => {
+    const result = await execStream('printf "a\\nb\\nc\\n"', { cwd });
+    expect(result.command!.outputTail).toBe('a\nb\nc\n');
+    expect(result.command!.outputTruncated).toBe(false);
+  });
+
+  it('marks omission when more lines ran than the chip shows, even under the byte cap', async () => {
+    const result = await execStream('seq 1 50', { cwd });
+    const chip = result.command!;
+    expect(chip.outputTail.trimEnd().endsWith('50')).toBe(true);
+    // 9, not 10: output ends with a newline, so the empty string after it takes one of the ten
+    // slots. Pre-existing cosmetic behavior of the line slice, pinned here rather than changed.
+    expect(chip.outputTail.split('\n').filter(Boolean)).toHaveLength(9);
+    expect(chip.outputTruncated).toBe(true);
+  });
+});
