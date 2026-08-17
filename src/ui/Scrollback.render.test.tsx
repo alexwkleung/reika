@@ -75,14 +75,15 @@ describe('Scrollback tool-call label', () => {
   });
 });
 
-describe('Scrollback system-message tone', () => {
-  const frameFor = (msg: Message): string => {
-    const { lastFrame } = render(
-      <Scrollback messages={[msg]} streaming="" streamingReasoning="" streamingTool="" />,
-    );
-    return lastFrame() ?? '';
-  };
+// Render one message on its own and return the frame. Shared by the scrub/tone suites below.
+const frameFor = (msg: Message): string => {
+  const { lastFrame } = render(
+    <Scrollback messages={[msg]} streaming="" streamingReasoning="" streamingTool="" />,
+  );
+  return lastFrame() ?? '';
+};
 
+describe('Scrollback system-message tone', () => {
   it('marks a warn notice (truncation retry) with the recycle glyph', () => {
     const frame = frameFor({
       role: 'system',
@@ -115,6 +116,33 @@ describe('Scrollback system-message tone', () => {
     const frame = frameFor({ role: 'error', content: `save failed: EACCES ${homedir()}/x.jsonl` });
     expect(frame).toContain('save failed: EACCES ~/x.jsonl');
     expect(frame).not.toContain(homedir());
+  });
+});
+
+// Shell mode ran the same commands as the bash tool through the same terminal but rendered them
+// with neither scrubber — so `security find-identity` in /shell printed an identity that the bash
+// tool would have redacted, and `pwd` printed the home path every other line collapses. The
+// transcript already scrubbed shell messages on save; the UI was the half that hadn't caught up.
+describe('Scrollback shell-mode scrubbing', () => {
+  it('collapses $HOME in a shell command and its output', () => {
+    const frame = frameFor({
+      role: 'shell',
+      command: `ls ${homedir()}/Downloads`,
+      output: `${homedir()}/Downloads/a.dmg`,
+    });
+    expect(frame).toContain('~/Downloads');
+    expect(frame).not.toContain(homedir());
+  });
+
+  it('redacts a signing identity in shell output', () => {
+    const frame = frameFor({
+      role: 'shell',
+      command: 'security find-identity -v -p codesigning',
+      output: '  1) "Developer ID Application: Jane Dev (AB12CD34EF)"',
+    });
+    expect(frame).toContain('<redacted>');
+    expect(frame).not.toContain('Jane Dev');
+    expect(frame).not.toContain('AB12CD34EF');
   });
 });
 

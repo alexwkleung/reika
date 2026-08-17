@@ -42,6 +42,10 @@ export const COMMANDS: CommandSpec[] = [
     desc: 'pick a model/profile interactively (/model <name> switches directly, even to a model not in your config)',
   },
   { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
+  {
+    name: 'anon',
+    desc: 'show/toggle anonymized display — hides your name, email, and account slugs (on|off)',
+  },
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
   { name: 'skills', desc: 'list available skills (loaded from skills dirs)' },

@@ -296,4 +296,8 @@ export type Config = {
   // Let a confidently-matched skill rewrite the prompt instead of only being suggested
   // (REIKA_SKILL_AUTO=1, default off, experimental). See skillmatch.ts.
   skillAuto: boolean;
+  // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in
+  // the scrollback and saved transcripts (REIKA_ANON=1, default off). Display only — the model
+  // still receives everything verbatim. See ui/identity.ts.
+  anon: boolean;
 };

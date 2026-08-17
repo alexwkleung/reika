@@ -599,6 +599,30 @@ which adds typecheck, lint, and format. Tests catch regressions evals can't: an 
 a path when a real model chooses to invoke it, so a broken branch can pass an eval by never
 running.
 
+### Fixtures use generic identities, not the author's
+
+Test fixtures, eval prompts, and code comments are committed and public-facing. Keep real personal
+data out of them: no `/Users/<name>/…` paths, no real names, emails, GitHub/HuggingFace handles, no
+private project names. Reach for the conventional placeholders instead — `octocat`, `Mona Lisa`,
+`octocat@example.com`, `~/…` or `/repo/…` for paths, `example.com`/`example.net` for hosts.
+
+The trap is that this material arrives honestly: you debug against your own machine, the real
+values are what you have in hand, and a fixture written from a live transcript or a probe carries
+them straight into the repo. `src/ui/identity.test.ts` was written this way first — a test suite
+for the anonymization feature, fixtured with the author's actual handle and both email addresses.
+
+Two exceptions, both about asserting behavior rather than naming a person:
+
+- **Environment-derived values.** A test that needs the real `$HOME` should call `homedir()` and
+  build the expectation from it, never hardcode this machine's layout. See the `scrubDisplay layer
+order` suite — it derives the username from `$HOME` so the assertion is about ordering, not about
+  whose laptop ran it.
+- **Third-party names that are the point.** `anthropics/claude-code` and `Qwen/Qwen3-30B` appear
+  verbatim in `identity.test.ts` precisely because the test asserts they are _not_ scrubbed.
+
+When genericizing, sweep case-insensitively and include comments and doc prose, not just string
+literals — the leftovers are usually a lowercased handle inside an explanatory comment.
+
 ## Skills
 
 Markdown files in `~/.config/reika/skills/` (global) and `<cwd>/.reika/skills/` (project) load as slash commands at bootstrap. Two layouts supported: a flat `name.md` file, or a directory `name/SKILL.md` (Claude Code convention — lets a skill carry supporting files which we ignore). Loader in `src/skills.ts`; bootstrap attaches the resulting `Skill[]` to `bundle.skills`. App.tsx `handleCommand` falls through to skill dispatch when no built-in matches — built-ins always shadow skill names.
@@ -641,6 +665,11 @@ Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
 
 1. New file in `evals/fixtures/NN-name.ts` exporting a `Fixture`
 2. Import + add to the `FIXTURES` array in `evals/runner.ts`
+
+Fixture `setup` files and prompts are committed source — genericize them the same way unit-test
+fixtures are (see [Fixtures use generic identities](#fixtures-use-generic-identities-not-the-authors)).
+An eval built from a real session is the likeliest place for a home path or a private repo name to
+slip in, because the transcript it came from was real.
 
 **Write the assertion's failure reason to be read, not just to fail.** These runs are expensive and
 non-deterministic, so a bare false throws away the run: say what the model did _instead_

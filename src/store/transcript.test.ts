@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message } from '../types.js';
 import {
@@ -88,6 +88,68 @@ describe('serializeJsonl', () => {
   it('preserves secrets verbatim when redact:false', () => {
     const msg: Message = { role: 'user', content: 'appleId=me@x.com' };
     expect(serializeJsonl([msg], META, { redact: false })).toContain('me@x.com');
+  });
+});
+
+// A saved transcript is the artifact that actually gets shared, so it must scrub paths at least
+// as hard as the scrollback does.
+describe('transcript path scrubbing', () => {
+  const HOME = homedir();
+
+  it('collapses the cwd prefix in message bodies', () => {
+    const msg: Message = { role: 'system', content: 'wrote /repo/src/a.ts' };
+    expect(renderTxt([msg], META)).toContain('wrote src/a.ts');
+  });
+
+  it('collapses the home prefix in message bodies', () => {
+    const msg: Message = { role: 'error', content: `ENOENT: ${HOME}/notes/x.md` };
+    const txt = renderTxt([msg], META);
+    expect(txt).toContain('~/notes/x.md');
+    expect(txt).not.toContain(HOME);
+  });
+
+  it('scrubs shell commands and output', () => {
+    const msg: Message = { role: 'shell', command: `ls ${HOME}/x`, output: `${HOME}/x/y.ts` };
+    const out = serializeJsonl([msg], META);
+    expect(out).not.toContain(HOME);
+    expect(out).toContain('~/x');
+  });
+
+  it('scrubs tool-call args and payloads', () => {
+    const msg: Message = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'read', args: { path: '/repo/src/deep.ts' } }],
+    };
+    expect(serializeJsonl([msg], META)).toContain('src/deep.ts');
+    expect(serializeJsonl([msg], META)).not.toContain('/repo/src/deep.ts');
+  });
+
+  it('collapses the header cwd to a home-relative form', () => {
+    const msg: Message = { role: 'header', model: 'qwen', cwd: `${HOME}/Git/proj` };
+    const out = serializeJsonl([msg], META);
+    expect(out).not.toContain(HOME);
+    expect(out).toContain('~/Git/proj');
+  });
+
+  it('collapses the meta cwd in both formats without emptying it', () => {
+    const meta = { ...META, cwd: `${HOME}/Git/proj` };
+    expect(renderTxt([], meta)).toContain('# cwd:      ~/Git/proj');
+    expect(JSON.parse(serializeJsonl([], meta).split('\n')[0]).cwd).toBe('~/Git/proj');
+  });
+
+  it('leaves paths verbatim when redact:false', () => {
+    const msg: Message = { role: 'system', content: '/repo/src/a.ts' };
+    const meta = { ...META, cwd: `${HOME}/Git/proj` };
+    expect(renderTxt([msg], meta, { redact: false })).toContain('/repo/src/a.ts');
+    expect(renderTxt([msg], meta, { redact: false })).toContain(`# cwd:      ${HOME}/Git/proj`);
+  });
+
+  it('still redacts secrets when a path sits alongside one', () => {
+    const msg: Message = { role: 'system', content: '/repo/build: appleId=me@x.com' };
+    const txt = renderTxt([msg], META);
+    expect(txt).toContain('build: appleId=<redacted>');
+    expect(txt).not.toContain('/repo/build');
   });
 });
 

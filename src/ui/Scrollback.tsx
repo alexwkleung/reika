@@ -4,8 +4,7 @@ import wrapAnsi from 'wrap-ansi';
 import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
-import { scrubPaths } from './paths.js';
-import { redactSecrets } from './redact.js';
+import { scrubDisplay } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
 import { formatDurationMs } from './format.js';
@@ -130,7 +129,7 @@ function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text color={theme.muted}>{redactSecrets(scrubPaths(shown))}</Text>
+      <Text color={theme.muted}>{scrubDisplay(shown)}</Text>
     </Box>
   );
 }
@@ -161,13 +160,17 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
     return <Header model={msg.model} cwd={msg.cwd} />;
   }
   if (msg.role === 'shell') {
+    // Scrubbed exactly like the bash tool's command/outputTail above. Shell mode runs the same
+    // commands through the same terminal — the only difference is that no model sees them — so
+    // `security find-identity` in /shell must not render an identity the bash tool would redact.
+    // The transcript already redacts shell messages on save; this brings the UI in line with it.
     return (
       <Box flexDirection="column" marginTop={1}>
         <Text>
           <Text color={theme.success}>{'$ '}</Text>
-          <Text>{msg.command}</Text>
+          <Text>{scrubDisplay(msg.command)}</Text>
         </Text>
-        {msg.output ? <Text color={theme.muted}>{msg.output}</Text> : null}
+        {msg.output ? <Text color={theme.muted}>{scrubDisplay(msg.output)}</Text> : null}
       </Box>
     );
   }
@@ -203,7 +206,10 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
         ) : null}
         {msg.sources && msg.sources.length > 0 ? (
           <Box marginTop={1}>
-            <Text color={theme.tool}>{`Sources: ${msg.sources.join(', ')}`}</Text>
+            {/* Fetched URLs are usually public, but this was the one render site running
+                neither scrubber — and a `file://` source or a self-hosted URL carrying the
+                account slug leaks the same way any other line would. */}
+            <Text color={theme.tool}>{scrubDisplay(`Sources: ${msg.sources.join(', ')}`)}</Text>
           </Box>
         ) : null}
         {msg.durationMs !== undefined ? (
@@ -230,7 +236,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               (loop.ts) keeps the verb as grounding. Scoped to Read because other
               tools' verbs ("Found", "Ran:", "Edited") carry meaning. */}
           <Text color={theme.secondary}>
-            {redactSecrets(scrubPaths((msg.summary ?? '').replace(/^Read /, '')))}
+            {scrubDisplay((msg.summary ?? '').replace(/^Read /, ''))}
           </Text>
         </Text>
         {msg.diff ? (
@@ -247,7 +253,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <Text>
               <Text color={theme.success}>{'$ '}</Text>
-              <Text>{redactSecrets(scrubPaths(msg.command.text))}</Text>
+              <Text>{scrubDisplay(msg.command.text)}</Text>
             </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
@@ -257,7 +263,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
                 {msg.command.outputTruncated ? (
                   <Text color={theme.muted}>…(earlier output omitted)</Text>
                 ) : null}
-                <Text color={theme.muted}>{redactSecrets(scrubPaths(msg.command.outputTail))}</Text>
+                <Text color={theme.muted}>{scrubDisplay(msg.command.outputTail)}</Text>
               </Box>
             ) : null}
           </Box>
@@ -281,7 +287,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
             (fs errno strings, save/paste failures), and an error box is the text
             most likely to be screenshotted or pasted into a bug report. `~/…`
             costs nothing diagnostically — only the prefix is rewritten. */}
-        <Text>{scrubPaths(msg.content)}</Text>
+        <Text>{scrubDisplay(msg.content)}</Text>
       </Box>
     );
   }
@@ -303,7 +309,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               Scrub them the same way tool lines are scrubbed so the home prefix doesn't
               leak into scrollback (and screenshots) — display only; the files are still
               written to, and the model still sees, the absolute path. */}
-          {scrubPaths(msg.content)}
+          {scrubDisplay(msg.content)}
         </Text>
       </Box>
     );
@@ -421,7 +427,7 @@ function formatArgs(name: string, args: Record<string, unknown>): string {
   const hidden = HIDDEN_ARGS[name];
   return Object.entries(args)
     .filter(([k]) => !hidden?.has(k))
-    .map(([k, v]) => `${k}=${truncate(redactSecrets(scrubPaths(JSON.stringify(v))), 120)}`)
+    .map(([k, v]) => `${k}=${truncate(scrubDisplay(JSON.stringify(v)), 120)}`)
     .join(', ');
 }
 

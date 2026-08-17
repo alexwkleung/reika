@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { Message, Mode, ToolCall } from '../types.js';
-import { redactSecrets } from '../ui/redact.js';
+import { scrubDisplay } from '../ui/scrub.js';
 import { formatDurationMs } from '../ui/format.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
@@ -71,25 +71,33 @@ function withModes(messages: Message[], meta: TranscriptMeta): FullMeta {
 }
 
 type SerializeOptions = {
-  // Run string fields through the secret redactor before writing. Default true; the /save
-  // --raw escape hatch passes false for a verbatim copy. Applies to both formats identically so
-  // the JSONL and the .txt never disagree about what was scrubbed.
+  // Run string fields through the secret redactor AND the path scrubber before writing. Default
+  // true; the /save --raw escape hatch passes false for a verbatim copy. Applies to both formats
+  // identically so the JSONL and the .txt never disagree about what was scrubbed.
+  //
+  // Paths are scrubbed here for the same reason the TUI scrubs them, only more so: a saved
+  // transcript is the artifact that actually gets shared, where scrollback is the one that
+  // doesn't. Leaving `/Users/<name>/…` in the file while scrubbing it on screen had it backwards.
   redact?: boolean;
 };
 
-// Lossless canonical format: a meta header line, then one JSON object per message. One-record-
-// per-line is what persistent sessions will append to incrementally (crash-safe, no rewrite),
-// and it round-trips back to Message[] via JSON.parse on each line. Full tool payloads are kept
-// here (unlike the .txt and the TUI, which only show summaries) so the record is complete.
+// Canonical format: a meta header line, then one JSON object per message. One-record-per-line is
+// what persistent sessions will append to incrementally (crash-safe, no rewrite), and it
+// round-trips back to Message[] via JSON.parse on each line. Full tool payloads are kept here
+// (unlike the .txt and the TUI, which only show summaries) so the record is structurally complete.
+//
+// "Lossless" only under `redact: false` — the default scrubs secrets and rewrites absolute paths,
+// so a reloaded session would see `~/…` where it once saw `/Users/<name>/…`. That was already true
+// of secret redaction; --raw remains the verbatim path for anything that must round-trip exactly.
 export function serializeJsonl(
   messages: Message[],
   meta: TranscriptMeta,
   opts: SerializeOptions = {},
 ): string {
   const redact = opts.redact !== false;
-  const lines = [JSON.stringify(withModes(messages, meta))];
+  const lines = [JSON.stringify(withModes(messages, redact ? scrubMeta(meta) : meta))];
   for (const msg of messages) {
-    lines.push(JSON.stringify(redact ? redactMessage(msg) : msg));
+    lines.push(JSON.stringify(redact ? redactMessage(msg, meta.cwd) : msg));
   }
   return lines.join('\n') + '\n';
 }
@@ -103,12 +111,13 @@ export function renderTxt(
   opts: SerializeOptions = {},
 ): string {
   const redact = opts.redact !== false;
+  const shownCwd = redact ? scrubMeta(meta).cwd : meta.cwd;
   const out: string[] = [
     '# reika transcript',
     `# saved:    ${meta.savedAt}`,
     `# model:    ${meta.model}`,
     `# base:     ${meta.baseURL}`,
-    `# cwd:      ${meta.cwd}`,
+    `# cwd:      ${shownCwd}`,
     `# messages: ${meta.messageCount}`,
     `# mode:     ${meta.mode} (at save)`,
     // The whole arc up front, so a reader knows what kind of session this was before reading it;
@@ -118,7 +127,7 @@ export function renderTxt(
     '='.repeat(72),
   ];
   for (const raw of messages) {
-    const msg = redact ? redactMessage(raw) : raw;
+    const msg = redact ? redactMessage(raw, meta.cwd) : raw;
     const block = renderMessageTxt(msg);
     if (block !== null) out.push('', block);
   }
@@ -213,9 +222,13 @@ function formatToolCall(tc: ToolCall): string {
   return `  • ${capitalize(tc.name)}(${args})`;
 }
 
-// Deep-copy a message with every human-facing string field run through redactSecrets. Keeps the
-// redaction policy in one place so JSONL and .txt scrub identically.
-function redactMessage(msg: Message): Message {
+// Deep-copy a message with every human-facing string field run through the scrubbers. Keeps the
+// redaction policy in one place so JSONL and .txt scrub identically. `cwd` is the session's
+// working directory, threaded in from the caller's meta rather than read off `process.cwd()` —
+// this module stays pure, and a transcript saved after a `/cd` scrubs against the cwd it was
+// actually recorded under.
+function redactMessage(msg: Message, cwd: string): Message {
+  const red = (s: string) => scrub(s, cwd);
   switch (msg.role) {
     case 'user':
       return {
@@ -228,7 +241,7 @@ function redactMessage(msg: Message): Message {
         ...msg,
         content: red(msg.content),
         ...(msg.reasoning ? { reasoning: red(msg.reasoning) } : {}),
-        ...(msg.toolCalls ? { toolCalls: msg.toolCalls.map(redactToolCall) } : {}),
+        ...(msg.toolCalls ? { toolCalls: msg.toolCalls.map(tc => redactToolCall(tc, cwd)) } : {}),
         ...(msg.sources ? { sources: msg.sources.map(red) } : {}),
       };
     case 'tool':
@@ -249,6 +262,10 @@ function redactMessage(msg: Message): Message {
       };
     case 'shell':
       return { ...msg, command: red(msg.command), output: red(msg.output) };
+    // The header's cwd is an absolute path by construction — it's the one field that leaks the
+    // home prefix even in a transcript whose messages never quote a path.
+    case 'header':
+      return { ...msg, cwd: red(msg.cwd) };
     case 'system':
     case 'error':
     case 'compaction':
@@ -258,16 +275,25 @@ function redactMessage(msg: Message): Message {
   }
 }
 
-function redactToolCall(tc: ToolCall): ToolCall {
+function redactToolCall(tc: ToolCall, cwd: string): ToolCall {
   const args: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(tc.args)) {
-    args[k] = typeof v === 'string' ? red(v) : v;
+    args[k] = typeof v === 'string' ? scrub(v, cwd) : v;
   }
   return { ...tc, args };
 }
 
-function red(s: string): string {
-  return redactSecrets(s);
+// One shared entry point with the TUI, so the saved file and the screen can never disagree about
+// what got scrubbed. See ui/scrub.ts for why the layer order is load-bearing.
+function scrub(s: string, cwd: string): string {
+  return scrubDisplay(s, cwd);
+}
+
+// The meta header carries the absolute cwd on its own. Scrubbing it against itself would empty
+// the field (the cwd-prefix rule needs a trailing separator), so it collapses to `~/…` via the
+// home rule and stays readable.
+function scrubMeta(meta: TranscriptMeta): TranscriptMeta {
+  return { ...meta, cwd: scrub(meta.cwd, meta.cwd) };
 }
 
 function capitalize(s: string): string {

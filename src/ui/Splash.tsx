@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink';
-import { homedir } from 'node:os';
 import { theme } from './theme.js';
+import { displayCwd } from './scrub.js';
 
 const LOGO = [
   '██████╗ ███████╗██╗██╗  ██╗ █████╗ ',
@@ -74,12 +74,4 @@ export function Splash({
 
 function padLabel(label: string, width: number): string {
   return label + ' '.repeat(Math.max(1, width - label.length));
-}
-
-function displayCwd(cwd: string): string {
-  const home = homedir();
-  if (home && cwd.startsWith(home)) {
-    return '~' + cwd.slice(home.length);
-  }
-  return cwd;
 }

@@ -45,6 +45,7 @@ const config = (): Config => ({
   bashTimeoutMs: 5000,
   pasteFetch: false,
   skillAuto: false,
+  anon: false,
 });
 
 const textChunk = (content: string): ChatCompletionChunk => ({ choices: [{ delta: { content } }] });

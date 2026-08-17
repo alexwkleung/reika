@@ -67,6 +67,10 @@ export function loadConfig(): Config {
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
     pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
     skillAuto: process.env.REIKA_SKILL_AUTO === '1',
+    // Substitute the current user's git name/email and account slugs for <user>/<email> in the
+    // scrollback and saved transcripts. Off by default: normally you want to see your own handle,
+    // and the lookup costs three git subprocesses at startup that are pure waste when unused.
+    anon: process.env.REIKA_ANON === '1',
   };
 }
 

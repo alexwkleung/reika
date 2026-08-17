@@ -1,6 +1,6 @@
-import { homedir } from 'node:os';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
+import { displayCwd } from './scrub.js';
 
 export function Header({ model, cwd }: { model: string; cwd: string }) {
   return (
@@ -11,12 +11,4 @@ export function Header({ model, cwd }: { model: string; cwd: string }) {
       <Text color={theme.muted}>{`  ·  ${model}  ·  ${displayCwd(cwd)}`}</Text>
     </Box>
   );
-}
-
-function displayCwd(cwd: string): string {
-  const home = homedir();
-  if (home && cwd.startsWith(home)) {
-    return '~' + cwd.slice(home.length);
-  }
-  return cwd;
 }
