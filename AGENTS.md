@@ -294,6 +294,20 @@ is a "rest" to save and the count in the summary is a total rather than a floor,
 real cost here — more scanning on a search broad enough to blow past the inline page. Same
 experimental discipline: constants and helpers together in `_spill.ts`, clearly marked.
 
+The ceiling is `SPILL_MAX_MATCHES` (300), and it is where the two tools stop being symmetric.
+Glob's spill is free — the crawl already holds every path — while grep's is paid on _every_ search
+broad enough to blow past the inline page, whether or not the model ever opens the artifact. Eval
+runs (`evals/fixtures/06-08`) put that at roughly one time in three when a shell is available:
+asked which files define a symbol, the model answers with `grep -r … | sort -u` in 98 bytes rather
+than paging a saved result, and it is right to — a query that projects the matches down beats
+reading them all. Follow-through rises without a shell (`grep-spill-noshell`, `planTools()`) and is
+3/3 on glob, where "last path alphabetically" has no narrower query that produces it. That is the
+generalization worth keeping: **spill pays off where the query cannot be reshaped to shrink the
+result**, which is structural for glob and occasional for grep, since grep takes a pattern that can
+always be narrowed. So 3x the page for 3x the scan is the trade that survives a one-in-three hit
+rate; 10x did not. Measured on one model family (Q2–Q4 local); a stronger model would likely
+reformulate _more_ readily, not less, so do not expect the grep rate to rise with capability.
+
 **Reasoning pruning** (`toolcall.ts`): historical `reasoning_content` is kept only for the
 last `REIKA_REASONING_ROUNDS` tool-call rounds (default 2; the active roundtrip is always
 among them — see the cross-provider note) and dropped elsewhere. Unbounded, a thinking model

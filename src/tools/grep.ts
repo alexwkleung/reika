@@ -8,10 +8,13 @@ import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from '
 
 const MAX_MATCHES = 100;
 // Ceiling on matches collected when spilling (REIKA_SPILL). Without it the walk stops dead at
-// MAX_MATCHES, so there is no "rest" to save and the count in the summary is a floor, not a
-// total. The extra scanning is the real cost of an honest count — bounded by this number, and
-// only paid on a search broad enough to blow past the inline page.
-const SPILL_MAX_MATCHES = 1000;
+// MAX_MATCHES, so there is no "rest" to save and the count in the summary is a floor, not a total.
+// The extra scanning is the real cost, and it is asymmetric: glob's spill is free (the crawl
+// already holds every path) while this one is paid on EVERY search broad enough to blow past the
+// inline page, whether or not the model ever opens the artifact — which eval runs put at roughly
+// one time in three when a shell is available to reformulate instead. 3x the page for 3x the scan
+// is the trade that survives that hit rate; 10x was not.
+const SPILL_MAX_MATCHES = 300;
 const MAX_FILE_BYTES = 1_000_000;
 const LINE_TRUNC = 300;
 const CONTEXT = 2; // lines of surrounding context emitted above/below each match

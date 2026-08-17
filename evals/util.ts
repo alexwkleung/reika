@@ -33,9 +33,11 @@ export function callsAfterSpill(messages: Message[], path: string): ToolCall[] {
   return messages.slice(at + 1).flatMap(m => (m.role === 'assistant' ? (m.toolCalls ?? []) : []));
 }
 
-// Whether a call reads back the spill artifact, by either supported route (`read` it or `grep`
-// it) — the retrieval hint names both, so both count as following the locator.
+// Whether a call reads back the spill artifact. Any tool that references the locator counts, not
+// just the `read`/`grep` the footer names: a shell `cat` of the same path is following it just as
+// much, and an earlier name filter would have scored that as "routed around it via bash" — the
+// exact inversion of the finding these fixtures exist to measure. A command that re-runs the
+// search never names the artifact, so it still reads as routing around.
 export function readsSpill(call: ToolCall, path: string): boolean {
-  if (call.name !== 'read' && call.name !== 'grep') return false;
   return Object.values(call.args).some(v => typeof v === 'string' && v.includes(path));
 }

@@ -101,13 +101,16 @@ describe('grepTool spill (REIKA_SPILL)', () => {
     for (const d of spillDirs.splice(0)) await rm(d, { recursive: true, force: true });
   });
 
-  // 420 matches over 7 files, 60 each. Matches are spaced wider than 2×CONTEXT so every one is
-  // its own block (adjacent ones would merge into a single range), and 60-per-file puts the
-  // 100-match inline boundary in the middle of a file rather than on a file edge.
-  async function writeManyMatches(): Promise<void> {
+  // 7 files x `perFile` matches. Matches are spaced wider than 2xCONTEXT so every one is its own
+  // block (adjacent ones would merge into a single range), and the per-file count puts the
+  // 100-match inline boundary in the middle of a file rather than on a file edge. The default
+  // total (210) sits under SPILL_MAX_MATCHES so the summary can report an exact count.
+  async function writeManyMatches(perFile = 30): Promise<void> {
     for (let f = 0; f < 7; f++) {
       const lines: string[] = [];
-      for (let i = 0; i < 60; i++) lines.push('needle', 'pad', 'pad', 'pad', 'pad', 'pad', 'pad');
+      for (let i = 0; i < perFile; i++) {
+        lines.push('needle', 'pad', 'pad', 'pad', 'pad', 'pad', 'pad');
+      }
       await writeFile(join(cwd, `f${f}.txt`), lines.join('\n'), 'utf8');
     }
   }
@@ -121,14 +124,25 @@ describe('grepTool spill (REIKA_SPILL)', () => {
     spillDirs.push(dirname(locator!));
 
     // The summary reports the honest total, not the "100+" floor the walk used to stop at.
-    expect(result.summary).toBe('Found 420 matches for /needle/ — showing 100');
+    expect(result.summary).toBe('Found 210 matches for /needle/ — showing 100');
     // The inline page is bounded; the spill file holds everything.
     const inlineHits = payload.split('\n').filter(l => /:\d+: /.test(l)).length;
     expect(inlineHits).toBe(100);
     const saved = await readFile(locator!, 'utf8');
-    expect(saved.split('\n').filter(l => /:\d+: /.test(l)).length).toBe(420);
+    expect(saved.split('\n').filter(l => /:\d+: /.test(l)).length).toBe(210);
     // The inline page is a true prefix of the saved result — no reformatting between them.
     expect(saved.startsWith(payload.slice(0, payload.indexOf('\n\n(Showing')))).toBe(true);
+  });
+
+  it('reports a floor rather than a false total once collection hits the ceiling', async () => {
+    await writeManyMatches(60); // 420 > SPILL_MAX_MATCHES
+    const result = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
+    const payload = result.payload ?? '';
+    spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(payload)![1]));
+    // The walk stopped early, so the count is honest about being a floor — claiming 300 exactly
+    // would assert something the search never established.
+    expect(result.summary).toBe('Found 300+ matches for /needle/ — showing 100');
+    expect(payload).toContain('Showing 100 of 300+ matches');
   });
 
   it('never cuts a context block in half', async () => {
