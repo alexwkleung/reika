@@ -108,6 +108,14 @@ describe('Scrollback system-message tone', () => {
     expect(frame).toContain('~/.config/reika/history/t.jsonl');
     expect(frame).not.toContain(homedir());
   });
+
+  // Errors quote paths too (fs errno strings), and an error box is the text most
+  // likely to be pasted into a bug report — so it gets the same scrub.
+  it('collapses $HOME in an error path to ~', () => {
+    const frame = frameFor({ role: 'error', content: `save failed: EACCES ${homedir()}/x.jsonl` });
+    expect(frame).toContain('save failed: EACCES ~/x.jsonl');
+    expect(frame).not.toContain(homedir());
+  });
 });
 
 // Regression: subagent messages render under `marginLeft={4}`, but the blocks that

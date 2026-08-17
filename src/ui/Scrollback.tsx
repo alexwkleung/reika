@@ -274,7 +274,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
         <Text bold color={theme.error}>
           Error
         </Text>
-        <Text>{msg.content}</Text>
+        {/* Scrubbed like the notices below: errors quote paths from whatever threw
+            (fs errno strings, save/paste failures), and an error box is the text
+            most likely to be screenshotted or pasted into a bug report. `~/…`
+            costs nothing diagnostically — only the prefix is rewritten. */}
+        <Text>{scrubPaths(msg.content)}</Text>
       </Box>
     );
   }
