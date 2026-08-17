@@ -1,10 +1,15 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
+import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
 const OUTPUT_TAIL_LINES = 10;
+// How much output the spill buffer retains. Big enough that an ordinary build or test run spills
+// complete; small enough that a runaway `yes` can't grow the process without bound. Only the
+// retained window is held — the drain itself never stops, which is the whole point.
+const SPILL_MAX_BYTES = 4 * 1024 * 1024;
 
 export const bashTool: Tool = {
   name: 'bash',
@@ -39,6 +44,34 @@ export const bashTool: Tool = {
   },
 };
 
+// A bounded tail of a stream: push every chunk, retain roughly the last `max` bytes. This is what
+// lets bash spill without restructuring the drain — the process keeps writing at full speed and
+// only the retained window is capped, so the end of a long run survives instead of the start.
+//
+// Chunk-granular, not byte-exact: whole chunks are dropped off the front, and the window is only
+// trimmed while it would still hold `max` bytes without the front one. So it retains between `max`
+// and `max` + one chunk (~64KB against a 4MB budget, under 2% slop) and never drops the only chunk
+// it has. Slicing strings on every read would buy exactness nobody can use — the boundary is
+// arbitrary either way, since a chunk edge is not a line edge.
+export class TailWindow {
+  private chunks: string[] = [];
+  bytes = 0;
+
+  constructor(private readonly max: number) {}
+
+  push(text: string): void {
+    this.chunks.push(text);
+    this.bytes += text.length;
+    while (this.chunks.length > 1 && this.bytes - this.chunks[0].length >= this.max) {
+      this.bytes -= this.chunks.shift()!.length;
+    }
+  }
+
+  text(): string {
+    return this.chunks.join('');
+  }
+}
+
 export function execStream(
   command: string,
   ctx: { cwd: string; onProgress?: (chunk: string) => void },
@@ -49,10 +82,23 @@ export function execStream(
     const buffer: string[] = [];
     let totalBytes = 0;
     let timedOut = false;
+    // Read once at spawn, not per chunk: a flag flipped mid-run would otherwise spill half a
+    // command's output and describe it as the whole tail.
+    const spilling = spillEnabled();
+    // The spill window, kept alongside the payload buffer rather than instead of it. The payload
+    // still keeps the HEAD (unchanged, so the flag A/Bs cleanly); this keeps the TAIL, because the
+    // case that motivates spilling bash at all — a long test or build run — puts the failure at the
+    // end, which is exactly what head-truncation throws away.
+    const tail = new TailWindow(SPILL_MAX_BYTES);
+    // Every byte the process wrote, retained or not. `totalBytes` stops at the payload cap, so it
+    // can't answer "of how many?" once truncation kicks in.
+    let rawBytes = 0;
 
     const append = (chunk: Buffer): void => {
       const text = chunk.toString('utf8');
       ctx.onProgress?.(text);
+      rawBytes += text.length;
+      if (spilling) tail.push(text);
       if (totalBytes >= MAX_PAYLOAD_BYTES) return;
       const remaining = MAX_PAYLOAD_BYTES - totalBytes;
       const slice = text.length > remaining ? text.slice(0, remaining) : text;
@@ -72,28 +118,66 @@ export function execStream(
       clearTimeout(timeoutId);
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const payload = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
+      const base = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
+      // The UI's tail chip stays built from the payload head, per #139 — the spill locator is a
+      // model-facing channel and shouldn't move what the user sees under the command.
       const display = buildCommandDisplay(command, rawOutput);
-      if (timedOut) {
-        resolve({
-          summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
-          payload,
-          command: display,
-        });
-      } else if (code === 0) {
-        resolve({
-          summary: `Ran: ${command} (${totalBytes} bytes output)`,
-          payload,
-          command: display,
-        });
-      } else {
-        const reason = signal ? `signal ${signal}` : `exit ${code}`;
-        resolve({
-          summary: `Bash failed: ${command} (${reason})`,
-          payload,
-          command: display,
-        });
+      // `rawBytes` only diverges from `totalBytes` once output passed the cap, and it's only
+      // tracked when spilling — so this reports the true size where we know it and is unchanged
+      // otherwise.
+      const reported = spilling ? rawBytes : totalBytes;
+      const done = (payload: string): void => {
+        if (timedOut) {
+          resolve({
+            summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
+            payload,
+            command: display,
+          });
+        } else if (code === 0) {
+          resolve({
+            summary: `Ran: ${command} (${reported} bytes output)`,
+            payload,
+            command: display,
+          });
+        } else {
+          const reason = signal ? `signal ${signal}` : `exit ${code}`;
+          resolve({
+            summary: `Bash failed: ${command} (${reason})`,
+            payload,
+            command: display,
+          });
+        }
+      };
+      // Nothing was held back (or spilling is off): the ordinary result, byte-identical to the
+      // pre-spill behavior so the flag is a clean A/B — including staying synchronous.
+      if (!spilling || rawBytes <= MAX_PAYLOAD_BYTES) {
+        done(base);
+        return;
       }
+      void (async () => {
+        const complete = tail.bytes >= rawBytes;
+        const ref = await spillResult('bash-output', tail.text());
+        const shared = { shown: totalBytes, total: String(rawBytes), unit: 'bytes' };
+        done(
+          base +
+            (ref
+              ? buildSpillFooter({
+                  ...shared,
+                  ref,
+                  subject: 'command',
+                  saved: complete
+                    ? 'Full output'
+                    : `The last ${tail.bytes} bytes (the middle was dropped)`,
+                  note: complete
+                    ? undefined
+                    : 'The output above is the start of the run; the file holds the end.',
+                })
+              : buildCappedFooter({
+                  ...shared,
+                  advice: 'narrow the output (pipe through `tail` or `grep`) and run it again',
+                })),
+        );
+      })();
     });
 
     proc.on('error', err => {

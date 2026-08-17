@@ -309,6 +309,42 @@ always be narrowed. So 3x the page for 3x the scan is the trade that survives a 
 rate; 10x did not. Measured on one model family (Q2–Q4 local); a stronger model would likely
 reformulate _more_ readily, not less, so do not expect the grep rate to rise with capability.
 
+**`bash` spills a bounded _tail_** (`bash.ts` `TailWindow`, `SPILL_MAX_BYTES` 4MB, same
+`REIKA_SPILL` flag). The search tools buffer then truncate; `bash` did neither — it stopped
+_draining_ the stream at the payload cap, so the tail was never read at all. That is the wrong end
+to lose: a build or test run puts the failure at the _end_, which is exactly what head-truncation
+throws away. The drain now always runs, and a second bounded buffer keeps the last ~4MB while the
+payload keeps the same 64KB head as before, so the flag stays a clean A/B. This needed no stream
+restructuring — the reason it was scoped out of the original spill work: a ring beside the existing
+buffer plus one write at close does what write-through would, and the retained window is what
+bounds memory, so a runaway `yes` still cannot grow the process. The window is chunk-granular, not
+byte-exact (whole chunks drop off the front, retaining between 4MB and 4MB + one chunk, ~2% slop) —
+a chunk edge is no more a line edge than a byte-exact cut would be. On a run bigger than the window
+the payload is the head and the file is the tail with a gap between, and the footer says so
+("the middle was dropped") instead of claiming a full result: a model told the file is complete
+will not think to doubt a gap in it. The UI's `outputTail` chip still comes from the payload head,
+deliberately untouched — the locator is a model-facing channel and should not move what the user
+sees under the command.
+
+Measured (`evals/fixtures/09-10`, 3 runs each on `kat-coder-qq2`): follow-through is not the
+problem. Five of six spill-on runs reached the artifact, and all three one-shot runs read it as the
+very _next_ call after the capped result, reporting a seed that existed nowhere else — unforgeable
+evidence the tail crossed into context. **The baseline is what qualifies that.** With the flag off,
+09 still answers correctly (`wc -l` recomputes the verdict), and 10's model neither fabricates a
+seed nor gives up: it re-runs the checker narrowed and reports a real seed from the _second_ run.
+So what bash spill buys is **a re-execution avoided**, not an otherwise-unanswerable question
+answered — and what that is worth scales with what the command costs to run twice, which a cheap
+fixture script cannot price. The frequency question (what share of real `bash` calls exceed 64KB
+at all) is telemetry, not an eval, and is still open.
+
+**The locator is a transcription hazard for small models**, found by a 09 run and belonging to
+`_spill.ts` rather than to any one tool. The model reached for the artifact correctly — `tail -50
+<path>`, which is following the locator, just via the shell instead of `read` — and dropped a
+character out of the ~100-character temp path (`…sz0b2wbh…` → `…sz02wbh…`), then never named it
+correctly again. Roughly 100 characters of tmpdir hash + `reika-spill-<pid>-<8 hex>` +
+`<name>-<6 hex>.txt` is a lot of exact copying to ask of a Q2 model, and grep/glob hand out the
+same shape.
+
 **Over-cap glob pages are sampled, not the head** (`glob.ts` `sampleAcrossEntries`). A capped page
 sorted lexicographically is one alphabetical _region_ of the tree, not a view of it: on a 2300-file
 monorepo `**/*.ts` matched 560 files whose 200-path head covered 3 of 5 top-level packages, two
