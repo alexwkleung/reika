@@ -19,8 +19,10 @@ import { fixture as f5 } from './fixtures/05-write.js';
 import { fixture as f6 } from './fixtures/06-grep-spill-aggregable.js';
 import { fixture as f7 } from './fixtures/07-glob-spill.js';
 import { fixture as f8 } from './fixtures/08-grep-spill-noshell.js';
+import { fixture as f9 } from './fixtures/09-bash-spill-verdict.js';
+import { fixture as f10 } from './fixtures/10-bash-spill-oneshot.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {
@@ -107,7 +109,12 @@ async function main(): Promise<void> {
     try {
       const rec = await runFixture(fix);
       records.push(rec);
-      const status = rec.result.pass ? 'PASS' : `FAIL — ${rec.result.reason}`;
+      // Print the pass note, not just PASS: for the spill fixtures the interesting part of a
+      // pass is *how* it got there (how many calls before it followed the locator), and that was
+      // being thrown away.
+      const status = rec.result.pass
+        ? `PASS${rec.result.note ? ` — ${rec.result.note}` : ''}`
+        : `FAIL — ${rec.result.reason}`;
       process.stdout.write(
         `${status} (${rec.toolCallCount} calls, ${(rec.elapsedMs / 1000).toFixed(1)}s)\n`,
       );
