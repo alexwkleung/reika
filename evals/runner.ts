@@ -21,8 +21,9 @@ import { fixture as f7 } from './fixtures/07-glob-spill.js';
 import { fixture as f8 } from './fixtures/08-grep-spill-noshell.js';
 import { fixture as f9 } from './fixtures/09-bash-spill-verdict.js';
 import { fixture as f10 } from './fixtures/10-bash-spill-oneshot.js';
+import { fixture as f11 } from './fixtures/11-plan-gate-verdict.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {
@@ -61,6 +62,10 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
         tools,
         payloads,
         signal: controller.signal,
+        // Without this every fixture ran as an agent turn regardless of its tool set, so plan-mode
+        // behavior (the plan prompt, force-write, the `planFinal` stamp) was unreachable from an
+        // eval — a fixture asserting on it passed vacuously.
+        promptMode: fix.mode ?? 'agent',
         // history mutation already populates `messages`; pushing again here would
         // produce a duplicate of every message and break strict providers.
         onMessage: () => {},

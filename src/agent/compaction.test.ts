@@ -220,6 +220,24 @@ function planHistory(): Message[] {
 }
 
 describe('distillPlanHandoff', () => {
+  // #126: `planFinal` marks the end of the plan turn, not the existence of a plan. Anchoring on a
+  // step-less message is the worst outcome available — the exploration that could have grounded
+  // the next turn is folded away, and "I couldn't determine…" is what survives verbatim.
+  it('refuses to fold when the marked message has no steps', () => {
+    const history = planHistory();
+    const plan = history[history.length - 1] as { content: string };
+    plan.content = 'I could not determine which file handles this.';
+    const before = history.length;
+
+    const { folded, reason } = distillPlanHandoff(history, 16384, 1, 0);
+
+    expect(reason).toBe('no-steps');
+    expect(folded).toBe(0);
+    // History is untouched: an un-distilled turn is merely bigger, not misleading.
+    expect(history).toHaveLength(before);
+    expect(history.some(m => m.role === 'compaction')).toBe(false);
+  });
+
   it('folds the exploration, keeping the request and the plan verbatim', () => {
     const history = planHistory();
     const { folded, reason } = distillPlanHandoff(history, 16384, 1, 0);
@@ -266,7 +284,9 @@ describe('distillPlanHandoff', () => {
   it('is a no-op when the plan was written with no exploration in front of it', () => {
     const history: Message[] = [
       { role: 'user', content: 'task' },
-      { role: 'assistant', content: 'plan', planFinal: true },
+      // A real plan (steps parse) so this exercises the empty-span path rather than the
+      // no-steps guard — both are no-ops, and only one of them is what this test is about.
+      { role: 'assistant', content: '1. edit a.ts', planFinal: true },
     ];
     expect(distillPlanHandoff(history, 16384, 1, 0)).toEqual({ folded: 0, reason: 'empty-span' });
   });
@@ -289,21 +309,23 @@ describe('distillPlanHandoff', () => {
         toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a.ts' } }],
       },
       { role: 'tool', callId: 'c1', summary: 'read a.ts', payload: payloadA },
-      { role: 'assistant', content: 'OLD PLAN', planFinal: true },
+      { role: 'assistant', content: '1. OLD PLAN step', planFinal: true },
       {
         role: 'assistant',
         content: '',
         toolCalls: [{ id: 'c2', name: 'read', args: { path: 'b.ts' } }],
       },
       { role: 'tool', callId: 'c2', summary: 'read b.ts', payload: payloadB },
-      { role: 'assistant', content: 'NEW PLAN', planFinal: true },
+      { role: 'assistant', content: '1. NEW PLAN step', planFinal: true },
     ];
     distillPlanHandoff(history, 16384, 1, 0);
     // The newest plan is the live anchor; the earlier one is folded away (superseded, not pinned).
     const last = history[history.length - 1];
-    expect((last as { content: string }).content).toBe('NEW PLAN');
+    expect((last as { content: string }).content).toBe('1. NEW PLAN step');
     expect(history.filter(m => m.role === 'compaction')).toHaveLength(1);
-    expect(history.some(m => m.role === 'assistant' && m.content === 'OLD PLAN')).toBe(false);
+    expect(history.some(m => m.role === 'assistant' && m.content === '1. OLD PLAN step')).toBe(
+      false,
+    );
     // The digest still indexes files read across the whole exploration, including pre-old-plan.
     expect((history[1] as { content: string }).content).toContain('a.ts');
   });

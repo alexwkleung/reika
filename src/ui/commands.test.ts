@@ -84,6 +84,33 @@ describe('planWritten', () => {
     const msgs: Message[] = [{ role: 'assistant', content: '1. Edit src/config.ts\n2. Run tests' }];
     expect(planWritten(msgs)).toBe(false);
   });
+
+  // #126: the marker means the plan TURN ended, not that a plan came out of it — loop.ts stamps it
+  // on any final plan-mode message, force-written spirals included. Vibe chained edits off those.
+  it('is false when the marked message has no steps in it (a force-written spiral)', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'fix the thing' },
+      {
+        role: 'assistant',
+        content:
+          'I could not determine which file handles this. I looked at several candidates but ' +
+          'none of them clearly own the behavior you described.',
+        planFinal: true,
+      },
+    ];
+    expect(planWritten(msgs)).toBe(false);
+  });
+
+  it('accepts a step that names no file — a plan need not quote paths to be a plan', () => {
+    const msgs: Message[] = [
+      {
+        role: 'assistant',
+        content: '1. Rename the exported helper\n2. Update its callers',
+        planFinal: true,
+      },
+    ];
+    expect(planWritten(msgs)).toBe(true);
+  });
 });
 
 describe('buildImplementPrompt', () => {

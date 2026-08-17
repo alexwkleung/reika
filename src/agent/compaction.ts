@@ -1,6 +1,7 @@
 import type { Message } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
 import { findFreshToolBlockStart } from '../provider/toolcall.js';
+import { parsePlanSteps } from './plantrack.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
 const CHARS_PER_TOKEN = 4;
@@ -294,7 +295,7 @@ export function gatherPlanFindings(history: Message[], charBudget: number): stri
 // names which so a silent zero is classifiable during the experiment's A/B, not guessed at.
 export type HandoffOutcome = {
   folded: number;
-  reason: 'folded' | 'no-marker' | 'empty-span' | 'already-distilled';
+  reason: 'folded' | 'no-marker' | 'empty-span' | 'already-distilled' | 'no-steps';
 };
 
 export function distillPlanHandoff(
@@ -315,6 +316,17 @@ export function distillPlanHandoff(
     }
   }
   if (planIdx < 0) return { folded: 0, reason: 'no-marker' };
+
+  // The marker says the plan turn ENDED, not that it produced a plan: loop.ts stamps it on any
+  // final plan-mode message, force-written spirals included (#126). Anchoring on a message with no
+  // parsed steps is the worst of both worlds — the exploration that might have grounded the next
+  // turn gets folded into a digest, and what survives verbatim is "I couldn't determine…". Leave
+  // history alone instead; an un-distilled turn is merely bigger, not misleading. Same 0-step
+  // definition `seedPlanProgress` has always used, so the two agree about what a plan is.
+  const planMsg = history[planIdx];
+  if (planMsg.role === 'assistant' && parsePlanSteps(planMsg.content ?? '').length === 0) {
+    return { folded: 0, reason: 'no-steps' };
+  }
 
   // Pin the original request at index 0 exactly as compactHistory does; fold only what follows it,
   // up to (but excluding) the plan message. A leading slash-command echo (meta) is not the task.
