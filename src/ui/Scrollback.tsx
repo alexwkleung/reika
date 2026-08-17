@@ -292,7 +292,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
       <Box marginTop={1}>
         <Text color={theme.muted}>
           <Text color={markerColor}>{marker}</Text>
-          {msg.content}
+          {/* Harness notices quote absolute paths (/save's history files, /cd's target).
+              Scrub them the same way tool lines are scrubbed so the home prefix doesn't
+              leak into scrollback (and screenshots) — display only; the files are still
+              written to, and the model still sees, the absolute path. */}
+          {scrubPaths(msg.content)}
         </Text>
       </Box>
     );
