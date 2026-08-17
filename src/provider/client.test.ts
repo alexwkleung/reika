@@ -137,11 +137,11 @@ describe('extractToolCallsFromContent', () => {
 describe('extractToolCallsFromContent (pythonic)', () => {
   it('extracts a sentinel-fenced pythonic call', () => {
     const input =
-      "<|tool_call_start|>[list(path='/Users/alex/Git/reika-code', depth=1)]<|tool_call_end|>";
+      "<|tool_call_start|>[list(path='/home/dev/example-app', depth=1)]<|tool_call_end|>";
     const result = extractToolCallsFromContent(input);
     expect(result.calls).toHaveLength(1);
     expect(result.calls[0].name).toBe('list');
-    expect(result.calls[0].args).toEqual({ path: '/Users/alex/Git/reika-code', depth: 1 });
+    expect(result.calls[0].args).toEqual({ path: '/home/dev/example-app', depth: 1 });
     expect(result.cleanedContent).toBe('');
   });
 

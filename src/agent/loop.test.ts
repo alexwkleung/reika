@@ -358,7 +358,7 @@ describe('shouldWithdrawInspection', () => {
   });
 
   it('withdraws a reasoning loop even post-edit — re-reading rumination is not edit-recovery', () => {
-    // The yumi case: model edited 5×, then looped re-reading router.ts at crossSim=1.0.
+    // Observed: model edited 5×, then looped re-reading one router file at crossSim=1.0.
     expect(shouldWithdrawInspection({ ...base, loopActiveRounds: 2 })).toBe(true);
   });
 
