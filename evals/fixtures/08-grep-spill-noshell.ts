@@ -10,9 +10,13 @@ import { assertSpillFollowed, FLAG_PROMPT, flagModuleSetup } from './_flagmodule
 // is only *narrowed*, not closed: without pipes the model can still re-grep per file, so the real
 // question is whether paging one saved result beats ten narrower searches.
 //
-// Scoped deliberately to the tool set rather than `promptMode: 'plan'`. Running full plan mode
-// would drag in the force-write machinery, the novelty cap and a written-plan deliverable, and
-// the outcome could no longer be attributed to bash availability.
+// Scoped deliberately to the tool set rather than plan mode. Running full plan mode would drag in
+// the force-write machinery, the novelty cap and a written-plan deliverable, and the outcome could
+// no longer be attributed to bash availability.
+//
+// `mode: 'plan'` is now a fixture field (#126 added it — before that, no fixture could run in plan
+// mode at all, tool set or not). This fixture still does not set it, on purpose: adding it would
+// change what the numbers recorded above mean. Leave it as the tool-set arm.
 export const fixture: Fixture = {
   name: 'grep-spill-noshell',
   setup: flagModuleSetup(),
