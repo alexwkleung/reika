@@ -57,7 +57,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 2. If it mutates files or runs commands, gate it via `ctx.requestApproval` — never skip the gate
 3. Register in `src/tools/index.ts`'s `defaultTools(config)`. If the tool needs a credential or endpoint, branch on the config (env-var-gated registration — keeps the system prompt lean for users who haven't opted in)
 4. Description must be short and action-oriented (small models pay for every token in the system prompt)
-5. Add an eval fixture in `evals/fixtures/` if behavior is testable
+5. Unit-test the logic the wrapper adds (caps, windows, footers — not the syscall), and add an eval fixture only if the question is whether a _model_ uses the tool correctly. See "Choosing a test instrument"
 
 ## Optional tools and provider abstractions
 
@@ -507,9 +507,46 @@ Two supporting pieces in `Input.tsx`, both needed because Ink has no bracketed-p
   height the box renders a window around the cursor and says how many lines it's hiding, so no
   path (repeated sub-threshold pastes, a long typed buffer) can push the frame over the ceiling.
 
+## Choosing a test instrument
+
+Four instruments, and picking the wrong one is the usual way time gets lost here. **Most questions
+about this repo need no model at all.** The rule of thumb: a log tells you the _mechanism_, and
+repetition tells you the _rate_ — so if the question is "does X happen", instrument it; if it is
+"how often", repeat it; if it is "is this function right", just test it.
+
+| Instrument                                               | Answers                                                             | Cost                       | Picking it wrong looks like                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| **Vitest unit / render test**                            | Given this input, does the module or component do the right thing?  | milliseconds, runs in CI   | Spending a model run to check a string, a slice boundary, or JSX order   |
+| **Eval fixture** (`npm run eval`)                        | Does a real model _use_ the affordance — follow a locator, recover? | minutes per run, needs 3+  | An n=1 conclusion; or evaluating logic that has one deterministic answer |
+| **pty drive** (`.claude/skills/verify`)                  | Does the whole app render and behave this way in a real terminal?   | a few minutes of setup     | Substituting a render test for keyboard, modal, or abort flows           |
+| **Instrumentation** (`REIKA_DEBUG`, `REIKA_SPILL_STATS`) | How often, and how big, in _real_ use?                              | days of passive collection | Trying to infer a rate from a fixture — a corpus you built cannot        |
+
+The boundaries that actually bite:
+
+- **An eval cannot answer a frequency question.** `evals/fixtures/09-10` show a model follows a
+  spill locator when the answer is only in the artifact; nothing in them says what share of a
+  week's `bash` calls exceed 64KB, which is the number that sizes the window. That is why
+  `REIKA_SPILL_STATS` exists — see the spill section.
+- **A render test is not a substitute for driving the app**, only for the part it covers. The
+  bash chip's tail has a render test _and_ was driven end to end, because "does this Box order its
+  children correctly" and "does a real 109KB run reach that Box" are different claims. Reach for
+  the pty when the change is what the user _sees_.
+- **A fixture's corpus is a choice, and it shows.** A cheap script makes re-running free, so a
+  model routes around the artifact and is _right_ to; the same prompt against a 90-second suite
+  would not. Build the arm that removes the escape (`10-bash-spill-oneshot`) rather than reading a
+  route-around as a failure.
+- **Q2–Q3 models have high run-to-run variance** — byte-identical inputs produce 52 / 16 / 6 tool
+  calls. Judge any eval change over 3+ runs; a single run is an anecdote.
+
 ## Tests (Vitest)
 
-`npm test` runs all unit tests (sub-second). Covered modules with bug-prone pure logic:
+`npm test` runs the unit suite (~5s, ~1000 tests across ~78 files). What earns a test: pure logic
+with edge cases (parsers, matchers, path math, aging/dedup rules), a bug you just fixed, and any
+_rendered_ output whose shape matters (Ink components have render tests via `ink-testing-library`
+— see `Scrollback.render.test.tsx` for the pattern, including how to pin viewport width).
+
+Representative of the bug-prone core rather than an inventory — the suite is far larger than any
+list worth maintaining here:
 
 - `src/provider/toolcall.ts` — `messagesToOpenAI` (assistant content nulling, tool message `name` field, payload aging)
 - `src/provider/client.ts` — `sanitizeToolName`, `extractToolCallsFromContent`
@@ -523,9 +560,16 @@ Two supporting pieces in `Input.tsx`, both needed because Ink has no bracketed-p
 - `src/ui/clipboard.ts` — parsing AppleScript's `«data PNGf…»` literal
 - `src/search/searxng.ts` — provider request shape + response normalization (fetch mocked)
 
-**Not covered (deliberately):** UI components (Ink testing is awkward; evals own end-to-end behavior), tools that wrap node fs/process (read/list/grep/edit/write/bash — shallow wrappers), the agent loop itself (evals territory).
+**Thin by design, not by policy:** `list.ts`, `write.ts`, and `_walk.ts` are shallow wrappers over
+node fs whose behavior is the syscall's — a test there restates the standard library. Everything
+else in `tools/` has one, because the moment a wrapper grows a cap, a window, or a footer it stops
+being thin (`bash.ts` is the worked example: shallow until it had a payload cap, a tail window and
+a spill footer to get wrong).
 
-**When editing a covered module, run `npm test` before declaring done.** Tests catch regressions evals can't (evals only run when a real model invokes the broken path).
+**When editing a covered module, run `npm test` before declaring done** — and prefer `npm run check`,
+which adds typecheck, lint, and format. Tests catch regressions evals can't: an eval only exercises
+a path when a real model chooses to invoke it, so a broken branch can pass an eval by never
+running.
 
 ## Skills
 
@@ -561,12 +605,25 @@ This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatToo
 
 ## Eval workflow
 
-`npm run eval` runs all fixtures sequentially against the configured model. Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
+`npm run eval` runs all fixtures sequentially against the configured model; `npm run eval -- <substring>`
+runs only matching ones, which is what you want while iterating — a local quantized model takes
+minutes per fixture. `REIKA_MODEL=<id> npm run eval -- <name>` pins the model, and comparing against
+a recorded result means pinning the same one (the spill fixtures were measured on `kat-coder-qq2`).
+Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
 
 1. New file in `evals/fixtures/NN-name.ts` exporting a `Fixture`
 2. Import + add to the `FIXTURES` array in `evals/runner.ts`
 
-Eval timeouts use the same `AbortController` pattern as the user-side abort.
+**Write the assertion's failure reason to be read, not just to fail.** These runs are expensive and
+non-deterministic, so a bare false throws away the run: say what the model did _instead_
+(`_checkerlog.ts` distinguishes "re-ran the command" from "routed around it" from "answered from
+the head"), and report a correct answer reached the wrong way as exactly that. A fixture is a
+record of a finding as much as a gate — several here are expected to fail and are kept for what the
+failure documents (`06-grep-spill-aggregable`).
+
+Eval timeouts use the same `AbortController` pattern as the user-side abort. Budget generously: a
+capped result plus a paged artifact read runs long on a quantized model, and the 5-minute default
+reports a timeout instead of an outcome.
 
 ## Things to avoid
 
