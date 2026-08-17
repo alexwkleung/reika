@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { detectDangerousPatterns, execStream } from './bash.js';
+import { readFile, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { detectDangerousPatterns, execStream, TailWindow } from './bash.js';
+import { resetSpillDir } from './_spill.js';
 
 describe('detectDangerousPatterns — destructive commands', () => {
   it('flags rm -rf', () => {
@@ -386,5 +389,120 @@ describe('execStream — timeout', () => {
     const result = await execStream('echo hi', { cwd: process.cwd() }, 5000);
     expect(result.summary).toMatch(/^Ran: echo hi/);
     expect(result.payload).toContain('hi');
+  });
+});
+
+describe('TailWindow', () => {
+  it('keeps everything while under the budget', () => {
+    const w = new TailWindow(100);
+    w.push('abc');
+    w.push('def');
+    expect(w.text()).toBe('abcdef');
+    expect(w.bytes).toBe(6);
+  });
+
+  it('drops from the front once over budget, keeping the end', () => {
+    const w = new TailWindow(10);
+    for (const c of ['aaaaa', 'bbbbb', 'ccccc', 'ddddd']) w.push(c);
+    // Trimming stops while the window would still hold 10 bytes without its front chunk, so the
+    // last two chunks survive and `bytes` reports what is retained, not what was seen.
+    expect(w.text()).toBe('cccccddddd');
+    expect(w.bytes).toBe(10);
+  });
+
+  it('never drops the only chunk it has, however big', () => {
+    const w = new TailWindow(4);
+    w.push('a'.repeat(50));
+    expect(w.text()).toHaveLength(50);
+    expect(w.bytes).toBe(50);
+  });
+});
+
+// #139: bash stopped *draining* at the payload cap, so the tail of a long run was never read —
+// exactly the bytes that matter, since a build or test failure lands at the end. The drain now
+// always runs; only the retained window is bounded.
+describe('execStream — spill', () => {
+  const spillDirs: string[] = [];
+  const cwd = process.cwd();
+  // ~109KB of output, comfortably past the 64KB payload cap, with a unique last line.
+  const BIG = 'seq 1 20000';
+
+  beforeEach(() => {
+    resetSpillDir();
+    process.env.REIKA_SPILL = '1';
+  });
+
+  afterEach(async () => {
+    delete process.env.REIKA_SPILL;
+    resetSpillDir();
+    for (const d of spillDirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  const locatorOf = (payload: string): string | undefined => {
+    const hit = /saved to (\S+\.txt)/.exec(payload)?.[1];
+    if (hit) spillDirs.push(dirname(hit));
+    return hit;
+  };
+
+  it('saves the tail the payload cap drops, and points at it', async () => {
+    const result = await execStream(BIG, { cwd });
+    const payload = result.payload ?? '';
+
+    // The payload is unchanged: still the head, still capped, still marked truncated.
+    expect(payload.startsWith('1\n2\n')).toBe(true);
+    expect(payload).toContain('…(truncated)');
+    expect(payload).not.toContain('\n20000\n');
+
+    const locator = locatorOf(payload);
+    expect(locator).toBeTruthy();
+    expect(payload).toContain('Full output saved to');
+    expect(payload).toContain('Do not re-run this command to see the rest.');
+
+    // The file holds the whole run — including the last line, which existed nowhere before.
+    const saved = await readFile(locator!, 'utf8');
+    expect(saved.startsWith('1\n')).toBe(true);
+    expect(saved.trimEnd().endsWith('\n20000')).toBe(true);
+
+    // The summary reports the true size now that we know it, not the 65536 it stopped counting at.
+    const reported = Number(/\((\d+) bytes output\)/.exec(result.summary)![1]);
+    expect(reported).toBe(saved.length);
+    expect(reported).toBeGreaterThan(100_000);
+  });
+
+  it('says so honestly when the window itself dropped the middle', async () => {
+    // ~4.7MB, past the 4MB window, so the head is in the payload and the tail in the file with a
+    // gap between — the one case where calling the file the "full output" would be a lie.
+    const result = await execStream('seq 1 700000', { cwd });
+    const payload = result.payload ?? '';
+    const locator = locatorOf(payload);
+    expect(locator).toBeTruthy();
+
+    expect(payload).toContain('(the middle was dropped)');
+    expect(payload).toContain('The output above is the start of the run; the file holds the end.');
+    expect(payload).not.toContain('Full output saved to');
+
+    const saved = await readFile(locator!, 'utf8');
+    expect(saved.startsWith('1\n')).toBe(false);
+    expect(saved.trimEnd().endsWith('\n700000')).toBe(true);
+    expect(saved.length).toBeGreaterThanOrEqual(4 * 1024 * 1024);
+  });
+
+  it('writes nothing when the output fits in the payload', async () => {
+    const result = await execStream('echo small', { cwd });
+    expect(result.payload).toContain('small');
+    expect(result.payload).not.toContain('saved to');
+  });
+
+  it('is byte-identical to the capped result when the flag is off', async () => {
+    const on = await execStream(BIG, { cwd });
+    locatorOf(on.payload ?? '');
+    delete process.env.REIKA_SPILL;
+    const off = await execStream(BIG, { cwd });
+
+    expect(off.payload).not.toContain('saved to');
+    expect(off.summary).toBe('Ran: seq 1 20000 (65536 bytes output)');
+    // The head both runs show is the same; only the footer and the honest byte count differ.
+    const head = (p: string): string => p.slice(0, p.indexOf('…(truncated)'));
+    expect(head(on.payload ?? '')).toBe(head(off.payload ?? ''));
   });
 });

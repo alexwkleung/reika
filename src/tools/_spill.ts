@@ -76,13 +76,20 @@ export function buildSpillFooter(opts: {
   // An extra sentence about how the page was chosen, when the caller did something other than
   // take the head — the model cannot tell a sampled page from a truncated one by looking.
   note?: string;
+  // What the file actually holds. The search tools save everything they collected, but a caller
+  // that spills a bounded window (bash keeps a tail) must say so — "Full result" would be a lie,
+  // and a model told the file is complete won't think to doubt a gap in it.
+  saved?: string;
+  // The noun in "do not re-run this ___": a search for grep/glob, a command for bash.
+  subject?: string;
 }): string {
   const { shown, total, unit, ref } = opts;
   const note = opts.note ? `${opts.note} ` : '';
+  const saved = opts.saved ?? 'Full result';
   return (
-    `\n\n(Showing ${shown} of ${total} ${unit}. ${note}Full result saved to ${ref.path} — ` +
+    `\n\n(Showing ${shown} of ${total} ${unit}. ${note}${saved} saved to ${ref.path} — ` +
     `read that path with offset/limit to page through it, or grep it to narrow. ` +
-    `Do not re-run this search to see the rest.)`
+    `Do not re-run this ${opts.subject ?? 'search'} to see the rest.)`
   );
 }
 
@@ -93,10 +100,13 @@ export function buildCappedFooter(opts: {
   total: string;
   unit: string;
   note?: string;
+  // How to get at the rest by hand, when narrowing a pattern isn't the move (bash can pipe).
+  advice?: string;
 }): string {
   const note = opts.note ? `${opts.note} ` : '';
+  const advice = opts.advice ?? 'narrow the pattern or scope to see them';
   return (
     `\n\n(Showing ${opts.shown} of ${opts.total} ${opts.unit}. ${note}The rest could not be saved — ` +
-    `narrow the pattern or scope to see them.)`
+    `${advice}.)`
   );
 }
