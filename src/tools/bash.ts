@@ -131,10 +131,12 @@ export function execStream(
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
       const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
-      // `rawBytes` only diverges from `totalBytes` once output passed the cap, and it's only
-      // tracked when spilling — so this reports the true size where we know it and is unchanged
-      // otherwise.
-      const reported = spilling ? rawBytes : totalBytes;
+      // The real size, unconditionally. `totalBytes` stops counting at the payload cap, so with
+      // spill off the summary told the model a 234KB run "produced 65536 bytes" — a claim about
+      // the command's output, not about how much of it we kept, and false either way. This was
+      // gated on `spilling` to keep the flag a byte-identical A/B; the payload still is, and a
+      // wrong number in the model's context is not worth the tidiness of that claim.
+      const reported = rawBytes;
       const done = (payload: string): void => {
         if (timedOut) {
           resolve({

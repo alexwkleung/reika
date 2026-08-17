@@ -493,17 +493,20 @@ describe('execStream — spill', () => {
     expect(result.payload).not.toContain('saved to');
   });
 
-  it('is byte-identical to the capped result when the flag is off', async () => {
+  it('leaves the payload identical when the flag is off — only the footer differs', async () => {
     const on = await execStream(BIG, { cwd });
     locatorOf(on.payload ?? '');
     delete process.env.REIKA_SPILL;
     const off = await execStream(BIG, { cwd });
 
     expect(off.payload).not.toContain('saved to');
-    expect(off.summary).toBe('Ran: seq 1 20000 (65536 bytes output)');
-    // The head both runs show is the same; only the footer and the honest byte count differ.
+    // The head both runs show is the same; the spill run adds a footer after it.
     const head = (p: string): string => p.slice(0, p.indexOf('…(truncated)'));
     expect(head(on.payload ?? '')).toBe(head(off.payload ?? ''));
+    // The summary reports the command's real output size either way. It used to say 65536 with
+    // the flag off — the payload cap, not the output — which was a false claim about the run.
+    expect(off.summary).toBe(on.summary);
+    expect(off.summary).toMatch(/\(108894 bytes output\)/);
   });
 });
 
