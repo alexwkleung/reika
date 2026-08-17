@@ -122,10 +122,12 @@ export function execStream(
       // The UI's tail chip stays built from the payload head, per #139 — the spill locator is a
       // model-facing channel and shouldn't move what the user sees under the command.
       const display = buildCommandDisplay(command, rawOutput);
-      // `rawBytes` only diverges from `totalBytes` once output passed the cap, and it's only
-      // tracked when spilling — so this reports the true size where we know it and is unchanged
-      // otherwise.
-      const reported = spilling ? rawBytes : totalBytes;
+      // The real size, unconditionally. `totalBytes` stops counting at the payload cap, so with
+      // spill off the summary told the model a 234KB run "produced 65536 bytes" — a claim about
+      // the command's output, not about how much of it we kept, and false either way. This was
+      // gated on `spilling` to keep the flag a byte-identical A/B; the payload still is, and a
+      // wrong number in the model's context is not worth the tidiness of that claim.
+      const reported = rawBytes;
       const done = (payload: string): void => {
         if (timedOut) {
           resolve({

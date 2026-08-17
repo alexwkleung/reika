@@ -321,7 +321,12 @@ reformulate _more_ readily, not less, so do not expect the grep rate to rise wit
 _draining_ the stream at the payload cap, so the tail was never read at all. That is the wrong end
 to lose: a build or test run puts the failure at the _end_, which is exactly what head-truncation
 throws away. The drain now always runs, and a second bounded buffer keeps the last ~4MB while the
-payload keeps the same 64KB head as before, so the flag stays a clean A/B. This needed no stream
+payload keeps the same 64KB head as before, so the flag stays a clean A/B on the bytes the model
+reads. (The _summary_ is not part of that A/B: it reports the command's real output size in both
+states. It used to report `totalBytes`, which stops at the payload cap, so with the flag off a
+234KB run was described to the model as "65536 bytes output" — a claim about the output, not about
+what was kept, and false either way. A wrong number in context is not worth a tidier A/B claim.)
+This needed no stream
 restructuring — the reason it was scoped out of the original spill work: a ring beside the existing
 buffer plus one write at close does what write-through would, and the retained window is what
 bounds memory, so a runaway `yes` still cannot grow the process. The window is chunk-granular, not

@@ -34,6 +34,21 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 - Detect client aborts with `res.on('close')` + `!res.writableEnded`; `req.on('close')`
   fires on request-body completion in modern Node, not on disconnect.
 - Delay the stream ~400ms so in-flight cancellation paths are observable.
+- **Dispatch on the request body, never on a request counter.** `REIKA_WARM` sends a real
+  prefix-warming request on the FIRST KEYSTROKE (`agent/warm.ts`, `maxTokens: 1`), so an
+  Nth-request mock hands the warm probe the response meant for turn 1. Symptom: the
+  assistant's final text renders but the tool call never does, and the log shows two
+  same-size requests. Key off the body instead — `max_tokens <= 4` is the warm probe, a
+  `tool` role in `messages` is the post-tool follow-up:
+
+  ```js
+  const warm = (req.max_tokens ?? 999) <= 4;
+  const kind = warm ? 'warm' : req.messages.some(m => m.role === 'tool') ? 'final' : 'toolcall';
+  ```
+
+  Answer the warm probe with a bare `finish_reason: 'stop'`. This also makes the mock
+  robust to retries the client makes on its own (e.g. the logprobs-unsupported retry in
+  `provider/client.ts`, which re-sends the same request without the logprobs fields).
 
 ## Driving with expect
 
@@ -54,8 +69,18 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 - When input lands wrong, don't theorize: temporarily `debugLog` `(input, key.return,
 value)` at the top of Input's `useInput` to see how each chunk was parsed.
 
+- Confirm the keystrokes landed before submitting: `expect -timeout 10 "<the text you
+  typed>"` after the `send -s`, then send `"\r"` on its own. A submit that silently did
+  not happen looks exactly like a model that did not answer.
+
 ## Flows worth driving
 
 Type-a-prompt → submit → assistant reply renders and status returns idle; slash command;
 Ctrl+C mid-turn abort. Status bar shows ctx/cache gauges — cache % is fed by
 `cached_tokens` from the mock.
+
+**A tool call end to end** (what proves a tool's own rendering, e.g. the `bash` command
+chip): run with `REIKA_AUTO_APPROVE=bypass` so no approval modal blocks the turn, have the
+mock answer the `toolcall` case with a `tool_calls` delta plus `finish_reason: 'tool_calls'`,
+and pick a command whose output is self-evident in the frame (`seq 1 20000` — the last line
+is the assertion). Expect the mock log to show three requests: `warm`, `toolcall`, `final`.
