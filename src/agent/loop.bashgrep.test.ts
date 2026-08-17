@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { isReadOnlyShell } from './loop.js';
 
 describe('isReadOnlyShell', () => {
-  // The read-only escapes actually observed in the nori loops — these must be refusable.
+  // The read-only escapes actually observed in real loops — these must be refusable.
   it.each([
     'grep -n "isFavorite\\|toggleFavorite" web/src/scripts/state.ts | head -20',
-    'cd /Users/alex/Git/nori && grep -n "btn-favorite" web/src/components/NowPlaying.astro',
-    'cd /Users/alex/Git/nori && cat web/src/scripts/state.ts | tail -20',
+    'cd /home/dev/example-app && grep -n "btn-favorite" web/src/components/NowPlaying.astro',
+    'cd /home/dev/example-app && cat web/src/scripts/state.ts | tail -20',
     'grep -A 5 "favorite-btn" web/src/scripts/dom.ts | head -20',
     'cat web/src/components/NowPlaying.astro | grep -A 5 "btn-favorite"',
     'grep -n "repair-btn" web/src/scripts/dom.ts',
