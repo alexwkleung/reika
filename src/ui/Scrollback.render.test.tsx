@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { homedir } from 'node:os';
 import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
@@ -97,6 +98,23 @@ describe('Scrollback system-message tone', () => {
       '❯ Context compacted.',
     );
     expect(frameFor({ role: 'system', content: 'plain note' })).toContain('❯ plain note');
+  });
+
+  // #138: /save reported the transcript's absolute path, leaking the home directory
+  // into scrollback while every tool line beside it was already scrubbed.
+  it('collapses $HOME in a notice path (e.g. /save) to ~', () => {
+    const file = `${homedir()}/.config/reika/history/t.jsonl`;
+    const frame = frameFor({ role: 'system', content: `saved 2 messages → ${file}` });
+    expect(frame).toContain('~/.config/reika/history/t.jsonl');
+    expect(frame).not.toContain(homedir());
+  });
+
+  // Errors quote paths too (fs errno strings), and an error box is the text most
+  // likely to be pasted into a bug report — so it gets the same scrub.
+  it('collapses $HOME in an error path to ~', () => {
+    const frame = frameFor({ role: 'error', content: `save failed: EACCES ${homedir()}/x.jsonl` });
+    expect(frame).toContain('save failed: EACCES ~/x.jsonl');
+    expect(frame).not.toContain(homedir());
   });
 });
 

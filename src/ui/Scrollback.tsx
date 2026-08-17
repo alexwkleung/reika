@@ -274,7 +274,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
         <Text bold color={theme.error}>
           Error
         </Text>
-        <Text>{msg.content}</Text>
+        {/* Scrubbed like the notices below: errors quote paths from whatever threw
+            (fs errno strings, save/paste failures), and an error box is the text
+            most likely to be screenshotted or pasted into a bug report. `~/…`
+            costs nothing diagnostically — only the prefix is rewritten. */}
+        <Text>{scrubPaths(msg.content)}</Text>
       </Box>
     );
   }
@@ -292,7 +296,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
       <Box marginTop={1}>
         <Text color={theme.muted}>
           <Text color={markerColor}>{marker}</Text>
-          {msg.content}
+          {/* Harness notices quote absolute paths (/save's history files, /cd's target).
+              Scrub them the same way tool lines are scrubbed so the home prefix doesn't
+              leak into scrollback (and screenshots) — display only; the files are still
+              written to, and the model still sees, the absolute path. */}
+          {scrubPaths(msg.content)}
         </Text>
       </Box>
     );
