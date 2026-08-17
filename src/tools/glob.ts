@@ -67,7 +67,7 @@ export const globTool: Tool = {
     // The crawl already holds every match, so saving the rest costs one write and no extra walking.
     // Without it the omitted paths are unrecoverable, which is also what makes the sampled page
     // below safe: the complete sorted list survives here regardless of what the page shows.
-    const ref = await spillResult('glob-results', files.join('\n'));
+    const ref = await spillResult('glob', files.join('\n'));
     const { page, entries, unreached } = sampleAcrossEntries(files, MAX_MATCHES);
     const note = samplingNote(entries, unreached);
     const footer = ref

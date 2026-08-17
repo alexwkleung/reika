@@ -91,7 +91,7 @@ export const grepTool: Tool = {
     }
     const shown = state.inlineCount ?? MAX_MATCHES;
     const total = `${state.count}${atCeiling ? '+' : ''}`;
-    const ref = await spillResult('grep-results', state.out.join('\n'));
+    const ref = await spillResult('grep', state.out.join('\n'));
     const footer = ref
       ? buildSpillFooter({ shown, total, unit: 'matches', ref })
       : buildCappedFooter({ shown, total, unit: 'matches' });

@@ -1,5 +1,6 @@
 import { readFile, rm, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildCappedFooter,
@@ -54,8 +55,28 @@ describe('spillResult', () => {
   it('sanitizes the suggested name to one path segment', async () => {
     const ref = await spill('../../etc/passwd', 'x');
     expect(ref).not.toBeNull();
-    expect(dirname(ref!.path)).toMatch(/reika-spill-/);
+    expect(dirname(ref!.path)).toMatch(/reika-[0-9a-f]{6}$/);
     expect(ref!.path).not.toContain('..');
+  });
+
+  // #144: the model has to copy this path verbatim to follow the locator, and one was observed
+  // dropping a character out of the ~100-char original — 48 of which were ours. Everything below
+  // the system temp dir is what we control, so that is what this pins.
+  it('keeps the part of the locator we control short enough to copy', async () => {
+    const ref = await spill('grep', 'x');
+    const ours = ref!.path.slice(tmpdir().length + 1);
+    expect(ours).toMatch(/^reika-[0-9a-f]{6}\/grep-\d+\.txt$/);
+    expect(ours.length).toBeLessThanOrEqual(24);
+  });
+
+  it('numbers files in a directory it created exclusively', async () => {
+    const a = await spill('grep', 'a');
+    const b = await spill('glob', 'b');
+    // A counter rather than random hex — nothing else can write into a 0700 dir made with an
+    // exclusive mkdir, and short digits are what the model has to retype.
+    expect(basename(a!.path)).toBe('grep-1.txt');
+    expect(basename(b!.path)).toBe('glob-2.txt');
+    expect(dirname(a!.path)).toBe(dirname(b!.path));
   });
 
   it('writes owner-only files', async () => {

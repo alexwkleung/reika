@@ -22,37 +22,66 @@ export function spillEnabled(): boolean {
 // One private directory per process — reika is one process per session, so per-process IS
 // session-scoped. Removed on exit so a long-lived machine doesn't accumulate them; a crash
 // leaves them to the OS's temp reaper.
+//
+// The name is deliberately SHORT (#144). A quantized model has to copy this path verbatim to
+// follow the locator, and one was observed dropping a character out of the ~100-char original —
+// turning a working recovery path into a failed `cat`, which is the loop spill exists to prevent.
+// Every character here is an independent chance to slip, so the pid is gone (it bought debugging
+// convenience on a directory that deletes itself) and the random suffix is 3 bytes rather than 4.
 let dir: string | undefined;
+let seq = 0;
+
+const MAX_DIR_ATTEMPTS = 8;
 
 function spillDir(): string {
   if (dir) return dir;
-  const d = join(tmpdir(), `reika-spill-${process.pid}-${randomBytes(4).toString('hex')}`);
-  mkdirSync(d, { recursive: true, mode: 0o700 });
-  process.on('exit', () => {
+  // NOT `recursive: true`, which succeeds silently on a directory that already exists. A 6-hex
+  // name collides far more readily than pid + 8 hex did, and the one outcome that must not happen
+  // is adopting a directory somebody else — or something else — created. Exclusive create turns a
+  // collision into an error we retry instead of a stranger's directory we write secrets into.
+  for (let attempt = 0; attempt < MAX_DIR_ATTEMPTS; attempt++) {
+    const d = join(tmpdir(), `reika-${randomBytes(3).toString('hex')}`);
     try {
-      rmSync(d, { recursive: true, force: true });
+      mkdirSync(d, { mode: 0o700 });
     } catch {
-      // Best effort — the OS temp reaper is the backstop.
+      continue;
     }
-  });
-  dir = d;
-  return d;
+    process.on('exit', () => {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // Best effort — the OS temp reaper is the backstop.
+      }
+    });
+    dir = d;
+    return d;
+  }
+  // Caller is inside spillResult's try/catch, so this fails open like every other spill failure.
+  throw new Error('could not create a private spill directory');
 }
 
-// Reset between tests; also the escape hatch if a session ever wants a fresh directory.
+// Reset between tests; also the escape hatch if a session ever wants a fresh directory. The
+// counter resets with it so a fresh directory starts numbering from 1 again.
 export function resetSpillDir(): void {
   dir = undefined;
+  seq = 0;
 }
 
 // Write `content` to a fresh file and return its locator. `name` is a hint, not a path — it is
-// sanitized to one path segment. Returns null when disabled or when anything at all goes wrong.
+// sanitized to one short path segment. Returns null when disabled or when anything at all goes
+// wrong. Keep `name` to a few characters: it is half of what the model has to retype.
 export async function spillResult(name: string, content: string): Promise<SpillRef | null> {
   if (!spillEnabled()) return null;
   try {
     // Dots are stripped along with separators: the name is a label, we supply the extension, and
     // a surviving `..` in a shared temp dir is a traversal shape nobody needs to reason about.
-    const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40) || 'result';
-    const path = join(spillDir(), `${safe}-${randomBytes(3).toString('hex')}.txt`);
+    // The 12-char cap is a length guard, not sanitization — a caller passing something verbose
+    // shouldn't be able to hand the model a locator it can't copy.
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 12) || 'result';
+    // A counter, not random hex: the directory is private to this process, so nothing else can
+    // be writing into it, and `1` is four characters the model cannot transpose. `wx` below still
+    // guarantees we never overwrite if that reasoning is ever wrong.
+    const path = join(spillDir(), `${safe}-${++seq}.txt`);
     // 'wx' + 0600: exclusive and owner-only, so a planted symlink in a shared temp dir can't
     // redirect the write.
     await writeFile(path, content, { flag: 'wx', mode: 0o600 });

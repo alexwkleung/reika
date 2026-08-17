@@ -283,6 +283,13 @@ below, which spill is what makes safe). When on, the complete
 formatted result is written to a session-scoped temp file (one private 0700 dir per process — reika
 is one process per session — removed on exit; files are `wx`+0600 so a planted symlink can't
 redirect the write) and the inline payload gains a footer naming the path and both follow-up calls.
+**The locator is kept short** (`reika-<6 hex>/grep-1.txt`, 23 chars below the system temp dir,
+down from 48) because the model has to retype it verbatim: a Q2 model was observed dropping one
+character out of the original ~100-char path and never recovering it, which turns the recovery
+path into a failed `cat` — the loop spill exists to prevent (#144). That is also why the per-file
+suffix is a counter rather than random hex, and why the directory is created with an exclusive
+`mkdir` rather than `recursive: true`: a short name collides more readily, and silently adopting
+an existing directory is the one outcome that must not happen.
 Deliberately **no new tool**: the locator points at `read` and `grep`, which the model already uses
 constantly, so following it needs no learned behavior beyond reading a path — the reason this is
 worth trying where an explicit recall tool wouldn't be. The footer lives in the payload, not the
