@@ -5,6 +5,7 @@ import type { Tool } from '../types.js';
 import { resolveUserPath } from './_paths.js';
 import { shouldSkipDir } from './_walk.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import { recordCapped } from './_spillstats.js';
 
 const MAX_MATCHES = 100;
 // Ceiling on matches collected when spilling (REIKA_SPILL). Without it the walk stops dead at
@@ -91,6 +92,7 @@ export const grepTool: Tool = {
     }
     const shown = state.inlineCount ?? MAX_MATCHES;
     const total = `${state.count}${atCeiling ? '+' : ''}`;
+    recordCapped({ tool: 'grep', total: state.count, shown, spilled: true });
     const ref = await spillResult('grep', state.out.join('\n'));
     const footer = ref
       ? buildSpillFooter({ shown, total, unit: 'matches', ref })

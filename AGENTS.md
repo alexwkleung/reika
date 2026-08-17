@@ -352,6 +352,20 @@ correctly again. Roughly 100 characters of tmpdir hash + `reika-spill-<pid>-<8 h
 `<name>-<6 hex>.txt` is a lot of exact copying to ask of a Q2 model, and grep/glob hand out the
 same shape.
 
+**Spill stats (`REIKA_SPILL_STATS=1`, off by default — `tools/_spillstats.ts`)** answer the one
+question the fixtures cannot. An eval shows that a model follows a locator when the answer is only
+in the artifact; it cannot show what share of a real week's `bash` calls exceed 64KB at all, and
+that is what decides whether a retained window is sized right or is provisioned for a case that
+fires twice a month. One JSON line per over-cap result (`tool`, `total`, `shown`, `spilled`, and
+for bash whether the window held the whole run) plus one per call that opens an artifact, appended
+to `~/.config/reika/spill-stats.jsonl`. Sizes and tool names only — never output. Deliberately not
+on `debugLog`: that sink truncates per session (#114) and turns on a flood of unrelated
+diagnostics, and a passive week-long measurement needs a file that costs nothing to leave enabled.
+JSONL rather than a tally because the distribution is the point — "how big" and "how often" need
+the individual sizes. The `capped` events without matching `followed` events are the interesting
+ratio: windows retained for nothing. Bash records its event whether or not `REIKA_SPILL` is on,
+since over-cap frequency is a property of the workload rather than of the flag.
+
 **Over-cap glob pages are sampled, not the head** (`glob.ts` `sampleAcrossEntries`). A capped page
 sorted lexicographically is one alphabetical _region_ of the tree, not a view of it: on a 2300-file
 monorepo `**/*.ts` matched 560 files whose 200-path head covered 3 of 5 top-level packages, two

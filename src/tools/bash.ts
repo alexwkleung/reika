@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import { recordCapped } from './_spillstats.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -148,6 +149,19 @@ export function execStream(
           });
         }
       };
+      // Recorded whether or not spilling is on: the question this answers is how often bash
+      // output exceeds the cap at all, which is a property of the workload, not of the flag.
+      if (rawBytes > MAX_PAYLOAD_BYTES) {
+        recordCapped({
+          tool: 'bash',
+          total: rawBytes,
+          shown: totalBytes,
+          spilled: spilling,
+          // Whether the 4MB window held the whole run. A stream of `complete: false` lines is the
+          // evidence that SPILL_MAX_BYTES is too small; none of them means it is generous.
+          complete: spilling ? tail.bytes >= rawBytes : undefined,
+        });
+      }
       // Nothing was held back (or spilling is off): the ordinary result, byte-identical to the
       // pre-spill behavior so the flag is a clean A/B — including staying synchronous.
       if (!spilling || rawBytes <= MAX_PAYLOAD_BYTES) {
