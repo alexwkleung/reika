@@ -103,6 +103,46 @@ describe('compactHistory', () => {
     expect(recap).toMatch(/\+\d+ earlier turns? condensed/);
   });
 
+  // The bug this guards: entries break only on a USER message, so one long agent turn is a single
+  // entry — and the keep-loop used to exempt the newest entry from the budget entirely. An ordinary
+  // long turn therefore produced a recap many times its own budget, i.e. the pass meant to reclaim
+  // the window handed most of it straight back.
+  it('bounds the recap when one long turn is a single entry', () => {
+    const W16 = 16384;
+    const history: Message[] = [{ role: 'user', content: 'refactor the parser' }];
+    for (let i = 0; i < 800; i++) {
+      history.push({
+        role: 'assistant',
+        content: `Round ${i}: checking the tokenizer boundary and the call site once more.`,
+      });
+    }
+    expect(compactHistory(history, W16, 1, 512)).toBeGreaterThan(0);
+    const recap = history.find(m => m.role === 'compaction') as { content: string };
+    const budget = Math.floor((W16 - 512) * 4 * 0.1);
+    expect(recap).toBeDefined();
+    // Allow the tool/files/footer lines, which were never part of the entry budget.
+    expect(recap.content.length).toBeLessThan(budget * 1.2);
+  });
+
+  it('keeps the turn intent and the most recent rounds when trimming a long entry', () => {
+    const W16 = 16384;
+    const history: Message[] = [{ role: 'user', content: 'refactor the parser' }];
+    for (let i = 0; i < 800; i++) {
+      history.push({ role: 'assistant', content: `Round ${i}: looked at the tokenizer boundary.` });
+    }
+    compactHistory(history, W16, 1, 512);
+    const recap = (history.find(m => m.role === 'compaction') as { content: string }).content;
+    // The task itself is pinned verbatim at the front rather than folded into the recap.
+    expect(history[0]).toMatchObject({ role: 'user', content: 'refactor the parser' });
+    expect(recap).toMatch(/\+\d+ rounds? condensed/); // says what it dropped
+    expect(
+      recap.includes('Round 799') ||
+        history.some(m => m.role === 'assistant' && (m.content ?? '').includes('Round 799')),
+    ).toBe(true);
+    // The OLDEST round must not be the one that survived trimming.
+    expect(recap).not.toContain('Round 0:');
+  });
+
   it('carries a prior recap forward into the new one', () => {
     const history: Message[] = [
       { role: 'compaction', content: 'PRIOR RECAP' },
