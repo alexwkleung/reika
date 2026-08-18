@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { selectBiasWords, buildLogitBias, buildRuminationLogitBias } from './logitrecovery.js';
+import {
+  selectBiasWords,
+  buildLogitBias,
+  buildRuminationLogitBias,
+  biasableShingles,
+} from './logitrecovery.js';
 
 describe('selectBiasWords', () => {
   it('drops stopwords and short words, frequency-ranks, and caps at max', () => {
@@ -97,5 +102,22 @@ describe('buildRuminationLogitBias', () => {
     });
     expect(bias).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled(); // short-circuits before any tokenize call
+  });
+});
+
+describe('biasableShingles', () => {
+  const span = [
+    'the cache invalidation happens before the write completes so',
+    'a second recurring gram here for the test',
+  ];
+
+  it('passes reasoning-channel shingles through for biasing', () => {
+    expect(biasableShingles(span, 'reasoning')).toEqual(span);
+  });
+
+  // Content-channel repeats are the model's answer text, not filler thinking — biasing against them
+  // is the loop-tokens-≡-work-tokens trap. Both hosts fail open on an empty span.
+  it('withholds content-channel shingles so no bias is built', () => {
+    expect(biasableShingles(span, 'content')).toEqual([]);
   });
 });

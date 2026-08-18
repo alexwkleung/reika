@@ -172,33 +172,33 @@ describe('ReasoningTrace', () => {
 
   it('reports no streak across distinct, converging rounds', () => {
     const t = new ReasoningTrace();
-    expect(t.record(A, T).streak).toBe(0); // first round: no prior
-    expect(t.record(B, T).streak).toBe(0); // disjoint from A
+    expect(t.record({ reasoning: A }, T).streak).toBe(0); // first round: no prior
+    expect(t.record({ reasoning: B }, T).streak).toBe(0); // disjoint from A
   });
 
   it('builds a streak as identical reasoning repeats (the observed loop)', () => {
     const t = new ReasoningTrace();
-    expect(t.record(A, T).streak).toBe(0);
-    const r2 = t.record(A, T); // crossSim ~1.0 vs prior
+    expect(t.record({ reasoning: A }, T).streak).toBe(0);
+    const r2 = t.record({ reasoning: A }, T); // crossSim ~1.0 vs prior
     expect(r2.sim).toBeCloseTo(1, 5);
     expect(r2.streak).toBe(1);
-    expect(t.record(A, T).streak).toBe(2); // fires at streak >= 2
-    expect(t.record(A, T).streak).toBe(3);
+    expect(t.record({ reasoning: A }, T).streak).toBe(2); // fires at streak >= 2
+    expect(t.record({ reasoning: A }, T).streak).toBe(3);
   });
 
   it('resets the streak when the model breaks out of the loop', () => {
     const t = new ReasoningTrace();
-    t.record(A, T);
-    expect(t.record(A, T).streak).toBe(1);
-    expect(t.record(B, T).streak).toBe(0); // fresh reasoning clears it
+    t.record({ reasoning: A }, T);
+    expect(t.record({ reasoning: A }, T).streak).toBe(1);
+    expect(t.record({ reasoning: B }, T).streak).toBe(0); // fresh reasoning clears it
   });
 
   it('an empty (tool-only) round resets the streak conservatively', () => {
     const t = new ReasoningTrace();
-    t.record(A, T);
-    expect(t.record(A, T).streak).toBe(1);
-    expect(t.record('', T).streak).toBe(0);
-    expect(t.record(undefined, T).streak).toBe(0);
+    t.record({ reasoning: A }, T);
+    expect(t.record({ reasoning: A }, T).streak).toBe(1);
+    expect(t.record({ reasoning: '' }, T).streak).toBe(0);
+    expect(t.record({}, T).streak).toBe(0);
   });
 
   // Paraphrases A: keeps A's first ~22 words, then drifts — Jaccard lands in the warm band
@@ -210,9 +210,9 @@ describe('ReasoningTrace', () => {
 
   it('catches an echo of a round two back that a prev-only comparison would miss', () => {
     const t = new ReasoningTrace();
-    t.record(A, T); // window: [A]
-    t.record(B, T); // an intervening distinct round; prev-only would see B and reset
-    const r = t.record(A, T); // A again — echoes two rounds back, not the immediate prior (B)
+    t.record({ reasoning: A }, T); // window: [A]
+    t.record({ reasoning: B }, T); // an intervening distinct round; prev-only would see B and reset
+    const r = t.record({ reasoning: A }, T); // A again — echoes two rounds back, not the immediate prior (B)
     expect(r.sim).toBeCloseTo(1, 5); // windowed max finds the A two back
     expect(r.streak).toBe(1); // counts as a loop round despite the intervening B
   });
@@ -222,22 +222,97 @@ describe('ReasoningTrace', () => {
     expect(crossRoundSimilarity(A, WARM)).toBeGreaterThanOrEqual(T * 0.5);
     expect(crossRoundSimilarity(A, WARM)).toBeLessThan(T);
     const t = new ReasoningTrace();
-    t.record(A, T);
-    expect(t.record(A, T).streak).toBe(1); // identical → streak builds
-    expect(t.record(WARM, T).streak).toBe(1); // warm dip HOLDS at 1 (a hard reset would zero it)
-    expect(t.record(A, T).streak).toBe(2); // next clear match resumes building → fires at >= 2
+    t.record({ reasoning: A }, T);
+    expect(t.record({ reasoning: A }, T).streak).toBe(1); // identical → streak builds
+    expect(t.record({ reasoning: WARM }, T).streak).toBe(1); // warm dip HOLDS at 1 (a hard reset would zero it)
+    expect(t.record({ reasoning: A }, T).streak).toBe(2); // next clear match resumes building → fires at >= 2
   });
 
   it('exposes the recurring shingles while looping and clears them on break', () => {
     const t = new ReasoningTrace();
-    t.record(A, T);
+    t.record({ reasoning: A }, T);
     expect(t.repeatedShingles()).toEqual([]); // first round, no prior to intersect
-    t.record(A, T); // identical → looping
+    t.record({ reasoning: A }, T); // identical → looping
     const repeated = t.repeatedShingles();
     expect(repeated.length).toBeGreaterThan(0);
     // The recurring k-grams are drawn from the ruminated text itself.
     expect(repeated.every(s => A.toLowerCase().includes(s))).toBe(true);
-    t.record(B, T); // fresh reasoning breaks the loop
+    t.record({ reasoning: B }, T); // fresh reasoning breaks the loop
     expect(t.repeatedShingles()).toEqual([]);
+  });
+
+  // Channel selection. The fallback exists because `reasoning` is empty EVERY round on a model with
+  // no thinking channel, which resets the streak forever — Layer 2 was structurally blind to those
+  // models. Content is only ever consulted when reasoning never shows up.
+  describe('channel fallback', () => {
+    it('uses reasoning and ignores content when the model thinks', () => {
+      const t = new ReasoningTrace();
+      // Content repeats verbatim every round; reasoning does not. A content-channel read would
+      // report a loop here — the thinking model must stay judged on its reasoning.
+      expect(t.record({ reasoning: A, content: A }, T).channel).toBe('reasoning');
+      const r = t.record({ reasoning: B, content: A }, T);
+      expect(r.channel).toBe('reasoning');
+      expect(r.streak).toBe(0);
+    });
+
+    it('falls back to content when the model has no reasoning channel', () => {
+      const t = new ReasoningTrace();
+      expect(t.record({ content: A }, T).channel).toBe('content');
+      expect(t.record({ content: A }, T).streak).toBe(1); // repeat is now visible
+      expect(t.record({ content: A }, T).streak).toBe(2); // fires at >= 2
+    });
+
+    it('still clears the streak on genuinely fresh content', () => {
+      const t = new ReasoningTrace();
+      t.record({ content: A }, T);
+      expect(t.record({ content: A }, T).streak).toBe(1);
+      expect(t.record({ content: B }, T).streak).toBe(0);
+    });
+
+    it('does not loop on short tool-call rounds with no text at all', () => {
+      const t = new ReasoningTrace();
+      for (let i = 0; i < 4; i++) expect(t.record({ content: '' }, T).streak).toBe(0);
+    });
+
+    // A round shorter than the shingle width can't be compared, so a model that emits the same
+    // one-line preamble before each tool call must not read as a loop.
+    it('does not loop on a repeated sub-shingle preamble', () => {
+      const t = new ReasoningTrace();
+      for (let i = 0; i < 4; i++) {
+        expect(t.record({ content: 'reading the file' }, T).streak).toBe(0);
+      }
+    });
+
+    // The false-positive direction that matters for the content channel: a model doing legitimate
+    // mechanical work emits a near-identical sentence per round, differing only in the filename.
+    // The 8-gram width is what saves this — one varying word invalidates every shingle spanning it,
+    // holding measured sim at ~0.33, well under the 0.6 threshold. Guard the margin.
+    it('does not loop on mechanical per-file work with near-identical content', () => {
+      const t = new ReasoningTrace();
+      for (const f of ['auth.ts', 'user.ts', 'cart.ts', 'order.ts', 'payment.ts']) {
+        const r = t.record(
+          {
+            content:
+              `I will now update the import statement in ${f} so that it points at ` +
+              'the new module path instead of the old one',
+          },
+          T,
+        );
+        expect(r.sim).toBeLessThan(T);
+        expect(r.streak).toBe(0);
+      }
+    });
+
+    it('restarts the comparison when reasoning appears after content seeded the window', () => {
+      const t = new ReasoningTrace();
+      t.record({ content: A }, T);
+      expect(t.record({ content: A }, T).streak).toBe(1); // content-channel streak building
+      // Reasoning arrives: the content shingles in the window aren't comparable to it, so the
+      // streak restarts rather than carrying a cross-channel verdict forward.
+      const r = t.record({ reasoning: A, content: A }, T);
+      expect(r.channel).toBe('reasoning');
+      expect(r.streak).toBe(0);
+      expect(t.repeatedShingles()).toEqual([]);
+    });
   });
 });
