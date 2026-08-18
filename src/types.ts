@@ -17,6 +17,12 @@ export type Message =
       display?: string;
       nested?: boolean;
       meta?: boolean;
+      // Set on prompts the HARNESS injected rather than the user typing them: loop nudges, the
+      // truncation-retry continue, ledger and done-gate messages. They reach the model as 'user'
+      // (messagesToOpenAI drops system messages) but they are scaffolding, not input — so recovery
+      // that rewrites history can drop them without touching anything the user actually said. A
+      // content prefix would not be safe to key off: a real prompt can start with '(' too.
+      harness?: boolean;
       // Which mode the turn this prompt opened actually ran in. Stamped by the UI on real turns
       // only (never on `meta` command echoes, which happen between turns), so a saved transcript
       // says what each turn was — a plan turn and an agent turn look identical otherwise. Vibe

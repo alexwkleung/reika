@@ -13,7 +13,7 @@
 // prose rarely repeats an 8-gram verbatim, so a high ratio is signal, not base rate.
 const SHINGLE_K = 8;
 
-function shingles(text: string, k = SHINGLE_K): string[] {
+export function shingles(text: string, k = SHINGLE_K): string[] {
   const words = text.toLowerCase().replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   if (words.length < k) return [];
   const out: string[] = [];
