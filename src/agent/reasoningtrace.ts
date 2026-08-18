@@ -13,7 +13,7 @@
 // prose rarely repeats an 8-gram verbatim, so a high ratio is signal, not base rate.
 const SHINGLE_K = 8;
 
-function shingles(text: string, k = SHINGLE_K): string[] {
+export function shingles(text: string, k = SHINGLE_K): string[] {
   const words = text.toLowerCase().replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   if (words.length < k) return [];
   const out: string[] = [];
@@ -142,6 +142,11 @@ export class ReasoningTrace {
   // against all of them (max Jaccard); the buffer evicts the oldest once full.
   private window: Set<string>[] = [];
   private streak = 0;
+  // Which channel this turn's comparisons are drawn from. Chosen on the first round that carries any
+  // text and sticky afterwards: a Jaccard between one round's reasoning and another's content
+  // compares two different distributions and means nothing, so the window must hold one channel's
+  // shingles only. Same reason entropytrace.ts keeps logprobs out of its KL columns.
+  private channel?: 'reasoning' | 'content';
   // The k-grams shared by the current round and its strongest recent match when they were similar
   // enough to count as a loop — i.e. the actual ruminated content. Captured during record() (the
   // Jaccard already finds the intersection) so the last-resort logit recovery can derive bias tokens
@@ -149,12 +154,36 @@ export class ReasoningTrace {
   // See agent/logitrecovery.ts.
   private repeated: string[] = [];
 
-  // Record one round's reasoning (call once per round, in order) and return the strongest similarity
-  // vs the last few rounds plus the resulting streak. An empty round (a pure tool-call turn with no
-  // thinking) yields sim 0 and resets the streak — conservative, so a momentary gap can't sustain a
-  // false loop; the observed loops emit non-empty reasoning every round.
-  record(reasoning: string | undefined, threshold: number): { sim: number; streak: number } {
-    const text = reasoning ?? '';
+  // Record one round (call once per round, in order) and return the strongest similarity vs the last
+  // few rounds, the resulting streak, and which channel produced them. An empty round (a pure
+  // tool-call turn with no thinking) yields sim 0 and resets the streak — conservative, so a
+  // momentary gap can't sustain a false loop; the observed loops emit non-empty reasoning every round.
+  record(
+    round: { reasoning?: string; content?: string },
+    threshold: number,
+  ): { sim: number; streak: number; channel: 'reasoning' | 'content' } {
+    const reasoning = round.reasoning ?? '';
+    const content = round.content ?? '';
+
+    // Pick the channel. Reasoning wins whenever the model emits any: it is what the thresholds were
+    // calibrated against, and on a thinking model the content channel is mostly tool-call scaffolding.
+    // Content is the fallback for a model with NO reasoning channel — a non-thinking model, or one
+    // whose reasoning the dialect handling strips — which otherwise gets zero Layer-2 coverage,
+    // since `reasoning` is empty every round and the streak resets forever.
+    if (reasoning) {
+      // Reasoning arriving after a content-seeded window invalidates that window: the shingles in it
+      // came from a different channel and aren't comparable. Restart rather than report a bogus sim.
+      if (this.channel === 'content') {
+        this.window = [];
+        this.streak = 0;
+        this.repeated = [];
+      }
+      this.channel = 'reasoning';
+    } else if (!this.channel && content) {
+      this.channel = 'content';
+    }
+
+    const text = this.channel === 'content' ? content : reasoning;
     const curSet = new Set(shingles(text));
 
     // Strongest Jaccard against any round in the window, keeping that round's intersection — the
@@ -185,7 +214,7 @@ export class ReasoningTrace {
     this.window.push(curSet);
     if (this.window.length > REASONING_LOOP_WINDOW) this.window.shift();
 
-    return { sim, streak: this.streak };
+    return { sim, streak: this.streak, channel: this.channel ?? 'reasoning' };
   }
 
   // The recurring k-grams behind the current streak (empty when not looping). The logit recovery

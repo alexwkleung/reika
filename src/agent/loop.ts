@@ -31,7 +31,7 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
-import { buildRuminationLogitBias } from './logitrecovery.js';
+import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
   extractPlanReferences,
@@ -876,6 +876,10 @@ export async function runTurn(opts: {
   // Whether the detector currently sees a sustained reasoning loop. Set after each round's model
   // call (from round i-1's reasoning); read at the top of round i to decide the force-commit.
   let reasoningLoopActive = false;
+  // Which channel that verdict was drawn from (see ReasoningTrace's channel fallback). Hoisted for
+  // the same reason as the flag above — the logit-recovery sites read round i-1's value — and read
+  // ONLY to exempt the content channel from logit bias. See LOGIT_RECOVERY_CHANNELS.
+  let reasoningChannel: 'reasoning' | 'content' = 'reasoning';
 
   const window = opts.config.contextWindow;
   // Prefix-stable mode is self-gating on a known window: sticky payload liveness without the
@@ -1017,7 +1021,7 @@ export async function runTurn(opts: {
           logitRecoveryTried = true;
           const span = forceVerbatimPlanWrite
             ? verbatimRepeatedSpan // intra-block span from the aborted block (Layer 1)
-            : reasoningTrace.repeatedShingles(); // cross-round rumination (Layer 2)
+            : biasableShingles(reasoningTrace.repeatedShingles(), reasoningChannel); // cross-round rumination (Layer 2)
           const bias = await buildRuminationLogitBias({
             baseURL: opts.config.baseURL,
             apiKey: opts.config.apiKey,
@@ -1162,7 +1166,7 @@ export async function runTurn(opts: {
           const bias = await buildRuminationLogitBias({
             baseURL: opts.config.baseURL,
             apiKey: opts.config.apiKey,
-            shingles: reasoningTrace.repeatedShingles(),
+            shingles: biasableShingles(reasoningTrace.repeatedShingles(), reasoningChannel),
             toolNames: opts.tools.map(t => t.name),
             signal: opts.signal,
           });
@@ -1533,6 +1537,7 @@ export async function runTurn(opts: {
         });
         opts.history.push({
           role: 'user',
+          harness: true,
           content:
             '(your reasoning was repeating the same text and was stopped — decide from what you ' +
             'already have and call a tool or give the answer concisely, without long reasoning)',
@@ -1574,15 +1579,22 @@ export async function runTurn(opts: {
     // high (+ finishReason=length) = Layer 1 verbatim degeneration; crossSim/streak high while never
     // finalizing = Layer 2 rumination. Model-invisible. See reasoningtrace.ts.
     const rsn = response.reasoning ?? '';
-    const { sim, streak } = reasoningTrace.record(rsn, REASONING_LOOP_THRESHOLD);
+    // Content rides along as the fallback channel: a model with no reasoning channel (non-thinking,
+    // or reasoning stripped by the dialect handling) would otherwise reset the streak every round and
+    // get no Layer-2 coverage at all. The trace picks one channel per turn and sticks to it.
+    const { sim, streak, channel } = reasoningTrace.record(
+      { reasoning: rsn, content: response.content },
+      REASONING_LOOP_THRESHOLD,
+    );
     // Fire on a sustained streak, OR immediately on a near-identical round (no point waiting out the
     // streak when the reasoning is provably stuck). See REASONING_LOOP_IMMEDIATE.
     reasoningLoopActive =
       streak >= REASONING_LOOP_STREAK || (streak >= 1 && sim >= REASONING_LOOP_IMMEDIATE);
+    reasoningChannel = channel;
     if (debugEnabled()) {
       debugLog(
         `[reika:debug] reasoning-loop round=${i} selfRepeat=${selfRepeatRatio(rsn).toFixed(2)} ` +
-          `crossSim=${sim.toFixed(2)} streak=${streak} active=${reasoningLoopActive} ` +
+          `crossSim=${sim.toFixed(2)} ch=${channel} streak=${streak} active=${reasoningLoopActive} ` +
           `finishReason=${response.finishReason ?? '?'} final=${isFinal} ` +
           `reasoning≈${Math.round(rsn.length / 4)}t\n`,
       );
@@ -1630,6 +1642,7 @@ export async function runTurn(opts: {
       // compaction uses: model-facing message in history, UI-only notice via onMessage).
       opts.history.push({
         role: 'user',
+        harness: true,
         content:
           '(your previous response was cut off at the token limit — continue concisely: give the answer or call a tool directly, no long preamble)',
       });
@@ -1732,7 +1745,7 @@ export async function runTurn(opts: {
         );
         if (decision.action === 'retry') {
           typecheckGateRounds++;
-          opts.history.push({ role: 'user', content: decision.modelMessage });
+          opts.history.push({ role: 'user', harness: true, content: decision.modelMessage });
           opts.onMessage({ role: 'system', tone: 'warn', content: decision.userNotice });
           continue;
         }
@@ -1773,7 +1786,7 @@ export async function runTurn(opts: {
         );
         if (gate.action === 'retry' && gate.modelMessage) {
           planGateRounds++;
-          opts.history.push({ role: 'user', content: gate.modelMessage });
+          opts.history.push({ role: 'user', harness: true, content: gate.modelMessage });
           opts.onMessage({ role: 'system', tone: 'warn', content: gate.userNotice ?? '' });
           continue;
         }

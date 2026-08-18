@@ -175,3 +175,16 @@ async function firstTokenIds(
   for (const r of results) if (r && r.length > 0) ids.push(r[0]);
   return ids;
 }
+
+// Channel guard for the bias sites. Both logit-recovery hosts justify down-weighting a loop's
+// recurring tokens on one specific ground: at those sites the repeated k-grams are *filler* — the
+// model re-deriving the same analysis — not the work product, so nudging off them can't damage the
+// answer. That argument holds for the REASONING channel only. When ReasoningTrace has fallen back to
+// the CONTENT channel (a model with no reasoning channel, see reasoningtrace.ts), the recurring
+// k-grams ARE the model's emitted answer text, which is exactly the loop-tokens-≡-work-tokens trap
+// that makes logit_bias dangerous. So content-channel loops get no bias: both hosts already treat a
+// null bias as fail-open (the agent terminal stops as before, the plan force-write proceeds
+// unbiased), so the exemption costs nothing and needs no new branch at either site.
+export function biasableShingles(shingles: string[], channel: 'reasoning' | 'content'): string[] {
+  return channel === 'reasoning' ? shingles : [];
+}
