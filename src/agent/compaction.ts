@@ -204,14 +204,28 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   }
   flush();
 
-  // Keep the most recent entries that fit the recap budget; count the rest as omitted.
+  // Keep the most recent entries that fit the recap budget; count the rest as omitted. The newest
+  // entry is TRIMMED to fit rather than exempted from the budget. Exempting it (the old
+  // `&& kept.length > 0` guard) assumed entries are turn-sized, but an entry breaks only on a user
+  // message — so one long agent turn is a SINGLE entry, and a recap that was supposed to free the
+  // window came back many times its own budget (measured: 52k chars against a 6.3k budget on an
+  // 800-round turn, i.e. most of a 16k window still spent right after the pass meant to reclaim it).
   const kept: string[] = [];
   let used = 0;
   let omitted = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const len = entries[i].length + 1;
-    if (used + len > recapBudget && kept.length > 0) {
-      omitted = i + 1;
+    if (used + len > recapBudget) {
+      if (kept.length === 0) {
+        const fitted = fitEntry(entries[i], Math.max(0, recapBudget - 1));
+        if (fitted) {
+          kept.unshift(fitted);
+          used += fitted.length + 1;
+        }
+        omitted = i;
+      } else {
+        omitted = i + 1;
+      }
       break;
     }
     kept.unshift(entries[i]);
@@ -238,6 +252,37 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   out.push('(Older tool outputs were omitted here but can be re-read on demand.)');
 
   return out.join('\n\n');
+}
+
+// Trim one recap entry to `budget` chars. The header (the `- User:` intent line) is what makes an
+// entry legible at all, so it is kept and the entry's own `→` rounds are dropped oldest-first —
+// the most recent rounds are the ones that describe where the turn actually got to. Returns null
+// when not even the header fits, in which case the caller keeps nothing rather than a fragment.
+function fitEntry(entry: string, budget: number): string | null {
+  if (entry.length <= budget) return entry;
+  const all = entry.split('\n');
+  // An entry only has a header when its turn's user message was inside the recapped span. It often
+  // isn't — compactHistory pins the task verbatim at the front of the history instead — and then
+  // line 0 is just the OLDEST round. Treating that as a header would keep precisely the round least
+  // worth keeping, so the header is recognised by its marker rather than by position.
+  const hasHeader = all[0]?.startsWith('- ');
+  const header = hasHeader ? all[0] : null;
+  const rounds = hasHeader ? all.slice(1) : all;
+  if (header !== null && header.length > budget) return null;
+  const keptRounds: string[] = [];
+  let used = header !== null ? header.length : 0;
+  let dropped = rounds.length;
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    const len = rounds[i].length + 1;
+    // Reserve room for the condensed-count line this will need.
+    if (used + len > budget - 32) break;
+    keptRounds.unshift(rounds[i]);
+    used += len;
+    dropped = i;
+  }
+  const note = dropped > 0 ? [`  (+${dropped} round${dropped === 1 ? '' : 's'} condensed)`] : [];
+  const out = [...(header !== null ? [header] : []), ...note, ...keptRounds];
+  return out.length > 0 ? out.join('\n') : null;
 }
 
 function trunc(s: string): string {
