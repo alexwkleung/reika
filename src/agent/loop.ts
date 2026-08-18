@@ -21,6 +21,7 @@ import {
   distillPlanHandoff,
   batchAgePayloads,
   AGE_LOW_FRACTION,
+  buildRestartHistory,
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
@@ -32,6 +33,7 @@ import {
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
 import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
+import { exciseSpiral, buildAppliedLedger, formatAppliedLedger } from './selfheal.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
   extractPlanReferences,
@@ -163,6 +165,14 @@ const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
+// EXPERIMENT (issue #137, REIKA_SELF_HEAL): the last rung of the ladder, in front of the honest
+// stop. Every rung before it ends the turn if it fails; this one instead rebuilds the turn as a
+// clean conversation — spiral excised, request and any converged plan verbatim — and gives the model
+// a genuine second start. Two per turn: enough to be a real second chance, and the digest for the
+// second is built from the ORIGINAL history rather than the first digest, so the losses of
+// summarizing a summary never compound. Off by default while unproven.
+const SELF_HEAL = process.env.REIKA_SELF_HEAL === '1';
+const MAX_SELF_HEAL_RESTARTS = 2;
 // EXPERIMENT (Tier 2 logit recovery): one biased round before the rumination terminal stop, gently
 // down-weighting the loop's recurring tokens to nudge the model off the rut. Gated for A/B; strict
 // no-op when off, and self-gating on /tokenize being reachable (so non-llama.cpp backends just stop
@@ -863,16 +873,25 @@ export async function runTurn(opts: {
   // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / dup-live /
   // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
   // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
-  const readTrace = new ReadTrace();
+  let readTrace = new ReadTrace();
   // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
   // Recorded unconditionally (cheap); only the READ_FIRST flag lets it withhold anything.
-  const readFirst = new ReadFirstGate(opts.bundle.cwd);
+  let readFirst = new ReadFirstGate(opts.bundle.cwd);
+  // Self-healing restarts spent this turn (#137, REIKA_SELF_HEAL). Bounded by
+  // MAX_SELF_HEAL_RESTARTS. This is the OUTERMOST retry budget — every other cap in this turn
+  // (length retries, converge retries, the gate rounds) sits inside it and is reset by a restart, so
+  // it has to be the boundary or the worst case multiplies instead of adding.
+  let selfHealRestarts = 0;
+  // The history as it stood before the FIRST restart. The second restart digests from this rather
+  // than from the first restart's output: re-summarizing a summary compounds the losses, and the
+  // failure mode is perverse — attempt two ends up worse-informed than attempt one.
+  let preRestartHistory: Message[] | null = null;
   // Cross-round reasoning-loop detector (Layer 2). Records each round's reasoning to spot the model
   // re-deriving the same analysis instead of converging. Always recorded (cheap, and the debug
   // diagnostic reads it); its verdict only drives a force-commit when REASONING_LOOP_BREAK is set.
   // See agent/reasoningtrace.ts.
-  const reasoningTrace = new ReasoningTrace();
+  let reasoningTrace = new ReasoningTrace();
   // Whether the detector currently sees a sustained reasoning loop. Set after each round's model
   // call (from round i-1's reasoning); read at the top of round i to decide the force-commit.
   let reasoningLoopActive = false;
@@ -957,6 +976,85 @@ export async function runTurn(opts: {
       `[reika:debug] plan-track steps=${planSteps.length} done=${planSteps.filter(s => s.done).length}\n`,
     );
   }
+
+  // Self-healing restart (#137). Rebuild the turn as a clean conversation and reset every per-turn
+  // counter, so the next round starts genuinely fresh instead of carrying the spiral's bookkeeping
+  // forward. Returns false when the budget is spent, the flag is off, or there is no user request to
+  // rebuild around — the caller then falls through to the honest stop it was already headed for.
+  // Fail-closed in the safe direction: a restart that cannot be built degrades to the stop, never to
+  // a half-reset turn.
+  const attemptSelfHeal = (round: number): boolean => {
+    if (!SELF_HEAL || selfHealRestarts >= MAX_SELF_HEAL_RESTARTS) return false;
+
+    // Attempt 2 digests the ORIGINAL history, not attempt 1's output — see preRestartHistory.
+    const source = preRestartHistory ?? opts.history;
+    const excised = exciseSpiral(source, {
+      shingles: reasoningTrace.repeatedShingles(),
+      loopingReads: readTrace
+        .loopingReads(round, LOOP_RECENT_ROUNDS, LOOP_AGED_REPEATS, LOOP_LIVE_REPEATS)
+        .map(r => r.path),
+    });
+    // The ledger reads the FULL source, not the excised copy: excision stubs duplicate read
+    // payloads, and an edit whose evidence was trimmed must still count as applied.
+    const applied = formatAppliedLedger(buildAppliedLedger(source));
+    const rebuilt = buildRestartHistory(excised.history, {
+      attempt: selfHealRestarts + 1,
+      maxAttempts: MAX_SELF_HEAL_RESTARTS,
+      contextWindow: window,
+      calibration,
+      minGen: opts.config.minGenTokens,
+      applied,
+    });
+    if (!rebuilt) {
+      debugLog(`[reika:debug] round=${round} self-heal declined — no user request to restart\n`);
+      return false;
+    }
+
+    if (!preRestartHistory) preRestartHistory = [...opts.history];
+    selfHealRestarts++;
+    // Replace in place: the caller holds this array reference.
+    opts.history.splice(0, opts.history.length, ...rebuilt.history);
+
+    // Reset the per-turn state the spiral built up. Everything bounded per turn resets, because the
+    // turn is starting over; the typecheck baseline deliberately does NOT — it was captured before
+    // the edits that are already on disk, and recapturing now would adopt those edits' errors as the
+    // baseline and hide them.
+    reasoningTrace = new ReasoningTrace();
+    readTrace = new ReadTrace();
+    readFirst = new ReadFirstGate(opts.bundle.cwd);
+    seenReadOnly.clear();
+    reasoningLoopActive = false;
+    reasoningChannel = 'reasoning';
+    // withdrawInspection is declared per-round inside the loop, so it needs no reset here.
+    loopActiveRounds = 0;
+    logitRecoveryTried = false;
+    convergeRetries = 0;
+    steerRetryActive = false;
+    lengthRetries = 0;
+    typecheckGateRounds = 0;
+    planGateRounds = 0;
+    lastEditFailed = false;
+    lastEditFailure = undefined;
+    editRecoveryGroundingTried = false;
+
+    debugLog(
+      `[reika:debug] round=${round} self-heal attempt=${selfHealRestarts}/${MAX_SELF_HEAL_RESTARTS} ` +
+        `droppedRounds=${excised.droppedRounds} strippedReasoning=${excised.strippedReasoning} ` +
+        `stubbed=${excised.stubbedPayloads} nudges=${excised.droppedNudges} ` +
+        `freed=${excised.freedChars} plan=${rebuilt.carriedPlan} applied=${applied ? 'yes' : 'none'}\n`,
+    );
+    // Persistent receipt — this must NOT read as an abrupt stop. Names the budget so the user can
+    // see it is bounded rather than churning.
+    opts.onMessage({
+      role: 'system',
+      tone: 'warn',
+      content:
+        `Stuck — restarting with a summary of the work so far ` +
+        `(${selfHealRestarts} of ${MAX_SELF_HEAL_RESTARTS}).`,
+    });
+    opts.onRecovering?.(true);
+    return true;
+  };
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
@@ -1189,12 +1287,19 @@ export async function runTurn(opts: {
             commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
             return;
           }
+        } else if (attemptSelfHeal(i)) {
+          // Tier 3, the last rung (#137): everything cheaper has failed, so rebuild the turn and
+          // give the model a genuine second start instead of ending here. attemptSelfHeal has
+          // already replaced the history and reset the per-turn counters; `continue` re-enters the
+          // round loop on the fresh conversation. Returns false when the budget is spent or there
+          // is no request to rebuild around, in which case we fall through to the stop below.
+          continue;
         } else {
           debugLog(
             `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
-              `edited=${editingStarted}\n`,
+              `edited=${editingStarted} restarts=${selfHealRestarts}\n`,
           );
-          commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+          commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted, selfHealRestarts);
           return;
         }
       }
@@ -1560,9 +1665,17 @@ export async function runTurn(opts: {
         debugLog(`[reika:debug] round=${i} converge-retry (plan) attempt=${convergeRetries}\n`);
         continue;
       }
+      // Last rung before the stop (#137): rebuild the turn and try again from a clean conversation.
+      // In plan mode a converged plan rides through verbatim — it is the surviving deliverable, not
+      // exploration to fold away — so a restart here resumes with the plan intact.
+      if (attemptSelfHeal(i)) {
+        // planForceWriteLoopTriggered is recomputed per round from the (now reset) detector state.
+        forceVerbatimPlanWrite = false;
+        continue;
+      }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
       // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
-      commitSpiralStop(opts, turnStart, fetchedUrls);
+      commitSpiralStop(opts, turnStart, fetchedUrls, selfHealRestarts);
       return;
     }
 
@@ -2152,6 +2265,7 @@ function commitSpiralStop(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   turnStart: number,
   fetchedUrls: Set<string>,
+  restarts = 0,
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -2166,8 +2280,8 @@ function commitSpiralStop(
     role: 'assistant',
     content:
       `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
-      `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
-      `rephrasing or narrowing it, or use a stronger model.`,
+      `indefinitely.${examined}${restartNote(restarts)} This looks like a request the model is ` +
+      `getting stuck on; try rephrasing or narrowing it, or use a stronger model.`,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -2179,11 +2293,22 @@ function commitSpiralStop(
 // bash). Ends the turn honestly rather than running to maxTurns. If the turn made edits, the work is
 // already on disk — frame it as "done but stopped re-checking" and name the edited files; otherwise
 // it's a stuck-without-progress stop. Mirrors commitSpiralStop (plan mode).
+// How the stop describes itself once restarts exist. Without this the terminal copy reads the same
+// whether the harness gave up immediately or already spent two clean restarts — a difference the
+// user needs, because it says whether the model is stuck on the request or on the approach.
+function restartNote(restarts: number): string {
+  if (restarts <= 0) return '';
+  return restarts === 1
+    ? ' I already restarted once with a clean summary and it looped again.'
+    : ` I already restarted ${restarts} times with a clean summary and it looped again each time.`;
+}
+
 function commitAgentLoopStop(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   turnStart: number,
   fetchedUrls: Set<string>,
   edited: boolean,
+  restarts = 0,
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -2195,12 +2320,13 @@ function commitAgentLoopStop(
     }
   }
   const fileList = files.size > 0 ? ` to ${[...files].slice(0, 8).join(', ')}` : '';
+  const note = restartNote(restarts);
   const content = edited
     ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
-      `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
-      `anything's off.`
-    : `I kept repeating the same step without making progress, so I've stopped rather than loop. Let ` +
-      `me know how you'd like to proceed.`;
+      `I've stopped to avoid looping.${note} The edits are saved — review them and ask me to continue ` +
+      `if anything's off.`
+    : `I kept repeating the same step without making progress, so I've stopped rather than loop.${note} ` +
+      `Let me know how you'd like to proceed.`;
   const m: Message = {
     role: 'assistant',
     content,
