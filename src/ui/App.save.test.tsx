@@ -81,14 +81,39 @@ function plain(frame: string | undefined): string {
 
 async function mountApp() {
   const app = render(<App />);
-  for (let i = 0; i < 40 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
+  for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
+  if (plain(app.lastFrame()).includes('Loading…')) throw new Error('App never finished loading');
   return app;
 }
 
-/** Type a line and submit it, then let the resulting turn/command settle. */
-async function submit(app: { stdin: { write: (s: string) => void } }, text: string) {
-  app.stdin.write(text);
-  await tick();
+// The current contents of the input row — the boxed line carrying the '> ' prompt. Scoped to that
+// row on purpose: the surrounding scrollback echoes earlier commands, so a whole-frame search would
+// report text as "typed" that is really just sitting in history.
+function inputLine(app: { lastFrame: () => string | undefined }): string {
+  const rows = plain(app.lastFrame())
+    .split('\n')
+    .filter(l => l.includes('│') && l.includes('> '));
+  return rows[rows.length - 1] ?? '';
+}
+
+/** Type a line and submit it, then let the resulting turn/command settle.
+ *
+ * The write is RETRIED until the input echoes it. Ink's useInput subscription is not live the
+ * instant the frame paints, and under full-suite parallel load the first submit's characters were
+ * dropped outright — the input still showed its placeholder afterwards and the turn never happened,
+ * surfacing downstream as a missing mode stamp. Waiting on the frame's appearance cannot fix that,
+ * because the frame already looks idle and ready. Retrying is safe rather than double-typing:
+ * `stdin.write` emits one 'data' event, so a dropped write is all-or-nothing and leaves nothing
+ * behind to append to. */
+async function submit(
+  app: { stdin: { write: (s: string) => void }; lastFrame: () => string | undefined },
+  text: string,
+) {
+  for (let i = 0; i < 200 && !inputLine(app).includes(text); i++) {
+    app.stdin.write(text);
+    await tick(20);
+  }
+  if (!inputLine(app).includes(text)) throw new Error(`input never echoed: ${text}`);
   app.stdin.write('\r');
   await tick(120);
 }
