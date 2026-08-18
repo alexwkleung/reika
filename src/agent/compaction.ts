@@ -385,3 +385,134 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   if (findings.trim()) out.push(`Findings:\n${findings}`);
   return out.join('\n\n');
 }
+
+// ---------------------------------------------------------------------------
+// Self-healing restart (issue #137)
+// ---------------------------------------------------------------------------
+
+// The prompt the user actually typed for the turn in progress — the last `user` message that is
+// neither a slash-command echo (`meta`) nor harness scaffolding (`harness`). Both exclusions matter
+// here: a restart that rebuilds the conversation around "(your reasoning was repeating…)" would
+// hand the model a nudge as its goal.
+export function lastUserRequest(history: Message[]): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'user' && !m.meta && !m.harness) return m.content;
+  }
+  return null;
+}
+
+export type RestartHistory = {
+  // The replacement history — short, ordered, and structurally a fresh conversation.
+  history: Message[];
+  // The digest text, for the debug line.
+  digest: string;
+  // Whether a converged plan was carried through untouched.
+  carriedPlan: boolean;
+};
+
+// Rebuild the turn as a clean conversation: a bounded digest of what happened, the user's request
+// verbatim, and any converged plan verbatim after it.
+//
+// Verbatim is doing real work in both cases. The digest summarizes the *work*; the request is
+// copied through untouched because on a small window a paraphrased goal drifts, and a restart that
+// loses the goal is worse than the honest stop it replaced. A converged plan is carried the same
+// way for a different reason: the plan already DID the exploring for this problem, so it is the
+// surviving deliverable rather than exploration to be folded — digesting it would discard the one
+// artifact the spiral didn't destroy. Same principle as distillPlanHandoff above, at a later
+// boundary.
+//
+// The result is deliberately small, which is also why this and ordinary compaction are ONE pass
+// rather than two: a restart under context pressure already ends below any threshold compaction was
+// about to fire on, so the caller skips the compaction it would otherwise have run (loop.ts).
+//
+// `applied` is the formatted applied-changes ledger from selfheal.ts — built from tool results, and
+// passed in rather than derived here so this module stays free of edit-tool knowledge.
+//
+// Returns null when there is no user request to rebuild around: with nothing to restate, a restart
+// would produce a conversation with no goal, and the caller should fall through to the honest stop.
+export function buildRestartHistory(
+  history: Message[],
+  opts: {
+    attempt: number;
+    maxAttempts: number;
+    contextWindow?: number;
+    calibration?: number;
+    minGen?: number;
+    applied?: string;
+  },
+): RestartHistory | null {
+  const request = lastUserRequest(history);
+  if (request === null) return null;
+
+  // Locate the two messages carried verbatim so the recap doesn't restate them in truncated form.
+  let requestIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'user' && !m.meta && !m.harness) {
+      requestIdx = i;
+      break;
+    }
+  }
+  let planIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'assistant' && m.planFinal) {
+      planIdx = i;
+      break;
+    }
+  }
+
+  const span = history.filter((_, i) => i !== requestIdx && i !== planIdx);
+  const calib = opts.calibration && opts.calibration > 0 ? opts.calibration : 1;
+  const window = opts.contextWindow ?? 0;
+  const avail = window
+    ? availTokens(window, opts.minGen ?? DEFAULT_MIN_GEN_TOKENS)
+    : // No declared window: fall back to the recap's own budget at a conservative default rather
+      // than an unbounded digest, which is the one outcome a restart cannot afford.
+      DEFAULT_MIN_GEN_TOKENS * 4;
+  // buildRecap groups consecutive assistant rounds into ONE entry (it only breaks on a user
+  // message), and its keep-loop always retains the first entry however large it is. A spiral is
+  // precisely that shape — hundreds of assistant rounds with no user turn between them — so the
+  // recap it returns here can run to tens of thousands of characters even though the budget is a
+  // few thousand. The restart cannot afford that: it is the pass that has to end BELOW the
+  // compaction threshold. Clamp to the same budget buildRecap was aiming for, keeping the tail
+  // because the most recent work is the part still worth knowing.
+  const recapBudget = Math.floor((avail * CHARS_PER_TOKEN * RECAP_FRACTION) / calib);
+  const recap = clampTail(buildRecap(span, avail, calib), recapBudget);
+
+  const parts = [
+    `[Restarted — attempt ${opts.attempt} of ${opts.maxAttempts}. The previous attempt stopped ` +
+      `making progress and its conversation was reset. This is a clean start with the same goal.]`,
+    `What happened before the reset:\n${recap}`,
+  ];
+  if (opts.applied) parts.push(opts.applied);
+  parts.push(
+    'How to proceed:\n' +
+      '- The request below is the goal. Work from it, not from what was tried before.\n' +
+      '- Check the current state of any file listed above before editing it again.\n' +
+      '- Take a different approach than the summary describes — the earlier one did not converge.',
+  );
+  const digest = parts.join('\n\n');
+
+  const rebuilt: Message[] = [
+    { role: 'compaction', content: digest },
+    { role: 'user', content: request },
+  ];
+  if (planIdx >= 0) {
+    const plan = history[planIdx];
+    if (plan.role === 'assistant') rebuilt.push({ ...plan });
+  }
+
+  return { history: rebuilt, digest, carriedPlan: planIdx >= 0 };
+}
+
+// Keep the last `maxChars` of `text`, cut on a line boundary so a truncated recap never ends
+// mid-word, and mark what went. Returns the input untouched when it already fits.
+function clampTail(text: string, maxChars: number): string {
+  if (maxChars <= 0 || text.length <= maxChars) return text;
+  const tail = text.slice(text.length - maxChars);
+  const nl = tail.indexOf('\n');
+  const cut = nl >= 0 ? tail.slice(nl + 1) : tail;
+  return `(earlier detail condensed)\n${cut}`;
+}
