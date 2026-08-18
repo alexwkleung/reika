@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
 import { displayCwd } from './scrub.js';
+import { contentWidth } from './layout.js';
 
 const LOGO = [
   '██████╗ ███████╗██╗██╗  ██╗ █████╗ ',
@@ -49,7 +50,10 @@ export function Splash({
           {rule}
         </Text>
       </Box>
-      <Box flexDirection="column">
+      {/* Width bound so the value column wraps under Ink instead of overflowing the row: these
+          are label+value rows inside <Static>, where an unbounded row lets a long cwd spill past
+          the edge and the terminal breaks it mid-path with no hanging indent. See layout.ts. */}
+      <Box flexDirection="column" width={contentWidth()}>
         <Box>
           <Text color={theme.muted}>{padLabel('model:', labelWidth)}</Text>
           <Text>{model}</Text>

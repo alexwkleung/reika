@@ -8,6 +8,7 @@ import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
 import { formatDurationMs } from './format.js';
+import { contentWidth } from './layout.js';
 
 export function Scrollback({
   messages,
@@ -63,10 +64,9 @@ function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
   return Math.max(3, Math.floor(avail / activeBlocks));
 }
 
-// Content width for a live block: terminal columns minus the App's paddingX={1} on
-// each side. Matches the width Ink lays the block's <Text> out at.
+// Content width for a live block. Matches the width Ink lays the block's <Text> out at.
 function liveContentWidth(): number {
-  return Math.max(20, (process.stdout.columns || 80) - 2);
+  return contentWidth();
 }
 
 // Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
@@ -448,5 +448,8 @@ function truncate(s: string, max: number): string {
 // paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6, and the
 // nesting indent when the tool ran inside a subagent.
 function diffViewWidth(indent = 0): number {
-  return Math.max(20, (process.stdout.columns || 80) - 6 - indent);
+  // DIFF_MARGIN is the diff block's own marginLeft={4}; contentWidth pays for the App's paddingX.
+  return contentWidth(DIFF_MARGIN + indent);
 }
+
+const DIFF_MARGIN = 4;

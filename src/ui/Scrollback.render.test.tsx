@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { homedir } from 'node:os';
 import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
+import chalk from 'chalk';
 import { Scrollback } from './Scrollback.js';
 import type { Message } from '../types.js';
 
@@ -356,5 +357,87 @@ describe('Scrollback command output sanitizing', () => {
     expect(frame).not.toContain(ESC);
     expect(frame).toContain('cleared');
     expect(frame).toContain('echo hi');
+  });
+});
+
+// Issue #154, second surface: the diff view paints changed lines with a background padded out to
+// the available width. The padding was counted in CHARACTERS, so a tab (one character, eight
+// columns) or a CJK glyph (one character, two columns) pushed the block past where every other row
+// ended — a ragged colored edge, and a wrapped colored stub once it cleared the terminal. Tabs are
+// flattened before layout and the padding is measured in columns.
+//
+// Color is forced on for these: with chalk at level 0 the background escapes disappear and Ink
+// trims the padding spaces as trailing whitespace, so the very thing under test isn't in the frame.
+describe('Scrollback diff view width', () => {
+  const TAB = '\t';
+
+  // What a terminal does with a tab that reached it: advance to the next 8-column stop.
+  const expandTabs = (row: string): string => {
+    let out = '';
+    for (const ch of row) {
+      if (ch !== TAB) {
+        out += ch;
+        continue;
+      }
+      const stop = (Math.floor(stringWidth(out) / 8) + 1) * 8;
+      out += ' '.repeat(stop - stringWidth(out));
+    }
+    return out;
+  };
+  let level: typeof chalk.level;
+
+  beforeAll(() => {
+    level = chalk.level;
+    chalk.level = 3;
+  });
+  afterAll(() => {
+    chalk.level = level;
+  });
+
+  const diffFrame = (diff: string, path = 'main.go'): string[] => {
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        callId: 't1',
+        summary: `Edited ${path}`,
+        diff: { text: diff, path, added: 1, removed: 1, startLine: 10 },
+      },
+    ];
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return (lastFrame() ?? '').split('\n');
+  };
+
+  it('paints tab-indented changed lines to the same width as every other one', () => {
+    const rows = diffFrame(
+      [
+        `  func handler() {`,
+        `- ${TAB}${TAB}log.Printf("old")`,
+        `+ ${TAB}${TAB}log.Printf("new value")`,
+        `  ${TAB}}`,
+      ].join('\n'),
+    );
+    const changed = rows.filter(r => r.includes('log.Printf'));
+    expect(changed).toHaveLength(2);
+    // Different content lengths, one painted width: that is the padding doing its job.
+    expect(new Set(changed.map(r => stringWidth(r))).size).toBe(1);
+    expect(rows.join('\n')).not.toContain(TAB);
+  });
+
+  it('keeps a deeply tab-indented changed line inside the terminal width', () => {
+    const width = process.stdout.columns || 100;
+    const rows = diffFrame([`  ok`, `+ ${TAB}${TAB}${TAB}deeply := "indented"`].join('\n'));
+    // Measured the way the SCREEN sees it — a raw tab left in the frame is zero columns to
+    // string-width and eight to the terminal, which is the whole bug; measuring the frame as-is
+    // would report every over-wide row as fitting.
+    for (const row of rows) expect(stringWidth(expandTabs(row))).toBeLessThanOrEqual(width);
+  });
+
+  it('pads double-width characters by column, not by character count', () => {
+    const rows = diffFrame([`- label: "old"`, `+ label: "日本語のラベル"`].join('\n'), 'ui.ts');
+    const changed = rows.filter(r => r.includes('label:'));
+    expect(changed).toHaveLength(2);
+    expect(new Set(changed.map(r => stringWidth(r))).size).toBe(1);
   });
 });

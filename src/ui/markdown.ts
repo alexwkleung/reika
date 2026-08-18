@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import { theme } from './theme.js';
 import { codeTheme, resolveLanguage } from './highlight.js';
+import { sanitizeTerminalText } from './termtext.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
 // in its source) and restores it in a final pass. See the listitem override.
@@ -115,7 +116,13 @@ marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
 
 export function renderMarkdown(content: string): string {
   try {
-    const parsed = marked.parse(content, { async: false });
+    // Sanitize the SOURCE, never the output (which carries the highlighter's own escape codes).
+    // A model answering about Go or a Makefile emits tab-indented code fences, and marked-terminal
+    // passes those tabs straight through. Ink measures a tab as zero columns, so the live block's
+    // row budget — the guard that keeps the dynamic frame under the viewport — undercounts every
+    // one of those lines, and the terminal expands them to eight columns anyway. Same defect as
+    // the bash chip (issue #154), on the path where miscounting rows costs the most.
+    const parsed = marked.parse(sanitizeTerminalText(content), { async: false });
     return typeof parsed === 'string' ? parsed.trimEnd() : content;
   } catch {
     return content;
@@ -141,7 +148,7 @@ export function renderInlineMarkdown(text: string): string {
 // code blocks). Edge cases like links/tables/fences degrade to the prior literal-text
 // behavior — strict improvement, never worse.
 export function stripReasoningMarkdown(text: string): string {
-  return text
+  return sanitizeTerminalText(text)
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/(?<!\*)\*(.+?)\*(?!\*)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')

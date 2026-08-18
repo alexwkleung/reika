@@ -172,3 +172,36 @@ describe('unsupported fence languages', () => {
     expect(resolveLanguage(undefined)).toBe('');
   });
 });
+
+// Issue #154, fourth surface. A model answering about Go or a Makefile emits tab-indented code
+// fences, and marked-terminal passes tabs straight through. Ink measures a tab as zero columns and
+// the terminal draws it as eight, so the live block's row budget — the guard that keeps the
+// dynamic frame under the viewport height — undercounts exactly the lines that are widest.
+describe('markdown terminal-unsafe characters', () => {
+  const TAB = '\t';
+
+  it('flattens tabs inside a code fence', () => {
+    const md = ['```go', 'func main() {', `${TAB}if ok {`, `${TAB}${TAB}run()`, '}', '```'].join(
+      '\n',
+    );
+    const out = renderMarkdown(md);
+    expect(out).not.toContain(TAB);
+    expect(out).toContain('run()');
+  });
+
+  it('keeps code-fence indentation proportional after flattening', () => {
+    const md = ['```go', `${TAB}one`, `${TAB}${TAB}two`, '```'].join('\n');
+    const lines = renderMarkdown(md).split('\n');
+    const one = lines.find(l => l.includes('one'))!;
+    const two = lines.find(l => l.includes('two'))!;
+    expect(two.indexOf('two')).toBeGreaterThan(one.indexOf('one'));
+  });
+
+  it('flattens tabs in reasoning text', () => {
+    expect(stripReasoningMarkdown(`plan:${TAB}step one`)).not.toContain(TAB);
+  });
+
+  it('leaves ordinary prose unchanged', () => {
+    expect(renderMarkdown('Just a **sentence** with `code`.')).toContain('sentence');
+  });
+});
