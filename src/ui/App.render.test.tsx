@@ -69,8 +69,47 @@ const tick = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 /** Mount, wait out bootstrap, and return the harness once App is past 'Loading…'. */
 async function mountApp() {
   const app = render(<App />);
-  for (let i = 0; i < 40 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
+  for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
+  if (plain(app.lastFrame()).includes('Loading…')) throw new Error('App never finished loading');
   return app;
+}
+
+/** The current contents of the input row — the boxed line carrying the '> ' prompt. Scoped to that
+ * row because the surrounding scrollback echoes earlier input, and a whole-frame search would
+ * report text as "typed" that is really just sitting in history. */
+function inputLine(app: { lastFrame: () => string | undefined }): string {
+  const rows = plain(app.lastFrame())
+    .split('\n')
+    .filter(l => l.includes('│') && l.includes('> '));
+  return rows[rows.length - 1] ?? '';
+}
+
+/** Type a line and submit it, then let the resulting turn/command settle.
+ *
+ * The write is RETRIED until the input echoes it. Ink's useInput subscription is not live the
+ * instant the frame paints, and under full-suite parallel load the first write's characters were
+ * dropped outright — the input still showed its placeholder afterwards and the turn never
+ * happened. Waiting on the frame's appearance cannot fix that, because the frame already looks
+ * idle and ready. Retrying is safe rather than double-typing: `stdin.write` emits one 'data'
+ * event, so a dropped write is all-or-nothing and leaves nothing behind to append to. */
+async function type(
+  app: { stdin: { write: (s: string) => void }; lastFrame: () => string | undefined },
+  text: string,
+) {
+  for (let i = 0; i < 200 && !inputLine(app).includes(text); i++) {
+    app.stdin.write(text);
+    await tick(20);
+  }
+  if (!inputLine(app).includes(text)) throw new Error(`input never echoed: ${text}`);
+}
+
+async function submit(
+  app: { stdin: { write: (s: string) => void }; lastFrame: () => string | undefined },
+  text: string,
+) {
+  await type(app, text);
+  app.stdin.write('\r');
+  await tick(120);
 }
 
 /** Lines of the current frame, trimmed of the App's paddingX and trailing blanks. */
@@ -111,10 +150,7 @@ describe('App layout', () => {
 
   it('shows the Working indicator above the input during a turn', async () => {
     const app = await mountApp();
-    app.stdin.write('hi');
-    await tick();
-    app.stdin.write('\r');
-    await tick(120);
+    await submit(app, 'hi');
 
     expect(runTurn).toHaveBeenCalledTimes(1);
     const rows = lines(app);
@@ -130,12 +166,9 @@ describe('App layout', () => {
   // top one so the two read as one frame; anything rendered between them lands *inside* it.
   it('keeps the Working indicator outside the completion/input frame', async () => {
     const app = await mountApp();
-    app.stdin.write('hi');
-    await tick();
-    app.stdin.write('\r');
-    await tick(120);
+    await submit(app, 'hi');
     // Open the slash-command list mid-turn.
-    app.stdin.write('/');
+    await type(app, '/');
     await tick(120);
 
     const rows = lines(app);
@@ -165,16 +198,10 @@ describe('App layout', () => {
 
   it('keeps a queued message outside the completion/input frame', async () => {
     const app = await mountApp();
-    app.stdin.write('hi');
-    await tick();
-    app.stdin.write('\r');
-    await tick(120);
+    await submit(app, 'hi');
     // Queued while the turn is in flight.
-    app.stdin.write('later');
-    await tick();
-    app.stdin.write('\r');
-    await tick(120);
-    app.stdin.write('/');
+    await submit(app, 'later');
+    await type(app, '/');
     await tick(120);
 
     const rows = lines(app);
