@@ -4,10 +4,11 @@ import wrapAnsi from 'wrap-ansi';
 import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
-import { scrubDisplay } from './scrub.js';
+import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
 import { formatDurationMs } from './format.js';
+import { contentWidth } from './layout.js';
 
 export function Scrollback({
   messages,
@@ -63,10 +64,9 @@ function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
   return Math.max(3, Math.floor(avail / activeBlocks));
 }
 
-// Content width for a live block: terminal columns minus the App's paddingX={1} on
-// each side. Matches the width Ink lays the block's <Text> out at.
+// Content width for a live block. Matches the width Ink lays the block's <Text> out at.
 function liveContentWidth(): number {
-  return Math.max(20, (process.stdout.columns || 80) - 2);
+  return contentWidth();
 }
 
 // Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
@@ -129,7 +129,7 @@ function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text color={theme.muted}>{scrubDisplay(shown)}</Text>
+      <Text color={theme.muted}>{scrubOutput(shown)}</Text>
     </Box>
   );
 }
@@ -168,9 +168,9 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
       <Box flexDirection="column" marginTop={1}>
         <Text>
           <Text color={theme.success}>{'$ '}</Text>
-          <Text>{scrubDisplay(msg.command)}</Text>
+          <Text>{scrubOutput(msg.command)}</Text>
         </Text>
-        {msg.output ? <Text color={theme.muted}>{scrubDisplay(msg.output)}</Text> : null}
+        {msg.output ? <Text color={theme.muted}>{scrubOutput(msg.output)}</Text> : null}
       </Box>
     );
   }
@@ -235,8 +235,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               immediately so it reads cleanly. The model-facing summary
               (loop.ts) keeps the verb as grounding. Scoped to Read because other
               tools' verbs ("Found", "Ran:", "Edited") carry meaning. */}
+          {/* scrubOutput, not scrubDisplay: a summary quotes what the tool was given — a bash
+              command, an edit's non-matching line — so it can carry the same tabs and control
+              characters raw output does, on a row that must stay one row. */}
           <Text color={theme.secondary}>
-            {scrubDisplay((msg.summary ?? '').replace(/^Read /, ''))}
+            {scrubOutput((msg.summary ?? '').replace(/^Read /, ''))}
           </Text>
         </Text>
         {msg.diff ? (
@@ -253,7 +256,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <Text>
               <Text color={theme.success}>{'$ '}</Text>
-              <Text>{scrubDisplay(msg.command.text)}</Text>
+              <Text>{scrubOutput(msg.command.text)}</Text>
             </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
@@ -263,7 +266,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
                 {msg.command.outputTruncated ? (
                   <Text color={theme.muted}>…(earlier output omitted)</Text>
                 ) : null}
-                <Text color={theme.muted}>{scrubDisplay(msg.command.outputTail)}</Text>
+                <Text color={theme.muted}>{scrubOutput(msg.command.outputTail)}</Text>
               </Box>
             ) : null}
           </Box>
@@ -445,5 +448,8 @@ function truncate(s: string, max: number): string {
 // paddingX={1} on each side (2) plus the tool-diff marginLeft={4} = 6, and the
 // nesting indent when the tool ran inside a subagent.
 function diffViewWidth(indent = 0): number {
-  return Math.max(20, (process.stdout.columns || 80) - 6 - indent);
+  // DIFF_MARGIN is the diff block's own marginLeft={4}; contentWidth pays for the App's paddingX.
+  return contentWidth(DIFF_MARGIN + indent);
 }
+
+const DIFF_MARGIN = 4;

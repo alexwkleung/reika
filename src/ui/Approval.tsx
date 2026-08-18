@@ -3,6 +3,13 @@ import type { ApprovalRequest } from '../types.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
 import { highlightCode } from './highlight.js';
+import { sanitizeTerminalText } from './termtext.js';
+import { contentWidth } from './layout.js';
+
+// The dialog's own border (1 column each side) plus its paddingX={1}, on top of the App padding
+// contentWidth already accounts for. The diff has to wrap inside all of it or its rows push
+// through the border — which is also how the live frame ends up taller than Ink thinks it is.
+const DIALOG_CHROME = 4;
 
 export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
 export type ApprovalChoice = 0 | 1 | 2;
@@ -45,7 +52,7 @@ export function Approval({
           <DiffView
             diff={request.preview}
             path={request.subject}
-            maxWidth={Math.max(20, (process.stdout.columns || 80) - 6)}
+            maxWidth={contentWidth(DIALOG_CHROME)}
             startLine={request.startLine}
           />
         )}
@@ -82,7 +89,11 @@ export function Approval({
 }
 
 function CommandPreview({ command }: { command: string }) {
-  const lines = command.split('\n');
+  // Sanitized like the scrollback chip (issue #154), but NOT scrubbed: this is the dialog where
+  // the user decides whether to run the thing, so it must show the command as written, secrets
+  // and all. Tabs and cursor motions still go — inside a bordered box they wrap past the border
+  // and the frame comes apart around the very text being approved.
+  const lines = sanitizeTerminalText(command).split('\n');
   return (
     <>
       {lines.map((line, i) => (

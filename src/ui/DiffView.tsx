@@ -1,7 +1,11 @@
 import { Box, Text } from 'ink';
 import { diffWordsWithSpace } from 'diff';
+import stringWidth from 'string-width';
+import wrapAnsi from 'wrap-ansi';
+import chalk from 'chalk';
 import { theme } from './theme.js';
 import { highlightCode } from './highlight.js';
+import { sanitizeTerminalText } from './termtext.js';
 
 export function DiffView({
   diff,
@@ -20,7 +24,12 @@ export function DiffView({
   startLine?: number;
 }) {
   const lang = detectLanguage(path);
-  const blocks = parseDiffBlocks(diff.split('\n'));
+  // File content reaches Ink here, and a tab in it is measured as zero columns while the terminal
+  // draws it eight wide (issue #154). Every changed line is painted with a background padded to
+  // `maxWidth`, so in a tab-indented file (Go, a Makefile) the block ran seven-plus columns past
+  // where every other row ended — ragged at best, and off the right edge for the terminal to wrap
+  // into a stray colored stub at worst. Flatten the tabs before anything measures the line.
+  const blocks = parseDiffBlocks(sanitizeTerminalText(diff).split('\n'));
   const rows = assignLineNumbers(blocks, startLine);
   const showGutter = startLine !== undefined;
   // Width of the number column, sized to the largest line number in view.
@@ -33,7 +42,15 @@ export function DiffView({
       {rows.lines.map((row, i) => {
         const gutter = showGutter ? String(row.lineNo).padStart(gutterWidth) : '';
         if (row.kind === 'context') {
-          return <ContextLine key={i} line={row.text} gutter={gutter} language={lang} />;
+          return (
+            <ContextLine
+              key={i}
+              line={row.text}
+              gutter={gutter}
+              language={lang}
+              maxWidth={contentWidth}
+            />
+          );
         }
         if (row.kind === 'paired') {
           return (
@@ -168,23 +185,82 @@ function Gutter({ gutter }: { gutter: string }) {
   return <Text color={theme.muted}>{`${gutter} `}</Text>;
 }
 
+// Continuation rows sit under the code, past where the `+`/`-` prefix ended, so a wrapped line
+// reads as one line and the prefix column stays scannable.
+const CONTINUATION = '  ';
+
+// One source line, laid out as however many terminal rows it needs.
+//
+// A diff row is a Box in ROW direction (gutter + content), and Ink lays those out at their
+// children's intrinsic width — it never wraps them. Nearly a fifth of the lines in this repo are
+// wider than the diff area at 80 columns, and each one used to run off the edge for the TERMINAL
+// to break, at column 0, with the background still painting: a ragged colored stub under an
+// otherwise aligned block, a broken border when the diff is inside the approval box, and a line
+// Ink counts as one row while the screen spends two (the undercount the live-frame budget can't
+// afford). So wrap here, where the widths are known.
+//
+// wrap-ansi does the breaking because the content is already syntax-highlighted: it re-opens the
+// active SGR codes on each row instead of leaving the tail unstyled. `hard` breaks tokens with no
+// space in them — a long path or a base64 blob — which is the common case in code.
+function WrappedRow({
+  content,
+  prefix,
+  gutter,
+  maxWidth,
+  bg,
+}: {
+  content: string;
+  prefix: string;
+  gutter: string;
+  maxWidth: number;
+  // Omitted for context lines: only `+`/`-` rows are tinted, and an untinted row needs no padding.
+  bg?: string;
+}) {
+  const rows = wrapAnsi(content, Math.max(1, maxWidth - prefix.length), {
+    trim: false,
+    hard: true,
+  }).split('\n');
+  return (
+    <>
+      {rows.map((row, i) => {
+        const lead = i === 0 ? prefix : CONTINUATION;
+        return (
+          <Box key={i}>
+            {/* Blanked, not dropped: the gutter still has to hold its columns or the
+                continuation slides left and the code column stops lining up. */}
+            <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} />
+            <Text backgroundColor={bg}>
+              {lead}
+              {row}
+              {bg ? padToWidth(lead + row, maxWidth) : ''}
+            </Text>
+          </Box>
+        );
+      })}
+    </>
+  );
+}
+
 // Context lines carry the same syntax highlighting as changed lines so the diff
 // reads like an editor view — only the `+`/`-` lines get a tinted background.
 function ContextLine({
   line,
   gutter,
   language,
+  maxWidth,
 }: {
   line: string;
   gutter: string;
   language: string;
+  maxWidth: number;
 }) {
   return (
-    <Box>
-      <Gutter gutter={gutter} />
-      <Text>{'  '}</Text>
-      <Text>{highlightCode(line, language)}</Text>
-    </Box>
+    <WrappedRow
+      content={highlightCode(line, language)}
+      prefix={CONTINUATION}
+      gutter={gutter}
+      maxWidth={maxWidth}
+    />
   );
 }
 
@@ -214,21 +290,25 @@ function PlainChangeLine({
   const bg = side === 'added' ? ADDED_BG : REMOVED_BG;
   const prefix = side === 'added' ? '+ ' : '- ';
   return (
-    <Box>
-      <Gutter gutter={gutter} />
-      <Text backgroundColor={bg}>
-        {prefix}
-        {highlightCode(line, language)}
-        {padToWidth(prefix.length + line.length, maxWidth)}
-      </Text>
-    </Box>
+    <WrappedRow
+      content={highlightCode(line, language)}
+      prefix={prefix}
+      gutter={gutter}
+      maxWidth={maxWidth}
+      bg={bg}
+    />
   );
 }
 
 // Pad with trailing spaces so the line bg spans the full available width even
 // for short or empty lines. Returns no padding if content already exceeds width.
-function padToWidth(visibleLen: number, maxWidth: number): string {
-  return visibleLen < maxWidth ? ' '.repeat(maxWidth - visibleLen) : '';
+//
+// Measured in COLUMNS, not characters: a CJK glyph or an emoji in a changed line is two columns
+// wide, so counting characters overshot the padding and pushed the background past the edge — the
+// same misalignment tabs used to cause, from the other direction.
+function padToWidth(text: string, maxWidth: number): string {
+  const visible = stringWidth(text);
+  return visible < maxWidth ? ' '.repeat(maxWidth - visible) : '';
 }
 
 // Minimum ratio of shared content for intra-line highlighting to be useful.
@@ -275,32 +355,22 @@ function PairedLine({
   const highlightBg = side === 'added' ? ADDED_HIGHLIGHT_BG : REMOVED_HIGHLIGHT_BG;
   const prefix = side === 'added' ? '+ ' : '- ';
 
+  // Painted into one string rather than nested <Text> elements: wrapping needs a single run of
+  // text to break, and chalk re-opens the outer style after each nested close, so the line's base
+  // background survives every highlighted span the same way Ink's own nesting would.
+  const painted = parts
+    .map(p => {
+      // Skip segments that belong only to the other side.
+      if (side === 'removed' && p.added) return '';
+      if (side === 'added' && p.removed) return '';
+      const isChange = side === 'removed' ? p.removed : p.added;
+      // Brighter background + bold for the changed portion — stands out against the line's own.
+      return isChange ? chalk.bgHex(highlightBg).bold(p.value) : highlightCode(p.value, language);
+    })
+    .join('');
+
   return (
-    <Box>
-      <Gutter gutter={gutter} />
-      <Text backgroundColor={bg}>
-        {prefix}
-        <Text>
-          {parts.map((p, i) => {
-            // Skip segments that belong only to the other side.
-            if (side === 'removed' && p.added) return null;
-            if (side === 'added' && p.removed) return null;
-            const isChange = side === 'removed' ? p.removed : p.added;
-            if (isChange) {
-              // Brighter background + bold for the changed portion — stands out
-              // against the line's base background.
-              return (
-                <Text key={i} bold backgroundColor={highlightBg}>
-                  {p.value}
-                </Text>
-              );
-            }
-            return <Text key={i}>{highlightCode(p.value, language)}</Text>;
-          })}
-        </Text>
-        {padToWidth(prefix.length + line.length, maxWidth)}
-      </Text>
-    </Box>
+    <WrappedRow content={painted} prefix={prefix} gutter={gutter} maxWidth={maxWidth} bg={bg} />
   );
 }
 

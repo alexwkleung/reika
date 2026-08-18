@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { redactSecrets } from './redact.js';
 import { scrubPaths } from './paths.js';
 import { scrubIdentity } from './identity.js';
+import { sanitizeTerminalText } from './termtext.js';
 
 // The single display-scrub entry point. Every render site and the transcript serializer go
 // through this, so a new one cannot silently pick up two of the three layers — which is exactly
@@ -37,4 +38,14 @@ export function displayCwd(cwd: string): string {
   // Scrubbed against itself: the cwd-prefix rule needs a trailing separator to fire, so it
   // can't empty the field, and what's left is the `~/…` form plus identity substitution.
   return scrubDisplay(cwd, cwd);
+}
+
+// Raw program output — a command's stdout/stderr, a shell-mode run, a streamed tool result —
+// needs one more layer than harness-authored text does: it can carry tabs, carriage returns and
+// escape sequences that Ink measures wrong and the terminal then acts on, which is how a chip ends
+// up wrapped at the wrong column with its indent painted over (issue #154). Sanitizing runs FIRST
+// so the redaction rules below see plain text: an escape sequence sitting inside a path or between
+// a key and its value is enough to break the anchor a rule matches on.
+export function scrubOutput(s: string, cwd?: string): string {
+  return scrubDisplay(sanitizeTerminalText(s), cwd);
 }
