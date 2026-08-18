@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
+import stringWidth from 'string-width';
 import { Scrollback } from './Scrollback.js';
 import type { Message } from '../types.js';
 
@@ -298,5 +299,62 @@ describe('Scrollback command chip', () => {
     const lines = chipFrame(false);
     expect(lines.join('\n')).not.toContain('omitted');
     expect(lines.some(l => l.includes('FAIL src/a.test.ts'))).toBe(true);
+  });
+});
+
+// Issue #154: a command's output is a stream of terminal instructions, not display text. Tabs
+// measure 0 for Ink but expand to 8 columns on screen, so a wide line looked narrow, went out
+// unwrapped, and the terminal wrapped it at a column Ink knew nothing about — continuation rows
+// landing outside the chip's indent, and Ink's row count (which the live-region budget depends on)
+// wrong. Carriage returns were worse: they return the cursor to column 0 of the PHYSICAL row and
+// paint over the indent. Both are now flattened to what a terminal would have shown.
+describe('Scrollback command output sanitizing', () => {
+  const TAB = '\t';
+  const CR = '\r';
+  const ESC = String.fromCharCode(27);
+
+  const frameFor = (outputTail: string, text = 'make build'): string => {
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        callId: 't1',
+        summary: `Ran: ${text}`,
+        command: { text, outputTail, outputTruncated: false },
+      },
+    ];
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return lastFrame() ?? '';
+  };
+
+  it('wraps tab-heavy output inside the frame instead of overflowing it', () => {
+    const width = process.stdout.columns || 100;
+    const frame = frameFor(`ab${TAB}`.repeat(40));
+    expect(frame).not.toContain(TAB);
+    for (const line of frame.split('\n')) {
+      expect(stringWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it('keeps every wrapped row of the output under the chip indent', () => {
+    const frame = frameFor(`x${TAB}`.repeat(60));
+    const rows = frame.split('\n').filter(l => l.trim().startsWith('x'));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(row.startsWith('    x')).toBe(true);
+  });
+
+  it('resolves progress output written with carriage returns', () => {
+    const frame = frameFor(`Downloading 5%${CR}Downloading 100%`);
+    expect(frame).not.toContain(CR);
+    expect(frame).toContain('Downloading 100%');
+    expect(frame).not.toContain('Downloading 5%');
+  });
+
+  it('strips escape sequences from the output and from the command line', () => {
+    const frame = frameFor(`${ESC}[2Jcleared`, `echo ${ESC}[31mhi`);
+    expect(frame).not.toContain(ESC);
+    expect(frame).toContain('cleared');
+    expect(frame).toContain('echo hi');
   });
 });

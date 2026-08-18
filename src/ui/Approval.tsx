@@ -3,6 +3,7 @@ import type { ApprovalRequest } from '../types.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
 import { highlightCode } from './highlight.js';
+import { sanitizeTerminalText } from './termtext.js';
 
 export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
 export type ApprovalChoice = 0 | 1 | 2;
@@ -82,7 +83,11 @@ export function Approval({
 }
 
 function CommandPreview({ command }: { command: string }) {
-  const lines = command.split('\n');
+  // Sanitized like the scrollback chip (issue #154), but NOT scrubbed: this is the dialog where
+  // the user decides whether to run the thing, so it must show the command as written, secrets
+  // and all. Tabs and cursor motions still go — inside a bordered box they wrap past the border
+  // and the frame comes apart around the very text being approved.
+  const lines = sanitizeTerminalText(command).split('\n');
   return (
     <>
       {lines.map((line, i) => (
