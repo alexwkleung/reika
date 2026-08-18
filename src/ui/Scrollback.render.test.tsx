@@ -5,6 +5,7 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import chalk from 'chalk';
+import stripAnsi from 'strip-ansi';
 import { Scrollback } from './Scrollback.js';
 import type { Message } from '../types.js';
 
@@ -370,6 +371,7 @@ describe('Scrollback command output sanitizing', () => {
 // trims the padding spaces as trailing whitespace, so the very thing under test isn't in the frame.
 describe('Scrollback diff view width', () => {
   const TAB = '\t';
+  const width = (): number => process.stdout.columns || 100;
 
   // What a terminal does with a tab that reached it: advance to the next 8-column stop.
   const expandTabs = (row: string): string => {
@@ -406,7 +408,10 @@ describe('Scrollback diff view width', () => {
     const { lastFrame } = render(
       <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
     );
-    return (lastFrame() ?? '').split('\n');
+    // Stripped for the assertions below: with color forced on, the highlighter's escapes sit
+    // between tokens, so column math and substring matching have to run on the visible text.
+    // string-width ignores escapes either way, so the width assertions are unaffected.
+    return (lastFrame() ?? '').split('\n').map(stripAnsi);
   };
 
   it('paints tab-indented changed lines to the same width as every other one', () => {
@@ -432,6 +437,35 @@ describe('Scrollback diff view width', () => {
     // string-width and eight to the terminal, which is the whole bug; measuring the frame as-is
     // would report every over-wide row as fitting.
     for (const row of rows) expect(stringWidth(expandTabs(row))).toBeLessThanOrEqual(width);
+  });
+
+  // Nearly a fifth of the lines in this repo are wider than the diff area at 80 columns. Ink lays
+  // a diff row out at its intrinsic width and never wraps it, so those used to run off the edge
+  // for the terminal to break at column 0 — with the background still painting, leaving a colored
+  // stub under an aligned block, and a row Ink counted as one while the screen spent two.
+  const LONG_LINE =
+    'const summary = `Bash failed: ${command} (${reason}) — see the log for details, ' +
+    'then retry with a narrower output filter`;';
+
+  it('wraps a long changed line instead of running it past the edge', () => {
+    const rows = diffFrame([`  function run() {`, `+ ${LONG_LINE}`, `  }`].join('\n'), 'bash.ts');
+    const painted = rows.filter(r => r.includes('summary') || r.includes('narrower'));
+    expect(painted.length).toBeGreaterThan(1);
+    // Same width on every row: the block stays a rectangle across the wrap.
+    expect(new Set(painted.map(r => stringWidth(r))).size).toBe(1);
+    for (const row of painted) expect(stringWidth(row)).toBeLessThanOrEqual(width());
+    // Nothing is hidden — the tail of the line is on screen, not truncated away.
+    expect(painted.join('')).toContain('narrower output filter');
+  });
+
+  it('indents the continuation under the code, with the gutter blanked', () => {
+    const rows = diffFrame([`  function run() {`, `+ ${LONG_LINE}`, `  }`].join('\n'), 'bash.ts');
+    const first = rows.findIndex(r => r.includes('const summary'));
+    const codeCol = rows[first].indexOf('const summary');
+    const continuation = rows[first + 1];
+    // Starts in the code column, and carries no repeated line number.
+    expect(continuation.search(/\S/)).toBe(codeCol);
+    expect(continuation.slice(0, codeCol).trim()).toBe('');
   });
 
   it('pads double-width characters by column, not by character count', () => {
