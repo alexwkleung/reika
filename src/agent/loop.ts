@@ -983,7 +983,7 @@ export async function runTurn(opts: {
   // rebuild around — the caller then falls through to the honest stop it was already headed for.
   // Fail-closed in the safe direction: a restart that cannot be built degrades to the stop, never to
   // a half-reset turn.
-  const attemptSelfHeal = (round: number): boolean => {
+  const attemptSelfHeal = (round: number, blocked?: string): boolean => {
     if (!SELF_HEAL || selfHealRestarts >= MAX_SELF_HEAL_RESTARTS) return false;
 
     // Attempt 2 digests the ORIGINAL history, not attempt 1's output — see preRestartHistory.
@@ -1004,6 +1004,7 @@ export async function runTurn(opts: {
       calibration,
       minGen: opts.config.minGenTokens,
       applied,
+      blocked,
     });
     if (!rebuilt) {
       debugLog(`[reika:debug] round=${round} self-heal declined — no user request to restart\n`);
@@ -1216,6 +1217,23 @@ export async function runTurn(opts: {
           });
           opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
           // fall through: don't stop — the grounded directive is injected into `system` below.
+        } else if (
+          attemptSelfHeal(
+            i,
+            lastEditFailure
+              ? `The previous attempt could not apply its edit to ${lastEditFailure.path}: the text ` +
+                  'it tried to match is not in that file. Read the file before editing it, and ' +
+                  'consider that the change may belong somewhere else entirely.'
+              : undefined,
+          )
+        ) {
+          // Last rung before the stuck report (#137). Reached only once the cheaper recoveries are
+          // spent, mirroring the rumination terminal below. The blocking fact is passed explicitly:
+          // the applied ledger covers edits that LANDED, and a failed edit leaves no diff, so without
+          // this the restart would carry the same goal with no record of what defeated it and would
+          // re-derive the same old_string.
+          debugLog(`[reika:debug] round=${i} edit-recovery-stuck — self-heal\n`);
+          continue;
         } else {
           const file = lastEditFailure?.path;
           debugLog(`[reika:debug] round=${i} edit-recovery-stuck file=${file ?? '?'}\n`);
@@ -1285,9 +1303,16 @@ export async function runTurn(opts: {
             });
             opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
             // fall through: don't stop — the biased round runs below with the loop ledger still set.
+          } else if (attemptSelfHeal(i)) {
+            // No /tokenize on this backend, so Tier 2 is unavailable — but that is a property of the
+            // BACKEND, not evidence the turn is unrecoverable. Falling straight to the stop here let a
+            // lower rung's unavailability consume the rung above it, which made self-heal dead code on
+            // every backend without /tokenize. Try it before stopping.
+            debugLog(`[reika:debug] round=${i} logit-recovery unavailable — self-heal\n`);
+            continue;
           } else {
             debugLog(`[reika:debug] round=${i} logit-recovery unavailable — stopping\n`);
-            commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+            commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted, selfHealRestarts);
             return;
           }
         } else if (attemptSelfHeal(i)) {

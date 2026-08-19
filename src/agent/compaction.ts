@@ -485,6 +485,11 @@ export function buildRestartHistory(
     calibration?: number;
     minGen?: number;
     applied?: string;
+    // What the previous attempt died ON, when the caller knows it structurally — currently the
+    // edit-recovery dead-end's failed target. The recap is a lossy summary under a token budget, so
+    // the one fact that makes this attempt different from the last cannot be left to survive it by
+    // chance. Omitted for a pure reasoning spiral, where there is no single blocking fact to name.
+    blocked?: string;
   },
 ): RestartHistory | null {
   const request = lastUserRequest(history);
@@ -528,6 +533,7 @@ export function buildRestartHistory(
     `What happened before the reset:\n${recap}`,
   ];
   if (opts.applied) parts.push(opts.applied);
+  if (opts.blocked) parts.push(opts.blocked);
   parts.push(
     'How to proceed:\n' +
       '- The request below is the goal. Work from it, not from what was tried before.\n' +

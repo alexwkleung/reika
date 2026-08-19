@@ -52,6 +52,21 @@ describe('buildRestartHistory', () => {
     expect(r!.digest).toContain('attempt 2 of 2');
   });
 
+  // The edit-recovery dead-end restarts on a failure that leaves no diff, so the applied ledger
+  // cannot carry it and the recap may summarize it away. Without the blocking fact stated outright
+  // the restart re-derives the old_string that just failed.
+  it('carries the blocking fact when the caller knows what defeated the last attempt', () => {
+    const blocked = 'could not apply its edit to styles/global.css';
+    const r = buildRestartHistory(base(), { ...OPTS, blocked });
+    expect(r!.digest).toContain(blocked);
+  });
+
+  // A pure reasoning spiral has no single blocking fact; inventing one would assert a cause the
+  // harness did not observe.
+  it('says nothing about a blocker when the caller names none', () => {
+    expect(buildRestartHistory(base(), OPTS)!.digest).not.toContain('could not apply');
+  });
+
   // The goal must survive byte-for-byte: a paraphrase drifts on a small window, and a restart that
   // loses the goal is worse than the stop it replaced.
   it('does not restate the request in truncated form inside the recap', () => {
