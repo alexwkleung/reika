@@ -996,7 +996,16 @@ export async function runTurn(opts: {
     });
     // The ledger reads the FULL source, not the excised copy: excision stubs duplicate read
     // payloads, and an edit whose evidence was trimmed must still count as applied.
-    const applied = formatAppliedLedger(buildAppliedLedger(source));
+    //
+    // On the SECOND restart it has to span both stretches. `source` is deliberately the pre-restart
+    // history so the digest never summarizes a summary — but attempt 1's edits exist only in the
+    // current history, and they are on disk exactly like attempt 0's. Digesting from the original
+    // while ledgering from the original too would hand attempt 2 a list of applied changes that
+    // omits everything attempt 1 wrote, and the model would re-apply it. The two spans never share
+    // a callId (a restart replaces the history with digest/request/plan, none of which carry tool
+    // results), so concatenating cannot double-count.
+    const ledgerSource = preRestartHistory ? [...preRestartHistory, ...opts.history] : opts.history;
+    const applied = formatAppliedLedger(buildAppliedLedger(ledgerSource));
     const rebuilt = buildRestartHistory(excised.history, {
       attempt: selfHealRestarts + 1,
       maxAttempts: MAX_SELF_HEAL_RESTARTS,
@@ -1025,6 +1034,22 @@ export async function runTurn(opts: {
     readFirst = new ReadFirstGate(opts.bundle.cwd);
     seenReadOnly.clear();
     reasoningLoopActive = false;
+    // Plan mode restarts PLANNING, not the plan write. planForceWrite is evaluated at the TOP of a
+    // round, before any tool runs, so a stale novelty counter (>= PLAN_STALL_ROUNDS is a certainty
+    // by the time the terminal fires) would force-write on the restart's very first round — turning
+    // the one rung that is supposed to grant a fresh state into a second transform over a digest.
+    // The earlier rungs are the steer; this rung is the new state, so exploration starts over and
+    // the force-write ladder re-arms from zero. Bounded exactly as before: the round index `i` is
+    // NOT reset (that is the outer budget), so a restart can never buy extra total rounds.
+    planStaleRounds = 0;
+    forceVerbatimPlanWrite = false;
+    // Same reason, one rung down: the verbatim-abort budget is what cuts a runaway reasoning block
+    // mid-stream, and it is spent by definition on any turn that reached this rung through plan
+    // mode. Left unreset, the restarted turn runs with no mid-stream cut at all — the recovery
+    // would hand the model a clean conversation and then remove the guard that made the spiral
+    // survivable. Bounded by the restart budget above, which is the outermost cap by design.
+    verbatimRecoveries = 0;
+    verbatimRepeatedSpan = [];
     // reasoningChannel is deliberately NOT reset: record() reassigns it every round, and its only
     // readers sit behind the loop terminal, which needs several loop-active rounds to reach — so it
     // cannot be read stale after a restart. Leaving it alone also keeps the content-channel work
@@ -1697,8 +1722,9 @@ export async function runTurn(opts: {
       // In plan mode a converged plan rides through verbatim — it is the surviving deliverable, not
       // exploration to fold away — so a restart here resumes with the plan intact.
       if (attemptSelfHeal(i)) {
-        // planForceWriteLoopTriggered is recomputed per round from the (now reset) detector state.
-        forceVerbatimPlanWrite = false;
+        // planForceWriteLoopTriggered is recomputed per round from the (now reset) detector state;
+        // forceVerbatimPlanWrite and planStaleRounds are cleared inside attemptSelfHeal, so the
+        // restart re-enters ordinary exploration rather than force-writing immediately.
         continue;
       }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop

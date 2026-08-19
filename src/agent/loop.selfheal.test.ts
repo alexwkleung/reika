@@ -13,9 +13,13 @@ const PRIOR = {
   rloop: process.env.REIKA_REASONING_LOOP,
   converge: process.env.REIKA_CONVERGE_RETRY,
   logit: process.env.REIKA_LOGIT_RECOVERY,
+  readFirst: process.env.REIKA_READ_FIRST,
 };
 process.env.REIKA_SELF_HEAL = '1';
 process.env.REIKA_REASONING_LOOP = '1';
+// Off so a scripted edit lands instead of being bounced for a read directive — this file is about
+// the restart, not the read-first gate.
+delete process.env.REIKA_READ_FIRST;
 // Off so the restart is the FIRST rung reached after the ledger/withdrawal — otherwise the cheaper
 // tiers absorb the terminal and the restart never fires within the scripted rounds.
 delete process.env.REIKA_CONVERGE_RETRY;
@@ -26,6 +30,7 @@ afterAll(() => {
     ['REIKA_REASONING_LOOP', PRIOR.rloop],
     ['REIKA_CONVERGE_RETRY', PRIOR.converge],
     ['REIKA_LOGIT_RECOVERY', PRIOR.logit],
+    ['REIKA_READ_FIRST', PRIOR.readFirst],
   ] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -82,6 +87,26 @@ const noop: Tool = {
   run: async () => ({ summary: 'ok' }),
 };
 
+// A stand-in for the edit tool that reports a landed diff without touching disk. `.md` on purpose:
+// the post-edit typecheck gate only inspects TS/JS, and this test is about the applied-changes
+// ledger, not the gate.
+const EDITED_PATH = 'notes.md';
+const edit: Tool = {
+  name: 'edit',
+  description: 'edits a file',
+  parameters: { type: 'object', properties: {}, required: [] },
+  run: async () => ({
+    summary: `edited ${EDITED_PATH}`,
+    diff: { text: '', path: EDITED_PATH, added: 3, removed: 0 },
+  }),
+};
+
+const editRound = (): ModelResponse => ({
+  content: '',
+  reasoning: RUMINATION,
+  toolCalls: [{ id: `e${h.scripted.length}`, name: 'edit', args: { path: EDITED_PATH } }],
+});
+
 const RUMINATION =
   'I need to check whether the helper is exported before I can change the call site, and to do ' +
   'that I should verify the module boundary once more before committing to any concrete edit at all.';
@@ -93,10 +118,16 @@ const spiralRound = (): ModelResponse => ({
 });
 
 async function drive(spiralRounds: number, then: ModelResponse) {
+  const script: ModelResponse[] = [];
+  for (let n = 0; n < spiralRounds; n++) script.push(spiralRound());
+  script.push(then);
+  return driveScript(script);
+}
+
+async function driveScript(script: ModelResponse[], tools: Tool[] = [noop]) {
   h.scripted.length = 0;
   h.sent.length = 0;
-  for (let n = 0; n < spiralRounds; n++) h.scripted.push(spiralRound());
-  h.scripted.push(then);
+  h.scripted.push(...script);
   const history: Message[] = [];
   const receipts: string[] = [];
   await runTurn({
@@ -104,7 +135,7 @@ async function drive(spiralRounds: number, then: ModelResponse) {
     history,
     bundle: makeBundle(),
     config: makeConfig(),
-    tools: [noop],
+    tools,
     payloads: new PayloadStore(),
     onMessage: m => {
       if (m.role === 'system') receipts.push(m.content);
@@ -150,6 +181,32 @@ describe('self-healing restart (#137)', () => {
     expect(after).not.toContain('verify the module boundary');
     // And the rebuild really is a fresh two-message conversation.
     expect((h.sent[restartAt] as unknown[]).length).toBe(2);
+  });
+
+  // The failure this pins is the one the design calls the only one that costs data: the second
+  // restart digests the ORIGINAL pre-restart history (so a summary is never re-summarized), but the
+  // applied-changes ledger must still span BOTH stretches. An edit made during attempt 1 lives only
+  // in the current history; if the ledger is read from the original alone, attempt 2 is told the
+  // file is untouched and re-applies work that is already on disk.
+  it('tells the second restart about a file the FIRST attempt edited', async () => {
+    const script: ModelResponse[] = [];
+    for (let n = 0; n < 6; n++) script.push(spiralRound()); // spiral → restart 1
+    script.push(editRound()); // attempt 1 lands an edit
+    for (let n = 0; n < 8; n++) script.push(spiralRound()); // attempt 1 spirals → restart 2
+    script.push({ content: 'converged', toolCalls: undefined });
+    await driveScript(script, [noop, edit]);
+
+    // Every request after a restart carries the digest at its head, so the boundary is the attempt
+    // number in the banner, not the mere presence of a compaction message.
+    const digests = h.sent
+      .map(ms => (ms as { role: string; content?: string }[])[0])
+      .filter(m => m?.role === 'compaction')
+      .map(m => m.content ?? '');
+    const secondDigest = digests.find(d => d.includes('attempt 2 of 2'));
+    expect(digests.some(d => d.includes('attempt 1 of 2'))).toBe(true);
+    expect(secondDigest).toBeDefined();
+    expect(secondDigest).toContain('ALREADY saved to disk');
+    expect(secondDigest).toContain(EDITED_PATH);
   });
 
   it('stops honestly once the restart budget is spent, and names the restarts', async () => {

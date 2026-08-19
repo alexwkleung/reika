@@ -91,6 +91,35 @@ describe('exciseSpiral', () => {
     expect(newest.role === 'tool' && newest.payload).toBe('NEWEST COPY');
   });
 
+  it('keeps the newest read even when a later edit touches the same path', () => {
+    // The shape that made this a bug: the model loops re-reading a file, then finally edits it.
+    // Only ReadTrace feeds `loopingReads`, so only a `read` call may claim the newest slot — an
+    // edit's result carries no payload, so letting it win would stub every real copy and leave the
+    // model with no bytes at all for the one file it was stuck on.
+    const history: Message[] = [
+      assistant({ toolCalls: [{ id: 'r1', name: 'read', args: { path: 'a.ts' } }] }),
+      { role: 'tool', callId: 'r1', summary: 'read a.ts', payload: 'FIRST COPY' },
+      assistant({ toolCalls: [{ id: 'r2', name: 'read', args: { path: 'a.ts' } }] }),
+      { role: 'tool', callId: 'r2', summary: 'read a.ts', payload: 'NEWEST COPY' },
+      assistant({
+        toolCalls: [{ id: 'e1', name: 'edit', args: { path: 'a.ts', old_string: 'x' } }],
+      }),
+      {
+        role: 'tool',
+        callId: 'e1',
+        summary: 'edited a.ts',
+        diff: { text: '', path: 'a.ts', added: 1, removed: 1 },
+      },
+    ];
+    const r = exciseSpiral(history, { shingles: [], loopingReads: ['a.ts'] });
+    expect(r.stubbedPayloads).toBe(1); // the first copy only
+    const newest = r.history[3];
+    expect(newest.role === 'tool' && newest.payload).toBe('NEWEST COPY');
+    // and the edit's own result is untouched — it was never a read to begin with
+    const edit = r.history[5];
+    expect(edit.role === 'tool' && edit.diff?.path).toBe('a.ts');
+  });
+
   it('leaves reads of paths the detector did not flag', () => {
     const history: Message[] = [
       assistant({ toolCalls: [{ id: 'r1', name: 'read', args: { path: 'b.ts' } }] }),

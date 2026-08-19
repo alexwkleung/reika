@@ -71,6 +71,12 @@ export function exciseSpiral(
   for (const m of history) {
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
+      // READS only. `loopingReads` comes from ReadTrace, which records nothing else, so any other
+      // call carrying a `path` (an edit on the very file the model is stuck re-reading — the most
+      // common shape there is) would otherwise claim the newest slot for a result that has no
+      // payload, and every real read of that path would stub. That deletes the exact bytes the
+      // newest-read floor exists to keep.
+      if (tc.name !== 'read') continue;
       const path = typeof tc.args.path === 'string' ? tc.args.path : undefined;
       if (!path || !looping.has(path)) continue;
       loopingCallPath.set(tc.id, path);
