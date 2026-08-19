@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDiffBlocks, diffStats, assignLineNumbers } from './DiffView.js';
+import { parseDiffBlocks, diffStats, assignLineNumbers, sanitizeDiffLines } from './DiffView.js';
 
 describe('parseDiffBlocks', () => {
   it('returns context-only blocks when no changes', () => {
@@ -69,6 +69,40 @@ describe('parseDiffBlocks', () => {
     expect(blocks[0].kind).toBe('change');
     expect(blocks[1].kind).toBe('context');
     expect(blocks[2].kind).toBe('change');
+  });
+});
+
+describe('sanitizeDiffLines', () => {
+  it('keeps the marker on a blank added line (issue #165)', () => {
+    // The line the write tool emits for an empty line in the file. Sanitizing the composed line
+    // trimmed the trailing blank off the marker, so it parsed as context and rendered indented and
+    // untinted in the middle of a green block.
+    const lines = sanitizeDiffLines('+ interface Props {\n+ }\n+ \n+ const x = 1;');
+    expect(lines[2]).toBe('+ ');
+    expect(parseDiffBlocks(lines)).toEqual([
+      { kind: 'change', removed: [], added: ['interface Props {', '}', '', 'const x = 1;'] },
+    ]);
+  });
+
+  it('keeps the marker on blank removed and context lines too', () => {
+    expect(sanitizeDiffLines('- \n  ')).toEqual(['- ', '  ']);
+  });
+
+  it('reduces a whitespace-only changed line to a blank one', () => {
+    expect(sanitizeDiffLines('+   \t ')).toEqual(['+ ']);
+  });
+
+  it('still flattens tabs, measured from the start of the line', () => {
+    // Content-relative stops, as an editor shows them — not two columns into our own prefix.
+    expect(sanitizeDiffLines('+ \tfoo\n  \tbar\n- \t\tbaz')).toEqual([
+      `+ ${' '.repeat(8)}foo`,
+      `  ${' '.repeat(8)}bar`,
+      `- ${' '.repeat(16)}baz`,
+    ]);
+  });
+
+  it('strips escape sequences from content', () => {
+    expect(sanitizeDiffLines('+ \u001b[31mred\u001b[0m')).toEqual(['+ red']);
   });
 });
 

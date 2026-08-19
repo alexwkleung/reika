@@ -24,12 +24,7 @@ export function DiffView({
   startLine?: number;
 }) {
   const lang = detectLanguage(path);
-  // File content reaches Ink here, and a tab in it is measured as zero columns while the terminal
-  // draws it eight wide (issue #154). Every changed line is painted with a background padded to
-  // `maxWidth`, so in a tab-indented file (Go, a Makefile) the block ran seven-plus columns past
-  // where every other row ended — ragged at best, and off the right edge for the terminal to wrap
-  // into a stray colored stub at worst. Flatten the tabs before anything measures the line.
-  const blocks = parseDiffBlocks(sanitizeTerminalText(diff).split('\n'));
+  const blocks = parseDiffBlocks(sanitizeDiffLines(diff));
   const rows = assignLineNumbers(blocks, startLine);
   const showGutter = startLine !== undefined;
   // Width of the number column, sized to the largest line number in view.
@@ -78,6 +73,29 @@ export function DiffView({
       })}
     </>
   );
+}
+
+// File content reaches Ink here, and a tab in it is measured as zero columns while the terminal
+// draws it eight wide (issue #154). Every changed line is painted with a background padded to
+// `maxWidth`, so in a tab-indented file (Go, a Makefile) the block ran seven-plus columns past
+// where every other row ended — ragged at best, and off the right edge for the terminal to wrap
+// into a stray colored stub at worst. Flatten the tabs before anything measures the line.
+//
+// Sanitize each line's CONTENT, never its `+ `/`- `/`  ` marker: that prefix is this view's own
+// framing, not file content. Running the whole composed line through let the sanitizer's
+// trailing-blank trim — free on program output, where a run of spaces is invisible — eat the space
+// off an otherwise empty `+ ` line. The marker stopped matching, the row parsed as CONTEXT, and a
+// blank added line rendered two columns in and untinted in the middle of a green block (#165).
+// Keeping the prefix out of it also puts tab stops where an editor puts them, measured from the
+// start of the line rather than two columns into our own gutter.
+// Exported for unit tests.
+export function sanitizeDiffLines(diff: string): string[] {
+  return diff.split('\n').map(line => {
+    const marker = line.slice(0, 2);
+    return marker === '+ ' || marker === '- ' || marker === '  '
+      ? marker + sanitizeTerminalText(line.slice(2))
+      : sanitizeTerminalText(line);
+  });
 }
 
 type DiffBlock =
