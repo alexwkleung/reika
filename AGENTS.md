@@ -571,9 +571,12 @@ The boundaries that actually bite:
 ## Tests (Vitest)
 
 `npm test` runs the unit suite (~5s, ~1000 tests across ~78 files). What earns a test: pure logic
-with edge cases (parsers, matchers, path math, aging/dedup rules), a bug you just fixed, and any
-_rendered_ output whose shape matters (Ink components have render tests via `ink-testing-library`
-— see `Scrollback.render.test.tsx` for the pattern, including how to pin viewport width).
+with edge cases (parsers, matchers, path math, aging/dedup rules), a bug you just fixed, any
+invariant a comment or doc claims **over a set** (a reset list, a dispatch table, a set of call
+sites — derive the set in the test rather than restating it, since a hand-copied list reproduces
+the omission it was meant to catch), and any _rendered_ output whose shape matters (Ink components
+have render tests via `ink-testing-library` — see `Scrollback.render.test.tsx` for the pattern,
+including how to pin viewport width).
 
 Representative of the bug-prone core rather than an inventory — the suite is far larger than any
 list worth maintaining here:
