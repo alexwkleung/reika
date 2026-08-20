@@ -8,7 +8,7 @@ import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
 import { formatDurationMs } from './format.js';
-import { contentWidth } from './layout.js';
+import { contentWidth, hangingWrap } from './layout.js';
 
 export function Scrollback({
   messages,
@@ -142,14 +142,32 @@ function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
 // fragments with no bar.
 const NESTED_INDENT = 4;
 
+// Line markers, and the hanging indent each one buys: a wrapped row lands under the text the
+// marker introduces, not under the marker and not at column 0. Kept as constants because the
+// indent must be the marker's exact rendered width — `↳` measures 1 column, so '  ↳ ' is 4.
+const TOOL_MARKER = '  ↳ ';
+const SHELL_MARKER = '$ ';
+const CALL_MARKER = '• ';
+const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
+// marginLeft on a tool result's command/output block; it pays for that out of the row's width.
+const COMMAND_MARGIN = 4;
+
 function MessageView({ msg }: { msg: Message }) {
   const nested = 'nested' in msg && !!msg.nested;
-  const inner = renderMessage(msg, nested ? NESTED_INDENT : 0);
+  const indent = nested ? NESTED_INDENT : 0;
+  const inner = renderMessage(msg, indent);
   if (inner === null) return null;
-  if (nested) {
-    return <Box marginLeft={NESTED_INDENT}>{inner}</Box>;
-  }
-  return inner;
+  // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
+  // inherit the App's paddingX={1}, so a plain <Text> here wraps at the FULL terminal width and is
+  // then painted one column in — every row that fills the line overflows by exactly one column and
+  // the terminal wraps that one character down to column 0 on its own (the stray `=`/`n`/`|` in
+  // issue #167). Blocks that size themselves off process.stdout.columns (the bubble, the reasoning
+  // bar, the diff view) already pay for the padding; this covers the ones that let Ink wrap.
+  return (
+    <Box flexDirection="column" width={contentWidth(indent)} marginLeft={indent}>
+      {inner}
+    </Box>
+  );
 }
 
 function renderMessage(msg: Message, indent = 0): ReactElement | null {
@@ -167,10 +185,16 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
     return (
       <Box flexDirection="column" marginTop={1}>
         <Text>
-          <Text color={theme.success}>{'$ '}</Text>
-          <Text>{scrubOutput(msg.command)}</Text>
+          <Text color={theme.success}>{SHELL_MARKER}</Text>
+          <Text>
+            {hangingWrap(scrubOutput(msg.command), contentWidth(indent), SHELL_MARKER.length)}
+          </Text>
         </Text>
-        {msg.output ? <Text color={theme.muted}>{scrubOutput(msg.output)}</Text> : null}
+        {msg.output ? (
+          <Text color={theme.muted}>
+            {hangingWrap(scrubOutput(msg.output), contentWidth(indent), 0)}
+          </Text>
+        ) : null}
       </Box>
     );
   }
@@ -198,8 +222,17 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               // when the line wraps (long edit args), Ink drops the boundary char
               // between adjacent siblings, rendering "• Edit(…)" as "• Edi(…)".
               <Text key={tc.id}>
-                <Text color={theme.tool}>{`• ${capitalize(tc.name)}`}</Text>
-                <Text color={theme.secondary}>{`(${formatArgs(tc.name, tc.args)})`}</Text>
+                <Text color={theme.tool}>{`${CALL_MARKER}${capitalize(tc.name)}`}</Text>
+                <Text color={theme.secondary}>
+                  {hangingWrap(
+                    `(${formatArgs(tc.name, tc.args)})`,
+                    contentWidth(indent),
+                    CALL_MARKER.length,
+                    // The name sits between the marker and the args, so the first row has less
+                    // room than the rest — but the indent stays the marker's width.
+                    CALL_MARKER.length + capitalize(tc.name).length,
+                  )}
+                </Text>
               </Text>
             ))}
           </Box>
@@ -229,7 +262,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
     return (
       <Box flexDirection="column">
         <Text>
-          <Text color={theme.tool}>{'  ↳ '}</Text>
+          <Text color={theme.tool}>{TOOL_MARKER}</Text>
           {/* Drop the redundant leading "Read " for display only: the `↳` already
               marks this as a child of the Read tool call, and the path follows
               immediately so it reads cleanly. The model-facing summary
@@ -239,7 +272,11 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               command, an edit's non-matching line — so it can carry the same tabs and control
               characters raw output does, on a row that must stay one row. */}
           <Text color={theme.secondary}>
-            {scrubOutput((msg.summary ?? '').replace(/^Read /, ''))}
+            {hangingWrap(
+              scrubOutput((msg.summary ?? '').replace(/^Read /, '')),
+              contentWidth(indent),
+              TOOL_MARKER.length,
+            )}
           </Text>
         </Text>
         {msg.diff ? (
@@ -253,10 +290,16 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
           </Box>
         ) : null}
         {msg.command ? (
-          <Box flexDirection="column" marginTop={1} marginLeft={4}>
+          <Box flexDirection="column" marginTop={1} marginLeft={COMMAND_MARGIN}>
             <Text>
-              <Text color={theme.success}>{'$ '}</Text>
-              <Text>{scrubOutput(msg.command.text)}</Text>
+              <Text color={theme.success}>{SHELL_MARKER}</Text>
+              <Text>
+                {hangingWrap(
+                  scrubOutput(msg.command.text),
+                  contentWidth(COMMAND_MARGIN + indent),
+                  SHELL_MARKER.length,
+                )}
+              </Text>
             </Text>
             {msg.command.outputTail ? (
               <Box flexDirection="column" marginTop={1}>
@@ -266,7 +309,16 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
                 {msg.command.outputTruncated ? (
                   <Text color={theme.muted}>…(earlier output omitted)</Text>
                 ) : null}
-                <Text color={theme.muted}>{scrubOutput(msg.command.outputTail)}</Text>
+                {/* hang 0: raw output has no marker to hang under, but it still goes through
+                    the same wrap so a break inside expanded tabs can't stagger the rows right of
+                    the chip's indent. */}
+                <Text color={theme.muted}>
+                  {hangingWrap(
+                    scrubOutput(msg.command.outputTail),
+                    contentWidth(COMMAND_MARGIN + indent),
+                    0,
+                  )}
+                </Text>
               </Box>
             ) : null}
           </Box>
@@ -312,7 +364,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
               Scrub them the same way tool lines are scrubbed so the home prefix doesn't
               leak into scrollback (and screenshots) — display only; the files are still
               written to, and the model still sees, the absolute path. */}
-          {scrubDisplay(msg.content)}
+          {hangingWrap(scrubDisplay(msg.content), contentWidth(indent), NOTICE_MARKER_WIDTH)}
         </Text>
       </Box>
     );

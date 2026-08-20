@@ -475,3 +475,125 @@ describe('Scrollback diff view width', () => {
     expect(new Set(changed.map(r => stringWidth(r))).size).toBe(1);
   });
 });
+
+// Issue #167: two defects, both visible on a long bash chip.
+//
+// (1) <Static> is laid out in its own pass that does NOT inherit the App's paddingX={1}, so a
+//     plain <Text> row wrapped at the FULL terminal width and was then painted one column in.
+//     Every row that filled the line overflowed by exactly one column and the TERMINAL wrapped
+//     that one character down to column 0 — the stray `=`, `n` and `|` in the report.
+// (2) A marker and its text share one <Text> (they must: adjacent <Text> siblings in a row Box
+//     lose the boundary character on wrap), so Ink wrapped the pair at the block's left edge and
+//     the continuation row landed flush left instead of under the text it continues.
+//
+// Both are properties of EVERY marker-prefixed line, so every marker is enumerated here.
+describe('Scrollback marker line wrapping', () => {
+  const COLS = 60;
+  // Long enough to wrap several times at 60 columns, and free of any token that would hard-split.
+  const LONG =
+    'cd ~/Git/nori && echo "=== css files ===" && find web -iname css && ' +
+    'grep -rn now-playing web/src | head && echo "=== how the bar is structured ==="';
+
+  const frame = (messages: Message[]): string[] => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      // Mirror App's own paddingX={1}, which the width math accounts for.
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+        </Box>,
+      );
+      return stripAnsi(lastFrame() ?? '').split('\n');
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  // Every marker, the message that renders it, and the column its text hangs from — the App's
+  // one column of padding, plus any block margin, plus the marker's own width.
+  const MARKERS: Array<{ name: string; msg: Message; indent: number; head: RegExp }> = [
+    {
+      name: '↳ tool summary',
+      msg: { role: 'tool', callId: 't1', summary: `Ran: ${LONG} (2442 bytes output)` },
+      indent: 1 + 4, // '  ↳ '
+      head: /^\s+↳ Ran: /,
+    },
+    {
+      name: '$ tool command',
+      msg: {
+        role: 'tool',
+        callId: 't1',
+        summary: 'Ran: x',
+        command: { text: LONG, outputTail: '', outputTruncated: false },
+      },
+      indent: 1 + 4 + 2, // block marginLeft={4} + '$ '
+      head: /^\s+\$ cd /,
+    },
+    {
+      name: '$ shell command',
+      msg: { role: 'shell', command: LONG, output: '' },
+      indent: 1 + 2, // '$ '
+      head: /^\s+\$ cd /,
+    },
+    {
+      name: '• tool call',
+      msg: {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't1', name: 'bash', args: { command: LONG } }],
+      },
+      indent: 1 + 2, // '• '
+      head: /^\s+• Bash\(/,
+    },
+    {
+      name: '❯ system notice',
+      msg: { role: 'system', content: LONG },
+      indent: 1 + 2, // '❯ '
+      head: /^\s+❯ cd /,
+    },
+  ];
+
+  for (const { name, msg, indent, head } of MARKERS) {
+    it(`hangs every wrapped row of a ${name} line under its text`, () => {
+      const lines = frame([msg]);
+      const start = lines.findIndex(l => head.test(l));
+      expect(start).toBeGreaterThanOrEqual(0);
+
+      // The block's rows run until the first blank line after it (the next block's marginTop).
+      const rest: string[] = [];
+      for (let i = start + 1; i < lines.length && lines[i]!.trim() !== ''; i++)
+        rest.push(lines[i]!);
+      expect(rest.length).toBeGreaterThan(0); // it has to actually wrap for this to prove anything
+
+      for (const row of rest) {
+        expect(row.slice(0, indent)).toBe(' '.repeat(indent));
+        expect(row[indent]).not.toBe(' ');
+      }
+    });
+
+    it(`keeps every row of a ${name} line inside the terminal`, () => {
+      for (const line of frame([msg])) expect(stringWidth(line)).toBeLessThanOrEqual(COLS);
+    });
+  }
+
+  it('keeps a full scrollback of long lines inside the terminal', () => {
+    const lines = frame([
+      { role: 'user', content: LONG },
+      {
+        role: 'assistant',
+        content: LONG,
+        reasoning: LONG,
+        toolCalls: [{ id: 't1', name: 'bash', args: { command: LONG } }],
+      },
+      {
+        role: 'tool',
+        callId: 't1',
+        summary: `Ran: ${LONG}`,
+        command: { text: LONG, outputTail: LONG, outputTruncated: false },
+      },
+      { role: 'system', content: LONG },
+    ]);
+    for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(COLS);
+  });
+});
