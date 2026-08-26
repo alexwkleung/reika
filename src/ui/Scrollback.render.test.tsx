@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback } from './Scrollback.js';
+import { theme } from './theme.js';
 import type { Message } from '../types.js';
 
 // Regression: a tool-call label rendered as two adjacent <Text> siblings in a row
@@ -595,5 +596,137 @@ describe('Scrollback marker line wrapping', () => {
       { role: 'system', content: LONG },
     ]);
     for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(COLS);
+  });
+});
+
+// #172: the user bubble was the last render site running neither scrubber. It goes unnoticed for
+// a typed prompt (the user knows their own paths) but not for a subagent's task text, which the
+// parent model writes with absolute paths — so the nested bubble printed the home directory in
+// full directly under a `Subagent(task=…)` line that had already collapsed it via formatArgs.
+describe('Scrollback user-bubble scrubbing', () => {
+  const WIDE = 140;
+  const wideFrame = (msg: Message): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: WIDE, configurable: true });
+    try {
+      return frameFor(msg);
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  it('collapses $HOME in a nested (subagent) task to ~', () => {
+    const frame = wideFrame({
+      role: 'user',
+      content: `Read ${homedir()}/work/web/src/scripts/trackmenu.ts and quote deleteTrack.`,
+      nested: true,
+    });
+    expect(frame).toContain('~/work/web/src/scripts/trackmenu.ts');
+    expect(frame).not.toContain(homedir());
+  });
+
+  it('scrubs a top-level user message the same way', () => {
+    const frame = wideFrame({ role: 'user', content: `open ${homedir()}/notes.md` });
+    expect(frame).toContain('~/notes.md');
+    expect(frame).not.toContain(homedir());
+  });
+
+  it('redacts a signing identity pasted into a prompt', () => {
+    const frame = wideFrame({
+      role: 'user',
+      content: 'why does "Developer ID Application: Jane Dev (AB12CD34EF)" fail?',
+    });
+    expect(frame).toContain('<redacted>');
+    expect(frame).not.toContain('Jane Dev');
+  });
+
+  // The bubble pads every row to a fixed width against a grey background, so an unsanitized tab
+  // measures short and fractures the block — the same class of break as #154.
+  it('expands a tab rather than padding the row against a mis-measured width', () => {
+    const frame = wideFrame({ role: 'user', content: 'a\tb' });
+    expect(frame).not.toContain('\t');
+    expect(frame).toContain('a       b'); // expanded to the 8-column tab stop
+  });
+});
+
+// #172: the accent bar reads as "the user said this". Inside a subagent the bubble carries the
+// parent model's task text, so it must not wear the user's color.
+describe('Scrollback nested user-bubble color', () => {
+  // Color is forced on: at chalk level 0 the bar's escapes disappear and there is nothing to assert.
+  let level: typeof chalk.level;
+  beforeAll(() => {
+    level = chalk.level;
+    chalk.level = 3;
+  });
+  afterAll(() => {
+    chalk.level = level;
+  });
+
+  // The escape run chalk emits ahead of the bar glyph for a given hex — what Ink writes too.
+  const open = (hex: string) => chalk.bold.hex(hex)('\u258e').split('\u258e')[0];
+  const barRun = (msg: Message): string =>
+    (
+      frameFor(msg)
+        .split('\n')
+        .find(l => l.includes('\u258e')) ?? ''
+    ).split('\u258e')[0];
+
+  it('gives a nested bubble the tool color, not the user accent', () => {
+    const run = barRun({ role: 'user', content: 'find every call site', nested: true });
+    expect(run).toContain(open(theme.tool));
+    expect(run).not.toContain(open(theme.accent));
+  });
+
+  it('keeps the accent bar on a real user message', () => {
+    const run = barRun({ role: 'user', content: 'find every call site' });
+    expect(run).toContain(open(theme.accent));
+    expect(run).not.toContain(open(theme.tool));
+  });
+});
+
+// #172: a tool row has no marginTop of its own (it sits tight under the call that produced it),
+// so the parent's "↳ Subagent completed (…)" landed on the line directly below the subagent's
+// closing "■ Worked for 10s" with nothing separating the two blocks.
+describe('Scrollback subagent block spacing', () => {
+  const workedFor: Message = {
+    role: 'assistant',
+    content: 'done',
+    durationMs: 10_000,
+    nested: true,
+  };
+  const completed: Message = {
+    role: 'tool',
+    callId: 't1',
+    summary: 'Subagent completed (525 chars)',
+  };
+
+  const linesOf = (messages: Message[]): string[] => {
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return stripAnsi(lastFrame() ?? '').split('\n');
+  };
+
+  it('separates the subagent’s last line from the parent tool result', () => {
+    const lines = linesOf([workedFor, completed]);
+    const worked = lines.findIndex(l => l.includes('Worked for'));
+    const done = lines.findIndex(l => l.includes('Subagent completed'));
+    expect(worked).toBeGreaterThanOrEqual(0);
+    expect(done).toBeGreaterThan(worked + 1);
+    expect(lines.slice(worked + 1, done).every(l => !l.trim())).toBe(true);
+  });
+
+  it('keeps a tool row tight under its own tool call', () => {
+    const lines = linesOf([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't1', name: 'read', args: { path: 'a.ts' } }],
+      },
+      { role: 'tool', callId: 't1', summary: 'Read a.ts lines 1–10 of 10' },
+    ]);
+    const call = lines.findIndex(l => l.includes('• Read('));
+    const result = lines.findIndex(l => l.includes('↳'));
+    expect(result).toBe(call + 1);
   });
 });
