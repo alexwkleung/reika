@@ -671,16 +671,31 @@ describe('Scrollback nested user-bubble color', () => {
         .find(l => l.includes('\u258e')) ?? ''
     ).split('\u258e')[0];
 
-  it('gives a nested bubble the tool color, not the user accent', () => {
+  it('gives a nested bubble the subagent color, not the user accent', () => {
     const run = barRun({ role: 'user', content: 'find every call site', nested: true });
-    expect(run).toContain(open(theme.tool));
+    expect(run).toContain(open(theme.subagent));
     expect(run).not.toContain(open(theme.accent));
   });
 
   it('keeps the accent bar on a real user message', () => {
     const run = barRun({ role: 'user', content: 'find every call site' });
     expect(run).toContain(open(theme.accent));
-    expect(run).not.toContain(open(theme.tool));
+    expect(run).not.toContain(open(theme.subagent));
+  });
+
+  // `▎` is a legend, not decoration: three different speakers share the glyph and are told apart
+  // by color alone. theme.ts says so in prose next to `subagent` — so it is pinned here rather
+  // than left as a comment a later palette tweak could quietly falsify.
+  it('keeps every ▎ speaker on a distinct color', () => {
+    const bars = { reasoning: theme.reasoning, user: theme.accent, subagent: theme.subagent };
+    expect(new Set(Object.values(bars)).size).toBe(Object.keys(bars).length);
+  });
+
+  // The specific collision that decided the color: `queued` marks the user's own words waiting to
+  // be sent, and a queued message sits in the chrome while a subagent runs — so an orange bar
+  // would clash on the one axis this bubble exists to disambiguate (who is speaking).
+  it('does not reuse the queued orange for the subagent bar', () => {
+    expect(theme.subagent).not.toBe(theme.queued);
   });
 });
 

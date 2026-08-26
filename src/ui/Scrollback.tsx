@@ -453,8 +453,8 @@ function UserBubble({
   const lines = wrapText(scrubOutput(text), contentW);
   const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
   // The accent bar means "the user said this". A nested bubble is the parent agent's task text,
-  // not the user's, so it takes the tool color that already marks agent-issued work elsewhere.
-  const barColor = nested ? theme.tool : theme.accent;
+  // not the user's, so it takes its own color — see theme.subagent for why it is not `queued`.
+  const barColor = nested ? theme.subagent : theme.accent;
 
   return (
     <Box flexDirection="column" marginTop={1}>
