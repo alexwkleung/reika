@@ -12,6 +12,13 @@ export const theme = {
   reasoning: '#6495ed', // cornflower blue: thinking-block bar, dimmer than the accent
   warning: '#e5d49a', // soft pastel yellow — luminous but easy on the eyes, matches the other accents
   queued: '#e8b87a', // soft pastel orange — queued label, complements the yellow warning
+  // The `▎` bar on a nested (subagent) user bubble. `▎` is a legend, not decoration: the same
+  // glyph marks the Thinking block (reasoning) and the user speaking (accent), so the color IS
+  // the attribution. This is deliberately NOT `queued` — that orange marks the user's own words
+  // waiting to be sent, and a queued message sits in the chrome while a subagent runs, so the two
+  // would collide on the exact axis #172 exists to disambiguate. Apricot instead: it echoes the
+  // syntax theme's number/literal tone (highlight.ts), which makes no claim about who is speaking.
+  subagent: '#e0b48f',
   error: 'red',
   success: 'green',
   userBg: '#303030',

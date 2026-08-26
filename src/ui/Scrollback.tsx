@@ -36,7 +36,9 @@ export function Scrollback({
 
   return (
     <>
-      <Static items={messages}>{(msg, i) => <MessageView key={i} msg={msg} />}</Static>
+      <Static items={messages}>
+        {(msg, i) => <MessageView key={i} msg={msg} prev={messages[i - 1]} />}
+      </Static>
       {streamingReasoning ? (
         <Box marginTop={1}>
           <ReasoningBlock text={streamingReasoning} maxLines={budget} />
@@ -152,10 +154,15 @@ const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
-function MessageView({ msg }: { msg: Message }) {
+function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   const nested = 'nested' in msg && !!msg.nested;
   const indent = nested ? NESTED_INDENT : 0;
-  const inner = renderMessage(msg, indent);
+  // A top-level row that follows a nested one closes out a subagent block. Tool rows
+  // are the only role with no marginTop of their own (they sit tight under the tool
+  // call that produced them), so without this the subagent's closing "Worked for …"
+  // and the parent's "↳ Subagent completed (…)" collide on adjacent lines.
+  const afterNested = !nested && !!prev && 'nested' in prev && !!prev.nested;
+  const inner = renderMessage(msg, indent, { nested, afterNested });
   if (inner === null) return null;
   // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
   // inherit the App's paddingX={1}, so a plain <Text> here wraps at the FULL terminal width and is
@@ -170,9 +177,13 @@ function MessageView({ msg }: { msg: Message }) {
   );
 }
 
-function renderMessage(msg: Message, indent = 0): ReactElement | null {
+function renderMessage(
+  msg: Message,
+  indent = 0,
+  ctx: { nested?: boolean; afterNested?: boolean } = {},
+): ReactElement | null {
   if (msg.role === 'user') {
-    return <UserBubble text={msg.display ?? msg.content} indent={indent} />;
+    return <UserBubble text={msg.display ?? msg.content} indent={indent} nested={ctx.nested} />;
   }
   if (msg.role === 'header') {
     return <Header model={msg.model} cwd={msg.cwd} />;
@@ -260,7 +271,7 @@ function renderMessage(msg: Message, indent = 0): ReactElement | null {
   }
   if (msg.role === 'tool') {
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" marginTop={ctx.afterNested ? 1 : 0}>
         <Text>
           <Text color={theme.tool}>{TOOL_MARKER}</Text>
           {/* Drop the redundant leading "Read " for display only: the `↳` already
@@ -422,18 +433,34 @@ function ReasoningBlock({
 // edge (aligned with the Thinking block's bar), one space of padding after it
 // and a trailing space, plus a blank background row above/below for breathing
 // room.
-function UserBubble({ text, indent = 0 }: { text: string; indent?: number }) {
+function UserBubble({
+  text,
+  indent = 0,
+  nested = false,
+}: {
+  text: string;
+  indent?: number;
+  nested?: boolean;
+}) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
   const contentW = Math.max(1, avail - 3); // '▎ ' gutter (2) + trailing space (1).
-  const lines = wrapText(text, contentW);
+  // scrubOutput, not scrubDisplay: this was the one render site running neither scrubber, so a
+  // subagent's task ("Read /Users/…/web/src/x.ts …") printed the absolute path in full while the
+  // Subagent(task=…) call above it — which goes through formatArgs — showed it collapsed (#172).
+  // The sanitize layer matters here too: rows are padEnd-ed to a fixed width against the grey
+  // background, so a tab or escape sequence in a paste would mis-measure and fracture the bubble.
+  const lines = wrapText(scrubOutput(text), contentW);
   const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
+  // The accent bar means "the user said this". A nested bubble is the parent agent's task text,
+  // not the user's, so it takes its own color — see theme.subagent for why it is not `queued`.
+  const barColor = nested ? theme.subagent : theme.accent;
 
   return (
     <Box flexDirection="column" marginTop={1}>
       {rows.map((line, i) => (
         <Text key={i} backgroundColor={theme.userBg}>
-          <Text bold color={theme.accent}>
+          <Text bold color={barColor}>
             ▎
           </Text>
           <Text color="whiteBright">{` ${line.padEnd(contentW)} `}</Text>
