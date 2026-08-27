@@ -41,6 +41,7 @@ import {
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
+import { isReadOnlyShell } from '../tools/_readonly.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
@@ -512,64 +513,6 @@ const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // sooner so the cap has to truncate less often. Deliberately not the cap's 2.5 floor: that would
 // compact at ~40% of a normal prose window and waste most of the context.
 const COMPACTION_CALIBRATION_FLOOR = 1;
-// Shell commands that only READ — the ones a withdrawn model uses to keep circling via bash. Kept to
-// commands with no in-place-write mode reachable without a flag isReadOnlyShell already rejects.
-const READ_ONLY_SHELL = new Set([
-  'grep',
-  'rg',
-  'egrep',
-  'fgrep',
-  'cat',
-  'head',
-  'tail',
-  'wc',
-  'ls',
-  'find',
-  'sort',
-  'uniq',
-  'cut',
-  'nl',
-  'column',
-  'stat',
-  'tree',
-  'basename',
-  'dirname',
-  'realpath',
-  'which',
-  'type',
-  'pwd',
-  'echo',
-  'sed',
-  'awk',
-]);
-
-// True only when we're CONFIDENT a bash command is pure read-only inspection — the "grep via bash"
-// escape a withdrawn model uses to keep looping. Conservative by design: any write signal (output
-// redirection, tee, sed/find in-place or destructive modes) or an unrecognized command anywhere in
-// the pipeline returns false, so mutating/build bash (npm, git, mkdir) is never refused. False
-// negatives (a bash-grep slips through) are cheap — the terminal stop still catches it; a false
-// positive (blocking a real build mid-loop) is the expensive mistake, so we avoid it. Pure + exported.
-export function isReadOnlyShell(command: string): boolean {
-  const c = command.trim();
-  if (!c) return false;
-  // Strip quoted regions first: a grep pattern like "a\|b" or ">" carries shell metacharacters (| and
-  // >) that are DATA, not a pipe/redirection — splitting or write-checking on them would misread a
-  // read-only grep as a pipeline or a write. Command names are never quoted, so this loses nothing we
-  // check. Malformed/nested quotes just leave junk that fails the command-name test → allowed (safe).
-  const bare = c.replace(/"[^"]*"|'[^']*'/g, ' ');
-  // Any sign of a write: file redirection, tee, sed -i, find -exec/-delete. Bail to "not read-only".
-  if (/[>]|(^|\s)tee(\s|$)|(^|\s)-i\b|(^|\s)-exec\b|(^|\s)-delete\b/.test(bare)) return false;
-  // Every pipeline/chain segment must start with a read-only command. Leading `cd <path>` hops (the
-  // observed loops prefix these) are stripped; an empty remainder is not read-only.
-  const segments = bare
-    .split(/\|\||&&|;|\|/)
-    .map(s => s.trim())
-    .filter(Boolean);
-  const meaningful = segments.filter(s => !/^cd\s/.test(s));
-  if (meaningful.length === 0) return false;
-  return meaningful.every(s => READ_ONLY_SHELL.has(s.split(/\s+/)[0]));
-}
-
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out.
 const WITHDRAWAL_DIRECTIVE =
