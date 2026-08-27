@@ -1,7 +1,16 @@
-import { readFile, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { detectDangerousPatterns, execStream, TailWindow } from './bash.js';
+import {
+  bashTool,
+  detectDangerousPatterns,
+  execStream,
+  readOnlyBashTool,
+  TailWindow,
+} from './bash.js';
+import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
+import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
 
 describe('detectDangerousPatterns — destructive commands', () => {
@@ -542,5 +551,65 @@ describe('execStream — command chip', () => {
     // slots. Pre-existing cosmetic behavior of the line slice, pinned here rather than changed.
     expect(chip.outputTail.split('\n').filter(Boolean)).toHaveLength(9);
     expect(chip.outputTruncated).toBe(true);
+  });
+});
+
+describe('readOnlyBashTool — plan mode (#109)', () => {
+  const ctx = { cwd: process.cwd() };
+
+  it('runs a command that is provably read-only', async () => {
+    const result = await readOnlyBashTool.run({ command: 'echo hello | wc -c' }, ctx);
+    expect(result.summary).toMatch(/^Ran:/);
+    expect(result.payload).toContain('6');
+  });
+
+  it('refuses a command that can write, and says why and what to do instead', async () => {
+    const result = await readOnlyBashTool.run({ command: 'rm -rf dist' }, ctx);
+    expect(result.summary).toContain('Bash refused (read-only mode)');
+    expect(result.summary).toContain('rm -rf dist');
+    expect(result.summary).toContain('read/grep/glob/list');
+  });
+
+  it('does not run the refused command', async () => {
+    const path = join(tmpdir(), `reika-readonly-${Date.now()}.txt`);
+    await writeFile(path, 'untouched');
+    await readOnlyBashTool.run({ command: `echo clobbered > ${path}` }, ctx);
+    expect(await readFile(path, 'utf8')).toBe('untouched');
+    await rm(path, { force: true });
+  });
+
+  it('names the enforced allowlist rather than a restated copy of it', () => {
+    expect(readOnlyBashTool.description).toContain(READ_ONLY_COMMAND_LIST);
+  });
+
+  it('reports an empty command as empty, not as refused', async () => {
+    const result = await readOnlyBashTool.run({ command: '   ' }, ctx);
+    expect(result.summary).toBe('Bash failed: empty command');
+  });
+
+  it('keeps the bash name so the model needs no second dialect', () => {
+    expect(readOnlyBashTool.name).toBe('bash');
+  });
+});
+
+describe('planTools — REIKA_PLAN_BASH gate', () => {
+  afterEach(() => {
+    delete process.env.REIKA_PLAN_BASH;
+  });
+
+  it('omits bash by default', () => {
+    delete process.env.REIKA_PLAN_BASH;
+    expect(planTools().map(t => t.name)).not.toContain('bash');
+  });
+
+  it('adds the read-only bash under the flag', () => {
+    process.env.REIKA_PLAN_BASH = '1';
+    const bash = planTools().find(t => t.name === 'bash');
+    expect(bash).toBe(readOnlyBashTool);
+  });
+
+  it('never adds the unrestricted bash', () => {
+    process.env.REIKA_PLAN_BASH = '1';
+    expect(planTools()).not.toContain(bashTool);
   });
 });

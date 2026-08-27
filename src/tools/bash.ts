@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { recordCapped } from './_spillstats.js';
+import { READ_ONLY_COMMAND_LIST, isReadOnlyShell } from './_readonly.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -45,6 +46,36 @@ export const bashTool: Tool = {
     }
 
     return execStream(command, ctx, ctx.bashTimeoutMs);
+  },
+};
+
+// Plan mode's bash (#109). The same tool, admitted only for commands `isReadOnlyShell` can PROVE
+// read-only — so plan mode gains the inspection a pipeline expresses (`grep … | head`, `find`, `wc`)
+// without gaining a way to mutate the repo. Keeps `name: 'bash'`, so the model needs no second
+// dialect and the plan-progress command matching still keys on it, and delegates the run itself so
+// approval, spill and timeout behave identically.
+//
+// A refusal is an ordinary result, not an error: a small model recovers from a stated rule far better
+// than from a tool that silently isn't there, and the message names both the rule and the way out.
+export const readOnlyBashTool: Tool = {
+  ...bashTool,
+  description:
+    'Execute a READ-ONLY shell command in the working directory. Only inspection commands run: ' +
+    `${READ_ONLY_COMMAND_LIST}, and pipelines of them. Anything that can write or run something ` +
+    'else is refused — redirection (>), command substitution ($(…)), sed/awk, and any command not ' +
+    'on that list. Use it for inspection the read/grep/glob/list tools cannot express.',
+  async run(args, ctx) {
+    const command = String(args.command ?? '').trim();
+    if (!command) return { summary: 'Bash failed: empty command' };
+    if (!isReadOnlyShell(command)) {
+      return {
+        summary:
+          `Bash refused (read-only mode): ${command}. Only these commands run, and only in ` +
+          `pipelines of themselves: ${READ_ONLY_COMMAND_LIST}. No redirection (>), no command ` +
+          'substitution, no sed/awk. Use read/grep/glob/list, or rewrite it as a read-only pipeline.',
+      };
+    }
+    return bashTool.run(args, ctx);
   },
 };
 

@@ -33,6 +33,10 @@ const READ_ONLY_COMMANDS = new Set([
   'echo',
 ]);
 
+// The allowlist, rendered for the model. Derived rather than restated so the tool description and
+// the refusal message cannot drift from the set actually enforced.
+export const READ_ONLY_COMMAND_LIST = [...READ_ONLY_COMMANDS].join(', ');
+
 // `awk` and `sed` are deliberately absent despite being read-only in their common uses. Both take a
 // PROGRAM as an argument, and from inside it can write a file (`awk '{print > "f"}'`, `sed 's/a/b/w f'`)
 // or shell out (`awk 'BEGIN{system("…")}'`). Validating a Turing-complete program by regex is a losing
@@ -90,13 +94,17 @@ function segmentIsReadOnly(segment: string): boolean {
   return true;
 }
 
-// Cut the command into segments at every separator that sits OUTSIDE quotes, and return each segment's
-// raw text. A search pattern like "a;b" carries separators that are data, not syntax, so the split
-// runs over a length-preserving mask of the quoted regions — same offsets, so the raw slice lines up.
-// An unbalanced quote masks nothing, leaving junk that fails the command-name test above → false.
-function splitSegments(command: string): string[] {
-  const masked = command.replace(/"[^"]*"|'[^']*'/g, m => ' '.repeat(m.length));
-  if (REDIRECT_RE.test(masked)) return [];
+// Blank out quoted regions while preserving length, so a scan can tell syntax from data and a
+// segment offset still indexes the raw command. An unbalanced quote masks nothing, leaving junk
+// that fails the command-name test above → false.
+function maskQuoted(command: string): string {
+  return command.replace(/"[^"]*"|'[^']*'/g, m => ' '.repeat(m.length));
+}
+
+// Cut the command at every separator that sits OUTSIDE quotes, returning each segment's RAW text —
+// a search pattern like "a;b" carries separators that are data, not syntax, so the split walks the
+// mask while the slices come from the original.
+function splitSegments(command: string, masked: string): string[] {
   const segments: string[] = [];
   let start = 0;
   SEPARATOR_RE.lastIndex = 0;
@@ -113,7 +121,9 @@ function splitSegments(command: string): string[] {
 export function isReadOnlyShell(command: string): boolean {
   const c = command.trim();
   if (!c || SUBSTITUTION_RE.test(c)) return false;
-  const segments = splitSegments(c);
+  const masked = maskQuoted(c);
+  if (REDIRECT_RE.test(masked)) return false;
+  const segments = splitSegments(c, masked);
   // Leading `cd <path>` hops (which the observed loops prefix) carry no read of their own; an empty
   // remainder is not read-only.
   const meaningful = segments.map(s => s.trim()).filter(s => s && !/^cd\s/.test(s));
