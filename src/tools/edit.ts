@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { relative } from 'node:path';
-import { resolveUserPath } from './_paths.js';
+import { escapesProject, OUTSIDE_PROJECT_WARNING, resolveUserPath } from './_paths.js';
 import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -27,7 +27,19 @@ export const editTool: Tool = {
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
     const full = resolveUserPath(ctx.cwd, path);
-    const rel = relative(ctx.cwd, full) || path;
+    // See write.ts: an out-of-project path is shown resolved, not as a `../../../..` chain.
+    const outside = escapesProject(ctx.cwd, full);
+    const rel = outside ? full : relative(ctx.cwd, full) || path;
+
+    // See write.ts — the same gap, the same gate. Checked before the file is read so the boundary is
+    // reported instead of an incidental read error on a path we would refuse anyway.
+    if (outside && !ctx.requestApproval) {
+      return {
+        summary:
+          `Edit refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
+          'are bypassed so it cannot be confirmed with the user. Edit inside the project instead.',
+      };
+    }
 
     if (oldStr === '') {
       return { summary: `Edit failed: old_string is empty` };
@@ -102,6 +114,7 @@ export const editTool: Tool = {
         subject: rel,
         preview: diffText,
         startLine,
+        warnings: outside ? [OUTSIDE_PROJECT_WARNING] : undefined,
       });
       if (!ok) return { summary: `Edit declined by user for ${rel}` };
     }

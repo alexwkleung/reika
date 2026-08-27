@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { editTool } from './edit.js';
+import type { ApprovalRequest } from '../types.js';
 
 let cwd: string;
 
@@ -185,5 +186,76 @@ describe('editTool', () => {
       expect(result.summary).toMatch(/font-size: 13px/);
       expect(result.summary).toMatch(/line 2/);
     });
+  });
+});
+
+// A recording approval gate — `warnings` is what makes an approval bypass session-auto-approve
+// (App.tsx hasWarnings), so what lands in the request IS the behavior under test.
+function gate(answer = true) {
+  const seen: ApprovalRequest[] = [];
+  return {
+    seen,
+    requestApproval: async (req: ApprovalRequest): Promise<boolean> => {
+      seen.push(req);
+      return answer;
+    },
+  };
+}
+
+describe('editTool — out-of-project gate', () => {
+  let outsideDir: string;
+
+  beforeEach(async () => {
+    outsideDir = await mkdtemp(join(tmpdir(), 'reika-outside-'));
+  });
+  afterEach(async () => {
+    await rm(outsideDir, { recursive: true, force: true });
+  });
+
+  it('flags an edit outside the project so it cannot be silently auto-approved', async () => {
+    const g = gate();
+    const target = join(outsideDir, 'escaped.txt');
+    await writeFile(target, 'before\n', 'utf8');
+    await editTool.run(
+      { path: target, old_string: 'before', new_string: 'after' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen).toHaveLength(1);
+    expect(g.seen[0].warnings).toEqual(['Writes outside the project directory']);
+    // The resolved path rides the subject line, so the modal shows it without a `../../..` chain.
+    expect(g.seen[0].subject).toBe(target);
+  });
+
+  it('raises no warning for an edit inside the project', async () => {
+    const g = gate();
+    await write('a.txt', 'before\n');
+    await editTool.run(
+      { path: 'a.txt', old_string: 'before', new_string: 'after' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen).toHaveLength(1);
+    expect(g.seen[0].warnings).toBeUndefined();
+  });
+
+  it('refuses an out-of-project edit under bypass, and leaves the file alone', async () => {
+    const target = join(outsideDir, 'escaped.txt');
+    await writeFile(target, 'before\n', 'utf8');
+    const result = await editTool.run(
+      { path: target, old_string: 'before', new_string: 'after' },
+      ctx(),
+    );
+    expect(result.summary).toContain('Edit refused');
+    expect(result.summary).toContain('outside the project directory');
+    expect(await readFile(target, 'utf8')).toBe('before\n');
+  });
+
+  it('still edits inside the project under bypass', async () => {
+    await write('a.txt', 'before\n');
+    const result = await editTool.run(
+      { path: 'a.txt', old_string: 'before', new_string: 'after' },
+      ctx(),
+    );
+    expect(result.summary).toMatch(/^Edited /);
+    expect(await readFile(join(cwd, 'a.txt'), 'utf8')).toBe('after\n');
   });
 });
