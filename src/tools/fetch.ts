@@ -1,9 +1,16 @@
 import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
 import type { Tool } from '../types.js';
+import { classifyPrivateUrl } from './_hosts.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
+// Redirect hops followed before giving up. The chain is walked here rather than handed to fetch's
+// own `redirect: 'follow'` because the host policy has to see every hop: a public URL that 302s to
+// 127.0.0.1 would otherwise pass the check on the URL as written and land on the local address
+// anyway. Five is what browsers and curl settle around; a chain longer than that is broken or
+// hostile either way.
+const MAX_REDIRECTS = 5;
 
 export type UrlExtraction =
   | { ok: true; content: string; extractedChars: number }
@@ -14,28 +21,71 @@ export type UrlExtraction =
   // might just be an offline machine, so it must not be reported as an invented URL on its own.
   | { ok: false; reached: boolean; error: string };
 
-// Fetch an http(s) URL and extract its main content to truncated markdown. Network + extraction
-// ONLY — no validation, budget accounting, or source bookkeeping; every caller owns those (the
-// fetch_url tool below, and harness-driven grounders that fetch URLs on the model's behalf rather
-// than waiting for it to call the tool). `content` is already truncated to MAX_PAYLOAD_BYTES;
-// `extractedChars` is the pre-truncation length, for an honest "N chars extracted" summary. Assumes
-// a well-formed http(s) URL — callers validate before calling.
-export async function extractUrl(url: string): Promise<UrlExtraction> {
+export type ExtractOptions = {
+  // Allow addresses that only resolve on this machine or this LAN (loopback, RFC1918, link-local).
+  // Off by default: the model-driven and harness-driven paths must not reach the local model
+  // server or a metadata endpoint. The one caller that sets it is pasted-URL expansion, where the
+  // user typed the address themselves — "read my dev server at http://localhost:3000" is a request,
+  // not an injection, and refusing it would break an ordinary workflow to stop nothing.
+  allowPrivate?: boolean;
+};
+
+// 303 and 307/308 are included alongside the classic 301/302: all of them move the request to a new
+// address, which is the only property that matters for the policy.
+function redirectLocation(res: Response): string | undefined {
+  if (res.status < 300 || res.status > 399) return undefined;
+  return res.headers?.get?.('location') ?? undefined;
+}
+
+// Fetch an http(s) URL and extract its main content to truncated markdown. Budget accounting and
+// source bookkeeping still belong to the callers (the fetch_url tool below, and the harness-driven
+// grounders that fetch on the model's behalf rather than waiting for it to call the tool), but the
+// HOST POLICY lives here and not with them: this is the one point every egress path funnels
+// through, and it is the only place that sees the redirect chain, which is where a check on the
+// caller's side would be walked around. Callers still validate the URL's shape before calling.
+// `content` is already truncated to MAX_PAYLOAD_BYTES; `extractedChars` is the pre-truncation
+// length, for an honest "N chars extracted" summary.
+export async function extractUrl(url: string, opts: ExtractOptions = {}): Promise<UrlExtraction> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-    if (!res.ok) return { ok: false, reached: true, error: `${res.status} ${res.statusText}` };
-    const html = await res.text();
-    const dom = new JSDOM(html, { url });
-    const result = await Defuddle(dom, url, { markdown: true });
-    const content = result.content ?? '';
-    const trimmed =
-      content.length > MAX_PAYLOAD_BYTES
-        ? content.slice(0, MAX_PAYLOAD_BYTES) +
-          `\n…(truncated, ${content.length - MAX_PAYLOAD_BYTES} more chars)`
-        : content;
-    return { ok: true, content: trimmed, extractedChars: content.length };
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      if (!opts.allowPrivate) {
+        const blocked = classifyPrivateUrl(current);
+        if (blocked) {
+          // `reached: false` is accurate — no request went out. The message names the range and
+          // says the address is off limits rather than missing, so a model reading it fixes the
+          // URL instead of retrying the same one against a "maybe the network is down" reading.
+          const where = hop === 0 ? '' : ` (redirected to ${current})`;
+          return {
+            ok: false,
+            reached: false,
+            error: `blocked by host policy: ${blocked}${where}`,
+          };
+        }
+      }
+      const res = await fetch(current, { signal: controller.signal, redirect: 'manual' });
+      const location = redirectLocation(res);
+      if (location !== undefined) {
+        // Resolve against the current URL so a relative Location works, then loop to re-check the
+        // new address against the policy before following it.
+        current = new URL(location, current).toString();
+        continue;
+      }
+      if (!res.ok) return { ok: false, reached: true, error: `${res.status} ${res.statusText}` };
+      const html = await res.text();
+      const dom = new JSDOM(html, { url: current });
+      const result = await Defuddle(dom, current, { markdown: true });
+      const content = result.content ?? '';
+      const trimmed =
+        content.length > MAX_PAYLOAD_BYTES
+          ? content.slice(0, MAX_PAYLOAD_BYTES) +
+            `\n…(truncated, ${content.length - MAX_PAYLOAD_BYTES} more chars)`
+          : content;
+      return { ok: true, content: trimmed, extractedChars: content.length };
+    }
+    return { ok: false, reached: true, error: `too many redirects (${MAX_REDIRECTS})` };
   } catch (e) {
     return { ok: false, reached: false, error: (e as Error).message };
   } finally {

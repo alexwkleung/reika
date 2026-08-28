@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UrlExtraction } from '../tools/fetch.js';
+import type { ExtractOptions, UrlExtraction } from '../tools/fetch.js';
 
-const extractUrl = vi.hoisted(() => vi.fn<(url: string) => Promise<UrlExtraction>>());
+const extractUrl = vi.hoisted(() =>
+  vi.fn<(url: string, opts?: ExtractOptions) => Promise<UrlExtraction>>(),
+);
 vi.mock('../tools/fetch.js', () => ({ extractUrl }));
 
 const { expandPastedUrls } = await import('./pastedurls.js');
@@ -97,5 +99,20 @@ describe('expandPastedUrls', () => {
     expect(r.fetched).toEqual(['https://good.com']);
     expect(r.blocks).toHaveLength(1);
     expect(r.notices).toHaveLength(2);
+  });
+});
+
+// #164: the host policy stops the MODEL and the HARNESS from reaching loopback/LAN addresses off
+// attacker-influenced text. A URL the user pasted is neither — it is a request — so this path opts
+// out, and "read my dev server at http://localhost:3000" keeps working.
+describe('expandPastedUrls — host policy exemption', () => {
+  it('opts out of the private-host block, because the user typed the address', async () => {
+    await expandPastedUrls('why is http://localhost:3000/api 500ing?', { enabled: true });
+    expect(extractUrl).toHaveBeenCalledWith('http://localhost:3000/api', { allowPrivate: true });
+  });
+
+  it('passes the same opt-out for a public URL, so provenance is the rule, not the address', async () => {
+    await expandPastedUrls('read https://example.com/docs', { enabled: true });
+    expect(extractUrl).toHaveBeenCalledWith('https://example.com/docs', { allowPrivate: true });
   });
 });
