@@ -8,9 +8,12 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 // Redirect hops followed before giving up. The chain is walked here rather than handed to fetch's
 // own `redirect: 'follow'` because the host policy has to see every hop: a public URL that 302s to
 // 127.0.0.1 would otherwise pass the check on the URL as written and land on the local address
-// anyway. Five is what browsers and curl settle around; a chain longer than that is broken or
-// hostile either way.
-const MAX_REDIRECTS = 5;
+// anyway. Twenty because that is exactly what `redirect: 'follow'` did before this walk existed
+// (the WHATWG limit undici implements — measured, not assumed: a 19-hop chain resolved and a
+// 21-hop chain threw `redirect count exceeded`). Taking the check into our own hands should not
+// quietly shorten what a URL is allowed to do; the policy comes from inspecting each hop, not from
+// permitting fewer of them.
+const MAX_REDIRECTS = 20;
 
 export type UrlExtraction =
   | { ok: true; content: string; extractedChars: number }

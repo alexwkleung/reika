@@ -252,6 +252,20 @@ describe('extractUrl — redirect chain', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('follows a chain longer than a handful, matching the pre-existing limit', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    for (let i = 0; i < 12; i++) {
+      fetchMock.mockResolvedValueOnce(mockRedirect(302, `https://example.com/hop${i}`));
+    }
+    fetchMock.mockResolvedValueOnce(
+      mockOk('<html><body><article>end of chain</article></body></html>'),
+    );
+    const result = await extractUrl('https://example.com/start');
+    // 12 hops used to resolve under redirect:'follow' (limit 20). A tighter cap here would be a
+    // silent regression for any site with a long canonicalization chain.
+    expect(result.ok).toBe(true);
+  });
+
   it('gives up after the hop cap instead of looping forever', async () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue(mockRedirect(302, 'https://example.com/loop'));
@@ -261,7 +275,9 @@ describe('extractUrl — redirect chain', () => {
       reached: true,
       error: expect.stringContaining('too many redirects'),
     });
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(6);
+    // Bounded, and bounded at the SAME place redirect:'follow' bounded it before the manual walk
+    // replaced it — 20 hops, then one more attempt that trips the cap.
+    expect(fetchMock.mock.calls.length).toBe(21);
   });
 
   it('treats a 3xx with no Location as a plain error response', async () => {
