@@ -1,10 +1,18 @@
-// Host policy for harness- and model-driven network egress (see #164). Every outbound fetch the
-// agent makes funnels through `extractUrl`, and three different things can put a URL there: the
-// model calling `fetch_url`, the harness grounding a URL a write/edit introduced, and the user
-// pasting one into the prompt. The first two are attacker-reachable — a fetched page can say "add
-// this URL to the config", the model writes it, and grounding fires the request with no tool call
-// and no intent — so those default to refusing addresses that only mean something on this machine
-// or this LAN: the local model server, a metadata endpoint, a router admin page.
+// Host policy for harness- and model-driven network egress (see #164). Every fetch of URL CONTENT
+// goes through `extractUrl`, and three different things can put a URL there: the model calling
+// `fetch_url`, the harness grounding a URL a write/edit introduced, and the user pasting one into
+// the prompt. The first two are attacker-reachable — a fetched page can say "add this URL to the
+// config", the model writes it, and grounding fires the request with no tool call and no intent —
+// so those default to refusing addresses that only mean something on this machine or this LAN: the
+// local model server, a metadata endpoint, a router admin page.
+//
+// NOT every socket the process opens, though, and the difference matters to anyone adding a network
+// path later. `SearxngProvider` (search/searxng.ts) calls `fetch` directly and is deliberately
+// outside this policy: its address comes from `REIKA_SEARXNG_URL`, which the user set, and a
+// local-first search instance is EXPECTED on loopback — policing it would break the documented
+// default setup to stop nothing. Same provenance rule as the pasted-URL exemption, reached by
+// configuration rather than by an argument. The URLs a search RETURNS are a different matter: the
+// model reaches those through `fetch_url`, so they are policed like anything else it names.
 //
 // WHAT THIS COVERS: literal addresses, in every encoding the URL parser normalizes (decimal, hex,
 // octal, and short-form IPv4 all arrive here as dotted quads — locked by a test in _hosts.test.ts),
