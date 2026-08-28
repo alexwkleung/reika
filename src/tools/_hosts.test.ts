@@ -46,6 +46,13 @@ describe('classifyPrivateHost — blocked addresses', () => {
     // Bare (unbracketed) IPv6, reachable from a non-URL caller
     ['::1', /loopback/],
     ['fe80::1', /link-local/],
+    // Kept in step with the IPv4 rules, which block multicast and the deprecated ranges. Not
+    // meaningfully fetchable, but an asymmetry between the two families is a defect on its own.
+    ['[ff02::1]', /multicast/],
+    ['[ff00::]', /multicast/],
+    ['[fec0::1]', /site-local/],
+    // ::/96 with a nonzero tail is IPv4-COMPATIBLE, not IPv4-mapped — same verdict, honest label.
+    ['[::2]', /IPv4-compatible/],
   ];
 
   for (const [host, reason] of blocked) {
@@ -73,6 +80,9 @@ describe('classifyPrivateHost — allowed addresses', () => {
     '100.128.0.1', // just above it
     '[2606:4700::1111]', // public IPv6 (Cloudflare)
     '[2001:db8::1]',
+    '[::ffff:8.8.8.8]', // IPv4-mapped PUBLIC address — the mapping is not itself a reason to block
+    '[64:ff9b::8.8.8.8]', // NAT64 well-known prefix onto a public address
+    '[fe00::1]', // just below fe80::/10
   ];
 
   for (const host of allowed) {

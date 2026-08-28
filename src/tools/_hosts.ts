@@ -117,11 +117,18 @@ function classifyIpv6(groups: number[]): string | undefined {
     if (groups[5] === 0 && groups[6] === 0 && groups[7] === 1) return 'loopback (::1)';
     if (groups.every(g => g === 0)) return 'unspecified address (::)';
     const v4 = IPV4_RULES.find(r => r.test(embedded));
-    if (v4) return `IPv4-mapped ${v4.reason}`;
+    // ::ffff:0:0/96 is IPv4-mapped; ::/96 with a nonzero tail is the deprecated IPv4-compatible
+    // form. Same verdict either way — name them apart so the reason text isn't quietly wrong.
+    if (v4) return `${groups[5] === 0xffff ? 'IPv4-mapped' : 'IPv4-compatible'} ${v4.reason}`;
     return undefined;
   }
   if ((groups[0] & 0xfe00) === 0xfc00) return 'unique local (fc00::/7)';
   if ((groups[0] & 0xffc0) === 0xfe80) return 'link-local (fe80::/10)';
+  // Kept in step with the IPv4 rules above, which block 224.0.0.0/4 and the deprecated ranges. An
+  // asymmetry between the two families is a defect even where it isn't reachable — a reviewer
+  // should not have to work out whether ff02::1 was considered and dismissed or simply missed.
+  if ((groups[0] & 0xff00) === 0xff00) return 'multicast (ff00::/8)';
+  if ((groups[0] & 0xffc0) === 0xfec0) return 'site-local, deprecated (fec0::/10)';
   return undefined;
 }
 
