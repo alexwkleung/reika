@@ -37,6 +37,20 @@ Mostly testing 20B-35B range models with low quantization of Q2-Q4 via llama.cpp
 
 Although Reika can work with small and low quantization models, the output and quality will vary during agentic coding compared to pure chat.
 
+## Tested Models
+
+- Qwen3.8 27B (UD-IQ3_XXS)
+- Qwen3.6 35B A3B (UD-IQ2_M)
+- Qwen3.6 35B A3B (UD-IQ2_XXS)
+- Ornith 1.0 35B (UD-IQ2_M)
+- Laguna XS 2.1 (IQ2_M)
+- KAT Coder V2.5 Dev (IQ2_M)
+- North Mini Code 1.0 (UD-IQ3_XXS)
+- Gemma 4 26B A4B IT (UD-IQ3_XXS)
+- GPT-OSS 20B (MXFP4-Q4)
+- Ornith 1.5 9B (Q5_K_M)
+- Qwen3.5 9B (MLX Q4)
+
 ## Quick start
 
 ```sh
@@ -339,4 +353,4 @@ There's more that isn't covered.
 
 ## Inspired by
 
-Inspired by Claude Code, Codex, Crush, OpenCode, and Pi.
+Inspired by Claude Code, Codex, Crush, OpenCode, Pi, DeepSeek Harness, Qwen Code, Kimi Code CLI, and Gemini CLI.
