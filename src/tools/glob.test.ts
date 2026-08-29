@@ -82,6 +82,21 @@ describe('globTool', () => {
   });
 });
 
+describe('globTool explicit ignored target', () => {
+  it('globs inside a gitignored directory when the path names it', async () => {
+    await mkdir(join(cwd, 'release'), { recursive: true });
+    await writeFile(join(cwd, 'release/App-1.0.0.dmg'), '', 'utf8');
+    const ig = ignore().add(['release/']);
+    const scoped = await globTool.run(
+      { pattern: '**/*.dmg', path: 'release' },
+      { cwd, ignore: ig },
+    );
+    expect(scoped.payload).toContain('App-1.0.0.dmg');
+    const root = await globTool.run({ pattern: '**/*.dmg' }, { cwd, ignore: ig });
+    expect(root.payload).toBe('(no matches)');
+  });
+});
+
 describe('globTool spill (REIKA_SPILL)', () => {
   const spillDirs: string[] = [];
 
