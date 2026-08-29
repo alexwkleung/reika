@@ -41,6 +41,7 @@ import {
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
+import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
@@ -860,9 +861,10 @@ export async function runTurn(opts: {
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
   const seenReadOnly = new Map<string, number>();
-  // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / dup-live /
-  // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
-  // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
+  // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
+  // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
+  // of aged-out content, or a model shrinking its window to get around an omitted payload.
+  // Model-invisible — only the debug log reads it. See agent/readtrace.ts.
   const readTrace = new ReadTrace();
   // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
@@ -1980,6 +1982,9 @@ export async function runTurn(opts: {
           Number(call.args.offset ?? 1),
           contentHash,
           i,
+          // Resolved exactly as the tool resolves it, so a default-window read followed by an
+          // explicit narrower one is seen as narrowing rather than as a repeat (#184).
+          Math.max(1, Number(call.args.limit ?? READ_DEFAULT_LIMIT)),
         );
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
