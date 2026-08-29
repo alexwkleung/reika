@@ -219,8 +219,23 @@ export function App() {
   modelSelectedRef.current = modelSelected;
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
-  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent.
-  const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
+  // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
+  // it holds only what the model actually sees — the loop appends every user/assistant/tool message
+  // it commits — and, critically, it PERSISTS the loop's history rewrites across turns (#183).
+  // Compaction and the plan→agent handoff fold spans of it into a `compaction` recap; seeding each
+  // turn from `messages` instead (the old `.slice()`) re-expanded those folds, so every turn redid
+  // the work, re-paid the context, and rewrote the recap that lives in the system block — a
+  // from-token-0 prefill on a local server (measured: ~6 min for 8.4k tokens at 22.9 tok/s). The
+  // loop mutates this array in place, so nothing has to be copied back at turn end.
+  const modelHistoryRef = useRef<Message[]>([]);
+  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent. Model history
+  // stashes alongside the scrollback so a round trip through /chat doesn't resurrect folded spans.
+  const stashedMessagesRef = useRef<{
+    agent?: Message[];
+    chat?: Message[];
+    agentModel?: Message[];
+    chatModel?: Message[];
+  }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = totalUsage;
   const sessionStartedAtRef = useRef(sessionStartedAt);
@@ -539,7 +554,9 @@ export function App() {
     ) {
       const m = modeRef.current;
       warmerRef.current.onEdge({
-        history: messagesRef.current,
+        // The model history, so the warm reproduces the prefix round 0 will actually send —
+        // including any span already folded by a previous turn's compaction.
+        history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfileRef.current),
         // Same mapping as submitToModel below; vibe's first internal turn is a plan turn, so
@@ -592,11 +609,15 @@ export function App() {
       const stash = stashedMessagesRef.current;
       if (currentIsChat) {
         stash.chat = messagesRef.current;
+        stash.chatModel = modelHistoryRef.current;
       } else {
         stash.agent = messagesRef.current;
+        stash.agentModel = modelHistoryRef.current;
       }
       const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
       setMessages([...restored, ...trailing]);
+      // The trailing banner/echo are UI-only (system + meta), so the model history restores bare.
+      modelHistoryRef.current = (nextIsChat ? stash.chatModel : stash.agentModel) ?? [];
     } else if (trailing.length > 0) {
       setMessages(prev => [...prev, ...trailing]);
     }
@@ -638,6 +659,7 @@ export function App() {
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
       stashedMessagesRef.current = {};
+      modelHistoryRef.current = [];
       // With the messages and stashes gone, no payloadId can reach the store anymore.
       payloads.clear();
       setPlanSteps(null);
@@ -1277,10 +1299,6 @@ export function App() {
     // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
     // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
     modeOverride?: Mode,
-    // Explicit model-facing history for this turn, replacing the `messages` closure. Needed by
-    // vibe mode's chained implement turn — the plan turn's messages are in React state but the
-    // closure captured pre-plan state, so the chain threads them through here instead.
-    historyOverride?: Message[],
   ): Promise<Message[]> => {
     // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
     // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
@@ -1309,7 +1327,9 @@ export function App() {
       await runTurn({
         userInput: modelText,
         userDisplay: displayOverride,
-        history: (historyOverride ?? messages).slice(),
+        // The persistent model history itself, not a copy: the loop appends this turn's messages
+        // and folds older spans in place, and both must survive to the next turn (#183).
+        history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfile),
         // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
@@ -1437,8 +1457,7 @@ export function App() {
   // Approval wiring is untouched — each phase asks exactly as its underlying mode would, so
   // REIKA_AUTO_APPROVE / the session toggle stay the sole source of truth for what auto-runs.
   const runVibeTurn = async (modelText: string, displayOverride?: string): Promise<void> => {
-    const base = messages.slice();
-    const planMsgs = await submitToModel(modelText, displayOverride, 'plan', base);
+    const planMsgs = await submitToModel(modelText, displayOverride, 'plan');
     // No planFinal marker means the plan phase was aborted (ctrl-c) or dead-ended — never
     // chain edits off a turn that didn't actually commit a plan.
     if (!planWritten(planMsgs)) {
@@ -1451,10 +1470,9 @@ export function App() {
       ]);
       return;
     }
-    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent', [
-      ...base,
-      ...planMsgs,
-    ]);
+    // No history threading needed: the plan phase appended straight into the shared model history,
+    // so the implement phase picks it up from there (the `messages` closure never would have).
+    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent');
   };
 
   if (status === 'error') {
