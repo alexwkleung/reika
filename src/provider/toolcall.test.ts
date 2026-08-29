@@ -419,6 +419,121 @@ describe('messagesToOpenAI', () => {
     });
   });
 
+  // #179: the cap arithmetic can reach <= 0 while the window still has room, and the <= 0 branch
+  // dropped a payload regardless of its size — a grep answering "Found 1 matches" and a 1,573-char
+  // sed both came back empty at 61% context, and the model narrowed its way to nothing.
+  describe('small-payload floor (#179)', () => {
+    // A budget starved by a huge system prompt: every fresh payload prices at cap <= 0.
+    const STARVED = 'S'.repeat(31_000);
+    const contentFor = (out: unknown[], id: string): string =>
+      (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+        .content;
+
+    it('sends a trivially small non-read payload verbatim when the budget prices it at zero', () => {
+      const payload = 'AGENTS.md:15:## Run / build';
+      const history: Message[] = [
+        { role: 'user', content: 'how do I build' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'g', name: 'grep', args: {} }] },
+        { role: 'tool', callId: 'g', summary: 'Found 1 matches', payload },
+      ];
+      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      expect(contentFor(out, 'g')).toContain(payload);
+      expect(contentFor(out, 'g')).not.toContain('omitted');
+    });
+
+    it('covers a small older read that newest-read protection does not reach', () => {
+      // Protection is single-slot; the 1,573-char `sed -n 1,40p` in the field report was a bash
+      // result, and an earlier read in the same round gets nothing from it either.
+      const small = 'export const x = 1;\n'.repeat(78); // ~1.5k, like the captured sed
+      const newest = 'y\n'.repeat(10);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'b', name: 'bash', args: {} },
+            { id: 'r', name: 'read', args: {} },
+          ],
+        },
+        {
+          role: 'tool',
+          callId: 'b',
+          summary: "Ran: sed -n '1,40p' (1573 bytes output)",
+          payload: small,
+        },
+        { role: 'tool', callId: 'r', summary: 'Read a lines 1-10 of 10', payload: newest },
+      ];
+      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      expect(contentFor(out, 'b')).toContain(small);
+      expect(contentFor(out, 'r')).toContain(newest);
+    });
+
+    it('still caps a large payload sharing the round with a small one', () => {
+      const small = 'src/a.ts:12:const x = 1;';
+      const big = 'Z'.repeat(100_000);
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'g', name: 'grep', args: {} },
+            { id: 'b', name: 'bash', args: {} },
+          ],
+        },
+        { role: 'tool', callId: 'g', summary: 'Found 1 matches', payload: small },
+        { role: 'tool', callId: 'b', summary: 'Ran: build (100000 bytes output)', payload: big },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'g')).toContain(small);
+      expect(contentFor(out, 'b')).toContain('to fit the context window');
+      expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+    });
+
+    it('bounds the exemption in aggregate so a round of small payloads cannot smuggle the window', () => {
+      // Eight 2k results = 16k chars: the per-payload floor alone would let all eight through.
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: Array.from({ length: 8 }, (_, k) => ({
+            id: `g${k}`,
+            name: 'grep',
+            args: {},
+          })),
+        },
+        ...Array.from({ length: 8 }, (_, k) => ({
+          role: 'tool' as const,
+          callId: `g${k}`,
+          summary: 'Found 40 matches',
+          payload: `${k}`.repeat(2000),
+        })),
+      ];
+      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const kept = Array.from({ length: 8 }, (_, k) => contentFor(out, `g${k}`)).filter(
+        c => !c.includes('omitted'),
+      );
+      expect(kept.length).toBeGreaterThan(0); // some small results always survive
+      expect(kept.length).toBeLessThan(8); // but not 16k chars of them
+    });
+
+    it('tells a fully-omitted payload the size that would have been delivered', () => {
+      // The old text said "read a narrower line range", which at cap <= 0 was false at every size:
+      // the model shrank 300 -> 120 -> 70 -> 40 lines and got nothing back each time.
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
+        { role: 'tool', callId: 'c', summary: 'Ran: build', payload: 'Z'.repeat(5000) },
+      ];
+      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const content = contentFor(out, 'c');
+      expect(content).toContain('5000 chars'); // the size that failed
+      expect(content).toContain('2048 chars or less'); // the size that would not
+    });
+  });
+
   describe('omission marker (edit-safety wording)', () => {
     it('warns at the cut point never to span the gap with an edit old_string', () => {
       // The marker already sits AT the cut; it must also tell the model the hidden middle is

@@ -58,6 +58,19 @@ const NO_STUBS: ReadonlySet<number> = new Set();
 // shared cap — overflow safety wins at scale.
 const PROTECTED_READ_FLOOR_CHARS = 4096;
 
+// Fix for #179: a payload this small is ALWAYS sent verbatim, whatever the computed cap says.
+// Field evidence: a grep whose whole result was "Found 1 matches" plus 3 lines, and a 1,573-char
+// `sed -n '1,40p'`, were both omitted entirely at 61% context — the cap arithmetic (pessimistic
+// density floor + safety slack + a split across parallel payloads) can reach <= 0 while the window
+// still has room, and the <= 0 branch drops a payload regardless of its length. Omitting a few
+// hundred bytes never buys back a meaningful amount of window, but it costs a whole round-trip and
+// reads to the model as a broken tool — the classic narrow-and-retry spiral. Same trade as
+// PROTECTED_READ_FLOOR_CHARS: a rare overflow is recoverable, the spiral is not.
+const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
+// Aggregate ceiling on that exemption within one round, so a round of eight small greps can't
+// smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
+const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
+
 export function messagesToOpenAI(
   system: string,
   history: Message[],
@@ -117,7 +130,7 @@ export function messagesToOpenAI(
   const protectedIdx = newestLiveReadIndex(history, freshFrom, stubbed, prefixStable);
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
-  const { cap: perPayloadCap, protectVerbatim } = freshPayloadCharCap(
+  const { cap: perPayloadCap, verbatim } = freshPayloadCharCap(
     systemContent,
     history,
     freshFrom,
@@ -165,7 +178,7 @@ export function messagesToOpenAI(
       if (prefixStable) {
         if (msg.payload && !msg.aged) {
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
-          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          const cap = verbatim.has(i) ? undefined : perPayloadCap;
           const rendered = msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, cap)}`;
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
@@ -186,7 +199,7 @@ export function messagesToOpenAI(
               ? `(reika: repeat of an earlier identical result — same outcome again: ${msg.summary})`
               : DEDUP_TRAIL_STUB;
         } else {
-          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          const cap = verbatim.has(i) ? undefined : perPayloadCap;
           content = fresh ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}` : msg.summary;
         }
       }
@@ -277,10 +290,14 @@ export function findFreshToolBlockStart(history: Message[]): number {
 // via the learned calibration), subtract everything else in the request, and split what
 // remains across the fresh payloads. `cap` undefined (no cap) when the context window is
 // unknown; 0 collapses payloads to summary-only when nothing else leaves room.
-// `protectVerbatim` reports whether the message at protectedIdx (the newest live read) is
-// exempt from the cap: yes when it fits the fresh budget whole, or — budget notwithstanding —
+// `verbatim` holds the history indices exempt from the cap entirely. The newest live read
+// (protectedIdx) is exempt when it fits the fresh budget whole, or — budget notwithstanding —
 // when it is at most PROTECTED_READ_FLOOR_CHARS; a larger read that doesn't fit joins the
-// shared split instead (overflow safety wins at scale).
+// shared split instead (overflow safety wins at scale). Any fresh payload at or under
+// SMALL_PAYLOAD_FLOOR_CHARS is exempt too, smallest-first up to SMALL_PAYLOAD_FLOOR_TOTAL_CHARS
+// (#179) — omitting a few hundred bytes frees no real window and only teaches the model its
+// tools are broken. Exempt payloads are allocated BEFORE the split, so what they cost is
+// subtracted from the budget the capped payloads divide rather than double-counted.
 function freshPayloadCharCap(
   systemContent: string,
   history: Message[],
@@ -294,10 +311,10 @@ function freshPayloadCharCap(
     minGenTokens?: number;
     prefixStable?: boolean;
   },
-): { cap: number | undefined; protectVerbatim: boolean } {
+): { cap: number | undefined; verbatim: ReadonlySet<number> } {
   const cw = opts?.contextWindow;
   // No window: nothing is capped, so protection is moot (capPayload passes everything through).
-  if (!cw) return { cap: undefined, protectVerbatim: false };
+  if (!cw) return { cap: undefined, verbatim: NO_STUBS };
   const prefixStable = !!opts?.prefixStable;
   // Reserve the same generation room the backstop and compaction use, so a fresh tool
   // dump can't leave a thinking model with no tokens to respond in. See provider/budget.ts.
@@ -313,7 +330,8 @@ function freshPayloadCharCap(
   // conservative); a roomy turn's small tool result still clears the reduced budget untruncated.
   const capCalib = Math.max(learned, CAP_DENSITY_FLOOR);
 
-  let freshCount = 0;
+  // Fresh payloads eligible for the shared split, with the lengths the floor exemption needs.
+  const fresh: Array<{ idx: number; len: number }> = [];
   let nonFreshChars = systemContent.length;
   // Payload length of the protected read (0 = none in the live set). Held out of the shared
   // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
@@ -329,7 +347,7 @@ function freshPayloadCharCap(
         protectedChars = m.payload.length;
         nonFreshChars += m.summary.length + 2;
       } else {
-        freshCount++;
+        fresh.push({ idx: i, len: m.payload.length });
         nonFreshChars += m.summary.length + 2;
       }
     } else if (!prefixStable && i >= freshFrom && m.role === 'tool' && m.payload) {
@@ -341,7 +359,7 @@ function freshPayloadCharCap(
         protectedChars = m.payload.length;
         nonFreshChars += m.summary.length + 2;
       } else {
-        freshCount++;
+        fresh.push({ idx: i, len: m.payload.length });
         nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
       }
     } else {
@@ -361,20 +379,31 @@ function freshPayloadCharCap(
   // verbatim regardless of budget up to the floor (the spiral is unrecoverable; a rare overflow
   // is not — see PROTECTED_READ_FLOOR_CHARS). Only a large read that doesn't fit falls back
   // into the shared split. Everything else divides what remains, which may be nothing.
-  let protectVerbatim = false;
+  const verbatim = new Set<number>();
   if (protectedChars > 0) {
     const protectedTokens = (protectedChars / CHARS_PER_TOKEN) * capCalib;
     if (protectedTokens <= freshTokenBudget || protectedChars <= PROTECTED_READ_FLOOR_CHARS) {
-      protectVerbatim = true;
+      verbatim.add(protectedIdx);
       freshTokenBudget -= protectedTokens;
     } else {
-      freshCount++;
+      fresh.push({ idx: protectedIdx, len: protectedChars });
     }
   }
-  if (freshCount === 0) return { cap: undefined, protectVerbatim };
-  if (freshTokenBudget <= 0) return { cap: 0, protectVerbatim };
+  // Small payloads next (#179), smallest-first so the ceiling saves as many as it can. Like the
+  // protected read these are allocated even when the budget is already spent — that is the point.
+  let smallChars = 0;
+  for (const p of [...fresh].sort((a, b) => a.len - b.len)) {
+    if (p.len > SMALL_PAYLOAD_FLOOR_CHARS) break;
+    if (smallChars + p.len > SMALL_PAYLOAD_FLOOR_TOTAL_CHARS) break;
+    smallChars += p.len;
+    verbatim.add(p.idx);
+    freshTokenBudget -= (p.len / CHARS_PER_TOKEN) * capCalib;
+  }
+  const capped = fresh.filter(p => !verbatim.has(p.idx)).length;
+  if (capped === 0) return { cap: undefined, verbatim };
+  if (freshTokenBudget <= 0) return { cap: 0, verbatim };
   const freshCharBudget = (freshTokenBudget * CHARS_PER_TOKEN) / capCalib;
-  return { cap: Math.floor(freshCharBudget / freshCount), protectVerbatim };
+  return { cap: Math.floor(freshCharBudget / capped), verbatim };
 }
 
 // Index from which reasoning_content is kept: the start of the Nth-most-recent tool-call
@@ -426,10 +455,17 @@ function capPayload(payload: string, cap: number | undefined): string {
   // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two
   // empty slices — "Output continues:" over nothing reads as tool output, not as an omission.
   if (cap <= 0) {
+    // The remedy must be one that can actually work. This branch used to say "read a narrower line
+    // range", which at cap <= 0 was false — the cap ignored payload length, so the model shrank
+    // 300 -> 120 -> 70 -> 40 lines over 20 minutes and got nothing back every time (#179). Since
+    // payloads at or under SMALL_PAYLOAD_FLOOR_CHARS now bypass the cap outright, narrowing IS a
+    // real remedy — but only below that number, so state the number and the size that failed.
     return (
       `[reika: entire output (${payload.length} chars) omitted to fit the context window — a ` +
-      `context-size limit, not a command error; re-running won't help. Work from the summary ` +
-      `line above, or read a narrower line range.]`
+      `context-size limit, not a command error; re-running this exact call won't help. Results of ` +
+      `${SMALL_PAYLOAD_FLOOR_CHARS} chars or less are always delivered in full, so re-run it ` +
+      `narrowed to return under that much (a targeted grep for one symbol, or a read of a few ` +
+      `dozen lines). Otherwise work from the summary line above.]`
     );
   }
   const head = Math.floor(cap * HEAD_FRACTION);
