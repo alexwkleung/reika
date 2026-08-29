@@ -87,6 +87,19 @@ describe('grepTool', () => {
   });
 });
 
+describe('grepTool explicit ignored target', () => {
+  it('searches inside a gitignored directory when the path names it', async () => {
+    await mkdir(join(cwd, 'release'), { recursive: true });
+    await writeFile(join(cwd, 'release/latest-mac.yml'), 'version: 1.0.0', 'utf8');
+    const ig = ignore().add(['release/']);
+    const scoped = await grepTool.run({ pattern: 'version', path: 'release' }, { cwd, ignore: ig });
+    expect(scoped.summary).toBe('Found 1 matches for /version/');
+    // Unchanged from the repo root: the ignore file still applies when it wasn't the target.
+    const root = await grepTool.run({ pattern: 'version' }, { cwd, ignore: ig });
+    expect(root.summary).toBe('Found 0 matches for /version/');
+  });
+});
+
 describe('grepTool spill (REIKA_SPILL)', () => {
   const spillDirs: string[] = [];
 

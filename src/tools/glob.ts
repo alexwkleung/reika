@@ -3,6 +3,7 @@ import { fdir } from 'fdir';
 import picomatch from 'picomatch';
 import { relative } from 'node:path';
 import { resolveUserPath } from './_paths.js';
+import { isFilteredTarget } from './_walk.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { recordCapped } from './_spillstats.js';
 import type { Tool } from '../types.js';
@@ -33,7 +34,9 @@ export const globTool: Tool = {
     if (!pattern) return { summary: 'Glob failed: empty pattern' };
     const startPath = String(args.path ?? '.');
     const start = resolveUserPath(ctx.cwd, startPath);
-    const ig = ctx.ignore;
+    // Same explicit-target rule as `list`: a glob based inside an ignored path (build output, a
+    // sibling repo) should match there instead of returning nothing. See _walk.ts.
+    const ig = isFilteredTarget(ctx.cwd, start, ctx.ignore) ? undefined : ctx.ignore;
 
     let isMatch: (path: string) => boolean;
     try {
