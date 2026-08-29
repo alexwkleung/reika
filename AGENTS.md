@@ -228,13 +228,17 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
 - **Fit-to-window payload cap** (`toolcall.ts`): fresh tool payloads are truncated to the
   room left after everything else, so a single big tool result can't overflow. The room left
   reserves `minGenTokens` for the model's reply — the same generation reserve compaction and
-  the backstop use (see below). **Both** the non-fresh subtraction and the fresh-allowance
-  conversion use a pessimistic density floor (`CAP_DENSITY_FLOOR`, 2.5 ≈ 1.6 chars/token) so the
-  built request can't overflow while calibration lags — this is a hard guarantee, not a heuristic.
-  Non-fresh used to be counted at the _learned_ average on the theory it's prose-ish; a real turn
-  disproved it — 400'd a 24.5k window because dense content (SVG path data / CSS / code in the kept
-  reasoning) tokenized ~1.6 chars/token, 2.5× the char/4 estimate, and under-counting the _fixed
-  overhead_ (system + tool-def JSON + reasoning), not just payloads, over-allocated the fresh budget.
+  the backstop use (see below). The split that matters is **measured vs. guessed**, not fresh vs.
+  non-fresh. Anything this request introduces — the fresh payloads, plus the trailing round's new
+  reasoning and summaries — prices at a pessimistic density floor (`CAP_DENSITY_FLOOR`, 2.5 ≈ 1.6
+  chars/token), because a dense turn 400'd a 24.5k window when the _fixed overhead_ (SVG path data /
+  CSS in freshly-kept reasoning) was counted at the learned prose average. Bytes a previous request
+  already carried price at the learned `calibration` instead, floored at char/4 (`SENT_DENSITY_FLOOR`,
+  same value and reasoning as `COMPACTION_CALIBRATION_FLOOR`) — that calibration _is_ the measurement
+  of them, and charging them the 2.5 guess over-billed retained content ~2.5× until the fresh budget
+  went negative and every read collapsed to `SMALL_PAYLOAD_FLOOR_CHARS` (#189; worst under
+  `REIKA_PREFIX_STABLE`, which never ages a live payload). Compaction and the cap now agree on what
+  retained content costs instead of disagreeing by 2.5× on the same bytes.
   The truncation marker says "context limit, not a command error" on purpose — without it, models
   loop re-running with different shell flags.
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
@@ -695,7 +699,7 @@ reports a timeout instead of an outcome.
 
 - A model server that is prefilling sends **zero bytes** — indistinguishable from a hang. Node's `fetch` is undici, whose 300s `headersTimeout`/`bodyTimeout` defaults would abort any turn whose prefill runs longer (issue #186: ~6.5k prompt tokens at ~23 tok/s on an M2 16GB is already over). `src/provider/dispatcher.ts` borrows the running undici's `Agent` off its global symbol — no new dependency, exact version match — and installs one with `REIKA_REQUEST_TIMEOUT_MS` (default 30 min) on both timeouts, for the chat stream only. It fails open: if the symbol or class isn't there, you get undici's defaults back, never a crash. Stream timeouts are never retried (the prompt hasn't changed) and the error names the knob to raise.
 - Reika sends no sampling params so some models may need their sampling parameters tweaked (server-side) in order to reduce issues like endless loops. Not a context bug; a single runaway completion can't be interrupted between calls. The sole exception is the experimental logit recovery (`REIKA_LOGIT_RECOVERY`), which sends a one-shot `logit_bias` on a single last-resort round only — see Loop breaking & spiral handling; normal turns still send nothing.
-- The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up.
+- The char/4 token estimate (`tokens.ts`) under-counts dense tokenizers — the context cap/compaction correct for it via a learned calibration plus a density floor on the cap (`CAP_DENSITY_FLOOR`). Don't drop the floor: it's what stops a dense tool dump overflowing before calibration catches up. Don't extend it to already-sent bytes either — see the fit-to-window cap above.
 - Some cloud thinking models require `reasoning_content` to be roundtripped on assistant messages with tool_calls — handled in `src/provider/toolcall.ts`
 - GPT-OSS on some inference engines leaks `<|channel|>` Harmony markers in tool-call names — `sanitizeToolName()` in `src/provider/client.ts` strips them defensively.
 - Models without a native tool-calling template fall back to emitting calls as text; `extractToolCallsFromContent` (`client.ts`) parses the dialects (`<tool_call>{json}`, Hermes `<function=…>`, pythonic `fn(k=v)`). Thinking models sometimes leak the call into the `reasoning_content` channel instead of `content` — `callModel` recovers it from reasoning when content is empty, so the turn doesn't stall. Prefer a native template; these parsers are the fallback.
