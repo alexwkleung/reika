@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { createSSEDecoder, tokenize } from './transport.js';
-import type { ChatCompletionChunk, SSEEvent } from './transport.js';
+import { createServer } from 'node:http';
+import type { Server, ServerResponse } from 'node:http';
+import { createSSEDecoder, streamChatCompletion, tokenize } from './transport.js';
+import type { ChatCompletionChunk, ChatCompletionRequest, SSEEvent } from './transport.js';
+import { resetStreamDispatcher } from './dispatcher.js';
 
 const enc = new TextEncoder();
 
@@ -143,4 +146,92 @@ describe('tokenize', () => {
     );
     expect(await tokenize({ baseURL: 'http://x/v1', apiKey: '', content: 'a' })).toBeNull();
   });
+});
+
+// The silent-stream timeout (issue #186), end to end against a real socket: undici's own timers
+// are what fire, so a stub can't prove this. `respond` decides what the server does with the
+// request — return without writing to hang the client the way a prefilling llama.cpp does.
+async function withServer(
+  respond: (res: ServerResponse) => void,
+  run: (baseURL: string, requests: () => number) => Promise<void>,
+): Promise<void> {
+  let requests = 0;
+  const server: Server = createServer((_req, res) => {
+    requests++;
+    respond(res);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    await run(`http://127.0.0.1:${port}/v1`, () => requests);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+}
+
+const BODY: ChatCompletionRequest = { model: 'm', messages: [], stream: true };
+
+async function drain(baseURL: string): Promise<string> {
+  let text = '';
+  for await (const chunk of streamChatCompletion({ baseURL, apiKey: '', body: BODY })) {
+    text += chunk.choices?.[0]?.delta?.content ?? '';
+  }
+  return text;
+}
+
+describe('silent-stream timeout', () => {
+  const PRIOR = process.env.REIKA_REQUEST_TIMEOUT_MS;
+  afterEach(() => {
+    if (PRIOR === undefined) delete process.env.REIKA_REQUEST_TIMEOUT_MS;
+    else process.env.REIKA_REQUEST_TIMEOUT_MS = PRIOR;
+    resetStreamDispatcher();
+  });
+
+  function setTimeoutMs(ms: string): void {
+    process.env.REIKA_REQUEST_TIMEOUT_MS = ms;
+    resetStreamDispatcher();
+  }
+
+  it('aborts a server that never sends headers, and says which knob to raise', async () => {
+    setTimeoutMs('300');
+    await withServer(
+      () => {
+        /* never responds — the prefill case */
+      },
+      async (baseURL, requests) => {
+        await expect(drain(baseURL)).rejects.toThrow(/REIKA_REQUEST_TIMEOUT_MS/);
+        // Retrying buys the same silent wait over again, so a timeout must not be retried.
+        expect(requests()).toBe(1);
+      },
+    );
+  }, 15000);
+
+  it('aborts a stream that stalls after some content', async () => {
+    setTimeoutMs('300');
+    await withServer(
+      res => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n');
+      },
+      async baseURL => {
+        await expect(drain(baseURL)).rejects.toThrow(/stream stalled.*REIKA_REQUEST_TIMEOUT_MS/s);
+      },
+    );
+  }, 15000);
+
+  it('streams normally with the dispatcher installed', async () => {
+    setTimeoutMs('5000');
+    await withServer(
+      res => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"he"}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{"content":"llo"}}]}\n\n');
+        res.end('data: [DONE]\n\n');
+      },
+      async baseURL => {
+        expect(await drain(baseURL)).toBe('hello');
+      },
+    );
+  }, 15000);
 });
