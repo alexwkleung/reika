@@ -159,7 +159,11 @@ describe('messagesToOpenAI', () => {
     // kept reasoning, ~1.6 chars/token) overflowed a 24,576 window because the cap assumed a looser
     // density. The invariant: the built request, counted at the pessimistic CAP_DENSITY_FLOOR (2.5,
     // i.e. ~1.6 chars/token), must still fit the window — requestChars * 2.5/4 <= window. A moderate
-    // system (dense tool-def surrogate) exercises the non-fresh-at-pessimistic-density path too.
+    // system (dense tool-def surrogate) exercises the fixed-overhead path too. Since #189 the
+    // already-sent part of that overhead is charged at its measured density, so this whole-request
+    // bound is no longer an identity — it holds here with room to spare, and the bound that IS
+    // exact now is asserted by 'fits the window when already-sent content is counted at its
+    // measured density' below.
     const window = 24576;
     const system = 'S'.repeat(10_000);
     const big = 'Z'.repeat(200_000);
@@ -254,6 +258,124 @@ describe('messagesToOpenAI', () => {
     };
     expect(tool?.content).toContain('to fit the context window');
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
+  });
+
+  describe('already-sent content is priced at its measured density (#189)', () => {
+    // The bug: every non-fresh char was charged at CAP_DENSITY_FLOOR (2.5, i.e. 1.6 chars per
+    // budget-token) even though `calibration` had already MEASURED those bytes — they went over the
+    // wire on the previous request. Ordinary source tokenizes at ~3.5-4 chars/token, so retained
+    // content was over-charged ~2.5x; under REIKA_PREFIX_STABLE (which never ages a live payload)
+    // the over-charge only accumulates, so the fresh budget went negative mid-turn and every read
+    // collapsed to the SMALL_PAYLOAD_FLOOR_CHARS exemption — 300 lines at turn 3, 60 by turn 13,
+    // at a real 63% window fill.
+    const WINDOW = 24576;
+    const FROZEN_FILES = 5;
+    const FROZEN_EACH = 'const x = 1;\n'.repeat(846); // ~11k chars → ~55k retained, as reported
+
+    // A long prefix-stable turn: FROZEN_FILES payloads already stamped (sent on earlier requests),
+    // then one never-sent read in the trailing round.
+    function retainedTurn(freshPayload: string): Message[] {
+      const history: Message[] = [{ role: 'user', content: 'wire up the audio player' }];
+      for (let k = 0; k < FROZEN_FILES; k++) {
+        const summary = `Read src/f${k}.ts lines 1-300 of 300`;
+        history.push({
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `old${k}`, name: 'read', args: {} }],
+        });
+        history.push({
+          role: 'tool',
+          callId: `old${k}`,
+          summary,
+          payload: FROZEN_EACH,
+          rendered: `${summary}\n\n${FROZEN_EACH}`, // stamped = already sent, so already measured
+        });
+      }
+      history.push({
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'new', name: 'read', args: {} }],
+      });
+      history.push({
+        role: 'tool',
+        callId: 'new',
+        summary: 'Read web/src/scripts/audio.ts lines 1-300 of 421',
+        payload: freshPayload,
+      });
+      return history;
+    }
+
+    it('still delivers a read far above the small-payload floor at ~55k retained chars', () => {
+      // 8k chars: past SMALL_PAYLOAD_FLOOR_CHARS (2048) and past PROTECTED_READ_FLOOR_CHARS (4096),
+      // so nothing but the shared budget can save it. Charging the 55k retained chars at 2.5 put the
+      // budget ~1.7x under water and this came back as the "entire output omitted" marker.
+      const fresh = 'export function play(): void {}\n'.repeat(250); // ~8k chars
+      const out = messagesToOpenAI('sys prompt', retainedTurn(fresh), {
+        contextWindow: WINDOW,
+        calibration: 1,
+        prefixStable: true,
+      });
+      const content = (
+        out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'new') as {
+          content: string;
+        }
+      ).content;
+      expect(content).toContain(fresh);
+      expect(content).not.toContain('omitted');
+    });
+
+    it('fits the window when already-sent content is counted at its measured density', () => {
+      // The bound the cap now actually guarantees: measured bytes at the learned calibration
+      // (floored at char/4) plus everything unmeasured at the pessimistic 2.5 stays inside the
+      // window. Driven by an oversized fresh payload so the cap is the binding constraint.
+      const out = messagesToOpenAI('sys prompt', retainedTurn('Z'.repeat(200_000)), {
+        contextWindow: WINDOW,
+        calibration: 1,
+        prefixStable: true,
+      });
+      const frozenChars =
+        FROZEN_FILES * (FROZEN_EACH.length + `Read src/f0.ts lines 1-300 of 300`.length + 2);
+      const rest = requestChars(out) - frozenChars;
+      expect(frozenChars / 4 + (rest * 2.5) / 4).toBeLessThanOrEqual(WINDOW);
+    });
+
+    it("still charges THIS round's new reasoning at the pessimistic density", () => {
+      // The 400 that motivated CAP_DENSITY_FLOOR leaked partly through freshly-kept reasoning
+      // quoting SVG path data. Reasoning arriving in the trailing round has never been measured, so
+      // it must stay on the pessimistic side of the split — identical bytes buy a much smaller
+      // payload there than they do one round back, where calibration already counted them.
+      const reasoning = 'M12 2 L3 7 v10 l9 5 9-5 V7 Z '.repeat(700); // ~20k chars of dense path data
+      const build = (onTrailingRound: boolean): number => {
+        const history: Message[] = [
+          { role: 'user', content: 'go' },
+          {
+            role: 'assistant',
+            content: '',
+            reasoning: onTrailingRound ? undefined : reasoning,
+            toolCalls: [{ id: 'a', name: 'grep', args: {} }],
+          },
+          { role: 'tool', callId: 'a', summary: 'Found 3 matches' },
+          {
+            role: 'assistant',
+            content: '',
+            reasoning: onTrailingRound ? reasoning : undefined,
+            toolCalls: [{ id: 'c', name: 'bash', args: {} }],
+          },
+          { role: 'tool', callId: 'c', summary: 'Ran: build', payload: 'Z'.repeat(100_000) },
+        ];
+        const out = messagesToOpenAI('sys', history, {
+          contextWindow: 16384,
+          calibration: 1,
+          reasoningRounds: 2, // keep both rounds' reasoning, so only WHERE it sits differs
+        });
+        return (
+          out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+            content: string;
+          }
+        ).content.length;
+      };
+      expect(build(true)).toBeLessThan(build(false));
+    });
   });
 
   it('leaves moderate context with ample room for fresh tool output', () => {
@@ -423,8 +545,10 @@ describe('messagesToOpenAI', () => {
   // dropped a payload regardless of its size — a grep answering "Found 1 matches" and a 1,573-char
   // sed both came back empty at 61% context, and the model narrowed its way to nothing.
   describe('small-payload floor (#179)', () => {
-    // A budget starved by a huge system prompt: every fresh payload prices at cap <= 0.
-    const STARVED = 'S'.repeat(31_000);
+    // A budget starved by a huge system prompt: every fresh payload prices at cap <= 0. Sized
+    // against the MEASURED floor the system block is now charged at (#189, SENT_DENSITY_FLOOR = 1),
+    // not the 2.5 guess — at char/4 this alone is ~15k tokens of a 16,384 window.
+    const STARVED = 'S'.repeat(60_000);
     const contentFor = (out: unknown[], id: string): string =>
       (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
         .content;
@@ -554,7 +678,7 @@ describe('messagesToOpenAI', () => {
     it('says the WHOLE output was omitted when the budget is fully exhausted', () => {
       // cap 0 used to render "…[marker]…\n\nOutput continues:" around two empty slices — which
       // reads as tool output, not as an omission.
-      const system = 'S'.repeat(31_000);
+      const system = 'S'.repeat(60_000); // see STARVED (#189): starving at the measured floor
       const history: Message[] = [
         { role: 'user', content: 'go' },
         { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },

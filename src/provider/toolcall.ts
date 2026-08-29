@@ -18,6 +18,20 @@ const BUDGET_SAFETY = 0.9;
 // vs a 9,941 char/4 estimate (2.5×), which sailed past compaction and 400'd a 24,576 window.
 // 4/2.5 = 1.6 chars per budget-token covers that worst case.
 const CAP_DENSITY_FLOOR = 2.5;
+// Floor on the calibration used for content that has ALREADY BEEN SENT (issue #189). The 2.5 floor
+// above is a guess about content whose real token cost is not yet known; applied to already-sent
+// bytes it is an over-correction, because those bytes went over the wire and their real cost was
+// measured — `calibration` IS that measurement (provider prompt_tokens / our char-4 estimate of the
+// request that carried them). Counting them at 2.5 anyway over-charges ordinary source (~3.5-4
+// chars/token) by ~2.2-2.5x, and under REIKA_PREFIX_STABLE — where a live payload is never aged —
+// the over-charge only accumulates, so the fresh budget goes negative mid-turn and every new read
+// collapses to the SMALL_PAYLOAD_FLOOR_CHARS exemption (observed: 300-line read at turn 3, 60-line
+// read at turn 13, at a real 63% fill). Flooring at 1 removes only the below-baseline optimism (a
+// prose-heavy session drives calibration to ~0.9) — it never assumes SPARSER than char/4. Same
+// value and same reasoning as COMPACTION_CALIBRATION_FLOOR in agent/loop.ts, deliberately: the
+// compaction trigger and the cap now agree on what retained content costs, instead of disagreeing
+// by 2.5x on the same bytes.
+const SENT_DENSITY_FLOOR = 1;
 
 // EXPERIMENT (REIKA_DEDUP_PAYLOADS): content-identity dedup of tool messages — the "deny the
 // attractor" context-hygiene layer. A weak/low-bit model is a pattern-completer, so identical content
@@ -321,18 +335,32 @@ function freshPayloadCharCap(
   const reserve =
     opts?.minGenTokens && opts.minGenTokens > 0 ? opts.minGenTokens : DEFAULT_MIN_GEN_TOKENS;
   const learned = opts?.calibration && opts.calibration > 0 ? opts.calibration : 1;
-  // Both the fresh-allowance conversion AND the non-fresh subtraction use the pessimistic floor.
-  // Non-fresh content was originally counted at the learned average on the theory it's prose-ish
-  // and well-described — but the observed 400 leaked partly through it: the system block carries
-  // dense tool-definition JSON and the kept reasoning quoted SVG path data / CSS, so fixed overhead
-  // tokenizes far denser than the prose average too. Under-counting it over-allocates to fresh and
-  // overflows. Over-counting only bites when the window is already tight (exactly when we want to be
-  // conservative); a roomy turn's small tool result still clears the reduced budget untruncated.
+  // The pessimistic floor, for every byte whose real token cost is still a guess: the fresh-allowance
+  // conversion and the part of the fixed overhead this request introduces. Under-counting unmeasured
+  // content over-allocates to fresh and overflows — the observed 400 leaked partly through the fixed
+  // overhead, because a round's freshly-kept reasoning quoted SVG path data / CSS and tokenized far
+  // denser than the prose average the learned calibration carried.
   const capCalib = Math.max(learned, CAP_DENSITY_FLOOR);
+  // The measured floor, for bytes a previous request already carried — `calibration` counted those,
+  // so pricing them at the guess instead over-charges them ~2.5x. See SENT_DENSITY_FLOOR (#189).
+  const sentCalib = Math.max(learned, SENT_DENSITY_FLOOR);
+  // Split point between the two: everything from the assistant turn that opened the trailing tool
+  // round onward is NEW in this request — this round's reasoning and tool summaries have never been
+  // measured, so they price at the pessimistic floor exactly like a fresh payload does. (The dense
+  // turn that motivated CAP_DENSITY_FLOOR overflowed partly through freshly-kept reasoning quoting
+  // SVG path data; that content stays on the pessimistic side of this line.)
+  const unsentFrom = unsentFromIndex(history);
 
   // Fresh payloads eligible for the shared split, with the lengths the floor exemption needs.
   const fresh: Array<{ idx: number; len: number }> = [];
-  let nonFreshChars = systemContent.length;
+  // Non-fresh chars, split by whether a previous request already carried them (measured, priced at
+  // sentCalib) or not (unmeasured, priced at capCalib). The system block has been in every request.
+  let sentChars = systemContent.length;
+  let unsentChars = 0;
+  const addNonFresh = (i: number, n: number): void => {
+    if (i >= unsentFrom) unsentChars += n;
+    else sentChars += n;
+  };
   // Payload length of the protected read (0 = none in the live set). Held out of the shared
   // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
   let protectedChars = 0;
@@ -341,39 +369,42 @@ function freshPayloadCharCap(
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
       if (m.rendered !== undefined) {
         // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
-        // that have never been sent split what's left.
-        nonFreshChars += m.rendered.length;
+        // that have never been sent split what's left. They are also *measured* whatever their
+        // index: `rendered` is stamped only on the call path that actually sent them (stampRenders).
+        sentChars += m.rendered.length;
       } else if (i === protectedIdx) {
         protectedChars = m.payload.length;
-        nonFreshChars += m.summary.length + 2;
+        addNonFresh(i, m.summary.length + 2);
       } else {
         fresh.push({ idx: i, len: m.payload.length });
-        nonFreshChars += m.summary.length + 2;
+        addNonFresh(i, m.summary.length + 2);
       }
     } else if (!prefixStable && i >= freshFrom && m.role === 'tool' && m.payload) {
       if (stubbed.has(i)) {
         // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
         // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
-        nonFreshChars += m.summary.length + DEDUP_PAYLOAD_STUB.length + 2;
+        addNonFresh(i, m.summary.length + DEDUP_PAYLOAD_STUB.length + 2);
       } else if (i === protectedIdx) {
         protectedChars = m.payload.length;
-        nonFreshChars += m.summary.length + 2;
+        addNonFresh(i, m.summary.length + 2);
       } else {
         fresh.push({ idx: i, len: m.payload.length });
-        nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
+        addNonFresh(i, m.summary.length + 2); // the summary prefix is always sent
       }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
       const includeReasoning = prefixStable
         ? !(m.role === 'assistant' && m.reasoningAged)
         : i >= keepReasoningFrom;
-      nonFreshChars += nonFreshChars0(m, includeReasoning);
+      addNonFresh(i, nonFreshChars0(m, includeReasoning));
     }
   }
-  // Work in real tokens: budget the prompt, subtract the (pessimistically-estimated) non-fresh
-  // content, and convert what's left for fresh payloads back to chars pessimistically.
+  // Work in real tokens: budget the prompt, subtract the non-fresh content — already-sent bytes at
+  // their measured density, this round's new bytes pessimistically — and convert what's left for
+  // fresh payloads back to chars pessimistically.
   const promptTokenBudget = (cw - reserve) * BUDGET_SAFETY;
-  const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * capCalib;
+  const nonFreshTokens =
+    (sentChars / CHARS_PER_TOKEN) * sentCalib + (unsentChars / CHARS_PER_TOKEN) * capCalib;
   let freshTokenBudget = promptTokenBudget - nonFreshTokens;
   // The protected read is allocated FIRST — verbatim if it fits the whole fresh budget, and
   // verbatim regardless of budget up to the floor (the spiral is unrecoverable; a rare overflow
@@ -422,6 +453,18 @@ function reasoningKeepFromIndex(history: Message[], rounds: number): number {
   // Fewer than `rounds` tool-call rounds exist: keep from the earliest one, or — if there
   // are no tool-call rounds at all — keep none (final-answer reasoning isn't needed later).
   return earliestToolCall === -1 ? history.length : earliestToolCall;
+}
+
+// First index of content that is NEW in the request being built — the assistant turn that opened
+// the trailing tool round, whose reasoning and tool_calls have never been sent, or history.length
+// when the trailing block isn't a tool round at all. Everything before it rode in the previous
+// request, so `calibration` measured it. Computed from the real trailing tool block rather than the
+// caller's `freshFrom` (which prefix-stable forces to 0 for serialization purposes). See
+// SENT_DENSITY_FLOOR.
+function unsentFromIndex(history: Message[]): number {
+  const block = findFreshToolBlockStart(history);
+  const opener = history[block - 1];
+  return opener?.role === 'assistant' && opener.toolCalls?.length ? block - 1 : block;
 }
 
 // Approximate the chars a message contributes to the serialized request, excluding fresh
