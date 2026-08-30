@@ -2,6 +2,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ContextBundle } from '../types.js';
+import { debugLog } from '../debug.js';
+import { formatBundleSize } from './bundlesize.js';
 import { buildRepoMap } from './repomap.js';
 import { buildFileIndex } from './files.js';
 import { loadGitignore } from './gitignore.js';
@@ -22,7 +24,19 @@ export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<Co
     .digest('hex')
     .slice(0, 16);
 
-  return { projectSummary, repoMap, instructions, cwd, hash, fileIndex, ignore: ig, skills };
+  const bundle: ContextBundle = {
+    projectSummary,
+    repoMap,
+    instructions,
+    cwd,
+    hash,
+    fileIndex,
+    ignore: ig,
+    skills,
+  };
+  // Logged here rather than at the call site so a /cd re-index reports its new bundle too.
+  debugLog(formatBundleSize(bundle));
+  return bundle;
 }
 
 async function summarizeProject(cwd: string): Promise<string> {
