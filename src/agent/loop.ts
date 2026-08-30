@@ -24,6 +24,7 @@ import {
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
+import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -748,6 +749,11 @@ export async function runTurn(opts: {
   // must persist for the first call's compaction decision to be accurate).
   priorCalibration?: number;
   onCalibration?: (factor: number) => void;
+  // Learned prefill throughput (tokens/second), threaded across turns for the same reason as
+  // calibration: each turn re-seeds history, so without it every turn's opening rounds have no
+  // rate to price themselves with — and those are the expensive ones.
+  priorPrefillRate?: number;
+  onPrefillRate?: (rate: number) => void;
   onToolProgress?: (chunk: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
@@ -894,6 +900,11 @@ export async function runTurn(opts: {
   // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
   // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
   const prefixTrace = new PrefixTrace();
+  // What that divergence costs (issue #195). Prefill is ~80% of wall clock on a slow local endpoint,
+  // so the cache line is only actionable annotated with the tokens it reprocessed and the seconds
+  // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
+  // provider's reported prompt tokens. See agent/prefillcost.ts.
+  const prefillRate = new PrefillRate(opts.priorPrefillRate);
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -1365,6 +1376,12 @@ export async function runTurn(opts: {
     // headless debug run still logs the signal + ratio for threshold tuning); otherwise it falls
     // through to the plain delta callback, zero-cost. Cleared after the call (block done).
     let roundReasoning = '';
+    // Tokens this round's request could not reuse from the prompt cache, filled by the prefix-cache
+    // hook below (REIKA_DEBUG-only, so 0 means "not measured" on a normal run). A turn's first
+    // request has no baseline to diverge from — the count is a ceiling there, not a measurement, so
+    // it may be reported but must not teach the rate.
+    let roundReprocessTokens = 0;
+    let roundReprocessBounded = false;
     let spinCheckedAt = 0;
     let spinning = false;
     let verbatimAborted = false;
@@ -1453,11 +1470,14 @@ export async function runTurn(opts: {
         ? msgs => {
             const d = prefixTrace.record(msgs);
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+            roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
+            roundReprocessBounded = d.cause === 'first-request';
             debugLog(
               `[reika:debug] prefix-cache round=${i} cause=${d.cause} ` +
                 `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
                 `msgs=${d.stableMessages}/${d.totalMessages}` +
                 (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                ` ${formatPrefillCost(roundReprocessTokens, prefillRate.get(), roundReprocessBounded)}` +
                 `\n`,
             );
           }
@@ -1487,6 +1507,17 @@ export async function runTurn(opts: {
         calibration = factor;
         opts.onCalibration?.(calibration);
       }
+    }
+    // Same idea one layer down: time-to-first-token is what those reprocessed tokens cost, so the
+    // round that just paid teaches the rate the next round's line quotes. Only fires under
+    // REIKA_DEBUG (roundReprocessTokens stays 0 otherwise), and rejects samples too small to
+    // separate prefill from per-request overhead — see agent/prefillcost.ts.
+    if (response.timing && roundReprocessTokens > 0 && !roundReprocessBounded) {
+      const learned = prefillRate.observe(
+        sampleTokens(response.usage, roundReprocessTokens),
+        response.timing.ttftMs,
+      );
+      if (learned != null) opts.onPrefillRate?.(learned);
     }
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +

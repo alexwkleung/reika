@@ -114,6 +114,10 @@ export function App() {
   // Learned char→token calibration for the context estimate, persisted across turns so the
   // first call of each turn (which re-seeds the full history) triggers compaction accurately.
   const calibrationRef = useRef(1);
+  // Learned prefill throughput (tokens/second), persisted the same way so a turn's round 0 — its
+  // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
+  // enough to measure one. See agent/prefillcost.ts.
+  const prefillRateRef = useRef<number | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -667,6 +671,9 @@ export function App() {
       setLastUsage(null);
       setEstimatedContext(null);
       calibrationRef.current = 1;
+      // /clear also drops back to the default profile, which may be a different model on different
+      // hardware — a rate learned under the old one would misprice every round until it re-learns.
+      prefillRateRef.current = undefined;
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(false);
@@ -1420,6 +1427,10 @@ export function App() {
         priorCalibration: calibrationRef.current,
         onCalibration: f => {
           calibrationRef.current = f;
+        },
+        priorPrefillRate: prefillRateRef.current,
+        onPrefillRate: r => {
+          prefillRateRef.current = r;
         },
       });
     } catch (e) {
