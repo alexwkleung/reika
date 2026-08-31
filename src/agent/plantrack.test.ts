@@ -394,13 +394,16 @@ describe('seedPlanProgress', () => {
         callId: 'c2',
         summary: 'Ran: cd /x && npm test -w @kana/ui (100 bytes output)',
         command: { text: 'cd /x && npm test -w @kana/ui', outputTail: '', outputTruncated: false },
+        exitCode: 0,
       },
-      // A failed run must not check anything off.
+      // A red run must not check anything off. Since #200 it reports as `Ran:` like any other
+      // command, so the exit code is the only thing separating it from the green run above.
       {
         role: 'tool',
         callId: 'c3',
-        summary: 'Bash failed: npm test (exit 1)',
+        summary: 'Ran: npm test (exit 1, 4120 bytes output)',
         command: { text: 'npm test', outputTail: '', outputTruncated: false },
+        exitCode: 1,
       },
       {
         role: 'system',
@@ -410,6 +413,51 @@ describe('seedPlanProgress', () => {
     ]);
     expect(steps?.map(s => s.done)).toEqual([true, true, false]);
     expect(steps?.map(s => s.waived)).toEqual([false, false, true]);
+  });
+});
+
+// #200 backward compatibility. seedPlanProgress re-derives progress by replaying history from the
+// plan forward — it never accumulates — so a tool message without the new `exitCode` field must keep
+// reading as it did before, or a resumed session or loaded transcript would silently un-check steps
+// that were checked off moments earlier, days after the change that caused it.
+describe('seedPlanProgress — results predating exitCode', () => {
+  const PLAN_CMD = '1. Run `npm test`\n2. Edit `src/never-touched.ts`';
+  const ran = (summary: string, exitCode?: number | null): Message => ({
+    role: 'tool',
+    callId: 'c1',
+    summary,
+    command: { text: 'npm test', outputTail: '', outputTruncated: false },
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  });
+
+  it('falls back to the Ran: prefix when no exit status rode along', () => {
+    const steps = seedPlanProgress([plan(PLAN_CMD), ran('Ran: npm test (100 bytes output)')]);
+    expect(steps?.map(s => s.done)).toEqual([true, false]);
+  });
+
+  it('still ignores an old-style failure line with no exit status', () => {
+    const steps = seedPlanProgress([plan(PLAN_CMD), ran('Bash failed: npm test (exit 1)')]);
+    expect(steps?.map(s => s.done)).toEqual([false, false]);
+  });
+
+  it('treats a signal death as a known status, not a missing one', () => {
+    // exitCode null would be indistinguishable from absent under a `?? ` fallback, and the summary
+    // it carries starts with `Ran: ` — so the prefix reading would check the step off.
+    const steps = seedPlanProgress([
+      plan(PLAN_CMD),
+      ran('Ran: npm test (killed by SIGKILL, 12 bytes output)', null),
+    ]);
+    expect(steps?.map(s => s.done)).toEqual([false, false]);
+  });
+
+  it('does not check off a non-bash result that happens to carry exit 0', () => {
+    // ranSuccessfully answers "did it end green", not "was this a command" — callers scope to bash
+    // (or to a result carrying a command) themselves.
+    const steps = seedPlanProgress([
+      plan(PLAN_CMD),
+      { role: 'tool', callId: 'r1', summary: 'Read src/a.ts (40 lines)', exitCode: 0 },
+    ]);
+    expect(steps?.map(s => s.done)).toEqual([false, false]);
   });
 });
 

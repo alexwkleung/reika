@@ -392,6 +392,62 @@ describe('execStream — timeout', () => {
   });
 });
 
+// #200: the exit status was reported by *reclassifying* the whole run — a non-zero exit read
+// `Bash failed:`, which is wrong for the many commands that exit non-zero as ordinary control flow.
+// It is now surfaced in the summary instead, and carried as data on the result so consumers don't
+// have to parse it back out of a string. This path had no coverage at all, which is how the
+// `Ran: ` prefix came to mean "exit 0" to two other modules without anything saying so.
+describe('execStream — exit status', () => {
+  const cwd = process.cwd();
+
+  it('reports a clean run with no status slot at all', async () => {
+    const result = await execStream('echo hi', { cwd });
+    expect(result.summary).toBe('Ran: echo hi (3 bytes output)');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('surfaces a non-zero exit without calling it a failure', async () => {
+    const result = await execStream('echo hello; exit 3', { cwd });
+    expect(result.summary).toBe('Ran: echo hello; exit 3 (exit 3, 6 bytes output)');
+    expect(result.exitCode).toBe(3);
+    expect(result.summary).not.toContain('failed');
+  });
+
+  it('keeps the output alongside the status, so a red test run is still readable', async () => {
+    const result = await execStream('echo "2 tests failed"; exit 1', { cwd });
+    expect(result.summary).toMatch(/^Ran: .* \(exit 1, \d+ bytes output\)$/);
+    expect(result.payload).toContain('2 tests failed');
+  });
+
+  it('does not treat grep-with-no-match as a failure', async () => {
+    const result = await execStream('echo abc | grep zzz', { cwd });
+    expect(result.summary).toMatch(/^Ran: /);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('names the signal when one killed the process, and reports no numeric code', async () => {
+    const result = await execStream('kill -TERM $$', { cwd });
+    expect(result.summary).toBe('Ran: kill -TERM $$ (killed by SIGTERM, 0 bytes output)');
+    // null, not undefined: a signal death is a status we know, not a status we lack. Consumers
+    // distinguish the two — see plantrack.ranSuccessfully.
+    expect(result.exitCode).toBeNull();
+  });
+
+  it('still calls a timeout a timeout, not a plain run', async () => {
+    const result = await execStream('sleep 5', { cwd }, 50);
+    expect(result.summary).toMatch(/^Bash timeout: /);
+    expect(result.summary).not.toContain('Ran: ');
+  });
+
+  it('still calls a spawn error a failure, and reports no status', async () => {
+    // The shell itself starts fine here, so drive the error path through a cwd that does not exist:
+    // spawn rejects before any process runs, which is the case `Bash failed:` is actually for.
+    const result = await execStream('echo hi', { cwd: '/nonexistent-reika-dir' });
+    expect(result.summary).toMatch(/^Bash failed: /);
+    expect(result.exitCode).toBeUndefined();
+  });
+});
+
 describe('TailWindow', () => {
   it('keeps everything while under the budget', () => {
     const w = new TailWindow(100);
