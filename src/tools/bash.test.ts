@@ -1144,6 +1144,21 @@ describe('detectDangerousPatterns — persistent system state', () => {
     );
   });
 
+  it('flags eval, whose payload the gate cannot inspect', () => {
+    expect(detectDangerousPatterns('eval "$CMD"')).toContain(
+      'Executes an unreviewable string (eval)',
+    );
+    expect(detectDangerousPatterns('eval "$(direnv hook zsh)"')).toContain(
+      'Executes an unreviewable string (eval)',
+    );
+    // This repo has an `evals/` directory; neither it nor the word in argument position counts.
+    expect(detectDangerousPatterns('npx tsx evals/run.ts')).toEqual([
+      'Remote package execution (npx/bunx/uvx)',
+    ]);
+    expect(detectDangerousPatterns('grep -rn eval src/')).toEqual([]);
+    expect(detectDangerousPatterns('npm run eval')).toEqual([]);
+  });
+
   it('flags raw network tools and the kill-everything form only', () => {
     expect(detectDangerousPatterns('nc -l 4444')).toContain(
       'Raw network connection (nc/socat/telnet)',

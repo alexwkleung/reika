@@ -660,6 +660,9 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Drives any GUI app on the machine — Mail, Finder, the browser — from one line.
   { re: /^osascript(?![\w./-])/, label: 'GUI automation (osascript)' },
 
+  // The one command the gate cannot inspect: what runs is whatever the variable expands to at
+  // execution time, so every pattern in this file is matching the wrapper rather than the work.
+  { re: /^eval(?![\w./-])/, label: 'Executes an unreviewable string (eval)' },
   // Called out in #206 as low-frequency in ordinary dev and nearly free to add.
   { re: /^(?:nc|ncat|socat|telnet)(?![\w./-])/, label: 'Raw network connection (nc/socat/telnet)' },
   // Only the everything-target is worth flagging: a targeted `kill <pid>` is recoverable, and the
