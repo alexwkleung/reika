@@ -58,8 +58,12 @@ const DEDUP_TRAIL_STUB = '(reika: repeat of an earlier identical result — omit
 // req-013). The repeat framing is kept — "you got this exact result again" is itself an anti-loop
 // signal — but the outcome rides along verbatim. Matching errs generous: a false positive merely
 // keeps a summary the stub would have dropped; a false negative hides a failure.
+// `exit \d+` / `killed by` are how a bash result reports a non-zero status since #200: it reads
+// `Ran: npm test (exit 1, 4120 bytes output)`, which carries none of the failure words above. Without
+// them an aged repeat of a failing command would collapse to the bare trail stub and the model would
+// lose the one thing distinguishing it from the run that passed.
 const OUTCOME_SUMMARY_RE =
-  /\b(fail(ed|ure)?|error|invalid|declined|denied|timed?\s?out|exceeded|not found|no (results?|match(es)?)|past end|found 0|listed 0)\b/i;
+  /\b(fail(ed|ure)?|error|invalid|declined|denied|timed?\s?out|exceeded|not found|no (results?|match(es)?)|past end|found 0|listed 0|exit \d+|killed by)\b/i;
 const NO_STUBS: ReadonlySet<number> = new Set();
 
 // Fix for the read→edit-fail→re-read spiral (qq2 evidence, req-012): the newest fresh read is the

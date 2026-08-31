@@ -143,19 +143,23 @@ export function execStream(
             summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
             payload,
             command: display,
-          });
-        } else if (code === 0) {
-          resolve({
-            summary: `Ran: ${command} (${reported} bytes output)`,
-            payload,
-            command: display,
+            exitCode: code,
           });
         } else {
-          const reason = signal ? `signal ${signal}` : `exit ${code}`;
+          // The status is *surfaced*, not reclassified (#200). A non-zero exit used to read
+          // `Bash failed:`, which is wrong for the many commands that exit non-zero as ordinary
+          // control flow — grep with no match, diff with differences, git diff --quiet, a test
+          // runner reporting red. Calling those failures teaches the model to retry a command that
+          // did exactly what it was asked. It still must not read as success either, which is what
+          // the old code did before the exit check existed: an added `(exit 1, …)` slot says what
+          // happened without judging it. A timeout and a spawn error keep their `Bash` prefixes —
+          // there the command genuinely did not run to completion.
+          const status = code === 0 ? '' : signal ? `killed by ${signal}, ` : `exit ${code}, `;
           resolve({
-            summary: `Bash failed: ${command} (${reason})`,
+            summary: `Ran: ${command} (${status}${reported} bytes output)`,
             payload,
             command: display,
+            exitCode: code,
           });
         }
       };

@@ -51,6 +51,7 @@ import {
   buildPlanProgressLedger,
   decidePlanGate,
   waiveUnchecked,
+  ranSuccessfully,
   MAX_PLAN_GATE_ROUNDS,
   type PlanStep,
 } from './plantrack.js';
@@ -1884,6 +1885,7 @@ export async function runTurn(opts: {
       let payload: string | undefined;
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
+      let exitCode: ToolResult['exitCode'];
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
@@ -1970,6 +1972,7 @@ export async function runTurn(opts: {
           payload = result.payload;
           diff = result.diff;
           command = result.command;
+          exitCode = result.exitCode;
           contentHash = result.contentHash;
           toolNotice = result.notice;
           editFailure = result.editFailure;
@@ -2081,10 +2084,17 @@ export async function runTurn(opts: {
           lastEditFailure = editFailure;
         }
       }
-      // Command steps ("run typecheck/tests"): a successful bash run (exit 0, the `Ran:` prefix)
-      // whose command contains the step's quoted command checks it off — previously these steps
-      // could never complete and dragged the checklist down after a green run.
-      if (planSteps && call.name === 'bash' && summary.startsWith('Ran: ') && command?.text) {
+      // Command steps ("run typecheck/tests"): a successful bash run whose command contains the
+      // step's quoted command checks it off — previously these steps could never complete and
+      // dragged the checklist down after a green run. Success is the exit status, not the summary
+      // prefix: since #200 a failing run also reports as `Ran:` (with the code in it), so keying on
+      // the prefix would check a step off for a red test run.
+      if (
+        planSteps &&
+        call.name === 'bash' &&
+        command?.text &&
+        ranSuccessfully({ summary, exitCode })
+      ) {
         const idx = applyPlanCommand(planSteps, command.text);
         if (idx >= 0) {
           opts.onPlanProgress?.(planSteps);
@@ -2104,6 +2114,7 @@ export async function runTurn(opts: {
         payloadId,
         ...(diff ? { diff } : {}),
         ...(command ? { command } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
