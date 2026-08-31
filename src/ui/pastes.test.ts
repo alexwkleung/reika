@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   expandPastes,
+  hasPasteMarker,
   isLargePaste,
   rememberPaste,
   MAX_PASTE_STORE_CHARS,
@@ -90,5 +91,23 @@ describe('expandPastes', () => {
   it('treats $-sequences in pasted text as literal', () => {
     const { pastes, marker } = rememberPaste([], 'cost is $&$1 total');
     expect(expandPastes(marker, pastes)).toBe('cost is $&$1 total');
+  });
+});
+
+describe('hasPasteMarker', () => {
+  it('sees a marker this module minted', () => {
+    const { marker } = rememberPaste([], lines(PASTE_LINE_THRESHOLD));
+    expect(hasPasteMarker(`${marker} explain`)).toBe(true);
+  });
+
+  it('is not fooled by prose about a paste', () => {
+    expect(hasPasteMarker('the pasted text above')).toBe(false);
+    expect(hasPasteMarker('[Pasted text]')).toBe(false);
+  });
+
+  it('does not carry lastIndex between calls', () => {
+    const { marker } = rememberPaste([], lines(PASTE_LINE_THRESHOLD));
+    expect(hasPasteMarker(marker)).toBe(true);
+    expect(hasPasteMarker(marker)).toBe(true);
   });
 });
