@@ -21,3 +21,12 @@ export function isWarmableInput(value: string): boolean {
   if (value.startsWith('/') || value.startsWith('@')) return false;
   return !hasPasteMarker(value) && !hasImageMarker(value);
 }
+
+// Whether a buffer edit is the moment to fire the warm: the transition into a prompt. Both
+// halves read only the buffer in front of them, so nothing latches — backspacing a warmed
+// prompt away and typing '@' leaves the edit non-warmable on both sides, exactly as if '@'
+// had been the session's first keystroke. Clearing the box and typing prose re-arms, which is
+// the retry path a failed warm relies on (agent/warm.ts keeps no completedKey for those).
+export function isWarmEdge(previous: string, next: string): boolean {
+  return !isWarmableInput(previous) && isWarmableInput(next);
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isWarmableInput } from './warmtrigger.js';
+import { isWarmEdge, isWarmableInput } from './warmtrigger.js';
 import { rememberPaste } from './pastes.js';
 import { nextImageMarker } from '../agent/attachments.js';
 
@@ -37,5 +37,49 @@ describe('isWarmableInput', () => {
   it('warms once a mention-free prompt survives the leading characters', () => {
     expect(isWarmableInput('fix @src/ui/App.tsx')).toBe(true);
     expect(isWarmableInput('mail me at me@example.com')).toBe(true);
+  });
+});
+
+// Each keystroke as (previous buffer, next buffer); true means the warm fires on that edit.
+const type = (steps: string[]): boolean[] =>
+  steps.slice(1).map((next, i) => isWarmEdge(steps[i], next));
+
+describe('isWarmEdge', () => {
+  it('fires once on the keystroke that opens a prompt', () => {
+    expect(type(['', 'f', 'fi', 'fix'])).toEqual([true, false, false]);
+  });
+
+  it('stays quiet through a mention typed from an empty box', () => {
+    expect(type(['', '@', '@sr', '@src/ui/App.tsx'])).toEqual([false, false, false]);
+  });
+
+  it('does not fire when a mention is retyped after backspacing a prompt away', () => {
+    // The predicate reads only the buffer in front of it, so '@' is no more warmable at the
+    // start of the second prompt than it was at the start of the session.
+    expect(type(['', 'f', 'fix', 'fi', 'f', '', '@', '@s'])).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('does not fire when a slash command is retyped after backspacing a mention away', () => {
+    expect(type(['', '@', '', '/', '/m'])).toEqual([false, false, false, false]);
+  });
+
+  it('re-arms when the box is cleared and prose is typed again', () => {
+    expect(type(['fix', '', 'r'])).toEqual([false, true]);
+  });
+
+  it('arms when a leading slash is deleted off an otherwise ordinary prompt', () => {
+    expect(type(['/fix it', 'fix it'])).toEqual([true]);
+  });
+
+  it('does not re-fire once a mention is appended to a warmed prompt', () => {
+    expect(type(['', 'f', 'fix ', 'fix @src/ui/App.tsx'])).toEqual([true, false, false]);
   });
 });
