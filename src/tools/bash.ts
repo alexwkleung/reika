@@ -397,10 +397,16 @@ const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?!
 const READ_ONLY_LEAD_RE =
   /^(?:e?grep|fgrep|rg|ag|ack|find|man|which|type|whereis|cat|bat|less|more|head|tail|awk|sed|echo|printf|ls|wc|git)\b/;
 
+// Tools whose own patterns already describe what they do. Without this, `helm uninstall app`
+// falls through to the generic label and reads as "removes third-party code" — it removes a
+// release from a cluster, and a misleading label is its own bug: the warning text is what the
+// user reads to decide.
+const SELF_COVERED_LEAD_RE = /^(?:helm|kubectl|oc|docker|podman|terraform|tofu|pulumi)\b/;
+
 function genericPackageLabel(command: string): string | undefined {
   for (const segment of command.split(/[;&|]+/)) {
     const seg = segment.trim();
-    if (!seg || READ_ONLY_LEAD_RE.test(seg)) continue;
+    if (!seg || READ_ONLY_LEAD_RE.test(seg) || SELF_COVERED_LEAD_RE.test(seg)) continue;
     const m = GENERIC_PACKAGE_RE.exec(seg);
     if (m) {
       return m[1]
@@ -409,6 +415,152 @@ function genericPackageLabel(command: string): string | undefined {
     }
   }
   return undefined;
+}
+
+// Cluster and container CLIs get the OPPOSITE polarity from the install patterns above, and the
+// reason is the risk asymmetry. Read verbs are a small closed set; mutating verbs are a long open
+// tail that grows every release. Blocklist the tail and a verb nobody enumerated runs silently —
+// fails open, high cost. Allowlist the reads and a *new read verb* prompts once — fails safe,
+// ~zero cost. Same file, two correct polarities.
+//
+// The read sets are generous on purpose. The precision argument cuts hardest here: in a
+// container-heavy repo, prompting on `docker ps` trains reflexive approval, and that degrades the
+// gate for `rm -rf` too. Two-token entries exist because the noun-first forms (`docker image ls`,
+// `kubectl config view`) are reads while their siblings (`image rm`, `config set-context`) are not.
+const CLUSTER_READ_VERBS: Record<string, readonly string[]> = {
+  kubectl: [
+    'get',
+    'describe',
+    'logs',
+    'top',
+    'explain',
+    'version',
+    'cluster-info',
+    'api-resources',
+    'api-versions',
+    'diff',
+    'events',
+    'completion',
+    'help',
+    'config view',
+    'config get-contexts',
+    'config current-context',
+    'auth can-i',
+  ],
+  docker: [
+    'ps',
+    'images',
+    'logs',
+    'inspect',
+    'version',
+    'info',
+    'stats',
+    'port',
+    'diff',
+    'history',
+    'search',
+    'help',
+    'events',
+    'top',
+    'image ls',
+    'image inspect',
+    'image history',
+    'container ls',
+    'container inspect',
+    'container logs',
+    'volume ls',
+    'volume inspect',
+    'network ls',
+    'network inspect',
+    'context ls',
+    'system df',
+    'system info',
+    'compose ps',
+    'compose logs',
+    'compose config',
+    'compose version',
+    'buildx ls',
+    'buildx version',
+  ],
+};
+CLUSTER_READ_VERBS.oc = CLUSTER_READ_VERBS.kubectl;
+CLUSTER_READ_VERBS.podman = CLUSTER_READ_VERBS.docker;
+
+// Verbs that already carry a more specific label, so the generic mutation one stays quiet rather
+// than stacking a second warning on the same command.
+const CLUSTER_VERBS_COVERED_ELSEWHERE: Record<string, readonly string[]> = {
+  docker: ['push'],
+  podman: ['push'],
+};
+
+// Global flags that consume the token after them, so `kubectl -n prod get pods` reads as `get`
+// rather than as `prod` — mistaking a namespace for a subcommand would prompt on every read.
+const FLAG_TAKES_VALUE = new Set([
+  '-n',
+  '--namespace',
+  '--context',
+  '--kubeconfig',
+  '-o',
+  '--output',
+  '-f',
+  '--filename',
+  '-l',
+  '--selector',
+  '--as',
+  '--token',
+  '-s',
+  '--server',
+  '--user',
+  '--cluster',
+  '-H',
+  '--host',
+  '--config',
+  '--log-level',
+  '--format',
+  '--filter',
+  '--since',
+  '--tail',
+  '-e',
+  '--env',
+  '-v',
+  '--volume',
+  '-p',
+  '--publish',
+  '--name',
+  '--network',
+  '-u',
+  '-w',
+  '--workdir',
+  '--entrypoint',
+  '--label',
+  '--mount',
+  '--platform',
+  '--request-timeout',
+]);
+
+function clusterLabel(segment: string): string | undefined {
+  const tokens = segment.split(/\s+/);
+  const tool = tokens[0];
+  const reads = CLUSTER_READ_VERBS[tool];
+  if (!reads) return undefined;
+  const sub: string[] = [];
+  for (let i = 1; i < tokens.length && sub.length < 2; i++) {
+    const t = tokens[i];
+    if (t.startsWith('-')) {
+      if (FLAG_TAKES_VALUE.has(t)) i++;
+      continue;
+    }
+    sub.push(t);
+  }
+  const [verb, next] = sub;
+  if (!verb) return undefined;
+  if (reads.includes(verb)) return undefined;
+  if (next && reads.includes(`${verb} ${next}`)) return undefined;
+  if (CLUSTER_VERBS_COVERED_ELSEWHERE[tool]?.includes(verb)) return undefined;
+  // `docker system` and `kubectl config` are noun groups, not verbs — naming only the first
+  // token would tell the user less than the command already did.
+  const group = next && reads.some(r => r.startsWith(`${verb} `));
+  return `Cluster/container mutation (${tool} ${group ? `${verb} ${next}` : verb})`;
 }
 
 // Commands whose danger lives in the *verb* position, so they are matched per shell segment
@@ -445,6 +597,74 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
   },
   // Overwrites the bytes before unlinking, so nothing survives — not the file, not a git object.
   { re: /^shred(?![\w./-])/, label: 'Unrecoverable file wipe (shred)' },
+
+  // Tier 2 — infra tools whose mutating verbs are a small named set, so these keep the ordinary
+  // blocklist polarity; only kubectl/docker above need the inverted one.
+  {
+    re: /^helm\s+(?:-{1,2}[\w-]+\s+)*(?:install|upgrade|uninstall|rollback|delete)(?![\w./-])/,
+    label: 'Helm release change (modifies a cluster)',
+  },
+  {
+    re: /^(?:terraform|tofu|pulumi)\s+(?:-{1,2}[\w-]+\s+)*(?:apply|destroy|import|taint|untaint)(?![\w./-])/,
+    label: 'Infrastructure change (terraform/pulumi)',
+  },
+  {
+    re: /^(?:terraform|tofu|pulumi)\s+state\s+(?:rm|mv|push|delete)(?![\w./-])/,
+    label: 'Infrastructure change (terraform/pulumi)',
+  },
+  // Fans out to every host in the inventory at once, so the blast radius is the fleet.
+  { re: /^ansible(?:-playbook)?(?![\w./-])/, label: 'Runs across many hosts (ansible)' },
+  // Cloud CLIs nest their verbs (`aws s3 rm …`, `gcloud compute instances delete …`), so the verb
+  // is matched a few tokens in rather than immediately after the tool — and heroku joins them
+  // with a colon (`heroku ps:scale`) rather than a space.
+  {
+    re: /^(?:aws|gcloud|az|flyctl|fly|vercel|netlify|heroku|doctl)(?![\w./-])(?:\s+\S+){0,6}?[\s:](?:create|delete|update|deploy|set|put|remove|rm|scale|restart|destroy)(?![\w./-])/,
+    label: 'Cloud resource change (mutating cloud CLI verb)',
+  },
+
+  // Tier 4 — persistent system state: survives the turn, the session, and usually the reboot.
+  {
+    re: /^(?:systemctl|service)(?![\w./-])[^\n]*\b(?:start|stop|restart|reload|enable|disable|mask|unmask)(?![\w./-])/,
+    label: 'Service state change (systemctl/service)',
+  },
+  {
+    re: /^launchctl\s+(?:load|unload|bootstrap|bootout|enable|disable|kickstart|remove|start|stop|setenv)(?![\w./-])/,
+    label: 'Launch agent change (launchctl)',
+  },
+  {
+    re: /^brew\s+services\s+(?:start|stop|restart|run|cleanup)(?![\w./-])/,
+    label: 'Service state change (brew services)',
+  },
+  // `crontab -r` wipes every job with no confirmation and is one fat-finger from `crontab -e`.
+  // `-l` is the only read, so it is the only form that stays quiet.
+  { re: /^crontab(?![\w./-])(?![^\n]*\s-l\b)/, label: 'Scheduled job change (crontab)' },
+  {
+    re: /^defaults\s+(?:write|delete|import)(?![\w./-])/,
+    label: 'macOS preference write (defaults)',
+  },
+  { re: /^(?:spctl|csrutil)(?![\w./-])/, label: 'Disabling macOS security (spctl/csrutil)' },
+  {
+    re: /^(?:diskutil|hdiutil)\s+(?:-{1,2}[\w-]+\s+)*(?:erase\w*|partitionDisk|reformat|apfs|destroy\w*)(?![\w./-])/i,
+    label: 'Disk erase/partition (diskutil/hdiutil)',
+  },
+  {
+    re: /^(?:mkfs(?:\.\w+)?|fdisk|parted|sgdisk)(?![\w./-])/,
+    label: 'Filesystem/partition change (mkfs/fdisk/parted)',
+  },
+  // Bare `mount` just lists the table; requiring an argument keeps the read quiet.
+  { re: /^u?mount(?![\w./-])\s+\S/, label: 'Mount table change (mount/umount)' },
+  {
+    re: /^tmutil\s+(?:delete|deletelocalsnapshots|disable)(?![\w./-])/,
+    label: 'Time Machine backup change (tmutil)',
+  },
+  // Drives any GUI app on the machine — Mail, Finder, the browser — from one line.
+  { re: /^osascript(?![\w./-])/, label: 'GUI automation (osascript)' },
+
+  // Called out in #206 as low-frequency in ordinary dev and nearly free to add.
+  { re: /^(?:nc|ncat|socat|telnet)(?![\w./-])/, label: 'Raw network connection (nc/socat/telnet)' },
+  // Only the everything-target is worth flagging: a targeted `kill <pid>` is recoverable, and the
+  // agent legitimately manages its own background processes.
+  { re: /^kill\s+(?:-\w+\s+)*-1(?![\d\w./-])/, label: 'Kill every process (kill -1)' },
 ];
 
 // Leading tokens that don't change what a segment actually runs: env assignments, privilege and
@@ -462,6 +682,8 @@ function verbLabels(command: string): string[] {
     for (const { re, label } of VERB_PATTERNS) {
       if (re.test(seg) && !hits.includes(label)) hits.push(label);
     }
+    const cluster = clusterLabel(seg);
+    if (cluster && !hits.includes(cluster)) hits.push(cluster);
   }
   return hits;
 }
@@ -546,6 +768,34 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\brm\s+[^&;|]*\.env\b/, label: 'Deleting environment file (.env)' },
   { re: />\s*\/dev\/sd[a-z]\b/, label: 'Writing to raw disk device' },
   { re: /:(){:|:&};:|:\(\)\s*\{\s*:\|:&\s*\};\s*:/, label: 'Fork bomb pattern' },
+
+  // Tier 4 — persistence. An append to a startup file outlives every session, and it is the
+  // classic first step of anything malicious.
+  {
+    re: />>?\s*(?:~|\$HOME|\/(?:Users|home)\/[^/\s]+)\/\.(?:zshrc|bashrc|bash_profile|zprofile|zshenv|profile|config\/fish\/config\.fish)\b/,
+    label: 'Append to shell startup file (persists across sessions)',
+  },
+
+  // Tier 5 — databases. Uniquely unrecoverable: no reflog, no undo, and the model cannot see
+  // what is in the database it is acting on. Matched as substrings rather than in verb position
+  // because SQL arrives inside a quoted `-c`/`-e` argument, never as the command itself.
+  { re: /\bdrop\s+(?:database|schema|table)\b/i, label: 'SQL DROP (irreversible)' },
+  // Uppercase-only for the bare form, so prose like "truncate the log" stays quiet; the explicit
+  // `truncate table` spelling is unambiguous enough to match either case.
+  { re: /\bTRUNCATE\s+(?:TABLE\s+)?[\w."`]+/, label: 'SQL TRUNCATE (empties a table)' },
+  { re: /\btruncate\s+table\b/i, label: 'SQL TRUNCATE (empties a table)' },
+  {
+    re: /\bdelete\s+from\b(?![^;]*\bwhere\b)/i,
+    label: 'SQL DELETE with no WHERE (empties a table)',
+  },
+  {
+    re: /\bredis-cli\b[^;|&]*\bflush(?:all|db)\b/i,
+    label: 'Redis flush (drops every key)',
+  },
+  { re: /\bprisma\s+migrate\s+reset\b/, label: 'Database reset (prisma migrate reset)' },
+  { re: /\brails\s+db:(?:drop|reset|purge)\b/, label: 'Database drop/reset (rails db:*)' },
+  { re: /\bmanage\.py\s+(?:flush|sqlflush)\b/, label: 'Database flush (django manage.py)' },
+  { re: /\balembic\s+downgrade\s+base\b/, label: 'Migration downgrade to base (alembic)' },
   // Global / persistent package installs — affect state outside the project
   {
     re: /\bnpm\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,

