@@ -1,9 +1,10 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { editTool } from './edit.js';
+import { addFileToIndex } from '../context/files.js';
 import type { ApprovalRequest } from '../types.js';
 
 let cwd: string;
@@ -257,5 +258,88 @@ describe('editTool — out-of-project gate', () => {
     );
     expect(result.summary).toMatch(/^Edited /);
     expect(await readFile(join(cwd, 'a.txt'), 'utf8')).toBe('after\n');
+  });
+});
+
+// The leak this closes: every failure branch in `edit` returns BEFORE the diff approval, and those
+// branches are built from file contents — `fuzzy.hint` names matching lines and `editFailure`
+// carries up to EXCERPT_MAX_LINES verbatim. With the gate only on the write, pointing `edit` at any
+// file on disk with an old_string that cannot match returned its contents under `safe`, no modal.
+describe('editTool — the read is gated, not just the write', () => {
+  let outsideDir: string;
+  const secret = Array.from({ length: 12 }, (_, i) => `secret_line_${i} = VALUE_${i}`).join('\n');
+
+  beforeEach(async () => {
+    outsideDir = await mkdtemp(join(tmpdir(), 'reika-outside-'));
+  });
+  afterEach(async () => {
+    await rm(outsideDir, { recursive: true, force: true });
+  });
+
+  async function attempt(answer: boolean, oldStr: string) {
+    const g = gate(answer);
+    const target = join(outsideDir, 'credentials');
+    await writeFile(target, secret + '\n', 'utf8');
+    const result = await editTool.run(
+      { path: target, old_string: oldStr, new_string: 'z' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    return { g, result, target };
+  }
+
+  it('asks before reading, so a declined edit returns no file-derived detail', async () => {
+    const { g, result } = await attempt(false, 'NOT_IN_THE_FILE');
+    expect(g.seen).toHaveLength(1);
+    expect(result.summary).toContain('declined');
+    // Pre-fix this was "old_string not found in …", which is only knowable by having read it.
+    expect(result.summary).not.toContain('not found');
+    expect(result.editFailure).toBeUndefined();
+  });
+
+  it('leaks no excerpt through the token-overlap branch when declined', async () => {
+    // This is the branch that carries verbatim numbered lines.
+    const { result } = await attempt(false, 'secret_line_3 = GUESS\nsecret_line_4 = GUESS');
+    expect(result.editFailure?.excerpt).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('VALUE_3');
+  });
+
+  it('reports the match failure normally once the user approves the access', async () => {
+    const { g, result } = await attempt(true, 'NOT_IN_THE_FILE');
+    expect(g.seen).toHaveLength(1);
+    expect(result.summary).toContain('not found');
+  });
+
+  it('previews the proposed change without opening the file', async () => {
+    const { g } = await attempt(false, 'secret_line_1 = VALUE_1');
+    expect(g.seen[0].preview).toContain('- secret_line_1 = VALUE_1');
+    expect(g.seen[0].preview).toContain('+ z');
+    // Built from the model's arguments alone — nothing from the file is in it.
+    expect(g.seen[0].preview).not.toContain('VALUE_7');
+  });
+
+  it('does not prompt twice for an approved out-of-project edit', async () => {
+    const g = gate(true);
+    const target = join(outsideDir, 'ok.txt');
+    await writeFile(target, 'before\n', 'utf8');
+    await editTool.run(
+      { path: target, old_string: 'before', new_string: 'after' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen).toHaveLength(1);
+    expect(await readFile(target, 'utf8')).toBe('after\n');
+  });
+
+  it('keeps diff.path relative so the file index cannot throw on it', async () => {
+    const g = gate(true);
+    const target = join(outsideDir, 'indexed.txt');
+    await writeFile(target, 'before\n', 'utf8');
+    const result = await editTool.run(
+      { path: target, old_string: 'before', new_string: 'after' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(isAbsolute(result.diff!.path)).toBe(false);
+    expect(() => addFileToIndex([], result.diff!.path, ignore())).not.toThrow();
+    // …while the user- and model-facing string stays the resolved one.
+    expect(result.summary).toContain(target);
   });
 });

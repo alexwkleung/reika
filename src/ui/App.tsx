@@ -1336,6 +1336,11 @@ export function App() {
             // so a just-created file is attachable without a restart or /cd. The
             // diff path is relative (write/edit emit `relative(cwd, …)`), matching
             // fileIndex. addFileToIndex no-ops on existing/filtered paths.
+            //
+            // That relativeness is load-bearing, not incidental: `ignore` throws a
+            // RangeError on an absolute path, so an out-of-project write would take
+            // the turn down here. write/edit keep a separate `display` string for the
+            // user- and model-facing text and never put it on `diff.path`.
             const written = msg.diff?.path;
             if (written) {
               setBundle(prev => {
