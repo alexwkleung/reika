@@ -34,6 +34,18 @@ describe('isWarmableInput', () => {
     expect(isWarmableInput(`fix the error in ${marker}`)).toBe(false);
   });
 
+  it('holds off on an image path dragged into the box, absolute or relative', () => {
+    // A drop inserts a bare path with no '@'. The absolute form also happens to start with
+    // '/', so assert both — the slash rule must not be the only thing covering this.
+    expect(isWarmableInput('/Users/dev/Desktop/screenshot.png')).toBe(false);
+    expect(isWarmableInput('./shot.png')).toBe(false);
+    expect(isWarmableInput('assets/logo.png what is wrong here')).toBe(false);
+  });
+
+  it('lets an image filename with no path through — nothing expands it', () => {
+    expect(isWarmableInput('rename shot.png to logo.png')).toBe(true);
+  });
+
   it('warms once a mention-free prompt survives the leading characters', () => {
     expect(isWarmableInput('fix @src/ui/App.tsx')).toBe(true);
     expect(isWarmableInput('mail me at me@example.com')).toBe(true);

@@ -128,6 +128,13 @@ function collectMentions(input: string): string[] {
   return out;
 }
 
+// Whether the text carries an image path expandMentions would pick up on its own — the
+// dragged-in-file form, with no '@' in front of it. Exposed so a caller can tell that this
+// text expands into an attachment without paying for the expansion.
+export function hasBareImagePath(input: string): boolean {
+  return collectBareImagePaths(input).length > 0;
+}
+
 function collectBareImagePaths(input: string): string[] {
   const out: string[] = [];
   IMAGE_PATH_RE.lastIndex = 0;
