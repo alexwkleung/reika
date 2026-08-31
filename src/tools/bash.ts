@@ -279,6 +279,23 @@ const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgh\s+pr\s+(?:create|merge)\b/, label: 'GitHub PR create/merge (outward-facing)' },
   { re: /\bgh\s+release\s+create\b/, label: 'GitHub release create (publishes)' },
   { re: /\bhf\s+upload\b/, label: 'Hugging Face upload (publishes to hub)' },
+  // Registry publishes. Same category and same irreversibility as `gh release create` above —
+  // a published version is visible immediately and most registries refuse to reuse the version
+  // number after an unpublish, so there is no quiet undo.
+  {
+    re: /\b(?:npm|pnpm|yarn|bun)\s+publish(?![\w./-])/,
+    label: 'Package publish (npm/pnpm/yarn/bun)',
+  },
+  { re: /\bcargo\s+publish(?![\w./-])/, label: 'Package publish (cargo)' },
+  { re: /\bpoetry\s+publish(?![\w./-])/, label: 'Package publish (poetry)' },
+  { re: /\btwine\s+upload(?![\w./-])/, label: 'Package publish (twine)' },
+  { re: /\bgem\s+push(?![\w./-])/, label: 'Package publish (gem push)' },
+  { re: /\bmvn\s+deploy(?![\w./-])/, label: 'Package publish (mvn deploy)' },
+  { re: /\bgradlew?\s+publish(?![\w./-])/, label: 'Package publish (gradle)' },
+  {
+    re: /\b(?:docker|podman)\s+push(?![\w./-])/,
+    label: 'Container image push (publishes to registry)',
+  },
 ];
 
 // Package management at ANY scope: installs, uninstalls, and registry-fetch-and-run (npx and
@@ -407,6 +424,27 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Kill-by-name matches on a pattern, not a PID, so the blast radius is every process whose name
   // happens to match — the user's editor, dev server, or database, not just the agent's own run.
   { re: /^(?:pkill|killall)(?![\w./-])/, label: 'Kill processes by name (pkill/killall)' },
+  // Remote access: whatever the agent does on the far side is outside this gate, outside the
+  // repo, and outside anything a local sandbox could constrain — so the hop itself is the only
+  // place left to ask. Coverage has to be structural, not incidental on the argument text.
+  { re: /^(?:ssh|scp|sftp)(?![\w./-])/, label: 'Remote host access (ssh/scp/sftp)' },
+  {
+    re: /^rsync(?![\w./-]).*\s(?:rsync:\/\/|[A-Za-z0-9_.@-]+:)/,
+    label: 'Remote host access (rsync)',
+  },
+  // The one rsync form that destroys locally too: --delete empties the destination to match the
+  // source, with no `rm` anywhere in the command for the other patterns to catch.
+  {
+    re: /^rsync(?![\w./-]).*\s--del(?:ete(?:-[\w-]+)?)?(?![\w-])/,
+    label: 'Delete-on-sync (rsync --delete)',
+  },
+  // Ends the session and everything else the user is running; a flailing model does emit these.
+  {
+    re: /^(?:reboot|shutdown|halt|poweroff)(?![\w./-])/,
+    label: 'Power state change (reboot/shutdown)',
+  },
+  // Overwrites the bytes before unlinking, so nothing survives — not the file, not a git object.
+  { re: /^shred(?![\w./-])/, label: 'Unrecoverable file wipe (shred)' },
 ];
 
 // Leading tokens that don't change what a segment actually runs: env assignments, privilege and
@@ -433,10 +471,32 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
     re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
     label: 'Recursive force delete (rm -rf)',
   },
+  // Recursive deletion is recursive deletion; -f only suppresses the prompts nothing was going
+  // to show anyway. The lookahead keeps `rm -rf` on its own more specific label above, while
+  // still catching the split-flag form (`rm -f -r x`) that pattern misses.
+  {
+    re: /\brm\s+(?:-{1,2}[\w-]+\s+)*(?:--recursive\b|-(?!\w*f)[a-zA-Z]*[rR])/,
+    label: 'Recursive delete (rm -r)',
+  },
+  {
+    re: /\bfind\b[^&;|]*\s(?:-delete\b|-exec\s+rm\b)/,
+    label: 'Delete files by search (find -delete)',
+  },
+  {
+    re: /\bchmod\s+(?:-{1,2}[\w-]+\s+)*(?:-[a-zA-Z]*R|--recursive\b)/,
+    label: 'Recursive permission change (chmod -R)',
+  },
+  {
+    re: /\bchown\s+(?:-{1,2}[\w-]+\s+)*(?:-[a-zA-Z]*R|--recursive\b)/,
+    label: 'Recursive ownership change (chown -R)',
+  },
   { re: /\bsudo\b/, label: 'Privilege escalation (sudo)' },
   { re: /(curl|wget)[^|]*\|\s*(sh|bash|zsh)\b/, label: 'Piping remote content to shell' },
   { re: /\|\s*(sh|bash|zsh)\b/, label: 'Piping to shell' },
   { re: /\bdd\s+[^&;|]*\bof=\/dev\//, label: 'Direct device write (dd of=/dev/…)' },
+  // dd truncates and overwrites whatever `of=` names, device or not — the label differs only so
+  // the user reads the right severity.
+  { re: /\bdd\s+[^&;|]*\bof=(?!\/dev\/)/, label: 'Overwrite file with dd (dd of=…)' },
   {
     re: /\bgit\s+push[^&;|]*(--force\b|--force-with-lease\b|\s-f\b)/,
     label: 'Force push to remote',
@@ -444,6 +504,42 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgit\s+branch\s+-D\b/, label: 'Force-delete git branch' },
   { re: /\bgit\s+reset\s+--hard\b/, label: 'Hard reset (discards uncommitted changes)' },
   { re: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'Force-clean untracked files' },
+  // The same act as the hard reset above through a different verb, and the worst of the set:
+  // uncommitted work was never in the object store, so there is no reflog to recover it from.
+  // Matched only in the pathspec forms — `git checkout <branch>` and `git restore --staged`
+  // keep the working tree, and prompting on a branch switch trains reflexive approval, which
+  // costs more safety than these patterns buy.
+  {
+    re: /\bgit\s+checkout\b[^&;|]*\s--\s/,
+    label: 'Discard working-tree changes (git checkout -- <path>)',
+  },
+  {
+    re: /\bgit\s+checkout\s+(?:-{1,2}[\w-]+\s+)*\.(?:\s|$)/,
+    label: 'Discard working-tree changes (git checkout -- <path>)',
+  },
+  {
+    re: /\bgit\s+restore\b(?![^&;|]*(?:--staged\b|\s-S\b))/,
+    label: 'Discard working-tree changes (git restore)',
+  },
+  {
+    re: /\bgit\s+restore\b[^&;|]*(?:--worktree\b|\s-W\b)/,
+    label: 'Discard working-tree changes (git restore)',
+  },
+  {
+    re: /\bgit\s+stash\s+(?:drop|clear)\b/,
+    label: 'Discard stashed changes (git stash drop/clear)',
+  },
+  // Recovery surfaces: expiring the reflog or pruning unreachable objects deletes exactly what
+  // a bad reset would otherwise be recoverable from, so these turn a reversible mistake final.
+  { re: /\bgit\s+reflog\s+expire\b/, label: 'Expire reflog (removes the undo history)' },
+  {
+    re: /\bgit\s+gc\b[^&;|]*--prune(?:=|\b)/,
+    label: 'Prune unreachable git objects (git gc --prune)',
+  },
+  { re: /\bgit\s+filter-(?:branch|repo)\b/, label: 'Rewrite git history (filter-branch/repo)' },
+  { re: /\bgit\s+update-ref\b[^&;|]*\s-d\b/, label: 'Delete a git ref (git update-ref -d)' },
+  // Not destructive on its own, but it silently changes where every later push lands.
+  { re: /\bgit\s+remote\s+(?:set-url|add)\b/, label: 'Change git remote (redirects pushes)' },
   { re: /\bgh\s+repo\s+delete\b/, label: 'Delete GitHub repo (irreversible remote)' },
   { re: /\bhf\s+repo\s+delete\b/, label: 'Delete Hugging Face repo (irreversible remote)' },
   { re: /\bchmod\s+[0-7]*777\b/, label: 'Open permissions (chmod 777)' },

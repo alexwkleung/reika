@@ -422,6 +422,198 @@ describe('detectDangerousPatterns — verb-position commands', () => {
   });
 });
 
+describe('detectDangerousPatterns — remote access and power state', () => {
+  it('flags ssh/scp/sftp structurally, not just when the argument looks dangerous', () => {
+    expect(detectDangerousPatterns('ssh host ./deploy.sh')).toContain(
+      'Remote host access (ssh/scp/sftp)',
+    );
+    expect(detectDangerousPatterns('scp file host:/tmp/')).toContain(
+      'Remote host access (ssh/scp/sftp)',
+    );
+    expect(detectDangerousPatterns('sftp host')).toContain('Remote host access (ssh/scp/sftp)');
+  });
+
+  it('flags rsync only when a remote target is named', () => {
+    expect(detectDangerousPatterns('rsync -a src/ user@host:/tmp/')).toContain(
+      'Remote host access (rsync)',
+    );
+    expect(detectDangerousPatterns('rsync -a src/ dst/')).toEqual([]);
+  });
+
+  it('flags rsync --delete even when both sides are local', () => {
+    expect(detectDangerousPatterns('rsync -a --delete src/ dst/')).toContain(
+      'Delete-on-sync (rsync --delete)',
+    );
+    expect(detectDangerousPatterns('rsync -a --dry-run src/ dst/')).toEqual([]);
+  });
+
+  it('flags power-state commands, including behind a wrapper', () => {
+    expect(detectDangerousPatterns('reboot')).toContain('Power state change (reboot/shutdown)');
+    expect(detectDangerousPatterns('poweroff')).toContain('Power state change (reboot/shutdown)');
+    expect(detectDangerousPatterns('sudo shutdown -h now')).toContain(
+      'Power state change (reboot/shutdown)',
+    );
+  });
+
+  it('flags shred', () => {
+    expect(detectDangerousPatterns('shred -u secrets.txt')).toContain(
+      'Unrecoverable file wipe (shred)',
+    );
+  });
+
+  it('does NOT flag these words in argument position or as prefixes', () => {
+    expect(detectDangerousPatterns('grep -rn ssh src/')).toEqual([]);
+    expect(detectDangerousPatterns('echo "use scp here"')).toEqual([]);
+    expect(detectDangerousPatterns('git log --grep reboot')).toEqual([]);
+    expect(detectDangerousPatterns('ssh-keygen -t ed25519')).toEqual([]);
+    expect(detectDangerousPatterns('cat shred.md')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — work-destroying git verbs', () => {
+  it('flags the pathspec forms of checkout and restore', () => {
+    for (const cmd of [
+      'git checkout -- .',
+      'git checkout .',
+      'git checkout -- src/app.ts',
+      'git checkout HEAD~1 -- src/',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toContain(
+        'Discard working-tree changes (git checkout -- <path>)',
+      );
+    }
+    for (const cmd of ['git restore .', 'git restore src/app.ts']) {
+      expect(detectDangerousPatterns(cmd)).toContain('Discard working-tree changes (git restore)');
+    }
+  });
+
+  it('flags git restore --staged only when it also writes the worktree', () => {
+    expect(detectDangerousPatterns('git restore --staged --worktree x')).toContain(
+      'Discard working-tree changes (git restore)',
+    );
+    expect(detectDangerousPatterns('git restore --staged src/app.ts')).toEqual([]);
+    expect(detectDangerousPatterns('git restore -S src/app.ts')).toEqual([]);
+  });
+
+  it('does NOT flag branch switching — prompting on that would train reflexive approval', () => {
+    expect(detectDangerousPatterns('git checkout main')).toEqual([]);
+    expect(detectDangerousPatterns('git checkout -b feat/x')).toEqual([]);
+    expect(detectDangerousPatterns('git checkout feat/nested/branch')).toEqual([]);
+  });
+
+  it('flags stash discards but not stash/list/pop', () => {
+    expect(detectDangerousPatterns('git stash drop')).toContain(
+      'Discard stashed changes (git stash drop/clear)',
+    );
+    expect(detectDangerousPatterns('git stash clear')).toContain(
+      'Discard stashed changes (git stash drop/clear)',
+    );
+    expect(detectDangerousPatterns('git stash')).toEqual([]);
+    expect(detectDangerousPatterns('git stash list')).toEqual([]);
+    expect(detectDangerousPatterns('git stash pop')).toEqual([]);
+  });
+
+  it('flags the recovery-surface and history-rewrite verbs', () => {
+    expect(detectDangerousPatterns('git reflog expire --expire=now --all')).toContain(
+      'Expire reflog (removes the undo history)',
+    );
+    expect(detectDangerousPatterns('git gc --prune=now')).toContain(
+      'Prune unreachable git objects (git gc --prune)',
+    );
+    expect(detectDangerousPatterns('git filter-branch --tree-filter x HEAD')).toContain(
+      'Rewrite git history (filter-branch/repo)',
+    );
+    expect(detectDangerousPatterns('git update-ref -d refs/heads/x')).toContain(
+      'Delete a git ref (git update-ref -d)',
+    );
+    expect(detectDangerousPatterns('git gc')).toEqual([]);
+  });
+
+  it('flags remote rewiring but not remote reads', () => {
+    expect(detectDangerousPatterns('git remote set-url origin git@evil:x.git')).toContain(
+      'Change git remote (redirects pushes)',
+    );
+    expect(detectDangerousPatterns('git remote add evil git@evil:x.git')).toContain(
+      'Change git remote (redirects pushes)',
+    );
+    expect(detectDangerousPatterns('git remote -v')).toEqual([]);
+    expect(detectDangerousPatterns('git remote get-url origin')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — destructive filesystem gaps', () => {
+  it('flags recursive rm without -f, including the split-flag form', () => {
+    for (const cmd of ['rm -r build/', 'rm -f -r build/', 'rm --recursive build/']) {
+      expect(detectDangerousPatterns(cmd)).toContain('Recursive delete (rm -r)');
+    }
+  });
+
+  it('keeps rm -rf on its own more specific label', () => {
+    const hits = detectDangerousPatterns('rm -rf /tmp/foo');
+    expect(hits).toContain('Recursive force delete (rm -rf)');
+    expect(hits).not.toContain('Recursive delete (rm -r)');
+  });
+
+  it('flags find that deletes', () => {
+    expect(detectDangerousPatterns('find . -name "*.ts" -delete')).toContain(
+      'Delete files by search (find -delete)',
+    );
+    expect(detectDangerousPatterns('find . -name "*.ts" -exec rm {} ;')).toContain(
+      'Delete files by search (find -delete)',
+    );
+    expect(detectDangerousPatterns('find . -name "*.ts"')).toEqual([]);
+  });
+
+  it('flags recursive chmod/chown, not the plain forms', () => {
+    expect(detectDangerousPatterns('chmod -R 755 .')).toContain(
+      'Recursive permission change (chmod -R)',
+    );
+    expect(detectDangerousPatterns('chown -R user:staff /usr/local')).toContain(
+      'Recursive ownership change (chown -R)',
+    );
+    expect(detectDangerousPatterns('chmod 755 file')).toEqual([]);
+    expect(detectDangerousPatterns('chmod +x script.sh')).toEqual([]);
+    expect(detectDangerousPatterns('chmod -v 644 file')).toEqual([]);
+    expect(detectDangerousPatterns('chown user file')).toEqual([]);
+  });
+
+  it('flags dd writing to a plain file, with the device label reserved for devices', () => {
+    expect(detectDangerousPatterns('dd if=/dev/zero of=./disk.img')).toEqual([
+      'Overwrite file with dd (dd of=…)',
+    ]);
+    expect(detectDangerousPatterns('dd if=x of=/dev/sda')).toEqual([
+      'Direct device write (dd of=/dev/…)',
+    ]);
+  });
+
+  it('does NOT flag plain deletes or non-recursive flags', () => {
+    expect(detectDangerousPatterns('rm file.txt')).toEqual([]);
+    expect(detectDangerousPatterns('rm -f file.txt')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — publish verbs', () => {
+  it('flags registry publishes, closing the gap next to gh release create', () => {
+    for (const cmd of ['npm publish', 'pnpm publish', 'yarn publish', 'bun publish']) {
+      expect(detectDangerousPatterns(cmd)).toContain('Package publish (npm/pnpm/yarn/bun)');
+    }
+    expect(detectDangerousPatterns('cargo publish')).toContain('Package publish (cargo)');
+    expect(detectDangerousPatterns('poetry publish')).toContain('Package publish (poetry)');
+    expect(detectDangerousPatterns('twine upload dist/*')).toContain('Package publish (twine)');
+    expect(detectDangerousPatterns('gem push x.gem')).toContain('Package publish (gem push)');
+    expect(detectDangerousPatterns('mvn deploy')).toContain('Package publish (mvn deploy)');
+    expect(detectDangerousPatterns('./gradlew publish')).toContain('Package publish (gradle)');
+    expect(detectDangerousPatterns('docker push me/img')).toContain(
+      'Container image push (publishes to registry)',
+    );
+  });
+
+  it('does NOT flag scripts that merely start with the same token', () => {
+    expect(detectDangerousPatterns('npm run publish-docs')).toEqual([]);
+    expect(detectDangerousPatterns('cargo publishes')).toEqual([]);
+  });
+});
+
 describe('detectDangerousPatterns — dedupe', () => {
   it('returns each label at most once even if multiple regexes match', () => {
     // `npm install -g foo` trips the global pattern and the plain package-install pattern, so
