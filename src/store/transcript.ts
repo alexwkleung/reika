@@ -3,12 +3,38 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { Message, Mode, ToolCall } from '../types.js';
 import { scrubDisplay } from '../ui/scrub.js';
-import { formatDurationMs } from '../ui/format.js';
+import { contextFill, formatDurationMs, kFormat } from '../ui/format.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
 // files instead of choking on them. Start at 1; never reuse a number.
 export const TRANSCRIPT_VERSION = 1;
+
+// The status line's numbers at the moment of the save (issue #199): what the session sent and
+// received, how full the context window was, how much of the last prompt the provider served from
+// cache, and how many model turns it took. Recorded so a saved transcript answers "how big did
+// this get?" on its own, instead of needing the status line pasted alongside it.
+//
+// Optional as a whole, and optional field-by-field within: a transcript saved before the first
+// call has counts of zero and no context size, and a provider that never reports cache hits leaves
+// the cache fields undefined rather than reporting a false 0%.
+export type TranscriptUsage = {
+  // Model turns — the status line's `turn N`, counted the same way (assistant messages).
+  turns: number;
+  // Session totals across every call, the status line's `↑`/`↓` pair.
+  promptTokens: number;
+  completionTokens: number;
+  // Session total of prompt tokens served from the provider's cache.
+  cachedTokens?: number;
+  // Current context size: the last call's prompt tokens, or the pre-send estimate when no call has
+  // landed yet. `contextEstimated` says which, because the difference matters when the file is
+  // being read as debugging evidence.
+  contextTokens?: number | null;
+  contextEstimated?: boolean;
+  contextWindow?: number;
+  // The last call's cached prompt tokens — the numerator behind the status line's `cache N%`.
+  lastCachedTokens?: number;
+};
 
 export type TranscriptMeta = {
   version: number;
@@ -22,6 +48,9 @@ export type TranscriptMeta = {
   // Mode the session was in when it was saved. The per-turn history is derived, not passed:
   // `modes` below is computed from the messages themselves so the two can never disagree.
   mode: Mode;
+  // Token/context/cache/turn accounting at save time. Absent from transcripts written before #199
+  // and from callers that don't track usage.
+  usage?: TranscriptUsage;
 };
 
 // One unbroken run of turns in the same mode. `from`/`to` are inclusive 1-based turn numbers over
@@ -56,6 +85,34 @@ export function summarizeModes(messages: Message[]): ModeRun[] {
     else runs.push({ mode, from: turn, to: turn });
   }
   return runs;
+}
+
+// The usage block as .txt header lines, in the status line's own order: turns, sent/received,
+// context, cache. Only what's actually known is emitted — a session with no call yet gets the
+// counts and nothing else, and a provider that reports no cache hits gets no cache line, so an
+// absent number reads as "not reported" rather than as zero.
+export function formatUsageHeader(usage: TranscriptUsage): string[] {
+  const lines = [`# turns:    ${usage.turns}`];
+  const cachedTotal =
+    usage.cachedTokens != null ? `, ${kFormat(usage.cachedTokens)} from cache` : '';
+  lines.push(
+    `# tokens:   ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓ (session total${cachedTotal})`,
+  );
+  const ctx = usage.contextTokens;
+  if (ctx != null && ctx > 0) {
+    const fill = contextFill(ctx, usage.contextWindow);
+    const notes = [
+      ...(fill != null ? [`${Math.round(fill * 100)}%`] : []),
+      ...(usage.contextEstimated ? ['estimated'] : []),
+    ];
+    const size = fill != null ? `${kFormat(ctx)}/${kFormat(usage.contextWindow!)}` : kFormat(ctx);
+    lines.push(`# ctx:      ${size}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`);
+    if (usage.lastCachedTokens != null) {
+      const pct = Math.round((usage.lastCachedTokens / ctx) * 100);
+      lines.push(`# cache:    ${pct}% of the last prompt (${kFormat(usage.lastCachedTokens)})`);
+    }
+  }
+  return lines;
 }
 
 // `agent (turns 1-3) → plan (turn 4)`. One line, for the .txt header.
@@ -119,6 +176,8 @@ export function renderTxt(
     `# base:     ${meta.baseURL}`,
     `# cwd:      ${shownCwd}`,
     `# messages: ${meta.messageCount}`,
+    // The status line's numbers, when the caller tracked them.
+    ...(meta.usage ? formatUsageHeader(meta.usage) : []),
     `# mode:     ${meta.mode} (at save)`,
     // The whole arc up front, so a reader knows what kind of session this was before reading it;
     // each turn below repeats its own mode in the `You [mode]:` label.
