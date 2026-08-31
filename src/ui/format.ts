@@ -15,3 +15,22 @@ export function formatElapsed(seconds: number): string {
 export function formatDurationMs(ms: number): string {
   return formatElapsed(Math.round(ms / 1000));
 }
+
+// Compact token counts: `999`, `1.2k`, `126k`, `1.3M`, `2.5B`. Lives here rather than in the
+// status bar because the saved transcript's header quotes the same numbers (issue #199), and the
+// two must not drift.
+export function kFormat(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return (n / 1000).toFixed(1) + 'k';
+  if (n < 1_000_000) return Math.round(n / 1000) + 'k';
+  if (n < 10_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n < 1_000_000_000) return Math.round(n / 1_000_000) + 'M';
+  if (n < 10_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
+  return Math.round(n / 1_000_000_000) + 'B';
+}
+
+// Fraction of the context window currently used, or null when either operand is unknown.
+export function contextFill(contextTokens?: number | null, contextWindow?: number): number | null {
+  if (!contextTokens || !contextWindow) return null;
+  return contextTokens / contextWindow;
+}

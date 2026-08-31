@@ -19,7 +19,11 @@ import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
-import { saveTranscript, TRANSCRIPT_VERSION } from '../store/transcript.js';
+import {
+  saveTranscript,
+  TRANSCRIPT_VERSION,
+  type TranscriptUsage,
+} from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
@@ -243,6 +247,12 @@ export function App() {
   }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = totalUsage;
+  // The other two halves of the status line's accounting, mirrored for the same reason as
+  // `usageRef`: /save reads them from a handler that may be a render behind (#199).
+  const lastUsageRef = useRef<Usage | null>(null);
+  lastUsageRef.current = lastUsage;
+  const estimatedContextRef = useRef<number | null>(null);
+  estimatedContextRef.current = estimatedContext;
   const sessionStartedAtRef = useRef(sessionStartedAt);
   sessionStartedAtRef.current = sessionStartedAt;
   const approvalsRef = useRef<Approvals>({ approved: 0, declined: 0 });
@@ -784,6 +794,23 @@ export function App() {
       // Use the active profile's model/base so the saved meta reflects what was actually running,
       // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
       const profile = config.profiles[activeProfileRef.current] ?? config.profiles.default;
+      // Everything the status line shows, frozen at save time (#199). Computed exactly as the
+      // status bar computes it — same turn count, same last-call-else-estimate context — so the
+      // header and a screenshot of the footer can never disagree.
+      const last = lastUsageRef.current;
+      const totals = usageRef.current;
+      const window = profile.contextWindow ?? config.contextWindow;
+      const usage: TranscriptUsage = {
+        turns: msgs.filter(m => m.role === 'assistant').length,
+        promptTokens: totals.promptTokens,
+        completionTokens: totals.completionTokens,
+        ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+        contextTokens: last?.promptTokens ?? estimatedContextRef.current,
+        // No call has landed yet, so the context size above is the pre-send estimate.
+        ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
+        ...(window ? { contextWindow: window } : {}),
+        ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+      };
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
@@ -796,6 +823,7 @@ export function App() {
             cwd: bundle.cwd,
             messageCount: msgs.length,
             mode: modeRef.current,
+            usage,
           },
           { redact: !raw },
         );

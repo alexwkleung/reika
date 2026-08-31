@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
 import type { Usage } from '../types.js';
 import { theme } from './theme.js';
-import { formatElapsed } from './format.js';
+import { contextFill, formatElapsed, kFormat } from './format.js';
 
 export function Status({
   model,
@@ -95,12 +95,6 @@ function modeColor(mode: string): string {
   }
 }
 
-// Fraction of the context window currently used, or null when either operand is unknown.
-export function contextFill(contextTokens?: number | null, contextWindow?: number): number | null {
-  if (!contextTokens || !contextWindow) return null;
-  return contextTokens / contextWindow;
-}
-
 // ` · ctx 45k/128k (35%)` when the window is known, ` · ctx 45k` when only the size is,
 // empty string when there's nothing to show yet.
 export function formatContext(contextTokens?: number | null, contextWindow?: number): string {
@@ -120,14 +114,4 @@ export function formatCache(cachedTokens?: number, contextTokens?: number | null
 // ` · PR: #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell).
 export function formatPr(pr?: number | null): string {
   return pr == null || pr <= 0 ? '' : ` · PR: #${pr}`;
-}
-
-export function kFormat(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 10_000) return (n / 1000).toFixed(1) + 'k';
-  if (n < 1_000_000) return Math.round(n / 1000) + 'k';
-  if (n < 10_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n < 1_000_000_000) return Math.round(n / 1_000_000) + 'M';
-  if (n < 10_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
-  return Math.round(n / 1_000_000_000) + 'B';
 }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Usage } from '../types.js';
 import type { TranscriptMeta } from '../store/transcript.js';
 import type * as ConfigModule from '../config.js';
 import type * as TranscriptModule from '../store/transcript.js';
@@ -52,11 +52,20 @@ vi.mock('../config.js', async () => {
 vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 
-// A turn that settles immediately, emitting only the prompt echo the real loop emits first —
-// enough for the mode stamp, and it leaves the app idle so the next command can be typed.
-type TurnOpts = { userInput: string; onMessage: (m: Message) => void };
+// A turn that settles immediately, emitting the prompt echo the real loop emits first, a one-line
+// reply (so the turn counts as a turn, as the status line counts them), and one call's usage —
+// enough for the mode stamp and the usage block, and it leaves the app idle so the next command
+// can be typed.
+type TurnOpts = {
+  userInput: string;
+  onMessage: (m: Message) => void;
+  onUsage?: (u: Usage) => void;
+};
+const CALL_USAGE: Usage = { promptTokens: 1000, completionTokens: 100, cachedTokens: 800 };
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'user', content: opts.userInput });
+  opts.onMessage({ role: 'assistant', content: 'ok' });
+  opts.onUsage?.(CALL_USAGE);
 });
 vi.mock('../agent/loop.js', () => ({
   runTurn: (...a: unknown[]) => runTurn(...(a as [TurnOpts])),
@@ -168,6 +177,52 @@ describe('/save records the mode', () => {
     // The plan phase produced no plan (the stubbed loop writes none), so the chain stops there:
     // one recorded turn, and it says vibe rather than plan.
     expect(turns.map(m => (m as { mode?: string }).mode)).toEqual(['vibe']);
+    app.unmount();
+  });
+});
+
+// The status line's numbers ride along in the saved meta (#199), so a shared transcript carries
+// them without the footer pasted next to it. App is the only place that holds all four.
+describe('/save records the status-line accounting', () => {
+  beforeEach(() => {
+    runTurn.mockClear();
+    saveTranscript.mockClear();
+  });
+
+  it('carries session totals, turn count, current ctx and the last call cache', async () => {
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    await submit(app, 'and the lexer');
+    await submit(app, '/save');
+
+    const { meta } = savedWith();
+    expect(meta.usage).toBeDefined();
+    // Two turns, summed across both calls; ctx and cache come from the last call alone.
+    expect(meta.usage).toMatchObject({
+      turns: 2,
+      promptTokens: 2000,
+      completionTokens: 200,
+      cachedTokens: 1600,
+      contextTokens: 1000,
+      lastCachedTokens: 800,
+    });
+    // The stub config declares no window, so the field stays absent rather than guessing one.
+    expect(meta.usage?.contextWindow).toBeUndefined();
+    expect(meta.usage?.contextEstimated).toBeUndefined();
+    app.unmount();
+  });
+
+  it('saves zeroed counts before any turn has run', async () => {
+    const app = await mountApp();
+    await submit(app, '/plan');
+    await submit(app, '/save');
+
+    const { meta } = savedWith();
+    expect(meta.usage).toMatchObject({ turns: 0, promptTokens: 0, completionTokens: 0 });
+    // No call has landed, so whatever context size is recorded is the pre-send estimate.
+    expect(meta.usage?.contextEstimated).toBe(true);
+    expect(meta.usage?.cachedTokens).toBeUndefined();
+    expect(meta.usage?.lastCachedTokens).toBeUndefined();
     app.unmount();
   });
 });

@@ -300,6 +300,17 @@ Type `/` in the input to see suggestions. Highlights:
 
 A saved transcript records mode alongside the conversation: each turn is labelled with the mode it ran in (`You [plan]:`, and `mode` on the JSONL record), and the header carries the mode at save time plus the whole arc — `# modes: agent (turns 1-3) → plan (turn 4) → agent (turn 5)`. A vibe turn is recorded as `vibe`, not as the plan and agent phases it runs as internally. So a transcript says how the work was done, not just what was said.
 
+The header also freezes the status line's accounting at save time — turn count, session tokens sent and received, current context against the window, and how much of the last prompt came from cache — so a shared transcript carries the numbers without the footer pasted beside it:
+
+```
+# turns:    7
+# tokens:   1.3M↑ 34k↓ (session total, 900k from cache)
+# ctx:      45k/128k (35%)
+# cache:    89% of the last prompt (40k)
+```
+
+Anything unreported is left out rather than written as zero: a provider that reports no cache hits gets no cache line at all, and a context size recorded before the first call lands is marked `(estimated)`. The same numbers ride the JSONL meta record under `usage`.
+
 ## Scripts
 
 - `npm run dev` — run the CLI with `tsx`
