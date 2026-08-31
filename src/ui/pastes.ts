@@ -48,6 +48,14 @@ export function expandPastes(input: string, pastes: PastedText[]): string {
   return input.replace(MARKER_RE, m => byMarker.get(m) ?? m);
 }
 
+// Whether the buffer still stands in for parked text. Mirrors hasImageMarker (agent/
+// attachments.ts) — lets a caller tell "this is what the user typed" from "this expands into
+// something much bigger at submit" without expanding anything.
+export function hasPasteMarker(input: string): boolean {
+  MARKER_RE.lastIndex = 0;
+  return MARKER_RE.test(input);
+}
+
 function nextMarker(pastes: PastedText[], text: string): string {
   const used = pastes.map(p => Number(/#(\d+)/.exec(p.marker)?.[1] ?? 0));
   const id = Math.max(0, ...used) + 1;

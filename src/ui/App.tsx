@@ -29,6 +29,7 @@ import { expandPastedUrls } from '../agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from '../skillmatch.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
+import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
@@ -539,23 +540,19 @@ export function App() {
   };
 
   const onInputChange = (value: string): void => {
-    // First keystroke of a new prompt (empty→non-empty, read against the pre-render ref) while
-    // idle: speculatively warm the server's KV cache with the prefix the submit will send.
-    // Skips '/'-input (commands never reach the model) and shell mode. Repeat edges on the same
-    // prefix dedupe inside the warmer; strict no-op unless REIKA_WARM=1.
-    const edge = inputValueRef.current === '' && value !== '';
+    // First keystroke of a new prompt (read against the pre-render ref) while idle:
+    // speculatively warm the server's KV cache with the prefix the submit will send. The edge is
+    // the buffer becoming a prompt, not merely becoming non-empty — a leading '/' or '@', or a
+    // marker standing in for a paste, isn't one (issue #202, see isWarmEdge). Shell mode never
+    // warms. Repeat edges on the same prefix dedupe inside the warmer; strict no-op unless
+    // REIKA_WARM=1.
+    const edge = isWarmEdge(inputValueRef.current, value);
     setInputValue(value);
     if (!bundle) {
       setSuggestionState(null);
       return;
     }
-    if (
-      edge &&
-      config &&
-      statusRef.current === 'idle' &&
-      !value.startsWith('/') &&
-      modeRef.current !== 'shell'
-    ) {
+    if (edge && config && statusRef.current === 'idle' && modeRef.current !== 'shell') {
       const m = modeRef.current;
       warmerRef.current.onEdge({
         // The model history, so the warm reproduces the prefix round 0 will actually send —
