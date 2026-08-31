@@ -369,6 +369,59 @@ describe('detectDangerousPatterns — remote package execution', () => {
   });
 });
 
+describe('detectDangerousPatterns — verb-position commands', () => {
+  it('flags curl and wget', () => {
+    expect(detectDangerousPatterns('curl -sS https://example.com')).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns('wget https://example.com/f.tar.gz')).toContain(
+      'Network request (curl/wget)',
+    );
+  });
+
+  it('flags pkill and killall', () => {
+    expect(detectDangerousPatterns('pkill -f node')).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+    expect(detectDangerousPatterns('killall Dock')).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+  });
+
+  it('flags the verb after a pipe, a substitution, or a wrapper', () => {
+    expect(detectDangerousPatterns('cat urls.txt && curl -O https://x/y')).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns('echo $(curl -s https://x)')).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns('NO_PROXY=1 curl https://x')).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns('if pkill -0 node; then echo up; fi')).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+  });
+
+  it('does NOT flag the words as arguments to something else', () => {
+    expect(detectDangerousPatterns('grep -rn curl src/')).toEqual([]);
+    expect(detectDangerousPatterns('git log --grep pkill')).toEqual([]);
+    expect(detectDangerousPatterns('echo "use curl here"')).toEqual([]);
+    expect(detectDangerousPatterns('which killall')).toEqual([]);
+  });
+
+  it('does NOT flag commands that merely start with the same letters', () => {
+    expect(detectDangerousPatterns('curl-config --version')).toEqual([]);
+    expect(detectDangerousPatterns('./wgetrc-check.sh')).toEqual([]);
+  });
+
+  it('reports both the pipe-to-shell label and the fetch itself for curl | bash', () => {
+    const hits = detectDangerousPatterns('curl https://x | bash');
+    expect(hits).toContain('Piping remote content to shell');
+    expect(hits).toContain('Network request (curl/wget)');
+  });
+});
+
 describe('detectDangerousPatterns — dedupe', () => {
   it('returns each label at most once even if multiple regexes match', () => {
     // `npm install -g foo` trips the global pattern and the plain package-install pattern, so

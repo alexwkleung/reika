@@ -394,6 +394,40 @@ function genericPackageLabel(command: string): string | undefined {
   return undefined;
 }
 
+// Commands whose danger lives in the *verb* position, so they are matched per shell segment
+// rather than anywhere in the string: both words are perfectly ordinary as arguments (`grep -rn
+// curl src/`, `git log --grep pkill`), and blanket matching would fire on reads and erode the
+// signal the same way a blanket `gh` match would. Matched after the leading wrappers below are
+// stripped, so `sudo curl …` and `FOO=1 pkill …` still read as what they run.
+const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  // Network egress: a request carries whatever the model chose to send off the machine (`curl -d
+  // @.env`) and brings back content it then acts on. Piping that straight to a shell is worse and
+  // stays flagged separately below; the fetch itself is still the user's call.
+  { re: /^(?:curl|wget)(?![\w./-])/, label: 'Network request (curl/wget)' },
+  // Kill-by-name matches on a pattern, not a PID, so the blast radius is every process whose name
+  // happens to match — the user's editor, dev server, or database, not just the agent's own run.
+  { re: /^(?:pkill|killall)(?![\w./-])/, label: 'Kill processes by name (pkill/killall)' },
+];
+
+// Leading tokens that don't change what a segment actually runs: env assignments, privilege and
+// timing wrappers, and the shell keywords a segment can open with (`if curl … ; then`).
+const VERB_PREFIX_RE =
+  /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
+
+// Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
+// are seen as the commands they are rather than as arguments of whatever encloses them.
+function verbLabels(command: string): string[] {
+  const hits: string[] = [];
+  for (const segment of command.split(/[\n;&|(){}]+|\$\(|`/)) {
+    const seg = segment.trim().replace(VERB_PREFIX_RE, '');
+    if (!seg) continue;
+    for (const { re, label } of VERB_PATTERNS) {
+      if (re.test(seg) && !hits.includes(label)) hits.push(label);
+    }
+  }
+  return hits;
+}
+
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   {
     re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
@@ -456,6 +490,9 @@ export function detectDangerousPatterns(command: string): string[] {
   const hits: string[] = [];
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
+  }
+  for (const label of verbLabels(command)) {
+    if (!hits.includes(label)) hits.push(label);
   }
   // The long-tail fallback only speaks up when nothing more specific did, so a `pip install`
   // reports one precise label instead of two overlapping ones. Every install/uninstall label
