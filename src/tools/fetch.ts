@@ -71,6 +71,11 @@ export async function extractUrl(url: string, opts: ExtractOptions = {}): Promis
       const res = await fetch(current, { signal: controller.signal, redirect: 'manual' });
       const location = redirectLocation(res);
       if (location !== undefined) {
+        // Drain the redirect's body before moving on. `redirect: 'manual'` hands back a real
+        // response per hop, and an unread body keeps its connection out of undici's pool until GC
+        // — invisible in tests, since nothing throws, but a 20-hop chain leaves 20 of them.
+        // `follow` did this internally; walking the chain ourselves means owning it.
+        await res.body?.cancel().catch(() => {});
         // Resolve against the current URL so a relative Location works, then loop to re-check the
         // new address against the policy before following it.
         current = new URL(location, current).toString();

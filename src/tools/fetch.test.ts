@@ -280,6 +280,34 @@ describe('extractUrl — redirect chain', () => {
     expect(fetchMock.mock.calls.length).toBe(21);
   });
 
+  it('drains each redirect body instead of leaking the connection', async () => {
+    // `follow` released these internally; the manual walk has to. An unread body holds its
+    // connection out of undici's pool until GC and throws nothing, so only a test catches it.
+    const cancels: number[] = [];
+    const withBody = (n: number, location: string) => ({
+      ...mockRedirect(302, location),
+      body: { cancel: async () => void cancels.push(n) },
+    });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(withBody(1, 'https://example.com/b') as unknown as Response)
+      .mockResolvedValueOnce(withBody(2, 'https://example.com/c') as unknown as Response)
+      .mockResolvedValueOnce(mockOk('<html><body><article>end</article></body></html>'));
+    const result = await extractUrl('https://example.com/a');
+    expect(result.ok).toBe(true);
+    expect(cancels).toEqual([1, 2]);
+  });
+
+  it('still follows the chain when a hop exposes no body', async () => {
+    // Node can hand back a bodyless response (204/HEAD-ish). The optional chain must not throw.
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(mockRedirect(301, 'https://example.com/final'))
+      .mockResolvedValueOnce(mockOk('<html><body><article>arrived</article></body></html>'));
+    const result = await extractUrl('https://example.com/start');
+    expect(result.ok).toBe(true);
+  });
+
   it('treats a 3xx with no Location as a plain error response', async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: false,
