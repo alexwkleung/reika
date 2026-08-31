@@ -4,24 +4,32 @@ import { resolveUserPath } from './_paths.js';
 import { createHash } from 'node:crypto';
 import type { Tool } from '../types.js';
 
+// Lines returned when the model gives no `limit`. Exported because the agent loop has to resolve
+// the same window this tool does to tell a narrowing re-read from a repeat (agent/readtrace.ts):
+// a default read followed by an explicit `limit` is only recognizable as narrowing if both sides
+// agree on what the default was.
+export const READ_DEFAULT_LIMIT = 300;
+
 // line-ranged by default
 export const readTool: Tool = {
   name: 'read',
-  description:
-    'Read lines from a file. Returns up to 300 lines by default. Use offset+limit for paging.',
+  description: `Read lines from a file. Returns up to ${READ_DEFAULT_LIMIT} lines by default. Use offset+limit for paging.`,
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'File path, absolute or relative to cwd.' },
       offset: { type: 'integer', description: 'Starting line, 1-indexed. Default 1.' },
-      limit: { type: 'integer', description: 'Max lines to return. Default 300.' },
+      limit: {
+        type: 'integer',
+        description: `Max lines to return. Default ${READ_DEFAULT_LIMIT}.`,
+      },
     },
     required: ['path'],
   },
   async run(args, ctx) {
     const path = String(args.path);
     const offset = Math.max(1, Number(args.offset ?? 1));
-    const limit = Math.max(1, Number(args.limit ?? 300));
+    const limit = Math.max(1, Number(args.limit ?? READ_DEFAULT_LIMIT));
     const full = resolveUserPath(ctx.cwd, path);
     const text = await readFile(full, 'utf8');
     // Hash the whole file (not the returned slice) so a window-varying re-read of the same

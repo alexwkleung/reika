@@ -56,6 +56,10 @@ export type Message =
       rendered?: string;
       diff?: { text: string; path: string; added: number; removed: number; startLine?: number };
       command?: { text: string; outputTail: string; outputTruncated: boolean };
+      // See ToolResult.exitCode. Rides the message so plan progress can be re-derived from history
+      // (agent/plantrack.ts replays it) rather than re-parsed out of the summary text. Absent on
+      // every non-bash result and on transcripts written before #200.
+      exitCode?: number | null;
       nested?: boolean;
     }
   | { role: 'error'; content: string; nested?: boolean }
@@ -110,6 +114,14 @@ export type ToolResult = {
   display?: string;
   diff?: { text: string; path: string; added: number; removed: number };
   command?: { text: string; outputTail: string; outputTruncated: boolean };
+  // The process's exit status, straight from node's 'close' event: a number, or null when a signal
+  // killed it. Set by `bash` only, and only once a process actually ran — undefined means "no
+  // status to report" (every other tool, and a spawn that never got off the ground), which is what
+  // lets consumers fall back to the old summary-prefix reading for results that predate the field.
+  // Carried as data because the summary is the wrong place to answer "did this succeed?": a
+  // non-zero exit is ordinary control flow (grep with no match, a red test run) and is reported as
+  // a plain `Ran:` line, so the prefix no longer implies success. See tools/bash.ts and #200.
+  exitCode?: number | null;
   // Hash of the whole file the read covered. Set only by `read`; lets the loop's ReadTrace
   // tell a re-read of unchanged content from a legitimate refetch after the file changed,
   // without a second disk read. Keyed on the full file (not the slice) so a window-varying

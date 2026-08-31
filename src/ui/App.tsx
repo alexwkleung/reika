@@ -19,7 +19,11 @@ import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
-import { saveTranscript, TRANSCRIPT_VERSION } from '../store/transcript.js';
+import {
+  saveTranscript,
+  TRANSCRIPT_VERSION,
+  type TranscriptUsage,
+} from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
@@ -29,6 +33,7 @@ import { expandPastedUrls } from '../agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from '../skillmatch.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
+import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
@@ -114,6 +119,10 @@ export function App() {
   // Learned char→token calibration for the context estimate, persisted across turns so the
   // first call of each turn (which re-seeds the full history) triggers compaction accurately.
   const calibrationRef = useRef(1);
+  // Learned prefill throughput (tokens/second), persisted the same way so a turn's round 0 — its
+  // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
+  // enough to measure one. See agent/prefillcost.ts.
+  const prefillRateRef = useRef<number | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -219,10 +228,31 @@ export function App() {
   modelSelectedRef.current = modelSelected;
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
-  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent.
-  const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
+  // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
+  // it holds only what the model actually sees — the loop appends every user/assistant/tool message
+  // it commits — and, critically, it PERSISTS the loop's history rewrites across turns (#183).
+  // Compaction and the plan→agent handoff fold spans of it into a `compaction` recap; seeding each
+  // turn from `messages` instead (the old `.slice()`) re-expanded those folds, so every turn redid
+  // the work, re-paid the context, and rewrote the recap that lives in the system block — a
+  // from-token-0 prefill on a local server (measured: ~6 min for 8.4k tokens at 22.9 tok/s). The
+  // loop mutates this array in place, so nothing has to be copied back at turn end.
+  const modelHistoryRef = useRef<Message[]>([]);
+  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent. Model history
+  // stashes alongside the scrollback so a round trip through /chat doesn't resurrect folded spans.
+  const stashedMessagesRef = useRef<{
+    agent?: Message[];
+    chat?: Message[];
+    agentModel?: Message[];
+    chatModel?: Message[];
+  }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = totalUsage;
+  // The other two halves of the status line's accounting, mirrored for the same reason as
+  // `usageRef`: /save reads them from a handler that may be a render behind (#199).
+  const lastUsageRef = useRef<Usage | null>(null);
+  lastUsageRef.current = lastUsage;
+  const estimatedContextRef = useRef<number | null>(null);
+  estimatedContextRef.current = estimatedContext;
   const sessionStartedAtRef = useRef(sessionStartedAt);
   sessionStartedAtRef.current = sessionStartedAt;
   const approvalsRef = useRef<Approvals>({ approved: 0, declined: 0 });
@@ -520,26 +550,24 @@ export function App() {
   };
 
   const onInputChange = (value: string): void => {
-    // First keystroke of a new prompt (empty→non-empty, read against the pre-render ref) while
-    // idle: speculatively warm the server's KV cache with the prefix the submit will send.
-    // Skips '/'-input (commands never reach the model) and shell mode. Repeat edges on the same
-    // prefix dedupe inside the warmer; strict no-op unless REIKA_WARM=1.
-    const edge = inputValueRef.current === '' && value !== '';
+    // First keystroke of a new prompt (read against the pre-render ref) while idle:
+    // speculatively warm the server's KV cache with the prefix the submit will send. The edge is
+    // the buffer becoming a prompt, not merely becoming non-empty — a leading '/' or '@', or a
+    // marker standing in for a paste, isn't one (issue #202, see isWarmEdge). Shell mode never
+    // warms. Repeat edges on the same prefix dedupe inside the warmer; strict no-op unless
+    // REIKA_WARM=1.
+    const edge = isWarmEdge(inputValueRef.current, value);
     setInputValue(value);
     if (!bundle) {
       setSuggestionState(null);
       return;
     }
-    if (
-      edge &&
-      config &&
-      statusRef.current === 'idle' &&
-      !value.startsWith('/') &&
-      modeRef.current !== 'shell'
-    ) {
+    if (edge && config && statusRef.current === 'idle' && modeRef.current !== 'shell') {
       const m = modeRef.current;
       warmerRef.current.onEdge({
-        history: messagesRef.current,
+        // The model history, so the warm reproduces the prefix round 0 will actually send —
+        // including any span already folded by a previous turn's compaction.
+        history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfileRef.current),
         // Same mapping as submitToModel below; vibe's first internal turn is a plan turn, so
@@ -592,11 +620,15 @@ export function App() {
       const stash = stashedMessagesRef.current;
       if (currentIsChat) {
         stash.chat = messagesRef.current;
+        stash.chatModel = modelHistoryRef.current;
       } else {
         stash.agent = messagesRef.current;
+        stash.agentModel = modelHistoryRef.current;
       }
       const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
       setMessages([...restored, ...trailing]);
+      // The trailing banner/echo are UI-only (system + meta), so the model history restores bare.
+      modelHistoryRef.current = (nextIsChat ? stash.chatModel : stash.agentModel) ?? [];
     } else if (trailing.length > 0) {
       setMessages(prev => [...prev, ...trailing]);
     }
@@ -638,6 +670,7 @@ export function App() {
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
       stashedMessagesRef.current = {};
+      modelHistoryRef.current = [];
       // With the messages and stashes gone, no payloadId can reach the store anymore.
       payloads.clear();
       setPlanSteps(null);
@@ -645,6 +678,9 @@ export function App() {
       setLastUsage(null);
       setEstimatedContext(null);
       calibrationRef.current = 1;
+      // /clear also drops back to the default profile, which may be a different model on different
+      // hardware — a rate learned under the old one would misprice every round until it re-learns.
+      prefillRateRef.current = undefined;
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(false);
@@ -758,6 +794,23 @@ export function App() {
       // Use the active profile's model/base so the saved meta reflects what was actually running,
       // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
       const profile = config.profiles[activeProfileRef.current] ?? config.profiles.default;
+      // Everything the status line shows, frozen at save time (#199). Computed exactly as the
+      // status bar computes it — same turn count, same last-call-else-estimate context — so the
+      // header and a screenshot of the footer can never disagree.
+      const last = lastUsageRef.current;
+      const totals = usageRef.current;
+      const window = profile.contextWindow ?? config.contextWindow;
+      const usage: TranscriptUsage = {
+        turns: msgs.filter(m => m.role === 'assistant').length,
+        promptTokens: totals.promptTokens,
+        completionTokens: totals.completionTokens,
+        ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+        contextTokens: last?.promptTokens ?? estimatedContextRef.current,
+        // No call has landed yet, so the context size above is the pre-send estimate.
+        ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
+        ...(window ? { contextWindow: window } : {}),
+        ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+      };
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
@@ -770,6 +823,7 @@ export function App() {
             cwd: bundle.cwd,
             messageCount: msgs.length,
             mode: modeRef.current,
+            usage,
           },
           { redact: !raw },
         );
@@ -1277,10 +1331,6 @@ export function App() {
     // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
     // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
     modeOverride?: Mode,
-    // Explicit model-facing history for this turn, replacing the `messages` closure. Needed by
-    // vibe mode's chained implement turn — the plan turn's messages are in React state but the
-    // closure captured pre-plan state, so the chain threads them through here instead.
-    historyOverride?: Message[],
   ): Promise<Message[]> => {
     // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
     // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
@@ -1309,7 +1359,9 @@ export function App() {
       await runTurn({
         userInput: modelText,
         userDisplay: displayOverride,
-        history: (historyOverride ?? messages).slice(),
+        // The persistent model history itself, not a copy: the loop appends this turn's messages
+        // and folds older spans in place, and both must survive to the next turn (#183).
+        history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfile),
         // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
@@ -1406,6 +1458,10 @@ export function App() {
         onCalibration: f => {
           calibrationRef.current = f;
         },
+        priorPrefillRate: prefillRateRef.current,
+        onPrefillRate: r => {
+          prefillRateRef.current = r;
+        },
       });
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
@@ -1442,8 +1498,7 @@ export function App() {
   // Approval wiring is untouched — each phase asks exactly as its underlying mode would, so
   // REIKA_AUTO_APPROVE / the session toggle stay the sole source of truth for what auto-runs.
   const runVibeTurn = async (modelText: string, displayOverride?: string): Promise<void> => {
-    const base = messages.slice();
-    const planMsgs = await submitToModel(modelText, displayOverride, 'plan', base);
+    const planMsgs = await submitToModel(modelText, displayOverride, 'plan');
     // No planFinal marker means the plan phase was aborted (ctrl-c) or dead-ended — never
     // chain edits off a turn that didn't actually commit a plan.
     if (!planWritten(planMsgs)) {
@@ -1456,10 +1511,9 @@ export function App() {
       ]);
       return;
     }
-    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent', [
-      ...base,
-      ...planMsgs,
-    ]);
+    // No history threading needed: the plan phase appended straight into the shared model history,
+    // so the implement phase picks it up from there (the `messages` closure never would have).
+    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent');
   };
 
   if (status === 'error') {

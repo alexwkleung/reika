@@ -18,6 +18,20 @@ const BUDGET_SAFETY = 0.9;
 // vs a 9,941 char/4 estimate (2.5×), which sailed past compaction and 400'd a 24,576 window.
 // 4/2.5 = 1.6 chars per budget-token covers that worst case.
 const CAP_DENSITY_FLOOR = 2.5;
+// Floor on the calibration used for content that has ALREADY BEEN SENT (issue #189). The 2.5 floor
+// above is a guess about content whose real token cost is not yet known; applied to already-sent
+// bytes it is an over-correction, because those bytes went over the wire and their real cost was
+// measured — `calibration` IS that measurement (provider prompt_tokens / our char-4 estimate of the
+// request that carried them). Counting them at 2.5 anyway over-charges ordinary source (~3.5-4
+// chars/token) by ~2.2-2.5x, and under REIKA_PREFIX_STABLE — where a live payload is never aged —
+// the over-charge only accumulates, so the fresh budget goes negative mid-turn and every new read
+// collapses to the SMALL_PAYLOAD_FLOOR_CHARS exemption (observed: 300-line read at turn 3, 60-line
+// read at turn 13, at a real 63% fill). Flooring at 1 removes only the below-baseline optimism (a
+// prose-heavy session drives calibration to ~0.9) — it never assumes SPARSER than char/4. Same
+// value and same reasoning as COMPACTION_CALIBRATION_FLOOR in agent/loop.ts, deliberately: the
+// compaction trigger and the cap now agree on what retained content costs, instead of disagreeing
+// by 2.5x on the same bytes.
+const SENT_DENSITY_FLOOR = 1;
 
 // EXPERIMENT (REIKA_DEDUP_PAYLOADS): content-identity dedup of tool messages — the "deny the
 // attractor" context-hygiene layer. A weak/low-bit model is a pattern-completer, so identical content
@@ -44,8 +58,12 @@ const DEDUP_TRAIL_STUB = '(reika: repeat of an earlier identical result — omit
 // req-013). The repeat framing is kept — "you got this exact result again" is itself an anti-loop
 // signal — but the outcome rides along verbatim. Matching errs generous: a false positive merely
 // keeps a summary the stub would have dropped; a false negative hides a failure.
+// `exit \d+` / `killed by` are how a bash result reports a non-zero status since #200: it reads
+// `Ran: npm test (exit 1, 4120 bytes output)`, which carries none of the failure words above. Without
+// them an aged repeat of a failing command would collapse to the bare trail stub and the model would
+// lose the one thing distinguishing it from the run that passed.
 const OUTCOME_SUMMARY_RE =
-  /\b(fail(ed|ure)?|error|invalid|declined|denied|timed?\s?out|exceeded|not found|no (results?|match(es)?)|past end|found 0|listed 0)\b/i;
+  /\b(fail(ed|ure)?|error|invalid|declined|denied|timed?\s?out|exceeded|not found|no (results?|match(es)?)|past end|found 0|listed 0|exit \d+|killed by)\b/i;
 const NO_STUBS: ReadonlySet<number> = new Set();
 
 // Fix for the read→edit-fail→re-read spiral (qq2 evidence, req-012): the newest fresh read is the
@@ -57,6 +75,19 @@ const NO_STUBS: ReadonlySet<number> = new Set();
 // recoverable (truncation retry) while the spiral is not. Reads larger than this fall back to the
 // shared cap — overflow safety wins at scale.
 const PROTECTED_READ_FLOOR_CHARS = 4096;
+
+// Fix for #179: a payload this small is ALWAYS sent verbatim, whatever the computed cap says.
+// Field evidence: a grep whose whole result was "Found 1 matches" plus 3 lines, and a 1,573-char
+// `sed -n '1,40p'`, were both omitted entirely at 61% context — the cap arithmetic (pessimistic
+// density floor + safety slack + a split across parallel payloads) can reach <= 0 while the window
+// still has room, and the <= 0 branch drops a payload regardless of its length. Omitting a few
+// hundred bytes never buys back a meaningful amount of window, but it costs a whole round-trip and
+// reads to the model as a broken tool — the classic narrow-and-retry spiral. Same trade as
+// PROTECTED_READ_FLOOR_CHARS: a rare overflow is recoverable, the spiral is not.
+const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
+// Aggregate ceiling on that exemption within one round, so a round of eight small greps can't
+// smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
+const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 
 export function messagesToOpenAI(
   system: string,
@@ -117,7 +148,7 @@ export function messagesToOpenAI(
   const protectedIdx = newestLiveReadIndex(history, freshFrom, stubbed, prefixStable);
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
-  const { cap: perPayloadCap, protectVerbatim } = freshPayloadCharCap(
+  const { cap: perPayloadCap, verbatim } = freshPayloadCharCap(
     systemContent,
     history,
     freshFrom,
@@ -165,7 +196,7 @@ export function messagesToOpenAI(
       if (prefixStable) {
         if (msg.payload && !msg.aged) {
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
-          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          const cap = verbatim.has(i) ? undefined : perPayloadCap;
           const rendered = msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, cap)}`;
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
@@ -186,7 +217,7 @@ export function messagesToOpenAI(
               ? `(reika: repeat of an earlier identical result — same outcome again: ${msg.summary})`
               : DEDUP_TRAIL_STUB;
         } else {
-          const cap = protectVerbatim && i === protectedIdx ? undefined : perPayloadCap;
+          const cap = verbatim.has(i) ? undefined : perPayloadCap;
           content = fresh ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}` : msg.summary;
         }
       }
@@ -277,10 +308,14 @@ export function findFreshToolBlockStart(history: Message[]): number {
 // via the learned calibration), subtract everything else in the request, and split what
 // remains across the fresh payloads. `cap` undefined (no cap) when the context window is
 // unknown; 0 collapses payloads to summary-only when nothing else leaves room.
-// `protectVerbatim` reports whether the message at protectedIdx (the newest live read) is
-// exempt from the cap: yes when it fits the fresh budget whole, or — budget notwithstanding —
+// `verbatim` holds the history indices exempt from the cap entirely. The newest live read
+// (protectedIdx) is exempt when it fits the fresh budget whole, or — budget notwithstanding —
 // when it is at most PROTECTED_READ_FLOOR_CHARS; a larger read that doesn't fit joins the
-// shared split instead (overflow safety wins at scale).
+// shared split instead (overflow safety wins at scale). Any fresh payload at or under
+// SMALL_PAYLOAD_FLOOR_CHARS is exempt too, smallest-first up to SMALL_PAYLOAD_FLOOR_TOTAL_CHARS
+// (#179) — omitting a few hundred bytes frees no real window and only teaches the model its
+// tools are broken. Exempt payloads are allocated BEFORE the split, so what they cost is
+// subtracted from the budget the capped payloads divide rather than double-counted.
 function freshPayloadCharCap(
   systemContent: string,
   history: Message[],
@@ -294,27 +329,42 @@ function freshPayloadCharCap(
     minGenTokens?: number;
     prefixStable?: boolean;
   },
-): { cap: number | undefined; protectVerbatim: boolean } {
+): { cap: number | undefined; verbatim: ReadonlySet<number> } {
   const cw = opts?.contextWindow;
   // No window: nothing is capped, so protection is moot (capPayload passes everything through).
-  if (!cw) return { cap: undefined, protectVerbatim: false };
+  if (!cw) return { cap: undefined, verbatim: NO_STUBS };
   const prefixStable = !!opts?.prefixStable;
   // Reserve the same generation room the backstop and compaction use, so a fresh tool
   // dump can't leave a thinking model with no tokens to respond in. See provider/budget.ts.
   const reserve =
     opts?.minGenTokens && opts.minGenTokens > 0 ? opts.minGenTokens : DEFAULT_MIN_GEN_TOKENS;
   const learned = opts?.calibration && opts.calibration > 0 ? opts.calibration : 1;
-  // Both the fresh-allowance conversion AND the non-fresh subtraction use the pessimistic floor.
-  // Non-fresh content was originally counted at the learned average on the theory it's prose-ish
-  // and well-described — but the observed 400 leaked partly through it: the system block carries
-  // dense tool-definition JSON and the kept reasoning quoted SVG path data / CSS, so fixed overhead
-  // tokenizes far denser than the prose average too. Under-counting it over-allocates to fresh and
-  // overflows. Over-counting only bites when the window is already tight (exactly when we want to be
-  // conservative); a roomy turn's small tool result still clears the reduced budget untruncated.
+  // The pessimistic floor, for every byte whose real token cost is still a guess: the fresh-allowance
+  // conversion and the part of the fixed overhead this request introduces. Under-counting unmeasured
+  // content over-allocates to fresh and overflows — the observed 400 leaked partly through the fixed
+  // overhead, because a round's freshly-kept reasoning quoted SVG path data / CSS and tokenized far
+  // denser than the prose average the learned calibration carried.
   const capCalib = Math.max(learned, CAP_DENSITY_FLOOR);
+  // The measured floor, for bytes a previous request already carried — `calibration` counted those,
+  // so pricing them at the guess instead over-charges them ~2.5x. See SENT_DENSITY_FLOOR (#189).
+  const sentCalib = Math.max(learned, SENT_DENSITY_FLOOR);
+  // Split point between the two: everything from the assistant turn that opened the trailing tool
+  // round onward is NEW in this request — this round's reasoning and tool summaries have never been
+  // measured, so they price at the pessimistic floor exactly like a fresh payload does. (The dense
+  // turn that motivated CAP_DENSITY_FLOOR overflowed partly through freshly-kept reasoning quoting
+  // SVG path data; that content stays on the pessimistic side of this line.)
+  const unsentFrom = unsentFromIndex(history);
 
-  let freshCount = 0;
-  let nonFreshChars = systemContent.length;
+  // Fresh payloads eligible for the shared split, with the lengths the floor exemption needs.
+  const fresh: Array<{ idx: number; len: number }> = [];
+  // Non-fresh chars, split by whether a previous request already carried them (measured, priced at
+  // sentCalib) or not (unmeasured, priced at capCalib). The system block has been in every request.
+  let sentChars = systemContent.length;
+  let unsentChars = 0;
+  const addNonFresh = (i: number, n: number): void => {
+    if (i >= unsentFrom) unsentChars += n;
+    else sentChars += n;
+  };
   // Payload length of the protected read (0 = none in the live set). Held out of the shared
   // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
   let protectedChars = 0;
@@ -323,58 +373,72 @@ function freshPayloadCharCap(
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
       if (m.rendered !== undefined) {
         // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
-        // that have never been sent split what's left.
-        nonFreshChars += m.rendered.length;
+        // that have never been sent split what's left. They are also *measured* whatever their
+        // index: `rendered` is stamped only on the call path that actually sent them (stampRenders).
+        sentChars += m.rendered.length;
       } else if (i === protectedIdx) {
         protectedChars = m.payload.length;
-        nonFreshChars += m.summary.length + 2;
+        addNonFresh(i, m.summary.length + 2);
       } else {
-        freshCount++;
-        nonFreshChars += m.summary.length + 2;
+        fresh.push({ idx: i, len: m.payload.length });
+        addNonFresh(i, m.summary.length + 2);
       }
     } else if (!prefixStable && i >= freshFrom && m.role === 'tool' && m.payload) {
       if (stubbed.has(i)) {
         // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
         // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
-        nonFreshChars += m.summary.length + DEDUP_PAYLOAD_STUB.length + 2;
+        addNonFresh(i, m.summary.length + DEDUP_PAYLOAD_STUB.length + 2);
       } else if (i === protectedIdx) {
         protectedChars = m.payload.length;
-        nonFreshChars += m.summary.length + 2;
+        addNonFresh(i, m.summary.length + 2);
       } else {
-        freshCount++;
-        nonFreshChars += m.summary.length + 2; // the summary prefix is always sent
+        fresh.push({ idx: i, len: m.payload.length });
+        addNonFresh(i, m.summary.length + 2); // the summary prefix is always sent
       }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
       const includeReasoning = prefixStable
         ? !(m.role === 'assistant' && m.reasoningAged)
         : i >= keepReasoningFrom;
-      nonFreshChars += nonFreshChars0(m, includeReasoning);
+      addNonFresh(i, nonFreshChars0(m, includeReasoning));
     }
   }
-  // Work in real tokens: budget the prompt, subtract the (pessimistically-estimated) non-fresh
-  // content, and convert what's left for fresh payloads back to chars pessimistically.
+  // Work in real tokens: budget the prompt, subtract the non-fresh content — already-sent bytes at
+  // their measured density, this round's new bytes pessimistically — and convert what's left for
+  // fresh payloads back to chars pessimistically.
   const promptTokenBudget = (cw - reserve) * BUDGET_SAFETY;
-  const nonFreshTokens = (nonFreshChars / CHARS_PER_TOKEN) * capCalib;
+  const nonFreshTokens =
+    (sentChars / CHARS_PER_TOKEN) * sentCalib + (unsentChars / CHARS_PER_TOKEN) * capCalib;
   let freshTokenBudget = promptTokenBudget - nonFreshTokens;
   // The protected read is allocated FIRST — verbatim if it fits the whole fresh budget, and
   // verbatim regardless of budget up to the floor (the spiral is unrecoverable; a rare overflow
   // is not — see PROTECTED_READ_FLOOR_CHARS). Only a large read that doesn't fit falls back
   // into the shared split. Everything else divides what remains, which may be nothing.
-  let protectVerbatim = false;
+  const verbatim = new Set<number>();
   if (protectedChars > 0) {
     const protectedTokens = (protectedChars / CHARS_PER_TOKEN) * capCalib;
     if (protectedTokens <= freshTokenBudget || protectedChars <= PROTECTED_READ_FLOOR_CHARS) {
-      protectVerbatim = true;
+      verbatim.add(protectedIdx);
       freshTokenBudget -= protectedTokens;
     } else {
-      freshCount++;
+      fresh.push({ idx: protectedIdx, len: protectedChars });
     }
   }
-  if (freshCount === 0) return { cap: undefined, protectVerbatim };
-  if (freshTokenBudget <= 0) return { cap: 0, protectVerbatim };
+  // Small payloads next (#179), smallest-first so the ceiling saves as many as it can. Like the
+  // protected read these are allocated even when the budget is already spent — that is the point.
+  let smallChars = 0;
+  for (const p of [...fresh].sort((a, b) => a.len - b.len)) {
+    if (p.len > SMALL_PAYLOAD_FLOOR_CHARS) break;
+    if (smallChars + p.len > SMALL_PAYLOAD_FLOOR_TOTAL_CHARS) break;
+    smallChars += p.len;
+    verbatim.add(p.idx);
+    freshTokenBudget -= (p.len / CHARS_PER_TOKEN) * capCalib;
+  }
+  const capped = fresh.filter(p => !verbatim.has(p.idx)).length;
+  if (capped === 0) return { cap: undefined, verbatim };
+  if (freshTokenBudget <= 0) return { cap: 0, verbatim };
   const freshCharBudget = (freshTokenBudget * CHARS_PER_TOKEN) / capCalib;
-  return { cap: Math.floor(freshCharBudget / freshCount), protectVerbatim };
+  return { cap: Math.floor(freshCharBudget / capped), verbatim };
 }
 
 // Index from which reasoning_content is kept: the start of the Nth-most-recent tool-call
@@ -393,6 +457,18 @@ function reasoningKeepFromIndex(history: Message[], rounds: number): number {
   // Fewer than `rounds` tool-call rounds exist: keep from the earliest one, or — if there
   // are no tool-call rounds at all — keep none (final-answer reasoning isn't needed later).
   return earliestToolCall === -1 ? history.length : earliestToolCall;
+}
+
+// First index of content that is NEW in the request being built — the assistant turn that opened
+// the trailing tool round, whose reasoning and tool_calls have never been sent, or history.length
+// when the trailing block isn't a tool round at all. Everything before it rode in the previous
+// request, so `calibration` measured it. Computed from the real trailing tool block rather than the
+// caller's `freshFrom` (which prefix-stable forces to 0 for serialization purposes). See
+// SENT_DENSITY_FLOOR.
+function unsentFromIndex(history: Message[]): number {
+  const block = findFreshToolBlockStart(history);
+  const opener = history[block - 1];
+  return opener?.role === 'assistant' && opener.toolCalls?.length ? block - 1 : block;
 }
 
 // Approximate the chars a message contributes to the serialized request, excluding fresh
@@ -426,10 +502,17 @@ function capPayload(payload: string, cap: number | undefined): string {
   // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two
   // empty slices — "Output continues:" over nothing reads as tool output, not as an omission.
   if (cap <= 0) {
+    // The remedy must be one that can actually work. This branch used to say "read a narrower line
+    // range", which at cap <= 0 was false — the cap ignored payload length, so the model shrank
+    // 300 -> 120 -> 70 -> 40 lines over 20 minutes and got nothing back every time (#179). Since
+    // payloads at or under SMALL_PAYLOAD_FLOOR_CHARS now bypass the cap outright, narrowing IS a
+    // real remedy — but only below that number, so state the number and the size that failed.
     return (
       `[reika: entire output (${payload.length} chars) omitted to fit the context window — a ` +
-      `context-size limit, not a command error; re-running won't help. Work from the summary ` +
-      `line above, or read a narrower line range.]`
+      `context-size limit, not a command error; re-running this exact call won't help. Results of ` +
+      `${SMALL_PAYLOAD_FLOOR_CHARS} chars or less are always delivered in full, so re-run it ` +
+      `narrowed to return under that much (a targeted grep for one symbol, or a read of a few ` +
+      `dozen lines). Otherwise work from the summary line above.]`
     );
   }
   const head = Math.floor(cap * HEAD_FRACTION);

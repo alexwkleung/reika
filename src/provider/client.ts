@@ -14,6 +14,10 @@ export type ModelResponse = {
   // at the token limit (the per-turn backstop firing, or a spiral hitting it) — the loop
   // uses it to recover rather than treat a truncated turn as a real final answer.
   finishReason?: string;
+  // Wall-clock split for this call (issue #195): `ttftMs` is time-to-first-token — prefill of
+  // whatever the engine's prompt cache could not reuse, plus a fixed per-request overhead — and
+  // `totalMs` is the whole stream. Absent when no delta ever arrived (empty or aborted stream).
+  timing?: { ttftMs: number; totalMs: number };
   // Per-token logprobs for the generated content, when they were requested AND the engine
   // returned them (issue #134). Absent otherwise — an absent array means "not measured", never
   // "the model was certain". Only the debug drift instrumentation reads it.
@@ -83,6 +87,12 @@ export async function callModel(opts: {
   const sampled: SampledToken[] = [];
   let usage: Usage | undefined;
   let finishReason: string | undefined;
+  // Reset per consume attempt: the logprobs degrade below re-sends from scratch, so a retry's
+  // prefill must not be timed from the rejected request's start.
+  let startedAt = Date.now();
+  let ttftMs: number | undefined;
+  const timing = (): ModelResponse['timing'] =>
+    ttftMs == null ? undefined : { ttftMs, totalMs: Date.now() - startedAt };
 
   const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !logprobsUnsupported;
   const body: ChatCompletionRequest = {
@@ -103,6 +113,8 @@ export async function callModel(opts: {
   let received = false;
 
   const consume = async (req: ChatCompletionRequest): Promise<void> => {
+    startedAt = Date.now();
+    ttftMs = undefined;
     const stream = streamChatCompletion({
       baseURL: opts.config.baseURL,
       apiKey: opts.config.apiKey,
@@ -141,6 +153,13 @@ export async function callModel(opts: {
       }
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
+      // First chunk carrying generated tokens ends prefill. Role-only openers and usage-only
+      // chunks carry no work, so they must not stop the clock early.
+      if (
+        ttftMs == null &&
+        (delta.content || delta.reasoning_content || delta.reasoning || delta.tool_calls)
+      )
+        ttftMs = Date.now() - startedAt;
       if (delta.content) {
         contentParts.push(delta.content);
         opts.onContentDelta?.(delta.content);
@@ -193,6 +212,7 @@ export async function callModel(opts: {
         toolCalls: undefined,
         usage,
         finishReason,
+        timing: timing(),
         ...(sampled.length > 0 ? { sampled } : {}),
       };
     }
@@ -220,6 +240,7 @@ export async function callModel(opts: {
     toolCalls: resolved.toolCalls.length > 0 ? resolved.toolCalls : undefined,
     usage,
     finishReason,
+    timing: timing(),
     ...(sampled.length > 0 ? { sampled } : {}),
   };
 }

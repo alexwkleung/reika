@@ -369,6 +369,18 @@ function editedPathFrom(msg: Message): string | undefined {
   return undefined;
 }
 
+// Did this bash result come back green? Reads the exit status as data when the result carries it,
+// and falls back to the old `Ran: ` prefix reading when it doesn't (#200). The fallback is not
+// cosmetic: this function replays history from the plan message forward and re-derives progress by
+// scanning, so a message written before `exitCode` existed — a resumed session, a loaded transcript,
+// any tool result that isn't bash — would evaluate `exitCode === 0` to false and silently un-check
+// steps that were checked off a moment earlier. `exitCode: null` (signal-killed) is a status, not an
+// absence, so it correctly reads as not-green. Callers still scope to bash themselves: the exit code
+// says how a command ended, not that one ran.
+export function ranSuccessfully(m: { summary: string; exitCode?: number | null }): boolean {
+  return m.exitCode !== undefined ? m.exitCode === 0 : m.summary.startsWith('Ran: ');
+}
+
 // Rebuild the checklist from history: the most recent written plan, with every successful
 // edit/write (path or content match), successful bash run (command match), and gate waiver marker
 // after it replayed. null when there's no plan or it yields no numbered steps — ordinary agent
@@ -392,7 +404,7 @@ export function seedPlanProgress(history: Message[]): PlanStep[] | null {
     const edited = editedPathFrom(m);
     if (edited && m.role === 'tool') {
       applyEdit(steps, edited, m.diff?.text);
-    } else if (m.role === 'tool' && m.summary.startsWith('Ran: ') && m.command?.text) {
+    } else if (m.role === 'tool' && m.command?.text && ranSuccessfully(m)) {
       applyCommand(steps, m.command.text);
     } else if (m.role === 'system' && m.planWaived) {
       for (const s of steps) if (m.planWaived.includes(s.n) && !s.done) s.waived = true;

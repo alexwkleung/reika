@@ -1,3 +1,4 @@
+import { isStreamTimeout, streamDispatcher, streamTimeoutMessage } from './dispatcher.js';
 import type { ToolParameters } from '../types.js';
 
 // Minimal client for the OpenAI-compatible `/v1/chat/completions` streaming API.
@@ -130,12 +131,18 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // phase. Note: we deliberately impose no total-request timeout. The SDK's 10-min cap would
 // kill a legitimately long local-model generation; a live stream keeps the socket fed, and
 // user cancellation is handled by `signal`. (bash/fetch tools keep their own timeouts.)
+//
+// What we DO impose is a silent-stream timeout, via the dispatcher — without one, undici's 300 s
+// default kills any turn whose prefill runs longer, which on slow local hardware is the normal
+// path once context grows (issue #186). A stream timeout is never retried: the prompt hasn't
+// changed, so a retry just buys the same silent wait again, three times over.
 async function postWithRetry(
   url: string,
   body: ChatCompletionRequest,
   apiKey: string,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const dispatcher = await streamDispatcher();
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -148,6 +155,7 @@ async function postWithRetry(
         },
         body: JSON.stringify(body),
         signal,
+        ...(dispatcher ? { dispatcher } : {}),
       });
       if (res.ok && res.body) return res;
       if (attempt < MAX_RETRIES && isRetryableStatus(res.status)) {
@@ -160,6 +168,8 @@ async function postWithRetry(
       );
     } catch (e) {
       if (isAbort(e) || signal?.aborted) throw e;
+      if (isStreamTimeout(e))
+        throw new Error(`chat/completions timed out: ${streamTimeoutMessage()}`);
       lastErr = e;
       if (attempt < MAX_RETRIES) {
         await sleep(backoffMs(attempt), signal);
@@ -249,7 +259,17 @@ export async function* streamChatCompletion(opts: {
   const decoder = createSSEDecoder();
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      // A mid-stream silence (the server stalled after some tokens) surfaces here rather than on
+      // the POST, so it gets the same actionable message instead of a bare undici code.
+      let read;
+      try {
+        read = await reader.read();
+      } catch (e) {
+        if (isStreamTimeout(e))
+          throw new Error(`chat/completions stream stalled: ${streamTimeoutMessage()}`);
+        throw e;
+      }
+      const { done, value } = read;
       if (done) break;
       for (const ev of decoder.push(value)) {
         if (ev.kind === 'done') return;

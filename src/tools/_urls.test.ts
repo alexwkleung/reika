@@ -295,3 +295,117 @@ describe('groundUrlsForPlan', () => {
     );
   });
 });
+
+// #164: grounding is harness-driven, so it must answer to the same per-turn cap as the fetches the
+// model asks for — and it must not reach addresses that only mean something on this machine.
+describe('groundCandidates — budget and host policy', () => {
+  const original = process.env.REIKA_URL_GROUNDING;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+    process.env.REIKA_URL_GROUNDING = '1';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '<html><body><article>page</article></body></html>',
+    } as unknown as Response);
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.REIKA_URL_GROUNDING;
+    else process.env.REIKA_URL_GROUNDING = original;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  const budget = (used = 0, max = 5) => ({
+    searches: { used: 0, max: 3 },
+    fetches: { used, max },
+  });
+
+  it('counts each grounding fetch against the turn budget', async () => {
+    const webBudget = budget();
+    await groundUrls({ cwd: '/tmp', webBudget }, 'see https://example.com/a');
+    expect(webBudget.fetches.used).toBe(1);
+  });
+
+  it('counts every URL in a multi-URL change', async () => {
+    const webBudget = budget();
+    await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a and https://example.com/b');
+    expect(webBudget.fetches.used).toBe(2);
+  });
+
+  it('accumulates across edits, so N edits cannot fan out uncounted', async () => {
+    const webBudget = budget(0, 5);
+    const ctx = { cwd: '/tmp', webBudget, groundedUrls: new Set<string>() };
+    await groundUrls(ctx, 'https://example.com/1');
+    await groundUrls(ctx, 'https://example.com/2');
+    await groundUrls(ctx, 'https://example.com/3');
+    expect(webBudget.fetches.used).toBe(3);
+  });
+
+  it('grounds nothing once the budget is spent', async () => {
+    const webBudget = budget(5, 5);
+    const out = await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toBeUndefined();
+  });
+
+  it('takes only what is left when the budget is nearly spent', async () => {
+    const webBudget = budget(4, 5);
+    await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a and https://example.com/b');
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    expect(webBudget.fetches.used).toBe(5);
+  });
+
+  it('degrades quietly rather than reporting a budget refusal to the model', async () => {
+    // fetch_url returns an error summary when out of budget; grounding must not, because nothing
+    // requested it and the note would be pure context noise.
+    const webBudget = budget(5, 5);
+    const out = await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a');
+    expect(out.note).toBeUndefined();
+  });
+
+  it('still works with no budget on the context', async () => {
+    const out = await groundUrls({ cwd: '/tmp' }, 'https://example.com/a');
+    expect(out.note).toContain('example.com');
+  });
+
+  it('does not ground a loopback URL, and does not flag it as a dead link', async () => {
+    const webBudget = budget();
+    const out = await groundUrls(
+      { cwd: '/tmp', webBudget },
+      'const base = "http://127.0.0.1:11434";',
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    // Silence, not a ✗ — a localhost URL in a config is usually correct (this project's own model
+    // server is one), so an unchecked address must not be reported as invented.
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toBeUndefined();
+    expect(webBudget.fetches.used).toBe(0);
+  });
+
+  it('does not let private URLs consume the per-call cap', async () => {
+    // Two private URLs ahead of a public one: the public one must still be grounded, which it
+    // would not be if the private pair were filtered only at fetch time.
+    const text = 'http://localhost:3000 http://192.168.1.1 https://example.com/real';
+    const out = await groundUrls({ cwd: '/tmp' }, text);
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'https://example.com/real',
+    );
+    expect(out.note).toContain('example.com/real');
+  });
+
+  it('applies the same budget and host rules on the plan path', async () => {
+    const webBudget = budget();
+    await groundUrlsForPlan({ cwd: '/tmp', webBudget }, 'plan names https://example.com/x');
+    expect(webBudget.fetches.used).toBe(1);
+    const out = await groundUrlsForPlan({ cwd: '/tmp', webBudget }, 'and http://127.0.0.1:11434');
+    expect(out.note).toBeUndefined();
+    expect(webBudget.fetches.used).toBe(1);
+  });
+});

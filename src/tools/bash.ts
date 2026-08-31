@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import { detectDangerousPatterns } from './_danger.js';
 import { recordCapped } from './_spillstats.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -143,19 +144,23 @@ export function execStream(
             summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
             payload,
             command: display,
-          });
-        } else if (code === 0) {
-          resolve({
-            summary: `Ran: ${command} (${reported} bytes output)`,
-            payload,
-            command: display,
+            exitCode: code,
           });
         } else {
-          const reason = signal ? `signal ${signal}` : `exit ${code}`;
+          // The status is *surfaced*, not reclassified (#200). A non-zero exit used to read
+          // `Bash failed:`, which is wrong for the many commands that exit non-zero as ordinary
+          // control flow — grep with no match, diff with differences, git diff --quiet, a test
+          // runner reporting red. Calling those failures teaches the model to retry a command that
+          // did exactly what it was asked. It still must not read as success either, which is what
+          // the old code did before the exit check existed: an added `(exit 1, …)` slot says what
+          // happened without judging it. A timeout and a spawn error keep their `Bash` prefixes —
+          // there the command genuinely did not run to completion.
+          const status = code === 0 ? '' : signal ? `killed by ${signal}, ` : `exit ${code}, `;
           resolve({
-            summary: `Bash failed: ${command} (${reason})`,
+            summary: `Ran: ${command} (${status}${reported} bytes output)`,
             payload,
             command: display,
+            exitCode: code,
           });
         }
       };
@@ -256,209 +261,4 @@ function buildCommandDisplay(
   const outputTruncated =
     omittedEarlier || retained.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
   return { text: command, outputTail: lineTail.join('\n'), outputTruncated };
-}
-
-// Workflow-policy commands: not destructive (a commit is local and reversible, a push is
-// recoverable), but they record or publish work, and the user generally wants to stay in the
-// loop rather than have the agent do it autonomously. These funnel through the same warnings
-// mechanism as the destructive patterns below — so under 'safe' auto-approve they force a
-// prompt, and only explicit 'bypass' lets them run unattended. Kept as a separate constant
-// from the genuinely-dangerous patterns so the safety/policy distinction stays visible.
-const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  { re: /\bgit\s+commit\b/, label: 'Git commit (records to version history)' },
-  // Bare push; force push is also flagged separately below as a destructive pattern.
-  { re: /\bgit\s+push\b/, label: 'Git push (publishes commits to remote)' },
-  // Outward-facing GitHub/HF actions. Scoped to the publishing subcommands so read-only
-  // invocations (gh pr view, gh run list, hf download) don't trip the gate — blanket gh/hf
-  // matching would fire on reads and erode the signal. Remote *deletions* are destructive,
-  // not policy, so they live in DANGER_PATTERNS below.
-  { re: /\bgh\s+pr\s+(?:create|merge)\b/, label: 'GitHub PR create/merge (outward-facing)' },
-  { re: /\bgh\s+release\s+create\b/, label: 'GitHub release create (publishes)' },
-  { re: /\bhf\s+upload\b/, label: 'Hugging Face upload (publishes to hub)' },
-];
-
-// Package management at ANY scope: installs, uninstalls, and registry-fetch-and-run (npx and
-// friends). Every ecosystem runs install-time scripts, so an install is arbitrary code execution
-// chosen by the model, and the package it picks may be hallucinated, typosquatted, or outright
-// malicious. Deliberately not limited to commands that name a package: a bare `npm install`
-// builds from a manifest the model may have just edited, and a lockfile install still runs
-// lifecycle scripts. The global-install patterns stay separate because those also change state
-// outside the project — a global install trips both and reads as both.
-// The trailing (?![\w./-]) keeps the verb a whole token, so `npm run install-hooks` and
-// `cat install.md` don't read as installs.
-const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  {
-    re: /\b(?:npm|pnpm|bun)\s+(?:-{1,2}[\w-]+\s+)*(?:install|i|add|ci)(?![\w./-])/,
-    label: 'Package install (npm/pnpm/bun)',
-  },
-  {
-    re: /\byarn\s+(?:-{1,2}[\w-]+\s+)*(?:install|add)(?![\w./-])/,
-    label: 'Package install (yarn)',
-  },
-  {
-    re: /\b(?:pip|pip3)\s+(?:-{1,2}[\w-]+\s+)*install(?![\w./-])/,
-    label: 'Python package install (pip)',
-  },
-  {
-    re: /\bpython[\d.]*\s+-m\s+pip\s+(?:-{1,2}[\w-]+\s+)*install(?![\w./-])/,
-    label: 'Python package install (pip)',
-  },
-  {
-    re: /\buv\s+(?:pip\s+install|add|sync)(?![\w./-])/,
-    label: 'Python package install (uv)',
-  },
-  {
-    re: /\b(?:poetry|pipenv)\s+(?:install|add)(?![\w./-])/,
-    label: 'Python package install (poetry/pipenv)',
-  },
-  { re: /\bcargo\s+add\b/, label: 'Rust package install (cargo add)' },
-  { re: /\bgo\s+get\b/, label: 'Go module install (go get)' },
-  {
-    re: /\b(?:bundle|composer)\s+(?:install|add|require)(?![\w./-])/,
-    label: 'Package install (bundler/composer)',
-  },
-  {
-    re: /\b(?:apt|apt-get|dnf|yum|zypper|apk|choco|scoop|winget|port)\s+(?:-{1,2}[\w-]+\s+)*(?:install|add)(?![\w./-])/,
-    label: 'System package install (persistent system change)',
-  },
-  { re: /\bpacman\s+-S[yu]*\b/, label: 'System package install (persistent system change)' },
-
-  // Uninstalls — the mirror of an install, and just as much the user's call: the model can rip
-  // out a dependency the project still needs, remove-hooks run the same arbitrary code, and the
-  // system-level ones reach outside the repo entirely.
-  {
-    re: /\b(?:npm|pnpm|bun|yarn)\s+(?:-{1,2}[\w-]+\s+)*(?:uninstall|remove|rm|un)(?![\w./-])/,
-    label: 'Package uninstall (npm/pnpm/yarn/bun)',
-  },
-  {
-    re: /\b(?:pip|pip3)\s+(?:-{1,2}[\w-]+\s+)*uninstall(?![\w./-])/,
-    label: 'Python package uninstall (pip)',
-  },
-  {
-    re: /\bpython[\d.]*\s+-m\s+pip\s+(?:-{1,2}[\w-]+\s+)*uninstall(?![\w./-])/,
-    label: 'Python package uninstall (pip)',
-  },
-  {
-    re: /\b(?:uv|poetry|pipenv)\s+(?:tool\s+)?(?:remove|uninstall)(?![\w./-])/,
-    label: 'Python package uninstall (uv/poetry/pipenv)',
-  },
-  {
-    re: /\b(?:brew|pipx|cargo|gem|composer|bundle|go)\s+(?:uninstall|remove)(?![\w./-])/,
-    label: 'Package uninstall (global tool)',
-  },
-  {
-    re: /\b(?:apt|apt-get|dnf|yum|zypper|apk|choco|scoop|winget|port)\s+(?:-{1,2}[\w-]+\s+)*(?:uninstall|remove|purge|del)(?![\w./-])/,
-    label: 'System package uninstall (persistent system change)',
-  },
-  { re: /\bpacman\s+-R[a-z]*\b/, label: 'System package uninstall (persistent system change)' },
-
-  // Fetch-and-run: no install, same vector. `npx some-cli` downloads a package the model chose
-  // — hallucinated or typosquatted just as easily as one it would have installed — and executes
-  // it immediately, so it gets the same gate.
-  {
-    re: /\b(?:npx|bunx|uvx)(?![\w./-])/,
-    label: 'Remote package execution (npx/bunx/uvx)',
-  },
-  {
-    re: /\b(?:pnpm|yarn)\s+dlx(?![\w./-])|\bpipx\s+run(?![\w./-])/,
-    label: 'Remote package execution (dlx/pipx run)',
-  },
-];
-
-// Fallback for the package managers not worth enumerating (conda, mix, gcloud components, a
-// project's own `make install`): any command whose verb is `install` or `uninstall`. A couple of
-// leading tokens are allowed so wrappers still match (`sudo apt install`, `python -m pip
-// install`), and it is only reported when no specific package pattern fired — see
-// detectDangerousPatterns. Matching is per shell segment, because the verb position is what
-// makes this precise: `grep -rn install src/` passes `install` as an *argument*, and the
-// read-only leads below never install anything, so they are skipped outright.
-const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?![\w./-])/;
-const READ_ONLY_LEAD_RE =
-  /^(?:e?grep|fgrep|rg|ag|ack|find|man|which|type|whereis|cat|bat|less|more|head|tail|awk|sed|echo|printf|ls|wc|git)\b/;
-
-function genericPackageLabel(command: string): string | undefined {
-  for (const segment of command.split(/[;&|]+/)) {
-    const seg = segment.trim();
-    if (!seg || READ_ONLY_LEAD_RE.test(seg)) continue;
-    const m = GENERIC_PACKAGE_RE.exec(seg);
-    if (m) {
-      return m[1]
-        ? 'Uninstall command (removes third-party code)'
-        : 'Install command (fetches and runs third-party code)';
-    }
-  }
-  return undefined;
-}
-
-const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  {
-    re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
-    label: 'Recursive force delete (rm -rf)',
-  },
-  { re: /\bsudo\b/, label: 'Privilege escalation (sudo)' },
-  { re: /(curl|wget)[^|]*\|\s*(sh|bash|zsh)\b/, label: 'Piping remote content to shell' },
-  { re: /\|\s*(sh|bash|zsh)\b/, label: 'Piping to shell' },
-  { re: /\bdd\s+[^&;|]*\bof=\/dev\//, label: 'Direct device write (dd of=/dev/…)' },
-  {
-    re: /\bgit\s+push[^&;|]*(--force\b|--force-with-lease\b|\s-f\b)/,
-    label: 'Force push to remote',
-  },
-  { re: /\bgit\s+branch\s+-D\b/, label: 'Force-delete git branch' },
-  { re: /\bgit\s+reset\s+--hard\b/, label: 'Hard reset (discards uncommitted changes)' },
-  { re: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'Force-clean untracked files' },
-  { re: /\bgh\s+repo\s+delete\b/, label: 'Delete GitHub repo (irreversible remote)' },
-  { re: /\bhf\s+repo\s+delete\b/, label: 'Delete Hugging Face repo (irreversible remote)' },
-  { re: /\bchmod\s+[0-7]*777\b/, label: 'Open permissions (chmod 777)' },
-  { re: /\brm\s+[^&;|]*\.env\b/, label: 'Deleting environment file (.env)' },
-  { re: />\s*\/dev\/sd[a-z]\b/, label: 'Writing to raw disk device' },
-  { re: /:(){:|:&};:|:\(\)\s*\{\s*:\|:&\s*\};\s*:/, label: 'Fork bomb pattern' },
-  // Global / persistent package installs — affect state outside the project
-  {
-    re: /\bnpm\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
-    label: 'Global npm install (persistent system change)',
-  },
-  {
-    re: /\bnpm\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
-    label: 'Global npm install (persistent system change)',
-  },
-  {
-    re: /\bpnpm\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
-    label: 'Global pnpm install (persistent system change)',
-  },
-  {
-    re: /\bpnpm\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
-    label: 'Global pnpm install (persistent system change)',
-  },
-  { re: /\byarn\s+global\s+add\b/, label: 'Global yarn install (persistent system change)' },
-  {
-    re: /\bbun\s+(?:install|i|add)\b[^|;&]*\s-{1,2}g(?:lobal)?\b/,
-    label: 'Global bun install (persistent system change)',
-  },
-  {
-    re: /\bbun\s+-{1,2}g(?:lobal)?\b[^|;&]*\b(?:install|i|add)\b/,
-    label: 'Global bun install (persistent system change)',
-  },
-  { re: /\bbrew\s+install\b/, label: 'Homebrew install (system-level)' },
-  { re: /\bcargo\s+install\b/, label: 'Cargo install (global binary)' },
-  { re: /\bgo\s+install\b/, label: 'Go install (global $GOBIN)' },
-  { re: /\bpipx\s+install\b/, label: 'pipx install (global Python tool)' },
-  { re: /\buv\s+tool\s+install\b/, label: 'uv tool install (global Python tool)' },
-  { re: /\bgem\s+install\b/, label: 'Gem install (Ruby package)' },
-  ...PACKAGE_PATTERNS,
-  ...POLICY_PATTERNS,
-];
-
-export function detectDangerousPatterns(command: string): string[] {
-  const hits: string[] = [];
-  for (const { re, label } of DANGER_PATTERNS) {
-    if (re.test(command) && !hits.includes(label)) hits.push(label);
-  }
-  // The long-tail fallback only speaks up when nothing more specific did, so a `pip install`
-  // reports one precise label instead of two overlapping ones. Every install/uninstall label
-  // above contains the word, which is what makes this cheap test sufficient.
-  if (!hits.some(h => /install/i.test(h))) {
-    const generic = genericPackageLabel(command);
-    if (generic) hits.push(generic);
-  }
-  return hits;
 }

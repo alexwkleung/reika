@@ -24,6 +24,7 @@ import {
 } from './compaction.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
+import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -41,6 +42,7 @@ import {
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
+import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
@@ -49,6 +51,7 @@ import {
   buildPlanProgressLedger,
   decidePlanGate,
   waiveUnchecked,
+  ranSuccessfully,
   MAX_PLAN_GATE_ROUNDS,
   type PlanStep,
 } from './plantrack.js';
@@ -747,6 +750,11 @@ export async function runTurn(opts: {
   // must persist for the first call's compaction decision to be accurate).
   priorCalibration?: number;
   onCalibration?: (factor: number) => void;
+  // Learned prefill throughput (tokens/second), threaded across turns for the same reason as
+  // calibration: each turn re-seeds history, so without it every turn's opening rounds have no
+  // rate to price themselves with — and those are the expensive ones.
+  priorPrefillRate?: number;
+  onPrefillRate?: (rate: number) => void;
   onToolProgress?: (chunk: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
@@ -860,9 +868,10 @@ export async function runTurn(opts: {
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
   const seenReadOnly = new Map<string, number>();
-  // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / dup-live /
-  // dup-aged so a run reveals whether re-reads are redundant loops or rational refetches of
-  // aged-out content. Model-invisible — only the debug log reads it. See agent/readtrace.ts.
+  // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
+  // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
+  // of aged-out content, or a model shrinking its window to get around an omitted payload.
+  // Model-invisible — only the debug log reads it. See agent/readtrace.ts.
   const readTrace = new ReadTrace();
   // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
@@ -892,6 +901,11 @@ export async function runTurn(opts: {
   // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
   // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
   const prefixTrace = new PrefixTrace();
+  // What that divergence costs (issue #195). Prefill is ~80% of wall clock on a slow local endpoint,
+  // so the cache line is only actionable annotated with the tokens it reprocessed and the seconds
+  // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
+  // provider's reported prompt tokens. See agent/prefillcost.ts.
+  const prefillRate = new PrefillRate(opts.priorPrefillRate);
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -1363,6 +1377,12 @@ export async function runTurn(opts: {
     // headless debug run still logs the signal + ratio for threshold tuning); otherwise it falls
     // through to the plain delta callback, zero-cost. Cleared after the call (block done).
     let roundReasoning = '';
+    // Tokens this round's request could not reuse from the prompt cache, filled by the prefix-cache
+    // hook below (REIKA_DEBUG-only, so 0 means "not measured" on a normal run). A turn's first
+    // request has no baseline to diverge from — the count is a ceiling there, not a measurement, so
+    // it may be reported but must not teach the rate.
+    let roundReprocessTokens = 0;
+    let roundReprocessBounded = false;
     let spinCheckedAt = 0;
     let spinning = false;
     let verbatimAborted = false;
@@ -1451,11 +1471,14 @@ export async function runTurn(opts: {
         ? msgs => {
             const d = prefixTrace.record(msgs);
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+            roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
+            roundReprocessBounded = d.cause === 'first-request';
             debugLog(
               `[reika:debug] prefix-cache round=${i} cause=${d.cause} ` +
                 `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
                 `msgs=${d.stableMessages}/${d.totalMessages}` +
                 (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                ` ${formatPrefillCost(roundReprocessTokens, prefillRate.get(), roundReprocessBounded)}` +
                 `\n`,
             );
           }
@@ -1485,6 +1508,17 @@ export async function runTurn(opts: {
         calibration = factor;
         opts.onCalibration?.(calibration);
       }
+    }
+    // Same idea one layer down: time-to-first-token is what those reprocessed tokens cost, so the
+    // round that just paid teaches the rate the next round's line quotes. Only fires under
+    // REIKA_DEBUG (roundReprocessTokens stays 0 otherwise), and rejects samples too small to
+    // separate prefill from per-request overhead — see agent/prefillcost.ts.
+    if (response.timing && roundReprocessTokens > 0 && !roundReprocessBounded) {
+      const learned = prefillRate.observe(
+        sampleTokens(response.usage, roundReprocessTokens),
+        response.timing.ttftMs,
+      );
+      if (learned != null) opts.onPrefillRate?.(learned);
     }
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
@@ -1851,6 +1885,7 @@ export async function runTurn(opts: {
       let payload: string | undefined;
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
+      let exitCode: ToolResult['exitCode'];
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
@@ -1937,6 +1972,7 @@ export async function runTurn(opts: {
           payload = result.payload;
           diff = result.diff;
           command = result.command;
+          exitCode = result.exitCode;
           contentHash = result.contentHash;
           toolNotice = result.notice;
           editFailure = result.editFailure;
@@ -1980,6 +2016,9 @@ export async function runTurn(opts: {
           Number(call.args.offset ?? 1),
           contentHash,
           i,
+          // Resolved exactly as the tool resolves it, so a default-window read followed by an
+          // explicit narrower one is seen as narrowing rather than as a repeat (#184).
+          Math.max(1, Number(call.args.limit ?? READ_DEFAULT_LIMIT)),
         );
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
@@ -2045,10 +2084,17 @@ export async function runTurn(opts: {
           lastEditFailure = editFailure;
         }
       }
-      // Command steps ("run typecheck/tests"): a successful bash run (exit 0, the `Ran:` prefix)
-      // whose command contains the step's quoted command checks it off — previously these steps
-      // could never complete and dragged the checklist down after a green run.
-      if (planSteps && call.name === 'bash' && summary.startsWith('Ran: ') && command?.text) {
+      // Command steps ("run typecheck/tests"): a successful bash run whose command contains the
+      // step's quoted command checks it off — previously these steps could never complete and
+      // dragged the checklist down after a green run. Success is the exit status, not the summary
+      // prefix: since #200 a failing run also reports as `Ran:` (with the code in it), so keying on
+      // the prefix would check a step off for a red test run.
+      if (
+        planSteps &&
+        call.name === 'bash' &&
+        command?.text &&
+        ranSuccessfully({ summary, exitCode })
+      ) {
         const idx = applyPlanCommand(planSteps, command.text);
         if (idx >= 0) {
           opts.onPlanProgress?.(planSteps);
@@ -2068,6 +2114,7 @@ export async function runTurn(opts: {
         payloadId,
         ...(diff ? { diff } : {}),
         ...(command ? { command } : {}),
+        ...(exitCode !== undefined ? { exitCode } : {}),
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
