@@ -302,6 +302,25 @@ below, which spill is what makes safe). When on, the complete
 formatted result is written to a session-scoped temp file (one private 0700 dir per process — reika
 is one process per session — removed on exit; files are `wx`+0600 so a planted symlink can't
 redirect the write) and the inline payload gains a footer naming the path and both follow-up calls.
+
+**Leftovers are collected at the next startup, not by a signal handler** (`sweepStaleSpills`,
+#224). The exit handler only fires on a normal exit — Ctrl-C is one, but SIGHUP (closing the
+terminal window, the common case), SIGTERM, SIGKILL and hard crashes are not, and a build-heavy
+session can leave tens of MB of 4MB `bash` tails behind per kill. `cli.tsx` fire-and-forgets a
+readdir of the temp dir before first paint and reaps every `reika-<6 hex>` directory whose session
+is gone. Signal handlers were the option not taken: registering `SIGINT`/`SIGTERM` suppresses
+Node's default termination, so we would own the exit in an app whose Ctrl-C semantics are already
+custom and whose `bash` sends its own SIGTERM to children — real risk for a temp-dir tidy that
+still could not catch SIGKILL or a crash. **Liveness, not age, is what protects a running
+session:** each directory carries a `.pid` stamp, and one whose owner still answers `kill(pid, 0)`
+is kept at any age, because a second reika idle overnight may still page an artifact it was handed
+— exactly the case an mtime threshold alone gets wrong. Age (24h) decides only directories with no
+readable stamp: pre-#224 ones, and the millisecond window between `mkdir` and the stamp. A
+recycled pid reads as alive and the directory outlives us, which is the safe direction to be wrong
+in — the OS temp reaper (~3 days untouched on macOS) is the same backstop it always was. The sweep
+runs even with `REIKA_SPILL=0`: the no-op-when-off rule governs what we write and what we offer the
+model, and stranding an earlier session's bytes is not a service to somebody who turned the feature
+off.
 **The locator is kept short** (`reika-<6 hex>/grep-1.txt`, 23 chars below the system temp dir,
 down from 48) because the model has to retype it verbatim: a Q2 model was observed dropping one
 character out of the original ~100-char path and never recovering it, which turns the recovery

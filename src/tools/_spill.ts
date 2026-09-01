@@ -8,8 +8,8 @@
 // which is also how the A/B baseline is spelled. Strict no-op when off. Fail-open everywhere: a
 // spill that can't be written returns null and the caller keeps its ordinary capped result. A
 // successful search must never become an error because a temp file didn't land.
-import { mkdirSync, rmSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,8 +21,8 @@ export function spillEnabled(): boolean {
 }
 
 // One private directory per process — reika is one process per session, so per-process IS
-// session-scoped. Removed on exit so a long-lived machine doesn't accumulate them; a crash
-// leaves them to the OS's temp reaper.
+// session-scoped. Removed on exit so a long-lived machine doesn't accumulate them, and swept at
+// the NEXT startup when that exit never happened (`sweepStaleSpills`, #224).
 //
 // The name is deliberately SHORT (#144). A quantized model has to copy this path verbatim to
 // follow the locator, and one was observed dropping a character out of the ~100-char original —
@@ -47,11 +47,19 @@ function spillDir(): string {
     } catch {
       continue;
     }
+    // Stamp the owner before anyone can observe the directory as ours. It is what the startup
+    // sweep reads to tell an abandoned directory from a live session's, so a failure here is not
+    // fatal — the directory just falls back to the sweep's age guard.
+    try {
+      writeFileSync(join(d, OWNER_FILE), `${process.pid}\n`, { flag: 'wx', mode: 0o600 });
+    } catch {
+      // Best effort — see above.
+    }
     process.on('exit', () => {
       try {
         rmSync(d, { recursive: true, force: true });
       } catch {
-        // Best effort — the OS temp reaper is the backstop.
+        // Best effort — the startup sweep is the backstop.
       }
     });
     dir = d;
@@ -59,6 +67,85 @@ function spillDir(): string {
   }
   // Caller is inside spillResult's try/catch, so this fails open like every other spill failure.
   throw new Error('could not create a private spill directory');
+}
+
+// --- Startup sweep (#224) -------------------------------------------------------------------
+//
+// The `process.on('exit')` handler above only runs on a normal exit. Ctrl-C is one (`cli.tsx`
+// sets `exitOnCtrlC: false` and `App` exits through Ink's `exit()`), but SIGHUP — closing the
+// terminal window, the common case — SIGTERM, SIGKILL and hard crashes all skip it, leaving up to
+// `SPILL_MAX_BYTES` per artifact behind with no bound on how many a session wrote.
+//
+// Sweeping at startup covers every one of those. Signal handlers would not: registering one
+// suppresses Node's default termination, so we would own the exit in an app whose Ctrl-C
+// semantics are already custom and whose `bash` sends its own SIGTERM to children — real risk for
+// a temp-dir tidy that still could not catch SIGKILL.
+//
+// This runs even with `REIKA_SPILL=0`. The no-op-when-off rule is about what we write and what we
+// offer the model; declining to clean up after an earlier session would just strand the bytes of
+// somebody who turned the feature off precisely because they didn't want them.
+const OWNER_FILE = '.pid';
+
+// Only our own directories, named exactly as `spillDir` names them.
+const SPILL_DIR_RE = /^reika-[0-9a-f]{6}$/;
+
+// How long a directory with no readable owner has to sit untouched before it is reaped. Two things
+// look like that: a directory written by a build from before this change, and one caught in the
+// window between its `mkdir` and its owner stamp (milliseconds). The second is covered by any
+// threshold at all; the first is why this is a full day rather than a few hours — the case that
+// must not break is a live older session, idle overnight, whose model may still page an artifact
+// it was handed. Owner-stamped directories never consult this: they are decided by liveness at
+// any age, so nothing about a long idle session is at risk once one startup has gone by.
+const ORPHAN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Signal 0 is the portable "does this process exist" probe: no signal is delivered. EPERM means
+// it exists and belongs to somebody else, which is emphatically alive and not ours to reap.
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function isAbandoned(d: string): Promise<boolean> {
+  const owner = Number((await readFile(join(d, OWNER_FILE), 'utf8').catch(() => '')).trim());
+  // A pid we can read decides it outright, regardless of age — the whole point is that a live
+  // session idle for a day keeps its artifacts. A recycled pid reads as alive and the directory
+  // survives us; that is the safe direction to be wrong in, and the OS temp reaper (macOS clears
+  // `/var/folders` entries untouched for ~3 days) remains the backstop it was before.
+  if (Number.isInteger(owner) && owner > 0) return !pidAlive(owner);
+  return Date.now() - (await stat(d)).mtimeMs > ORPHAN_MAX_AGE_MS;
+}
+
+// Remove spill directories left behind by sessions that are gone. Returns the paths reaped, for
+// tests and diagnostics. Best-effort per directory: a race with a second reika doing the same
+// sweep, or with the OS reaper, is a caught error and not a failed sweep. `root` is a seam for
+// tests; production always sweeps the temp dir we write to.
+export async function sweepStaleSpills(root: string = tmpdir()): Promise<string[]> {
+  const removed: string[] = [];
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !SPILL_DIR_RE.test(entry.name)) continue;
+    const d = join(root, entry.name);
+    // Belt and braces: our own directory is owned by a live pid, so the check below already keeps
+    // it. Saying so here means a sweep can never depend on that reasoning holding.
+    if (d === dir) continue;
+    try {
+      if (!(await isAbandoned(d))) continue;
+      await rm(d, { recursive: true, force: true });
+      removed.push(d);
+    } catch {
+      // Gone already, or not ours to remove. Either way the next startup tries again.
+    }
+  }
+  return removed;
 }
 
 // Every locator handed to the model this session. Kept so the loop can tell that a tool call is
