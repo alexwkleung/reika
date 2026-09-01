@@ -19,11 +19,7 @@ import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
-import {
-  saveTranscript,
-  TRANSCRIPT_VERSION,
-  type TranscriptUsage,
-} from '../store/transcript.js';
+import { saveTranscript, TRANSCRIPT_VERSION, type TranscriptUsage } from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
