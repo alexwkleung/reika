@@ -266,6 +266,15 @@ const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
 // liveness needs the batch-aging watermark to bound it); silently inactive without one. Off by
 // default for A/B; strict no-op when off.
 const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE === '1';
+// EXPERIMENT (dropped-payload notice, #227): tell the model, once per request, that some tool
+// results above show only a summary because their output was dropped. Flagged rather than shipped
+// on, because it is a *prompt-level* bet and this repo's history says those often bench null (the
+// preventive-alignment layer; REIKA_DEDUP_PAYLOADS). It also has a real downside to measure, not
+// just an absent upside: "re-run that call" can induce re-fetching of aged results, which costs
+// rounds and re-inflates the fresh block — the dup-aged read loop the ledger→withdrawal ladder
+// exists for. `read-trace-summary` (dup-aged / maxrepeat / looped, emitted per turn) is the metric;
+// run it against the same task with the flag on and off. Strict no-op when off.
+const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER === '1';
 // EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
 // blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
 // a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
@@ -432,7 +441,8 @@ export function buildSteadySystem(opts: {
 }): string {
   // First, and in both modes: settled context about the request itself, not a directive. Aging hits
   // plan exploration exactly as it hits an agent turn.
-  const dropped = hasDroppedPayloads(opts.history) ? '\n\n' + buildDroppedPayloadLedger() : '';
+  const droppedLedger = droppedPayloadLedgerFor(opts.history, false);
+  const dropped = droppedLedger ? '\n\n' + droppedLedger : '';
   if (opts.promptMode === 'plan') {
     return opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round);
   }
@@ -651,6 +661,16 @@ function prefixed(ledger: string): string {
 // ledger (system suffix, or the trailing note under REIKA_PREFIX_STABLE where the tail is rewritten
 // each round anyway), and touches no budget walk. Emitted only when something actually was dropped,
 // so it can never make a false claim.
+// Single gate for all four compositions (see buildDroppedPayloadLedger). Routing every call site
+// through one predicate is deliberate: the first version of this change reached only two of the
+// four, and a bare `FLAG && hasDroppedPayloads(...)` at each site is the same mistake waiting to
+// happen. Returns '' when the flag is off or nothing was actually dropped.
+function droppedPayloadLedgerFor(history: Message[], prefixStable: boolean): string {
+  return DROPPED_LEDGER && hasDroppedPayloads(history, prefixStable)
+    ? buildDroppedPayloadLedger()
+    : '';
+}
+
 export function buildDroppedPayloadLedger(): string {
   return [
     '--- reika status (auto-generated — not user input) ---',
@@ -1118,7 +1138,7 @@ export async function runTurn(opts: {
         // prefix-stable plan run takes.
         system = baseSystem;
         roundSuffix = [
-          hasDroppedPayloads(opts.history, prefixStable) ? buildDroppedPayloadLedger() : '',
+          droppedPayloadLedgerFor(opts.history, prefixStable),
           buildQuestionLedger(questionAnswers),
           buildPlanLedger(opts.history, i),
         ]
@@ -1284,9 +1304,8 @@ export async function runTurn(opts: {
       // First: this is settled context, not a directive, and the directives below are ordered by how
       // close to generation they need to sit. Order must match buildSteadySystem's composition or
       // the warm prefix diverges from round 0 (warm.test.ts locks the two).
-      if (hasDroppedPayloads(opts.history, prefixStable)) {
-        suffixParts.push(buildDroppedPayloadLedger());
-      }
+      const droppedLedger = droppedPayloadLedgerFor(opts.history, prefixStable);
+      if (droppedLedger) suffixParts.push(droppedLedger);
       const answered = buildQuestionLedger(questionAnswers);
       if (answered) suffixParts.push(answered);
       if (PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)) {

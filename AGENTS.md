@@ -277,7 +277,8 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   up to `TASK_SPEC_PIN_CHARS` on the previous task's detail until this turn lands its own first tool
   result). `stale=true` is the one behaviour here that could read as task conflation, so it is
   greppable rather than something to re-derive from the history.
-- **Dropped-payload ledger** (`loop.ts` `buildDroppedPayloadLedger`, always on — #227): an aged tool
+- **Dropped-payload ledger** (`REIKA_DROPPED_LEDGER=1`, default off, experimental — `loop.ts`
+  `buildDroppedPayloadLedger` — #227): an aged tool
   message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes output)` — which reads
   to a model as a result it already saw and handled, not as content that is GONE. Observed on a
   `/issue` turn: after both `gh` payloads aged, the model wrote "let me re-read the issue once more",
@@ -291,7 +292,14 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` drives runTurn under
   the flag and covers all four, because a unit test on `buildSteadySystem` reaches only two. The
   plan **force-write** round is excluded on purpose: that prompt's job is "stop calling tools and
-  write the plan", and the notice ends with "re-run that call". The per-message form was tried and rejected: at
+  write the plan", and the notice ends with "re-run that call". All four sites route through one
+  `droppedPayloadLedgerFor` gate rather than repeating `FLAG && hasDroppedPayloads(...)`, since a
+  half-applied flag is the mistake that already happened once here. **Flagged rather than shipped on
+  because it is a prompt-level bet with a measurable downside**, not just an absent upside: "re-run
+  that call" can induce re-fetching of aged results — the dup-aged read loop the ledger→withdrawal
+  ladder exists for. `evals/readtrace-report.ts` reads `read-trace-summary` (dup-aged / maxrepeat /
+  looped) and `spec-pin` out of a REIKA_DEBUG log and diffs two arms; per the small-model variance
+  rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
   ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
   serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
   the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition
