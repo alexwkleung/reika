@@ -6,6 +6,10 @@ export function buildSystemPrompt(opts: {
   bundle: ContextBundle;
   mode?: PromptMode;
   planMode?: boolean;
+  // Whether `ask_user` is in this turn's tool list. Subagents run without it (see makeSpawnSubagent),
+  // and the agent prompt must not point a model at a tool it does not have — the same coupling the
+  // plan prompt keeps with planTools (#109).
+  canAsk?: boolean;
 }): string {
   const mode = opts.mode ?? 'agent';
   if (mode === 'chat') {
@@ -55,7 +59,11 @@ function buildPlanPrompt(bundle: ContextBundle): string {
   return parts.join('\n\n');
 }
 
-function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): string {
+function buildAgentPrompt(opts: {
+  bundle: ContextBundle;
+  planMode?: boolean;
+  canAsk?: boolean;
+}): string {
   const parts: string[] = [
     [
       'You are a coding assistant operating in a terminal. Be concise.',
@@ -66,6 +74,17 @@ function buildAgentPrompt(opts: { bundle: ContextBundle; planMode?: boolean }): 
       '4. If a tool call fails, do not give up — try a different tool (grep, list, read) to recover.',
       '5. Only the listed tools exist. Use their exact names.',
       '6. Before creating a new file in an existing directory, OR adding to a registry/list/array, you MUST read at least one existing example to learn its shape and exact exported interface. Never invent a structure.',
+      // Counterweight to rule 4, which is why it earns its tokens rather than restating the tool's
+      // own description. Every rule above pushes one way — recover, keep going, don't give up — and
+      // in that frame stopping to ask reads as giving up. The trigger lives in the ask_user
+      // description (that is what a model consults when choosing a tool); this is the permission,
+      // and permission is what a model needs BEFORE it is stuck. A directive would not help after:
+      // the class of model that ignores the withdrawal ledger cannot act on directives either.
+      ...(opts.canAsk
+        ? [
+            '7. Stopping to ask is a legitimate outcome, not a failure to try harder: when the code you have read contradicts the request, use ask_user instead of silently picking one reading.',
+          ]
+        : []),
     ].join('\n'),
     `Working directory: ${opts.bundle.cwd}`,
   ];

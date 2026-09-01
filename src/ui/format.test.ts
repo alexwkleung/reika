@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatElapsed, formatDurationMs } from './format.js';
+import { formatElapsed, formatDurationMs, toolLabel } from './format.js';
 
 describe('formatElapsed', () => {
   it('renders bare seconds under a minute', () => {
@@ -29,5 +29,28 @@ describe('formatDurationMs', () => {
 
   it('matches the status-bar format above an hour', () => {
     expect(formatDurationMs(4_212_000)).toBe('1h 10m 12s');
+  });
+});
+
+describe('toolLabel', () => {
+  // `ask_user` is named for the model (it says who is being asked); the chip is for the user,
+  // where it should read like every other one-word tool name.
+  it('renders ask_user as Ask', () => {
+    expect(toolLabel('ask_user')).toBe('Ask');
+  });
+
+  // Same wart, same fix: the chip showed the raw `fetch_url`. The args already carry the URL, so
+  // the label has no work to do beyond naming the verb.
+  it('renders fetch_url as Fetch', () => {
+    expect(toolLabel('fetch_url')).toBe('Fetch');
+  });
+
+  it('capitalizes tools with no override', () => {
+    expect(toolLabel('bash')).toBe('Bash');
+    expect(toolLabel('edit')).toBe('Edit');
+  });
+
+  it('leaves an empty name alone', () => {
+    expect(toolLabel('')).toBe('');
   });
 });

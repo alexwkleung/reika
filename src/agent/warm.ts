@@ -71,6 +71,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     history,
     bundle: ctx.bundle,
     promptMode: ctx.promptMode,
+    tools: ctx.tools,
     contextWindow: ctx.config.contextWindow,
     calibration: ctx.calibration,
     minGenTokens: ctx.config.minGenTokens,

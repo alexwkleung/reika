@@ -7,6 +7,7 @@ import { editTool } from './edit.js';
 import { writeTool } from './write.js';
 import { bashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
+import { askUserTool } from './ask.js';
 import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
 import { SearxngProvider } from '../search/searxng.js';
@@ -28,9 +29,21 @@ export function defaultTools(config?: Config): Tool[] {
     // without SearXNG unable to read a link the user had just handed it.
     fetchUrlTool,
   ];
+  if (askEnabled()) tools.push(askUserTool);
   const search = makeSearchProvider(config);
   if (search) tools.push(createSearchTool(search));
   return tools;
+}
+
+// On by default (#198), off with REIKA_ASK=0 — the polarity every other default-on switch uses
+// (cf. `pasteFetch`). Kept switchable rather than hardcoded for a specific reason beyond
+// convention: this tool's whole effect is to PREVENT the failure it was built for, so the baseline
+// arm of any measurement of that failure needs a build without it. The agent prompt's rule 7 keys
+// off the tool list (prompt.ts `canAsk`), so it disappears on its own when this is off and the two
+// arms differ by exactly one variable. Read per call, not at module load, so toggling it doesn't
+// need a restart.
+function askEnabled(): boolean {
+  return process.env.REIKA_ASK !== '0';
 }
 
 // EXPERIMENT (plan mode): read-only exploration tools. No edit/write/subagent — so a model in plan
@@ -44,6 +57,13 @@ export function defaultTools(config?: Config): Tool[] {
 // per call, not at module load, so toggling it doesn't need a restart.
 export function planTools(): Tool[] {
   const tools = [readTool, listTool, grepTool, globTool];
+  // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
+  // before any code is written, and the tool touches nothing in the repo. It is also outside the
+  // withdrawal set (LOOP_WITHDRAW_TOOLS) on purpose — a model that has been told to stop exploring
+  // still needs a way to say what it cannot decide. The plan PROMPT deliberately stays silent about
+  // it (see prompt.test.ts): the capability is available, but nothing pushes a stalling model toward
+  // a new way to avoid writing the plan.
+  if (askEnabled()) tools.push(askUserTool);
   if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
   return tools;
 }

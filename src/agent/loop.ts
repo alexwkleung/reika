@@ -4,6 +4,8 @@ import type {
   ContextBundle,
   EditFailure,
   Message,
+  QuestionAnswer,
+  QuestionRequest,
   Tool,
   ToolResult,
   Usage,
@@ -453,6 +455,9 @@ export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // Needed only for the ask_user gate in the agent prompt, but it has to be the SAME list runTurn
+  // will send: the warm prefix is worthless if it diverges from round 0 by a line.
+  tools: Tool[];
   contextWindow?: number;
   calibration: number;
   minGenTokens: number;
@@ -460,7 +465,11 @@ export function buildRoundZeroPrefix(opts: {
   if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
     distillPlanHandoff(opts.history, opts.contextWindow, opts.calibration, opts.minGenTokens);
   }
-  const baseSystem = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
+  const baseSystem = buildSystemPrompt({
+    bundle: opts.bundle,
+    mode: opts.promptMode,
+    canAsk: opts.tools.some(t => t.name === 'ask_user'),
+  });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
   return buildSteadySystem({
@@ -606,6 +615,33 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
   return lines.join('\n');
 }
 
+// Persistent, non-aging record of what the user has already settled this turn (tools/ask.ts). Same
+// mechanism as the loop ledgers, for the same reason: the answer arrives as a tool result, and tool
+// results age out under compaction — on a 16-24k window, well inside the turn that asked. A model
+// that loses the answer does not fall back to guessing, it falls back to re-deriving the question,
+// which is precisely the state the question was asked from. Pinning it to the regenerated suffix
+// costs a few dozen tokens a round and makes the answer the one thing in the turn that cannot be
+// forgotten. Empty (and therefore inert, including at round 0) until a question is actually answered.
+// The ledger builders all start with a blank line so they read as a separated block when appended;
+// this keeps that spacing when one is concatenated directly rather than through suffixParts.
+function prefixed(ledger: string): string {
+  return ledger ? '\n' + ledger : '';
+}
+
+export function buildQuestionLedger(answers: { question: string; answer: string }[]): string {
+  if (answers.length === 0) return '';
+  const lines = ['', '--- reika status (auto-generated — not user input) ---'];
+  lines.push('The user has already answered this, and it is settled:');
+  for (const a of answers) {
+    lines.push(`  Q: ${a.question}`, `  A: ${a.answer}`);
+  }
+  lines.push(
+    'Build exactly what that answer says. Do not re-open it, do not weigh the alternatives again,',
+    'and do not ask about it a second time.',
+  );
+  return lines.join('\n');
+}
+
 // Persistent, non-aging recovery directive for a `diverged` edit failure (anchor present, one line
 // off) that has started looping. The edit tool already reports the divergence in its result summary,
 // but that string ages out under compaction before a period >= 2 loop returns to it — the same reason
@@ -713,6 +749,7 @@ export async function runTurn(opts: {
   // done-gate are gated behind REIKA_PLAN_ALIGN). The array is the loop's live tracker — copy it.
   onPlanProgress?: (steps: PlanStep[]) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   signal?: AbortSignal;
   promptMode?: PromptMode;
 }): Promise<void> {
@@ -724,7 +761,12 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  const baseSystem = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
+  // canAsk must match what buildRoundZeroPrefix passes, or the warm prefix diverges from round 0.
+  const baseSystem = buildSystemPrompt({
+    bundle: opts.bundle,
+    mode: opts.promptMode,
+    canAsk: opts.tools.some(t => t.name === 'ask_user'),
+  });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
@@ -745,6 +787,26 @@ export async function runTurn(opts: {
   // URLs grounded (fetched on the model's behalf) this turn, so a URL a write/edit introduces is
   // fetched at most once per turn. Per-turn like resolvedDeps. See tools/_urls.ts.
   const groundedUrls = new Set<string>();
+  // Questions put to the user this turn (tools/ask.ts). Per-turn like resolvedDeps, and the ask tool
+  // reads it to enforce its one-per-turn cap.
+  const askedQuestions: string[] = [];
+  // Q&A pairs the user has settled this turn. Recorded HERE rather than inside the tool because the
+  // answer has to outlive its own tool result: that result ages out under compaction, and a model
+  // that loses the answer re-derives the question it was stuck on — which is the spiral the tool was
+  // added to end (#198). The ledger below re-pins it into the regenerated suffix every round.
+  const questionAnswers: { question: string; answer: string }[] = [];
+  const requestQuestion = opts.requestQuestion
+    ? async (req: QuestionRequest): Promise<QuestionAnswer | null> => {
+        const answered = await opts.requestQuestion!(req);
+        if (answered) {
+          questionAnswers.push({
+            question: req.question,
+            answer: answered.notes ? `${answered.text} — ${answered.notes}` : answered.text,
+          });
+        }
+        return answered;
+      }
+    : undefined;
   // Notify the user at most once per turn that compaction kicked in, even if it runs
   // again across the turn's tool rounds.
   let notifiedCompaction = false;
@@ -1014,15 +1076,19 @@ export async function runTurn(opts: {
         // The ledger changes every round (files examined, escalating pressure); in the system
         // suffix that re-processes the whole prompt each round. As the tail note it costs nothing.
         system = baseSystem;
-        roundSuffix = buildPlanLedger(opts.history, i).trimStart();
+        roundSuffix = [buildQuestionLedger(questionAnswers), buildPlanLedger(opts.history, i)]
+          .filter(Boolean)
+          .join('\n\n')
+          .trimStart();
       } else {
-        system = buildSteadySystem({
-          baseSystem,
-          promptMode: 'plan',
-          history: opts.history,
-          round: i,
-          planSteps: null,
-        });
+        system =
+          buildSteadySystem({
+            baseSystem,
+            promptMode: 'plan',
+            history: opts.history,
+            round: i,
+            planSteps: null,
+          }) + prefixed(buildQuestionLedger(questionAnswers));
       }
     } else {
       // Agent/chat: surface a persistent stop directive while a loop is active. Two independent
@@ -1170,6 +1236,10 @@ export async function runTurn(opts: {
       // (buildRoundZeroPrefix) reproduces round 0 through that helper, and the drift tests in
       // warm.test.ts lock the two together.
       const suffixParts: string[] = [];
+      // First: this is settled context, not a directive, and the directives below are ordered by how
+      // close to generation they need to sit.
+      const answered = buildQuestionLedger(questionAnswers);
+      if (answered) suffixParts.push(answered);
       if (PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)) {
         suffixParts.push(buildPlanProgressLedger(planSteps));
       }
@@ -1916,7 +1986,9 @@ export async function runTurn(opts: {
             fetchedUrls,
             resolvedDeps,
             groundedUrls,
+            askedQuestions,
             requestApproval: opts.requestApproval,
+            requestQuestion,
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts),
             bashTimeoutMs: opts.config.bashTimeoutMs,
@@ -2220,7 +2292,10 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
       apiKey: parent.config.subagentApiKey ?? parent.config.apiKey,
       maxTurns: parent.config.subagentMaxTurns,
     };
-    const subTools = parent.tools.filter(t => t.name !== 'subagent');
+    // No `subagent` (no recursion) and no `ask_user`: a subagent runs underneath a tool call the
+    // parent is already blocked on, so a question from down here would stack a second prompt on the
+    // user with no context for where it came from. It degrades to "decide it yourself" instead.
+    const subTools = parent.tools.filter(t => t.name !== 'subagent' && t.name !== 'ask_user');
     const subHistory: Message[] = [];
 
     await runTurn({
