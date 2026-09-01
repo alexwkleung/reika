@@ -1,5 +1,8 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ReadFirstGate, buildReadFirstDirective, isLive, probeLine } from './readfirst.js';
+import { resolveUserPath } from '../tools/_paths.js';
 import type { Message } from '../types.js';
 
 const CWD = '/repo';
@@ -248,3 +251,49 @@ describe('buildReadFirstDirective', () => {
     expect(d).toContain('aged out');
   });
 });
+
+// #216: the bounce is a directive to `read`, and `read` applies no project boundary — so bouncing
+// an out-of-project edit walks the model around the gate write/edit apply to that same path (#175).
+// The gate is an ergonomics nudge; it must not be able to widen reach as a side effect.
+describe('ReadFirstGate — out-of-project paths are never bounced', () => {
+  const history = () => dispatching({ role: 'user', content: 'go' });
+
+  it.each([
+    ['a parent escape', '../outside.txt'],
+    ['an absolute path elsewhere', '/etc/hosts'],
+    ['a prefix-sharing sibling', '/repo-backup/x.ts'],
+  ])('does not bounce %s', (_label, path) => {
+    expect(new ReadFirstGate(CWD).shouldBounce(path, history())).toBe(false);
+  });
+
+  it('does not bounce a ~/ path, which bare resolve() would misread as in-project', () => {
+    // norm() resolves against cwd, so `~/.aws/credentials` would become `/repo/~/.aws/credentials`
+    // — inside the project, and unbounced for the wrong reason. shouldBounce uses resolveUserPath
+    // so the answer is right for the right reason.
+    expect(new ReadFirstGate(CWD).shouldBounce('~/.aws/credentials', history())).toBe(false);
+    expect(escapesProjectProbe()).toBe(join(homedir(), '.aws/credentials'));
+  });
+
+  it('still bounces an in-project path whose name begins with two dots', () => {
+    // Guards the #175 escapesProject fix from the other side: `..config` is in-project, so the
+    // ordinary nudge must still fire.
+    expect(new ReadFirstGate(CWD).shouldBounce('..config/x.ts', history())).toBe(true);
+  });
+
+  it('still bounces an ordinary in-project path', () => {
+    expect(new ReadFirstGate(CWD).shouldBounce('src/app.ts', history())).toBe(true);
+  });
+
+  it('leaves an out-of-project path unrecorded, so it never consumes the one-bounce budget', () => {
+    const gate = new ReadFirstGate(CWD);
+    expect(gate.shouldBounce('/etc/hosts', history())).toBe(false);
+    // And an in-project edit in the same turn is unaffected by it.
+    expect(gate.shouldBounce('src/app.ts', history())).toBe(true);
+  });
+});
+
+// Small helper kept beside the test that needs it: asserts the resolution the gate relies on,
+// rather than trusting the comment above it.
+function escapesProjectProbe(): string {
+  return resolveUserPath(CWD, '~/.aws/credentials');
+}

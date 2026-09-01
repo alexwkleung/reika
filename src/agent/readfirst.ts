@@ -1,5 +1,6 @@
 import { relative, resolve } from 'node:path';
 import { findFreshToolBlockStart } from '../provider/toolcall.js';
+import { escapesProject, resolveUserPath } from '../tools/_paths.js';
 import type { Message } from '../types.js';
 
 // Read-first gate (#72). Weak models blind-apply edits to files whose contents are not in front of
@@ -89,6 +90,17 @@ export class ReadFirstGate {
   // True exactly once per ungrounded path per turn — and recording the bounce here (a side effect)
   // is what guarantees the once: every later call for the path, grounded or not, passes.
   shouldBounce(path: string, history: Message[], prefixStable = false): boolean {
+    // Never bounce a path outside the project (#216). The bounce is a directive to `read` the file,
+    // and `read` applies no boundary of its own — so bouncing here is the harness walking the model
+    // around the gate `write`/`edit` just applied to that same path (#175, tools/_paths.ts). This
+    // gate is an ergonomics nudge for weak models; widening what the agent can reach is not
+    // something it should be able to do as a side effect. Let the edit run and answer to its own
+    // approval instead.
+    //
+    // resolveUserPath rather than this.norm: `~/…` is the shape that matters here, and norm's bare
+    // resolve() would read it as a literal `~` directory inside cwd — in-project, and unbounced for
+    // the wrong reason.
+    if (escapesProject(this.cwd, resolveUserPath(this.cwd, path))) return false;
     const p = this.norm(path);
     if (this.bounced.has(p)) return false;
     if (this.isGrounded(path, history, prefixStable)) return false;
