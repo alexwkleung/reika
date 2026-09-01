@@ -39,6 +39,12 @@ describe('toolLabel', () => {
     expect(toolLabel('ask_user')).toBe('Ask');
   });
 
+  // Same wart, same fix: the chip showed the raw `fetch_url`. The args already carry the URL, so
+  // the label has no work to do beyond naming the verb.
+  it('renders fetch_url as Fetch', () => {
+    expect(toolLabel('fetch_url')).toBe('Fetch');
+  });
+
   it('capitalizes tools with no override', () => {
     expect(toolLabel('bash')).toBe('Bash');
     expect(toolLabel('edit')).toBe('Edit');

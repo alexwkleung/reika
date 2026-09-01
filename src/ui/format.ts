@@ -40,7 +40,7 @@ export function contextFill(contextTokens?: number | null, contextWindow?: numbe
 // is user-facing, where the one-word shape every other tool has reads better than a raw
 // snake_case identifier. Only names needing an override are listed; everything else capitalizes.
 // Both the rendered label and the hanging-wrap width math go through this, so they cannot drift.
-const TOOL_LABELS: Record<string, string> = { ask_user: 'Ask' };
+const TOOL_LABELS: Record<string, string> = { ask_user: 'Ask', fetch_url: 'Fetch' };
 
 export function toolLabel(name: string): string {
   const override = TOOL_LABELS[name];
