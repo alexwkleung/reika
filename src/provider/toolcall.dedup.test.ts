@@ -35,8 +35,12 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
         payload: payload ?? 'PAYLOAD_A',
       },
     ];
+    // The opening `list` keeps the #227 task-spec pin off c1, so this exercises the aged trail
+    // rather than the pin (which is covered in toolcall.test.ts).
     const history: Message[] = [
       { role: 'user', content: 'inspect A' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c0', name: 'list', args: {} }] },
+      { role: 'tool', callId: 'c0', summary: 'Listed 3 entries', payload: 'A\nB\nC' },
       ...readA('c1'),
       ...readA('c2'),
       ...readA('c3', 'PAYLOAD_A_FRESH'),

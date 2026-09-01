@@ -423,9 +423,11 @@ describe('batchAgePayloads', () => {
   });
 
   it('ages oldest-first down to the low watermark and clears frozen renders', () => {
-    // threshold = (1000 − 0) × 0.9 = 900; estimate starts at 3 × 400 = 1200.
+    // threshold = (1000 − 0) × 0.9 = 900; estimate starts at 50 + 3 × 400 = 1250. The 50-char
+    // opening round is the turn's task spec (#227) and is exempt, so aging starts at 'a'.
     const history: Message[] = [
       { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
       ...round('a', 'x'.repeat(400)),
       ...round('b', 'y'.repeat(400)),
       ...round('c', 'z'.repeat(400)),
@@ -433,12 +435,58 @@ describe('batchAgePayloads', () => {
     const marked = batchAgePayloads(history, estimateOf(history), 1000, 0);
     expect(marked).toBeGreaterThan(0);
     const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
-    // Oldest aged (render cleared), trailing block protected.
-    expect(tools[0].aged).toBe(true);
-    expect(tools[0].rendered).toBeUndefined();
-    expect(tools[2].aged).toBeUndefined();
-    expect(tools[2].rendered).toBeDefined();
+    // Oldest non-spec aged (render cleared), trailing block protected.
+    expect(tools[1].aged).toBe(true);
+    expect(tools[1].rendered).toBeUndefined();
+    expect(tools[3].aged).toBeUndefined();
+    expect(tools[3].rendered).toBeDefined();
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
+  });
+
+  it("never ages the turn's task spec, even as everything older-first around it goes (#227)", () => {
+    // The observed failure: `/issue` mandates `gh issue view` as the opening call, so the payload
+    // that DEFINES the task is the oldest and therefore the first one aging sacrifices — after
+    // which its summary ("Ran: … (505 bytes output)") reads as handled and the model confabulates
+    // the issue text instead of re-fetching.
+    const history: Message[] = [
+      { role: 'user', content: 'read the skill body then work on issue 213' },
+      ...round('spec', 'ISSUE BODY'.repeat(20)),
+      ...round('a', 'x'.repeat(4000)),
+      ...round('b', 'y'.repeat(4000)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    expect(tools[0].aged).toBeUndefined();
+    expect(tools[0].rendered).toBeDefined();
+    expect(tools[1].aged).toBe(true);
+    expect(tools[2].aged).toBe(true);
+  });
+
+  it('pins nothing when the turn opens with a payload too large to be a spec', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('dump', 'x'.repeat(5000)),
+      ...round('a', 'y'.repeat(400)),
+      ...round('b', 'z'.repeat(400)),
+    ];
+    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect((history[2] as Message & { role: 'tool' }).aged).toBe(true);
+  });
+
+  it("moves the pin to the new turn, releasing the previous turn's spec", () => {
+    const history: Message[] = [
+      { role: 'user', content: 'turn 1' },
+      ...round('spec1', 'OLD SPEC'),
+      { role: 'user', content: 'turn 2' },
+      ...round('spec2', 'NEW SPEC'),
+      ...round('a', 'x'.repeat(4000)),
+      ...round('b', 'y'.repeat(400)),
+    ];
+    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    expect(tools[0].aged).toBe(true); // turn 1's spec is no longer the task
+    expect(tools[1].aged).toBeUndefined(); // turn 2's is
   });
 
   it('never ages the active roundtrip, even when the target is unreachable', () => {

@@ -45,7 +45,9 @@ describe('estimateRequestTokens', () => {
   });
 
   it('reflects payload aging: stale tool payloads cost less than fresh ones', () => {
-    const big = 'X'.repeat(4000);
+    // Above TASK_SPEC_PIN_CHARS (#227): a smaller opening payload would be pinned as the turn's
+    // task spec and stay live across the turn boundary, which is a different behaviour from aging.
+    const big = 'X'.repeat(5000);
     // Fresh: tool block is trailing, so payload is included.
     const fresh: Message[] = [
       { role: 'user', content: 'go' },

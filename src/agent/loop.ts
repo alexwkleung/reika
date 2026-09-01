@@ -24,6 +24,7 @@ import {
   batchAgePayloads,
   AGE_LOW_FRACTION,
 } from './compaction.js';
+import { findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
@@ -1329,6 +1330,18 @@ export async function runTurn(opts: {
           `sys≈${Math.round(system.length / 4)}t reasoning≈${Math.round(rsnChars / 4)}t ` +
           `summaries≈${Math.round(sumChars / 4)}t payloads≈${Math.round(payChars / 4)}t ` +
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
+      );
+      // Task-spec pin (#227), on its own line so a suspicion about a confabulated task can be
+      // checked by grep instead of re-derived. `holding` is the bit that matters: the pin only does
+      // work once the spec falls outside the trailing tool block, which is where aging would
+      // otherwise have taken it.
+      const specIdx = taskSpecIndex(opts.history);
+      const spec = specIdx >= 0 ? opts.history[specIdx] : undefined;
+      debugLog(
+        specIdx >= 0 && spec?.role === 'tool'
+          ? `[reika:debug] round=${i} spec-pin idx=${specIdx} chars=${spec.payload?.length ?? 0} ` +
+              `holding=${specIdx < findFreshToolBlockStart(opts.history)} summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
+          : `[reika:debug] round=${i} spec-pin none\n`,
       );
     }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in

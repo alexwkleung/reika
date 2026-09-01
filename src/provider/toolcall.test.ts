@@ -118,8 +118,89 @@ describe('messagesToOpenAI', () => {
     const oldTool = out.find(m => m.tool_call_id === 'old');
     const freshTool = out.find(m => m.tool_call_id === 'fresh');
     expect(oldTool?.content).toBe('old summary');
-    expect(oldTool?.content).not.toContain('OLD PAYLOAD');
     expect(freshTool?.content).toContain('FRESH PAYLOAD');
+  });
+
+  describe('task-spec pin (#227)', () => {
+    // `/issue` and `/review` mandate a `gh` fetch as the opening call, so the payload that DEFINES
+    // the task is the oldest — and aging is oldest-first. Observed on #213: once it collapsed, the
+    // model wrote "let me re-read the issue" with no tool call and quoted issue text that does not
+    // exist. The pin keeps that one small payload live for the turn that asked for it.
+    const spec = (payload: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+      {
+        role: 'tool',
+        callId: 'spec',
+        summary: 'Ran: gh issue view 213 (505 bytes output)',
+        payload,
+      },
+    ];
+    const later = (id: string, payload: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: {} }] },
+      { role: 'tool', callId: id, summary: `Read ${id}`, payload },
+    ];
+    const contentFor = (out: unknown[], id: string): string =>
+      (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+        .content;
+
+    it("keeps the turn's opening payload live outside the trailing tool block", () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
+      // Everything else outside the trailing block still ages normally.
+      expect(contentFor(out, 'a')).not.toContain('AAA');
+    });
+
+    it('sends the pinned spec verbatim even when the budget prices every payload at zero', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(120_000)),
+        ...later('b', 'B'.repeat(120_000)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 8192 });
+      expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
+    });
+
+    it('does not pin an opening payload larger than the spec ceiling', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        ...spec('D'.repeat(5000)),
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).toBe('Ran: gh issue view 213 (505 bytes output)');
+    });
+
+    it("follows the turn — the previous turn's spec is released", () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        { role: 'user', content: 'now do something else' },
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
+      expect(contentFor(out, 'a')).toContain('AAA'); // the new turn's opening call is pinned now
+    });
+
+    it('is off under prefix-stable, where batch aging owns the pin instead', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(500)),
+      ];
+      (history[2] as Message & { role: 'tool' }).aged = true;
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384, prefixStable: true });
+      expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
+    });
   });
 
   it('leaves fresh payloads untouched when no context window is given', () => {
@@ -847,7 +928,9 @@ describe('messagesToOpenAI', () => {
       tool_call_id?: string;
       content?: string;
     }>;
-    expect(out.find(m => m.tool_call_id === 'a')?.content).toBe('Read A lines 1-5 of 5');
+    // 'a' is the turn's pinned task spec (#227) so it keeps its payload; 'b' ages to summary. With
+    // dedup on, 'b' would have collapsed to a back-reference — the point here is that it doesn't.
+    expect(out.find(m => m.tool_call_id === 'a')?.content).toContain('Read A lines 1-5 of 5');
     expect(out.find(m => m.tool_call_id === 'b')?.content).toBe('Read A lines 1-5 of 5');
   });
 });

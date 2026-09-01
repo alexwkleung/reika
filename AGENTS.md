@@ -255,6 +255,23 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   retained content costs instead of disagreeing by 2.5× on the same bytes.
   The truncation marker says "context limit, not a command error" on purpose — without it, models
   loop re-running with different shell flags.
+- **Task-spec pin** (`toolcall.ts` `taskSpecIndex`, always on — #227): aging is oldest-first with no
+  notion of which payload defines the task, and `/issue` / `/review` both mandate a `gh` fetch as the
+  opening call — so the payload holding the task definition was always the _first_ one dropped, after
+  which its summary (`Ran: gh issue view 213 (505 bytes output)`) reads to the model as a result it
+  already handled. Observed: "let me re-read the issue", no tool call, then a fabricated issue body.
+  The fix pins the current turn's _opening_ tool payload (capped at `TASK_SPEC_PIN_CHARS`, 4096 — same
+  number and trade as `PROTECTED_READ_FLOOR_CHARS`) so it serializes live past the trailing block, is
+  allocated verbatim ahead of everything in `freshPayloadCharCap`, and is skipped by
+  `batchAgePayloads`. Two non-obvious rules: it's the _opening_ payload, not the first small one (a
+  huge first result means this turn didn't open with a spec fetch, and aging should stay free to
+  collapse it); and it releases only when the next turn lands its **own** first tool result, not when
+  the user hits enter — releasing at round 0 would shrink mid-history bytes on the exact request
+  `warm.ts` prebuilt, which `warm.test.ts`'s strict-prefix assertion catches. Prefix-stable mode
+  leaves the pin entirely to batch aging: resurrecting bytes that already serialized as a summary is
+  the mid-history rewrite that mode exists to prevent. `dedupToolContent` signs the pinned message as
+  a payload so "the signature is what WOULD be serialized" stays true. The `spec-pin` REIKA_DEBUG line
+  reports the index, size and whether the pin is currently holding anything.
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
   `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
   earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read

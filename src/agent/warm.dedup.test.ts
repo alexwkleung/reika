@@ -8,9 +8,11 @@ import type { Config, ContextBundle, Message } from '../types.js';
 // The gate const DEDUP_PAYLOADS is read at toolcall.js import time, so the flag must be set
 // before the imports. REIKA_WARM + REIKA_DEDUP_PAYLOADS is a live configuration (.env.example
 // ships both on): this locks the warm prefix to the real round-0 request when dedup stubbing is
-// rewriting tool content. It composes because stub decisions depend only on (history, freshFrom),
-// and at a turn boundary both requests see every tool message as non-fresh with the same
-// signatures — the trailing user message the warm lacks can't change a stub.
+// rewriting tool content. It composes because stub decisions depend only on
+// (history, freshFrom, specIdx), and at a turn boundary both requests agree on all three: every
+// tool message is non-fresh with the same signatures, and the task-spec pin (#227) doesn't move
+// until this turn lands its own first tool result — so the trailing user message the warm lacks
+// can't change a stub.
 const PRIOR = process.env.REIKA_DEDUP_PAYLOADS;
 process.env.REIKA_DEDUP_PAYLOADS = '1';
 afterAll(() => {
@@ -86,6 +88,14 @@ function loopyPriorTurn(): Message[] {
       toolCalls: [{ id: 'c2', name: 'read', args: { path: 'a.ts' } }],
     },
     { role: 'tool', callId: 'c2', summary: 'read a.ts', payload },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c3', name: 'read', args: { path: 'a.ts' } }],
+    },
+    // c1 is the turn's pinned task spec (#227) and keeps its payload, so the byte-identical AGED
+    // trail this test is about starts at c2 — c3 is the repeat that must stub the same way in both.
+    { role: 'tool', callId: 'c3', summary: 'read a.ts', payload },
     { role: 'assistant', content: 'a.ts defines a.' },
   ];
 }
