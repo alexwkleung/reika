@@ -286,7 +286,12 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   **once per request as a ledger**, not per message — `hasDroppedPayloads` (`toolcall.ts`, beside the
   serialization branches it mirrors) gates it, so it can never make a false claim, and it rides the
   same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
-  where the tail is rewritten each round anyway). The per-message form was tried and rejected: at
+  where the tail is rewritten each round anyway). There are **four** live compositions — {plan,
+  agent} x {system suffix, trailing note} — and plan-mode-under-prefix-stable builds its own suffix
+  inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` drives runTurn under
+  the flag and covers all four, because a unit test on `buildSteadySystem` reaches only two. The
+  plan **force-write** round is excluded on purpose: that prompt's job is "stop calling tools and
+  write the plan", and the notice ends with "re-run that call". The per-message form was tried and rejected: at
   ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
   serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
   the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition

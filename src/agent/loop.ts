@@ -1069,6 +1069,11 @@ export async function runTurn(opts: {
     let convergeSteerNow = false;
     if (opts.promptMode === 'plan') {
       if (planForceWrite) {
+        // No dropped-payload notice here, deliberately: the force-write prompt's whole job is
+        // "stop calling tools and write the plan from what you have", and the notice ends with
+        // "re-run that call" — handing the model a contradiction on the one round it must not
+        // explore. Dropped output is a reason the plan may be thin, not a reason to reopen the
+        // exploration the force-write exists to end.
         system = buildPlanWritePrompt(steerRetryActive);
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
@@ -1108,8 +1113,15 @@ export async function runTurn(opts: {
       } else if (prefixStable) {
         // The ledger changes every round (files examined, escalating pressure); in the system
         // suffix that re-processes the whole prompt each round. As the tail note it costs nothing.
+        // The dropped-payload notice leads, same as buildSteadySystem's plan branch: aging hits
+        // exploration exactly as it hits an agent turn, and this path is the only one a
+        // prefix-stable plan run takes.
         system = baseSystem;
-        roundSuffix = [buildQuestionLedger(questionAnswers), buildPlanLedger(opts.history, i)]
+        roundSuffix = [
+          hasDroppedPayloads(opts.history, prefixStable) ? buildDroppedPayloadLedger() : '',
+          buildQuestionLedger(questionAnswers),
+          buildPlanLedger(opts.history, i),
+        ]
           .filter(Boolean)
           .join('\n\n')
           .trimStart();
