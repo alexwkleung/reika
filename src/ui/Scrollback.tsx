@@ -7,7 +7,7 @@ import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
-import { formatDurationMs } from './format.js';
+import { formatDurationMs, toolLabel } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 
 export function Scrollback({
@@ -233,7 +233,7 @@ function renderMessage(
               // when the line wraps (long edit args), Ink drops the boundary char
               // between adjacent siblings, rendering "• Edit(…)" as "• Edi(…)".
               <Text key={tc.id}>
-                <Text color={theme.tool}>{`${CALL_MARKER}${capitalize(tc.name)}`}</Text>
+                <Text color={theme.tool}>{`${CALL_MARKER}${toolLabel(tc.name)}`}</Text>
                 <Text color={theme.secondary}>
                   {hangingWrap(
                     `(${formatArgs(tc.name, tc.args)})`,
@@ -241,7 +241,7 @@ function renderMessage(
                     CALL_MARKER.length,
                     // The name sits between the marker and the args, so the first row has less
                     // room than the rest — but the indent stays the marker's width.
-                    CALL_MARKER.length + capitalize(tc.name).length,
+                    CALL_MARKER.length + toolLabel(tc.name).length,
                   )}
                 </Text>
               </Text>
@@ -515,9 +515,6 @@ function formatArgs(name: string, args: Record<string, unknown>): string {
 
 // Title-case the tool name's first letter for a tidier, conventional look
 // (Read, List, Bash …).
-function capitalize(s: string): string {
-  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
-}
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;

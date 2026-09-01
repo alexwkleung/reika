@@ -35,15 +35,15 @@ export function defaultTools(config?: Config): Tool[] {
   return tools;
 }
 
-// EXPERIMENT (#198): flag-gated like every other behavioral change here, and for a specific reason
-// beyond convention — the tool's whole effect is to PREVENT the failure it was built for, so the
-// baseline arm of any measurement needs a build without it. Checking out an older commit stops
-// working the moment this merges; a flag keeps the comparison runnable forever. The agent prompt's
-// rule 7 keys off the tool list (prompt.ts `canAsk`), so it disappears on its own when this is off
-// and the flag A/Bs against a byte-identical prompt. Read per call, not at module load, so toggling
-// it doesn't need a restart.
+// On by default (#198), off with REIKA_ASK=0 — the polarity every other default-on switch uses
+// (cf. `pasteFetch`). Kept switchable rather than hardcoded for a specific reason beyond
+// convention: this tool's whole effect is to PREVENT the failure it was built for, so the baseline
+// arm of any measurement of that failure needs a build without it. The agent prompt's rule 7 keys
+// off the tool list (prompt.ts `canAsk`), so it disappears on its own when this is off and the two
+// arms differ by exactly one variable. Read per call, not at module load, so toggling it doesn't
+// need a restart.
 function askEnabled(): boolean {
-  return process.env.REIKA_ASK === '1';
+  return process.env.REIKA_ASK !== '0';
 }
 
 // EXPERIMENT (plan mode): read-only exploration tools. No edit/write/subagent — so a model in plan

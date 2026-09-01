@@ -34,3 +34,16 @@ export function contextFill(contextTokens?: number | null, contextWindow?: numbe
   if (!contextTokens || !contextWindow) return null;
   return contextTokens / contextWindow;
 }
+
+// Display name for a tool in the scrollback chip. Tool names are model-facing and picked for the
+// model's benefit — `ask_user` names who is being asked, which a bare `ask` doesn't — but the chip
+// is user-facing, where the one-word shape every other tool has reads better than a raw
+// snake_case identifier. Only names needing an override are listed; everything else capitalizes.
+// Both the rendered label and the hanging-wrap width math go through this, so they cannot drift.
+const TOOL_LABELS: Record<string, string> = { ask_user: 'Ask' };
+
+export function toolLabel(name: string): string {
+  const override = TOOL_LABELS[name];
+  if (override) return override;
+  return name.length > 0 ? name[0].toUpperCase() + name.slice(1) : name;
+}
