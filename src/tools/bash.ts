@@ -204,17 +204,11 @@ export function execStream(
         }
       };
       // Recorded whether or not spilling is on: the question this answers is how often bash
-      // output exceeds the cap at all, which is a property of the workload, not of the flag.
-      if (rawBytes > MAX_PAYLOAD_BYTES) {
-        recordCapped({
-          tool: 'bash',
-          total: rawBytes,
-          shown: totalBytes,
-          spilled: spilling,
-          // Whether the 4MB window held the whole run. A stream of `complete: false` lines is the
-          // evidence that SPILL_MAX_BYTES is too small; none of them means it is generous.
-          complete: spilling ? tail.bytes >= rawBytes : undefined,
-        });
+      // output exceeds the cap at all, which is a property of the workload, not of the flag. The
+      // spilling arm records below instead, after the write, so `spilled` reports whether an
+      // artifact actually landed rather than whether one was intended.
+      if (rawBytes > MAX_PAYLOAD_BYTES && !spilling) {
+        recordCapped({ tool: 'bash', total: rawBytes, shown: totalBytes, spilled: false });
       }
       // Nothing was held back (or spilling is off): the ordinary result, byte-identical to the
       // pre-spill behavior so the flag is a clean A/B — including staying synchronous.
@@ -225,6 +219,16 @@ export function execStream(
       void (async () => {
         const complete = tail.bytes >= rawBytes;
         const ref = await spillResult('bash', tail.text());
+        recordCapped({
+          tool: 'bash',
+          total: rawBytes,
+          shown: totalBytes,
+          spilled: !!ref,
+          // Whether the 4MB window held the whole run. A stream of `complete: false` lines is the
+          // evidence that SPILL_MAX_BYTES is too small; none of them means it is generous. Only a
+          // claim the run can make when the window was actually saved.
+          complete: ref ? complete : undefined,
+        });
         const shared = { shown: totalBytes, total: String(rawBytes), unit: 'bytes' };
         done(
           base +

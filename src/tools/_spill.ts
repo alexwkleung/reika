@@ -4,7 +4,8 @@
 // new is offered to the model — the locator points at tools it already has, which is why this
 // needs no schema growth and no learned behavior beyond following a path.
 //
-// Gated behind REIKA_SPILL so it can be A/B'd; strict no-op when off. Fail-open everywhere: a
+// On by default; REIKA_SPILL=0 turns it off (the polarity every other default-on switch uses),
+// which is also how the A/B baseline is spelled. Strict no-op when off. Fail-open everywhere: a
 // spill that can't be written returns null and the caller keeps its ordinary capped result. A
 // successful search must never become an error because a temp file didn't land.
 import { mkdirSync, rmSync } from 'node:fs';
@@ -16,7 +17,7 @@ import { join } from 'node:path';
 export type SpillRef = { path: string; bytes: number };
 
 export function spillEnabled(): boolean {
-  return process.env.REIKA_SPILL === '1';
+  return process.env.REIKA_SPILL !== '0';
 }
 
 // One private directory per process — reika is one process per session, so per-process IS

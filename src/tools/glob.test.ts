@@ -154,7 +154,7 @@ describe('globTool spill (REIKA_SPILL)', () => {
     await writeManyFiles();
     const on = await globTool.run({ pattern: '**/*.ts' }, { cwd, ignore: ignore() });
     spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(on.payload ?? '')![1]));
-    delete process.env.REIKA_SPILL;
+    process.env.REIKA_SPILL = '0';
     const off = await globTool.run({ pattern: '**/*.ts' }, { cwd, ignore: ignore() });
     expect(off.summary).toBe('Found 300+ file(s) matching **/*.ts');
     expect(off.payload).not.toContain('saved to');

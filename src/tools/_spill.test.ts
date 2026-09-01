@@ -30,8 +30,22 @@ async function spill(name: string, content: string) {
 }
 
 describe('spillResult', () => {
-  it('is a strict no-op when REIKA_SPILL is off', async () => {
+  // The default is ON: only the explicit '0' opt-out disables it. Pinned because the polarity is
+  // the whole contract — an unset var reading as off would silently take the feature away from
+  // every user who never heard of the flag.
+  it('is on when REIKA_SPILL is unset, and off only for an explicit 0', async () => {
     delete process.env.REIKA_SPILL;
+    expect(spillEnabled()).toBe(true);
+    process.env.REIKA_SPILL = '0';
+    expect(spillEnabled()).toBe(false);
+    for (const on of ['1', 'true', 'yes', '']) {
+      process.env.REIKA_SPILL = on;
+      expect(spillEnabled()).toBe(true);
+    }
+  });
+
+  it('is a strict no-op when REIKA_SPILL is off', async () => {
+    process.env.REIKA_SPILL = '0';
     expect(spillEnabled()).toBe(false);
     expect(await spillResult('x', 'content')).toBeNull();
   });
