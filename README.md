@@ -103,6 +103,7 @@ Config sources, in precedence order (higher wins):
 | `REIKA_REASONING_ROUNDS`      | `2`                                 | Recent tool-call rounds that keep their reasoning in context (rest pruned). 1 = leanest; higher avoids re-derivation on thinking models, at a token cost                                                                                                                                                                                                                                                                                                                                                                       |
 | `REIKA_SEARXNG_URL`           | _unset_                             | SearXNG instance URL (self-hosted, local-first); enables the `search` tool. `fetch_url` registers regardless                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `REIKA_PASTE_FETCH`           | `1`                                 | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each). `0` disables — an outbound request per pasted link                                                                                                                                                                                                                                                                                                                                                                                    |
+| `REIKA_ASK`                   | `1`                                 | The `ask_user` tool: the model can put one multiple-choice question to you mid-turn instead of guessing when what it read contradicts what you asked for. `0` removes the tool, and with it the agent prompt's line about asking                                                                                                                                                                                                                                                                                               |
 | `REIKA_MAX_SEARCHES_PER_TURN` | `3`                                 | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`                                 | Cap `fetch_url` calls per user turn                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `REIKA_BASH_TIMEOUT_MS`       | `300000`                            | Wall-clock timeout for a single bash command, ms (raise for slow builds, lower to fail hangs faster)                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -187,20 +188,23 @@ Conversation history persists across switches; if styles clash, run `/new` first
 
 The agent has these tools. Optional tools register only when their config is present:
 
-| Tool        | What                                                               | Approval?              | Optional?                    |
-| ----------- | ------------------------------------------------------------------ | ---------------------- | ---------------------------- |
-| `read`      | Read lines from a file (line-ranged, default 200 lines)            | no                     | —                            |
-| `list`      | List files in a directory (depth-limited)                          | no                     | —                            |
-| `grep`      | JS regex over file contents (cap 100 matches)                      | no                     | —                            |
-| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading    | no                     | —                            |
-| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple | yes                    | —                            |
-| `write`     | Create a new file; refuses to overwrite                            | yes                    | —                            |
-| `bash`      | Run a shell command (streamed output, danger-pattern warnings)     | yes                    | —                            |
-| `subagent`  | Spawn an isolated subagent for focused exploration                 | no (its own tools may) | —                            |
-| `search`    | Web search (returns title + URL + snippet, up to 8)                | no                     | requires `REIKA_SEARXNG_URL` |
-| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)           | no                     | always registered            |
+| Tool        | What                                                                  | Approval?               | Optional?                    |
+| ----------- | --------------------------------------------------------------------- | ----------------------- | ---------------------------- |
+| `read`      | Read lines from a file (line-ranged, default 200 lines)               | no                      | —                            |
+| `list`      | List files in a directory (depth-limited)                             | no                      | —                            |
+| `grep`      | JS regex over file contents (cap 100 matches)                         | no                      | —                            |
+| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading       | no                      | —                            |
+| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple    | yes                     | —                            |
+| `write`     | Create a new file; refuses to overwrite                               | yes                     | —                            |
+| `bash`      | Run a shell command (streamed output, danger-pattern warnings)        | yes                     | —                            |
+| `subagent`  | Spawn an isolated subagent for focused exploration                    | no (its own tools may)  | —                            |
+| `search`    | Web search (returns title + URL + snippet, up to 8)                   | no                      | requires `REIKA_SEARXNG_URL` |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)              | no                      | always registered            |
+| `ask_user`  | Ask you ONE multiple-choice question mid-turn and wait for the answer | no (it _is_ the prompt) | `REIKA_ASK=0` removes it     |
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
+
+`ask_user` renders the same way: `↑↓` + `Enter` to pick an option, `Tab` to pick one _and_ add a note in your own words, or select the last row — always present — to type your own answer instead, when none of the options is the right frame. One question per turn, and the answer is pinned into context afterwards so it can't be forgotten and re-asked later in the same turn. Small models can and do frame a question around a misreading, so the options are not a summary of the request; that last row is the way out.
 
 ## Skills (reusable prompt templates)
 
