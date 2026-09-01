@@ -277,6 +277,21 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   up to `TASK_SPEC_PIN_CHARS` on the previous task's detail until this turn lands its own first tool
   result). `stale=true` is the one behaviour here that could read as task conflation, so it is
   greppable rather than something to re-derive from the history.
+- **Dropped-payload ledger** (`loop.ts` `buildDroppedPayloadLedger`, always on — #227): an aged tool
+  message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes output)` — which reads
+  to a model as a result it already saw and handled, not as content that is GONE. Observed on a
+  `/issue` turn: after both `gh` payloads aged, the model wrote "let me re-read the issue once more",
+  made no tool call, and quoted issue text that does not exist. Same affordance rule as the
+  truncation marker: an unservable state must be loud rather than silently look like success. Stated
+  **once per request as a ledger**, not per message — `hasDroppedPayloads` (`toolcall.ts`, beside the
+  serialization branches it mirrors) gates it, so it can never make a false claim, and it rides the
+  same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
+  where the tail is rewritten each round anyway). The per-message form was tried and rejected: at
+  ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
+  serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
+  the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition
+  order matters — it goes first, ahead of the other ledgers, in **both** `buildSteadySystem` and the
+  agent loop's inline mirror, or the warm prefix diverges from round 0 (`warm.test.ts` locks them).
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
   `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
   earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read

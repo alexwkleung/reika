@@ -26,6 +26,7 @@ import {
 } from './compaction.js';
 import {
   findFreshToolBlockStart,
+  hasDroppedPayloads,
   lastUserMessageIndex,
   taskSpecIndex,
 } from '../provider/toolcall.js';
@@ -429,14 +430,17 @@ export function buildSteadySystem(opts: {
   round: number;
   planSteps: PlanStep[] | null;
 }): string {
+  // First, and in both modes: settled context about the request itself, not a directive. Aging hits
+  // plan exploration exactly as it hits an agent turn.
+  const dropped = hasDroppedPayloads(opts.history) ? '\n\n' + buildDroppedPayloadLedger() : '';
   if (opts.promptMode === 'plan') {
-    return opts.baseSystem + '\n\n' + buildPlanLedger(opts.history, opts.round);
+    return opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round);
   }
   const planLedger =
     PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
       ? '\n\n' + buildPlanProgressLedger(opts.planSteps)
       : '';
-  return opts.baseSystem + planLedger;
+  return opts.baseSystem + dropped + planLedger;
 }
 
 // Whether the prefix-stable experiment governs requests for this window config — the same
@@ -631,6 +635,30 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
 // this keeps that spacing when one is concatenated directly rather than through suffixParts.
 function prefixed(ledger: string): string {
   return ledger ? '\n' + ledger : '';
+}
+
+// An aged tool message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes
+// output)` — which reads to a model as a result it already saw and handled, not as content that is
+// GONE (#227). Observed on a `/issue` turn: after both `gh` payloads aged, the model wrote "let me
+// re-read the issue once more", made no tool call, and quoted issue text that does not exist. Same
+// affordance rule as capPayload's truncation marker (#102): an unservable state must be loud rather
+// than silently look like success.
+//
+// Stated ONCE per request rather than per message. The per-message form was measured at ~2,700
+// chars on a 30-round turn (~19% of the serialized request) — the note runs ~2.7x the aged summary
+// it annotates — and being mid-history it moves the compaction trigger, the keep boundary and the
+// cap arithmetic at once. As a ledger it costs one line, rides the same transport as every other
+// ledger (system suffix, or the trailing note under REIKA_PREFIX_STABLE where the tail is rewritten
+// each round anyway), and touches no budget walk. Emitted only when something actually was dropped,
+// so it can never make a false claim.
+export function buildDroppedPayloadLedger(): string {
+  return [
+    '--- reika status (auto-generated — not user input) ---',
+    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`).',
+    'Their output was dropped to make room; it is not in your context any more. That is a context',
+    'limit, not a failed command, and it does not mean you already handled the result. If you need',
+    'what one of them returned, re-run that call — do not answer from memory of it.',
+  ].join('\n');
 }
 
 export function buildQuestionLedger(answers: { question: string; answer: string }[]): string {
@@ -1242,7 +1270,11 @@ export async function runTurn(opts: {
       // warm.test.ts lock the two together.
       const suffixParts: string[] = [];
       // First: this is settled context, not a directive, and the directives below are ordered by how
-      // close to generation they need to sit.
+      // close to generation they need to sit. Order must match buildSteadySystem's composition or
+      // the warm prefix diverges from round 0 (warm.test.ts locks the two).
+      if (hasDroppedPayloads(opts.history, prefixStable)) {
+        suffixParts.push(buildDroppedPayloadLedger());
+      }
       const answered = buildQuestionLedger(questionAnswers);
       if (answered) suffixParts.push(answered);
       if (PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)) {

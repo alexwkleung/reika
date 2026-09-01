@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import {
   dedupToolContent,
+  hasDroppedPayloads,
   lastUserMessageIndex,
   messagesToOpenAI,
   taskSpecIndex,
@@ -1009,6 +1010,44 @@ describe('lastUserMessageIndex', () => {
     ];
     expect(taskSpecIndex(own)).toBe(5);
     expect(taskSpecIndex(own) < lastUserMessageIndex(own)).toBe(false); // this turn's own
+  });
+});
+
+describe('hasDroppedPayloads (#227)', () => {
+  const round = (id: string, payload?: string): Message[] => [
+    { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: {} }] },
+    { role: 'tool', callId: id, summary: `${id} summary`, ...(payload ? { payload } : {}) },
+  ];
+
+  it('is true when a payload-bearing result sits outside the trailing tool block', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(hasDroppedPayloads(history)).toBe(true);
+  });
+
+  it('is false while the only payload is still fresh', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'BODY')];
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('is false for results that never had a payload (nothing was dropped)', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a'), ...round('b')];
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('keys on the sticky `aged` mark under prefix-stable, not on the trailing block', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    // Prefix-stable keeps every unaged payload live however old it is.
+    expect(hasDroppedPayloads(history, true)).toBe(false);
+    (history[2] as Message & { role: 'tool' }).aged = true;
+    expect(hasDroppedPayloads(history, true)).toBe(true);
   });
 });
 

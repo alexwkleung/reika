@@ -312,6 +312,19 @@ function newestLiveReadIndex(
   return -1;
 }
 
+// Does this request drop any tool payload it once carried? True when at least one tool message
+// will serialize to its summary alone despite HAVING a payload — i.e. content the model saw and
+// no longer has. Mirrors the two serialization branches in messagesToOpenAI exactly, and lives
+// beside them so the two can't drift; the loop turns a true into the one-line notice that says so
+// (#227). A result that never had a payload doesn't count: nothing was dropped, and there is
+// nothing to re-run for.
+export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {
+  const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
+  return history.some((m, i) =>
+    m.role === 'tool' && m.payload ? (prefixStable ? !!m.aged : i < freshFrom) : false,
+  );
+}
+
 // Start index of the trailing block of tool messages — tool messages at or after
 // this index keep their payloads; earlier ones collapse to summary. Exported for
 // batch aging (agent/compaction.ts), which must never age the active round's results.

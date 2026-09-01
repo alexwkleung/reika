@@ -327,6 +327,51 @@ describe('buildSteadySystem', () => {
     expect(at(0).startsWith('BASE\n\n')).toBe(true);
   });
 
+  it('names dropped payloads once, in both modes, ahead of the other ledgers (#227)', () => {
+    // c1 HAD a payload and sits outside the trailing tool block, so this request serializes it as a
+    // bare summary — the state that reads to a model as "already handled".
+    const dropped: Message[] = [
+      ...explored.slice(0, 2),
+      {
+        role: 'tool',
+        callId: 'c1',
+        summary: 'Ran: gh issue view 213 (505 bytes output)',
+        payload: 'ISSUE',
+      },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c2', summary: 'Read b.ts', payload: 'BODY' },
+    ];
+    for (const promptMode of ['agent', 'plan'] as const) {
+      const s = buildSteadySystem({
+        baseSystem: 'BASE',
+        promptMode,
+        history: dropped,
+        round: 0,
+        planSteps: null,
+      });
+      expect(s).toContain('Their output was dropped to make room');
+      expect(s).toContain('re-run that call');
+      // Stated exactly once, however many payloads were dropped.
+      expect(s.split('Their output was dropped to make room')).toHaveLength(2);
+      // Settled context first, directives after: the plan ledger follows it.
+      expect(s.startsWith('BASE\n\n--- reika status')).toBe(true);
+    }
+  });
+
+  it('says nothing when no payload was dropped', () => {
+    // `explored`'s only tool result never had a payload — nothing was lost, nothing to re-run for.
+    for (const promptMode of ['agent', 'plan'] as const) {
+      const s = buildSteadySystem({
+        baseSystem: 'BASE',
+        promptMode,
+        history: explored,
+        round: 0,
+        planSteps: null,
+      });
+      expect(s).not.toContain('dropped to make room');
+    }
+  });
+
   it('plan mode with nothing explored nudges toward a first tool call', () => {
     const s = buildSteadySystem({
       baseSystem: 'BASE',
