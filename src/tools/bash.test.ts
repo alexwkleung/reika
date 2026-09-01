@@ -246,6 +246,15 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
     expect(readOnlyBashTool.description).toContain(READ_ONLY_COMMAND_LIST);
   });
 
+  // The refusal states the rule, not the roster. A refused model retries, and the allowlist already
+  // rides every request in the tool description — restating it per refusal would spend ~100 tokens a
+  // round re-teaching what the model can already see, on the small windows this project targets.
+  it('keeps the refusal terse: no second copy of the allowlist', async () => {
+    const result = await readOnlyBashTool.run({ command: 'rm -rf dist' }, ctx);
+    expect(result.summary).not.toContain(READ_ONLY_COMMAND_LIST);
+    expect(result.summary.length).toBeLessThan(200);
+  });
+
   it('reports an empty command as empty, not as refused', async () => {
     const result = await readOnlyBashTool.run({ command: '   ' }, ctx);
     expect(result.summary).toBe('Bash failed: empty command');
@@ -253,6 +262,63 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
 
   it('keeps the bash name so the model needs no second dialect', () => {
     expect(readOnlyBashTool.name).toBe('bash');
+  });
+
+  // The approval decision, asserted rather than left to emerge from _danger.ts happening to return
+  // no warnings. `off` is documented as "confirm every MUTATING action", the classifier has just
+  // proved this command mutates nothing, and plan mode's other four tools read arbitrary paths with
+  // no prompt — so gating this one on a modal would be incoherent, not safer. Flipping the decision
+  // means deleting the `requestApproval: undefined` line in bash.ts, which fails this test first.
+  it('does not prompt for a command it proved read-only, even with approvals wired', async () => {
+    let asked = 0;
+    const result = await readOnlyBashTool.run(
+      { command: 'echo hello' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return true;
+        },
+      },
+    );
+    expect(asked).toBe(0);
+    expect(result.summary).toMatch(/^Ran:/);
+  });
+
+  // A refusal must never reach the approval prompt either: asking the user to authorize a command
+  // that is about to be thrown away is pure noise, and it would put `rm -rf dist` in a modal that
+  // implies it might run.
+  it('never prompts for a refused command', async () => {
+    let asked = 0;
+    const result = await readOnlyBashTool.run(
+      { command: 'rm -rf dist' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return true;
+        },
+      },
+    );
+    expect(asked).toBe(0);
+    expect(result.summary).toContain('Bash refused (read-only mode)');
+  });
+
+  // The unrestricted bash still prompts — the exemption is scoped to the proven-read-only tool, not
+  // leaked into the tool it spreads.
+  it('leaves the ordinary bash tool prompting as before', async () => {
+    let asked = 0;
+    await bashTool.run(
+      { command: 'echo hello' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return false;
+        },
+      },
+    );
+    expect(asked).toBe(1);
   });
 });
 

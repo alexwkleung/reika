@@ -1,11 +1,21 @@
-// Shell commands that only READ. Two callers with one question between them: the loop's withdrawal
-// ladder refuses a read-only `bash` (the escape a withdrawn model routes to when read/grep/glob/list
-// are pulled), and plan mode ADMITS one (#109). The polarities are opposite, so this must answer
-// "provably read-only", not "probably" — a wrong `true` is a nudge misfire on one side and an escape
-// from plan mode's read-only guarantee on the other.
+// Shell commands that only READ — asked as TWO questions, because the two callers pull in opposite
+// directions and collapsing them costs whichever one is on the losing side.
+//
+//   isProvablyReadOnly — plan mode's permission gate (#109). `true` ADMITS the command, so a wrong
+//     `true` is a write that escaped plan mode's read-only guarantee. It must UNDER-allow: anything
+//     it cannot prove safe is refused.
+//
+//   isInspectionEscape — the loop's withdrawal ladder. `true` REFUSES the call, as the bash-shaped
+//     escape a withdrawn model routes to when read/grep/glob/list are pulled. A wrong `true` refuses
+//     a real build mid-loop (the expensive mistake); a wrong `false` lets the model keep circling,
+//     which is the failure the whole subsystem exists to break. It must OVER-detect inspection.
+//
+// One predicate cannot serve both: `sed -n '1,50p' f` is a line-range read the ladder MUST catch and
+// plan mode must NOT admit. So the two share every rule below and differ only in which command names
+// they recognize.
 //
 // An allowlist, not a denylist: an unrecognized command is never read-only, so `rm`/`sudo`/`npm` are
-// excluded by construction rather than by pattern. Everything below covers what an allowlist alone
+// excluded by construction rather than by pattern. Everything after it covers what an allowlist alone
 // cannot see — a second command smuggled past the parse, or an allowlisted one asked to write.
 const READ_ONLY_COMMANDS = new Set([
   'grep',
@@ -33,16 +43,22 @@ const READ_ONLY_COMMANDS = new Set([
   'echo',
 ]);
 
-// The allowlist, rendered for the model. Derived rather than restated so the tool description and
-// the refusal message cannot drift from the set actually enforced.
-export const READ_ONLY_COMMAND_LIST = [...READ_ONLY_COMMANDS].join(', ');
+// `awk` and `sed` are absent from the set above despite being read-only in their common uses. Both
+// take a PROGRAM as an argument, and from inside it can write a file (`awk '{print > "f"}'`,
+// `sed 's/a/b/w f'`) or shell out (`awk 'BEGIN{system("…")}'`). Validating a Turing-complete program
+// by regex is a losing game, so plan mode refuses them; `read` with offset/limit, `head`/`tail` and
+// `grep` cover the inspection they were reached for. `tree` is absent for a smaller version of the
+// same reason — its `-o` writes the listing to a file, and `ls`/`find` already cover it.
+//
+// The LADDER still needs them. `sed -n '1,50p' f`, `awk '{print $1}' f` and `tree src` are exactly
+// the shapes a withdrawn model routes to, and they were refusable before #109 split these questions
+// apart. Recognizing them here is not a claim that they are safe to RUN — only that they are the
+// model reading instead of working, which is the ladder's whole question.
+const INSPECTION_ALSO = new Set(['sed', 'awk', 'tree']);
 
-// `awk` and `sed` are deliberately absent despite being read-only in their common uses. Both take a
-// PROGRAM as an argument, and from inside it can write a file (`awk '{print > "f"}'`, `sed 's/a/b/w f'`)
-// or shell out (`awk 'BEGIN{system("…")}'`). Validating a Turing-complete program by regex is a losing
-// game, so they lose the allowlist instead; `read` with offset/limit, `head`/`tail` and `grep` cover
-// the inspection they were reached for. `tree` is absent for a smaller version of the same reason —
-// its `-o` writes the listing to a file, and `ls`/`find` already cover it.
+// The allowlist, rendered for the model. Derived rather than restated so the tool description cannot
+// drift from the set actually enforced.
+export const READ_ONLY_COMMAND_LIST = [...READ_ONLY_COMMANDS].join(', ');
 
 // Substitution runs a nested command the allowlist would never see. Tested against the RAW string,
 // not the quote-masked view, because `$(…)` inside double quotes still executes. Costs a false
@@ -57,20 +73,28 @@ const REDIRECT_RE = />/;
 // whitespace: `;`, `&`, `|`, and a bare newline. A missing one lets a second command ride along.
 const SEPARATOR_RE = /[;&|\r\n]+/g;
 
-// The allowlisted commands that can still be asked to WRITE, and the argument that asks. Enumerated
+// The recognized commands that can still be asked to WRITE, and the argument that asks. Enumerated
 // per command rather than globally because the same spelling reads elsewhere — `grep -o` is
 // only-matching, `sort -o` is an output file. `sort`'s short flag is matched anywhere in a combined
 // cluster (`sort -no out` is `-n -o`), which denies more of `sort` than strictly needed: over-denying
 // a listed command costs one refusal, under-denying it costs the guarantee.
+//
+// `sed`/`tree` appear here for the LADDER's sake only (plan mode never recognizes them at all): an
+// in-place `sed -i` is real work, and refusing it mid-loop is the expensive mistake the ladder is
+// built to avoid. `awk`'s write surface lives inside its program argument and cannot be spotted by
+// flag, which is precisely why plan mode does not admit it.
 const WRITE_FLAGS: Record<string, RegExp> = {
   // GNU/BSD `find`'s write-and-exec surface. Prefix-matched so `-fprintf`/`-fprint0` are covered;
   // `-printf` (stdout) deliberately is not.
   find: /^-(?:exec|ok|delete|fprint|fls)/,
   sort: /^-[^-]*o|^--output/,
+  sed: /^-[^-]*i|^--in-place/,
+  tree: /^-[^-]*o$|^--output/,
 };
 
 // `uniq [input [output]]` writes its SECOND operand — a write with no flag to spot. Reading stdin in
-// a pipeline (no operands) and reading one named file both stay allowed.
+// a pipeline (no operands) and reading one named file both stay allowed. Flags that take a separate
+// value (`uniq -f 2 file`) push the count over and are refused: over-denial, the safe direction.
 const MAX_OPERANDS: Record<string, number> = { uniq: 1 };
 
 // Split into words the way the shell does, keeping a quoted run with spaces in it as ONE word, then
@@ -82,9 +106,9 @@ function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
-function segmentIsReadOnly(segment: string): boolean {
+function segmentIsReadOnly(segment: string, recognized: Set<string>): boolean {
   const [name, ...args] = words(segment);
-  if (!name || !READ_ONLY_COMMANDS.has(name)) return false;
+  if (!name || !recognized.has(name)) return false;
   const writeFlag = WRITE_FLAGS[name];
   if (writeFlag && args.some(a => writeFlag.test(a))) return false;
   const maxOperands = MAX_OPERANDS[name];
@@ -116,9 +140,10 @@ function splitSegments(command: string, masked: string): string[] {
   return segments;
 }
 
-// True only when a bash command is PROVABLY pure read-only inspection. Every unknown resolves to
-// false, so being wrong costs a refused inspection, never an unnoticed write. Pure.
-export function isReadOnlyShell(command: string): boolean {
+// The shared core. Every unknown resolves to false, so being wrong costs a refused inspection rather
+// than an unnoticed write on the plan side, and a missed escape rather than a refused build on the
+// ladder side. Pure.
+function classify(command: string, recognized: Set<string>): boolean {
   const c = command.trim();
   if (!c || SUBSTITUTION_RE.test(c)) return false;
   const masked = maskQuoted(c);
@@ -128,5 +153,18 @@ export function isReadOnlyShell(command: string): boolean {
   // remainder is not read-only.
   const meaningful = segments.map(s => s.trim()).filter(s => s && !/^cd\s/.test(s));
   if (meaningful.length === 0) return false;
-  return meaningful.every(segmentIsReadOnly);
+  return meaningful.every(s => segmentIsReadOnly(s, recognized));
+}
+
+// PLAN MODE's gate: true only when the command is PROVABLY pure read-only inspection.
+export function isProvablyReadOnly(command: string): boolean {
+  return classify(command, READ_ONLY_COMMANDS);
+}
+
+const INSPECTION_COMMANDS = new Set([...READ_ONLY_COMMANDS, ...INSPECTION_ALSO]);
+
+// The LADDER's question: is this the model inspecting rather than working? A superset of the above —
+// same write/substitution/separator rules, wider set of command names.
+export function isInspectionEscape(command: string): boolean {
+  return classify(command, INSPECTION_COMMANDS);
 }
