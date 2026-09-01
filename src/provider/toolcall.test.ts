@@ -191,6 +191,33 @@ describe('messagesToOpenAI', () => {
       expect(contentFor(out, 'a')).toContain('AAA'); // the new turn's opening call is pinned now
     });
 
+    it('keeps the request inside the window with all three floors firing at once', () => {
+      // The pin is a THIRD unconditional verbatim allocation, alongside newest-read protection and
+      // the small-payload floor — each of which can allocate past a spent budget by design. This is
+      // the no-400 guarantee for the case where all three fire in one round on a tight window.
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('S'.repeat(4000)), // pin, at the ceiling
+        ...later('big', 'B'.repeat(200_000)), // shared split, gets capped
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'small1', name: 'grep', args: {} },
+            { id: 'small2', name: 'grep', args: {} },
+            { id: 'read', name: 'read', args: {} },
+          ],
+        },
+        { role: 'tool', callId: 'small1', summary: 'Found 1 matches', payload: 'm'.repeat(1800) },
+        { role: 'tool', callId: 'small2', summary: 'Found 2 matches', payload: 'n'.repeat(1800) },
+        { role: 'tool', callId: 'read', summary: 'Read z', payload: 'R'.repeat(4000) },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 8192, calibration: 1 });
+      expect(contentFor(out, 'spec')).toContain('SSS'); // the pin still holds…
+      // …and the whole request still fits the window at the char/4 baseline.
+      expect(requestChars(out)).toBeLessThanOrEqual(8192 * 4);
+    });
+
     it('is off under prefix-stable, where batch aging owns the pin instead', () => {
       const history: Message[] = [
         { role: 'user', content: 'work on issue 213' },
