@@ -50,6 +50,8 @@ Although Reika can work with small and low quantization models, the output and q
 - GPT-OSS 20B (MXFP4-Q4)
 - Ornith 1.5 9B (Q5_K_M)
 - Qwen3.5 9B (MLX Q4)
+- LFM2.5 8B A1B (MLX Q4)
+- Granite 4.1 8B (MLX Q4)
 
 ## Quick start
 
