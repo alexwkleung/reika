@@ -93,9 +93,14 @@ const WRITE_FLAGS: Record<string, RegExp> = {
 };
 
 // `uniq [input [output]]` writes its SECOND operand — a write with no flag to spot. Reading stdin in
-// a pipeline (no operands) and reading one named file both stay allowed. Flags that take a separate
-// value (`uniq -f 2 file`) push the count over and are refused: over-denial, the safe direction.
+// a pipeline (no operands) and reading one named file both stay allowed.
 const MAX_OPERANDS: Record<string, number> = { uniq: 1 };
+
+// Flags that consume the NEXT word as their value, for the commands counting operands above. Without
+// this, `uniq -f 2 file` reads as two operands (`2` and `file`) and is refused as a write — which
+// over-denies a plain read on the plan side and, worse, hides it from the ladder, since a shape the
+// ladder scores as "not inspection" is one it lets a withdrawn model keep circling on.
+const VALUE_FLAGS: Record<string, Set<string>> = { uniq: new Set(['-f', '-s', '-w']) };
 
 // Split into words the way the shell does, keeping a quoted run with spaces in it as ONE word, then
 // drop the quote characters. Quoting changes nothing about how a command reads its own arguments, so
@@ -112,8 +117,17 @@ function segmentIsReadOnly(segment: string, recognized: Set<string>): boolean {
   const writeFlag = WRITE_FLAGS[name];
   if (writeFlag && args.some(a => writeFlag.test(a))) return false;
   const maxOperands = MAX_OPERANDS[name];
-  if (maxOperands !== undefined && args.filter(a => !a.startsWith('-')).length > maxOperands) {
-    return false;
+  if (maxOperands !== undefined) {
+    const takesValue = VALUE_FLAGS[name] ?? new Set<string>();
+    let operands = 0;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith('-')) {
+        if (takesValue.has(args[i])) i++; // the next word is this flag's value, not an operand
+        continue;
+      }
+      operands++;
+    }
+    if (operands > maxOperands) return false;
   }
   return true;
 }

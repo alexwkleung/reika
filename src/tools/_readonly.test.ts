@@ -153,6 +153,20 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
     it.each(['sort f | uniq -c', 'uniq -c in.txt'])('allows %s', cmd => {
       expect(isProvablyReadOnly(cmd)).toBe(true);
     });
+
+    // `-f`/`-s`/`-w` take the next word as their value. Counting it as an operand refused a plain
+    // read — and on the ladder side scored a real inspection shape as "not inspection", letting a
+    // withdrawn model keep circling on it.
+    it.each(['uniq -f 2 in.txt', 'uniq -s 5 in.txt', 'uniq -w 5 in.txt', 'uniq -c -f 2 out.txt'])(
+      'does not count a flag value as the output operand: %s',
+      cmd => {
+        expect(isProvablyReadOnly(cmd)).toBe(true);
+      },
+    );
+
+    it('still rejects a real second operand alongside a valued flag', () => {
+      expect(isProvablyReadOnly('uniq -f 2 in.txt out.txt')).toBe(false);
+    });
   });
 
   // `-i` used to read as an in-place-edit signal, which denied the single most common grep flag.
