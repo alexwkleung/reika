@@ -48,6 +48,23 @@ afterEach(() => {
   }
 });
 
+describe('loadConfig — base URL', () => {
+  // Nothing else exercises the fallback: every other test sets REIKA_BASE_URL explicitly, which
+  // is how the default sat at Ollama's 11434 while .env.example, the quick start and the README
+  // all said llama-server's 8080. Pinned so the two can't drift apart again silently.
+  it('falls back to llama-server on 8080 when REIKA_BASE_URL is unset', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    delete process.env.REIKA_BASE_URL;
+    expect(loadConfig().baseURL).toBe('http://localhost:8080/v1');
+  });
+
+  it('prefers an explicit REIKA_BASE_URL over the fallback', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_BASE_URL = 'https://api.example/v1';
+    expect(loadConfig().baseURL).toBe('https://api.example/v1');
+  });
+});
+
 describe('loadConfig — profiles', () => {
   it('always has a "default" profile from the flat REIKA_MODEL/BASE_URL/API_KEY', () => {
     process.env.REIKA_MODEL = 'qwen3-9b';

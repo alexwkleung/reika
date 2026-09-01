@@ -23,7 +23,10 @@ export function loadConfig(): Config {
     );
   }
   const model = models[0];
-  const baseURL = process.env.REIKA_BASE_URL ?? 'http://localhost:11434/v1';
+  // llama-server's port, matching .env.example and the quick start. The fallback only applies
+  // when REIKA_BASE_URL is unset, which for a required-REIKA_MODEL config means somebody
+  // running on defaults end to end.
+  const baseURL = process.env.REIKA_BASE_URL ?? 'http://localhost:8080/v1';
   validateBaseURL(baseURL, 'REIKA_BASE_URL');
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
