@@ -23,16 +23,27 @@ export function defaultTools(config?: Config): Tool[] {
     writeTool,
     bashTool,
     subagentTool,
-    askUserTool,
     // Unconditional, unlike `search`: fetching a known URL needs no provider or credential, and
     // the harness itself puts URLs in front of the model (pasted-link expansion, URL grounding)
     // that it must be able to follow up on. Gating it behind the search provider left a reika
     // without SearXNG unable to read a link the user had just handed it.
     fetchUrlTool,
   ];
+  if (askEnabled()) tools.push(askUserTool);
   const search = makeSearchProvider(config);
   if (search) tools.push(createSearchTool(search));
   return tools;
+}
+
+// EXPERIMENT (#198): flag-gated like every other behavioral change here, and for a specific reason
+// beyond convention — the tool's whole effect is to PREVENT the failure it was built for, so the
+// baseline arm of any measurement needs a build without it. Checking out an older commit stops
+// working the moment this merges; a flag keeps the comparison runnable forever. The agent prompt's
+// rule 7 keys off the tool list (prompt.ts `canAsk`), so it disappears on its own when this is off
+// and the flag A/Bs against a byte-identical prompt. Read per call, not at module load, so toggling
+// it doesn't need a restart.
+function askEnabled(): boolean {
+  return process.env.REIKA_ASK === '1';
 }
 
 // EXPERIMENT (plan mode): read-only exploration tools. No edit/write/subagent — so a model in plan
@@ -45,11 +56,14 @@ export function defaultTools(config?: Config): Tool[] {
 // absence, so it is flagged separately from plan mode itself and can be turned off on its own. Read
 // per call, not at module load, so toggling it doesn't need a restart.
 export function planTools(): Tool[] {
+  const tools = [readTool, listTool, grepTool, globTool];
   // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
   // before any code is written, and the tool touches nothing in the repo. It is also outside the
   // withdrawal set (LOOP_WITHDRAW_TOOLS) on purpose — a model that has been told to stop exploring
-  // still needs a way to say what it cannot decide.
-  const tools = [readTool, listTool, grepTool, globTool, askUserTool];
+  // still needs a way to say what it cannot decide. The plan PROMPT deliberately stays silent about
+  // it (see prompt.test.ts): the capability is available, but nothing pushes a stalling model toward
+  // a new way to avoid writing the plan.
+  if (askEnabled()) tools.push(askUserTool);
   if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
   return tools;
 }

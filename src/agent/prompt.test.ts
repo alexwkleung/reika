@@ -53,12 +53,26 @@ describe('plan prompt tracks planTools (#109)', () => {
 // Same coupling as the plan-prompt block above, for the same reason: rule 7 names `ask_user`, and a
 // prompt that points a model at a tool it has not been given is worse than saying nothing.
 describe('agent prompt tracks the ask_user tool (#214)', () => {
+  afterEach(() => {
+    delete process.env.REIKA_ASK;
+  });
+
   const agentPrompt = (canAsk?: boolean): string =>
     buildSystemPrompt({ bundle, mode: 'agent', canAsk }).replace(/\s+/g, ' ');
 
   it('offers ask_user when the tool is in the list', () => {
+    process.env.REIKA_ASK = '1';
     expect(defaultTools().map(t => t.name)).toContain('ask_user');
     expect(agentPrompt(true)).toContain('ask_user');
+  });
+
+  // The baseline arm of any #198 measurement: flag off means the tool is gone AND rule 7 goes with
+  // it, so the comparison runs against a byte-identical prompt rather than a different build.
+  it('registers nothing and says nothing when the flag is off', () => {
+    delete process.env.REIKA_ASK;
+    expect(defaultTools().map(t => t.name)).not.toContain('ask_user');
+    expect(planTools().map(t => t.name)).not.toContain('ask_user');
+    expect(agentPrompt(false)).not.toContain('ask_user');
   });
 
   // Subagents run with ask_user filtered out (makeSpawnSubagent) — there is nobody to answer a
@@ -79,6 +93,7 @@ describe('agent prompt tracks the ask_user tool (#214)', () => {
   // Plan mode resolves ambiguity by iterating on the plan across turns (#46) instead. The tool is
   // still in planTools for a model that hits a real contradiction; the prompt just doesn't push it.
   it('leaves the plan prompt alone', () => {
+    process.env.REIKA_ASK = '1';
     expect(planTools().map(t => t.name)).toContain('ask_user');
     const plan = buildSystemPrompt({ bundle, mode: 'plan', canAsk: true });
     expect(plan).not.toContain('ask_user');
