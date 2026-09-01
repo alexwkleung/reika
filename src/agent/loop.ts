@@ -455,6 +455,9 @@ export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // Needed only for the ask_user gate in the agent prompt, but it has to be the SAME list runTurn
+  // will send: the warm prefix is worthless if it diverges from round 0 by a line.
+  tools: Tool[];
   contextWindow?: number;
   calibration: number;
   minGenTokens: number;
@@ -462,7 +465,11 @@ export function buildRoundZeroPrefix(opts: {
   if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
     distillPlanHandoff(opts.history, opts.contextWindow, opts.calibration, opts.minGenTokens);
   }
-  const baseSystem = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
+  const baseSystem = buildSystemPrompt({
+    bundle: opts.bundle,
+    mode: opts.promptMode,
+    canAsk: opts.tools.some(t => t.name === 'ask_user'),
+  });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
   return buildSteadySystem({
@@ -754,7 +761,12 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  const baseSystem = buildSystemPrompt({ bundle: opts.bundle, mode: opts.promptMode });
+  // canAsk must match what buildRoundZeroPrefix passes, or the warm prefix diverges from round 0.
+  const baseSystem = buildSystemPrompt({
+    bundle: opts.bundle,
+    mode: opts.promptMode,
+    canAsk: opts.tools.some(t => t.name === 'ask_user'),
+  });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
