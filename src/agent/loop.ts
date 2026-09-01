@@ -42,6 +42,7 @@ import {
 } from './groundcheck.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
+import { isInspectionEscape } from '../tools/_readonly.js';
 import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
@@ -364,11 +365,18 @@ export function buildPlanTransformInput(
 function buildPlanLedger(history: Message[], round: number): string {
   const files = new Set<string>();
   const searches = new Set<string>();
+  // Under REIKA_PLAN_BASH the model can explore through `bash`, whose call carries `command` and
+  // neither `path` nor `pattern`. Without this the ledger goes blind exactly when that tool is used:
+  // it would report "Nothing examined yet" every round to a model that had just read half the repo,
+  // and the round-1/2 "you can probably stop" nudge (which keys on having examined something) would
+  // never fire. The convergence pressure is the whole point of the ledger, so it has to see them.
+  const commands = new Set<string>();
   for (const m of history) {
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
       if (typeof tc.args.path === 'string') files.add(tc.args.path);
       if (typeof tc.args.pattern === 'string') searches.add(tc.args.pattern);
+      if (typeof tc.args.command === 'string') commands.add(tc.args.command);
     }
   }
   const cap = (s: Set<string>): string => {
@@ -378,7 +386,8 @@ function buildPlanLedger(history: Message[], round: number): string {
   const lines = ['', '--- plan-mode status (reika, auto-generated — not user input) ---'];
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
   if (searches.size > 0) lines.push(`Searches run: ${cap(searches)}`);
-  if (files.size === 0 && searches.size === 0) {
+  if (commands.size > 0) lines.push(`Commands run: ${cap(commands)}`);
+  if (files.size === 0 && searches.size === 0 && commands.size === 0) {
     lines.push(
       'Nothing examined yet — start by grepping the relevant symbol or reading the entry file.',
     );
@@ -391,7 +400,7 @@ function buildPlanLedger(history: Message[], round: number): string {
       `You have explored across ${round} rounds and very likely have enough. Write the numbered ` +
         'plan now unless one specific unknown truly blocks you.',
     );
-  } else if (files.size > 0 || searches.size > 0) {
+  } else if (files.size > 0 || searches.size > 0 || commands.size > 0) {
     lines.push(
       'If you can already describe the steps, STOP exploring and write the numbered plan.',
     );
@@ -515,64 +524,6 @@ const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // sooner so the cap has to truncate less often. Deliberately not the cap's 2.5 floor: that would
 // compact at ~40% of a normal prose window and waste most of the context.
 const COMPACTION_CALIBRATION_FLOOR = 1;
-// Shell commands that only READ — the ones a withdrawn model uses to keep circling via bash. Kept to
-// commands with no in-place-write mode reachable without a flag isReadOnlyShell already rejects.
-const READ_ONLY_SHELL = new Set([
-  'grep',
-  'rg',
-  'egrep',
-  'fgrep',
-  'cat',
-  'head',
-  'tail',
-  'wc',
-  'ls',
-  'find',
-  'sort',
-  'uniq',
-  'cut',
-  'nl',
-  'column',
-  'stat',
-  'tree',
-  'basename',
-  'dirname',
-  'realpath',
-  'which',
-  'type',
-  'pwd',
-  'echo',
-  'sed',
-  'awk',
-]);
-
-// True only when we're CONFIDENT a bash command is pure read-only inspection — the "grep via bash"
-// escape a withdrawn model uses to keep looping. Conservative by design: any write signal (output
-// redirection, tee, sed/find in-place or destructive modes) or an unrecognized command anywhere in
-// the pipeline returns false, so mutating/build bash (npm, git, mkdir) is never refused. False
-// negatives (a bash-grep slips through) are cheap — the terminal stop still catches it; a false
-// positive (blocking a real build mid-loop) is the expensive mistake, so we avoid it. Pure + exported.
-export function isReadOnlyShell(command: string): boolean {
-  const c = command.trim();
-  if (!c) return false;
-  // Strip quoted regions first: a grep pattern like "a\|b" or ">" carries shell metacharacters (| and
-  // >) that are DATA, not a pipe/redirection — splitting or write-checking on them would misread a
-  // read-only grep as a pipeline or a write. Command names are never quoted, so this loses nothing we
-  // check. Malformed/nested quotes just leave junk that fails the command-name test → allowed (safe).
-  const bare = c.replace(/"[^"]*"|'[^']*'/g, ' ');
-  // Any sign of a write: file redirection, tee, sed -i, find -exec/-delete. Bail to "not read-only".
-  if (/[>]|(^|\s)tee(\s|$)|(^|\s)-i\b|(^|\s)-exec\b|(^|\s)-delete\b/.test(bare)) return false;
-  // Every pipeline/chain segment must start with a read-only command. Leading `cd <path>` hops (the
-  // observed loops prefix these) are stripped; an empty remainder is not read-only.
-  const segments = bare
-    .split(/\|\||&&|;|\|/)
-    .map(s => s.trim())
-    .filter(Boolean);
-  const meaningful = segments.filter(s => !/^cd\s/.test(s));
-  if (meaningful.length === 0) return false;
-  return meaningful.every(s => READ_ONLY_SHELL.has(s.split(/\s+/)[0]));
-}
-
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out.
 const WITHDRAWAL_DIRECTIVE =
@@ -1855,12 +1806,14 @@ export async function runTurn(opts: {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
       // Loop break: refuse a withdrawn inspection call at dispatch — covers the in-band caller that
-      // routes around the omitted tool list. No execution, no content; just the directive. A read-only
-      // `bash grep/cat/tail …` is refused too: it's the escape a withdrawn model routes to when
-      // read/grep/glob/list are pulled (mutating/build bash still runs, so real work is unaffected).
-      // See isReadOnlyShell.
+      // routes around the omitted tool list. No execution, no content; just the directive. An
+      // inspection `bash grep/cat/tail/sed -n …` is refused too: it's the escape a withdrawn model
+      // routes to when read/grep/glob/list are pulled (mutating/build bash still runs, so real work
+      // is unaffected). isInspectionEscape, NOT plan mode's isProvablyReadOnly — the ladder needs the
+      // wider question ("is this the model reading instead of working"), which includes the sed/awk
+      // line-range reads plan mode refuses to admit. See tools/_readonly.ts.
       const refusedBashGrep =
-        call.name === 'bash' && isReadOnlyShell(String(call.args.command ?? ''));
+        call.name === 'bash' && isInspectionEscape(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
       // Never while inspection is withdrawn (the directed read would itself be refused), and only

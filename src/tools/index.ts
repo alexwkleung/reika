@@ -5,7 +5,7 @@ import { grepTool } from './grep.js';
 import { globTool } from './glob.js';
 import { editTool } from './edit.js';
 import { writeTool } from './write.js';
-import { bashTool } from './bash.js';
+import { bashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
 import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
@@ -33,11 +33,19 @@ export function defaultTools(config?: Config): Tool[] {
   return tools;
 }
 
-// EXPERIMENT (plan mode): read-only exploration tools. No edit/write/bash/subagent — so a
-// model in plan mode structurally cannot mutate the repo or run side-effecting commands. The
-// only failure mode left is over-exploration, which the ledger + convergence nudge target.
+// EXPERIMENT (plan mode): read-only exploration tools. No edit/write/subagent — so a model in plan
+// mode structurally cannot mutate the repo. The only failure mode left is over-exploration, which the
+// ledger + convergence nudge target.
+//
+// REIKA_PLAN_BASH=1 (default off, experimental — #109) adds `readOnlyBashTool`: the shell, narrowed
+// to commands `isReadOnlyShell` can PROVE read-only. Plan mode's guarantee is unchanged in kind — it
+// still cannot mutate the repo — but it is now enforced by a classifier rather than by the tool's
+// absence, so it is flagged separately from plan mode itself and can be turned off on its own. Read
+// per call, not at module load, so toggling it doesn't need a restart.
 export function planTools(): Tool[] {
-  return [readTool, listTool, grepTool, globTool];
+  const tools = [readTool, listTool, grepTool, globTool];
+  if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
+  return tools;
 }
 
 // Tools available in chat mode — knowledge-only, no filesystem or shell access.

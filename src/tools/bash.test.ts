@@ -1,7 +1,10 @@
-import { readFile, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { execStream, TailWindow } from './bash.js';
+import { bashTool, execStream, readOnlyBashTool, TailWindow } from './bash.js';
+import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
+import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
 
 describe('execStream — timeout', () => {
@@ -212,5 +215,131 @@ describe('execStream — command chip', () => {
     // slots. Pre-existing cosmetic behavior of the line slice, pinned here rather than changed.
     expect(chip.outputTail.split('\n').filter(Boolean)).toHaveLength(9);
     expect(chip.outputTruncated).toBe(true);
+  });
+});
+
+describe('readOnlyBashTool — plan mode (#109)', () => {
+  const ctx = { cwd: process.cwd() };
+
+  it('runs a command that is provably read-only', async () => {
+    const result = await readOnlyBashTool.run({ command: 'echo hello | wc -c' }, ctx);
+    expect(result.summary).toMatch(/^Ran:/);
+    expect(result.payload).toContain('6');
+  });
+
+  it('refuses a command that can write, and says why and what to do instead', async () => {
+    const result = await readOnlyBashTool.run({ command: 'rm -rf dist' }, ctx);
+    expect(result.summary).toContain('Bash refused (read-only mode)');
+    expect(result.summary).toContain('rm -rf dist');
+    expect(result.summary).toContain('read/grep/glob/list');
+  });
+
+  it('does not run the refused command', async () => {
+    const path = join(tmpdir(), `reika-readonly-${Date.now()}.txt`);
+    await writeFile(path, 'untouched');
+    await readOnlyBashTool.run({ command: `echo clobbered > ${path}` }, ctx);
+    expect(await readFile(path, 'utf8')).toBe('untouched');
+    await rm(path, { force: true });
+  });
+
+  it('names the enforced allowlist rather than a restated copy of it', () => {
+    expect(readOnlyBashTool.description).toContain(READ_ONLY_COMMAND_LIST);
+  });
+
+  // The refusal states the rule, not the roster. A refused model retries, and the allowlist already
+  // rides every request in the tool description — restating it per refusal would spend ~100 tokens a
+  // round re-teaching what the model can already see, on the small windows this project targets.
+  it('keeps the refusal terse: no second copy of the allowlist', async () => {
+    const result = await readOnlyBashTool.run({ command: 'rm -rf dist' }, ctx);
+    expect(result.summary).not.toContain(READ_ONLY_COMMAND_LIST);
+    expect(result.summary.length).toBeLessThan(200);
+  });
+
+  it('reports an empty command as empty, not as refused', async () => {
+    const result = await readOnlyBashTool.run({ command: '   ' }, ctx);
+    expect(result.summary).toBe('Bash failed: empty command');
+  });
+
+  it('keeps the bash name so the model needs no second dialect', () => {
+    expect(readOnlyBashTool.name).toBe('bash');
+  });
+
+  // The approval decision, asserted rather than left to emerge from _danger.ts happening to return
+  // no warnings. `off` is documented as "confirm every MUTATING action", the classifier has just
+  // proved this command mutates nothing, and plan mode's other four tools read arbitrary paths with
+  // no prompt — so gating this one on a modal would be incoherent, not safer. Flipping the decision
+  // means deleting the `requestApproval: undefined` line in bash.ts, which fails this test first.
+  it('does not prompt for a command it proved read-only, even with approvals wired', async () => {
+    let asked = 0;
+    const result = await readOnlyBashTool.run(
+      { command: 'echo hello' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return true;
+        },
+      },
+    );
+    expect(asked).toBe(0);
+    expect(result.summary).toMatch(/^Ran:/);
+  });
+
+  // A refusal must never reach the approval prompt either: asking the user to authorize a command
+  // that is about to be thrown away is pure noise, and it would put `rm -rf dist` in a modal that
+  // implies it might run.
+  it('never prompts for a refused command', async () => {
+    let asked = 0;
+    const result = await readOnlyBashTool.run(
+      { command: 'rm -rf dist' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return true;
+        },
+      },
+    );
+    expect(asked).toBe(0);
+    expect(result.summary).toContain('Bash refused (read-only mode)');
+  });
+
+  // The unrestricted bash still prompts — the exemption is scoped to the proven-read-only tool, not
+  // leaked into the tool it spreads.
+  it('leaves the ordinary bash tool prompting as before', async () => {
+    let asked = 0;
+    await bashTool.run(
+      { command: 'echo hello' },
+      {
+        ...ctx,
+        requestApproval: async () => {
+          asked++;
+          return false;
+        },
+      },
+    );
+    expect(asked).toBe(1);
+  });
+});
+
+describe('planTools — REIKA_PLAN_BASH gate', () => {
+  afterEach(() => {
+    delete process.env.REIKA_PLAN_BASH;
+  });
+
+  it('omits bash by default', () => {
+    delete process.env.REIKA_PLAN_BASH;
+    expect(planTools().map(t => t.name)).not.toContain('bash');
+  });
+
+  it('adds the read-only bash under the flag', () => {
+    process.env.REIKA_PLAN_BASH = '1';
+    const bash = planTools().find(t => t.name === 'bash');
+    expect(bash).toBe(readOnlyBashTool);
+  });
+
+  it('never adds the unrestricted bash', () => {
+    process.env.REIKA_PLAN_BASH = '1';
+    expect(planTools()).not.toContain(bashTool);
   });
 });

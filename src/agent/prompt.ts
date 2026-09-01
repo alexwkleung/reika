@@ -22,14 +22,26 @@ export function buildSystemPrompt(opts: {
 // closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
 function buildPlanPrompt(bundle: ContextBundle): string {
+  // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
+  // worse than saying nothing — it won't reach for one it has been told is absent. The default text
+  // is left byte-identical so the flag A/Bs against an unchanged prompt.
+  const planBash = process.env.REIKA_PLAN_BASH === '1';
   const parts: string[] = [
     [
       'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',
-      'You can ONLY explore the codebase — read, list, grep, glob. You CANNOT edit, write,',
-      'or run commands; those tools are not available and will fail.',
+      ...(planBash
+        ? [
+            'You can ONLY explore the codebase — read, list, grep, glob, and READ-ONLY shell',
+            'commands through bash. You CANNOT edit or write files; those tools are not available',
+            'and will fail, and bash refuses any command that could write or run something else.',
+          ]
+        : [
+            'You can ONLY explore the codebase — read, list, grep, glob. You CANNOT edit, write,',
+            'or run commands; those tools are not available and will fail.',
+          ]),
       'Your job: explore just enough to understand the change, then STOP and write a plan.',
       'Rules:',
-      '1. Use grep/read/list/glob to ground every claim in the actual code. Never guess.',
+      `1. Use ${planBash ? 'grep/read/list/glob/bash' : 'grep/read/list/glob'} to ground every claim in the actual code. Never guess.`,
       '2. Explore only what you need. The moment you can describe the steps, STOP exploring.',
       '3. Do NOT re-read or re-grep something you already examined — act on what you have.',
       '4. End by writing a numbered, file-specific plan of the steps to make the change.',

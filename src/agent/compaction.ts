@@ -406,6 +406,11 @@ export function distillPlanHandoff(
 // gatherPlanFindings.
 function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   const files = new Set<string>();
+  // Exploration done through `bash` (REIKA_PLAN_BASH) carries `command`, not `path`, so without this
+  // the digest's "Files examined" line silently under-reports the plan phase — the agent turn would
+  // inherit a handoff claiming less was explored than actually was. See buildPlanLedger in loop.ts,
+  // which goes blind the same way for the same reason.
+  const commands = new Set<string>();
   const priorRecaps: string[] = [];
   for (const m of span) {
     if (m.role === 'compaction') {
@@ -414,6 +419,8 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
       for (const tc of m.toolCalls ?? []) {
         const p = tc.args.path;
         if (typeof p === 'string') files.add(p);
+        const c = tc.args.command;
+        if (typeof c === 'string') commands.add(c);
       }
     }
   }
@@ -424,6 +431,12 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
     const shown = sorted.slice(0, 25).join(', ');
     const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
     out.push(`Files examined: ${shown}${extra}`);
+  }
+  if (commands.size > 0) {
+    const sorted = [...commands].sort();
+    const shown = sorted.slice(0, 25).join(', ');
+    const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
+    out.push(`Commands run: ${shown}${extra}`);
   }
   if (priorRecaps.length > 0) out.push(priorRecaps.join('\n\n'));
   const findings = gatherPlanFindings(span, findingsBudget);

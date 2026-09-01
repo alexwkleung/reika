@@ -3,6 +3,7 @@ import type { Tool, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
 import { recordCapped } from './_spillstats.js';
+import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -46,6 +47,44 @@ export const bashTool: Tool = {
     }
 
     return execStream(command, ctx, ctx.bashTimeoutMs);
+  },
+};
+
+// Plan mode's bash (#109). The same tool, admitted only for commands `isProvablyReadOnly` can PROVE
+// read-only — so plan mode gains the inspection a pipeline expresses (`grep … | head`, `find`, `wc`)
+// without gaining a way to mutate the repo. Keeps `name: 'bash'`, so the model needs no second
+// dialect and the plan-progress command matching still keys on it, and delegates the run itself so
+// spill and timeout behave identically.
+//
+// A refusal is an ordinary result, not an error: a small model recovers from a stated rule far better
+// than from a tool that silently isn't there. It names the rule and the way out but NOT the allowlist
+// — that already rides every request in the description above, and a refused model tends to retry, so
+// restating 141 chars of it per refusal buys nothing and crowds a small window (cf. the loop's
+// WITHDRAWAL_DIRECTIVE, which carries no content for the same reason).
+export const readOnlyBashTool: Tool = {
+  ...bashTool,
+  description:
+    'Execute a READ-ONLY shell command in the working directory. Only inspection commands run: ' +
+    `${READ_ONLY_COMMAND_LIST}, and pipelines of them. Anything that can write or run something ` +
+    'else is refused — redirection (>), command substitution ($(…)), sed/awk, and any command not ' +
+    'on that list. Use it for inspection the read/grep/glob/list tools cannot express.',
+  async run(args, ctx) {
+    const command = String(args.command ?? '').trim();
+    if (!command) return { summary: 'Bash failed: empty command' };
+    if (!isProvablyReadOnly(command)) {
+      return {
+        summary:
+          `Bash refused (read-only mode): ${command}. It could write or run something off the ` +
+          'read-only list. Use read/grep/glob/list, or rewrite it as a read-only pipeline.',
+      };
+    }
+    // No approval prompt, deliberately. `off` is documented as "confirm every MUTATING action"
+    // (types.ts AutoApproveMode), and the classifier above has just proved this command mutates
+    // nothing — while plan mode's other four tools read arbitrary paths with no prompt at all.
+    // Prompting only for bash would gate a capability `read` already has, and would train the user
+    // to approve bash modals reflexively, weakening the prompt in agent mode where it carries the
+    // real decision. The command still renders its chip in scrollback, so nothing runs unseen.
+    return bashTool.run(args, { ...ctx, requestApproval: undefined });
   },
 };
 
