@@ -175,7 +175,7 @@ describe('grepTool spill (REIKA_SPILL)', () => {
     await writeManyMatches();
     const on = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
     spillDirs.push(dirname(/saved to (\S+\.txt)/.exec(on.payload ?? '')![1]));
-    delete process.env.REIKA_SPILL;
+    process.env.REIKA_SPILL = '0';
     const off = await grepTool.run({ pattern: 'needle' }, { cwd, ignore: ignore() });
     expect(off.summary).toBe('Found 100+ matches for /needle/');
     expect(off.payload).not.toContain('saved to');

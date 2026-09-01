@@ -292,7 +292,7 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   Size it ~2048 for reasoning-off models, 6144–8192 for reasoning-on thinking models on a
   small window.
 
-**Tool-output spill (`REIKA_SPILL=1`, on by default in `.env.example`, experimental — `tools/_spill.ts`).** Every
+**Tool-output spill (on by default, `REIKA_SPILL=0` disables — `tools/_spill.ts`).** Every
 layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
 cap their inline page (100 matches / 200 paths) and, before this, the rest was simply gone — so a
 model that needed the tail had exactly one move: re-run the search with a different pattern, which

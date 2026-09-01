@@ -53,7 +53,7 @@ describe('spill stats', () => {
   // The measurement has to see over-cap runs whether or not spilling is on, because what it
   // answers is a property of the workload: how often bash output blows past 64KB at all.
   it('records a capped bash run with REIKA_SPILL off', async () => {
-    delete process.env.REIKA_SPILL;
+    process.env.REIKA_SPILL = '0';
     await execStream('seq 1 20000', { cwd: process.cwd() });
     const out = await lines();
     expect(out).toHaveLength(1);

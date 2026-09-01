@@ -172,7 +172,7 @@ describe('execStream — spill', () => {
   it('leaves the payload identical when the flag is off — only the footer differs', async () => {
     const on = await execStream(BIG, { cwd });
     locatorOf(on.payload ?? '');
-    delete process.env.REIKA_SPILL;
+    process.env.REIKA_SPILL = '0';
     const off = await execStream(BIG, { cwd });
 
     expect(off.payload).not.toContain('saved to');
@@ -190,7 +190,7 @@ describe('execStream — command chip', () => {
   const cwd = process.cwd();
 
   it('shows the end of a truncated run, not the end of the payload head', async () => {
-    delete process.env.REIKA_SPILL;
+    process.env.REIKA_SPILL = '0';
     const result = await execStream('seq 1 20000', { cwd });
     const chip = result.command!;
 
