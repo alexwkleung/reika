@@ -177,6 +177,32 @@ export type ApprovalRequest = {
   warnings?: string[];
 };
 
+// One choice in an `ask_user` question. `label` is the whole answer as far as the model is
+// concerned — it is what comes back when the user picks this row, so it must stand alone as a
+// sentence. `description` is optional on purpose: a weak model that emits bare labels still
+// produces a usable menu, and rejecting the call would push it back to guessing, which is the
+// exact failure the tool exists to prevent (#198).
+export type QuestionOption = {
+  label: string;
+  description?: string;
+  // At most one option may carry this; the UI marks it and nothing else depends on it.
+  recommended?: boolean;
+};
+
+export type QuestionRequest = {
+  question: string;
+  options: QuestionOption[];
+};
+
+// What the user actually chose. `index` is undefined when they typed their own answer instead of
+// picking a row; `notes` carries free text added on top of a picked row. `text` is the resolved
+// answer either way, so a caller that only wants "what did they say" reads one field.
+export type QuestionAnswer = {
+  text: string;
+  index?: number;
+  notes?: string;
+};
+
 export type WebBudget = {
   searches: { used: number; max: number };
   fetches: { used: number; max: number };
@@ -198,6 +224,15 @@ export type ToolContext = {
   // most once, so a follow-up edit to the same file doesn't re-fetch it.
   groundedUrls?: Set<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  // Put a question to the user and wait for their answer (tools/ask.ts). Resolves null when the
+  // user dismisses it. Undefined when there is no one to ask — a subagent, a test, a non-interactive
+  // run — and the tool degrades to telling the model to proceed on its own judgment rather than
+  // hanging on a prompt nobody will see.
+  requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
+  // Questions already put to the user this turn, oldest first. Per-turn like resolvedDeps, and
+  // mutated by the ask tool. Enforces the one-question cap: a tool that can be called repeatedly is
+  // a new loop surface, and the answer to the second question is rarely what was blocking.
+  askedQuestions?: string[];
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
   // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/

@@ -14,6 +14,7 @@ import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
+import { Question, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { addFileToIndex } from '../context/files.js';
@@ -39,7 +40,15 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
-import type { ApprovalRequest, Config, ContextBundle, Message, Usage } from '../types.js';
+import type {
+  ApprovalRequest,
+  Config,
+  ContextBundle,
+  Message,
+  QuestionAnswer,
+  QuestionRequest,
+  Usage,
+} from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -124,6 +133,15 @@ export function App() {
     resolve: (allow: boolean) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
+  // An `ask_user` question waiting on the user (#198). Modal like Approval, with one difference: the
+  // input box stays LIVE underneath once `questionTyping` is set, because the free-text row hands the
+  // answer to Input rather than to a field rebuilt in the dialog.
+  const [question, setQuestion] = useState<{
+    request: QuestionRequest;
+    resolve: (answer: QuestionAnswer | null) => void;
+  } | null>(null);
+  const [questionSelected, setQuestionSelected] = useState(0);
+  const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
   // REIKA_DEFAULT_MODE picks the launch mode (agent/plan/vibe; REIKA_PLAN_EXPERIMENT=1 is the
   // legacy alias for plan). /plan, /vibe and /agent still toggle it at any time regardless.
   const [mode, setMode] = useState<Mode>(resolveDefaultMode);
@@ -204,6 +222,12 @@ export function App() {
   statusRef.current = status;
   const pendingRef = useRef<typeof pending>(null);
   pendingRef.current = pending;
+  const questionRef = useRef<typeof question>(null);
+  questionRef.current = question;
+  const questionSelectedRef = useRef(0);
+  questionSelectedRef.current = questionSelected;
+  const questionTypingRef = useRef<QuestionTyping | null>(null);
+  questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
   const sessionAutoApproveRef = useRef(false);
@@ -355,14 +379,14 @@ export function App() {
   useEffect(() => {
     // Pause the elapsed-time interval while an approval is pending — every tick
     // re-renders the live region, which trips the xterm.js scroll-jump bug.
-    if (status !== 'busy' || pending !== null) return;
+    if (status !== 'busy' || pending !== null || question !== null) return;
     const id = setInterval(() => {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [status, pending]);
+  }, [status, pending, question]);
 
   // Branch↔PR badge. The poll only shells out to git (cheap, local); the `gh` lookup behind
   // it is cached per branch, so a branch switch made in another terminal shows up within a
@@ -409,10 +433,16 @@ export function App() {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       const hadPending = pendingRef.current !== null;
-      // Interrupt anything in flight: decline a pending approval, abort a turn.
+      // Interrupt anything in flight: decline a pending approval, drop an unanswered question,
+      // abort a turn.
       if (hadPending) {
         pendingRef.current!.resolve(false);
         setPending(null);
+      }
+      if (questionRef.current) {
+        questionRef.current.resolve(null);
+        setQuestion(null);
+        setQuestionTyping(null);
       }
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
@@ -473,6 +503,51 @@ export function App() {
         pendingRef.current.resolve(false);
         setPending(null);
       }
+      return;
+    }
+    const q = questionRef.current;
+    if (q) {
+      // Typing the answer: Input owns the keyboard. Nothing here may consume the keystroke, or the
+      // answer loses characters to the dialog that asked for it.
+      if (questionTypingRef.current) return;
+      // Rows are the options plus the always-last "type your own" row.
+      const last = q.request.options.length;
+      if (key.upArrow) {
+        setQuestionSelected(i => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setQuestionSelected(i => Math.min(last, i + 1));
+        return;
+      }
+      // Tab on an option: take it, but add a note in your own words. The model gets both.
+      if (key.tab && questionSelectedRef.current < last) {
+        const forIndex = questionSelectedRef.current;
+        queueMicrotask(() => setQuestionTyping({ forIndex }));
+        return;
+      }
+      if (key.return) {
+        const sel = questionSelectedRef.current;
+        if (sel === last) {
+          // Deferred a microtask: this same keypress is dispatched to every useInput handler with
+          // re-renders in between, so enabling Input synchronously hands it the very Enter that
+          // opened it and submits an empty answer.
+          queueMicrotask(() => setQuestionTyping({}));
+          return;
+        }
+        const chosen = q.request.options[sel];
+        setQuestion(null);
+        setQuestionTyping(null);
+        q.resolve({ text: chosen.label, index: sel });
+        return;
+      }
+      // No escape-to-skip, deliberately, and none in the typing branch above either. An arrow key
+      // is ESC `[` A/B, and when those bytes arrive in separate chunks — which a pty under load
+      // does, observed while driving this dialog — Ink hands the handler a bare `key.escape`
+      // first. On a picker that costs a reopened list; here it would silently answer on the
+      // user's behalf and tell the model to proceed without them. Approval binds no escape for
+      // the same reason: ctrl-c is the one way out of a modal that decides something.
+      // Modal while the list is up: the input is disabled, so no other key has anywhere to go.
       return;
     }
     const ms = modelSelectRef.current;
@@ -603,6 +678,12 @@ export function App() {
       };
       setPending({ request: req, resolve: wrappedResolve });
     });
+  };
+
+  const requestQuestion = (req: QuestionRequest): Promise<QuestionAnswer | null> => {
+    setQuestionSelected(0);
+    setQuestionTyping(null);
+    return new Promise(resolve => setQuestion({ request: req, resolve }));
   };
 
   // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
@@ -1206,6 +1287,31 @@ export function App() {
   }, [status, pending, queue]);
 
   const onSubmit = async (input: string) => {
+    // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
+    // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
+    // be queued as the user's next prompt.
+    const q = questionRef.current;
+    const typing = questionTypingRef.current;
+    if (q && typing) {
+      const text = input.trim();
+      // An empty own-answer isn't an answer; leave the box open rather than resolving with nothing.
+      // An empty note is fine — it just means "this option, no comment".
+      if (typing.forIndex === undefined && !text) return;
+      setInputValue('');
+      setSuggestionState(null);
+      setQuestion(null);
+      setQuestionTyping(null);
+      if (typing.forIndex === undefined) {
+        q.resolve({ text });
+      } else {
+        q.resolve({
+          text: q.request.options[typing.forIndex].label,
+          index: typing.forIndex,
+          ...(text ? { notes: text } : {}),
+        });
+      }
+      return;
+    }
     // While a turn is running (or the session is still booting), don't drop the
     // message — hold it and replay it through this same path once idle. A
     // scrollback receipt records what was queued; the ephemeral list above the
@@ -1365,6 +1471,7 @@ export function App() {
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
+        requestQuestion,
         promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
         onMessage: raw => {
           // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
@@ -1547,7 +1654,7 @@ export function App() {
           {/* Spinner and queue sit *above* any overlay, not between it and the input: the
               overlay drops its bottom border and the input its top one so the two merge into
               one frame, and anything rendered in that gap lands inside the frame. */}
-          {status === 'busy' && pending === null ? (
+          {status === 'busy' && pending === null && question === null ? (
             <Working
               // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
               // hint — they're things the harness is actively doing, not a maybe.
@@ -1573,6 +1680,12 @@ export function App() {
           <QueuedList queue={queue} />
           {pending ? (
             <Approval request={pending.request} selectedIndex={approvalSelected} />
+          ) : question ? (
+            <Question
+              request={question.request}
+              selectedIndex={questionSelected}
+              typing={questionTyping}
+            />
           ) : modelSelect ? (
             <ModelSelect
               targets={modelSelect}
@@ -1590,8 +1703,19 @@ export function App() {
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
           <Input
-            disabled={pending !== null || modelSelect !== null}
-            attachedAbove={pending !== null || modelSelect !== null || suggestionState !== null}
+            // The question dialog is modal only while its list is up; once the user is typing an
+            // answer the input has to be live, since it IS the answer field.
+            disabled={
+              pending !== null ||
+              modelSelect !== null ||
+              (question !== null && questionTyping === null)
+            }
+            attachedAbove={
+              pending !== null ||
+              question !== null ||
+              modelSelect !== null ||
+              suggestionState !== null
+            }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
             mode={mode}

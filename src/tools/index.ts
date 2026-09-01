@@ -7,6 +7,7 @@ import { editTool } from './edit.js';
 import { writeTool } from './write.js';
 import { bashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
+import { askUserTool } from './ask.js';
 import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
 import { SearxngProvider } from '../search/searxng.js';
@@ -22,6 +23,7 @@ export function defaultTools(config?: Config): Tool[] {
     writeTool,
     bashTool,
     subagentTool,
+    askUserTool,
     // Unconditional, unlike `search`: fetching a known URL needs no provider or credential, and
     // the harness itself puts URLs in front of the model (pasted-link expansion, URL grounding)
     // that it must be able to follow up on. Gating it behind the search provider left a reika
@@ -43,7 +45,11 @@ export function defaultTools(config?: Config): Tool[] {
 // absence, so it is flagged separately from plan mode itself and can be turned off on its own. Read
 // per call, not at module load, so toggling it doesn't need a restart.
 export function planTools(): Tool[] {
-  const tools = [readTool, listTool, grepTool, globTool];
+  // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
+  // before any code is written, and the tool touches nothing in the repo. It is also outside the
+  // withdrawal set (LOOP_WITHDRAW_TOOLS) on purpose — a model that has been told to stop exploring
+  // still needs a way to say what it cannot decide.
+  const tools = [readTool, listTool, grepTool, globTool, askUserTool];
   if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
   return tools;
 }
