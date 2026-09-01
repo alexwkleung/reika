@@ -95,8 +95,11 @@ export const grepTool: Tool = {
     }
     const shown = state.inlineCount ?? MAX_MATCHES;
     const total = `${state.count}${atCeiling ? '+' : ''}`;
-    recordCapped({ tool: 'grep', total: state.count, shown, spilled: true });
     const ref = await spillResult('grep', state.out.join('\n'));
+    // Recorded after the write, not before it: `spilled` has to say whether an artifact actually
+    // landed, and a spill that fails (no writable tmpdir, disk full) is exactly the case the
+    // stats exist to surface.
+    recordCapped({ tool: 'grep', total: state.count, shown, spilled: !!ref });
     const footer = ref
       ? buildSpillFooter({ shown, total, unit: 'matches', ref })
       : buildCappedFooter({ shown, total, unit: 'matches' });
