@@ -99,7 +99,10 @@ export class ReadFirstGate {
     //
     // resolveUserPath rather than this.norm: `~/…` is the shape that matters here, and norm's bare
     // resolve() would read it as a literal `~` directory inside cwd — in-project, and unbounced for
-    // the wrong reason.
+    // the wrong reason. A test pins that distinction.
+    //
+    // Returning before the `bounced` bookkeeping is tidiness, not policy: nothing reads that set
+    // for a path this branch rejects, so recording it would be equally correct.
     if (escapesProject(this.cwd, resolveUserPath(this.cwd, path))) return false;
     const p = this.norm(path);
     if (this.bounced.has(p)) return false;

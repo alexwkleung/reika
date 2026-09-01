@@ -284,11 +284,15 @@ describe('ReadFirstGate — out-of-project paths are never bounced', () => {
     expect(new ReadFirstGate(CWD).shouldBounce('src/app.ts', history())).toBe(true);
   });
 
-  it('leaves an out-of-project path unrecorded, so it never consumes the one-bounce budget', () => {
+  it('leaves the gate usable for in-project paths in the same turn', () => {
+    // Deliberately NOT a claim about whether the escaping path lands in `bounced`: it returns
+    // before that set is consulted, so recording it or not has no observable effect (verified by
+    // mutation — adding it there fails nothing). What is worth pinning is the weaker, real thing:
+    // an out-of-project call does not disturb the gate for the paths it does govern.
     const gate = new ReadFirstGate(CWD);
     expect(gate.shouldBounce('/etc/hosts', history())).toBe(false);
-    // And an in-project edit in the same turn is unaffected by it.
     expect(gate.shouldBounce('src/app.ts', history())).toBe(true);
+    expect(gate.shouldBounce('src/app.ts', history())).toBe(false); // still exactly once
   });
 });
 
