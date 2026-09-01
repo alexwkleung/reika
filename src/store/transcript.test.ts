@@ -6,11 +6,13 @@ import type { Message } from '../types.js';
 import {
   TRANSCRIPT_VERSION,
   formatModeRuns,
+  formatUsageHeader,
   renderTxt,
   saveTranscript,
   serializeJsonl,
   summarizeModes,
   type TranscriptMeta,
+  type TranscriptUsage,
 } from './transcript.js';
 
 const META: TranscriptMeta = {
@@ -284,5 +286,82 @@ describe('saveTranscript', () => {
     const dir = join(await mkdtemp(join(tmpdir(), 'reika-transcript-')), 'nested', 'history');
     const { jsonlPath } = await saveTranscript(dir, ALL_ROLES, META);
     expect(await readFile(jsonlPath, 'utf8')).toContain('"role"');
+  });
+});
+
+// The status line's numbers, carried into the file so a shared transcript doesn't need the footer
+// pasted next to it (#199).
+describe('usage in the saved record', () => {
+  const USAGE: TranscriptUsage = {
+    turns: 7,
+    promptTokens: 1_250_900,
+    completionTokens: 34_100,
+    cachedTokens: 900_000,
+    contextTokens: 45_000,
+    contextWindow: 128_000,
+    lastCachedTokens: 40_000,
+  };
+
+  it('renders turns, sent/received, ctx and cache in the .txt header', () => {
+    const txt = renderTxt([], { ...META, usage: USAGE });
+    expect(txt).toContain('# turns:    7');
+    expect(txt).toContain('# tokens:   1.3M↑ 34k↓ (session total, 900k from cache)');
+    expect(txt).toContain('# ctx:      45k/128k (35%)');
+    expect(txt).toContain('# cache:    89% of the last prompt (40k)');
+  });
+
+  it('carries the raw counts in the JSONL meta line', () => {
+    const meta = JSON.parse(serializeJsonl([], { ...META, usage: USAGE }).split('\n')[0]);
+    expect(meta.usage).toEqual(USAGE);
+  });
+
+  it('omits the whole block when the caller tracked no usage', () => {
+    const txt = renderTxt([], META);
+    expect(txt).not.toContain('# turns:');
+    expect(txt).not.toContain('# tokens:');
+    expect(txt).not.toContain('# ctx:');
+    expect(JSON.parse(serializeJsonl([], META).split('\n')[0]).usage).toBeUndefined();
+  });
+
+  it('drops the ctx and cache lines before the first call, keeping the counts', () => {
+    const lines = formatUsageHeader({ turns: 0, promptTokens: 0, completionTokens: 0 });
+    expect(lines).toEqual(['# turns:    0', '# tokens:   0↑ 0↓ (session total)']);
+  });
+
+  // A provider that reports no cache hits must leave the fields undefined rather than report 0%,
+  // so "cache 0%" always means a real cold prompt.
+  it('omits the cache figures when the provider reported none', () => {
+    const lines = formatUsageHeader({
+      turns: 2,
+      promptTokens: 8000,
+      completionTokens: 400,
+      contextTokens: 8000,
+      contextWindow: 32_000,
+    });
+    expect(lines.join('\n')).not.toContain('cache');
+    expect(lines).toContain('# ctx:      8.0k/32k (25%)');
+  });
+
+  it('shows the bare context size when the window is unknown, and flags an estimate', () => {
+    const lines = formatUsageHeader({
+      turns: 1,
+      promptTokens: 0,
+      completionTokens: 0,
+      contextTokens: 12_000,
+      contextEstimated: true,
+    });
+    expect(lines).toContain('# ctx:      12k (estimated)');
+  });
+
+  it('flags an estimate alongside the fill when the window is known', () => {
+    const lines = formatUsageHeader({
+      turns: 1,
+      promptTokens: 0,
+      completionTokens: 0,
+      contextTokens: 16_000,
+      contextWindow: 32_000,
+      contextEstimated: true,
+    });
+    expect(lines).toContain('# ctx:      16k/32k (50%, estimated)');
   });
 });

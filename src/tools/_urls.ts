@@ -1,4 +1,5 @@
 import type { ToolContext } from '../types.js';
+import { classifyPrivateUrl } from './_hosts.js';
 import { extractUrl, type UrlExtraction } from './fetch.js';
 
 // Local models sometimes write a plausible-looking URL into code or a comment — an API endpoint, a
@@ -161,10 +162,26 @@ export type UrlGroundingOutcome = {
 async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGroundingResult[]> {
   if (process.env.REIKA_URL_GROUNDING !== '1') return [];
   const seen = ctx.groundedUrls;
-  const candidates = extractUrls(text)
+  const eligible = extractUrls(text)
     .filter(u => !seen?.has(u))
-    .slice(0, MAX_URLS);
+    // Drop private/loopback addresses BEFORE the cap rather than letting extractUrl refuse them.
+    // extractUrl would refuse correctly, but the refusal would then be rendered as a ✗ "did NOT
+    // resolve — likely wrong or invented", and a localhost URL in a config file is usually neither:
+    // this project's own model server is one. Silence is the honest report for an address we chose
+    // not to check, and filtering first also stops two such URLs from eating the whole per-call cap.
+    .filter(u => !classifyPrivateUrl(u));
+
+  // Grounding is harness-driven — the model never asked for these fetches — so it must answer to
+  // the same per-turn cap as the ones it does ask for (fetch.ts). Without this, N edits in a turn
+  // was up to 2N uncounted requests, and the cap AGENTS.md calls the runaway guard only ever saw
+  // the tool-call half of the traffic. Degrades quietly by taking what's left rather than
+  // returning an error the way fetch_url does: nothing here was requested, so there is nobody to
+  // report a budget refusal to, and a note saying so would be pure noise in the model's context.
+  const budget = ctx.webBudget?.fetches;
+  const room = budget ? Math.max(0, budget.max - budget.used) : Number.POSITIVE_INFINITY;
+  const candidates = eligible.slice(0, Math.min(MAX_URLS, room));
   if (candidates.length === 0) return [];
+  if (budget) budget.used += candidates.length;
   candidates.forEach(u => seen?.add(u));
 
   return Promise.all(candidates.map(async url => ({ url, res: await extractUrl(url) })));

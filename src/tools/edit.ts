@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { relative } from 'node:path';
-import { resolveUserPath } from './_paths.js';
+import { escapesProject, OUTSIDE_PROJECT_WARNING, resolveUserPath } from './_paths.js';
 import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -27,13 +27,52 @@ export const editTool: Tool = {
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
     const full = resolveUserPath(ctx.cwd, path);
+    const outside = escapesProject(ctx.cwd, full);
+    // See write.ts for why these are two names. `rel` stays project-relative because it rides
+    // `diff.path`, which App.tsx hands to addFileToIndex -> ignore (a RangeError on an absolute
+    // path); `display` is what the user and the model see.
     const rel = relative(ctx.cwd, full) || path;
+    const display = outside ? full : rel;
+
+    // See write.ts — the same gap, the same gate. Checked before the file is read so the boundary is
+    // reported instead of an incidental read error on a path we would refuse anyway.
+    if (outside && !ctx.requestApproval) {
+      return {
+        summary:
+          `Edit refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
+          'are bypassed so it cannot be confirmed with the user. Edit inside the project instead.',
+      };
+    }
 
     if (oldStr === '') {
       return { summary: `Edit failed: old_string is empty` };
     }
     if (oldStr === newStr) {
       return { summary: `Edit failed: old_string and new_string are identical` };
+    }
+
+    // Consent BEFORE the read, not just before the write. Every failure branch below returns
+    // ahead of the diff approval, and they are built from file contents: `fuzzy.hint` names lines,
+    // and `editFailure.excerpt` carries up to EXCERPT_MAX_LINES verbatim. Gating only the write
+    // left `edit` usable as a read primitive for any path on disk under `safe` — point it at a
+    // credentials file with an old_string that cannot match and the contents come back with no
+    // modal. Scrubbing those messages was the alternative and is the wrong one: gate earlier
+    // rather than launder what the model gets to see.
+    //
+    // The preview is built from the model's own arguments, so it needs nothing off disk and still
+    // shows the user the actual proposed change. The real contextual diff comes to the approval
+    // below, which no longer re-raises the warning — the boundary was consented to here, so under
+    // `safe` that second one auto-approves and this stays a single modal.
+    let approvedOutside = false;
+    if (outside && ctx.requestApproval) {
+      const ok = await ctx.requestApproval({
+        tool: 'edit',
+        subject: display,
+        preview: intentDiff(oldStr, newStr),
+        warnings: [OUTSIDE_PROJECT_WARNING],
+      });
+      if (!ok) return { summary: `Edit declined by user for ${display}` };
+      approvedOutside = true;
     }
 
     const text = await readFile(full, 'utf8');
@@ -54,7 +93,7 @@ export const editTool: Tool = {
         const a = lineOf(text, first);
         const b = lineOf(text, second);
         return {
-          summary: `Edit failed: old_string appears multiple times in ${rel} (lines ${a}, ${b}); add surrounding context to make it unique`,
+          summary: `Edit failed: old_string appears multiple times in ${display} (lines ${a}, ${b}); add surrounding context to make it unique`,
         };
       }
       start = first;
@@ -64,21 +103,21 @@ export const editTool: Tool = {
       const fuzzy = fuzzyLineMatch(text, oldStr, newStr);
       if (fuzzy.status === 'multiple') {
         return {
-          summary: `Edit failed: old_string appears multiple times in ${rel} (lines ${fuzzy.lines.join(', ')}); add surrounding context to make it unique`,
+          summary: `Edit failed: old_string appears multiple times in ${display} (lines ${fuzzy.lines.join(', ')}); add surrounding context to make it unique`,
         };
       }
       if (fuzzy.status === 'mixed') {
         return {
-          summary: `Edit failed: new_string mixes indentation in ${rel}; line "${fuzzy.line.trim()}" doesn't match the block's base indent — re-indent it consistently and retry`,
+          summary: `Edit failed: new_string mixes indentation in ${display}; line "${fuzzy.line.trim()}" doesn't match the block's base indent — re-indent it consistently and retry`,
         };
       }
       if (fuzzy.status === 'none') {
         return {
-          summary: `Edit failed: old_string not found in ${rel}.${fuzzy.hint}`,
+          summary: `Edit failed: old_string not found in ${display}.${fuzzy.hint}`,
           // Surface the structured divergence the hint was built from, so the agent loop can ground a
           // recovery round on it (see agent/loop.ts buildEditRecoveryLedger) instead of re-parsing the
           // summary string. `absent` here means re-reading won't help — the target isn't in the file.
-          editFailure: withPath(fuzzy.failure, rel),
+          editFailure: withPath(fuzzy.failure, display),
         };
       }
       start = fuzzy.start;
@@ -96,14 +135,14 @@ export const editTool: Tool = {
     );
     const startLine = editDiffStartLine(beforeText);
 
-    if (ctx.requestApproval) {
+    if (ctx.requestApproval && !approvedOutside) {
       const ok = await ctx.requestApproval({
         tool: 'edit',
-        subject: rel,
+        subject: display,
         preview: diffText,
         startLine,
       });
-      if (!ok) return { summary: `Edit declined by user for ${rel}` };
+      if (!ok) return { summary: `Edit declined by user for ${display}` };
     }
 
     const next = text.slice(0, start) + effectiveNew + text.slice(start + matchLen);
@@ -122,16 +161,25 @@ export const editTool: Tool = {
     // from current bytes instead of a now-stale read — collapsing the re-read-after-edit loop. The
     // size cap keeps the cost trivial and is where multi-site edits actually cluster; large files
     // fall back to the diff region (model re-reads only if it needs a distant block).
-    const refreshed = refreshedFile(rel, next);
+    const refreshed = refreshedFile(display, next);
     const payload = [depPayload, url.note, refreshed].filter(Boolean).join('\n\n') || undefined;
     return {
-      summary: `Edited ${rel} at line ${line} (+${added} -${removed})`,
+      summary: `Edited ${display} at line ${line} (+${added} -${removed})`,
       diff: { text: diffText, path: rel, added, removed, startLine },
       ...(payload ? { payload } : {}),
       ...(url.notice ? { notice: url.notice } : {}),
     };
   },
 };
+
+// A diff-shaped preview of the change the model is asking for, built only from its arguments. Used
+// to gate the read on an out-of-project path, where the file has deliberately not been opened yet
+// and the real contextual diff therefore does not exist.
+function intentDiff(oldStr: string, newStr: string): string {
+  const minus = oldStr.split('\n').map(l => `- ${l}`);
+  const plus = newStr.split('\n').map(l => `+ ${l}`);
+  return [...minus, ...plus].join('\n');
+}
 
 // A small edited file is cheap to echo back and is exactly where the re-read-after-edit loop bites
 // (config/index/test modules with edits scattered across the file). Above the cap, the per-edit

@@ -85,3 +85,41 @@ describe('SearxngProvider', () => {
     await expect(provider.search('q')).rejects.toThrow(/403/);
   });
 });
+
+// #164 gave extractUrl a host policy that refuses loopback and LAN addresses. The search provider
+// is deliberately outside it — its address comes from REIKA_SEARXNG_URL, which the user set, and a
+// local-first instance is EXPECTED on loopback. That exemption is stated in AGENTS.md, so it is
+// pinned here too: "unify every fetch through extractUrl" should fail a test rather than silently
+// break local search, which is the documented default setup.
+describe('SearxngProvider — outside the extractUrl host policy', () => {
+  const loopback = [
+    'http://localhost:8888',
+    'http://127.0.0.1:8888',
+    'http://192.168.1.50:8888', // a LAN instance is as legitimate as a loopback one
+  ];
+
+  for (const base of loopback) {
+    it(`reaches a private-address instance at ${base}`, async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(
+        mockResponse({ results: [{ title: 'r', url: 'https://example.com', content: 'x' }] }),
+      );
+      const results = await new SearxngProvider(base).search('hello');
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0][0])).toContain(new URL(base).host);
+      expect(results).toHaveLength(1);
+    });
+  }
+
+  it('calls fetch directly rather than routing through extractUrl', async () => {
+    // The structural half of the claim: the provider issues its own request with an Accept header
+    // and its own timeout signal, which is what keeps it off the policed path. If this ever starts
+    // going through extractUrl, the loopback cases above stop passing.
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse({ results: [] }));
+    await new SearxngProvider('http://127.0.0.1:8888').search('q');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      headers: { Accept: 'application/json' },
+    });
+  });
+});

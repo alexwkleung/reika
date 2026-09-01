@@ -48,7 +48,11 @@ export async function expandPastedUrls(
 
   const urls = all.slice(0, MAX_PASTED_URLS);
   opts.onStart?.(urls.length);
-  const results = await Promise.all(urls.map(url => extractUrl(url)));
+  // allowPrivate: the user typed this address into the prompt themselves. The host policy exists to
+  // stop the model and the harness from reaching loopback and LAN addresses off attacker-influenced
+  // text (tools/_hosts.ts); a URL the user pasted is a request, and "read my dev server at
+  // http://localhost:3000" is the ordinary case it would otherwise break for no security gain.
+  const results = await Promise.all(urls.map(url => extractUrl(url, { allowPrivate: true })));
 
   const blocks: string[] = [];
   const notices: PastedUrlNotice[] = [];

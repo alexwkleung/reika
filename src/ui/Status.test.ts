@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { kFormat, formatContext, formatCache, contextFill, formatPr } from './Status.js';
+import { formatContext, formatCache, formatPr } from './Status.js';
+import { contextFill, kFormat } from './format.js';
 
 describe('kFormat', () => {
   it('shows raw numbers below 1k', () => {

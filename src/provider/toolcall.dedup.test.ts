@@ -153,6 +153,12 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
   it('preserves outcome-bearing summaries from every tool in the repeat stub', () => {
     const outcomes = [
       'Bash failed: npm test (exit 1)',
+      // #200: a non-zero exit reports as a plain `Ran:` line now, carrying none of the failure
+      // words the rest of this list is caught by. If the repeat stub swallowed it, a model retrying
+      // a red test run would see the second attempt collapse to "same as before" with the exit code
+      // gone — the exact regression this test was written for, one summary rewrite later.
+      'Ran: npm test (exit 1, 4120 bytes output)',
+      'Ran: make build (killed by SIGKILL, 12 bytes output)',
       'Bash timeout: sleep 999 (killed after 30s)',
       'Bash declined by user: rm -rf dist',
       'Fetch budget exceeded for this turn (max 3). Summarize what you have or split into multiple turns.',

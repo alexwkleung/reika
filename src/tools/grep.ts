@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import type { Ignore } from 'ignore';
 import type { Tool } from '../types.js';
 import { resolveUserPath } from './_paths.js';
-import { shouldSkipDir } from './_walk.js';
+import { isFilteredTarget, shouldSkipDir } from './_walk.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { recordCapped } from './_spillstats.js';
 
@@ -65,6 +65,9 @@ export const grepTool: Tool = {
     const start = resolveUserPath(ctx.cwd, startPath);
     const st = await stat(start).catch(() => null);
     if (!st) return { summary: `Grep failed: path not found: ${startPath}` };
+    // Same explicit-target rule as `list`: a grep aimed straight at an ignored path (build output,
+    // a sibling repo) should search it instead of reporting a silent 0 matches. See _walk.ts.
+    const ig = isFilteredTarget(ctx.cwd, start, ctx.ignore) ? undefined : ctx.ignore;
     const spilling = spillEnabled();
     const state: GrepState = {
       count: 0,
@@ -73,7 +76,7 @@ export const grepTool: Tool = {
       excluded: 0,
       limit: spilling ? SPILL_MAX_MATCHES : MAX_MATCHES,
     };
-    await walk(start, ctx.cwd, ctx.ignore, suffix, re, state);
+    await walk(start, ctx.cwd, ig, suffix, re, state);
     if (state.count === 0 && suffix && state.scanned === 0 && state.excluded > 0) {
       return {
         summary:

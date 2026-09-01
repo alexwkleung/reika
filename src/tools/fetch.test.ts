@@ -141,3 +141,207 @@ describe('extractUrl — harness-callable extraction', () => {
     expect(result).toEqual({ ok: false, reached: false, error: 'ECONNREFUSED' });
   });
 });
+
+function mockRedirect(status: number, location: string): Response {
+  return {
+    ok: false,
+    status,
+    statusText: 'Redirect',
+    headers: { get: (h: string) => (h.toLowerCase() === 'location' ? location : null) },
+    text: async () => '',
+  } as unknown as Response;
+}
+
+// The host policy (#164). extractUrl is the choke point every egress path funnels through, so this
+// is where "the agent must not reach the local model server or a metadata endpoint" is enforced.
+describe('extractUrl — host policy', () => {
+  it('blocks a loopback URL without making a request', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const result = await extractUrl('http://127.0.0.1:11434/api/tags');
+    expect(result).toEqual({
+      ok: false,
+      reached: false,
+      error: expect.stringContaining('blocked by host policy'),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks the cloud metadata endpoint', async () => {
+    const result = await extractUrl('http://169.254.169.254/latest/meta-data/');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/link-local/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('reports blocked as not-reached, so a grounder does not read it as an offline network', async () => {
+    const result = await extractUrl('http://localhost/');
+    // reached:false is the honest value (no request went out), and the error text carries the
+    // distinction that `reached` alone cannot.
+    expect(result).toMatchObject({ ok: false, reached: false });
+  });
+
+  it('allows an ordinary public URL through', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<html><body><article>public</article></body></html>'),
+    );
+    const result = await extractUrl('https://example.com');
+    expect(result.ok).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a private address when the caller opts in (pasted-URL path)', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockOk('<html><body><article>dev server</article></body></html>'),
+    );
+    const result = await extractUrl('http://localhost:3000/', { allowPrivate: true });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.content).toContain('dev server');
+  });
+});
+
+// A check on the URL as written is decorative on its own: one 302 walks around it. The chain is
+// walked here so the policy sees every hop.
+describe('extractUrl — redirect chain', () => {
+  it('follows an ordinary redirect and extracts the final page', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(mockRedirect(301, 'https://example.com/final'))
+      .mockResolvedValueOnce(mockOk('<html><body><article>arrived</article></body></html>'));
+    const result = await extractUrl('http://example.com/start');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.content).toContain('arrived');
+    expect(fetchMock.mock.calls[1][0]).toBe('https://example.com/final');
+  });
+
+  it('resolves a relative Location against the current URL', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(mockRedirect(302, '/moved'))
+      .mockResolvedValueOnce(mockOk('<html><body><article>ok</article></body></html>'));
+    await extractUrl('https://example.com/a/b');
+    expect(fetchMock.mock.calls[1][0]).toBe('https://example.com/moved');
+  });
+
+  it('BLOCKS a public URL that redirects into loopback', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(mockRedirect(302, 'http://127.0.0.1:11434/api/tags'));
+    const result = await extractUrl('https://evil.example/bounce');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/blocked by host policy/);
+      expect(result.error).toMatch(/redirected to/);
+    }
+    // The first request went out (it was a public address); the second never did.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('BLOCKS a redirect into cloud metadata', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(mockRedirect(307, 'http://169.254.169.254/latest/meta-data/'));
+    const result = await extractUrl('https://example.com/x');
+    expect(result.ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows a redirect into a private address when the caller opted in', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(mockRedirect(302, 'http://localhost:3000/app'))
+      .mockResolvedValueOnce(mockOk('<html><body><article>dev</article></body></html>'));
+    const result = await extractUrl('https://example.com/go', { allowPrivate: true });
+    expect(result.ok).toBe(true);
+  });
+
+  it('follows a chain longer than a handful, matching the pre-existing limit', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    for (let i = 0; i < 12; i++) {
+      fetchMock.mockResolvedValueOnce(mockRedirect(302, `https://example.com/hop${i}`));
+    }
+    fetchMock.mockResolvedValueOnce(
+      mockOk('<html><body><article>end of chain</article></body></html>'),
+    );
+    const result = await extractUrl('https://example.com/start');
+    // 12 hops used to resolve under redirect:'follow' (limit 20). A tighter cap here would be a
+    // silent regression for any site with a long canonicalization chain.
+    expect(result.ok).toBe(true);
+  });
+
+  it('gives up after the hop cap instead of looping forever', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockRedirect(302, 'https://example.com/loop'));
+    const result = await extractUrl('https://example.com/loop');
+    expect(result).toEqual({
+      ok: false,
+      reached: true,
+      error: expect.stringContaining('too many redirects'),
+    });
+    // Bounded, and bounded at the SAME place redirect:'follow' bounded it before the manual walk
+    // replaced it — 20 hops, then one more attempt that trips the cap.
+    expect(fetchMock.mock.calls.length).toBe(21);
+  });
+
+  it('drains each redirect body instead of leaking the connection', async () => {
+    // `follow` released these internally; the manual walk has to. An unread body holds its
+    // connection out of undici's pool until GC and throws nothing, so only a test catches it.
+    const cancels: number[] = [];
+    const withBody = (n: number, location: string) => ({
+      ...mockRedirect(302, location),
+      body: { cancel: async () => void cancels.push(n) },
+    });
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(withBody(1, 'https://example.com/b') as unknown as Response)
+      .mockResolvedValueOnce(withBody(2, 'https://example.com/c') as unknown as Response)
+      .mockResolvedValueOnce(mockOk('<html><body><article>end</article></body></html>'));
+    const result = await extractUrl('https://example.com/a');
+    expect(result.ok).toBe(true);
+    expect(cancels).toEqual([1, 2]);
+  });
+
+  it('still follows the chain when a hop exposes no body', async () => {
+    // Node can hand back a bodyless response (204/HEAD-ish). The optional chain must not throw.
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock
+      .mockResolvedValueOnce(mockRedirect(301, 'https://example.com/final'))
+      .mockResolvedValueOnce(mockOk('<html><body><article>arrived</article></body></html>'));
+    const result = await extractUrl('https://example.com/start');
+    expect(result.ok).toBe(true);
+  });
+
+  it('treats a 3xx with no Location as a plain error response', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 302,
+      statusText: 'Found',
+      headers: { get: () => null },
+      text: async () => '',
+    } as unknown as Response);
+    const result = await extractUrl('https://example.com/x');
+    expect(result).toEqual({ ok: false, reached: true, error: '302 Found' });
+  });
+});
+
+describe('fetch_url tool — host policy', () => {
+  it('refuses a loopback URL with a reason the model can act on', async () => {
+    const result = await fetchUrlTool.run(
+      { url: 'http://127.0.0.1:11434/api/tags' },
+      { cwd: '/tmp' },
+    );
+    expect(result.summary).toMatch(/blocked by host policy/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('charges the blocked attempt against the turn budget', async () => {
+    // Deliberate: a refusal that costs nothing lets a spiraling model probe private addresses
+    // without bound. Charging it drains the turn's fetch budget and pushes the model onward.
+    const budget = makeBudget();
+    await fetchUrlTool.run({ url: 'http://192.168.1.1/' }, { cwd: '/tmp', webBudget: budget });
+    expect(budget.fetches.used).toBe(1);
+  });
+
+  it('does not record a blocked URL as a source', async () => {
+    const fetchedUrls = new Set<string>();
+    await fetchUrlTool.run({ url: 'http://localhost/' }, { cwd: '/tmp', fetchedUrls });
+    expect(fetchedUrls.size).toBe(0);
+  });
+});

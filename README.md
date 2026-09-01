@@ -37,6 +37,20 @@ Mostly testing 20B-35B range models with low quantization of Q2-Q4 via llama.cpp
 
 Although Reika can work with small and low quantization models, the output and quality will vary during agentic coding compared to pure chat.
 
+## Tested Models
+
+- Qwen3.8 27B (UD-IQ3_XXS)
+- Qwen3.6 35B A3B (UD-IQ2_M)
+- Qwen3.6 35B A3B (UD-IQ2_XXS)
+- Ornith 1.0 35B (UD-IQ2_M)
+- Laguna XS 2.1 (IQ2_M)
+- KAT Coder V2.5 Dev (IQ2_M)
+- North Mini Code 1.0 (UD-IQ3_XXS)
+- Gemma 4 26B A4B IT (UD-IQ3_XXS)
+- GPT-OSS 20B (MXFP4-Q4)
+- Ornith 1.5 9B (Q5_K_M)
+- Qwen3.5 9B (MLX Q4)
+
 ## Quick start
 
 ```sh
@@ -75,7 +89,7 @@ Config sources, in precedence order (higher wins):
 | `REIKA_API_KEY`               | `no-key`                            | Cloud API key (any non-empty for local)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `REIKA_MAX_TURNS`             | `12`                                | Tool-call iterations per user turn                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `REIKA_REPO_MAP_BUDGET`       | `3200`                              | Chars allotted to repo map in system prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `REIKA_AUTO_APPROVE`          | `off`                               | Approval mode. `safe` (or `true`/`1`) auto-approves edit/write/bash but still prompts for dangerous commands; `bypass` (or `yolo`) skips all prompts; `off` confirms everything                                                                                                                                                                                                                                                                                                                                                |
+| `REIKA_AUTO_APPROVE`          | `off`                               | Approval mode. `safe` (or `true`/`1`) auto-approves edit/write/bash but still prompts for dangerous commands and for any write that lands outside the project directory; `bypass` (or `yolo`) skips all prompts, and refuses out-of-project writes outright since there is no prompt to fall back on; `off` confirms everything                                                                                                                                                                                                |
 | `REIKA_DEFAULT_MODE`          | `agent`                             | Mode the session starts in: `agent`, `plan`, or `vibe` (chat/shell aren't launchable defaults). Unrecognized values fall back to `agent`. `REIKA_PLAN_EXPERIMENT=1` is the legacy alias for `plan`; an explicit `REIKA_DEFAULT_MODE` wins                                                                                                                                                                                                                                                                                      |
 | `REIKA_SUBAGENT_MODEL`        | _falls back to main_                | Override model for subagents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `REIKA_SUBAGENT_BASE_URL`     | _falls back_                        | Override server for subagents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -90,9 +104,10 @@ Config sources, in precedence order (higher wins):
 | `REIKA_MAX_SEARCHES_PER_TURN` | `3`                                 | Cap `search` calls per user turn (prevents runaway / quota burn)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`                                 | Cap `fetch_url` calls per user turn                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `REIKA_BASH_TIMEOUT_MS`       | `300000`                            | Wall-clock timeout for a single bash command, ms (raise for slow builds, lower to fail hangs faster)                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `REIKA_REQUEST_TIMEOUT_MS`    | `1800000`                           | How long the model server may send **nothing at all** before the request is aborted, ms. Covers prefill: llama.cpp emits no bytes while it processes the prompt, and Node's own default would kill the turn at 300s (~6.5k tokens on slow local hardware). `0` waits indefinitely                                                                                                                                                                                                                                              |
 | `REIKA_OCR_LANGS`             | _unset_                             | Preferred languages (BCP-47, comma-separated) for OCR of pasted images, e.g. `en-US,ja-JP`. Unset uses the platform recognizer's default. Windows uses only the first entry                                                                                                                                                                                                                                                                                                                                                    |
 | `REIKA_TSCONFIG`              | _unset_                             | Override the tsconfig the post-edit typecheck gate uses (relative to cwd or absolute). For layouts auto-detection can't reason about — references-only roots, or named-variant-only projects (`tsconfig.web.json`, …) with no plain `tsconfig.json`. Normally auto-detected: walks up from the edited file to the nearest `tsconfig.json`                                                                                                                                                                                      |
-| `REIKA_DEBUG`                 | _unset_                             | Any non-empty value writes per-turn diagnostics (loop/spiral detectors, grounding, prefix-cache classification, per-round entropy/KL drift, etc.) to a log file. Goes to a **file**, never stderr — stderr would corrupt the Ink TUI frame                                                                                                                                                                                                                                                                                     |
+| `REIKA_DEBUG`                 | _unset_                             | Any non-empty value writes diagnostics (session-start bundle size, loop/spiral detectors, grounding, prefix-cache classification with the prefill cost it implies, per-round entropy/KL drift, etc.) to a log file. Goes to a **file**, never stderr — stderr would corrupt the Ink TUI frame                                                                                                                                                                                                                                  |
 | `REIKA_DEBUG_FILE`            | `~/reika-debug.log`                 | Path for the `REIKA_DEBUG` log. The default log is reset at the start of each session; an explicit `REIKA_DEBUG_FILE` is always appended to, so use it when an experiment should accumulate across runs                                                                                                                                                                                                                                                                                                                        |
 | `REIKA_ENTROPY`               | _unset_                             | `1` asks the server for per-token logprobs, so the `REIKA_DEBUG` drift lines report the model's real predictive entropy (and how surprised it was by its own output) instead of the entropy of the text alone. Needs `REIKA_DEBUG` — the log is the only consumer — and costs a much larger streamed response (top-5 candidates per token). The per-round entropy/KL lines are written either way; this only sharpens the entropy half. A server that rejects the fields is retried once without them, so it can't cost a turn |
 | `REIKA_SPILL_STATS`           | _unset_                             | `1` appends one JSON line per over-cap tool result — and per call that opens a saved artifact — to a stats file. Sizes and tool names only, never output. Measurement, not a feature: an eval can show the model follows a locator, but only real use answers what share of your `bash` calls exceed the 64KB cap at all, which is what decides whether the retained window is sized right. Off by default; no behavior change while it runs                                                                                   |
@@ -287,6 +302,17 @@ Type `/` in the input to see suggestions. Highlights:
 
 A saved transcript records mode alongside the conversation: each turn is labelled with the mode it ran in (`You [plan]:`, and `mode` on the JSONL record), and the header carries the mode at save time plus the whole arc — `# modes: agent (turns 1-3) → plan (turn 4) → agent (turn 5)`. A vibe turn is recorded as `vibe`, not as the plan and agent phases it runs as internally. So a transcript says how the work was done, not just what was said.
 
+The header also freezes the status line's accounting at save time — turn count, session tokens sent and received, current context against the window, and how much of the last prompt came from cache — so a shared transcript carries the numbers without the footer pasted beside it:
+
+```
+# turns:    7
+# tokens:   1.3M↑ 34k↓ (session total, 900k from cache)
+# ctx:      45k/128k (35%)
+# cache:    89% of the last prompt (40k)
+```
+
+Anything unreported is left out rather than written as zero: a provider that reports no cache hits gets no cache line at all, and a context size recorded before the first call lands is marked `(estimated)`. The same numbers ride the JSONL meta record under `usage`.
+
 ## Scripts
 
 - `npm run dev` — run the CLI with `tsx`
@@ -325,7 +351,7 @@ When the reader is an LLM with a token budget, the case for locality, predictabi
 
 ## Working caveats
 
-- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=safe` (or `true`) for trusted runs: ordinary edits/commands auto-run, but commands matching a dangerous pattern (`rm -rf`, force push, any package install/uninstall, `npx`, etc.) still force a manual approve/reject. This is yolo mode with safeguards. For true no-prompts-ever, set `REIKA_AUTO_APPROVE=bypass` (or `yolo`) — that runs dangerous commands without asking.
+- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=safe` (or `true`) for trusted runs: ordinary edits/commands auto-run, but commands matching a dangerous pattern (`rm -rf`, force push, any package install/uninstall, `npx`, `curl`/`wget`, `pkill`/`killall`, etc.) still force a manual approve/reject. This is yolo mode with safeguards. For true no-prompts-ever, set `REIKA_AUTO_APPROVE=bypass` (or `yolo`) — that runs dangerous commands without asking.
 - Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them. Furthermore, the subagent will only run if its configured.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
@@ -340,4 +366,4 @@ There's more that isn't covered.
 
 ## Inspired by
 
-Inspired by Claude Code, Codex, Crush, OpenCode, and Pi.
+Inspired by Claude Code, Codex, Crush, OpenCode, Pi, DeepSeek Harness, Qwen Code, Kimi Code CLI, and Gemini CLI.
