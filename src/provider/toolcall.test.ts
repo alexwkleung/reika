@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { dedupToolContent, messagesToOpenAI } from './toolcall.js';
+import {
+  dedupToolContent,
+  lastUserMessageIndex,
+  messagesToOpenAI,
+  taskSpecIndex,
+} from './toolcall.js';
 
 // Total serialized characters of a built request — content plus tool_call JSON.
 function requestChars(out: unknown[]): number {
@@ -959,6 +964,51 @@ describe('messagesToOpenAI', () => {
     // dedup on, 'b' would have collapsed to a back-reference — the point here is that it doesn't.
     expect(out.find(m => m.tool_call_id === 'a')?.content).toContain('Read A lines 1-5 of 5');
     expect(out.find(m => m.tool_call_id === 'b')?.content).toBe('Read A lines 1-5 of 5');
+  });
+});
+
+describe('lastUserMessageIndex', () => {
+  it('finds the newest real user message', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'ok' },
+    ];
+    expect(lastUserMessageIndex(history)).toBe(2);
+  });
+
+  it('skips a slash-command echo, which is scrollback and not a turn boundary', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: '/stats', meta: true },
+    ];
+    expect(lastUserMessageIndex(history)).toBe(0);
+  });
+
+  it('is -1 when no user message exists', () => {
+    expect(lastUserMessageIndex([{ role: 'assistant', content: 'hi' }])).toBe(-1);
+  });
+
+  // What `stale=` on the spec-pin debug line means: a pin at an index BELOW this one was carried
+  // over from an earlier turn rather than established by the current one.
+  it('separates a pin established this turn from one carried over', () => {
+    const carried: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'spec', summary: 'Ran: gh', payload: 'ISSUE' },
+      { role: 'user', content: 'now something else' },
+    ];
+    expect(taskSpecIndex(carried)).toBe(2);
+    expect(taskSpecIndex(carried) < lastUserMessageIndex(carried)).toBe(true); // stale
+    const own: Message[] = [
+      ...carried,
+      { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'b', summary: 'Read a', payload: 'FILE' },
+    ];
+    expect(taskSpecIndex(own)).toBe(5);
+    expect(taskSpecIndex(own) < lastUserMessageIndex(own)).toBe(false); // this turn's own
   });
 });
 

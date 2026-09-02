@@ -271,7 +271,12 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   leaves the pin entirely to batch aging: resurrecting bytes that already serialized as a summary is
   the mid-history rewrite that mode exists to prevent. `dedupToolContent` signs the pinned message as
   a payload so "the signature is what WOULD be serialized" stays true. The `spec-pin` REIKA_DEBUG line
-  reports the index, size and whether the pin is currently holding anything.
+  reports the index, size, whether the pin is currently `holding` (the spec has fallen outside the
+  trailing block, so the pin is the only reason it survives) and whether it is `stale` (it predates
+  the current user message — the deliberate carry-over that keeps round 0 append-only, which spends
+  up to `TASK_SPEC_PIN_CHARS` on the previous task's detail until this turn lands its own first tool
+  result). `stale=true` is the one behaviour here that could read as task conflation, so it is
+  greppable rather than something to re-derive from the history.
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
   `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
   earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read

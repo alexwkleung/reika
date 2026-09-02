@@ -24,7 +24,11 @@ import {
   batchAgePayloads,
   AGE_LOW_FRACTION,
 } from './compaction.js';
-import { findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
+import {
+  findFreshToolBlockStart,
+  lastUserMessageIndex,
+  taskSpecIndex,
+} from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
@@ -1332,15 +1336,21 @@ export async function runTurn(opts: {
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
       );
       // Task-spec pin (#227), on its own line so a suspicion about a confabulated task can be
-      // checked by grep instead of re-derived. `holding` is the bit that matters: the pin only does
-      // work once the spec falls outside the trailing tool block, which is where aging would
-      // otherwise have taken it.
+      // checked by grep instead of re-derived. `holding`: the pin only does work once the spec
+      // falls outside the trailing tool block, which is where aging would otherwise have taken it.
+      // `stale`: the pin predates the current user message — the deliberate carry-over that keeps
+      // round 0 append-only for the warm prefix (see taskSpecIndex), which costs up to
+      // TASK_SPEC_PIN_CHARS of the PREVIOUS task's detail until this turn lands its own first tool
+      // result. Bounded and self-correcting, but it is the one behaviour here that could read as
+      // task conflation, so it is greppable rather than something to re-derive from the history.
       const specIdx = taskSpecIndex(opts.history);
       const spec = specIdx >= 0 ? opts.history[specIdx] : undefined;
       debugLog(
         specIdx >= 0 && spec?.role === 'tool'
           ? `[reika:debug] round=${i} spec-pin idx=${specIdx} chars=${spec.payload?.length ?? 0} ` +
-              `holding=${specIdx < findFreshToolBlockStart(opts.history)} summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
+              `holding=${specIdx < findFreshToolBlockStart(opts.history)} ` +
+              `stale=${specIdx < lastUserMessageIndex(opts.history)} ` +
+              `summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
           : `[reika:debug] round=${i} spec-pin none\n`,
       );
     }
