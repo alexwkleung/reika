@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { dedupToolContent, messagesToOpenAI } from './toolcall.js';
+import {
+  dedupToolContent,
+  lastUserMessageIndex,
+  messagesToOpenAI,
+  taskSpecIndex,
+} from './toolcall.js';
 
 // Total serialized characters of a built request — content plus tool_call JSON.
 function requestChars(out: unknown[]): number {
@@ -118,8 +123,116 @@ describe('messagesToOpenAI', () => {
     const oldTool = out.find(m => m.tool_call_id === 'old');
     const freshTool = out.find(m => m.tool_call_id === 'fresh');
     expect(oldTool?.content).toBe('old summary');
-    expect(oldTool?.content).not.toContain('OLD PAYLOAD');
     expect(freshTool?.content).toContain('FRESH PAYLOAD');
+  });
+
+  describe('task-spec pin (#227)', () => {
+    // `/issue` and `/review` mandate a `gh` fetch as the opening call, so the payload that DEFINES
+    // the task is the oldest — and aging is oldest-first. Observed on #213: once it collapsed, the
+    // model wrote "let me re-read the issue" with no tool call and quoted issue text that does not
+    // exist. The pin keeps that one small payload live for the turn that asked for it.
+    const spec = (payload: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+      {
+        role: 'tool',
+        callId: 'spec',
+        summary: 'Ran: gh issue view 213 (505 bytes output)',
+        payload,
+      },
+    ];
+    const later = (id: string, payload: string): Message[] => [
+      { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: {} }] },
+      { role: 'tool', callId: id, summary: `Read ${id}`, payload },
+    ];
+    const contentFor = (out: unknown[], id: string): string =>
+      (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+        .content;
+
+    it("keeps the turn's opening payload live outside the trailing tool block", () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
+      // Everything else outside the trailing block still ages normally.
+      expect(contentFor(out, 'a')).not.toContain('AAA');
+    });
+
+    it('sends the pinned spec verbatim even when the budget prices every payload at zero', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(120_000)),
+        ...later('b', 'B'.repeat(120_000)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 8192 });
+      expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
+    });
+
+    it('does not pin an opening payload larger than the spec ceiling', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        ...spec('D'.repeat(5000)),
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).toBe('Ran: gh issue view 213 (505 bytes output)');
+    });
+
+    it("follows the turn — the previous turn's spec is released", () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        { role: 'user', content: 'now do something else' },
+        ...later('a', 'A'.repeat(500)),
+        ...later('b', 'B'.repeat(500)),
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
+      expect(contentFor(out, 'a')).toContain('AAA'); // the new turn's opening call is pinned now
+    });
+
+    it('keeps the request inside the window with all three floors firing at once', () => {
+      // The pin is a THIRD unconditional verbatim allocation, alongside newest-read protection and
+      // the small-payload floor — each of which can allocate past a spent budget by design. This is
+      // the no-400 guarantee for the case where all three fire in one round on a tight window.
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('S'.repeat(4000)), // pin, at the ceiling
+        ...later('big', 'B'.repeat(200_000)), // shared split, gets capped
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'small1', name: 'grep', args: {} },
+            { id: 'small2', name: 'grep', args: {} },
+            { id: 'read', name: 'read', args: {} },
+          ],
+        },
+        { role: 'tool', callId: 'small1', summary: 'Found 1 matches', payload: 'm'.repeat(1800) },
+        { role: 'tool', callId: 'small2', summary: 'Found 2 matches', payload: 'n'.repeat(1800) },
+        { role: 'tool', callId: 'read', summary: 'Read z', payload: 'R'.repeat(4000) },
+      ];
+      const out = messagesToOpenAI('sys', history, { contextWindow: 8192, calibration: 1 });
+      expect(contentFor(out, 'spec')).toContain('SSS'); // the pin still holds…
+      // …and the whole request still fits the window at the char/4 baseline.
+      expect(requestChars(out)).toBeLessThanOrEqual(8192 * 4);
+    });
+
+    it('is off under prefix-stable, where batch aging owns the pin instead', () => {
+      const history: Message[] = [
+        { role: 'user', content: 'work on issue 213' },
+        ...spec('ISSUE BODY: the thing to fix'),
+        ...later('a', 'A'.repeat(500)),
+      ];
+      (history[2] as Message & { role: 'tool' }).aged = true;
+      const out = messagesToOpenAI('sys', history, { contextWindow: 16384, prefixStable: true });
+      expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
+    });
   });
 
   it('leaves fresh payloads untouched when no context window is given', () => {
@@ -847,8 +960,55 @@ describe('messagesToOpenAI', () => {
       tool_call_id?: string;
       content?: string;
     }>;
-    expect(out.find(m => m.tool_call_id === 'a')?.content).toBe('Read A lines 1-5 of 5');
+    // 'a' is the turn's pinned task spec (#227) so it keeps its payload; 'b' ages to summary. With
+    // dedup on, 'b' would have collapsed to a back-reference — the point here is that it doesn't.
+    expect(out.find(m => m.tool_call_id === 'a')?.content).toContain('Read A lines 1-5 of 5');
     expect(out.find(m => m.tool_call_id === 'b')?.content).toBe('Read A lines 1-5 of 5');
+  });
+});
+
+describe('lastUserMessageIndex', () => {
+  it('finds the newest real user message', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'ok' },
+    ];
+    expect(lastUserMessageIndex(history)).toBe(2);
+  });
+
+  it('skips a slash-command echo, which is scrollback and not a turn boundary', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: '/stats', meta: true },
+    ];
+    expect(lastUserMessageIndex(history)).toBe(0);
+  });
+
+  it('is -1 when no user message exists', () => {
+    expect(lastUserMessageIndex([{ role: 'assistant', content: 'hi' }])).toBe(-1);
+  });
+
+  // What `stale=` on the spec-pin debug line means: a pin at an index BELOW this one was carried
+  // over from an earlier turn rather than established by the current one.
+  it('separates a pin established this turn from one carried over', () => {
+    const carried: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'spec', summary: 'Ran: gh', payload: 'ISSUE' },
+      { role: 'user', content: 'now something else' },
+    ];
+    expect(taskSpecIndex(carried)).toBe(2);
+    expect(taskSpecIndex(carried) < lastUserMessageIndex(carried)).toBe(true); // stale
+    const own: Message[] = [
+      ...carried,
+      { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'b', summary: 'Read a', payload: 'FILE' },
+    ];
+    expect(taskSpecIndex(own)).toBe(5);
+    expect(taskSpecIndex(own) < lastUserMessageIndex(own)).toBe(false); // this turn's own
   });
 });
 

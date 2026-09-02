@@ -1,6 +1,6 @@
 import type { Message } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
-import { findFreshToolBlockStart } from '../provider/toolcall.js';
+import { findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
@@ -118,9 +118,15 @@ export function batchAgePayloads(
   // the assistant message that issued those calls keeps its reasoning (some providers require the
   // active roundtrip's reasoning_content — see toolcall.ts).
   const protect = protectedTailStart(history);
+  // #227: the turn's task-defining payload is exempt. Aging is oldest-first and a skill that
+  // mandates a spec fetch as its opening call puts that payload at the front of the queue, so
+  // without this the definition of the task is always the first thing dropped — and an aged
+  // summary reads as "already handled", not as content that is gone.
+  const specIdx = taskSpecIndex(history);
   let marked = 0;
   for (let i = 0; i < protect; i++) {
     if (estimate() <= target) break;
+    if (i === specIdx) continue;
     const m = history[i];
     if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
       m.reasoningAged = true;
@@ -144,7 +150,9 @@ function protectedTailStart(history: Message[]): number {
 }
 
 // Approximate the characters a message contributes to a request (at rest: tool payloads
-// are already summarized by aging, so only the summary counts).
+// are already summarized by aging, so only the summary counts). The one message this under-prices
+// is the pinned task spec (#227), which still carries its payload; bounded by TASK_SPEC_PIN_CHARS,
+// so the keep-budget walk stays close enough.
 function msgChars(m: Message): number {
   switch (m.role) {
     case 'user':

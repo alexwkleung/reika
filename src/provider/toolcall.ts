@@ -89,6 +89,12 @@ const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
 // smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
 const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 
+// Fix for #227: the largest payload worth pinning as the turn's task spec (see taskSpecIndex).
+// Same number and same trade as PROTECTED_READ_FLOOR_CHARS — a spec is small (the issue that
+// motivated this was 505 bytes), and a first result larger than this is a dump, not a definition,
+// which aging should stay free to collapse.
+const TASK_SPEC_PIN_CHARS = 4096;
+
 export function messagesToOpenAI(
   system: string,
   history: Message[],
@@ -120,7 +126,17 @@ export function messagesToOpenAI(
   // stubbed payload frees its budget for the surviving copies rather than being counted then dropped.
   // Bypassed under prefix-stable: a stub decision flipping when a later duplicate arrives would
   // rewrite mid-history bytes — the exact prefix-cache invalidation that mode exists to prevent.
-  const stubbed = DEDUP_PAYLOADS && !prefixStable ? dedupToolContent(history, freshFrom) : NO_STUBS;
+  // #227: keep the turn's task-defining payload live past the trailing block. Prefix-stable mode
+  // is exempt — there the pin belongs to batch aging (compaction.ts), because resurrecting bytes
+  // that already serialized as a summary is exactly the mid-history rewrite that mode forbids.
+  // Computed before dedup (which needs it to sign the pinned payload correctly) and dropped if
+  // dedup stubbed it anyway — keep-first means the earliest copy survives, so it normally can't.
+  const specCandidate = prefixStable ? -1 : taskSpecIndex(history);
+  const stubbed =
+    DEDUP_PAYLOADS && !prefixStable
+      ? dedupToolContent(history, freshFrom, specCandidate)
+      : NO_STUBS;
+  const specIdx = specCandidate >= 0 && !stubbed.has(specCandidate) ? specCandidate : -1;
   // Reasoning is scratch work that a thinking model emits every round; kept unbounded it
   // starves the budget over a long multi-round turn, but pruning it too hard makes the
   // model re-derive the same analysis across rounds. Keep the last N tool-call rounds (the
@@ -155,6 +171,7 @@ export function messagesToOpenAI(
     keepReasoningFrom,
     stubbed,
     protectedIdx,
+    specIdx,
     opts,
   );
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
@@ -204,7 +221,7 @@ export function messagesToOpenAI(
           content = msg.summary;
         }
       } else {
-        const fresh = i >= freshFrom && msg.payload;
+        const fresh = !!msg.payload && (i >= freshFrom || i === specIdx);
         if (stubbed.has(i)) {
           // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
           // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
@@ -255,13 +272,15 @@ export function messagesToOpenAI(
 // collide with a summary. Two scales fall out of the one rule: simultaneous full-payload dups within a
 // round (fresh↔fresh on the payload) and the aged summary trail across rounds (aged↔aged on the
 // summary). Pure + exported for tests. See DEDUP_PAYLOADS.
-export function dedupToolContent(history: Message[], freshFrom: number): Set<number> {
+export function dedupToolContent(history: Message[], freshFrom: number, specIdx = -1): Set<number> {
   const firstSeen = new Map<string, number>();
   const stubbed = new Set<number>();
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (m.role !== 'tool') continue;
-    const fresh = i >= freshFrom && m.payload;
+    // The pinned task spec (#227) serializes its payload even outside the fresh block, so its
+    // signature is the payload's — keeping "the signature is what WOULD be serialized" true.
+    const fresh = (i >= freshFrom || i === specIdx) && m.payload;
     const sig = fresh ? `p:${m.payload}` : `s:${m.summary}`;
     if (firstSeen.has(sig)) stubbed.add(i);
     else firstSeen.set(sig, i);
@@ -303,12 +322,53 @@ export function findFreshToolBlockStart(history: Message[]): number {
   return 0;
 }
 
+// Index of the CURRENT turn's task-defining tool result — the first tool payload after the last
+// real user message — or -1 when there isn't one worth pinning. Aging is oldest-first with no
+// notion of which payload defines the task, so under a skill that mandates a spec fetch as the
+// opening call (`/issue`, `/review` both do) the payload holding the task definition is always the
+// FIRST one sacrificed, which inverts the priority (#227). `verbatim` only exempts a fresh payload
+// from the char cap and newest-read protection only covers a `read`, so neither reaches a `bash`
+// result holding the issue text. Scoped to the turn in progress and capped at TASK_SPEC_PIN_CHARS,
+// so the pin costs a bounded few KB and the next turn's own opening result moves it. Deliberately
+// not "the first SMALL payload": the opening call is the spec candidate, and a huge one means this
+// turn didn't open with a spec fetch at all. Pure + exported for tests and batch aging.
+// Index of the newest real user message, or -1. "Real" excludes `meta` — a slash-command echo is
+// UI scrollback, never a turn boundary the model sees. taskSpecIndex walks every user message (it
+// falls through turns that landed no tool result); this names just the current one, which is what
+// tells a pin belonging to THIS turn from one carried over from an earlier one.
+export function lastUserMessageIndex(history: Message[]): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role === 'user' && !m.meta) return i;
+  }
+  return -1;
+}
+
+export function taskSpecIndex(history: Message[]): number {
+  for (let u = history.length - 1; u >= 0; u--) {
+    const m = history[u];
+    if (m.role !== 'user' || m.meta) continue;
+    for (let i = u + 1; i < history.length; i++) {
+      const t = history[i];
+      if (t.role !== 'tool' || !t.payload) continue;
+      return t.payload.length <= TASK_SPEC_PIN_CHARS ? i : -1;
+    }
+    // This turn has no tool result yet (round 0), so nothing has replaced the spec — keep the
+    // previous turn's pin rather than releasing it the instant the user hits enter. Releasing at
+    // round 0 would shrink mid-history bytes on the exact request the prompt-prefix warm-up
+    // (agent/warm.ts) prebuilt from the pre-turn history, breaking its append-only guarantee for
+    // no gain. The handover happens one round later, when this turn's own opening result lands.
+  }
+  return -1;
+}
+
 // Per-payload character budget for the fresh tool block, computed to *fit the window*:
 // take the prompt's char budget (window minus response headroom, converted from tokens
 // via the learned calibration), subtract everything else in the request, and split what
 // remains across the fresh payloads. `cap` undefined (no cap) when the context window is
 // unknown; 0 collapses payloads to summary-only when nothing else leaves room.
-// `verbatim` holds the history indices exempt from the cap entirely. The newest live read
+// `verbatim` holds the history indices exempt from the cap entirely. The pinned task spec
+// (specIdx, #227) is exempt unconditionally — taskSpecIndex already bounded it. The newest live read
 // (protectedIdx) is exempt when it fits the fresh budget whole, or — budget notwithstanding —
 // when it is at most PROTECTED_READ_FLOOR_CHARS; a larger read that doesn't fit joins the
 // shared split instead (overflow safety wins at scale). Any fresh payload at or under
@@ -323,6 +383,7 @@ function freshPayloadCharCap(
   keepReasoningFrom: number,
   stubbed: ReadonlySet<number>,
   protectedIdx: number,
+  specIdx: number,
   opts?: {
     contextWindow?: number;
     calibration?: number;
@@ -368,6 +429,9 @@ function freshPayloadCharCap(
   // Payload length of the protected read (0 = none in the live set). Held out of the shared
   // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
   let protectedChars = 0;
+  // Payload length of the pinned task spec (0 = none). Allocated verbatim ahead of everything
+  // else — it is already bounded by TASK_SPEC_PIN_CHARS, and losing it is what #227 is about.
+  let specChars = 0;
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
@@ -383,8 +447,16 @@ function freshPayloadCharCap(
         fresh.push({ idx: i, len: m.payload.length });
         addNonFresh(i, m.summary.length + 2);
       }
-    } else if (!prefixStable && i >= freshFrom && m.role === 'tool' && m.payload) {
-      if (stubbed.has(i)) {
+    } else if (
+      !prefixStable &&
+      (i >= freshFrom || i === specIdx) &&
+      m.role === 'tool' &&
+      m.payload
+    ) {
+      if (i === specIdx) {
+        specChars = m.payload.length;
+        addNonFresh(i, m.summary.length + 2);
+      } else if (stubbed.has(i)) {
         // A stubbed fresh dup carries no payload — only its summary + the fixed stub note — so it
         // must NOT claim a share of the fresh budget (it would shrink the survivors' cap for nothing).
         addNonFresh(i, m.summary.length + DEDUP_PAYLOAD_STUB.length + 2);
@@ -410,11 +482,17 @@ function freshPayloadCharCap(
   const nonFreshTokens =
     (sentChars / CHARS_PER_TOKEN) * sentCalib + (unsentChars / CHARS_PER_TOKEN) * capCalib;
   let freshTokenBudget = promptTokenBudget - nonFreshTokens;
-  // The protected read is allocated FIRST — verbatim if it fits the whole fresh budget, and
+  // The pinned task spec is allocated first and unconditionally (#227) — taskSpecIndex already
+  // bounded it, and losing the definition of the task is the failure this exists to prevent.
+  // The protected read comes next — verbatim if it fits the whole fresh budget, and
   // verbatim regardless of budget up to the floor (the spiral is unrecoverable; a rare overflow
   // is not — see PROTECTED_READ_FLOOR_CHARS). Only a large read that doesn't fit falls back
   // into the shared split. Everything else divides what remains, which may be nothing.
   const verbatim = new Set<number>();
+  if (specChars > 0) {
+    verbatim.add(specIdx);
+    freshTokenBudget -= (specChars / CHARS_PER_TOKEN) * capCalib;
+  }
   if (protectedChars > 0) {
     const protectedTokens = (protectedChars / CHARS_PER_TOKEN) * capCalib;
     if (protectedTokens <= freshTokenBudget || protectedChars <= PROTECTED_READ_FLOOR_CHARS) {
