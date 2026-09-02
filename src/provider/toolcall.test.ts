@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import {
   dedupToolContent,
+  droppedPayloadCount,
   hasDroppedPayloads,
   lastUserMessageIndex,
   messagesToOpenAI,
@@ -1033,6 +1034,18 @@ describe('hasDroppedPayloads (#227)', () => {
   it('is false while the only payload is still fresh', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'BODY')];
     expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('counts how many dropped, for the debug line', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'SPEC'), // pinned, not a drop
+      ...round('a', 'BODY'),
+      ...round('b', 'BODY2'),
+      ...round('c', 'FRESH'),
+    ];
+    expect(droppedPayloadCount(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(true);
   });
 
   it('is false for results that never had a payload (nothing was dropped)', () => {

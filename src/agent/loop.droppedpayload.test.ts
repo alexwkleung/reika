@@ -6,7 +6,8 @@ import type { Message } from '../types.js';
 // compositions (system suffix); the prefix-stable pair, which runs through a different code path in
 // each mode, is in loop.droppedpayload.prefixstable.test.ts. loop.test.ts holds the flag-off guard.
 process.env.REIKA_DROPPED_LEDGER = '1';
-const { buildSteadySystem } = await import('./loop.js');
+const { DROPPED_LEDGER_MARKER, buildDroppedPayloadLedger, buildSteadySystem } =
+  await import('./loop.js');
 
 const explored: Message[] = [
   { role: 'user', content: 'work on issue 213' },
@@ -53,6 +54,12 @@ const pinnedOnly: Message[] = [
 ];
 
 describe('dropped-payload notice in the system suffix (#227)', () => {
+  // The debug line detects the notice by searching the composed request for this exact sentence,
+  // so a reworded ledger must not be able to leave that detection silently broken.
+  it('the marker the debug line looks for is really in the ledger', () => {
+    expect(buildDroppedPayloadLedger()).toContain(DROPPED_LEDGER_MARKER);
+  });
+
   for (const promptMode of ['agent', 'plan'] as const) {
     it(`names dropped payloads once, ahead of the other ledgers, in ${promptMode} mode`, () => {
       const s = buildSteadySystem({

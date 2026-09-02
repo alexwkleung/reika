@@ -25,6 +25,7 @@ import {
   AGE_LOW_FRACTION,
 } from './compaction.js';
 import {
+  droppedPayloadCount,
   findFreshToolBlockStart,
   hasDroppedPayloads,
   lastUserMessageIndex,
@@ -671,11 +672,16 @@ function droppedPayloadLedgerFor(history: Message[], prefixStable: boolean): str
     : '';
 }
 
+// The sentence that identifies this ledger in a composed request. Exported so the debug line can
+// look for it in the ACTUAL system/tail bytes rather than re-running the gate — the composition has
+// four sites and re-deriving "did it fire?" is how a check drifts from what shipped.
+export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
+
 export function buildDroppedPayloadLedger(): string {
   return [
     '--- reika status (auto-generated — not user input) ---',
     'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`).',
-    'Their output was dropped to make room; it is not in your context any more. That is a context',
+    `${DROPPED_LEDGER_MARKER}; it is not in your context any more. That is a context`,
     'limit, not a failed command, and it does not mean you already handled the result. If you need',
     'what one of them returned, re-run that call — do not answer from memory of it.',
   ].join('\n');
@@ -1415,6 +1421,18 @@ export async function runTurn(opts: {
               `stale=${specIdx < lastUserMessageIndex(opts.history)} ` +
               `summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
           : `[reika:debug] round=${i} spec-pin none\n`,
+      );
+      // Dropped-payload ledger (#227). Read off the COMPOSED request — the notice reaches the model
+      // through the system block or the trailing note depending on mode and REIKA_PREFIX_STABLE,
+      // and this block runs after both are final — so `active` is what actually shipped, not a
+      // re-run of the gate. Without it an unmoved dup-aged number is ambiguous: "the notice didn't
+      // help" and "the notice never fired" look identical in the log.
+      const ledgerActive =
+        system.includes(DROPPED_LEDGER_MARKER) || !!roundSuffix?.includes(DROPPED_LEDGER_MARKER);
+      debugLog(
+        `[reika:debug] round=${i} dropped-ledger active=${ledgerActive} ` +
+          `payloads=${droppedPayloadCount(opts.history, prefixStable)} ` +
+          `via=${system.includes(DROPPED_LEDGER_MARKER) ? 'system' : ledgerActive ? 'tail' : 'none'}\n`,
       );
     }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in

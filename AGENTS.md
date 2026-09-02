@@ -300,8 +300,13 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   half-applied flag is the mistake that already happened once here. **Flagged rather than shipped on
   because it is a prompt-level bet with a measurable downside**, not just an absent upside: "re-run
   that call" can induce re-fetching of aged results — the dup-aged read loop the ledger→withdrawal
-  ladder exists for. `evals/readtrace-report.ts` reads `read-trace-summary` (dup-aged / maxrepeat /
-  looped) and `spec-pin` out of a REIKA_DEBUG log and diffs two arms; per the small-model variance
+  ladder exists for. The `dropped-ledger` REIKA_DEBUG line reports
+  `active` / `payloads` / `via` (system suffix vs trailing note), read off the **composed** request
+  rather than by re-running the gate — with four composition sites, re-deriving "did it fire?" is
+  how a check drifts from what shipped, and without it an unmoved `dup-aged` can't distinguish "the
+  notice didn't help" from "the notice never fired". `evals/readtrace-report.ts` reads
+  `read-trace-summary` (dup-aged / maxrepeat / looped) and `spec-pin` out of a REIKA_DEBUG log and
+  diffs two arms; per the small-model variance
   rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
   ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
   serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
