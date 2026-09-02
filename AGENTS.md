@@ -285,12 +285,15 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   made no tool call, and quoted issue text that does not exist. Same affordance rule as the
   truncation marker: an unservable state must be loud rather than silently look like success. Stated
   **once per request as a ledger**, not per message — `hasDroppedPayloads` (`toolcall.ts`, beside the
-  serialization branches it mirrors) gates it, so it can never make a false claim, and it rides the
+  serialization branches it mirrors) gates it, so it can never make a false claim — it excludes the
+  pinned task spec, since the pin keeps that one live and a request whose only summary-only payload
+  is the spec has dropped nothing — and it rides the
   same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
   where the tail is rewritten each round anyway). There are **four** live compositions — {plan,
   agent} x {system suffix, trailing note} — and plan-mode-under-prefix-stable builds its own suffix
-  inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` drives runTurn under
-  the flag and covers all four, because a unit test on `buildSteadySystem` reaches only two. The
+  inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` (system suffix) and
+  `loop.droppedpayload.prefixstable.test.ts` (trailing note, driving runTurn) cover all four between
+  them, because a unit test on `buildSteadySystem` reaches only two. The
   plan **force-write** round is excluded on purpose: that prompt's job is "stop calling tools and
   write the plan", and the notice ends with "re-run that call". All four sites route through one
   `droppedPayloadLedgerFor` gate rather than repeating `FLAG && hasDroppedPayloads(...)`, since a

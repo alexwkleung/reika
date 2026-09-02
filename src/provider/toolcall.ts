@@ -317,11 +317,19 @@ function newestLiveReadIndex(
 // no longer has. Mirrors the two serialization branches in messagesToOpenAI exactly, and lives
 // beside them so the two can't drift; the loop turns a true into the one-line notice that says so
 // (#227). A result that never had a payload doesn't count: nothing was dropped, and there is
-// nothing to re-run for.
+// nothing to re-run for — and neither does the pinned task spec, which is the whole point of the
+// pin: it stays live, so a request whose ONLY summary-only payload is the spec has dropped nothing
+// and must not claim otherwise. Prefix-stable needs no such exclusion — there the pin lives in
+// batch aging, so an unpinned-and-unaged payload is already not counted.
 export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {
   const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
+  const specIdx = prefixStable ? -1 : taskSpecIndex(history);
   return history.some((m, i) =>
-    m.role === 'tool' && m.payload ? (prefixStable ? !!m.aged : i < freshFrom) : false,
+    m.role === 'tool' && m.payload && i !== specIdx
+      ? prefixStable
+        ? !!m.aged
+        : i < freshFrom
+      : false,
   );
 }
 

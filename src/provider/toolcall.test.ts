@@ -1020,9 +1020,11 @@ describe('hasDroppedPayloads (#227)', () => {
   ];
 
   it('is true when a payload-bearing result sits outside the trailing tool block', () => {
+    // 'a' is the turn's pinned spec and stays live, so 'mid' is the one that actually dropped.
     const history: Message[] = [
       { role: 'user', content: 'go' },
-      ...round('a', 'BODY'),
+      ...round('a', 'SPEC'),
+      ...round('mid', 'BODY'),
       ...round('b', 'FRESH'),
     ];
     expect(hasDroppedPayloads(history)).toBe(true);
@@ -1036,6 +1038,42 @@ describe('hasDroppedPayloads (#227)', () => {
   it('is false for results that never had a payload (nothing was dropped)', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a'), ...round('b')];
     expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  // The #228 reconcile: the pin keeps the spec live, so a request whose only summary-only payload
+  // IS the spec has dropped nothing. Without this the notice would fire on every skill-driven turn
+  // from round 1 and claim a loss that never happened.
+  it('does not count the pinned task spec — the pin keeps it live', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('still reports a real drop alongside the pinned spec', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      ...round('a', 'BODY'), // aged out — a genuine loss
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(true);
+  });
+
+  it('counts a former spec once the pin has moved on to a later turn', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      { role: 'user', content: 'now something else' },
+      ...round('own', 'THIS TURN'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(5); // the new turn's own opening result
+    expect(hasDroppedPayloads(history)).toBe(true); // the old spec is genuinely gone now
   });
 
   it('keys on the sticky `aged` mark under prefix-stable, not on the trailing block', () => {
