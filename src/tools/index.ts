@@ -11,6 +11,8 @@ import { askUserTool } from './ask.js';
 import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
 import { SearxngProvider } from '../search/searxng.js';
+import { CdpSearchProvider } from '../search/cdp.js';
+import { ChromeHost } from '../search/_chrome.js';
 import type { SearchProvider } from '../search/types.js';
 
 export function defaultTools(config?: Config): Tool[] {
@@ -76,9 +78,16 @@ export function chatTools(config?: Config): Tool[] {
   return tools;
 }
 
-function makeSearchProvider(config?: Config): SearchProvider | undefined {
-  // SearXNG only — local-first, no third-party tool-use APIs. The SearchProvider
-  // interface stays vendor-neutral so another provider can be slotted in here later.
+// Exported for the precedence test: which provider wins when both are configured is a rule, and a
+// rule stated only in a comment is one refactor away from silently inverting.
+export function makeSearchProvider(config?: Config): SearchProvider | undefined {
+  // Both providers are local-first — no third-party tool-use APIs, no credentials. CDP wins when
+  // enabled (#235): SearXNG reaches engines as a bare HTTP client and gets CAPTCHA'd for it, where
+  // a real browser on a persistent profile keeps being served. SearXNG stays the fallback so a
+  // machine without Chrome, or with the flag off, is exactly as it was.
+  if (config?.cdpSearch) {
+    return new CdpSearchProvider(new ChromeHost({ port: config.cdpPort }));
+  }
   if (config?.searxngUrl) return new SearxngProvider(config.searxngUrl);
   return undefined;
 }
