@@ -85,6 +85,20 @@ const PROTECTED_READ_FLOOR_CHARS = 4096;
 // reads to the model as a broken tool — the classic narrow-and-retry spiral. Same trade as
 // PROTECTED_READ_FLOOR_CHARS: a rare overflow is recoverable, the spiral is not.
 const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
+
+// Aging is a cliff where capping is a slope: an over-cap payload keeps its head, a loud marker and
+// its tail (capPayload), but an AGED one collapses to `summary` and the bytes are simply gone. For
+// most results that is the right trade — the summary says what ran and how it came out. A unified
+// diff is the exception (#227 follow-up). Under `/review` the diff IS the task, it arrives in
+// 300-line pages far over TASK_SPEC_PIN_CHARS so no pin can hold it, and its summary — "Ran: gh pr
+// diff 225 | sed -n '1,300p' (15169 bytes output)" — reads like a result rather than a hole. A model
+// that later goes back to check a hunk reconstructs it from whatever else is in context: on #225,
+// qwen3.8-27b invented an `import { resetSpillDir, spill, sweepStaleSpills }` line the diff never
+// contained, then spent an hour of git archaeology defending it against the file on disk. Keeping
+// the structural lines costs a bounded ~1KB, leaves a map of which files and which line ranges the
+// page covered, and — the point — makes the omission unmistakable so a gap is read as a gap.
+const AGED_DIFF_SKELETON_CHARS = 1024;
+const DIFF_STRUCTURE_RE = /^(?:diff --git |--- |\+\+\+ |@@ )/;
 // Aggregate ceiling on that exemption within one round, so a round of eight small greps can't
 // smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
 const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
@@ -218,7 +232,7 @@ export function messagesToOpenAI(
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
         } else {
-          content = msg.summary;
+          content = agedToolContent(msg);
         }
       } else {
         const fresh = !!msg.payload && (i >= freshFrom || i === specIdx);
@@ -235,7 +249,9 @@ export function messagesToOpenAI(
               : DEDUP_TRAIL_STUB;
         } else {
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          content = fresh ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}` : msg.summary;
+          content = fresh
+            ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}`
+            : agedToolContent(msg);
         }
       }
       const toolName = findToolNameForCall(history, i);
@@ -575,6 +591,49 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
 // The marker makes clear this is a *context* limit, not the command failing — otherwise a
 // model loops re-running with different flags. Full text stays in the PayloadStore.
 const HEAD_FRACTION = 0.4;
+// Structural residue for an aged unified diff, or null when the payload isn't one. `--- ` and
+// `+++ ` alone are not evidence — they open plain prose and markdown rules — so an anchor line
+// (`diff --git ` or a hunk header) is required before anything is kept. A page that carries no
+// structural line at all (the tail of a hunk, e.g. `sed -n '301,317p'`) correctly returns null and
+// ages to its summary: there is no map to keep.
+function diffSkeleton(payload: string): string | null {
+  const structural: string[] = [];
+  let anchored = false;
+  for (const line of payload.split('\n')) {
+    if (!DIFF_STRUCTURE_RE.test(line)) continue;
+    if (line.startsWith('diff --git ') || line.startsWith('@@ ')) anchored = true;
+    structural.push(line);
+  }
+  if (!anchored || structural.length < 2) return null;
+  // Head-first and whole lines only: the early hunks are the ones a later question is most likely
+  // to be about, and half a hunk header is worse than one fewer.
+  let kept = '';
+  let n = 0;
+  for (const line of structural) {
+    if (kept.length + line.length + 1 > AGED_DIFF_SKELETON_CHARS) break;
+    kept += (kept ? '\n' : '') + line;
+    n++;
+  }
+  if (n === 0) return null;
+  const rest = structural.length - n;
+  return (
+    `[reika: the body of this diff is no longer in context — a context-size limit, not a command ` +
+    `error, and re-running this exact call won't help. Only its structure is kept below` +
+    (rest > 0 ? `, and ${rest} further structural line(s) were dropped as well` : '') +
+    `. You do NOT have the changed lines: do not quote a hunk, and do not state what one adds, ` +
+    `removes or imports from memory — re-run the paged command above to see it again. If the file ` +
+    `on disk disagrees with what you recall of this diff, the file is right.]\n\n${kept}`
+  );
+}
+
+// What an aged tool result serializes as. Summary only, except for a diff, which keeps a bounded
+// skeleton so the hole announces itself (AGED_DIFF_SKELETON_CHARS).
+function agedToolContent(msg: Extract<Message, { role: 'tool' }>): string {
+  if (!msg.payload) return msg.summary;
+  const skeleton = diffSkeleton(msg.payload);
+  return skeleton ? `${msg.summary}\n\n${skeleton}` : msg.summary;
+}
+
 function capPayload(payload: string, cap: number | undefined): string {
   if (cap === undefined || payload.length <= cap) return payload;
   // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two

@@ -1012,6 +1012,89 @@ describe('lastUserMessageIndex', () => {
   });
 });
 
+describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
+  // The #225 review run: `gh pr diff | sed -n '1,300p'` (15169 bytes) aged to its summary line at
+  // 11k/24k, and the model then invented an import statement the diff never contained and defended
+  // it against the file on disk for an hour. Too big for the task-spec pin by 4x, so the fix is to
+  // make the hole legible rather than to keep the bytes.
+  const DIFF = [
+    'diff --git a/src/tools/_spill.test.ts b/src/tools/_spill.test.ts',
+    '--- a/src/tools/_spill.test.ts',
+    '+++ b/src/tools/_spill.test.ts',
+    '@@ -1,6 +1,7 @@ import {',
+    '   spillResult,',
+    '+  sweepStaleSpills,',
+    ' } from ./_spill.js;',
+    '@@ -106,6 +107,114 @@ describe(spillResult, () => {',
+    '+const ref = await spill(grep, still needed);',
+  ].join('\n');
+
+  const history = (payload: string): Message[] => [
+    { role: 'user', content: 'review 225' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+    { role: 'tool', callId: 'spec', summary: 'Ran: gh pr view 225', payload: 'PR BODY' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'd', name: 'bash', args: {} }] },
+    { role: 'tool', callId: 'd', summary: 'Ran: gh pr diff 225 (15169 bytes output)', payload },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'z', name: 'read', args: {} }] },
+    { role: 'tool', callId: 'z', summary: 'Read x', payload: 'Z'.repeat(40_000) },
+  ];
+  const contentFor = (out: unknown[], id: string): string =>
+    (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+      .content;
+
+  it('keeps file and hunk headers when the diff ages out', () => {
+    const out = messagesToOpenAI('sys', history(DIFF), { contextWindow: 8192 });
+    const aged = contentFor(out, 'd');
+    expect(aged).toContain('Ran: gh pr diff 225');
+    expect(aged).toContain('diff --git a/src/tools/_spill.test.ts');
+    expect(aged).toContain('@@ -106,6 +107,114 @@');
+    // The bodies are exactly what must NOT survive — that is what got quoted from memory.
+    expect(aged).not.toContain('sweepStaleSpills,');
+    expect(aged).not.toContain('still needed');
+  });
+
+  it('tells the model it no longer has the hunks, and that disk wins', () => {
+    const out = messagesToOpenAI('sys', history(DIFF), { contextWindow: 8192 });
+    const aged = contentFor(out, 'd');
+    expect(aged).toContain('no longer in context');
+    expect(aged).toContain('do not state what one adds');
+    expect(aged).toContain('the file is right');
+  });
+
+  it('is bounded, so a huge diff cannot re-inflate the request as a skeleton', () => {
+    const huge = Array.from(
+      { length: 4000 },
+      (_, i) => `@@ -${i},6 +${i},7 @@ hunk ${i}\n+body line that must not be kept ${i}`,
+    ).join('\n');
+    const out = messagesToOpenAI('sys', history(huge), { contextWindow: 8192 });
+    const aged = contentFor(out, 'd');
+    expect(aged.length).toBeLessThan(2048);
+    expect(aged).toContain('further structural line(s) were dropped as well');
+    expect(aged).not.toContain('body line that must not be kept');
+  });
+
+  it('leaves a non-diff payload aging to its summary alone', () => {
+    const out = messagesToOpenAI('sys', history('just some command output\nwith no hunks'), {
+      contextWindow: 8192,
+    });
+    expect(contentFor(out, 'd')).toBe('Ran: gh pr diff 225 (15169 bytes output)');
+  });
+
+  it('ages a mid-hunk page with no structural lines to its summary alone', () => {
+    // `sed -n '301,317p'` lands inside a hunk body: no headers, so there is no map worth keeping.
+    const tail = ['+      // Gone already.', '+    }', '+  }', '+  return removed;'].join('\n');
+    const out = messagesToOpenAI('sys', history(tail), { contextWindow: 8192 });
+    expect(contentFor(out, 'd')).toBe('Ran: gh pr diff 225 (15169 bytes output)');
+  });
+
+  it('does not touch the diff while it is still live', () => {
+    const out = messagesToOpenAI('sys', history(DIFF).slice(0, 5), { contextWindow: 32768 });
+    const live = contentFor(out, 'd');
+    expect(live).toContain('+  sweepStaleSpills,');
+    expect(live).not.toContain('no longer in context');
+  });
+});
+
 describe('dedupToolContent', () => {
   const tool = (callId: string, summary: string, payload?: string): Message => ({
     role: 'tool',
