@@ -1,5 +1,6 @@
 import { debugLog } from '../debug.js';
 import { ChromeHost, type BrowserHost } from './_chrome.js';
+import { SearchUnavailableError } from './types.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
 // Brave, not Google. Measured on a live SERP: Google and Bing launder every outbound link through
@@ -106,8 +107,9 @@ export class CdpSearchProvider implements SearchProvider {
       // reported as an empty result set reads to the model as a bad query, and it rewords and
       // retries against a wall that will refuse every variant identically.
       if (data.blocked) {
-        throw new Error(
-          'the search page served a bot check instead of results — open the browser profile and complete it once',
+        throw new SearchUnavailableError(
+          'the search page served a bot check instead of results',
+          'The search browser was challenged. Open its window (the profile at ~/.config/reika/chrome) and complete the check once — it persists for that profile.',
         );
       }
       const results: SearchResult[] = (data.results ?? [])
@@ -120,7 +122,7 @@ export class CdpSearchProvider implements SearchProvider {
           source: 'brave',
         }));
       if (results.length === 0 && (data.anchors ?? 0) < MIN_SERP_ANCHORS) {
-        throw new Error(
+        throw new SearchUnavailableError(
           `the search page returned no result list (${data.anchors ?? 0} links on the page) — likely a challenge or interstitial`,
         );
       }

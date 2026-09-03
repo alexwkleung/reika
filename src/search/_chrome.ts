@@ -3,6 +3,7 @@ import { accessSync, constants, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { debugLog } from '../debug.js';
+import { SearchUnavailableError } from './types.js';
 
 // A tab, as the search provider needs it. The provider depends on this and nothing else, so its
 // extraction and parsing are testable without a browser on the machine running the suite.
@@ -112,8 +113,9 @@ export class ChromeHost implements BrowserHost {
   private async launch(): Promise<void> {
     const exe = this.binary ?? findChrome();
     if (!exe) {
-      throw new Error(
-        'no Chrome or Chromium found — install one or set REIKA_CHROME_PATH to its binary',
+      throw new SearchUnavailableError(
+        'no Chrome or Chromium found',
+        'CDP search needs a browser. Install Chrome or Chromium, set REIKA_CHROME_PATH to its binary, or unset REIKA_CDP_SEARCH to fall back to SearXNG.',
       );
     }
     mkdirSync(this.profileDir, { recursive: true });

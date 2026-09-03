@@ -9,6 +9,7 @@ import type {
   Tool,
   ToolResult,
   Usage,
+  SearchHealth,
   WebBudget,
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
@@ -782,6 +783,10 @@ export async function runTurn(opts: {
     searches: { used: 0, max: opts.config.maxSearchesPerTurn },
     fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
   };
+  // Latched when a search fails for a reason that is a property of the provider rather than the
+  // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
+  // well find the block cleared, so it is never carried across one.
+  const searchHealth: SearchHealth = {};
   // Track URLs successfully fetched this turn. Stamped onto the final assistant
   // message as `sources` for deterministic citation rendering (no model recall).
   const fetchedUrls = new Set<string>();
@@ -2006,6 +2011,7 @@ export async function runTurn(opts: {
             cwd: opts.bundle.cwd,
             ignore: opts.bundle.ignore,
             webBudget,
+            searchHealth,
             fetchedUrls,
             resolvedDeps,
             groundedUrls,

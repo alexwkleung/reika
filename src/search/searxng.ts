@@ -1,4 +1,5 @@
 import { debugLog } from '../debug.js';
+import { SearchUnavailableError } from './types.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -53,7 +54,10 @@ export class SearxngProvider implements SearchProvider {
       // that burns the turn's search budget while every attempt is refused for the same reason.
       // Raising here routes it through the tool's failure path, where the cause is stated instead.
       if (results.length === 0 && down) {
-        throw new Error(`every SearXNG engine was unavailable (${down})`);
+        throw new SearchUnavailableError(
+          `every SearXNG engine was unavailable (${down})`,
+          'Every engine this SearXNG instance tried refused the request. REIKA_CDP_SEARCH=1 drives a real Chrome instead, which keeps being served where a bare HTTP client is blocked.',
+        );
       }
 
       return results;

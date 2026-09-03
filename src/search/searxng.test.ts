@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearxngProvider } from './searxng.js';
+import { SearchUnavailableError } from './types.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -145,6 +146,17 @@ describe('SearxngProvider — blocked engines are a failure, not an empty result
     await expect(provider.search('q')).rejects.toThrow(
       /every SearXNG engine was unavailable.*duckduckgo: CAPTCHA/,
     );
+  });
+
+  // Typed, not a bare Error: the tool latches on this class specifically, so a plain throw here
+  // would silently turn a turn-wide block back into three separate reworded attempts.
+  it('raises the typed provider-level failure, carrying the remedy for the user', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse(allBlocked));
+    const provider = new SearxngProvider('http://localhost:8888');
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SearchUnavailableError);
+    expect((err as SearchUnavailableError).remedy).toMatch(/REIKA_CDP_SEARCH=1/);
   });
 
   it('still reports a genuine zero-result search as empty, not as a failure', async () => {

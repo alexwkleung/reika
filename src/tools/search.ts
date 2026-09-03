@@ -1,3 +1,4 @@
+import { SearchUnavailableError } from '../search/types.js';
 import type { SearchProvider } from '../search/types.js';
 import type { Tool } from '../types.js';
 
@@ -16,6 +17,16 @@ export function createSearchTool(provider: SearchProvider): Tool {
     async run(args, ctx) {
       const query = String(args.query ?? '').trim();
       if (!query) return { summary: 'Search failed: empty query' };
+
+      // A provider-level failure already reported this turn: no browser, a bot check, every engine
+      // refused. Re-attempting cannot succeed, so say so without spending a call or the budget —
+      // the model was going to reword and try again otherwise, which is what burns a 3-search turn
+      // on one condition. Worded as still-blocked rather than a fresh problem for the same reason.
+      const latched = ctx.searchHealth?.unavailable;
+      if (latched) {
+        return { summary: `Search still unavailable this turn: ${latched}` };
+      }
+
       const budget = ctx.webBudget?.searches;
       if (budget && budget.used >= budget.max) {
         return {
@@ -40,6 +51,21 @@ export function createSearchTool(provider: SearchProvider): Tool {
           payload,
         };
       } catch (e) {
+        if (e instanceof SearchUnavailableError) {
+          // Latch for the rest of the turn, and refund the call. The cap exists to stop runaway
+          // loops hammering upstream engines (AGENTS.md); a search that never got an answer — a
+          // missing browser reaches nothing at all — is not the egress it was built to limit.
+          if (ctx.searchHealth) ctx.searchHealth.unavailable = e.message;
+          if (budget) budget.used--;
+          return {
+            summary: `Search failed: ${e.message}`,
+            // The remedy is for the user, not the model: it cannot set an environment variable, and
+            // naming one in its context is noise it can only ignore. Emitted once — on the failure
+            // that sets the latch — so a turn with three searches doesn't print three identical
+            // warnings.
+            ...(e.remedy ? { notice: { tone: 'warn' as const, content: e.remedy } } : {}),
+          };
+        }
         return { summary: `Search failed: ${(e as Error).message}` };
       }
     },

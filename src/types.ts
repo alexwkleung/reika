@@ -208,10 +208,18 @@ export type WebBudget = {
   fetches: { used: number; max: number };
 };
 
+// Set once per turn when a search fails for a provider-level reason (see SearchUnavailableError).
+// Shared by reference like webBudget: the object is what carries the latch between calls, since a
+// fresh ToolContext is built per tool call.
+export type SearchHealth = { unavailable?: string };
+
 export type ToolContext = {
   cwd: string;
   ignore?: Ignore;
   webBudget?: WebBudget;
+  // Per-turn latch for a provider-level search failure. Once set, further searches in the turn
+  // report the same reason without re-attempting or spending budget.
+  searchHealth?: SearchHealth;
   // Tools push successfully-fetched URLs here; the loop stamps them onto the
   // final assistant message as `sources`, rendered deterministically in scrollback.
   fetchedUrls?: Set<string>;

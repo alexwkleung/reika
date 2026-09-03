@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CdpSearchProvider } from './cdp.js';
 import { findChrome, type BrowserHost, type TabHandle } from './_chrome.js';
+import { SearchUnavailableError } from './types.js';
 
 // The provider depends only on BrowserHost, so extraction and parsing are exercised without a
 // browser on the machine running the suite — the page's answer is the thing under test.
@@ -80,6 +81,21 @@ describe('CdpSearchProvider', () => {
   it('raises on a bot check rather than reporting an empty result set', async () => {
     const provider = new CdpSearchProvider(hostReturning(page([], true)));
     await expect(provider.search('q')).rejects.toThrow(/bot check/);
+  });
+
+  it('raises the typed provider-level failure on a bot check, so the turn latches', async () => {
+    const provider = new CdpSearchProvider(hostReturning(page([], true)));
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SearchUnavailableError);
+    expect((err as SearchUnavailableError).remedy).toMatch(/complete the check once/);
+  });
+
+  // A page that ran no script is not the provider being unavailable — the next query may load fine,
+  // so this must stay an ordinary error or one bad page would mute search for the whole turn.
+  it('keeps a page-level failure query-level, not provider-level', async () => {
+    const provider = new CdpSearchProvider(hostReturning('<!doctype html>'));
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(SearchUnavailableError);
   });
 
   it('raises when the page ran no script at all', async () => {
