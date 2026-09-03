@@ -73,3 +73,43 @@ describe('debugLog session reset (#114)', () => {
     expect(readFileSync(path, 'utf8')).toBe('untouched\n');
   });
 });
+
+describe('formatExperimentFlags', () => {
+  // Written after an A/B was lost to an arm run from a build that did not contain the feature: the
+  // flag it set was read by nothing, and by filename the two arms looked like a clean on/off pair.
+  const clear = (): void => {
+    for (const k of Object.keys(process.env)) if (k.startsWith('REIKA_')) delete process.env[k];
+  };
+
+  it('reports numeric flag values verbatim, sorted, so two logs diff cleanly', async () => {
+    clear();
+    process.env.REIKA_PREFIX_STABLE = '1';
+    process.env.REIKA_DROPPED_LEDGER = '0';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    const { formatExperimentFlags } = await freshDebug();
+    const line = formatExperimentFlags();
+    expect(line).toContain('context-window=16384');
+    expect(line).toContain('dropped-ledger=0');
+    expect(line).toContain('prefix-stable=1');
+    expect(line.indexOf('context-window')).toBeLessThan(line.indexOf('dropped-ledger'));
+  });
+
+  it('never writes a non-numeric value — keys, URLs and home paths stay out of the log', async () => {
+    clear();
+    process.env.REIKA_DEBUG_FILE = '/Users/someone/private/on.log';
+    process.env.REIKA_SEARXNG_URL = 'http://localhost:8888';
+    const { formatExperimentFlags } = await freshDebug();
+    const line = formatExperimentFlags();
+    expect(line).toContain('debug-file=set');
+    expect(line).toContain('searxng-url=set');
+    expect(line).not.toContain('/Users/someone');
+    expect(line).not.toContain('localhost:8888');
+  });
+
+  it('says so when nothing is set, rather than emitting a bare line', async () => {
+    clear();
+    const { formatExperimentFlags } = await freshDebug();
+    expect(await freshDebug().then(m => m.formatExperimentFlags())).toContain('(none set)');
+    expect(formatExperimentFlags()).toContain('version=');
+  });
+});

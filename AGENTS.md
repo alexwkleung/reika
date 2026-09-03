@@ -305,8 +305,14 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   rather than by re-running the gate — with four composition sites, re-deriving "did it fire?" is
   how a check drifts from what shipped, and without it an unmoved `dup-aged` can't distinguish "the
   notice didn't help" from "the notice never fired". `evals/readtrace-report.ts` reads
-  `read-trace-summary` (dup-aged / maxrepeat / looped) and `spec-pin` out of a REIKA_DEBUG log and
-  diffs two arms; per the small-model variance
+  `read-trace-summary` (dup-aged / maxrepeat / looped), `spec-pin` and `dropped-ledger` out of a
+  REIKA_DEBUG log and diffs two arms — and **validates the arms before the numbers**: it stops on an
+  arm whose build has no `dropped-ledger` lines at all (the feature isn't in that build, so the flag
+  was read by nothing), and calls two arms with identical `flags` lines a variance baseline rather
+  than a result. Every session writes that `flags` line (`debug.ts` `formatExperimentFlags`,
+  enumerated from the environment so it can't go stale, values numeric-or-`set` so keys and paths
+  never land in a log), because an A/B was once lost to an arm run from the wrong branch: by
+  filename it looked like a clean on/off pair, and both arms were the same configuration; per the small-model variance
   rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
   ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
   serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
