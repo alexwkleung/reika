@@ -315,6 +315,13 @@ export type Config = {
   subagentApiKey?: string;
   subagentMaxTurns: number;
   searxngUrl?: string;
+  // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
+  // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which
+  // is the shape they CAPTCHA — a browser with a persistent profile is the one that stays served.
+  cdpSearch?: boolean;
+  // Port for Chrome's remote debugging endpoint (REIKA_CDP_PORT). An instance already listening
+  // here is reused rather than relaunched.
+  cdpPort?: number;
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;
