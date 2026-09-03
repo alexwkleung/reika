@@ -382,4 +382,4 @@ There's more that isn't covered.
 
 ## Inspired by
 
-Inspired by Claude Code, Codex, Crush, OpenCode, Pi, DeepSeek Harness, Qwen Code, Kimi Code CLI, and Gemini CLI.
+Inspired by Claude Code, Codex, Crush, OpenCode, Pi, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, and DS4.
