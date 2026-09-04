@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import {
   dedupToolContent,
+  droppedPayloadCount,
+  hasDroppedPayloads,
   lastUserMessageIndex,
   messagesToOpenAI,
   taskSpecIndex,
@@ -1009,6 +1011,94 @@ describe('lastUserMessageIndex', () => {
     ];
     expect(taskSpecIndex(own)).toBe(5);
     expect(taskSpecIndex(own) < lastUserMessageIndex(own)).toBe(false); // this turn's own
+  });
+});
+
+describe('hasDroppedPayloads (#227)', () => {
+  const round = (id: string, payload?: string): Message[] => [
+    { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: {} }] },
+    { role: 'tool', callId: id, summary: `${id} summary`, ...(payload ? { payload } : {}) },
+  ];
+
+  it('is true when a payload-bearing result sits outside the trailing tool block', () => {
+    // 'a' is the turn's pinned spec and stays live, so 'mid' is the one that actually dropped.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'SPEC'),
+      ...round('mid', 'BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(hasDroppedPayloads(history)).toBe(true);
+  });
+
+  it('is false while the only payload is still fresh', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'BODY')];
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('counts how many dropped, for the debug line', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'SPEC'), // pinned, not a drop
+      ...round('a', 'BODY'),
+      ...round('b', 'BODY2'),
+      ...round('c', 'FRESH'),
+    ];
+    expect(droppedPayloadCount(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(true);
+  });
+
+  it('is false for results that never had a payload (nothing was dropped)', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a'), ...round('b')];
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  // The #228 reconcile: the pin keeps the spec live, so a request whose only summary-only payload
+  // IS the spec has dropped nothing. Without this the notice would fire on every skill-driven turn
+  // from round 1 and claim a loss that never happened.
+  it('does not count the pinned task spec — the pin keeps it live', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(false);
+  });
+
+  it('still reports a real drop alongside the pinned spec', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      ...round('a', 'BODY'), // aged out — a genuine loss
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(2);
+    expect(hasDroppedPayloads(history)).toBe(true);
+  });
+
+  it('counts a former spec once the pin has moved on to a later turn', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'work on issue 213' },
+      ...round('spec', 'ISSUE BODY'),
+      { role: 'user', content: 'now something else' },
+      ...round('own', 'THIS TURN'),
+      ...round('b', 'FRESH'),
+    ];
+    expect(taskSpecIndex(history)).toBe(5); // the new turn's own opening result
+    expect(hasDroppedPayloads(history)).toBe(true); // the old spec is genuinely gone now
+  });
+
+  it('keys on the sticky `aged` mark under prefix-stable, not on the trailing block', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'BODY'),
+      ...round('b', 'FRESH'),
+    ];
+    // Prefix-stable keeps every unaged payload live however old it is.
+    expect(hasDroppedPayloads(history, true)).toBe(false);
+    (history[2] as Message & { role: 'tool' }).aged = true;
+    expect(hasDroppedPayloads(history, true)).toBe(true);
   });
 });
 

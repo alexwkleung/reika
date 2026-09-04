@@ -312,6 +312,31 @@ function newestLiveReadIndex(
   return -1;
 }
 
+// Does this request drop any tool payload it once carried? True when at least one tool message
+// will serialize to its summary alone despite HAVING a payload — i.e. content the model saw and
+// no longer has. Mirrors the two serialization branches in messagesToOpenAI exactly, and lives
+// beside them so the two can't drift; the loop turns a true into the one-line notice that says so
+// (#227). A result that never had a payload doesn't count: nothing was dropped, and there is
+// nothing to re-run for — and neither does the pinned task spec, which is the whole point of the
+// pin: it stays live, so a request whose ONLY summary-only payload is the spec has dropped nothing
+// and must not claim otherwise. Prefix-stable needs no such exclusion — there the pin lives in
+// batch aging, so an unpinned-and-unaged payload is already not counted.
+export function droppedPayloadCount(history: Message[], prefixStable = false): number {
+  const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
+  const specIdx = prefixStable ? -1 : taskSpecIndex(history);
+  return history.filter((m, i) =>
+    m.role === 'tool' && m.payload && i !== specIdx
+      ? prefixStable
+        ? !!m.aged
+        : i < freshFrom
+      : false,
+  ).length;
+}
+
+export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {
+  return droppedPayloadCount(history, prefixStable) > 0;
+}
+
 // Start index of the trailing block of tool messages — tool messages at or after
 // this index keep their payloads; earlier ones collapse to summary. Exported for
 // batch aging (agent/compaction.ts), which must never age the active round's results.

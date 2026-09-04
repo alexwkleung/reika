@@ -290,6 +290,48 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   up to `TASK_SPEC_PIN_CHARS` on the previous task's detail until this turn lands its own first tool
   result). `stale=true` is the one behaviour here that could read as task conflation, so it is
   greppable rather than something to re-derive from the history.
+- **Dropped-payload ledger** (`REIKA_DROPPED_LEDGER=1`, default off, experimental — `loop.ts`
+  `buildDroppedPayloadLedger` — #227): an aged tool
+  message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes output)` — which reads
+  to a model as a result it already saw and handled, not as content that is GONE. Observed on a
+  `/issue` turn: after both `gh` payloads aged, the model wrote "let me re-read the issue once more",
+  made no tool call, and quoted issue text that does not exist. Same affordance rule as the
+  truncation marker: an unservable state must be loud rather than silently look like success. Stated
+  **once per request as a ledger**, not per message — `hasDroppedPayloads` (`toolcall.ts`, beside the
+  serialization branches it mirrors) gates it, so it can never make a false claim — it excludes the
+  pinned task spec, since the pin keeps that one live and a request whose only summary-only payload
+  is the spec has dropped nothing — and it rides the
+  same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
+  where the tail is rewritten each round anyway). There are **four** live compositions — {plan,
+  agent} x {system suffix, trailing note} — and plan-mode-under-prefix-stable builds its own suffix
+  inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` (system suffix) and
+  `loop.droppedpayload.prefixstable.test.ts` (trailing note, driving runTurn) cover all four between
+  them, because a unit test on `buildSteadySystem` reaches only two. The
+  plan **force-write** round is excluded on purpose: that prompt's job is "stop calling tools and
+  write the plan", and the notice ends with "re-run that call". All four sites route through one
+  `droppedPayloadLedgerFor` gate rather than repeating `FLAG && hasDroppedPayloads(...)`, since a
+  half-applied flag is the mistake that already happened once here. **Flagged rather than shipped on
+  because it is a prompt-level bet with a measurable downside**, not just an absent upside: "re-run
+  that call" can induce re-fetching of aged results — the dup-aged read loop the ledger→withdrawal
+  ladder exists for. The `dropped-ledger` REIKA_DEBUG line reports
+  `active` / `payloads` / `via` (system suffix vs trailing note), read off the **composed** request
+  rather than by re-running the gate — with four composition sites, re-deriving "did it fire?" is
+  how a check drifts from what shipped, and without it an unmoved `dup-aged` can't distinguish "the
+  notice didn't help" from "the notice never fired". `evals/readtrace-report.ts` reads
+  `read-trace-summary` (dup-aged / maxrepeat / looped), `spec-pin` and `dropped-ledger` out of a
+  REIKA_DEBUG log and diffs two arms — and **validates the arms before the numbers**: it stops on an
+  arm whose build has no `dropped-ledger` lines at all (the feature isn't in that build, so the flag
+  was read by nothing), and calls two arms with identical `flags` lines a variance baseline rather
+  than a result. Every session writes that `flags` line (`debug.ts` `formatExperimentFlags`,
+  enumerated from the environment so it can't go stale, values numeric-or-`set` so keys and paths
+  never land in a log), because an A/B was once lost to an arm run from the wrong branch: by
+  filename it looked like a clean on/off pair, and both arms were the same configuration; per the small-model variance
+  rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
+  ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
+  serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
+  the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition
+  order matters — it goes first, ahead of the other ledgers, in **both** `buildSteadySystem` and the
+  agent loop's inline mirror, or the warm prefix diverges from round 0 (`warm.test.ts` locks them).
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
   `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
   earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read

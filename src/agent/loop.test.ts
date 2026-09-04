@@ -327,6 +327,27 @@ describe('buildSteadySystem', () => {
     expect(at(0).startsWith('BASE\n\n')).toBe(true);
   });
 
+  it('emits no dropped-payload notice while REIKA_DROPPED_LEDGER is unset (#227)', () => {
+    // Strict no-op when off. This file sets no flags, so it is the honest default-config check —
+    // the flag-on compositions live in loop.droppedpayload*.test.ts.
+    const dropped: Message[] = [
+      ...explored.slice(0, 2),
+      { role: 'tool', callId: 'c1', summary: 'Ran: gh (505 bytes output)', payload: 'ISSUE' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c2', summary: 'Read b.ts', payload: 'BODY' },
+    ];
+    for (const promptMode of ['agent', 'plan'] as const) {
+      const s = buildSteadySystem({
+        baseSystem: 'BASE',
+        promptMode,
+        history: dropped,
+        round: 0,
+        planSteps: null,
+      });
+      expect(s).not.toContain('dropped to make room');
+    }
+  });
+
   it('plan mode with nothing explored nudges toward a first tool call', () => {
     const s = buildSteadySystem({
       baseSystem: 'BASE',

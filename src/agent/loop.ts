@@ -26,7 +26,9 @@ import {
   AGE_LOW_FRACTION,
 } from './compaction.js';
 import {
+  droppedPayloadCount,
   findFreshToolBlockStart,
+  hasDroppedPayloads,
   lastUserMessageIndex,
   taskSpecIndex,
 } from '../provider/toolcall.js';
@@ -266,6 +268,15 @@ const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
 // liveness needs the batch-aging watermark to bound it); silently inactive without one. Off by
 // default for A/B; strict no-op when off.
 const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE === '1';
+// EXPERIMENT (dropped-payload notice, #227): tell the model, once per request, that some tool
+// results above show only a summary because their output was dropped. Flagged rather than shipped
+// on, because it is a *prompt-level* bet and this repo's history says those often bench null (the
+// preventive-alignment layer; REIKA_DEDUP_PAYLOADS). It also has a real downside to measure, not
+// just an absent upside: "re-run that call" can induce re-fetching of aged results, which costs
+// rounds and re-inflates the fresh block — the dup-aged read loop the ledger→withdrawal ladder
+// exists for. `read-trace-summary` (dup-aged / maxrepeat / looped, emitted per turn) is the metric;
+// run it against the same task with the flag on and off. Strict no-op when off.
+const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER === '1';
 // EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
 // blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
 // a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
@@ -430,14 +441,18 @@ export function buildSteadySystem(opts: {
   round: number;
   planSteps: PlanStep[] | null;
 }): string {
+  // First, and in both modes: settled context about the request itself, not a directive. Aging hits
+  // plan exploration exactly as it hits an agent turn.
+  const droppedLedger = droppedPayloadLedgerFor(opts.history, false);
+  const dropped = droppedLedger ? '\n\n' + droppedLedger : '';
   if (opts.promptMode === 'plan') {
-    return opts.baseSystem + '\n\n' + buildPlanLedger(opts.history, opts.round);
+    return opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round);
   }
   const planLedger =
     PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
       ? '\n\n' + buildPlanProgressLedger(opts.planSteps)
       : '';
-  return opts.baseSystem + planLedger;
+  return opts.baseSystem + dropped + planLedger;
 }
 
 // Whether the prefix-stable experiment governs requests for this window config — the same
@@ -632,6 +647,45 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
 // this keeps that spacing when one is concatenated directly rather than through suffixParts.
 function prefixed(ledger: string): string {
   return ledger ? '\n' + ledger : '';
+}
+
+// An aged tool message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes
+// output)` — which reads to a model as a result it already saw and handled, not as content that is
+// GONE (#227). Observed on a `/issue` turn: after both `gh` payloads aged, the model wrote "let me
+// re-read the issue once more", made no tool call, and quoted issue text that does not exist. Same
+// affordance rule as capPayload's truncation marker (#102): an unservable state must be loud rather
+// than silently look like success.
+//
+// Stated ONCE per request rather than per message. The per-message form was measured at ~2,700
+// chars on a 30-round turn (~19% of the serialized request) — the note runs ~2.7x the aged summary
+// it annotates — and being mid-history it moves the compaction trigger, the keep boundary and the
+// cap arithmetic at once. As a ledger it costs one line, rides the same transport as every other
+// ledger (system suffix, or the trailing note under REIKA_PREFIX_STABLE where the tail is rewritten
+// each round anyway), and touches no budget walk. Emitted only when something actually was dropped,
+// so it can never make a false claim.
+// Single gate for all four compositions (see buildDroppedPayloadLedger). Routing every call site
+// through one predicate is deliberate: the first version of this change reached only two of the
+// four, and a bare `FLAG && hasDroppedPayloads(...)` at each site is the same mistake waiting to
+// happen. Returns '' when the flag is off or nothing was actually dropped.
+function droppedPayloadLedgerFor(history: Message[], prefixStable: boolean): string {
+  return DROPPED_LEDGER && hasDroppedPayloads(history, prefixStable)
+    ? buildDroppedPayloadLedger()
+    : '';
+}
+
+// The sentence that identifies this ledger in a composed request. Exported so the debug line can
+// look for it in the ACTUAL system/tail bytes rather than re-running the gate — the composition has
+// four sites and re-deriving "did it fire?" is how a check drifts from what shipped.
+export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
+
+export function buildDroppedPayloadLedger(): string {
+  return [
+    '--- reika status (auto-generated — not user input) ---',
+    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`).',
+    `${DROPPED_LEDGER_MARKER}; it is not in your context any more. That is a context`,
+    'limit, not a failed command, and it does not mean you already handled the result. If you need',
+    'what one of them returned, re-run that call — do not answer from memory of it.',
+  ].join('\n');
 }
 
 export function buildQuestionLedger(answers: { question: string; answer: string }[]): string {
@@ -1046,6 +1100,11 @@ export async function runTurn(opts: {
     let convergeSteerNow = false;
     if (opts.promptMode === 'plan') {
       if (planForceWrite) {
+        // No dropped-payload notice here, deliberately: the force-write prompt's whole job is
+        // "stop calling tools and write the plan from what you have", and the notice ends with
+        // "re-run that call" — handing the model a contradiction on the one round it must not
+        // explore. Dropped output is a reason the plan may be thin, not a reason to reopen the
+        // exploration the force-write exists to end.
         system = buildPlanWritePrompt(steerRetryActive);
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
@@ -1085,8 +1144,15 @@ export async function runTurn(opts: {
       } else if (prefixStable) {
         // The ledger changes every round (files examined, escalating pressure); in the system
         // suffix that re-processes the whole prompt each round. As the tail note it costs nothing.
+        // The dropped-payload notice leads, same as buildSteadySystem's plan branch: aging hits
+        // exploration exactly as it hits an agent turn, and this path is the only one a
+        // prefix-stable plan run takes.
         system = baseSystem;
-        roundSuffix = [buildQuestionLedger(questionAnswers), buildPlanLedger(opts.history, i)]
+        roundSuffix = [
+          droppedPayloadLedgerFor(opts.history, prefixStable),
+          buildQuestionLedger(questionAnswers),
+          buildPlanLedger(opts.history, i),
+        ]
           .filter(Boolean)
           .join('\n\n')
           .trimStart();
@@ -1247,7 +1313,10 @@ export async function runTurn(opts: {
       // warm.test.ts lock the two together.
       const suffixParts: string[] = [];
       // First: this is settled context, not a directive, and the directives below are ordered by how
-      // close to generation they need to sit.
+      // close to generation they need to sit. Order must match buildSteadySystem's composition or
+      // the warm prefix diverges from round 0 (warm.test.ts locks the two).
+      const droppedLedger = droppedPayloadLedgerFor(opts.history, prefixStable);
+      if (droppedLedger) suffixParts.push(droppedLedger);
       const answered = buildQuestionLedger(questionAnswers);
       if (answered) suffixParts.push(answered);
       if (PLAN_ALIGN && planSteps && planSteps.some(s => !s.done)) {
@@ -1357,6 +1426,18 @@ export async function runTurn(opts: {
               `stale=${specIdx < lastUserMessageIndex(opts.history)} ` +
               `summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
           : `[reika:debug] round=${i} spec-pin none\n`,
+      );
+      // Dropped-payload ledger (#227). Read off the COMPOSED request — the notice reaches the model
+      // through the system block or the trailing note depending on mode and REIKA_PREFIX_STABLE,
+      // and this block runs after both are final — so `active` is what actually shipped, not a
+      // re-run of the gate. Without it an unmoved dup-aged number is ambiguous: "the notice didn't
+      // help" and "the notice never fired" look identical in the log.
+      const ledgerActive =
+        system.includes(DROPPED_LEDGER_MARKER) || !!roundSuffix?.includes(DROPPED_LEDGER_MARKER);
+      debugLog(
+        `[reika:debug] round=${i} dropped-ledger active=${ledgerActive} ` +
+          `payloads=${droppedPayloadCount(opts.history, prefixStable)} ` +
+          `via=${system.includes(DROPPED_LEDGER_MARKER) ? 'system' : ledgerActive ? 'tail' : 'none'}\n`,
       );
     }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in
