@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearxngProvider } from './searxng.js';
+import { SearchUnavailableError } from './types.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -121,5 +122,79 @@ describe('SearxngProvider — outside the extractUrl host policy', () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
       headers: { Accept: 'application/json' },
     });
+  });
+});
+
+// The instance that prompted this: SearXNG answers 200 with `results: []` and every engine listed
+// as blocked. Returning that as an ordinary empty array made the tool say "No results for <query>",
+// which reads as a bad query — so the model rewords and re-searches until the turn's budget is gone.
+describe('SearxngProvider — blocked engines are a failure, not an empty result set', () => {
+  const allBlocked = {
+    results: [],
+    unresponsive_engines: [
+      ['brave', 'Suspended: too many requests'],
+      ['duckduckgo', 'CAPTCHA'],
+      ['qwant', 'Suspended: access denied'],
+      ['startpage', 'Suspended: CAPTCHA'],
+    ],
+  };
+
+  it('throws naming the engines when every engine is down and nothing came back', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse(allBlocked));
+    const provider = new SearxngProvider('http://localhost:8888');
+    await expect(provider.search('q')).rejects.toThrow(
+      /every SearXNG engine was unavailable.*duckduckgo: CAPTCHA/,
+    );
+  });
+
+  // Typed, not a bare Error: the tool latches on this class specifically, so a plain throw here
+  // would silently turn a turn-wide block back into three separate reworded attempts.
+  it('raises the typed provider-level failure, carrying the remedy for the user', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse(allBlocked));
+    const provider = new SearxngProvider('http://localhost:8888');
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SearchUnavailableError);
+    expect((err as SearchUnavailableError).remedy).toMatch(/REIKA_CDP_SEARCH=1/);
+  });
+
+  it('still reports a genuine zero-result search as empty, not as a failure', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse({ results: [], unresponsive_engines: [] }));
+    const provider = new SearxngProvider('http://localhost:8888');
+    await expect(provider.search('q')).resolves.toEqual([]);
+  });
+
+  it('treats a missing unresponsive_engines field as a genuine zero-result search', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse({ results: [] }));
+    const provider = new SearxngProvider('http://localhost:8888');
+    await expect(provider.search('q')).resolves.toEqual([]);
+  });
+
+  it('returns results when only some engines are down — partial degradation is not a failure', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        results: [{ title: 'A', url: 'https://a.example', content: 'snip', engine: 'wikipedia' }],
+        unresponsive_engines: [['duckduckgo', 'CAPTCHA']],
+      }),
+    );
+    const provider = new SearxngProvider('http://localhost:8888');
+    await expect(provider.search('q')).resolves.toHaveLength(1);
+  });
+
+  it('degrades unexpected unresponsive_engines shapes to readable text', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        results: [],
+        // A bare name, a pair, and junk: the message has to stay legible for the model reading it.
+        unresponsive_engines: ['mojeek', ['brave', 'timeout'], { engine: 'x' }, []],
+      }),
+    );
+    const provider = new SearxngProvider('http://localhost:8888');
+    await expect(provider.search('q')).rejects.toThrow(/mojeek; brave: timeout/);
   });
 });

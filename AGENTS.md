@@ -68,7 +68,20 @@ When a tool wraps an external service (web search, GitHub, etc.):
 - Register conditionally in `defaultTools(config)` based on which credentials are present
 - Multiple providers for the same role (SearXNG, Brave, Exa…) could implement the same interface; switching is config-only, no tool-layer changes
 
-This is how `search` is wired. `SearxngProvider` (self-hosted, local-first) implements `SearchProvider`. Reika deliberately ships only the local-first provider — no third-party tool-use APIs — but the interface stays vendor-neutral so another provider can be slotted into `makeSearchProvider` later. If `REIKA_SEARXNG_URL` is unset, `search` doesn't register and the system prompt stays lean. `fetch_url` is **not** gated with it — it needs no provider, and the harness hands the model URLs (pasted-link expansion, URL grounding) that it must be able to follow up on.
+This is how `search` is wired. Two providers implement `SearchProvider`, both local-first — no third-party tool-use APIs, no credentials. `SearxngProvider` proxies a self-hosted SearXNG instance. `CdpSearchProvider` (#235, `REIKA_CDP_SEARCH=1`) drives a real Chrome over CDP instead, and **outranks SearXNG in `makeSearchProvider` when both are configured**: SearXNG reaches engines as a bare HTTP client, which is the shape they CAPTCHA — a measured instance had all four of its engines refused (`unresponsive_engines`: CAPTCHA, suspended) on even a three-word query — where a browser on a persistent profile keeps being served. If neither is configured, `search` doesn't register and the system prompt stays lean. `fetch_url` is **not** gated with it — it needs no provider, and the harness hands the model URLs (pasted-link expansion, URL grounding) that it must be able to follow up on.
+
+**CDP search (`REIKA_CDP_SEARCH=1`, default off).** `search/_chrome.ts` owns the browser (discovery, launch, reattach, idle shutdown) behind a `BrowserHost`/`TabHandle` interface plus a dependency-free CDP client — Node ships a global `WebSocket`, so the protocol is an id, a send, and a map of pending resolvers. `search/cdp.ts` is the provider: navigate, extract, parse. The split is what makes the provider unit-testable without a browser on the machine running the suite.
+
+Four decisions worth not re-litigating:
+
+- **Brave, not Google.** Measured on live SERPs: Google and Bing launder every outbound link through an opaque tracker (`google.com/goto?url=…`, `bing.com/ck/a?…`) — 0 of 53 and 0 of 46 visible links survive to a usable URL, and `cite` is a display string, not a fallback. Brave and DDG return real hrefs. Brave also runs its own index rather than reselling Bing, so it isn't correlated with the engine most likely to block us next.
+- **Not headless.** A fresh headless profile is the shape engines CAPTCHA. macOS `open -g -na` starts a real browser that never takes focus or shows a window, which is the end the headless flag was wanted for without raising the detection surface. The persistent `--user-data-dir` (`~/.config/reika/chrome`) is the anti-CAPTCHA mechanism, not an implementation detail.
+- **The extractor is deliberately structure-agnostic**: every visible `a[href]`, filtered, deduped, capped at two per host (a result with a nested issues/discussions cluster otherwise contributes a run of same-host links that crowds out everything ranked below it). No result-card selectors, so a SERP redesign degrades quality rather than silently emptying the results.
+- **A refused search must not read as an empty one** — #236's rule, and the reason detection has a structural half: the challenge that prompted it says "Verifying you're not a bot", which no obvious phrase list would have caught, so a page carrying almost no links is reported as an interstitial regardless of its wording. `waitForReady` probes the committed `location.href` alongside `readyState` for the same reason: `readyState` reads `complete` for the document still on screen while a navigation is in flight, and extracting from the `about:blank` a new tab starts on looks exactly like a search that found nothing.
+
+**Provider-level search failures latch for the turn (#239).** `SearchUnavailableError` (`search/types.ts`) marks a failure that is a property of the *provider* rather than the query — no browser found, a bot check, every SearXNG engine refused — as against an ordinary throw, which stays query-level (one unparseable page) and leaves the next search free to run. On catching it the tool records the reason in `ctx.searchHealth` (per-turn, shared by reference like `webBudget`) and every later search that turn returns it without re-attempting, worded as *still* unavailable so it doesn't read as a fresh problem. Without this a three-search turn spends all three on one condition that refuses every query identically — the exact spiral #236 was about, one level up: there the model couldn't tell a block from an empty result, here it can't tell a block from a *transient* one.
+
+Two details that follow from what the budget is for. A refused search is **refunded** (`budget.used--`): the cap exists to stop runaway loops hammering upstream engines, and a search that never reached an engine — a missing Chrome reaches nothing at all — is not that egress. And the error's optional `remedy` is surfaced through `ToolResult.notice` (user-facing, `warn`), never in the summary: the model cannot set an environment variable, so naming one in its context is noise it can only ignore, while the user is the one who can act. Emitted once, on the failure that sets the latch.
 
 **Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. **Harness-driven fetches count too:** URL grounding (`groundCandidates`) charges the same `fetches` counter, because a fetch the model never asked for is still egress — without it, N edits in a turn was up to 2N requests the runaway guard never saw. It differs only in how it declines: grounding takes whatever budget is left (possibly none) and stays silent, where a tool returns a refusal summary — nothing requested the grounding fetch, so there is nobody to report a refusal to, and the note would be context noise. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
 
@@ -277,6 +290,48 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   up to `TASK_SPEC_PIN_CHARS` on the previous task's detail until this turn lands its own first tool
   result). `stale=true` is the one behaviour here that could read as task conflation, so it is
   greppable rather than something to re-derive from the history.
+- **Dropped-payload ledger** (`REIKA_DROPPED_LEDGER=1`, default off, experimental — `loop.ts`
+  `buildDroppedPayloadLedger` — #227): an aged tool
+  message serializes to its summary alone — `Ran: gh issue view 213 (505 bytes output)` — which reads
+  to a model as a result it already saw and handled, not as content that is GONE. Observed on a
+  `/issue` turn: after both `gh` payloads aged, the model wrote "let me re-read the issue once more",
+  made no tool call, and quoted issue text that does not exist. Same affordance rule as the
+  truncation marker: an unservable state must be loud rather than silently look like success. Stated
+  **once per request as a ledger**, not per message — `hasDroppedPayloads` (`toolcall.ts`, beside the
+  serialization branches it mirrors) gates it, so it can never make a false claim — it excludes the
+  pinned task spec, since the pin keeps that one live and a request whose only summary-only payload
+  is the spec has dropped nothing — and it rides the
+  same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
+  where the tail is rewritten each round anyway). There are **four** live compositions — {plan,
+  agent} x {system suffix, trailing note} — and plan-mode-under-prefix-stable builds its own suffix
+  inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` (system suffix) and
+  `loop.droppedpayload.prefixstable.test.ts` (trailing note, driving runTurn) cover all four between
+  them, because a unit test on `buildSteadySystem` reaches only two. The
+  plan **force-write** round is excluded on purpose: that prompt's job is "stop calling tools and
+  write the plan", and the notice ends with "re-run that call". All four sites route through one
+  `droppedPayloadLedgerFor` gate rather than repeating `FLAG && hasDroppedPayloads(...)`, since a
+  half-applied flag is the mistake that already happened once here. **Flagged rather than shipped on
+  because it is a prompt-level bet with a measurable downside**, not just an absent upside: "re-run
+  that call" can induce re-fetching of aged results — the dup-aged read loop the ledger→withdrawal
+  ladder exists for. The `dropped-ledger` REIKA_DEBUG line reports
+  `active` / `payloads` / `via` (system suffix vs trailing note), read off the **composed** request
+  rather than by re-running the gate — with four composition sites, re-deriving "did it fire?" is
+  how a check drifts from what shipped, and without it an unmoved `dup-aged` can't distinguish "the
+  notice didn't help" from "the notice never fired". `evals/readtrace-report.ts` reads
+  `read-trace-summary` (dup-aged / maxrepeat / looped), `spec-pin` and `dropped-ledger` out of a
+  REIKA_DEBUG log and diffs two arms — and **validates the arms before the numbers**: it stops on an
+  arm whose build has no `dropped-ledger` lines at all (the feature isn't in that build, so the flag
+  was read by nothing), and calls two arms with identical `flags` lines a variance baseline rather
+  than a result. Every session writes that `flags` line (`debug.ts` `formatExperimentFlags`,
+  enumerated from the environment so it can't go stale, values numeric-or-`set` so keys and paths
+  never land in a log), because an A/B was once lost to an arm run from the wrong branch: by
+  filename it looked like a clean on/off pair, and both arms were the same configuration; per the small-model variance
+  rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
+  ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
+  serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
+  the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition
+  order matters — it goes first, ahead of the other ledgers, in **both** `buildSteadySystem` and the
+  agent loop's inline mirror, or the warm prefix diverges from round 0 (`warm.test.ts` locks them).
 - **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
   `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
   earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read

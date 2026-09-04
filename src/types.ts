@@ -208,10 +208,18 @@ export type WebBudget = {
   fetches: { used: number; max: number };
 };
 
+// Set once per turn when a search fails for a provider-level reason (see SearchUnavailableError).
+// Shared by reference like webBudget: the object is what carries the latch between calls, since a
+// fresh ToolContext is built per tool call.
+export type SearchHealth = { unavailable?: string };
+
 export type ToolContext = {
   cwd: string;
   ignore?: Ignore;
   webBudget?: WebBudget;
+  // Per-turn latch for a provider-level search failure. Once set, further searches in the turn
+  // report the same reason without re-attempting or spending budget.
+  searchHealth?: SearchHealth;
   // Tools push successfully-fetched URLs here; the loop stamps them onto the
   // final assistant message as `sources`, rendered deterministically in scrollback.
   fetchedUrls?: Set<string>;
@@ -315,6 +323,13 @@ export type Config = {
   subagentApiKey?: string;
   subagentMaxTurns: number;
   searxngUrl?: string;
+  // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
+  // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which
+  // is the shape they CAPTCHA — a browser with a persistent profile is the one that stays served.
+  cdpSearch?: boolean;
+  // Port for Chrome's remote debugging endpoint (REIKA_CDP_PORT). An instance already listening
+  // here is reused rather than relaunched.
+  cdpPort?: number;
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;

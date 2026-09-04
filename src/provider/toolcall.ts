@@ -328,6 +328,34 @@ function newestLiveReadIndex(
   return -1;
 }
 
+// Does this request drop any tool payload it once carried? True when at least one tool message
+// LOSES its payload despite having had one — i.e. content the model saw and no longer has. Counted
+// off `aged`/position, never off the rendered bytes, so it tracks the two serialization branches in
+// messagesToOpenAI without depending on what they emit; the loop turns a true into the one-line
+// notice that says so (#227). "Lost the payload" is not the same as "serializes to the summary
+// alone": an aged *diff* also carries a bounded structural skeleton (agedToolContent), and it still
+// counts — the hunk bodies are gone, which is the thing the notice is about. Keep it that way; a
+// content-sniffing count would silently stop counting the payload type most worth counting. A result that never had a payload doesn't count: nothing was dropped, and there is
+// nothing to re-run for — and neither does the pinned task spec, which is the whole point of the
+// pin: it stays live, so a request whose ONLY summary-only payload is the spec has dropped nothing
+// and must not claim otherwise. Prefix-stable needs no such exclusion — there the pin lives in
+// batch aging, so an unpinned-and-unaged payload is already not counted.
+export function droppedPayloadCount(history: Message[], prefixStable = false): number {
+  const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
+  const specIdx = prefixStable ? -1 : taskSpecIndex(history);
+  return history.filter((m, i) =>
+    m.role === 'tool' && m.payload && i !== specIdx
+      ? prefixStable
+        ? !!m.aged
+        : i < freshFrom
+      : false,
+  ).length;
+}
+
+export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {
+  return droppedPayloadCount(history, prefixStable) > 0;
+}
+
 // Start index of the trailing block of tool messages — tool messages at or after
 // this index keep their payloads; earlier ones collapse to summary. Exported for
 // batch aging (agent/compaction.ts), which must never age the active round's results.

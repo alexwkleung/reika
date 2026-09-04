@@ -60,6 +60,8 @@ export function loadConfig(): Config {
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
     subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
+    cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
+    cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
     profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
