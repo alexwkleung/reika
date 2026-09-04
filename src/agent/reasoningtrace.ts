@@ -100,8 +100,11 @@ const VERBATIM_LEN_HI = 28000; // ~7000 tokens — by here a long block needs on
 // At 4001 chars the old bar was 0.75, so nothing cut it; the model would have had to reach ~24000
 // chars before the descending curve caught up with its ratio. Every bar in 0.25-0.50 separates that
 // loop from all 83 healthy blocks, so these sit mid-band: ~3x margin over the worst healthy block,
-// ~0.2 under the observed loop. Re-measure before moving them — the corpus is one model, and the
-// numbers above are the whole argument for the values.
+// ~0.2 under the observed loop. The long end is thinner: 4 healthy blocks past LEN_LO and 1 past
+// LEN_HI (28872 chars, ratio 0.009), all far under the floor — enough to say the floor is not
+// obviously wrong, not enough to have tuned it. Re-measure before moving any of them (the corpus is
+// one model); evals/selfrepeat-report.ts is the instrument, and the numbers here are the whole
+// argument for the values.
 const VERBATIM_RATIO_HI = 0.35; // bar between LEN_MIN and LEN_LO
 const VERBATIM_RATIO_LO = 0.25; // floor at/above LEN_HI (long + moderately repetitive = stuck)
 
