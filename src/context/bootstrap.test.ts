@@ -72,9 +72,13 @@ describe('bootstrap bundle-size reporting', () => {
     const bundle = await bootstrap(dir);
     await bootstrap(dir);
 
+    // Since 188bb03 each session also writes a `flags` line beside the bundle line, so select the
+    // bundle lines rather than counting everything in the log — the claim is "one per build", not
+    // "the log has N lines", and the next debug line added shouldn't break this test again.
     const lines = readFileSync(log, 'utf8').trim().split('\n');
-    expect(lines).toHaveLength(2);
-    for (const line of lines) {
+    const bundleLines = lines.filter(l => l.includes('bundle hash='));
+    expect(bundleLines).toHaveLength(2);
+    for (const line of bundleLines) {
       expect(line).toContain(`bundle hash=${bundle.hash}`);
       expect(line).toContain(`instructions=${bundle.instructions.length}c`);
     }

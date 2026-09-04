@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { CdpSearchProvider } from './cdp.js';
 import { findChrome, type BrowserHost, type TabHandle } from './_chrome.js';
 import { SearchUnavailableError } from './types.js';
