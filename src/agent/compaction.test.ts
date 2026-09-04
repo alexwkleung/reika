@@ -259,6 +259,81 @@ function planHistory(): Message[] {
   ];
 }
 
+describe('compactHistory keeps the task spec through the fold (#251)', () => {
+  // The `/review` shape, which is what made this bite: the skill is ONE user message followed by
+  // many tool rounds with no later user boundary, and it mandates a `gh` fetch as the opening call.
+  // So the payload that DEFINES the task is the oldest message — first out under a backwards
+  // keep-budget walk. taskSpecIndex is scoped to the last real user message, which in this shape is
+  // still the first one. Before this fix the model was left with "Tools used: 5 bash", correctly
+  // re-fetched, and the re-fetch re-inflated the estimate into the next compaction. Measured at
+  // 3h29m with no review produced.
+  const SPEC = 'ISSUE #224: spill artifacts leak when the process dies without a normal exit';
+  // One tool round inside the same turn — no user message, so the turn never breaks.
+  const round = (id: string, payload: string): Message[] => [
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id, name: 'read', args: { path: `${id}.ts` } }],
+    },
+    { role: 'tool', callId: id, summary: `read ${id}.ts`, payload },
+  ];
+  const reviewTurn = (): Message[] => [
+    { role: 'user', content: 'review 225' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'spec', name: 'bash', args: { command: 'gh pr view 225' } }],
+    },
+    { role: 'tool', callId: 'spec', summary: 'Ran: gh pr view 225', payload: SPEC },
+    ...round('a', 'X'.repeat(500)),
+    ...round('b', 'X'.repeat(500)),
+    ...round('c', 'X'.repeat(500)),
+    ...round('d', 'X'.repeat(500)),
+  ];
+
+  it('carries the spec payload verbatim into the recap', () => {
+    const history = reviewTurn();
+    expect(compactHistory(history, W, 1, 0)).toBeGreaterThan(0);
+    const recap = history.find(m => m.role === 'compaction');
+    expect(recap).toBeDefined();
+    expect(recap!.content).toContain(SPEC);
+    // And says plainly that it is the real thing, so it is not read as another summary.
+    expect(recap!.content).toContain('not a summary');
+  });
+
+  it('leaves the spec alone when the fold does not reach it', () => {
+    const history = reviewTurn().slice(0, 3);
+    expect(compactHistory(history, 16384)).toBe(0);
+    expect(history[2].role).toBe('tool');
+  });
+
+  it('folds exactly as before when the opening payload is too big to be a spec', () => {
+    // taskSpecIndex refuses a first result over its pin cap — a huge opening dump is a dump, not a
+    // task definition. Nothing is carried, and the old behaviour is unchanged.
+    const history: Message[] = [
+      { role: 'user', content: 'review 225' },
+      ...round('big', 'X'.repeat(5000)),
+      ...round('a', 'X'.repeat(500)),
+      ...round('b', 'X'.repeat(500)),
+      ...round('c', 'X'.repeat(500)),
+    ];
+    expect(compactHistory(history, W, 1, 0)).toBeGreaterThan(0);
+    const recap = history.find(m => m.role === 'compaction');
+    expect(recap).toBeDefined();
+    expect(recap!.content).not.toContain('not a summary');
+  });
+
+  it('never leaves a tool message directly after the recap', () => {
+    // The reason the payload is carried as text rather than by keeping the message: a tool result
+    // may not lead a request, and its assistant parent may have had sibling calls that were folded.
+    const history = reviewTurn();
+    compactHistory(history, W, 1, 0);
+    const at = history.findIndex(m => m.role === 'compaction');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(history[at + 1]?.role).not.toBe('tool');
+  });
+});
+
 describe('distillPlanHandoff', () => {
   // #126: `planFinal` marks the end of the plan turn, not the existence of a plan. Anchoring on a
   // step-less message is the worst outcome available — the exploration that could have grounded
