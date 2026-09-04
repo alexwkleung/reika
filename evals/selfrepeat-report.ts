@@ -88,7 +88,9 @@ function readSession(path: string): Session | null {
 function reportLog(path: string): void {
   const text = readFileSync(path, 'utf8');
   const flags = text.split('\n').find(l => l.includes('[reika:debug] flags '));
-  const aborts = text.split('\n').filter(l => l.includes('verbatim-abort'));
+  // Anchor on the debug line's own shape: the `flags` line contains the literal `verbatim-abort=1`,
+  // so a bare substring match reports every run as a cut.
+  const aborts = text.split('\n').filter(l => /\[reika:debug\] verbatim-abort round=/.test(l));
   const rounds = text.split('\n').filter(l => l.includes('reasoning-loop round='));
   console.log(`\n=== ${path}`);
   console.log(
