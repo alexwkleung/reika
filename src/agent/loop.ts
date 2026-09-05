@@ -212,9 +212,10 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // Auto-abort a reasoning stream that's stuck — either a near-verbatim decoder loop (provably stuck at
 // any length) or a long block that's gone moderately repetitive (a semantic spiral, which we won't
 // judge at normal length but which past a pathological length is clearly not deliberation). The bar
-// is length-aware (verbatimAbortThreshold): 0.75 below ~healthy-max length, scaling toward 0.4 as the
-// block grows, so it never touches a normal-length block and genuinely-long DISTINCT reasoning (low
-// ratio) is left alone. The one place mid-stream abort is sound; without it the only backstop is the
+// is length-aware (verbatimAbortThreshold): no ratio abort under 2000 chars, 0.35 from there, easing
+// to 0.25 as the block grows, so genuinely-long DISTINCT reasoning (low ratio) is left alone. The
+// bars sit far above every healthy block measured and far below the observed loop — the sample and
+// its margins are documented at the constants, and they are the argument for the numbers. The one place mid-stream abort is sound; without it the only backstop is the
 // max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
 // independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
 // 2 (not 1) so the force-write *recovery round* is itself abort-protected — a deeply-stuck model

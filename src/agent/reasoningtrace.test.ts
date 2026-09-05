@@ -144,20 +144,34 @@ describe('liveSpinSignal', () => {
 });
 
 describe('verbatimAbortThreshold', () => {
-  it('requires the high (verbatim-only) bar for a normal-length block', () => {
-    expect(verbatimAbortThreshold(0)).toBe(0.75);
-    expect(verbatimAbortThreshold(16000)).toBe(0.75); // at/below the length floor
+  it('never cuts on ratio below the minimum length', () => {
+    // A short block can score 1.0 off one repeated sentence; that is not evidence of a spiral.
+    expect(verbatimAbortThreshold(0)).toBe(Number.POSITIVE_INFINITY);
+    expect(verbatimAbortThreshold(1999)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('applies the mid-length bar once there is enough text to conclude from', () => {
+    expect(verbatimAbortThreshold(2000)).toBe(0.35);
+    expect(verbatimAbortThreshold(16000)).toBe(0.35); // at/below the length floor
+  });
+
+  // The gap that let a real loop run: 4001 chars at ratio 0.549, under the old 0.75 bar. Worst
+  // healthy block across 84 samples was 0.120, so the separation is wide and this is not a squeeze.
+  it('cuts the observed mid-length semantic loop while clearing every healthy block measured', () => {
+    expect(0.549).toBeGreaterThanOrEqual(verbatimAbortThreshold(4001));
+    expect(0.12).toBeLessThan(verbatimAbortThreshold(2435));
+    expect(0.045).toBeLessThan(verbatimAbortThreshold(18193)); // longest healthy block seen
   });
 
   it('lowers the bar toward the floor as a single block grows pathologically long', () => {
-    expect(verbatimAbortThreshold(40000)).toBe(0.4); // at/above the upper length
+    expect(verbatimAbortThreshold(40000)).toBe(0.25); // at/above the upper length
     const mid = verbatimAbortThreshold(22000); // between the two lengths
-    expect(mid).toBeLessThan(0.75);
-    expect(mid).toBeGreaterThan(0.4);
+    expect(mid).toBeLessThan(0.35);
+    expect(mid).toBeGreaterThan(0.25);
   });
 
   it('is monotonically non-increasing in length', () => {
-    const lens = [0, 16000, 20000, 24000, 28000, 50000];
+    const lens = [2000, 16000, 20000, 24000, 28000, 50000];
     const ts = lens.map(verbatimAbortThreshold);
     for (let i = 1; i < ts.length; i++) expect(ts[i]).toBeLessThanOrEqual(ts[i - 1]);
   });

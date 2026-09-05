@@ -85,12 +85,33 @@ export function liveSpinSignal(reasoning: string): { spinning: boolean; ratio: n
 // genuinely-long DISTINCT reasoning keeps a low ratio and is left alone — that's the discriminator a
 // blunt token cap lacks). Returns the ratio a block of this char-length must reach to be auto-cut.
 // Tune the curve against the REIKA_DEBUG `verbatim-abort`/`reasoning-spin` ratios on real spirals.
-const VERBATIM_LEN_LO = 16000; // ~4000 tokens — above any healthy block; at/below, verbatim-only (0.75)
+// Below this there is not enough text to conclude anything: a 400-char block that says one sentence
+// twice scores high without being stuck. No ratio-based abort under it — the hard ceil still applies.
+const VERBATIM_LEN_MIN = 2000;
+const VERBATIM_LEN_LO = 16000; // ~4000 tokens — the length past which even moderate repetition is odd
 const VERBATIM_LEN_HI = 28000; // ~7000 tokens — by here a long block needs only moderate repetition
-const VERBATIM_RATIO_HI = 0.75; // bar at/below LEN_LO (true decoder loop)
-const VERBATIM_RATIO_LO = 0.4; // floor at/above LEN_HI (long + moderately repetitive = stuck)
+// The bars were 0.75/0.4, on the theory that a sub-LEN_LO block only needs protection from a true
+// byte-verbatim decoder loop. Measured against 84 reasoning blocks >=1500 chars over 30 saved
+// sessions (60 `/review`, 24 general), that left a hole a *semantic* loop walks straight through:
+//
+//   healthy: median 0.001, p90 0.020, p99 0.082, MAX 0.120 (a 2435c general block)
+//   observed loop: 0.549 at 4001 chars — one generation repeating a paragraph four times
+//
+// At 4001 chars the old bar was 0.75, so nothing cut it; the model would have had to reach ~24000
+// chars before the descending curve caught up with its ratio. Every bar in 0.25-0.50 separates that
+// loop from all 83 healthy blocks, so these sit mid-band: ~3x margin over the worst healthy block,
+// ~0.2 under the observed loop. The long end is thinner: 4 healthy blocks past LEN_LO and 1 past
+// LEN_HI (28872 chars, ratio 0.009), all far under the floor — enough to say the floor is not
+// obviously wrong, not enough to have tuned it. Re-measure before moving any of them (the corpus is
+// one model); evals/selfrepeat-report.ts is the instrument, and the numbers here are the whole
+// argument for the values.
+const VERBATIM_RATIO_HI = 0.35; // bar between LEN_MIN and LEN_LO
+const VERBATIM_RATIO_LO = 0.25; // floor at/above LEN_HI (long + moderately repetitive = stuck)
 
 export function verbatimAbortThreshold(reasoningChars: number): number {
+  // Unreachable rather than 1.0: a ratio can BE 1.0 on a pathological short block, and this must
+  // read as "no ratio abort here", not "abort only on a perfect repeat".
+  if (reasoningChars < VERBATIM_LEN_MIN) return Number.POSITIVE_INFINITY;
   if (reasoningChars <= VERBATIM_LEN_LO) return VERBATIM_RATIO_HI;
   if (reasoningChars >= VERBATIM_LEN_HI) return VERBATIM_RATIO_LO;
   const t = (reasoningChars - VERBATIM_LEN_LO) / (VERBATIM_LEN_HI - VERBATIM_LEN_LO);
