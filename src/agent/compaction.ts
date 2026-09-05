@@ -131,6 +131,13 @@ export function compactHistory(
 // across turns and the new turn's first request stays prefix-aligned with the previous one.
 export const AGE_LOW_FRACTION = 0.7;
 
+// A payload below this contributes too little relief to be worth risking a re-read on. An event
+// sheds tens of thousands of chars; 2000 (~500 tokens, ~2% of a 24k window) cannot plausibly be the
+// mark that tips the estimate under the watermark, while losing it can cost a whole round. Chars,
+// not tokens, deliberately — it is compared against `payload.length`, and the threshold's token
+// units are a different scale.
+const SMALL_PAYLOAD_CHARS = 2000;
+
 export function batchAgePayloads(
   history: Message[],
   estimate: () => number, // calibrated request-token estimate; re-read after each mark
@@ -149,18 +156,32 @@ export function batchAgePayloads(
   // without this the definition of the task is always the first thing dropped — and an aged
   // summary reads as "already handled", not as content that is gone.
   const specIdx = taskSpecIndex(history);
+  // Two sweeps, oldest-first within each: shed bulk before crumbs. Aging is otherwise strictly
+  // oldest-first regardless of size, which on a measured 2h run aged `src/cli.tsx` — 673 bytes, 0.7%
+  // of a 24k window — in an event that shed 18,935 chars. The model re-read it, twice, and each
+  // re-read costs a full round-trip AND puts the payload straight back in the window, pulling the
+  // next shrink event forward. That is a feedback loop paid for in whole rounds to reclaim
+  // rounding error.
+  //
+  // The floor only reorders: the second sweep ages the small payloads too, so it can never keep the
+  // event from reaching its watermark — the worst case is the previous behavior. Reasoning is aged
+  // in the first sweep regardless of size, because dropping it can't provoke a re-read (the model
+  // cannot re-fetch its own reasoning) and so carries none of this risk.
   let marked = 0;
-  for (let i = 0; i < protect; i++) {
-    if (estimate() <= target) break;
-    if (i === specIdx) continue;
-    const m = history[i];
-    if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
-      m.reasoningAged = true;
-      marked++;
-    } else if (m.role === 'tool' && m.payload && !m.aged) {
-      m.aged = true;
-      delete m.rendered;
-      marked++;
+  for (const crumbs of [false, true]) {
+    for (let i = 0; i < protect; i++) {
+      if (estimate() <= target) return marked;
+      if (i === specIdx) continue;
+      const m = history[i];
+      if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
+        m.reasoningAged = true;
+        marked++;
+      } else if (m.role === 'tool' && m.payload && !m.aged) {
+        if (!crumbs && m.payload.length < SMALL_PAYLOAD_CHARS) continue;
+        m.aged = true;
+        delete m.rendered;
+        marked++;
+      }
     }
   }
   return marked;

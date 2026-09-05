@@ -537,7 +537,13 @@ with byte-frozen renders (`Message.rendered`, stamped only on the real call path
 never stamp, so freezing doesn't depend on debug timing) until the calibrated estimate crosses
 the same threshold compaction uses, then `batchAgePayloads` (`compaction.ts`) sheds them
 oldest-first down to a 0.7 watermark in the _same_ request compaction fires in — one amortized
-cache invalidation instead of one per round, with the active roundtrip always protected. When
+cache invalidation instead of one per round, with the active roundtrip always protected. Aging
+sweeps twice, shedding bulk before crumbs (#257): a payload under `SMALL_PAYLOAD_CHARS` is skipped
+on the first sweep, because relief that small can't plausibly be what tips the estimate under the
+watermark while losing it can cost a whole re-read round — and the re-read puts the payload straight
+back, pulling the next shrink event forward. The second sweep takes the crumbs too, so the floor
+only ever reorders; it can never keep an event from reaching its watermark. Reasoning is aged on the
+first sweep at any size, since the model can't re-fetch its own reasoning. When
 aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
 the system prompt + the active round's reads are most of it), compaction is pulled into the same
 event — otherwise the estimate hovers just under the threshold and the next round immediately
