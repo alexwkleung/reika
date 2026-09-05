@@ -50,14 +50,16 @@ export function debugLog(line: string): void {
 // Enumerated from the environment rather than a hand-maintained list: a hardcoded list is exactly
 // the incomplete enumeration that goes stale the next time a flag is added. Values are rendered
 // numerically or as `set` — never verbatim — so keys, URLs and home paths cannot land in a log
-// that gets pasted around.
+// that gets pasted around. Decimals count as numeric: a fraction-valued tuning flag
+// (REIKA_AGE_LOW_FRACTION) rendered as `set` would make the two arms of an A/B *on that value*
+// indistinguishable in their own logs, which is the exact mislabel this line exists to prevent.
 export function formatExperimentFlags(): string {
   const flags = Object.keys(process.env)
     .filter(k => k.startsWith('REIKA_'))
     .sort()
     .map(k => {
       const v = process.env[k] ?? '';
-      return `${k.slice('REIKA_'.length).toLowerCase().replace(/_/g, '-')}=${/^\d+$/.test(v) ? v : v === '' ? "''" : 'set'}`;
+      return `${k.slice('REIKA_'.length).toLowerCase().replace(/_/g, '-')}=${/^\d+(\.\d+)?$/.test(v) ? v : v === '' ? "''" : 'set'}`;
     });
   return `[reika:debug] flags version=${VERSION} ${flags.join(' ') || '(none set)'}`;
 }

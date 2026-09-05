@@ -19,6 +19,9 @@ export type PrefixCause =
   | 'system-changed'
   // A message between system and the tail changed (payload aging, reasoning pruning, re-capping).
   | 'mid-history'
+  // The ONLY divergence is the slot the previous request's transient harness note occupied — the
+  // round was a pure append and the note was displaced by it (see the `trailingNote` option).
+  | 'trailing-note'
   // This request is shorter than the last (compaction spliced messages out).
   | 'shrunk';
 
@@ -36,14 +39,24 @@ export type PrefixDivergence = {
 export class PrefixTrace {
   private prev: string[] | null = null;
   private prevRoles: string[] = [];
+  private prevHadNote = false;
 
-  record(messages: Array<{ role: string }>): PrefixDivergence {
+  // `trailingNote` says the final message of THIS request is the transient harness note (loop
+  // ledger / nudge) that prefix-stable mode rides at the end of the prompt. It is regenerated every
+  // round and never enters history, so the next round's append lands *on its slot* — which the
+  // byte comparison correctly sees as a divergence, but which is not history churn. Told about it,
+  // the next record() names that case instead of reporting `mid-history firstChanged=assistant` for
+  // what was a pure append. See issue #253: on a 24k run this was a constant 436 chars/round, and
+  // the label made it read as reasoning-aging invalidating the cache on every single round.
+  record(messages: Array<{ role: string }>, opts?: { trailingNote?: boolean }): PrefixDivergence {
     const cur = messages.map(m => JSON.stringify(m));
     const roles = messages.map(m => m.role);
     const prev = this.prev;
     const prevRoles = this.prevRoles;
+    const prevHadNote = this.prevHadNote;
     this.prev = cur;
     this.prevRoles = roles;
+    this.prevHadNote = !!opts?.trailingNote;
 
     const totalChars = cur.reduce((a, s) => a + s.length, 0);
     const base = { totalMessages: cur.length, totalChars };
@@ -70,6 +83,12 @@ export class PrefixTrace {
     }
     // Count the intra-message common prefix too — the engine caches bytes, not messages.
     stableChars += lcpLength(prev[i], cur[i]);
+    if (prevHadNote && i === prev.length - 1) {
+      // Everything the previous request sent BEFORE its note is intact: the note's slot is the only
+      // thing that moved. No `changedRole` — the cause already names what changed, and reporting
+      // the role that displaced the note is the misreading this case exists to prevent.
+      return { cause: 'trailing-note', stableMessages: i, stableChars, ...base };
+    }
     return {
       cause: i === 0 ? 'system-changed' : 'mid-history',
       stableMessages: i,
