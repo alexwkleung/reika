@@ -87,8 +87,34 @@ export function compactHistory(
   const recapStart = first && first.role === 'user' && !first.meta ? 1 : 0;
   if (keepFrom <= recapStart) return 0;
 
+  // #251: carry the turn's task-defining payload THROUGH the fold, verbatim. batchAgePayloads
+  // already exempts it from aging (#227), but compaction removed it outright, and the recap records
+  // that a tool ran — not what it returned. The model then reasons correctly from what it was left
+  // ("the summary says 'Tools used: 5 bash, 4 read' ... I need to re-run the bash calls") and
+  // re-fetches; the re-fetch re-inflates the estimate and triggers the NEXT compaction. Measured on
+  // a 3h29m `/review` that compacted at rounds 9 and 12 and never produced a review.
+  //
+  // Carried as text inside the recap rather than by keeping the tool message: a tool result may not
+  // lead a request, its assistant parent may have issued sibling calls whose responses are being
+  // folded, and an unmatched tool_call is an API error. Text has none of those failure modes.
+  //
+  // No extra bound needed — taskSpecIndex only ever returns a payload at or under its own pin cap,
+  // so this is a few KB at most. Note it stops being findable by taskSpecIndex afterwards (that
+  // looks for a `tool` message), so `spec-pin none` after a compaction is expected, not a
+  // regression: the content is in the recap, and the next turn's opening call becomes the new pin.
+  const specIdx = taskSpecIndex(history);
+  const spec = specIdx >= recapStart && specIdx < keepFrom ? history[specIdx] : undefined;
+  const preserved =
+    spec && spec.role === 'tool' && spec.payload
+      ? `The task this turn is working on, kept verbatim through the compaction ` +
+        `(this is the real output, not a summary of it):\n\n${spec.summary}\n\n${spec.payload}`
+      : undefined;
+
   const recap = buildRecap(history.slice(recapStart, keepFrom), avail, calib);
-  history.splice(recapStart, keepFrom - recapStart, { role: 'compaction', content: recap });
+  history.splice(recapStart, keepFrom - recapStart, {
+    role: 'compaction',
+    content: preserved ? `${preserved}\n\n${recap}` : recap,
+  });
   return keepFrom - recapStart;
 }
 
