@@ -154,14 +154,28 @@ function ageLowFraction(): number {
 // units are a different scale.
 const SMALL_PAYLOAD_CHARS = 2000;
 
+// What one shrink event did. `kept` is the number that says whether the size floor actually changed
+// anything this event: small payloads the first sweep skipped and the second never had to take. A
+// run where every event reports kept=0 exercised none of #257 — which is otherwise indistinguishable
+// in a log from "it engaged and didn't help", the ambiguity that makes an A/B unreadable.
+export type AgeResult = {
+  // Total marks, reasoning included — what the estimate actually shed.
+  marked: number;
+  // Payloads aged at or above the floor (first sweep) vs below it (second sweep, needed anyway).
+  bulk: number;
+  crumbs: number;
+  kept: number;
+};
+
 export function batchAgePayloads(
   history: Message[],
   estimate: () => number, // calibrated request-token estimate; re-read after each mark
   contextWindow: number,
   minGen = DEFAULT_MIN_GEN_TOKENS,
-): number {
+): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
-  if (estimate() <= threshold) return 0;
+  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  if (estimate() <= threshold) return none;
   const target = threshold * AGE_LOW_FRACTION;
   // Never age the active round: the trailing tool block is what the model is about to act on, and
   // the assistant message that issued those calls keeps its reasoning (some providers require the
@@ -183,24 +197,42 @@ export function batchAgePayloads(
   // event from reaching its watermark — the worst case is the previous behavior. Reasoning is aged
   // in the first sweep regardless of size, because dropping it can't provoke a re-read (the model
   // cannot re-fetch its own reasoning) and so carries none of this risk.
-  let marked = 0;
-  for (const crumbs of [false, true]) {
+  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  // `kept` is counted at the end over what survived, not decremented as the sweeps run: a payload
+  // skipped by the first sweep and taken by the second was never kept, and tracking that by hand is
+  // exactly the bookkeeping that drifts.
+  const survivingCrumbs = (): number => {
+    let n = 0;
     for (let i = 0; i < protect; i++) {
-      if (estimate() <= target) return marked;
+      if (i === specIdx) continue;
+      const m = history[i];
+      if (m.role === 'tool' && m.payload && !m.aged && m.payload.length < SMALL_PAYLOAD_CHARS) n++;
+    }
+    return n;
+  };
+  for (const takeCrumbs of [false, true]) {
+    for (let i = 0; i < protect; i++) {
+      if (estimate() <= target) {
+        out.kept = survivingCrumbs();
+        return out;
+      }
       if (i === specIdx) continue;
       const m = history[i];
       if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
         m.reasoningAged = true;
-        marked++;
+        out.marked++;
       } else if (m.role === 'tool' && m.payload && !m.aged) {
-        if (!crumbs && m.payload.length < SMALL_PAYLOAD_CHARS) continue;
+        if (!takeCrumbs && m.payload.length < SMALL_PAYLOAD_CHARS) continue;
         m.aged = true;
         delete m.rendered;
-        marked++;
+        out.marked++;
+        if (takeCrumbs) out.crumbs++;
+        else out.bulk++;
       }
     }
   }
-  return marked;
+  out.kept = survivingCrumbs();
+  return out;
 }
 
 // Index of the assistant message that issued the trailing tool block's calls (or the final

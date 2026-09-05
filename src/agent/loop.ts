@@ -1447,7 +1447,7 @@ export async function runTurn(opts: {
     // amortized prefix-cache invalidation, not two on consecutive rounds).
     let agedThisRound = false;
     if (prefixStable && window && !planForceWrite) {
-      const marked = batchAgePayloads(
+      const aged = batchAgePayloads(
         opts.history,
         // compactCalibration, not the raw learned factor: batch aging replaces the per-round
         // collapse as the shrink mechanism, so it must fire under the same floored trigger as
@@ -1457,9 +1457,15 @@ export async function runTurn(opts: {
         window,
         opts.config.minGenTokens,
       );
-      agedThisRound = marked > 0;
-      if (marked > 0) {
-        debugLog(`[reika:debug] round=${i} prefix-stable batch-age marked=${marked}\n`);
+      agedThisRound = aged.marked > 0;
+      if (aged.marked > 0) {
+        // bulk/crumbs/kept is the #257 sweep split: `kept` counts small payloads the size floor
+        // spared, so a run can say whether the floor engaged at all rather than leaving "never
+        // fired" and "fired and didn't help" looking identical.
+        debugLog(
+          `[reika:debug] round=${i} prefix-stable batch-age marked=${aged.marked} ` +
+            `bulk=${aged.bulk} crumbs=${aged.crumbs} kept=${aged.kept}\n`,
+        );
       }
     }
     // Aging stops at the protected tail, so on a small window (system prompt + the active round's

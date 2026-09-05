@@ -493,7 +493,7 @@ describe('batchAgePayloads', () => {
 
   it('is a no-op below the compaction threshold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(50))];
-    expect(batchAgePayloads(history, estimateOf(history), 1000, 0)).toBe(0);
+    expect(batchAgePayloads(history, estimateOf(history), 1000, 0).marked).toBe(0);
     expect((history[2] as Message & { role: 'tool' }).aged).toBeUndefined();
   });
 
@@ -507,8 +507,8 @@ describe('batchAgePayloads', () => {
       ...round('b', 'y'.repeat(400)),
       ...round('c', 'z'.repeat(400)),
     ];
-    const marked = batchAgePayloads(history, estimateOf(history), 1000, 0);
-    expect(marked).toBeGreaterThan(0);
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(aged.marked).toBeGreaterThan(0);
     const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
     // Oldest non-spec aged (render cleared), trailing block protected.
     expect(tools[1].aged).toBe(true);
@@ -591,12 +591,16 @@ describe('batchAgePayloads', () => {
       ...round('big', 'y'.repeat(4000)),
       ...round('c', 'z'.repeat(400)),
     ];
-    batchAgePayloads(history, estimateOf(history), 1000, 0);
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
     const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
     // The bulky payload is older-last but shed first; the crumb older-first and kept.
     expect(tools[2].aged).toBe(true);
     expect(tools[1].aged).toBeUndefined();
     expect(tools[1].rendered).toBeDefined();
+    // The reported split is what a run's log is read by, so assert it, not just the marks.
+    expect(aged.bulk).toBe(1);
+    expect(aged.crumbs).toBe(0);
+    expect(aged.kept).toBe(1);
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
@@ -612,8 +616,10 @@ describe('batchAgePayloads', () => {
       ...round('d', 'w'.repeat(300)),
     ];
     // Every payload is under the floor, so the first sweep can shed nothing at all.
-    const marked = batchAgePayloads(history, estimateOf(history), 1000, 0);
-    expect(marked).toBeGreaterThan(0);
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(aged.marked).toBeGreaterThan(0);
+    expect(aged.bulk).toBe(0);
+    expect(aged.crumbs).toBeGreaterThan(0);
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
