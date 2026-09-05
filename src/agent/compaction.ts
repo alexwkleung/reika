@@ -129,7 +129,23 @@ export function compactHistory(
 // Marks are set on the shared message objects ON PURPOSE (unlike compactHistory's per-turn splice):
 // the next user turn re-seeds history from the same objects, so liveness and the frozen bytes carry
 // across turns and the new turn's first request stays prefix-aligned with the previous one.
-export const AGE_LOW_FRACTION = 0.7;
+// How far below the threshold each shrink event sheds. This is the lever issue #253 identified and
+// deliberately did NOT pick a value for: shedding further means fewer events across a run (each one
+// re-processes most of the prompt — three of them were ~24 min of a 2h15m run), at the cost of a
+// smaller live working set between events, which #251 showed is exactly what keeps the model on
+// task. Both sides are real, so it is env-tunable to be MEASURED (evals/prefixcost-report.ts is the
+// instrument) rather than argued about; the default is unchanged.
+export const AGE_LOW_FRACTION = ageLowFraction();
+
+// Clamped, not trusted: above ~0.95 an event sheds nothing and re-fires the next round (consecutive
+// full re-processes, the pattern batching exists to prevent), and below ~0.3 the event throws away
+// most of the live context in one step. A malformed value falls back to the default rather than
+// silently disabling aging.
+function ageLowFraction(): number {
+  const raw = Number(process.env.REIKA_AGE_LOW_FRACTION);
+  if (!Number.isFinite(raw) || raw < 0.3 || raw > 0.95) return 0.7;
+  return raw;
+}
 
 export function batchAgePayloads(
   history: Message[],

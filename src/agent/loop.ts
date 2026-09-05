@@ -1600,7 +1600,9 @@ export async function runTurn(opts: {
       // and which mechanism class broke it. Measured on the exact serialized request.
       onRequest: debugEnabled()
         ? msgs => {
-            const d = prefixTrace.record(msgs);
+            // `trailingNote` lets the trace tell the note's own slot apart from real history
+            // churn — without it every append reads as `mid-history firstChanged=assistant` (#253).
+            const d = prefixTrace.record(msgs, { trailingNote: !!roundSuffix });
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
             roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
             roundReprocessBounded = d.cause === 'first-request';
