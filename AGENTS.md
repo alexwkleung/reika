@@ -536,14 +536,19 @@ inactive without one), requests stay **append-only between shrink events**: payl
 with byte-frozen renders (`Message.rendered`, stamped only on the real call path — estimates
 never stamp, so freezing doesn't depend on debug timing) until the calibrated estimate crosses
 the same threshold compaction uses, then `batchAgePayloads` (`compaction.ts`) sheds them
-oldest-first down to a 0.7 watermark in the _same_ request compaction fires in — one amortized
-cache invalidation instead of one per round, with the active roundtrip always protected. Aging
-sweeps twice, shedding bulk before crumbs (#257): a payload under `SMALL_PAYLOAD_CHARS` is skipped
-on the first sweep, because relief that small can't plausibly be what tips the estimate under the
-watermark while losing it can cost a whole re-read round — and the re-read puts the payload straight
-back, pulling the next shrink event forward. The second sweep takes the crumbs too, so the floor
-only ever reorders; it can never keep an event from reaching its watermark. Reasoning is aged on the
-first sweep at any size, since the model can't re-fetch its own reasoning. When
+oldest-first down to a 0.7 watermark (`AGE_LOW_FRACTION`, overridable via
+`REIKA_AGE_LOW_FRACTION` for A/B, clamped to 0.3–0.95) in the _same_ request compaction fires in —
+one amortized cache invalidation instead of one per round, with the active roundtrip always
+protected. How deep that watermark should be is an open, measurable question (#253): each event
+re-processes most of the prompt, so shedding further means fewer events per run, at the cost of a
+smaller live working set between them — which #251 showed is what keeps the model on task. Measure
+it with `evals/prefixcost-report.ts`; don't argue it.
+Aging sweeps twice, shedding bulk before crumbs (#257): a payload under `SMALL_PAYLOAD_CHARS` is
+skipped on the first sweep, because relief that small can't plausibly be what tips the estimate
+under the watermark while losing it can cost a whole re-read round — and the re-read puts the
+payload straight back, pulling the next shrink event forward. The second sweep takes the crumbs too,
+so the floor only ever reorders; it can never keep an event from reaching its watermark. Reasoning
+is aged on the first sweep at any size, since the model can't re-fetch its own reasoning. When
 aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
 the system prompt + the active round's reads are most of it), compaction is pulled into the same
 event — otherwise the estimate hovers just under the threshold and the next round immediately
@@ -560,9 +565,14 @@ in exchange for near-zero prefill on cached rounds. Note `ReadTrace`'s dup-live/
 still assumes one-round liveness, so under the flag its classification is conservative (a loop
 on still-live content fires one repeat later). Bench with the always-available `prefix-cache`
 REIKA_DEBUG line (`agent/prefixtrace.ts`): it classifies each request's divergence from the
-previous one (`append-only` / `system-changed` / `mid-history` / `shrunk`) with the stable-byte
-fraction — flag off you'll see `mid-history` every round; flag on should be `append-only` with
-occasional `shrunk`. Same experimental discipline: constants and helpers together, clearly
+previous one (`append-only` / `trailing-note` / `system-changed` / `mid-history` / `shrunk`) with
+the stable-byte fraction — flag off you'll see `mid-history` every round; flag on should be
+`trailing-note` (the transient note's own slot, a fixed ~400 chars, displaced by the round's
+append) or `append-only`, with occasional `shrunk`. `trailing-note` exists because that case used
+to report as `mid-history firstChanged=assistant`, which reads as aging invalidating the cache
+every round when the round was a pure append (#253). A cache line alone can't tell overhead from
+growth — for that split, and what each shrink event cost in wall clock, run
+`evals/prefixcost-report.ts` over the log. Same experimental discipline: constants and helpers together, clearly
 marked.
 
 **Speculative KV-cache warming (`REIKA_WARM=1`, default off, experimental — issue #81, `agent/warm.ts`).**

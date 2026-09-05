@@ -94,6 +94,15 @@ describe('formatExperimentFlags', () => {
     expect(line.indexOf('context-window')).toBeLessThan(line.indexOf('dropped-ledger'));
   });
 
+  // #253: a fraction-valued tuning flag rendered as `set` makes the two arms of an A/B on that very
+  // value indistinguishable in their own logs — the mislabel this line exists to prevent.
+  it('reports a decimal tuning value verbatim, not as `set`', async () => {
+    clear();
+    process.env.REIKA_AGE_LOW_FRACTION = '0.5';
+    const { formatExperimentFlags } = await freshDebug();
+    expect(formatExperimentFlags()).toContain('age-low-fraction=0.5');
+  });
+
   it('never writes a non-numeric value — keys, URLs and home paths stay out of the log', async () => {
     clear();
     process.env.REIKA_DEBUG_FILE = '/Users/someone/private/on.log';
