@@ -109,6 +109,33 @@ const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 // which aging should stay free to collapse.
 const TASK_SPEC_PIN_CHARS = 4096;
 
+// What the fit-to-window cap did to THIS request's fresh tool payloads (#253). Measurement only —
+// nothing reads it but the debug log. The cap is sized from the room left after everything else in
+// the request, so retaining more old payloads tightens it: raising the aging watermark buys
+// old-payload retention by truncating NEW tool output, and without this that half of the trade is
+// invisible in a log.
+//
+// Counted where the cap is actually applied, which is the moment a payload first enters a request.
+// Under prefix-stable a frozen `rendered` payload is not re-capped, so these numbers describe the
+// payloads ARRIVING this round rather than every payload in the prompt — which is the quantity the
+// question is about.
+export type CapStats = {
+  // The per-payload char cap in force (undefined = no window configured, nothing capped).
+  cap: number | undefined;
+  // Fresh payloads serialized this request, and how many the cap actually cut.
+  fresh: number;
+  truncated: number;
+  // Chars dropped across those.
+  omitted: number;
+  // Fresh payloads that shipped WHOLE — either no cap was in force (the request already fit) or the
+  // payload was exempt (newest-read protection, or under the small-payload floor). One number
+  // because the question it answers is "did this arrive intact", not why.
+  uncapped: number;
+  // Payloads that got NO body at all because the budget was exhausted (cap <= 0) — the #179 shape,
+  // worth its own count because it is a different failure from ordinary truncation.
+  starved: number;
+};
+
 export function messagesToOpenAI(
   system: string,
   history: Message[],
@@ -132,6 +159,8 @@ export function messagesToOpenAI(
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
     trailingNote?: string;
+    // Debug-only hook: reports what the fit-to-window cap did to this request (#253).
+    onCapStats?: (stats: CapStats) => void;
   },
 ): ChatMessageParam[] {
   const prefixStable = !!opts?.prefixStable;
@@ -188,6 +217,27 @@ export function messagesToOpenAI(
     specIdx,
     opts,
   );
+  const capStats: CapStats = {
+    cap: perPayloadCap,
+    fresh: 0,
+    truncated: 0,
+    omitted: 0,
+    uncapped: 0,
+    starved: 0,
+  };
+  // Wraps capPayload so the counts can never drift from what was actually serialized — the two call
+  // sites below are the only places a fresh payload's body is produced.
+  const applyCap = (payload: string, cap: number | undefined): string => {
+    capStats.fresh++;
+    if (cap !== undefined && payload.length > cap) {
+      capStats.truncated++;
+      capStats.omitted += payload.length - Math.max(cap, 0);
+      if (cap <= 0) capStats.starved++;
+    } else {
+      capStats.uncapped++;
+    }
+    return capPayload(payload, cap);
+  };
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
   // Compaction left no user turn — surface the recap as the user message so a user-requiring
   // template still renders. (Normal case: hasUserTurn is true and the recap stayed in the system
@@ -228,7 +278,7 @@ export function messagesToOpenAI(
         if (msg.payload && !msg.aged) {
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          const rendered = msg.rendered ?? `${msg.summary}\n\n${capPayload(msg.payload, cap)}`;
+          const rendered = msg.rendered ?? `${msg.summary}\n\n${applyCap(msg.payload, cap)}`;
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
         } else {
@@ -250,7 +300,7 @@ export function messagesToOpenAI(
         } else {
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
           content = fresh
-            ? `${msg.summary}\n\n${capPayload(msg.payload!, cap)}`
+            ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}`
             : agedToolContent(msg);
         }
       }
@@ -277,6 +327,7 @@ export function messagesToOpenAI(
   if (!out.some(m => m.role === 'user')) {
     out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
+  opts?.onCapStats?.(capStats);
   return out;
 }
 
