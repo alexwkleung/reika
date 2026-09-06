@@ -1,6 +1,7 @@
 import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
+import type { CapStats } from './toolcall.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
@@ -60,6 +61,9 @@ export async function callModel(opts: {
   // Debug hook: called with the exact serialized request messages before sending, so the loop's
   // prefix-divergence instrumentation measures what the engine actually receives.
   onRequest?: (messages: ChatMessageParam[]) => void;
+  // Debug hook: what the fit-to-window cap did to this request's fresh tool payloads (#253).
+  // Same discipline as onRequest — measurement only, never set on a normal run.
+  onCapStats?: (stats: CapStats) => void;
   // Ask for per-token logprobs with this many top-k alternatives per position (issue #134).
   // Set only by the debug drift instrumentation; undefined leaves the request byte-identical
   // to a normal turn.
@@ -77,6 +81,7 @@ export async function callModel(opts: {
     // The real call is the one that freezes live-payload bytes (estimates and warms never do).
     stampRenders: opts.stampRenders ?? opts.prefixStable,
     trailingNote: opts.trailingNote,
+    onCapStats: opts.onCapStats,
   });
   opts.onRequest?.(messages);
   const maxTokens = opts.maxTokens ?? opts.config.maxTokens;

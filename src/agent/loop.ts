@@ -1596,6 +1596,20 @@ export async function runTurn(opts: {
       // Measurement only (issue #134), and only when something will read it: the debug log is the
       // sole consumer, so an un-logged run never pays the larger streaming payload.
       logprobs: ENTROPY_LOGPROBS && debugEnabled() ? ENTROPY_TOP_K : undefined,
+      // Fit-to-window cap line (#253): what the cap did to the fresh tool payloads in THIS request.
+      // The cap is sized from the room left after everything else, so aging-watermark changes show
+      // up here as truncation of NEW output — the half of the retention trade that is otherwise
+      // invisible. Silent when nothing fresh arrived, so quiet rounds add no noise.
+      onCapStats: debugEnabled()
+        ? c => {
+            if (c.fresh === 0) return;
+            debugLog(
+              `[reika:debug] payload-cap round=${i} cap=${c.cap ?? 'none'} ` +
+                `fresh=${c.fresh} truncated=${c.truncated} omitted=${c.omitted}c ` +
+                `uncapped=${c.uncapped} starved=${c.starved}\n`,
+            );
+          }
+        : undefined,
       // Prefix-divergence line (issue #69): where this request stopped matching the previous one,
       // and which mechanism class broke it. Measured on the exact serialized request.
       onRequest: debugEnabled()
