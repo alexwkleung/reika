@@ -542,7 +542,13 @@ one amortized cache invalidation instead of one per round, with the active round
 protected. How deep that watermark should be is an open, measurable question (#253): each event
 re-processes most of the prompt, so shedding further means fewer events per run, at the cost of a
 smaller live working set between them — which #251 showed is what keeps the model on task. Measure
-it with `evals/prefixcost-report.ts`; don't argue it. When
+it with `evals/prefixcost-report.ts`; don't argue it.
+Aging sweeps twice, shedding bulk before crumbs (#257): a payload under `SMALL_PAYLOAD_CHARS` is
+skipped on the first sweep, because relief that small can't plausibly be what tips the estimate
+under the watermark while losing it can cost a whole re-read round — and the re-read puts the
+payload straight back, pulling the next shrink event forward. The second sweep takes the crumbs too,
+so the floor only ever reorders; it can never keep an event from reaching its watermark. Reasoning
+is aged on the first sweep at any size, since the model can't re-fetch its own reasoning. When
 aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
 the system prompt + the active round's reads are most of it), compaction is pulled into the same
 event — otherwise the estimate hovers just under the threshold and the next round immediately

@@ -493,7 +493,7 @@ describe('batchAgePayloads', () => {
 
   it('is a no-op below the compaction threshold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(50))];
-    expect(batchAgePayloads(history, estimateOf(history), 1000, 0)).toBe(0);
+    expect(batchAgePayloads(history, estimateOf(history), 1000, 0).marked).toBe(0);
     expect((history[2] as Message & { role: 'tool' }).aged).toBeUndefined();
   });
 
@@ -507,8 +507,8 @@ describe('batchAgePayloads', () => {
       ...round('b', 'y'.repeat(400)),
       ...round('c', 'z'.repeat(400)),
     ];
-    const marked = batchAgePayloads(history, estimateOf(history), 1000, 0);
-    expect(marked).toBeGreaterThan(0);
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(aged.marked).toBeGreaterThan(0);
     const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
     // Oldest non-spec aged (render cleared), trailing block protected.
     expect(tools[1].aged).toBe(true);
@@ -550,11 +550,15 @@ describe('batchAgePayloads', () => {
   });
 
   it("moves the pin to the new turn, releasing the previous turn's spec", () => {
+    // Spec payloads are sized like the real thing (an issue/PR body, under TASK_SPEC_PIN_CHARS)
+    // rather than a token string: aging now sheds bulk before crumbs, and an 8-char payload is a
+    // crumb the first sweep correctly declines to spend a re-read risk on. What this test is about
+    // is which spec is PINNED, not the size of either.
     const history: Message[] = [
       { role: 'user', content: 'turn 1' },
-      ...round('spec1', 'OLD SPEC'),
+      ...round('spec1', 'OLD SPEC'.repeat(300)),
       { role: 'user', content: 'turn 2' },
-      ...round('spec2', 'NEW SPEC'),
+      ...round('spec2', 'NEW SPEC'.repeat(300)),
       ...round('a', 'x'.repeat(4000)),
       ...round('b', 'y'.repeat(400)),
     ];
@@ -574,6 +578,49 @@ describe('batchAgePayloads', () => {
     const assistant = history[1] as Message & { role: 'assistant' };
     expect(tool.aged).toBeUndefined();
     expect(assistant.reasoningAged).toBeUndefined();
+  });
+
+  // #257: aging was strictly oldest-first regardless of size, so a 673-byte file got aged in an
+  // event that shed 18,935 chars — and the model re-read it, twice. A re-read costs a whole round
+  // AND puts the payload back in the window, pulling the next shrink event forward.
+  it('sheds a bulky payload and leaves the crumb behind when that reaches the watermark', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...round('tiny', 'x'.repeat(100)),
+      ...round('big', 'y'.repeat(4000)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    // The bulky payload is older-last but shed first; the crumb older-first and kept.
+    expect(tools[2].aged).toBe(true);
+    expect(tools[1].aged).toBeUndefined();
+    expect(tools[1].rendered).toBeDefined();
+    // The reported split is what a run's log is read by, so assert it, not just the marks.
+    expect(aged.bulk).toBe(1);
+    expect(aged.crumbs).toBe(0);
+    expect(aged.kept).toBe(1);
+    expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
+  });
+
+  // The floor reorders; it must never gate the watermark, or a shrink event lands just under the
+  // threshold and the next round re-fires it — consecutive full re-processes, the exact pattern
+  // batching exists to prevent.
+  it('ages the crumbs too when shedding bulk alone cannot reach the watermark', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'x'.repeat(300)),
+      ...round('b', 'y'.repeat(300)),
+      ...round('c', 'z'.repeat(300)),
+      ...round('d', 'w'.repeat(300)),
+    ];
+    // Every payload is under the floor, so the first sweep can shed nothing at all.
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(aged.marked).toBeGreaterThan(0);
+    expect(aged.bulk).toBe(0);
+    expect(aged.crumbs).toBeGreaterThan(0);
+    expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
   it('drops old reasoning in the same sweep as old payloads', () => {

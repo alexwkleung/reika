@@ -147,14 +147,35 @@ function ageLowFraction(): number {
   return raw;
 }
 
+// A payload below this contributes too little relief to be worth risking a re-read on. An event
+// sheds tens of thousands of chars; 2000 (~500 tokens, ~2% of a 24k window) cannot plausibly be the
+// mark that tips the estimate under the watermark, while losing it can cost a whole round. Chars,
+// not tokens, deliberately — it is compared against `payload.length`, and the threshold's token
+// units are a different scale.
+const SMALL_PAYLOAD_CHARS = 2000;
+
+// What one shrink event did. `kept` is the number that says whether the size floor actually changed
+// anything this event: small payloads the first sweep skipped and the second never had to take. A
+// run where every event reports kept=0 exercised none of #257 — which is otherwise indistinguishable
+// in a log from "it engaged and didn't help", the ambiguity that makes an A/B unreadable.
+export type AgeResult = {
+  // Total marks, reasoning included — what the estimate actually shed.
+  marked: number;
+  // Payloads aged at or above the floor (first sweep) vs below it (second sweep, needed anyway).
+  bulk: number;
+  crumbs: number;
+  kept: number;
+};
+
 export function batchAgePayloads(
   history: Message[],
   estimate: () => number, // calibrated request-token estimate; re-read after each mark
   contextWindow: number,
   minGen = DEFAULT_MIN_GEN_TOKENS,
-): number {
+): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
-  if (estimate() <= threshold) return 0;
+  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  if (estimate() <= threshold) return none;
   const target = threshold * AGE_LOW_FRACTION;
   // Never age the active round: the trailing tool block is what the model is about to act on, and
   // the assistant message that issued those calls keeps its reasoning (some providers require the
@@ -165,21 +186,53 @@ export function batchAgePayloads(
   // without this the definition of the task is always the first thing dropped — and an aged
   // summary reads as "already handled", not as content that is gone.
   const specIdx = taskSpecIndex(history);
-  let marked = 0;
-  for (let i = 0; i < protect; i++) {
-    if (estimate() <= target) break;
-    if (i === specIdx) continue;
-    const m = history[i];
-    if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
-      m.reasoningAged = true;
-      marked++;
-    } else if (m.role === 'tool' && m.payload && !m.aged) {
-      m.aged = true;
-      delete m.rendered;
-      marked++;
+  // Two sweeps, oldest-first within each: shed bulk before crumbs. Aging is otherwise strictly
+  // oldest-first regardless of size, which on a measured 2h run aged `src/cli.tsx` — 673 bytes, 0.7%
+  // of a 24k window — in an event that shed 18,935 chars. The model re-read it, twice, and each
+  // re-read costs a full round-trip AND puts the payload straight back in the window, pulling the
+  // next shrink event forward. That is a feedback loop paid for in whole rounds to reclaim
+  // rounding error.
+  //
+  // The floor only reorders: the second sweep ages the small payloads too, so it can never keep the
+  // event from reaching its watermark — the worst case is the previous behavior. Reasoning is aged
+  // in the first sweep regardless of size, because dropping it can't provoke a re-read (the model
+  // cannot re-fetch its own reasoning) and so carries none of this risk.
+  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  // `kept` is counted at the end over what survived, not decremented as the sweeps run: a payload
+  // skipped by the first sweep and taken by the second was never kept, and tracking that by hand is
+  // exactly the bookkeeping that drifts.
+  const survivingCrumbs = (): number => {
+    let n = 0;
+    for (let i = 0; i < protect; i++) {
+      if (i === specIdx) continue;
+      const m = history[i];
+      if (m.role === 'tool' && m.payload && !m.aged && m.payload.length < SMALL_PAYLOAD_CHARS) n++;
+    }
+    return n;
+  };
+  for (const takeCrumbs of [false, true]) {
+    for (let i = 0; i < protect; i++) {
+      if (estimate() <= target) {
+        out.kept = survivingCrumbs();
+        return out;
+      }
+      if (i === specIdx) continue;
+      const m = history[i];
+      if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
+        m.reasoningAged = true;
+        out.marked++;
+      } else if (m.role === 'tool' && m.payload && !m.aged) {
+        if (!takeCrumbs && m.payload.length < SMALL_PAYLOAD_CHARS) continue;
+        m.aged = true;
+        delete m.rendered;
+        out.marked++;
+        if (takeCrumbs) out.crumbs++;
+        else out.bulk++;
+      }
     }
   }
-  return marked;
+  out.kept = survivingCrumbs();
+  return out;
 }
 
 // Index of the assistant message that issued the trailing tool block's calls (or the final
