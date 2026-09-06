@@ -1494,7 +1494,24 @@ export async function runTurn(opts: {
         compactCalibration,
         opts.config.minGenTokens,
       );
-      debugLog(`[reika:debug] round=${i} compaction removed=${removed}\n`);
+      // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
+      // it is spliced into the model history per turn, while the saved transcript is written from
+      // the UI scrollback, so no recap that reached a model has ever been readable afterwards. That
+      // makes "the model got confused after a fold" impossible to check against the recap that
+      // caused it, and would make any improvement to buildRecap unmeasurable. Line-prefixed rather
+      // than a raw block so it stays greppable and can't be mistaken for other debug lines:
+      //   grep 'compaction-recap' log | sed 's/.*| //'
+      const recap = removed > 0 ? opts.history.find(m => m.role === 'compaction') : undefined;
+      debugLog(
+        `[reika:debug] round=${i} compaction removed=${removed}` +
+          (recap ? ` recap=${recap.content.length}c` : '') +
+          `\n`,
+      );
+      if (recap) {
+        for (const line of recap.content.split('\n')) {
+          debugLog(`[reika:debug] compaction-recap round=${i} | ${line}\n`);
+        }
+      }
       if (removed > 0 && !notifiedCompaction) {
         notifiedCompaction = true;
         opts.onMessage({
