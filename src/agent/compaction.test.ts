@@ -634,3 +634,106 @@ describe('batchAgePayloads', () => {
     expect((history[1] as Message & { role: 'assistant' }).reasoningAged).toBe(true);
   });
 });
+
+// #247: what a fold leaves behind. Before this, a tool-heavy turn recapped to a bare tool count
+// with no record of what was done, a file list read off any `path` argument, and one copy of the
+// closing note per fold.
+describe('recap narrative and ranges (#247)', () => {
+  // One exploration round: an assistant tool call with EMPTY content — the thinking rides in
+  // `reasoning`, which the recap never reads — and its result. The reasoning is what spends the
+  // keep budget here, exactly as it does on a real exploration turn.
+  function call(
+    id: string,
+    name: string,
+    args: Record<string, unknown>,
+    summary: string,
+  ): Message[] {
+    return [
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'r'.repeat(800),
+        toolCalls: [{ id, name, args }],
+      },
+      { role: 'tool', callId: id, summary, payload: 'P'.repeat(400) },
+    ];
+  }
+
+  // Trailing rounds that push the interesting ones out of the keep budget and into the recap.
+  function filler(n: number): Message[] {
+    const out: Message[] = [];
+    for (let i = 0; i < n; i++)
+      out.push(...call(`z${i}`, 'bash', { command: 'true' }, 'Ran: true (ok)'));
+    return out;
+  }
+
+  const RW = 2000; // keep budget 2400 chars, recap budget 800
+
+  it('records what the tool calls did when every assistant message is empty', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'fix the diff bug' },
+      ...call(
+        'c1',
+        'read',
+        { path: 'src/tools/_diff.ts' },
+        'Read src/tools/_diff.ts lines 1-40 of 244',
+      ),
+      ...call(
+        'c2',
+        'grep',
+        { path: 'src', pattern: 'applyPatch' },
+        'Found 6 matches for /applyPatch/',
+      ),
+      ...call('c3', 'bash', { command: 'npm test' }, 'Ran: npm test (ok, 812 bytes output)'),
+      ...filler(4),
+    ];
+    expect(compactHistory(history, RW, 1, 0)).toBeGreaterThan(0);
+    const recap = (history[1] as { content: string }).content;
+    expect(recap).toContain('Found 6 matches for /applyPatch/');
+    expect(recap).toContain('Ran: npm test');
+    // The narrative is summaries only — the one verbatim payload in there is the #251 task pin.
+    expect(recap.split('Tools used:')[1] ?? '').not.toContain('PPPP');
+  });
+
+  it('attaches the line ranges covered, merging adjacent reads of one file', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...call('c1', 'read', { path: 'a.ts' }, 'Read a.ts lines 1-40 of 244'),
+      ...call('c2', 'read', { path: 'a.ts' }, 'Read a.ts lines 41-80 of 244'),
+      ...call('c3', 'read', { path: 'a.ts' }, 'Read a.ts lines 200-244 of 244'),
+      ...call('c4', 'edit', { path: 'b.ts' }, 'Edited b.ts at line 12 (+3 -1)'),
+      ...filler(4),
+    ];
+    compactHistory(history, RW, 1, 0);
+    const recap = (history[1] as { content: string }).content;
+    expect(recap).toContain('a.ts (lines 1-80, 200-244)');
+    expect(recap).toContain('b.ts (lines 12)');
+  });
+
+  it('leaves directories, search roots and failed calls out of the file list', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...call('c1', 'list', { path: 'src' }, 'Listed 14 entries in src'),
+      ...call('c2', 'grep', { path: 'src', pattern: 'x' }, 'Found 2 matches for /x/'),
+      ...call('c3', 'edit', { path: 'gone.ts' }, 'Edit failed: old_string not found in gone.ts.'),
+      ...call('c4', 'read', { path: 'real.ts' }, 'Read real.ts lines 1-9 of 9'),
+      ...filler(4),
+    ];
+    compactHistory(history, RW, 1, 0);
+    const recap = (history[1] as { content: string }).content;
+    const line = recap.split('\n').find(l => l.startsWith('Files touched:')) ?? '';
+    expect(line).toContain('real.ts (lines 1-9)');
+    expect(line).not.toContain('src');
+    expect(line).not.toContain('gone.ts');
+  });
+
+  it('carries the closing note forward once, not once per fold', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...filler(6)];
+    compactHistory(history, RW, 1, 0);
+    history.push(...filler(6));
+    compactHistory(history, RW, 1, 0);
+    const recap = (history[1] as { content: string }).content;
+    const notes = recap.split('\n').filter(l => l.startsWith('(Older tool outputs'));
+    expect(notes).toHaveLength(1);
+  });
+});

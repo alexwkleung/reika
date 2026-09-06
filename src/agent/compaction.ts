@@ -1,4 +1,4 @@
-import type { Message } from '../types.js';
+import type { Message, ToolCall } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
 import { findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
@@ -267,16 +267,89 @@ function msgChars(m: Message): number {
   }
 }
 
-// Deterministic recap of an older span — selection, not generation. Each turn's intent and
-// conclusion, aggregate tool usage, and files touched, bounded to RECAP_FRACTION of the
-// window: when there's more than fits, the most recent turns are kept and the rest are
-// noted as a count. Any prior recap in the span is carried forward.
+// The recap's closing pointer. A single constant because a carried-forward recap already ends with
+// it: appended unconditionally, N folds produced N identical notes (#247).
+const OMISSION_NOTE = '(Older tool outputs were omitted here but can be re-read on demand.)';
+
+// Tools whose `path` argument names a file the turn actually worked on. `list` takes a DIRECTORY
+// and grep/glob take a search ROOT, so reading the file list off "any call with a path arg" put
+// bare `src` in it — a wrong entry that reads as a handled file (#247).
+const FILE_TOOLS = new Set(['read', 'edit', 'write']);
+
+// How many line ranges are spelled out per file before the rest become a count.
+const MAX_RANGES = 3;
+
+// Strip trailing copies of the closing pointer from a carried-forward recap, so the one appended
+// at the end of this recap is the only one.
+function stripOmissionNote(content: string): string {
+  let out = content.trimEnd();
+  while (out.endsWith(OMISSION_NOTE)) out = out.slice(0, -OMISSION_NOTE.length).trimEnd();
+  return out;
+}
+
+// The line range a tool result covered, read off the result SUMMARY rather than the call args:
+// `read` clamps its offset/limit to the file's real length, and an edit's line is only known after
+// the match is found — so the args say what was asked for and the summary says what happened.
+function summaryRange(summary: string): [number, number] | null {
+  const span = /\blines (\d+)-(\d+)\b/.exec(summary);
+  if (span) return [Number(span[1]), Number(span[2])];
+  const one = /\bat line (\d+)\b/.exec(summary);
+  return one ? [Number(one[1]), Number(one[1])] : null;
+}
+
+// Record one tool result against the file it addressed. Failed and declined calls are skipped:
+// naming a file the turn never actually read is the same lie as naming a directory.
+function noteFile(
+  files: Map<string, [number, number][]>,
+  call: ToolCall | undefined,
+  summary: string,
+): void {
+  if (!call || !FILE_TOOLS.has(call.name)) return;
+  const path = call.args.path;
+  if (typeof path !== 'string' || !path) return;
+  if (/^\S+ (failed|declined|timeout)\b/i.test(summary)) return;
+  const ranges = files.get(path) ?? [];
+  const range = summaryRange(summary);
+  if (range) ranges.push(range);
+  files.set(path, ranges);
+}
+
+// Merge overlapping and adjacent ranges so five reads walking one file come back as one span
+// rather than five near-identical ones.
+function mergeRanges(ranges: [number, number][]): [number, number][] {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out: [number, number][] = [];
+  for (const [start, end] of sorted) {
+    const last = out[out.length - 1];
+    if (last && start <= last[1] + 1) last[1] = Math.max(last[1], end);
+    else out.push([start, end]);
+  }
+  return out;
+}
+
+// `path (lines 1-40, 120-160)` — the coordinates the fold used to drop (#247). Deliberately reads
+// as coverage, not as content: what was looked at, still re-readable, not what it said.
+function describeFile(path: string, ranges: [number, number][]): string {
+  const merged = mergeRanges(ranges);
+  if (merged.length === 0) return path;
+  const shown = merged.slice(0, MAX_RANGES).map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`));
+  const extra = merged.length > MAX_RANGES ? `, +${merged.length - MAX_RANGES} more` : '';
+  return `${path} (lines ${shown.join(', ')}${extra})`;
+}
+
+// Deterministic recap of an older span — selection, not generation. Each turn's intent, the tool
+// results that made up the work, aggregate tool usage, and files touched with the ranges covered,
+// bounded to RECAP_FRACTION of the window: when there's more than fits, the most recent turns are
+// kept and the rest are noted as a count. Any prior recap in the span is carried forward.
 function buildRecap(span: Message[], avail: number, calib: number): string {
   const recapBudget = (avail * CHARS_PER_TOKEN * RECAP_FRACTION) / calib;
   const priorRecaps: string[] = [];
   const entries: string[] = [];
   const toolCounts: Record<string, number> = {};
-  const files = new Set<string>();
+  const files = new Map<string, [number, number][]>();
+  // Tool calls by id, so each result can be read together with the call that produced it: the call
+  // knows the tool and the path, the result knows what actually happened.
+  const calls = new Map<string, ToolCall>();
   let pending: string | null = null;
 
   const flush = (): void => {
@@ -285,10 +358,13 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
       pending = null;
     }
   };
+  const add = (line: string): void => {
+    pending = pending ? `${pending}\n${line}` : line;
+  };
 
   for (const m of span) {
     if (m.role === 'compaction') {
-      priorRecaps.push(m.content);
+      priorRecaps.push(stripOmissionNote(m.content));
     } else if (m.role === 'user' && !m.meta) {
       // Skip slash-command echoes — they're UI-only and must not re-enter context via the recap.
       flush();
@@ -296,13 +372,17 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
     } else if (m.role === 'assistant') {
       for (const tc of m.toolCalls ?? []) {
         toolCounts[tc.name] = (toolCounts[tc.name] ?? 0) + 1;
-        const p = tc.args.path;
-        if (typeof p === 'string') files.add(p);
+        calls.set(tc.id, tc);
       }
-      if (m.content?.trim()) {
-        const line = `  → ${trunc(m.content)}`;
-        pending = pending ? `${pending}\n${line}` : line;
-      }
+      if (m.content?.trim()) add(`  → ${trunc(m.content)}`);
+    } else if (m.role === 'tool') {
+      // The narrative used to come from assistant `content` alone, which on a tool-heavy
+      // exploration turn is empty on EVERY message — the thinking rides in `reasoning`, which the
+      // recap doesn't read. Fifteen folded messages then recapped to `Tools used: 4 read, 3 bash`
+      // and nothing else (#247). The result summaries are the record of what was actually done, and
+      // they already carry paths, ranges, match counts and exit status.
+      noteFile(files, calls.get(m.callId), m.summary);
+      add(`  · ${trunc(m.summary)}`);
     }
   }
   flush();
@@ -347,12 +427,15 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   if (toolSummary) out.push(`Tools used: ${toolSummary}`);
   if (files.size > 0) {
     // Cap the file list so the recap can't grow unbounded with a long session.
-    const sorted = [...files].sort();
-    const shown = sorted.slice(0, 25).join(', ');
+    const sorted = [...files.keys()].sort();
+    const shown = sorted
+      .slice(0, 25)
+      .map(f => describeFile(f, files.get(f) ?? []))
+      .join(', ');
     const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
     out.push(`Files touched: ${shown}${extra}`);
   }
-  out.push('(Older tool outputs were omitted here but can be re-read on demand.)');
+  out.push(OMISSION_NOTE);
 
   return out.join('\n\n');
 }
