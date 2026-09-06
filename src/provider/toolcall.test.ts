@@ -1097,6 +1097,95 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
   });
 });
 
+describe('aged read keeps a declaration outline (#260)', () => {
+  // #260: across four `/review` runs, 7 of 8 re-reads happened with no fold — the summary already
+  // said `Read src/tools/_spill.ts lines 1-244 of 244` and the model re-read the whole file anyway.
+  // Coordinates were never the missing part; an outline is what makes a narrower re-read possible.
+  const g = (n: number, text: string): string => `${String(n).padStart(5, ' ')}│${text}`;
+  const FILE = [
+    g(1, "import { readFile } from 'node:fs/promises';"),
+    g(2, ''),
+    g(3, 'export function spillResult(text: string): string {'),
+    g(4, '  const ref = makeRef(text);'),
+    g(5, '  return ref;'),
+    g(6, '}'),
+    g(7, ''),
+    g(8, 'export async function sweepStaleSpills(dir: string): Promise<number> {'),
+    g(9, '  let removed = 0;'),
+    g(10, '  return removed;'),
+    g(11, '}'),
+  ].join('\n');
+
+  const history = (payload: string): Message[] => [
+    { role: 'user', content: 'review the spill module' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+    { role: 'tool', callId: 'spec', summary: 'Ran: gh pr view 260', payload: 'PR BODY' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'r', name: 'read', args: {} }] },
+    { role: 'tool', callId: 'r', summary: 'Read src/tools/_spill.ts lines 1-244 of 244', payload },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'z', name: 'read', args: {} }] },
+    { role: 'tool', callId: 'z', summary: 'Read x', payload: 'Z'.repeat(40_000) },
+  ];
+  const contentFor = (out: unknown[], id: string): string =>
+    (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+      .content;
+
+  it('keeps top-level declarations with their line numbers, and drops the bodies', () => {
+    const out = messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 });
+    const aged = contentFor(out, 'r');
+    expect(aged).toContain('Read src/tools/_spill.ts lines 1-244 of 244');
+    expect(aged).toContain('export function spillResult(text: string): string {');
+    expect(aged).toContain('    8│export async function sweepStaleSpills');
+    expect(aged).toContain("import { readFile } from 'node:fs/promises';");
+    // Bodies are the bytes; keeping them would be keeping the payload.
+    expect(aged).not.toContain('const ref = makeRef');
+    expect(aged).not.toContain('let removed = 0');
+  });
+
+  it('tells the model to re-read a narrow range rather than the whole file', () => {
+    const aged = contentFor(messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 }), 'r');
+    expect(aged).toContain('no longer in context');
+    expect(aged).toContain('narrow line range');
+    expect(aged).toContain('the file is right');
+  });
+
+  it('is bounded, so a huge file cannot re-inflate the request as an outline', () => {
+    const huge = Array.from({ length: 3000 }, (_, i) =>
+      [
+        g(i * 2 + 1, `export function fn${i}(): void {`),
+        g(i * 2 + 2, '  body line kept never;'),
+      ].join('\n'),
+    ).join('\n');
+    const aged = contentFor(messagesToOpenAI('sys', history(huge), { contextWindow: 8192 }), 'r');
+    expect(aged.length).toBeLessThan(2048);
+    expect(aged).toContain('further declaration line(s) were dropped as well');
+    expect(aged).not.toContain('body line kept never');
+  });
+
+  it('ages command output to its summary alone — no gutter, no outline', () => {
+    const out = messagesToOpenAI('sys', history('export function looksLikeCode() {}\nplain'), {
+      contextWindow: 8192,
+    });
+    expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
+  });
+
+  it('ages a body-only page to its summary alone — one declaration is a fact, not a map', () => {
+    const body = [g(120, '  const x = 1;'), g(121, '  return x;'), g(122, '}')].join('\n');
+    const out = messagesToOpenAI('sys', history(body), { contextWindow: 8192 });
+    expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
+  });
+
+  it('does not touch the read while it is still live', () => {
+    const out = messagesToOpenAI('sys', history(FILE).slice(0, 5), { contextWindow: 32768 });
+    const live = contentFor(out, 'r');
+    expect(live).toContain('const ref = makeRef(text);');
+    expect(live).not.toContain('no longer in context');
+  });
+
+  it('counts as a dropped payload — the outline is not the content', () => {
+    expect(hasDroppedPayloads(history(FILE))).toBe(true);
+  });
+});
+
 describe('hasDroppedPayloads (#227)', () => {
   const round = (id: string, payload?: string): Message[] => [
     { role: 'assistant', content: '', toolCalls: [{ id, name: 'read', args: {} }] },

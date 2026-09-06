@@ -99,6 +99,24 @@ const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
 // page covered, and — the point — makes the omission unmistakable so a gap is read as a gap.
 const AGED_DIFF_SKELETON_CHARS = 1024;
 const DIFF_STRUCTURE_RE = /^(?:diff --git |--- |\+\+\+ |@@ )/;
+
+// The same trade as AGED_DIFF_SKELETON_CHARS, applied to the other payload shape that ages badly:
+// a line-numbered `read`. #260 measured 7 of 8 re-reads in four `/review` runs happening with no
+// fold at all — the summary already carries the coordinates (`Read src/tools/_spill.ts lines 1-244
+// of 244`) and the model re-read the whole file anyway, because the range was never the missing
+// part. Keeping the top-level declaration lines — with their real line numbers — leaves an outline
+// the model can orient from: which symbols the range contained and where each one starts, so a
+// follow-up read can be a narrow one, or unnecessary. Bodies are what must go; they are the bytes.
+const AGED_READ_SKELETON_CHARS = 1024;
+// A `read` payload's gutter (see tools/read.ts). Nothing else in the harness emits it, so it is
+// also what identifies the payload as a code read rather than command output.
+const READ_GUTTER_RE = /^\s*(\d+)│(.*)$/;
+// Top-level declarations only: a declaration keyword at column zero. Indented matches are excluded
+// deliberately — at any indent this fires on locals and object literals and the outline stops being
+// an outline. Deliberately several languages wide and shallow; a missed dialect degrades to the
+// summary, which is today's behaviour, while a false positive costs bounded chars.
+const DECLARATION_RE =
+  /^(?:export|import|from|declare|async|function|class|interface|type|enum|const|let|var|def|fn|pub|impl|struct|trait|package|module|public|private|protected|func|abstract|extension|namespace)\b/;
 // Aggregate ceiling on that exemption within one round, so a round of eight small greps can't
 // smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
 const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
@@ -658,7 +676,10 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
         (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)
       );
     case 'tool':
-      return m.summary.length;
+      // A skeleton is chars the request actually carries (up to ~1KB each, and a long session ages
+      // many reads), so price what agedToolContent will emit rather than the summary alone —
+      // under-counting here is what shrinks the fresh cap into an overflow.
+      return agedToolContent(m).length;
     default:
       return 0;
   }
@@ -705,11 +726,51 @@ function diffSkeleton(payload: string): string | null {
   );
 }
 
-// What an aged tool result serializes as. Summary only, except for a diff, which keeps a bounded
-// skeleton so the hole announces itself (AGED_DIFF_SKELETON_CHARS).
+// Structural residue for an aged line-numbered `read`, or null when the payload isn't one. The
+// gutter is the anchor — without it this is command output, which has no outline to keep — and two
+// declarations are the minimum that makes a map rather than a fact.
+function readSkeleton(payload: string): string | null {
+  const lines = payload.split('\n');
+  const first = lines[0].match(READ_GUTTER_RE);
+  if (!first) return null;
+  const structural: string[] = [];
+  for (const line of lines) {
+    const m = line.match(READ_GUTTER_RE);
+    if (!m || !DECLARATION_RE.test(m[2])) continue;
+    structural.push(line);
+  }
+  if (structural.length < 2) return null;
+  // Head-first and whole lines only, as with diffSkeleton: the truncated tail is still covered by
+  // the summary's range, and half a signature invites the model to complete it from memory.
+  let kept = '';
+  let n = 0;
+  for (const line of structural) {
+    if (kept.length + line.length + 1 > AGED_READ_SKELETON_CHARS) break;
+    kept += (kept ? '\n' : '') + line;
+    n++;
+  }
+  if (n === 0) return null;
+  const rest = structural.length - n;
+  return (
+    `[reika: the body of this file read is no longer in context — a context-size limit, not a ` +
+    `tool error. Only its top-level declaration lines are kept below, with their real line ` +
+    `numbers` +
+    (rest > 0 ? `, and ${rest} further declaration line(s) were dropped as well` : '') +
+    `. You do NOT have the code: do not quote a line, and do not state what a function or import ` +
+    `contains from memory. If you need a body, read the narrow line range the outline points at ` +
+    `rather than the whole file again. If the file on disk disagrees with what you recall, the ` +
+    `file is right.]\n\n${kept}`
+  );
+}
+
+// What an aged tool result serializes as. Summary only, except for a diff or a line-numbered read,
+// which keep a bounded skeleton so the hole announces itself (AGED_*_SKELETON_CHARS). The two are
+// mutually exclusive in practice — a diff has no gutter, a read has no hunk headers — so the order
+// only settles the pathological case of a read of a .patch file, where the diff map is the better
+// one.
 function agedToolContent(msg: Extract<Message, { role: 'tool' }>): string {
   if (!msg.payload) return msg.summary;
-  const skeleton = diffSkeleton(msg.payload);
+  const skeleton = diffSkeleton(msg.payload) ?? readSkeleton(msg.payload);
   return skeleton ? `${msg.summary}\n\n${skeleton}` : msg.summary;
 }
 
