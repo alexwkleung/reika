@@ -17,6 +17,8 @@ import { Approval } from './Approval.js';
 import { Question, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { bootstrap } from '../context/bootstrap.js';
+import { budgetWarning, formatBudget } from '../context/bundlesize.js';
+import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
@@ -344,6 +346,15 @@ export function App() {
               cfg.subagentModel && cfg.subagentModel !== cfg.model ? cfg.subagentModel : undefined,
           },
         ]);
+        // The window/reserve arithmetic decides how much room reads and history get, and a
+        // configuration that leaves too little degrades silently — reads truncated every round,
+        // the model re-reading the same file (#262). Report the numbers to the log always, and
+        // say so in the scrollback when they fall under the floor. Startup only: the profile in
+        // force here is `default`, and a later /model switch reports its own window in /stats.
+        const runtime = resolveProfile(cfg, 'default');
+        debugLog(formatBudget(b, runtime));
+        const warn = budgetWarning(b, runtime);
+        if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
