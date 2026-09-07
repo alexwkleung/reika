@@ -1019,6 +1019,9 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
   // 11k/24k, and the model then invented an import statement the diff never contained and defended
   // it against the file on disk for an hour. Too big for the task-spec pin by 4x, so the fix is to
   // make the hole legible rather than to keep the bytes.
+  // Padded past the crossover where the skeleton stops being the cheaper of the two — a page small
+  // enough that the hole marker costs more than the hunks now ships whole (agedToolContent), which
+  // is a different branch from the one this block is about.
   const DIFF = [
     'diff --git a/src/tools/_spill.test.ts b/src/tools/_spill.test.ts',
     '--- a/src/tools/_spill.test.ts',
@@ -1029,6 +1032,10 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
     ' } from ./_spill.js;',
     '@@ -106,6 +107,114 @@ describe(spillResult, () => {',
     '+const ref = await spill(grep, still needed);',
+    ...Array.from(
+      { length: 60 },
+      (_, i) => `+  const padding${i} = 'body bytes the skeleton drops';`,
+    ),
   ].join('\n');
 
   const history = (payload: string): Message[] => [
@@ -1094,6 +1101,99 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
     const live = contentFor(out, 'd');
     expect(live).toContain('+  sweepStaleSpills,');
     expect(live).not.toContain('no longer in context');
+  });
+});
+
+describe('aged read keeps a declaration outline (#260)', () => {
+  // #260: across four `/review` runs, 7 of 8 re-reads happened with no fold — the summary already
+  // said `Read src/tools/_spill.ts lines 1-244 of 244` and the model re-read the whole file anyway.
+  // Coordinates were never the missing part; an outline is what makes a narrower re-read possible.
+  const g = (n: number, text: string): string => `${String(n).padStart(5, ' ')}│${text}`;
+  // Bodies padded past the crossover: below it the whole payload is cheaper than the outline plus
+  // its marker and ships intact instead (see toolcall.agedstats.test.ts).
+  const FILE = [
+    g(1, "import { readFile } from 'node:fs/promises';"),
+    g(2, ''),
+    g(3, 'export function spillResult(text: string): string {'),
+    g(4, '  const ref = makeRef(text);'),
+    ...Array.from({ length: 40 }, (_, i) => g(i + 5, `  const step${i} = ref.slice(${i});`)),
+    g(45, '  return ref;'),
+    g(46, '}'),
+    g(47, ''),
+    g(48, 'export async function sweepStaleSpills(dir: string): Promise<number> {'),
+    g(49, '  let removed = 0;'),
+    ...Array.from({ length: 40 }, (_, i) => g(i + 50, `  removed += await sweepOne(dir, ${i});`)),
+    g(90, '  return removed;'),
+    g(91, '}'),
+  ].join('\n');
+
+  const history = (payload: string): Message[] => [
+    { role: 'user', content: 'review the spill module' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'spec', name: 'bash', args: {} }] },
+    { role: 'tool', callId: 'spec', summary: 'Ran: gh pr view 260', payload: 'PR BODY' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'r', name: 'read', args: {} }] },
+    { role: 'tool', callId: 'r', summary: 'Read src/tools/_spill.ts lines 1-244 of 244', payload },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'z', name: 'read', args: {} }] },
+    { role: 'tool', callId: 'z', summary: 'Read x', payload: 'Z'.repeat(40_000) },
+  ];
+  const contentFor = (out: unknown[], id: string): string =>
+    (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
+      .content;
+
+  it('keeps top-level declarations with their line numbers, and drops the bodies', () => {
+    const out = messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 });
+    const aged = contentFor(out, 'r');
+    expect(aged).toContain('Read src/tools/_spill.ts lines 1-244 of 244');
+    expect(aged).toContain('export function spillResult(text: string): string {');
+    expect(aged).toContain('   48│export async function sweepStaleSpills');
+    expect(aged).toContain("import { readFile } from 'node:fs/promises';");
+    // Bodies are the bytes; keeping them would be keeping the payload.
+    expect(aged).not.toContain('const ref = makeRef');
+    expect(aged).not.toContain('let removed = 0');
+  });
+
+  it('tells the model to re-read a narrow range rather than the whole file', () => {
+    const aged = contentFor(messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 }), 'r');
+    expect(aged).toContain('no longer in context');
+    expect(aged).toContain('narrow line range');
+    expect(aged).toContain('the file is right');
+  });
+
+  it('is bounded, so a huge file cannot re-inflate the request as an outline', () => {
+    const huge = Array.from({ length: 3000 }, (_, i) =>
+      [
+        g(i * 2 + 1, `export function fn${i}(): void {`),
+        g(i * 2 + 2, '  body line kept never;'),
+      ].join('\n'),
+    ).join('\n');
+    const aged = contentFor(messagesToOpenAI('sys', history(huge), { contextWindow: 8192 }), 'r');
+    expect(aged.length).toBeLessThan(2048);
+    expect(aged).toContain('further declaration line(s) were dropped as well');
+    expect(aged).not.toContain('body line kept never');
+  });
+
+  it('ages command output to its summary alone — no gutter, no outline', () => {
+    const out = messagesToOpenAI('sys', history('export function looksLikeCode() {}\nplain'), {
+      contextWindow: 8192,
+    });
+    expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
+  });
+
+  it('ages a body-only page to its summary alone — one declaration is a fact, not a map', () => {
+    const body = [g(120, '  const x = 1;'), g(121, '  return x;'), g(122, '}')].join('\n');
+    const out = messagesToOpenAI('sys', history(body), { contextWindow: 8192 });
+    expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
+  });
+
+  it('does not touch the read while it is still live', () => {
+    const out = messagesToOpenAI('sys', history(FILE).slice(0, 5), { contextWindow: 32768 });
+    const live = contentFor(out, 'r');
+    expect(live).toContain('const ref = makeRef(text);');
+    expect(live).not.toContain('no longer in context');
+  });
+
+  it('counts as a dropped payload — the outline is not the content', () => {
+    expect(hasDroppedPayloads(history(FILE))).toBe(true);
   });
 });
 
@@ -1190,7 +1290,12 @@ describe('a skeletoned diff still counts as dropped', () => {
   // it no longer renders as "the summary alone". The count must key off `aged`, not off the bytes —
   // otherwise the diff, the payload whose loss actually spiralled a model, is the one thing that
   // stops being counted. Prose alone wouldn't hold this; the invariant needs a test (#162).
-  const DIFF = ['diff --git a/x.ts b/x.ts', '@@ -1,2 +1,3 @@', '+added line'].join('\n');
+  const DIFF = [
+    'diff --git a/x.ts b/x.ts',
+    '@@ -1,2 +1,3 @@',
+    '+added line',
+    ...Array.from({ length: 60 }, (_, i) => `+  const padding${i} = 'body bytes';`),
+  ].join('\n');
 
   it('counts an aged diff even though it renders a skeleton, not a bare summary', () => {
     const history: Message[] = [
@@ -1214,6 +1319,27 @@ describe('a skeletoned diff still counts as dropped', () => {
     const rendered = out.find(m => m.tool_call_id === 'd')!.content;
     expect(rendered).toContain('@@ -1,2 +1,3 @@');
     expect(rendered).not.toContain('+added line');
+  });
+
+  it('counts an aged payload small enough to still render whole', () => {
+    // The same invariant one branch further along: under the crossover an aged payload keeps its
+    // bytes (#260), which makes it indistinguishable from a live one by content. Keying off `aged`
+    // is what keeps the ledger honest about it — the model is told the payload may vanish next
+    // round, and a bytes-sniffing count would go quiet exactly here.
+    const tiny = ['diff --git a/x.ts b/x.ts', '@@ -1,2 +1,3 @@', '+added line'].join('\n');
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'a', summary: 'spec', payload: 'SPEC' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'd', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'd', summary: 'Ran: gh pr diff', payload: tiny, aged: true },
+    ];
+    expect(droppedPayloadCount(history, true)).toBe(1);
+    const out = messagesToOpenAI('sys', history, {
+      contextWindow: 8192,
+      prefixStable: true,
+    }) as Array<{ tool_call_id?: string; content: string }>;
+    expect(out.find(m => m.tool_call_id === 'd')!.content).toContain('+added line');
   });
 });
 

@@ -1,6 +1,6 @@
 import type { Message, ToolCall } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
-import { findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
+import { agedContentChars, findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
@@ -259,7 +259,10 @@ function msgChars(m: Message): number {
         (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)
       );
     case 'tool':
-      return m.summary.length;
+      // An aged payload is not always just its summary: it may carry a bounded skeleton, or (under
+      // the crossover where the skeleton costs more than the bytes) the payload itself. Pricing
+      // those at the summary tells the walk it freed chars it did not, and it stops shedding early.
+      return m.aged ? agedContentChars(m) : m.summary.length;
     case 'compaction':
       return m.content.length;
     default:

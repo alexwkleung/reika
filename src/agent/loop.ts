@@ -1633,6 +1633,20 @@ export async function runTurn(opts: {
             );
           }
         : undefined,
+      // Eviction line (#260): what the aged half of the request actually serialized as — how many
+      // payloads collapsed to a bare summary, how many kept a diff skeleton or a declaration
+      // outline, and how many were small enough that keeping them whole cost less than the marker.
+      // Silent when nothing is aged yet, so early rounds add no noise.
+      onAgedStats: debugEnabled()
+        ? a => {
+            const total = a.summary + a.diff + a.outline + a.whole;
+            if (total === 0) return;
+            debugLog(
+              `[reika:debug] aged-payload round=${i} aged=${total} summary=${a.summary} ` +
+                `diff=${a.diff} outline=${a.outline} whole=${a.whole}\n`,
+            );
+          }
+        : undefined,
       // Prefix-divergence line (issue #69): where this request stopped matching the previous one,
       // and which mechanism class broke it. Measured on the exact serialized request.
       onRequest: debugEnabled()
