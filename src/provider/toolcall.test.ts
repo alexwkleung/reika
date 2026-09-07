@@ -1168,7 +1168,7 @@ describe('aged read keeps a declaration outline (#260)', () => {
     ).join('\n');
     const aged = contentFor(messagesToOpenAI('sys', history(huge), { contextWindow: 8192 }), 'r');
     expect(aged.length).toBeLessThan(2048);
-    expect(aged).toContain('further declaration line(s) were dropped as well');
+    expect(aged).toContain('further structural line(s) were dropped as well');
     expect(aged).not.toContain('body line kept never');
   });
 

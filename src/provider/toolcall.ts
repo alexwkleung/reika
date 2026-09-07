@@ -117,6 +117,57 @@ const READ_GUTTER_RE = /^\s*(\d+)│(.*)$/;
 // summary, which is today's behaviour, while a false positive costs bounded chars.
 const DECLARATION_RE =
   /^(?:export|import|from|declare|async|function|class|interface|type|enum|const|let|var|def|fn|pub|impl|struct|trait|package|module|public|private|protected|func|abstract|extension|namespace)\b/;
+// The other half of "structural", and the one a keyword list can never reach (#269): a column-zero
+// line that OPENS something. `describe('footers', () => {` is the shape 15 of 23 missed reads had —
+// a call, not a declaration — and the same rule picks up Go's `func`, Ruby's `def`, a Python `class`
+// and a Lua `function` without enumerating any of them. Applied only inside a known code extension,
+// where a line ending in `{`/`:`/`=>` is structure; in prose it is a sentence.
+const BLOCK_OPENER_RE = /(?:\{|=>|:)\s*$/;
+// Lines that sit at column zero and are structure's opposite: a closing bracket, or a comment.
+// `#` is in here for shell and Python, which is exactly why markdown headings need their own rule
+// rather than a shared one.
+const NON_STRUCTURE_RE = /^(?:[)\]}]|\/\/|\/\*|\*|#|--|;;)/;
+// Markdown structure is the heading tree; JSON's is its top-level keys (at indent 2 in every
+// formatter anyone uses, so allow a shallow indent rather than requiring column zero).
+const MARKDOWN_HEADING_RE = /^#{1,6}\s+\S/;
+const JSON_KEY_RE = /^ {0,2}"[^"]+"\s*:/;
+// Extensions whose structure is line-shaped enough for BLOCK_OPENER_RE. An extension missing here
+// falls back to declaration keywords alone — today's behaviour, which is the point: an unknown
+// language degrades, it does not misfire. Grow this from evals/agedoutline-report.ts, never from
+// imagination.
+const CODE_EXTENSIONS = new Set([
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'mjs',
+  'cjs',
+  'py',
+  'go',
+  'rs',
+  'rb',
+  'lua',
+  'sh',
+  'bash',
+  'zsh',
+  'c',
+  'h',
+  'cc',
+  'cpp',
+  'hpp',
+  'java',
+  'kt',
+  'swift',
+  'php',
+  'cs',
+  'scala',
+  'zig',
+  'ex',
+  'exs',
+  'vue',
+  'svelte',
+  'sql',
+]);
 // Aggregate ceiling on that exemption within one round, so a round of eight small greps can't
 // smuggle 16k chars past the budget. Granted smallest-first, which saves the most payloads.
 const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
@@ -747,17 +798,63 @@ function diffSkeleton(payload: string): string | null {
 // Structural residue for an aged line-numbered `read`, or null when the payload isn't one. The
 // gutter is the anchor — without it this is command output, which has no outline to keep — and two
 // declarations are the minimum that makes a map rather than a fact.
-function readSkeleton(payload: string): string | null {
+// The file a read summary names: `Read <path> lines A-B of N`. The path is already in the message,
+// so choosing a structure rule by extension needs no new plumbing — and an unrecognized shape
+// (a summary from some other tool, a path with no extension) simply lands on the default rule.
+function readExtension(summary: string): string {
+  const path = summary.startsWith('Read ') ? summary.slice(5).split(' ')[0].replace(/:$/, '') : '';
+  const dot = path.lastIndexOf('.');
+  return dot > path.lastIndexOf('/') ? path.slice(dot + 1).toLowerCase() : '';
+}
+
+// Whether one gutter-stripped line is structure, per the file's own shape (#269). Measured over 12
+// real transcripts, the single-rule version scored 96% on plain source and 29%/0%/0% on test files,
+// markdown and JSON — because `describe(`, `## Heading` and `"key":` are not declarations. Each
+// rule is narrow and only ever applies to the extension that asked for it, so a wrong guess about
+// one language cannot leak into another.
+function isStructuralLine(content: string, ext: string): boolean {
+  if (ext === 'md' || ext === 'markdown') return MARKDOWN_HEADING_RE.test(content);
+  if (ext === 'json' || ext === 'jsonc') return JSON_KEY_RE.test(content);
+  // Keywords stay column-zero-only: at any indent `const x = 1;` in a function body matches, and an
+  // outline of locals is worse than no outline. Block openers do not have that problem (a body line
+  // rarely ends in `{`), which is what lets them be read relative to the page — see shallowestIndent.
+  if (content === content.trimStart() && DECLARATION_RE.test(content)) return true;
+  if (!CODE_EXTENSIONS.has(ext)) return false;
+  return !NON_STRUCTURE_RE.test(content) && BLOCK_OPENER_RE.test(content);
+}
+
+// Structure is relative to the PAGE, not to the file. A read of lines 42-186 lands inside a
+// `describe(` whose opener is back at line 30, so every opener on the page is indented and a
+// column-zero rule keeps nothing — 6 of the 12 remaining misses in the #269 measurement, plus
+// `edit.ts lines 25-144`, which is entirely inside one object literal. Keeping the shallowest
+// openers present gives each page the outline of its own scope: `it(` cases when the page is one
+// suite's interior, `describe(` blocks when it is the whole file.
+function shallowestIndent(contents: string[]): number {
+  let min = Infinity;
+  for (const c of contents) min = Math.min(min, c.length - c.trimStart().length);
+  return min === Infinity ? 0 : min;
+}
+
+function readSkeleton(payload: string, summary: string): string | null {
   const lines = payload.split('\n');
   const first = lines[0].match(READ_GUTTER_RE);
   if (!first) return null;
-  const structural: string[] = [];
+  const ext = readExtension(summary);
+  const candidates: Array<{ line: string; content: string }> = [];
   for (const line of lines) {
     const m = line.match(READ_GUTTER_RE);
-    if (!m || !DECLARATION_RE.test(m[2])) continue;
-    structural.push(line);
+    if (!m || !isStructuralLine(m[2], ext)) continue;
+    candidates.push({ line, content: m[2] });
   }
-  if (structural.length < 2) return null;
+  const indent = shallowestIndent(candidates.map(c => c.content));
+  const structural = candidates
+    .filter(c => c.content.length - c.content.trimStart().length === indent)
+    .map(c => c.line);
+  // One structural line is still a map — `describe('footers', () => {` tells the model which suite
+  // that range holds, and 4 of the #269 misses were exactly that. Below the crossover the whole
+  // payload is kept anyway (agedToolContent), so a one-line outline can never be the expensive
+  // branch. Zero is the only count with nothing to say.
+  if (structural.length === 0) return null;
   // Head-first and whole lines only, as with diffSkeleton: the truncated tail is still covered by
   // the summary's range, and half a signature invites the model to complete it from memory.
   let kept = '';
@@ -771,13 +868,12 @@ function readSkeleton(payload: string): string | null {
   const rest = structural.length - n;
   return (
     `[reika: the body of this file read is no longer in context — a context-size limit, not a ` +
-    `tool error. Only its top-level declaration lines are kept below, with their real line ` +
-    `numbers` +
-    (rest > 0 ? `, and ${rest} further declaration line(s) were dropped as well` : '') +
-    `. You do NOT have the code: do not quote a line, and do not state what a function or import ` +
-    `contains from memory. If you need a body, read the narrow line range the outline points at ` +
-    `rather than the whole file again. If the file on disk disagrees with what you recall, the ` +
-    `file is right.]\n\n${kept}`
+    `tool error. Only its structural lines are kept below, with their real line numbers` +
+    (rest > 0 ? `, and ${rest} further structural line(s) were dropped as well` : '') +
+    `. You do NOT have the contents: do not quote a line, and do not state what a section, ` +
+    `function or import contains from memory. If you need one, read the narrow line range the ` +
+    `outline points at rather than the whole file again. If the file on disk disagrees with what ` +
+    `you recall, the file is right.]\n\n${kept}`
   );
 }
 
@@ -798,7 +894,7 @@ export function agedContentChars(msg: Extract<Message, { role: 'tool' }>): numbe
 function agedToolContent(msg: Extract<Message, { role: 'tool' }>): AgedContent {
   if (!msg.payload) return { content: msg.summary, kind: 'summary' };
   const diff = diffSkeleton(msg.payload);
-  const skeleton = diff ?? readSkeleton(msg.payload);
+  const skeleton = diff ?? readSkeleton(msg.payload, msg.summary);
   if (!skeleton) return { content: msg.summary, kind: 'summary' };
   // The marker is ~590 chars, so on a small file the outline barely saves anything: `src/cli.tsx`
   // (13 lines, 755 chars) serializes to 641 — 114 chars bought, and in run 1 of the #260
