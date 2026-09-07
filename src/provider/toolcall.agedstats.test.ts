@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messagesToOpenAI, type AgedStats } from './toolcall.js';
+import { agedContentChars, messagesToOpenAI, type AgedStats } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #260 verification run 1: three re-reads and two folds in one 19-round /review, and nothing in the
@@ -102,5 +102,42 @@ describe('aged-payload stats (#260)', () => {
       },
     });
     expect(stats).toEqual({ summary: 0, diff: 0, outline: 0, whole: 0 });
+  });
+});
+
+describe('the aging walk and serialization agree on what an aged payload costs (#260)', () => {
+  it('prices a kept-whole payload at its real cost, not at its summary', () => {
+    // The walk sheds until its estimate reaches the target. If it prices this at the summary while
+    // the request carries the whole payload, it stops shedding with the request still over.
+    const msg = {
+      role: 'tool' as const,
+      callId: 'r',
+      summary: 'Read src/cli.tsx lines 1-13 of 13',
+      payload: CLI_TSX,
+    };
+    expect(agedContentChars(msg)).toBeGreaterThan(msg.summary.length);
+    expect(agedContentChars(msg)).toBe(msg.summary.length + 2 + CLI_TSX.length);
+  });
+
+  it('prices an outlined payload at summary plus skeleton', () => {
+    const msg = {
+      role: 'tool' as const,
+      callId: 'r',
+      summary: 'Read big.ts lines 1-403 of 403',
+      payload: BIG_FILE,
+    };
+    const chars = agedContentChars(msg);
+    expect(chars).toBeGreaterThan(msg.summary.length);
+    expect(chars).toBeLessThan(BIG_FILE.length);
+  });
+
+  it('prices a payload with no structure at its summary alone', () => {
+    const msg = {
+      role: 'tool' as const,
+      callId: 'r',
+      summary: 'Ran: gh pr diff 225 | wc -l (9 bytes output)',
+      payload: '317',
+    };
+    expect(agedContentChars(msg)).toBe(msg.summary.length);
   });
 });

@@ -697,7 +697,7 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
       // A skeleton is chars the request actually carries (up to ~1KB each, and a long session ages
       // many reads), so price what agedToolContent will emit rather than the summary alone —
       // under-counting here is what shrinks the fresh cap into an overflow.
-      return agedToolContent(m).content.length;
+      return agedContentChars(m);
     default:
       return 0;
   }
@@ -787,6 +787,14 @@ function readSkeleton(payload: string): string | null {
 // mutually exclusive in practice — a diff has no gutter, a read has no hunk headers — so the order
 // only settles the pathological case of a read of a .patch file, where the diff map is the better
 // one.
+// Chars an aged tool message actually contributes to a request. Exported because the aging walk
+// (agent/compaction.ts) decides how much a shed payload frees, and if it prices one at its summary
+// while serialization emits a skeleton — or the whole payload, under the crossover — the two
+// disagree and the walk stops shedding while the request is still over target.
+export function agedContentChars(msg: Extract<Message, { role: 'tool' }>): number {
+  return agedToolContent(msg).content.length;
+}
+
 function agedToolContent(msg: Extract<Message, { role: 'tool' }>): AgedContent {
   if (!msg.payload) return { content: msg.summary, kind: 'summary' };
   const diff = diffSkeleton(msg.payload);
