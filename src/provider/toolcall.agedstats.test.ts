@@ -26,6 +26,13 @@ const BIG_FILE = [
   g(403, 'export function two(): void {'),
 ].join('\n');
 
+// Past SMALL_AGED_PAYLOAD_FLOOR_CHARS, so these cases exercise the summary branch rather than the crumb
+// floor: a payload under the floor keeps its bytes whatever its shape.
+const NO_STRUCTURE = Array.from(
+  { length: 80 },
+  (_, i) => `plain command output line ${i}, no gutter and no hunks`,
+).join('\n');
+
 const history = (payload: string): Message[] => [
   { role: 'user', content: 'review' },
   // A spec-pin holder first: the turn's first small payload stays live (#227), so a read in that
@@ -77,7 +84,7 @@ describe('an aged payload never costs more than its own skeleton (#260)', () => 
 
 describe('aged-payload stats (#260)', () => {
   it('counts a payload that collapsed to its summary alone', () => {
-    const { stats } = serialize(history('plain command output, no gutter and no hunks'));
+    const { stats } = serialize(history(NO_STRUCTURE));
     expect(stats.summary).toBe(1);
     expect(stats.outline + stats.diff + stats.whole).toBe(0);
   });
@@ -135,8 +142,8 @@ describe('the aging walk and serialization agree on what an aged payload costs (
     const msg = {
       role: 'tool' as const,
       callId: 'r',
-      summary: 'Ran: gh pr diff 225 | wc -l (9 bytes output)',
-      payload: '317',
+      summary: 'Ran: npm test (4812 bytes output)',
+      payload: NO_STRUCTURE,
     };
     expect(agedContentChars(msg)).toBe(msg.summary.length);
   });

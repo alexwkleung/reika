@@ -98,6 +98,24 @@ const SMALL_PAYLOAD_FLOOR_CHARS = 2048;
 // the structural lines costs a bounded ~1KB, leaves a map of which files and which line ranges the
 // page covered, and — the point — makes the omission unmistakable so a gap is read as a gap.
 const AGED_DIFF_SKELETON_CHARS = 1024;
+
+// #257: an aged payload this small is not worth the round-trip it costs. Aging is oldest-first and
+// size-blind past the sweep split, so a 755-char `src/cli.tsx` gets shed inside an event that sheds
+// tens of thousands — and the ~590-char hole marker means the eviction bought 114 chars. Measured
+// twice, on two different runs of the same task: the model re-read that file three times, hit
+// `maxrepeat=3`, and took a full tool withdrawal. The two runs that never shed it had zero dup-aged
+// re-reads and finished in half the rounds and half the tokens. Below this floor an aged payload
+// therefore keeps its bytes: the skeleton it displaces bounds what that costs, and a crumb the
+// model still has is a round it doesn't spend re-reading. Same number and same trade as
+// SMALL_PAYLOAD_FLOOR_CHARS on the cap path.
+const SMALL_AGED_PAYLOAD_FLOOR_CHARS = 2048;
+// Aggregate ceiling on that exemption within one request, mirroring SMALL_PAYLOAD_FLOOR_TOTAL_CHARS:
+// without it a long session's fifty small greps become 100k chars aging can never reclaim, and the
+// shrink event that can't reach its watermark escalates to a fold — a far worse outcome than the
+// eviction this floor exists to avoid. Granted NEWEST-first, not smallest-first as the cap path
+// grants it: the cap is choosing which payloads arrive at all, while this is choosing which
+// evictions the model is likeliest to have to undo, and that is a question about recency.
+const SMALL_AGED_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 const DIFF_STRUCTURE_RE = /^(?:diff --git |--- |\+\+\+ |@@ )/;
 
 // The same trade as AGED_DIFF_SKELETON_CHARS, applied to the other payload shape that ages badly:
@@ -205,8 +223,9 @@ export type CapStats = {
   starved: number;
 };
 
-// Which branch agedToolContent took for one message. `whole` is an aged payload kept verbatim
-// because its skeleton would have cost more than it did.
+// Which branch agedToolContent took for one message. `whole` is an aged payload kept verbatim —
+// either because it is a crumb the floor spared (#257) or because its skeleton would have cost more
+// than it did.
 type AgedKind = 'summary' | 'diff' | 'outline' | 'whole';
 type AgedContent = { content: string; kind: AgedKind };
 
@@ -297,6 +316,13 @@ export function messagesToOpenAI(
     specIdx,
     opts,
   );
+  // #257: which aged payloads keep their bytes under the crumb floor. Computed over the same set
+  // the loop below will actually age, so the exemption can never be granted to a payload that
+  // serializes live anyway.
+  const keptWhole = agedWholeIndices(
+    history,
+    agedToolIndices(history, prefixStable, freshFrom, specIdx, stubbed),
+  );
   const capStats: CapStats = {
     cap: perPayloadCap,
     fresh: 0,
@@ -321,8 +347,8 @@ export function messagesToOpenAI(
   const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0 };
   // Same discipline as applyCap: count where the content is produced, so the line can never
   // describe a serialization that didn't happen.
-  const serializeAged = (msg: Extract<Message, { role: 'tool' }>): string => {
-    const { content, kind } = agedToolContent(msg);
+  const serializeAged = (msg: Extract<Message, { role: 'tool' }>, i: number): string => {
+    const { content, kind } = agedToolContent(msg, keptWhole.has(i));
     agedStats[kind]++;
     return content;
   };
@@ -370,7 +396,7 @@ export function messagesToOpenAI(
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
         } else {
-          content = serializeAged(msg);
+          content = serializeAged(msg, i);
         }
       } else {
         const fresh = !!msg.payload && (i >= freshFrom || i === specIdx);
@@ -387,7 +413,9 @@ export function messagesToOpenAI(
               : DEDUP_TRAIL_STUB;
         } else {
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          content = fresh ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}` : serializeAged(msg);
+          content = fresh
+            ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}`
+            : serializeAged(msg, i);
         }
       }
       const toolName = findToolNameForCall(history, i);
@@ -887,21 +915,75 @@ function readSkeleton(payload: string, summary: string): string | null {
 // (agent/compaction.ts) decides how much a shed payload frees, and if it prices one at its summary
 // while serialization emits a skeleton — or the whole payload, under the crossover — the two
 // disagree and the walk stops shedding while the request is still over target.
-export function agedContentChars(msg: Extract<Message, { role: 'tool' }>): number {
-  return agedToolContent(msg).content.length;
+export function agedContentChars(
+  msg: Extract<Message, { role: 'tool' }>,
+  keepWhole?: boolean,
+): number {
+  return agedToolContent(msg, keepWhole).content.length;
 }
 
-function agedToolContent(msg: Extract<Message, { role: 'tool' }>): AgedContent {
+// Tool messages THIS request will serialize aged, in history order. Mirrors the two branches of the
+// serialization loop exactly — a dedup-stubbed message is excluded because it never reaches
+// serializeAged at all — so the crumb ceiling is granted over the set that is really being evicted.
+function agedToolIndices(
+  history: Message[],
+  prefixStable: boolean,
+  freshFrom: number,
+  specIdx: number,
+  stubbed: ReadonlySet<number>,
+): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.role !== 'tool') continue;
+    if (prefixStable) {
+      if (!(m.payload && !m.aged)) out.push(i);
+    } else {
+      if (stubbed.has(i)) continue;
+      if (!(m.payload && (i >= freshFrom || i === specIdx))) out.push(i);
+    }
+  }
+  return out;
+}
+
+// Of those, the crumbs that keep their bytes (#257): newest-first up to the aggregate ceiling.
+// `continue` rather than `break` on the ceiling — a smaller, older crumb can still fit in what a
+// larger one didn't, and skipping it would spend the exemption on nothing.
+function agedWholeIndices(history: Message[], agedIdx: readonly number[]): Set<number> {
+  const keep = new Set<number>();
+  let total = 0;
+  for (let k = agedIdx.length - 1; k >= 0; k--) {
+    const i = agedIdx[k];
+    const m = history[i];
+    if (m.role !== 'tool' || !m.payload) continue;
+    if (m.payload.length > SMALL_AGED_PAYLOAD_FLOOR_CHARS) continue;
+    if (total + m.payload.length > SMALL_AGED_PAYLOAD_FLOOR_TOTAL_CHARS) continue;
+    total += m.payload.length;
+    keep.add(i);
+  }
+  return keep;
+}
+
+function agedToolContent(
+  msg: Extract<Message, { role: 'tool' }>,
+  // Whether the crumb floor's aggregate ceiling granted this payload its bytes. Undefined for the
+  // estimators, which have no request-scoped budget to consult: they answer "crumb, so whole",
+  // ignoring the ceiling. That is the safe direction — over-pricing an aged message shrinks the
+  // fresh cap and makes the keep-budget walk fold sooner, while under-pricing one is what lets a
+  // request the walk believed had shrunk go out over the window.
+  keepWhole?: boolean,
+): AgedContent {
   if (!msg.payload) return { content: msg.summary, kind: 'summary' };
+  if (keepWhole ?? msg.payload.length <= SMALL_AGED_PAYLOAD_FLOOR_CHARS) {
+    return { content: `${msg.summary}\n\n${msg.payload}`, kind: 'whole' };
+  }
   const diff = diffSkeleton(msg.payload);
   const skeleton = diff ?? readSkeleton(msg.payload, msg.summary);
   if (!skeleton) return { content: msg.summary, kind: 'summary' };
-  // The marker is ~590 chars, so on a small file the outline barely saves anything: `src/cli.tsx`
-  // (13 lines, 755 chars) serializes to 641 — 114 chars bought, and in run 1 of the #260
-  // verification the model re-read that file three times regardless. Below the crossover the trade
-  // inverts outright, and there keeping the bytes is never worse for the window (it is bounded by
-  // the skeleton it displaces) and strictly better for the model. Not aging small payloads at all
-  // is the real fix and is #257's; this is only the floor that keeps the trade from going negative.
+  // Second floor, for payloads over the crumb floor whose skeleton still isn't smaller than the
+  // bytes it replaces (a long file of near-all-structural lines, say). Keeping them is never worse
+  // for the window — the cost is bounded by the skeleton it displaces — and strictly better for the
+  // model.
   if (skeleton.length >= msg.payload.length) {
     return { content: `${msg.summary}\n\n${msg.payload}`, kind: 'whole' };
   }
