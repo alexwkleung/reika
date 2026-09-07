@@ -1,7 +1,7 @@
 import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
-import type { CapStats } from './toolcall.js';
+import type { AgedStats, CapStats } from './toolcall.js';
 import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
@@ -64,6 +64,8 @@ export async function callModel(opts: {
   // Debug hook: what the fit-to-window cap did to this request's fresh tool payloads (#253).
   // Same discipline as onRequest — measurement only, never set on a normal run.
   onCapStats?: (stats: CapStats) => void;
+  // Debug hook: what eviction did to this request's aged tool payloads (#260). Same discipline.
+  onAgedStats?: (stats: AgedStats) => void;
   // Ask for per-token logprobs with this many top-k alternatives per position (issue #134).
   // Set only by the debug drift instrumentation; undefined leaves the request byte-identical
   // to a normal turn.
@@ -82,6 +84,7 @@ export async function callModel(opts: {
     stampRenders: opts.stampRenders ?? opts.prefixStable,
     trailingNote: opts.trailingNote,
     onCapStats: opts.onCapStats,
+    onAgedStats: opts.onAgedStats,
   });
   opts.onRequest?.(messages);
   const maxTokens = opts.maxTokens ?? opts.config.maxTokens;

@@ -154,6 +154,16 @@ export type CapStats = {
   starved: number;
 };
 
+// Which branch agedToolContent took for one message. `whole` is an aged payload kept verbatim
+// because its skeleton would have cost more than it did.
+type AgedKind = 'summary' | 'diff' | 'outline' | 'whole';
+type AgedContent = { content: string; kind: AgedKind };
+
+// What eviction did to this request, counted where it happens (#260). Aging is otherwise invisible
+// in the logs: the summaries and skeletons live only in the serialized request, which nothing
+// records, so a verification run could not tell an outline that fired from one that never did.
+export type AgedStats = Record<AgedKind, number>;
+
 export function messagesToOpenAI(
   system: string,
   history: Message[],
@@ -179,6 +189,7 @@ export function messagesToOpenAI(
     trailingNote?: string;
     // Debug-only hook: reports what the fit-to-window cap did to this request (#253).
     onCapStats?: (stats: CapStats) => void;
+    onAgedStats?: (stats: AgedStats) => void;
   },
 ): ChatMessageParam[] {
   const prefixStable = !!opts?.prefixStable;
@@ -256,6 +267,14 @@ export function messagesToOpenAI(
     }
     return capPayload(payload, cap);
   };
+  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0 };
+  // Same discipline as applyCap: count where the content is produced, so the line can never
+  // describe a serialization that didn't happen.
+  const serializeAged = (msg: Extract<Message, { role: 'tool' }>): string => {
+    const { content, kind } = agedToolContent(msg);
+    agedStats[kind]++;
+    return content;
+  };
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
   // Compaction left no user turn — surface the recap as the user message so a user-requiring
   // template still renders. (Normal case: hasUserTurn is true and the recap stayed in the system
@@ -300,7 +319,7 @@ export function messagesToOpenAI(
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
         } else {
-          content = agedToolContent(msg);
+          content = serializeAged(msg);
         }
       } else {
         const fresh = !!msg.payload && (i >= freshFrom || i === specIdx);
@@ -317,9 +336,7 @@ export function messagesToOpenAI(
               : DEDUP_TRAIL_STUB;
         } else {
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          content = fresh
-            ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}`
-            : agedToolContent(msg);
+          content = fresh ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}` : serializeAged(msg);
         }
       }
       const toolName = findToolNameForCall(history, i);
@@ -346,6 +363,7 @@ export function messagesToOpenAI(
     out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
   opts?.onCapStats?.(capStats);
+  opts?.onAgedStats?.(agedStats);
   return out;
 }
 
@@ -679,7 +697,7 @@ function nonFreshChars0(m: Message, includeReasoning: boolean): number {
       // A skeleton is chars the request actually carries (up to ~1KB each, and a long session ages
       // many reads), so price what agedToolContent will emit rather than the summary alone —
       // under-counting here is what shrinks the fresh cap into an overflow.
-      return agedToolContent(m).length;
+      return agedToolContent(m).content.length;
     default:
       return 0;
   }
@@ -763,15 +781,27 @@ function readSkeleton(payload: string): string | null {
   );
 }
 
-// What an aged tool result serializes as. Summary only, except for a diff or a line-numbered read,
+// What an aged tool result serializes as, with the branch it took (AgedStats reads it). Summary
+// only, except for a diff or a line-numbered read,
 // which keep a bounded skeleton so the hole announces itself (AGED_*_SKELETON_CHARS). The two are
 // mutually exclusive in practice — a diff has no gutter, a read has no hunk headers — so the order
 // only settles the pathological case of a read of a .patch file, where the diff map is the better
 // one.
-function agedToolContent(msg: Extract<Message, { role: 'tool' }>): string {
-  if (!msg.payload) return msg.summary;
-  const skeleton = diffSkeleton(msg.payload) ?? readSkeleton(msg.payload);
-  return skeleton ? `${msg.summary}\n\n${skeleton}` : msg.summary;
+function agedToolContent(msg: Extract<Message, { role: 'tool' }>): AgedContent {
+  if (!msg.payload) return { content: msg.summary, kind: 'summary' };
+  const diff = diffSkeleton(msg.payload);
+  const skeleton = diff ?? readSkeleton(msg.payload);
+  if (!skeleton) return { content: msg.summary, kind: 'summary' };
+  // The marker is ~590 chars, so on a small file the outline barely saves anything: `src/cli.tsx`
+  // (13 lines, 755 chars) serializes to 641 — 114 chars bought, and in run 1 of the #260
+  // verification the model re-read that file three times regardless. Below the crossover the trade
+  // inverts outright, and there keeping the bytes is never worse for the window (it is bounded by
+  // the skeleton it displaces) and strictly better for the model. Not aging small payloads at all
+  // is the real fix and is #257's; this is only the floor that keeps the trade from going negative.
+  if (skeleton.length >= msg.payload.length) {
+    return { content: `${msg.summary}\n\n${msg.payload}`, kind: 'whole' };
+  }
+  return { content: `${msg.summary}\n\n${skeleton}`, kind: diff ? 'diff' : 'outline' };
 }
 
 function capPayload(payload: string, cap: number | undefined): string {
