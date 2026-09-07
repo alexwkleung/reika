@@ -316,13 +316,10 @@ export function messagesToOpenAI(
     specIdx,
     opts,
   );
-  // #257: which aged payloads keep their bytes under the crumb floor. Computed over the same set
-  // the loop below will actually age, so the exemption can never be granted to a payload that
-  // serializes live anyway.
-  const keptWhole = agedWholeIndices(
-    history,
-    agedToolIndices(history, prefixStable, freshFrom, specIdx, stubbed),
-  );
+  // How each tool message is served this request, and — of the ones being aged — which crumbs keep
+  // their bytes under the floor (#257). Both the loop below and the ceiling read this one map.
+  const disposition = toolDispositions(history, prefixStable, freshFrom, specIdx, stubbed);
+  const keptWhole = agedWholeIndices(history, disposition);
   const capStats: CapStats = {
     cap: perPayloadCap,
     fresh: 0,
@@ -388,35 +385,39 @@ export function messagesToOpenAI(
       out.push(param as unknown as ChatMessageParam);
     } else if (msg.role === 'tool') {
       let content: string;
-      if (prefixStable) {
-        if (msg.payload && !msg.aged) {
-          // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
+      // Total by construction: toolDispositions classifies every tool message in `history`. The
+      // switch below is exhaustive over ToolDisposition, so adding a disposition is a type error
+      // here rather than a silently unserialized message.
+      switch (disposition.get(i)!) {
+        case 'live': {
           const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          const rendered = msg.rendered ?? `${msg.summary}\n\n${applyCap(msg.payload, cap)}`;
+          const body = (): string => `${msg.summary}\n\n${applyCap(msg.payload!, cap)}`;
+          if (!prefixStable) {
+            content = body();
+            break;
+          }
+          // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
+          const rendered = msg.rendered ?? body();
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
-        } else {
+          break;
+        }
+        case 'aged':
           content = serializeAged(msg, i);
-        }
-      } else {
-        const fresh = !!msg.payload && (i >= freshFrom || i === specIdx);
-        if (stubbed.has(i)) {
-          // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
-          // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
-          // bare back-reference (its summary is the very thing repeating) — UNLESS the summary
-          // carries an outcome, which must survive the stub (see OUTCOME_SUMMARY_RE). tool_call_id
-          // pairing is untouched, so the provider still matches every call to a response.
-          content = fresh
-            ? `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}`
-            : OUTCOME_SUMMARY_RE.test(msg.summary)
-              ? `(reika: repeat of an earlier identical result — same outcome again: ${msg.summary})`
-              : DEDUP_TRAIL_STUB;
-        } else {
-          const cap = verbatim.has(i) ? undefined : perPayloadCap;
-          content = fresh
-            ? `${msg.summary}\n\n${applyCap(msg.payload!, cap)}`
-            : serializeAged(msg, i);
-        }
+          break;
+        // A byte-identical repeat of an earlier tool result. Keep the summary on a fresh dup (the
+        // model still sees what it was, minus the redundant body); collapse an aged-trail dup to a
+        // bare back-reference (its summary is the very thing repeating) — UNLESS the summary carries
+        // an outcome, which must survive the stub (see OUTCOME_SUMMARY_RE). tool_call_id pairing is
+        // untouched, so the provider still matches every call to a response.
+        case 'stub-fresh':
+          content = `${msg.summary}\n\n${DEDUP_PAYLOAD_STUB}`;
+          break;
+        case 'stub-aged':
+          content = OUTCOME_SUMMARY_RE.test(msg.summary)
+            ? `(reika: repeat of an earlier identical result — same outcome again: ${msg.summary})`
+            : DEDUP_TRAIL_STUB;
+          break;
       }
       const toolName = findToolNameForCall(history, i);
       const param: Record<string, unknown> = {
@@ -922,38 +923,54 @@ export function agedContentChars(
   return agedToolContent(msg, keepWhole).content.length;
 }
 
-// Tool messages THIS request will serialize aged, in history order. Mirrors the two branches of the
-// serialization loop exactly — a dedup-stubbed message is excluded because it never reaches
-// serializeAged at all — so the crumb ceiling is granted over the set that is really being evicted.
-function agedToolIndices(
+// What this request does with each tool message. Computed once, read by both the crumb ceiling
+// (#257) and the serialization loop, so "which payloads is this request evicting" has one answer
+// instead of two copies of the same predicate drifting apart. The two modes disagree on what makes
+// a payload live — prefix-stable liveness is sticky (`m.aged`, set only by batch aging) while the
+// default is trailing-block-only — and that disagreement belongs here rather than at each use.
+type ToolDisposition =
+  // Payload serialized: frozen bytes under prefix-stable, capped under the default.
+  | 'live'
+  // Payload dropped for a summary, a skeleton, or — under a floor — its own bytes (agedToolContent).
+  | 'aged'
+  // Byte-identical repeat of a live payload: summary plus a back-reference (DEDUP_PAYLOADS only).
+  | 'stub-fresh'
+  // Byte-identical repeat within the aged trail, where the summary itself is what repeats.
+  | 'stub-aged';
+
+function toolDispositions(
   history: Message[],
   prefixStable: boolean,
   freshFrom: number,
   specIdx: number,
   stubbed: ReadonlySet<number>,
-): number[] {
-  const out: number[] = [];
+): Map<number, ToolDisposition> {
+  const out = new Map<number, ToolDisposition>();
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (m.role !== 'tool') continue;
     if (prefixStable) {
-      if (!(m.payload && !m.aged)) out.push(i);
-    } else {
-      if (stubbed.has(i)) continue;
-      if (!(m.payload && (i >= freshFrom || i === specIdx))) out.push(i);
+      out.set(i, m.payload && !m.aged ? 'live' : 'aged');
+      continue;
     }
+    const fresh = !!m.payload && (i >= freshFrom || i === specIdx);
+    out.set(i, stubbed.has(i) ? (fresh ? 'stub-fresh' : 'stub-aged') : fresh ? 'live' : 'aged');
   }
   return out;
 }
 
-// Of those, the crumbs that keep their bytes (#257): newest-first up to the aggregate ceiling.
-// `continue` rather than `break` on the ceiling — a smaller, older crumb can still fit in what a
-// larger one didn't, and skipping it would spend the exemption on nothing.
-function agedWholeIndices(history: Message[], agedIdx: readonly number[]): Set<number> {
+// Of the payloads this request ages, the crumbs that keep their bytes (#257): newest-first up to
+// the aggregate ceiling. `continue` rather than `break` on the ceiling — a smaller, older crumb can
+// still fit in what a larger one didn't, and skipping it would spend the exemption on nothing.
+function agedWholeIndices(
+  history: Message[],
+  disposition: ReadonlyMap<number, ToolDisposition>,
+): Set<number> {
+  const aged = [...disposition].filter(([, d]) => d === 'aged').map(([i]) => i);
   const keep = new Set<number>();
   let total = 0;
-  for (let k = agedIdx.length - 1; k >= 0; k--) {
-    const i = agedIdx[k];
+  for (let k = aged.length - 1; k >= 0; k--) {
+    const i = aged[k];
     const m = history[i];
     if (m.role !== 'tool' || !m.payload) continue;
     if (m.payload.length > SMALL_AGED_PAYLOAD_FLOOR_CHARS) continue;
