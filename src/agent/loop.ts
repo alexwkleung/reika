@@ -1461,10 +1461,12 @@ export async function runTurn(opts: {
       if (aged.marked > 0) {
         // bulk/crumbs/kept is the #257 sweep split: `kept` counts small payloads the size floor
         // spared, so a run can say whether the floor engaged at all rather than leaving "never
-        // fired" and "fired and didn't help" looking identical.
+        // fired" and "fired and didn't help" looking identical. `short` is the tokens still over
+        // the watermark when the sweeps ran dry — the number that says whether the fold this event
+        // is about to trigger was avoidable.
         debugLog(
           `[reika:debug] round=${i} prefix-stable batch-age marked=${aged.marked} ` +
-            `bulk=${aged.bulk} crumbs=${aged.crumbs} kept=${aged.kept}\n`,
+            `bulk=${aged.bulk} crumbs=${aged.crumbs} kept=${aged.kept} short=${aged.short}\n`,
         );
       }
     }

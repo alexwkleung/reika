@@ -109,12 +109,23 @@ const AGED_DIFF_SKELETON_CHARS = 1024;
 // model still has is a round it doesn't spend re-reading. Same number and same trade as
 // SMALL_PAYLOAD_FLOOR_CHARS on the cap path.
 const SMALL_AGED_PAYLOAD_FLOOR_CHARS = 2048;
-// Aggregate ceiling on that exemption within one request, mirroring SMALL_PAYLOAD_FLOOR_TOTAL_CHARS:
-// without it a long session's fifty small greps become 100k chars aging can never reclaim, and the
-// shrink event that can't reach its watermark escalates to a fold — a far worse outcome than the
-// eviction this floor exists to avoid. Granted NEWEST-first, not smallest-first as the cap path
-// grants it: the cap is choosing which payloads arrive at all, while this is choosing which
-// evictions the model is likeliest to have to undo, and that is a question about recency.
+// Aggregate ceiling on that exemption within one request, mirroring SMALL_PAYLOAD_FLOOR_TOTAL_CHARS.
+//
+// The ceiling is what bounds this floor's ONE departure from #258's sweep split. That split only
+// reordered — the second sweep took the crumbs anyway, so it could never keep a shrink event from
+// reaching its watermark, and its worst case was the previous behavior exactly. This floor is not
+// that: the exemption lives in serialization, the aging walk has no way to override it, so an event
+// CAN come up short because of bytes held back here and escalate to a fold in the same round
+// (loop.ts, `agedButAboveWatermark`). The ceiling is what keeps that bounded at ~1k tokens against
+// a shrink event that sheds five or six times that — small enough to be the wrong explanation for
+// any fold you find, but say so rather than assume it. The `short=` number on the batch-age line is
+// there to settle it: measured over the three #279 verification runs, the only event that came up
+// short was ~4000 tokens short with a single sheddable bulk payload left, so the crumbs were not
+// what cost it.
+//
+// Granted NEWEST-first, not smallest-first as the cap path grants it: the cap is choosing which
+// payloads arrive at all, while this is choosing which evictions the model is likeliest to have to
+// undo, and that is a question about recency.
 const SMALL_AGED_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 const DIFF_STRUCTURE_RE = /^(?:diff --git |--- |\+\+\+ |@@ )/;
 
