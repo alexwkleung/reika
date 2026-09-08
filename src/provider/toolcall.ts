@@ -205,7 +205,7 @@ const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 // Same number and same trade as PROTECTED_READ_FLOOR_CHARS — a spec is small (the issue that
 // motivated this was 505 bytes), and a first result larger than this is a dump, not a definition,
 // which aging should stay free to collapse.
-const TASK_SPEC_PIN_CHARS = 4096;
+export const TASK_SPEC_PIN_CHARS = 4096;
 
 // What the fit-to-window cap did to THIS request's fresh tool payloads (#253). Measurement only —
 // nothing reads it but the debug log. The cap is sized from the room left after everything else in

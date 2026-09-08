@@ -1,6 +1,12 @@
 import type { Message, ToolCall } from '../types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
-import { agedContentChars, findFreshToolBlockStart, taskSpecIndex } from '../provider/toolcall.js';
+import {
+  TASK_SPEC_PIN_CHARS,
+  agedContentChars,
+  findFreshToolBlockStart,
+  lastUserMessageIndex,
+  taskSpecIndex,
+} from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
@@ -98,19 +104,20 @@ export function compactHistory(
   // lead a request, its assistant parent may have issued sibling calls whose responses are being
   // folded, and an unmatched tool_call is an API error. Text has none of those failure modes.
   //
-  // No extra bound needed — taskSpecIndex only ever returns a payload at or under its own pin cap,
-  // so this is a few KB at most. Note it stops being findable by taskSpecIndex afterwards (that
-  // looks for a `tool` message), so `spec-pin none` after a compaction is expected, not a
-  // regression: the content is in the recap, and the next turn's opening call becomes the new pin.
-  const specIdx = taskSpecIndex(history);
-  const spec = specIdx >= recapStart && specIdx < keepFrom ? history[specIdx] : undefined;
-  const preserved =
-    spec && spec.role === 'tool' && spec.payload
-      ? `The task this turn is working on, kept verbatim through the compaction ` +
-        `(this is the real output, not a summary of it):\n\n${spec.summary}\n\n${spec.payload}`
-      : undefined;
+  // No extra bound needed — every candidate is capped at TASK_SPEC_PIN_CHARS, so this is a few KB at
+  // most. Note the elected spec stops being findable by taskSpecIndex afterwards (that looks for a
+  // `tool` message), so `spec-pin none` after a compaction is expected, not a regression: the
+  // content is in the recap, and the next turn's opening call becomes the new pin.
+  //
+  // #275: elect ONCE per turn, at the first fold. Every later fold re-runs the election with the
+  // winner already folded into a `compaction` message — invisible to taskSpecIndex — so it pinned
+  // whatever small tool result had arrived since (a 13-line file read, then a grep of AGENTS.md)
+  // under a header asserting it is the task. The first fold is also the only one whose ballot still
+  // held the real spec, so its answer is the one to keep.
+  const span = history.slice(recapStart, keepFrom);
+  const preserved = carriedSpecBlock(span) ?? electSpecBlock(history, recapStart, keepFrom);
 
-  const recap = buildRecap(history.slice(recapStart, keepFrom), avail, calib);
+  const recap = buildRecap(span, avail, calib);
   history.splice(recapStart, keepFrom - recapStart, {
     role: 'compaction',
     content: preserved ? `${preserved}\n\n${recap}` : recap,
@@ -291,12 +298,103 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write']);
 // How many line ranges are spelled out per file before the rest become a count.
 const MAX_RANGES = 3;
 
+// Share of the recap budget a carried-forward recap may occupy (#275). Half: the earlier session and
+// this fold's own turns each keep a floor, so neither the deep history nor the recent work can be
+// squeezed out by the other however many times a session folds.
+const PRIOR_RECAP_SHARE = 0.5;
+
 // Strip trailing copies of the closing pointer from a carried-forward recap, so the one appended
 // at the end of this recap is the only one.
 function stripOmissionNote(content: string): string {
   let out = content.trimEnd();
   while (out.endsWith(OMISSION_NOTE)) out = out.slice(0, -OMISSION_NOTE.length).trimEnd();
   return out;
+}
+
+// The preserved task definition that leads a recap (#251), and the closing line that bounds it so a
+// later fold can find the whole block and carry it forward instead of electing a second one (#275).
+// One block per recap, always at the front, always under TASK_SPEC_PIN_CHARS.
+const SPEC_BLOCK_END = '(End of the preserved task definition; the recap of earlier work follows.)';
+
+// The three things the block can hold, most trustworthy first. Only the first two make the strong
+// claim, and both have earned it: a skill mandates its opening call (`/issue`, `/review` both fetch
+// the spec first), and the user's own message IS the task. The third is elected by position alone —
+// `taskSpecIndex` knows nothing about skills — so it says what is actually true and no more. A wrong
+// claim under a header this assertive costs more than the content is worth (#275).
+const SPEC_HEADER_SKILL =
+  'The task this turn is working on, kept verbatim through the compaction ' +
+  '(this is the real output, not a summary of it):';
+const SPEC_HEADER_USER =
+  'The task this turn is working on, kept verbatim through the compaction ' +
+  "(the user's own request, not a summary of it):";
+const SPEC_HEADER_FIRST =
+  "This turn's first tool output, kept verbatim through the compaction (this is the real output, " +
+  'not a summary of it). It is what ran first, which is not necessarily a statement of the task:';
+const SPEC_HEADERS = [SPEC_HEADER_SKILL, SPEC_HEADER_USER, SPEC_HEADER_FIRST];
+
+function specBlock(header: string, body: string): string {
+  return `${header}\n\n${body}\n\n${SPEC_BLOCK_END}`;
+}
+
+// Split a recap into its leading preserved block (if any) and the narrative after it. Recognised by
+// its own header at the front plus the closing line — not by "contains a header", so a header
+// quoted inside a payload can't make the rest of the recap disappear.
+function splitSpecBlock(content: string): { block?: string; rest: string } {
+  const text = content.trimStart();
+  if (!SPEC_HEADERS.some(h => text.startsWith(h))) return { rest: content };
+  const end = text.indexOf(SPEC_BLOCK_END);
+  if (end < 0) return { rest: content };
+  const cut = end + SPEC_BLOCK_END.length;
+  return { block: text.slice(0, cut), rest: text.slice(cut).trimStart() };
+}
+
+// The block a prior fold already elected, if one is being folded again. Its presence is what ends
+// the election: the task does not change mid-turn, so re-running it can only replace a right answer
+// with a newer wrong one.
+function carriedSpecBlock(span: Message[]): string | undefined {
+  for (const m of span) {
+    if (m.role !== 'compaction') continue;
+    const { block } = splitSpecBlock(m.content);
+    if (block) return block;
+  }
+  return undefined;
+}
+
+// Choose what this recap preserves verbatim, in the order of what the choice can be trusted to be.
+// Returns undefined rather than guessing: nothing is better than a false claim, and a recap with no
+// block still carries the narrative.
+function electSpecBlock(
+  history: Message[],
+  recapStart: number,
+  keepFrom: number,
+): string | undefined {
+  const inSpan = (i: number): boolean => i >= recapStart && i < keepFrom;
+  // The skill mark rides the turn's user message, so it is readable whether or not that message is
+  // itself being folded.
+  const userIdx = lastUserMessageIndex(history);
+  const user = userIdx >= 0 ? history[userIdx] : undefined;
+  const specIdx = taskSpecIndex(history);
+  const specMsg = inSpan(specIdx) ? history[specIdx] : undefined;
+  const spec = specMsg?.role === 'tool' && specMsg.payload ? specMsg : undefined;
+
+  if (user?.role === 'user' && user.skill && spec) {
+    return specBlock(SPEC_HEADER_SKILL, `${spec.summary}\n\n${spec.payload}`);
+  }
+  // A generic multi-turn session folds the user's own request into a `- User: …` line truncated to
+  // MAX_TEXT, while an arbitrary first tool payload got up to TASK_SPEC_PIN_CHARS verbatim under a
+  // header calling itself the task — the inversion #251 fixed, one turn over. The request is small,
+  // so keep it whole (an oversized one is a pasted dump, not a definition; let the recap have it).
+  if (
+    user?.role === 'user' &&
+    inSpan(userIdx) &&
+    user.content.length > 0 &&
+    user.content.length <= TASK_SPEC_PIN_CHARS
+  ) {
+    return specBlock(SPEC_HEADER_USER, user.content);
+  }
+  // Nothing guaranteed the election, but keeping the payload still spares the re-fetch loop #251
+  // measured. It ships under the weaker header.
+  return spec ? specBlock(SPEC_HEADER_FIRST, `${spec.summary}\n\n${spec.payload}`) : undefined;
 }
 
 // The line range a tool result covered, read off the result SUMMARY rather than the call args:
@@ -352,7 +450,8 @@ function describeFile(path: string, ranges: [number, number][]): string {
 // Deterministic recap of an older span — selection, not generation. Each turn's intent, the tool
 // results that made up the work, aggregate tool usage, and files touched with the ranges covered,
 // bounded to RECAP_FRACTION of the window: when there's more than fits, the most recent turns are
-// kept and the rest are noted as a count. Any prior recap in the span is carried forward.
+// kept and the rest are noted as a count. Any prior recap in the span is carried forward, trimmed to
+// its own share of that budget so repeated folds can't stack.
 function buildRecap(span: Message[], avail: number, calib: number): string {
   const recapBudget = (avail * CHARS_PER_TOKEN * RECAP_FRACTION) / calib;
   const priorRecaps: string[] = [];
@@ -376,7 +475,10 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
 
   for (const m of span) {
     if (m.role === 'compaction') {
-      priorRecaps.push(stripOmissionNote(m.content));
+      // The preserved block is dropped here; compactHistory carries that forward itself, exactly
+      // once (#275). What is left is narrative, and it goes under the budget below.
+      const carried = stripOmissionNote(splitSpecBlock(m.content).rest);
+      if (carried) priorRecaps.push(carried);
     } else if (m.role === 'user' && !m.meta) {
       // Skip slash-command echoes — they're UI-only and must not re-enter context via the recap.
       flush();
@@ -405,14 +507,24 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   // message — so one long agent turn is a SINGLE entry, and a recap that was supposed to free the
   // window came back many times its own budget (measured: 52k chars against a 6.3k budget on an
   // 800-round turn, i.e. most of a 16k window still spent right after the pass meant to reclaim it).
+  // A carried recap gets a share of the budget rather than a pass on it (#275). Outside the budget —
+  // as it used to be — each fold appended its own narrative to the previous fold's verbatim and the
+  // "bounded to RECAP_FRACTION" contract above held only for the newest fold: five folds of one
+  // measured session grew the recap from 4.1KB to 10.1KB inside a 24k window. Trimmed rather than
+  // evicted, because the oldest material is also the most condensed — dropping it whenever a newer
+  // turn wants the room would erase the whole early session at the first tight fold.
+  const priorText = priorRecaps.join('\n\n');
+  const prior = priorText ? fitEntry(priorText, Math.floor(recapBudget * PRIOR_RECAP_SHARE)) : null;
+  const entryBudget = recapBudget - (prior ? prior.length + 1 : 0);
+
   const kept: string[] = [];
   let used = 0;
   let omitted = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const len = entries[i].length + 1;
-    if (used + len > recapBudget) {
+    if (used + len > entryBudget) {
       if (kept.length === 0) {
-        const fitted = fitEntry(entries[i], Math.max(0, recapBudget - 1));
+        const fitted = fitEntry(entries[i], Math.max(0, entryBudget - 1));
         if (fitted) {
           kept.unshift(fitted);
           used += fitted.length + 1;
@@ -428,7 +540,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   }
 
   const out: string[] = [];
-  if (priorRecaps.length > 0) out.push(priorRecaps.join('\n\n'));
+  if (prior) out.push(prior);
   if (omitted > 0) out.push(`(+${omitted} earlier turn${omitted === 1 ? '' : 's'} condensed)`);
   if (kept.length > 0) out.push(kept.join('\n'));
 

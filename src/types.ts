@@ -23,6 +23,13 @@ export type Message =
       // turns are stamped 'vibe' rather than their internal plan→agent phases. See
       // store/transcript.ts summarizeModes.
       mode?: Mode;
+      // Name of the skill this turn was opened with (typed `/name`, or auto-injected by skill
+      // routing). Stamped at submit, where it is known — nothing downstream can infer it, since a
+      // skill turn's content is just the skill body. Compaction reads it to tell a MANDATED opening
+      // call (`/issue`, `/review` both fetch the spec first, so the turn's first tool result really
+      // is the task) from an arbitrary one elected by position, and only makes the strong "this is
+      // the task" claim over the former (#275).
+      skill?: string;
     }
   | {
       role: 'assistant';

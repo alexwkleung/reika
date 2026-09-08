@@ -760,6 +760,8 @@ export function buildAbsentGrounding(failure: Extract<EditFailure, { kind: 'abse
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
+  // Skill this turn was opened with, stamped onto the user message. See Message.skill (#275).
+  userSkill?: string;
   history: Message[];
   bundle: ContextBundle;
   config: Config;
@@ -818,6 +820,7 @@ export async function runTurn(opts: {
     role: 'user',
     content: opts.userInput,
     ...(opts.userDisplay ? { display: opts.userDisplay } : {}),
+    ...(opts.userSkill ? { skill: opts.userSkill } : {}),
   };
   opts.history.push(userMsg);
   opts.onMessage(userMsg);

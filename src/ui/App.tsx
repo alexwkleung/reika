@@ -179,6 +179,12 @@ export function App() {
   // Skills already suggested this session. A hint the user declined once is noise the second
   // time — and the user who wanted it typed the slash command instead.
   const suggestedSkillsRef = useRef<Set<string>>(new Set());
+  // The skill the next submit is opening, set where that is known — the `/name` command path and
+  // routing's auto-inject branch — and consumed by submitToModel, which stamps it on the turn's user
+  // message. Compaction needs it to know the turn's opening tool call was mandated by a skill rather
+  // than picked by position (#275); no downstream code can tell, since the turn's content is just
+  // the skill body.
+  const pendingSkillRef = useRef<string | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
@@ -1106,6 +1112,7 @@ export function App() {
           // `raw` stays the display, so the bubble shows the marker while the model gets the text.
           const extra = expandPastes(args.trim(), pastedTextsRef.current);
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
+          pendingSkillRef.current = skill.name;
           // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
           // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
           // bubble reads `/issue 14` while the model receives the skill body. Pre-appending
@@ -1267,6 +1274,7 @@ export function App() {
         content: `Applied skill /${match.skill.name} (matched: ${match.matched.join(', ')})`,
         tone: 'info',
       });
+      pendingSkillRef.current = match.skill.name;
       return `${match.skill.body}\n\n${modelText}`;
     }
     if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
@@ -1448,6 +1456,9 @@ export function App() {
     // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
     // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
     const appended: Message[] = [];
+    // Consumed here whether or not the turn runs, so a skill can never leak onto a later prompt.
+    const skill = pendingSkillRef.current;
+    pendingSkillRef.current = undefined;
     if (!config || !bundle) return appended;
     const activeMode = modeOverride ?? mode;
     // What this turn is recorded as on its prompt, which is not always what it runs as (vibe).
@@ -1472,6 +1483,7 @@ export function App() {
       await runTurn({
         userInput: modelText,
         userDisplay: displayOverride,
+        userSkill: skill,
         // The persistent model history itself, not a copy: the loop appends this turn's messages
         // and folds older spans in place, and both must survive to the next turn (#183).
         history: modelHistoryRef.current,
