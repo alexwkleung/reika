@@ -47,7 +47,7 @@ Although Reika can work with small and low quantization models, the output and q
 - KAT Coder V2.5 Dev (IQ2_M)
 - North Mini Code 1.0 (UD-IQ3_XXS)
 - Gemma 4 26B A4B IT (UD-IQ3_XXS)
-- GPT-OSS 20B (MXFP4-Q4)
+- GPT-OSS 20B (MXFP4 Q4_K_M)
 - Ornith 1.5 9B (Q5_K_M)
 - Qwen3.5 9B (MLX Q4)
 - LFM2.5 8B A1B (MLX Q4)
@@ -384,4 +384,4 @@ There's more that isn't covered.
 
 ## Inspired by
 
-Inspired by Claude Code, Codex, Crush, OpenCode, Pi, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, and DS4.
+Inspired by Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
