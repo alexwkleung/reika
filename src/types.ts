@@ -47,6 +47,13 @@ export type Message =
       // on the shared message object so the boundary — and the inference engine's prompt-cache
       // prefix — holds across rounds and turns. See agent/compaction.ts batchAgePayloads.
       reasoningAged?: boolean;
+      // EXPERIMENT (REIKA_CONTINUE, #284): this assistant message carries the trimmed tail of a
+      // reasoning block that was cut off mid-thought, promoted into `content` so the chat template
+      // renders it (prior-turn `reasoning_content` is dropped by Qwen-family templates). Marks it
+      // for the aging sweep: protected while the continuation it feeds is live, then the FIRST
+      // thing shed once spent — the same "the model can't re-fetch its own reasoning" logic that
+      // ages reasoning first, which applies again the moment the tail has done its job.
+      continuationTail?: boolean;
     }
   | {
       role: 'tool';
