@@ -765,3 +765,104 @@ describe('recap narrative and ranges (#247)', () => {
     expect(notes).toHaveLength(1);
   });
 });
+
+// #275: after repeated folds the recap re-elected a task spec that had already been folded away
+// (pinning a 13-line file read, then a grep of AGENTS.md, under a header asserting it is the task)
+// and stacked a copy of every prior recap — 4.1KB to 10.1KB across five folds of one 24k session.
+describe('compactHistory across repeated folds (#275)', () => {
+  const W5 = 4000;
+  const STRONG = 'The task this turn is working on';
+  const WEAK = "This turn's first tool output";
+
+  // One tool round: an assistant call and its result, sized so ~20 of them overflow the keep budget.
+  function round(n: number, tag: string): Message[] {
+    return [
+      {
+        // Real narrative text: the keep budget prices a tool result at its SUMMARY, so a turn's
+        // weight lives in the assistant messages, not the payloads.
+        role: 'assistant',
+        content: `Round ${n}: ${'checking the call site once more. '.repeat(6)}`,
+        toolCalls: [{ id: `r${n}`, name: 'read', args: { path: `f${n}.ts` } }],
+      },
+      {
+        role: 'tool',
+        callId: `r${n}`,
+        summary: `read f${n}.ts`,
+        payload: `${tag}-${n} `.repeat(30),
+      },
+    ];
+  }
+
+  // A `/review`-shaped turn: the skill's mandated spec fetch, then rounds of work, folding after
+  // each batch. Returns the recap left by every fold, in order.
+  function foldRepeatedly(folds: number, opts: { skill?: string } = {}): string[] {
+    const history: Message[] = [
+      { role: 'user', content: 'run the review', ...(opts.skill ? { skill: opts.skill } : {}) },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'spec', name: 'bash', args: { command: 'gh pr view 225' } }],
+      },
+      {
+        role: 'tool',
+        callId: 'spec',
+        summary: 'Ran: gh pr view 225 --json title,state,body',
+        payload: `THE-REAL-SPEC ${'body '.repeat(100)}`,
+      },
+    ];
+    const recaps: string[] = [];
+    let n = 0;
+    for (let f = 0; f < folds; f++) {
+      for (let i = 0; i < 20; i++) history.push(...round(n++, 'WRONG-PIN'));
+      expect(compactHistory(history, W5, 1, 0)).toBeGreaterThan(0);
+      const recap = history.find(m => m.role === 'compaction') as { content: string };
+      expect(recap).toBeDefined();
+      recaps.push(recap.content);
+    }
+    return recaps;
+  }
+
+  it('keeps the recap flat over five folds instead of stacking each one on the last', () => {
+    const recaps = foldRepeatedly(5, { skill: 'review' });
+    const recapBudget = W5 * 4 * 0.1;
+    // The measured bug: monotonic growth, every fold bigger than the last. Bounded now by the
+    // recap budget plus the one preserved block (TASK_SPEC_PIN_CHARS caps that).
+    for (const r of recaps) expect(r.length).toBeLessThan(recapBudget + 4096);
+    // Fold 1 hasn't filled its budget yet; from there on the size must not climb.
+    for (const r of recaps.slice(2)) expect(r.length).toBeLessThanOrEqual(recaps[1].length);
+  });
+
+  it("preserves the task spec exactly once, and it stays the first fold's answer", () => {
+    const recaps = foldRepeatedly(5, { skill: 'review' });
+    for (const [i, r] of recaps.entries()) {
+      expect(r.split(STRONG).length - 1, `fold ${i + 1} claims`).toBe(1);
+      // The real spec, not whatever small payload arrived after it was folded away.
+      expect(r).toContain('THE-REAL-SPEC');
+      expect(r.slice(0, r.indexOf('(End of the preserved task definition'))).not.toContain(
+        'WRONG-PIN',
+      );
+    }
+  });
+
+  it('makes no strong claim when nothing guaranteed the election', () => {
+    const recaps = foldRepeatedly(2);
+    for (const r of recaps) {
+      expect(r).not.toContain(STRONG);
+      expect(r).toContain(WEAK);
+    }
+  });
+
+  it("preserves a folded turn's own request verbatim rather than truncating it to the recap line", () => {
+    // Multi-turn session: the first user message is pinned at index 0, and a LATER one — the actual
+    // current task — gets folded. It used to become `- User: <240 chars>` while an arbitrary tool
+    // payload took the verbatim slot.
+    const ask = `rewrite the tokenizer boundary check ${'and explain each step '.repeat(20)}`;
+    const history: Message[] = [{ role: 'user', content: 'earlier question' }, ...round(0, 'OLD')];
+    history.push({ role: 'user', content: ask });
+    for (let i = 1; i < 25; i++) history.push(...round(i, 'LATER'));
+    expect(compactHistory(history, W5, 1, 0)).toBeGreaterThan(0);
+    const recap = (history.find(m => m.role === 'compaction') as { content: string }).content;
+    expect(recap).toContain(ask);
+    expect(recap).toContain('The task this turn is working on');
+  });
+});
