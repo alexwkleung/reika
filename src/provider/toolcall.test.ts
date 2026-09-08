@@ -109,7 +109,8 @@ describe('messagesToOpenAI', () => {
         content: '',
         toolCalls: [{ id: 'old', name: 'read', args: {} }],
       },
-      { role: 'tool', callId: 'old', summary: 'old summary', payload: 'OLD PAYLOAD' },
+      // Past the crumb floor (#257): a payload this side of it keeps its bytes when aged.
+      { role: 'tool', callId: 'old', summary: 'old summary', payload: 'OLD PAYLOAD\n'.repeat(200) },
       { role: 'user', content: 'turn 2' },
       {
         role: 'assistant',
@@ -154,8 +155,8 @@ describe('messagesToOpenAI', () => {
       const history: Message[] = [
         { role: 'user', content: 'work on issue 213' },
         ...spec('ISSUE BODY: the thing to fix'),
-        ...later('a', 'A'.repeat(500)),
-        ...later('b', 'B'.repeat(500)),
+        ...later('a', 'A'.repeat(3000)),
+        ...later('b', 'B'.repeat(3000)),
       ];
       const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
@@ -178,8 +179,8 @@ describe('messagesToOpenAI', () => {
       const history: Message[] = [
         { role: 'user', content: 'go' },
         ...spec('D'.repeat(5000)),
-        ...later('a', 'A'.repeat(500)),
-        ...later('b', 'B'.repeat(500)),
+        ...later('a', 'A'.repeat(3000)),
+        ...later('b', 'B'.repeat(3000)),
       ];
       const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).toBe('Ran: gh issue view 213 (505 bytes output)');
@@ -188,10 +189,12 @@ describe('messagesToOpenAI', () => {
     it("follows the turn — the previous turn's spec is released", () => {
       const history: Message[] = [
         { role: 'user', content: 'work on issue 213' },
-        ...spec('ISSUE BODY: the thing to fix'),
+        // Over the crumb floor (#257) and under TASK_SPEC_PIN_CHARS, so the pin is what holds it
+        // and dropping the pin is observable in the content.
+        ...spec('ISSUE BODY: the thing to fix. '.repeat(100)),
         { role: 'user', content: 'now do something else' },
-        ...later('a', 'A'.repeat(500)),
-        ...later('b', 'B'.repeat(500)),
+        ...later('a', 'A'.repeat(3000)),
+        ...later('b', 'B'.repeat(3000)),
       ];
       const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
@@ -228,8 +231,8 @@ describe('messagesToOpenAI', () => {
     it('is off under prefix-stable, where batch aging owns the pin instead', () => {
       const history: Message[] = [
         { role: 'user', content: 'work on issue 213' },
-        ...spec('ISSUE BODY: the thing to fix'),
-        ...later('a', 'A'.repeat(500)),
+        ...spec('ISSUE BODY: the thing to fix. '.repeat(100)),
+        ...later('a', 'A'.repeat(3000)),
       ];
       (history[2] as Message & { role: 'tool' }).aged = true;
       const out = messagesToOpenAI('sys', history, { contextWindow: 16384, prefixStable: true });
@@ -952,9 +955,11 @@ describe('messagesToOpenAI', () => {
     const history: Message[] = [
       { role: 'user', content: 'go' },
       { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] },
-      { role: 'tool', callId: 'a', summary: 'Read A lines 1-5 of 5', payload: 'AAA' },
+      // Past the crumb floor (#257), which would otherwise keep the aged copy's bytes and make
+      // "dedup is off" indistinguishable from "dedup ran and the exemption undid it".
+      { role: 'tool', callId: 'a', summary: 'Read A lines 1-5 of 5', payload: 'AAA'.repeat(1000) },
       { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'read', args: {} }] },
-      { role: 'tool', callId: 'b', summary: 'Read A lines 1-5 of 5', payload: 'AAA' },
+      { role: 'tool', callId: 'b', summary: 'Read A lines 1-5 of 5', payload: 'AAA'.repeat(1000) },
       { role: 'user', content: 'next' },
       { role: 'assistant', content: 'done' },
     ];
@@ -1083,15 +1088,23 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
   });
 
   it('leaves a non-diff payload aging to its summary alone', () => {
-    const out = messagesToOpenAI('sys', history('just some command output\nwith no hunks'), {
-      contextWindow: 8192,
-    });
+    const out = messagesToOpenAI(
+      'sys',
+      history('just some command output\nwith no hunks\n'.repeat(60)),
+      {
+        contextWindow: 8192,
+      },
+    );
     expect(contentFor(out, 'd')).toBe('Ran: gh pr diff 225 (15169 bytes output)');
   });
 
   it('ages a mid-hunk page with no structural lines to its summary alone', () => {
     // `sed -n '301,317p'` lands inside a hunk body: no headers, so there is no map worth keeping.
-    const tail = ['+      // Gone already.', '+    }', '+  }', '+  return removed;'].join('\n');
+    // Repeated to clear the crumb floor (#257): the case is about a page with no MAP, and a page
+    // small enough to keep whole never reaches the skeleton rules at all.
+    const tail = Array.from({ length: 60 }, () =>
+      ['+      // Gone already.', '+    }', '+  }', '+  return removed;'].join('\n'),
+    ).join('\n');
     const out = messagesToOpenAI('sys', history(tail), { contextWindow: 8192 });
     expect(contentFor(out, 'd')).toBe('Ran: gh pr diff 225 (15169 bytes output)');
   });
@@ -1173,14 +1186,20 @@ describe('aged read keeps a declaration outline (#260)', () => {
   });
 
   it('ages command output to its summary alone — no gutter, no outline', () => {
-    const out = messagesToOpenAI('sys', history('export function looksLikeCode() {}\nplain'), {
-      contextWindow: 8192,
-    });
+    const out = messagesToOpenAI(
+      'sys',
+      history('export function looksLikeCode() {}\nplain\n'.repeat(60)),
+      { contextWindow: 8192 },
+    );
     expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
   });
 
   it('ages a body-only page to its summary alone — one declaration is a fact, not a map', () => {
-    const body = [g(120, '  const x = 1;'), g(121, '  return x;'), g(122, '}')].join('\n');
+    const body = [
+      ...Array.from({ length: 100 }, (_, i) => g(120 + i, '  const x = 1;')),
+      g(220, '  return x;'),
+      g(221, '}'),
+    ].join('\n');
     const out = messagesToOpenAI('sys', history(body), { contextWindow: 8192 });
     expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
   });
@@ -1423,7 +1442,8 @@ describe('messagesToOpenAI prefix-stable', () => {
   it('collapses an aged payload to summary-only', () => {
     const history: Message[] = [
       { role: 'user', content: 'go' },
-      ...toolRound('old', 'OLD PAYLOAD'),
+      // Over the crumb floor (#257), which keeps a small aged payload's bytes instead.
+      ...toolRound('old', 'OLD PAYLOAD\n'.repeat(200)),
       ...toolRound('fresh', 'FRESH PAYLOAD'),
     ];
     (history[2] as Message & { role: 'tool' }).aged = true;

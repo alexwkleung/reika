@@ -32,7 +32,9 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
         role: 'tool',
         callId: id,
         summary: 'Read A lines 1-10 of 10',
-        payload: payload ?? 'PAYLOAD_A',
+        // Past the crumb floor (#257), so the aged copies collapse to their summary and the trail
+        // this case is about actually exists.
+        payload: payload ?? 'PAYLOAD_A\n'.repeat(300),
       },
     ];
     // The opening `list` keeps the #227 task-spec pin off c1, so this exercises the aged trail

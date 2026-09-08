@@ -518,6 +518,34 @@ describe('batchAgePayloads', () => {
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
+  it('reports short=0 when the event reaches its watermark', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...round('a', 'x'.repeat(400)),
+      ...round('b', 'y'.repeat(400)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    expect(batchAgePayloads(history, estimateOf(history), 1000, 0).short).toBe(0);
+  });
+
+  it('reports how far short it came when the sweeps run out of candidates (#279)', () => {
+    // Everything sheddable is in the protected tail, so the walk marks what it can and still ends
+    // over target. `short` is what says a fold about to fire in this round was unavoidable rather
+    // than the price of a floor holding bytes back — the question a log could not answer on the
+    // three #279 verification runs without reconstructing it from payload sizes by hand.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...round('a', 'x'.repeat(400)),
+      ...round('tail', 'z'.repeat(5000)),
+    ];
+    const aged = batchAgePayloads(history, estimateOf(history), 1000, 0);
+    expect(aged.short).toBeGreaterThan(0);
+    // And it is the real gap, not a flag: estimate minus the low watermark.
+    expect(aged.short).toBe(Math.round(estimateOf(history)() - 900 * AGE_LOW_FRACTION));
+  });
+
   it("never ages the turn's task spec, even as everything older-first around it goes (#227)", () => {
     // The observed failure: `/issue` mandates `gh issue view` as the opening call, so the payload
     // that DEFINES the task is the oldest and therefore the first one aging sacrifices — after

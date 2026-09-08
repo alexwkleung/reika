@@ -165,6 +165,12 @@ export type AgeResult = {
   bulk: number;
   crumbs: number;
   kept: number;
+  // Tokens still over the low watermark when the sweeps ran out of candidates; 0 when the event
+  // reached it. Non-zero is what escalates to a fold in the same round (loop.ts,
+  // `agedButAboveWatermark`), and without it a log cannot say whether aging fell an inch short or a
+  // mile — the difference between "the crumb exemption cost us this fold" and "there was nothing
+  // sheddable left". Reconstructing it by hand from payload sizes is what it replaces.
+  short: number;
 };
 
 export function batchAgePayloads(
@@ -174,7 +180,7 @@ export function batchAgePayloads(
   minGen = DEFAULT_MIN_GEN_TOKENS,
 ): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
-  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
   if (estimate() <= threshold) return none;
   const target = threshold * AGE_LOW_FRACTION;
   // Never age the active round: the trailing tool block is what the model is about to act on, and
@@ -197,7 +203,7 @@ export function batchAgePayloads(
   // event from reaching its watermark — the worst case is the previous behavior. Reasoning is aged
   // in the first sweep regardless of size, because dropping it can't provoke a re-read (the model
   // cannot re-fetch its own reasoning) and so carries none of this risk.
-  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0 };
+  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
   // `kept` is counted at the end over what survived, not decremented as the sweeps run: a payload
   // skipped by the first sweep and taken by the second was never kept, and tracking that by hand is
   // exactly the bookkeeping that drifts.
@@ -232,6 +238,9 @@ export function batchAgePayloads(
     }
   }
   out.kept = survivingCrumbs();
+  // Ran out of candidates while still over: everything sheddable outside the protected tail is
+  // aged, and what remains is the active round plus whatever the floors hold.
+  out.short = Math.max(0, Math.round(estimate() - target));
   return out;
 }
 

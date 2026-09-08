@@ -27,7 +27,9 @@ const agedContent = (summary: string, payload: string): string => {
   return out.find(m => m.tool_call_id === 'r')!.content;
 };
 
-// Padding keeps every fixture past the crossover where keeping the payload whole is cheaper.
+// Padding keeps every fixture past both floors that keep an aged payload's bytes: the crumb floor
+// (#257, SMALL_AGED_PAYLOAD_FLOOR_CHARS) and the crossover where the skeleton costs more than the
+// payload. Outlining is what these cases are about, so each fixture has to be big enough to age.
 const pad = (from: number, n: number, text: string): string[] =>
   Array.from({ length: n }, (_, i) => g(from + i, text));
 
@@ -94,7 +96,7 @@ describe('json outlines by top-level key (#269)', () => {
   const PKG = [
     g(1, '{'),
     g(2, '  "name": "reika",'),
-    ...pad(3, 30, '    "some-dep": "^1.0.0",'),
+    ...pad(3, 30, '    "some-dep-with-a-name-long-enough-to-pad": "^1.0.0",'),
     g(33, '  "scripts": {'),
     ...pad(34, 30, '    "test": "vitest run",'),
     g(64, '  },'),
@@ -117,7 +119,7 @@ describe('an unknown extension stays on the conservative rule (#269)', () => {
     // apply, so a genuinely declaration-shaped line in an unknown dialect is still kept.
     const PROSE = [
       g(1, 'Summary:'),
-      ...pad(2, 40, 'Consider the following:'),
+      ...pad(2, 40, 'Consider the following, at some length, so the page clears the floor:'),
       g(42, 'Conclusion:'),
     ].join('\n');
     expect(agedContent('Read notes/design.txt lines 1-42 of 42', PROSE)).toBe(
@@ -169,7 +171,7 @@ describe('structure is relative to the page, not the file (#269)', () => {
   it('still keeps nothing when the page has no structural line at all', () => {
     // A mid-function body: `const` at an indent is a local, not a declaration, and `}` is a closer.
     const BODY = [
-      ...pad(120, 40, '    const partial = accumulate(chunk);'),
+      ...pad(120, 40, '    const partial = accumulate(chunk, offset, limit, encoding);'),
       g(160, '    return partial;'),
       g(161, '  }'),
     ].join('\n');
