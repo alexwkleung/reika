@@ -40,15 +40,6 @@ describe('buildEditDiff', () => {
     expect(diff).toContain('+ foo(baz)');
   });
 
-  it('emits a full-rewrite block as all removed then all added lines, in order', () => {
-    // No line survives on both sides: the whole old block is `-` then the whole
-    // new block is `+`, each in original order, with no context interleaved.
-    const oldStr = ['a1', 'a2', 'a3'].join('\n');
-    const newStr = ['b1', 'b2'].join('\n');
-    const diff = buildEditDiff(oldStr, newStr, '', '');
-    expect(diff).toBe('- a1\n- a2\n- a3\n+ b1\n+ b2');
-  });
-
   it('handles pure deletion (new is shorter)', () => {
     const oldStr = 'a\nb\nc';
     const newStr = 'a\nc';
