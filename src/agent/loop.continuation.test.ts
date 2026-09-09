@@ -16,17 +16,34 @@ const isNudge = (m: Message): m is UserMessage =>
 // a verbatim-degenerate one still falls through to the old discard-and-retry. The distinction is the
 // repetition ratio, not which cut fired.
 
-const h = vi.hoisted(() => ({ scripted: [] as ModelResponse[] }));
+const h = vi.hoisted(() => ({
+  scripted: [] as ModelResponse[],
+  // Reasoning to stream through onReasoningDelta before answering, so a test can drive the
+  // mid-stream length ceiling the same way a real generation would.
+  stream: [] as string[],
+}));
 vi.mock('../provider/client.js', () => ({
-  callModel: vi.fn(async () => h.scripted.shift() ?? { content: 'done', toolCalls: undefined }),
+  callModel: vi.fn(async (opts: { onReasoningDelta?: (t: string) => void }) => {
+    const chunk = h.stream.shift();
+    if (chunk) {
+      // Chunks larger than REASONING_SPIN_DEBOUNCE (400) so the ceiling check actually runs.
+      for (let i = 0; i < chunk.length; i += 1000)
+        opts.onReasoningDelta?.(chunk.slice(i, i + 1000));
+    }
+    return h.scripted.shift() ?? { content: 'done', toolCalls: undefined };
+  }),
 }));
 
 // CONTINUE is read at module load, so the env must be set before loop.js is imported.
 const PRIOR = process.env.REIKA_CONTINUE;
+const PRIOR_ABORT = process.env.REIKA_VERBATIM_ABORT;
 process.env.REIKA_CONTINUE = '1';
+process.env.REIKA_VERBATIM_ABORT = '1';
 afterAll(() => {
   if (PRIOR === undefined) delete process.env.REIKA_CONTINUE;
   else process.env.REIKA_CONTINUE = PRIOR;
+  if (PRIOR_ABORT === undefined) delete process.env.REIKA_VERBATIM_ABORT;
+  else process.env.REIKA_VERBATIM_ABORT = PRIOR_ABORT;
 });
 const { runTurn } = await import('./loop.js');
 const { callModel } = await import('../provider/client.js');
@@ -113,6 +130,7 @@ describe('truncation continuation (integration)', () => {
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'reika-continue-'));
     h.scripted.length = 0;
+    h.stream.length = 0;
     vi.mocked(callModel).mockClear();
   });
   afterEach(async () => {
@@ -167,5 +185,46 @@ describe('truncation continuation (integration)', () => {
     const nudge = history.find(isNudge);
     expect(nudge?.content).toContain('concisely');
     expect(messages.some(m => m.role === 'system' && m.content.includes('retrying'))).toBe(true);
+  });
+
+  it('carries a block cut by the LENGTH ceiling, not just one cut by the token wall', async () => {
+    // REASONING_HARD_CEIL (32000 chars) fires on length ALONE — `ratio >= abortAt || tooLong` — so
+    // before #284 a long but coherent thought crossing it was discarded exactly like a spiral and
+    // told "your reasoning was repeating the same text". On the measured run the token wall landed
+    // 1,730 chars (5.4%) short of this ceiling, so which cut won was near-arbitrary; two cuts that
+    // close cannot carry opposite semantics. Healthy prose, well past the ceiling.
+    h.stream.push(healthy(600));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: 'done', toolCalls: undefined },
+    );
+    const { history, messages } = await run(cwd);
+
+    const carried = history.find(m => m.role === 'assistant' && m.continuationTail);
+    expect(carried).toBeDefined();
+    expect(history.find(isNudge)?.content).toContain('continue from that exact point');
+    expect(messages.some(m => m.role === 'system' && m.content.includes('length ceiling'))).toBe(
+      true,
+    );
+    // The false diagnosis is gone: this block was never repeating.
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
+      false,
+    );
+  });
+
+  it('still discards a ceiling cut when the block IS degenerate', async () => {
+    // Same ceiling, opposite content: here the ratio agrees with the cut, so the old discard-and-
+    // recover path is correct and must survive.
+    h.stream.push(degenerate(600));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: 'done', toolCalls: undefined },
+    );
+    const { history, messages } = await run(cwd);
+
+    expect(history.some(m => m.role === 'assistant' && m.continuationTail)).toBe(false);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
+      true,
+    );
   });
 });

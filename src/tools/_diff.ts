@@ -18,9 +18,17 @@ export function buildEditDiff(
   // Line-level diff so lines that exist on both sides render as context (`  `)
   // rather than being naively dumped as `-` then `+`. Reveals what actually
   // changed instead of repeating the whole block twice.
-  for (const change of diffArrays(oldLines, newLines)) {
-    const prefix = change.removed ? '- ' : change.added ? '+ ' : '  ';
-    for (const l of change.value) out.push(`${prefix}${l}`);
+  if (countCommon(oldLines, newLines) === 0) {
+    // No line survives on both sides: the whole old block is removed and the
+    // whole new block added. diffArrays (Myers) costs O(n*m) to reach that
+    // same conclusion; emit it directly.
+    for (const l of oldLines) out.push(`- ${l}`);
+    for (const l of newLines) out.push(`+ ${l}`);
+  } else {
+    for (const change of diffArrays(oldLines, newLines)) {
+      const prefix = change.removed ? '- ' : change.added ? '+ ' : '  ';
+      for (const l of change.value) out.push(`${prefix}${l}`);
+    }
   }
   for (const l of after) out.push(`  ${l}`);
   return out.join('\n');
@@ -58,4 +66,21 @@ function stripTrailingNewline(s: string): string {
 
 function stripLeadingNewline(s: string): string {
   return s.startsWith('\n') ? s.slice(1) : s;
+}
+
+// Count lines that appear in both sides, respecting multiplicity: a line that
+// occurs twice on one side and once on the other counts as one common line.
+// 0 means no line survives on both sides, so the diff is a full rewrite.
+function countCommon(a: string[], b: string[]): number {
+  const counts = new Map<string, number>();
+  for (const l of a) counts.set(l, (counts.get(l) ?? 0) + 1);
+  let common = 0;
+  for (const l of b) {
+    const c = counts.get(l);
+    if (c !== undefined && c > 0) {
+      common++;
+      counts.set(l, c - 1);
+    }
+  }
+  return common;
 }
