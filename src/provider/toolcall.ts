@@ -555,13 +555,14 @@ export function findFreshToolBlockStart(history: Message[]): number {
 // not "the first SMALL payload": the opening call is the spec candidate, and a huge one means this
 // turn didn't open with a spec fetch at all. Pure + exported for tests and batch aging.
 // Index of the newest real user message, or -1. "Real" excludes `meta` — a slash-command echo is
-// UI scrollback, never a turn boundary the model sees. taskSpecIndex walks every user message (it
+// UI scrollback, never a turn boundary the model sees — and `harness`, a recovery nudge the model
+// must read but which does not start a turn (see the field in types.ts). taskSpecIndex walks every user message (it
 // falls through turns that landed no tool result); this names just the current one, which is what
 // tells a pin belonging to THIS turn from one carried over from an earlier one.
 export function lastUserMessageIndex(history: Message[]): number {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
-    if (m.role === 'user' && !m.meta) return i;
+    if (m.role === 'user' && !m.meta && !m.harness) return i;
   }
   return -1;
 }
@@ -569,7 +570,7 @@ export function lastUserMessageIndex(history: Message[]): number {
 export function taskSpecIndex(history: Message[]): number {
   for (let u = history.length - 1; u >= 0; u--) {
     const m = history[u];
-    if (m.role !== 'user' || m.meta) continue;
+    if (m.role !== 'user' || m.meta || m.harness) continue;
     for (let i = u + 1; i < history.length; i++) {
       const t = history[i];
       if (t.role !== 'tool' || !t.payload) continue;

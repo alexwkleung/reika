@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message } from '../types.js';
+import { taskSpecIndex } from '../provider/toolcall.js';
 
 type UserMessage = Extract<Message, { role: 'user' }>;
 const isNudge = (m: Message): m is UserMessage =>
@@ -226,5 +227,40 @@ describe('truncation continuation (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
       true,
     );
+  });
+
+  it('does not move the task-spec pin — the nudge is not a turn boundary', async () => {
+    // Regression from the first live arm: the nudge is role 'user' (it must reach the model, so it
+    // cannot be `meta`), and taskSpecIndex elects the first tool payload after the newest real user
+    // message. Every continuation therefore re-elected the spec to whatever landed next — measured
+    // moving off `gh issue view 244` onto a 126-char grep result and then a 47-char heredoc echo,
+    // exactly two rounds after each nudge, after which the model correctly re-fetched the issue.
+    // That is the #251/#252 cascade continuation exists to prevent.
+    const history: Message[] = [
+      { role: 'user', content: '/issue 244' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'bash', args: {} }] },
+      { role: 'tool', callId: 'c1', summary: 'ran gh issue view', payload: 'THE ISSUE TEXT' },
+    ];
+    const specBefore = taskSpecIndex(history);
+    expect(specBefore).toBe(2);
+
+    h.scripted.push(truncated(healthy()), { content: 'done', toolCalls: undefined });
+    const messages: Message[] = [];
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(cwd),
+      config: makeConfig(),
+      tools: [],
+      payloads: new PayloadStore(),
+      promptMode: 'agent',
+      onMessage: m => messages.push(m),
+    });
+
+    expect(history.some(m => m.role === 'user' && m.harness)).toBe(true);
+    // The pin still names the issue payload, not anything the continuation produced.
+    const spec = taskSpecIndex(history);
+    expect(spec).toBeGreaterThanOrEqual(0);
+    expect(history[spec].role === 'tool' && history[spec].payload).toBe('THE ISSUE TEXT');
   });
 });

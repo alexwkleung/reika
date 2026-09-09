@@ -920,7 +920,10 @@ export async function runTurn(opts: {
     pendingContinuation = block;
     const tail = continuationTail(block);
     opts.history.push({ role: 'assistant', content: tail.text, continuationTail: true });
-    opts.history.push({ role: 'user', content: CONTINUE_NUDGE });
+    // `harness`: the nudge must reach the model, so it cannot be `meta` — but it is not a turn
+    // boundary, and the task-spec pin elects the first tool payload after the newest real user
+    // message. Without this, every continuation re-elects the spec to whatever result lands next.
+    opts.history.push({ role: 'user', content: CONTINUE_NUDGE, harness: true });
     return tail.omitted;
   };
   // Consecutive plan-mode rounds that surfaced no new information (seenReadOnly didn't grow). Drives

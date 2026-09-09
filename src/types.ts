@@ -17,6 +17,14 @@ export type Message =
       display?: string;
       nested?: boolean;
       meta?: boolean;
+      // Authored by the harness, not typed by the human: a recovery nudge that must REACH the model
+      // (so it cannot be `meta`, which is dropped from the request) but is not a turn boundary. The
+      // task-spec pin elects "the first tool payload after the newest real user message" (#227), so
+      // without this a nudge re-elects the spec to whatever result lands next. Measured on the
+      // continuation arm: the pin moved off `gh issue view 244` onto a 126-char grep result, then a
+      // 47-char heredoc echo, exactly two rounds after each nudge — and the model then correctly
+      // re-fetched the issue, which is the #251/#252 cascade the nudge exists to avoid.
+      harness?: boolean;
       // Which mode the turn this prompt opened actually ran in. Stamped by the UI on real turns
       // only (never on `meta` command echoes, which happen between turns), so a saved transcript
       // says what each turn was — a plan turn and an agent turn look identical otherwise. Vibe
