@@ -24,6 +24,7 @@ import {
   distillPlanHandoff,
   batchAgePayloads,
   AGE_LOW_FRACTION,
+  CONTINUATION_SHED_NOTE,
 } from './compaction.js';
 import {
   droppedPayloadCount,
@@ -42,7 +43,12 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
-import { ContinuationGate, continuationGate, continuationTail } from './continuation.js';
+import {
+  CONTINUATION_TAIL_CHARS,
+  ContinuationGate,
+  continuationGate,
+  continuationTail,
+} from './continuation.js';
 import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
@@ -903,13 +909,34 @@ export async function runTurn(opts: {
   // the budget is per-spiral, not per-turn.
   let lengthRetries = 0;
   // Truncation continuation (#284). `continuation` bounds *unproductive* continuing (a consecutive
-  // count that resets on progress, plus a novelty check); `pendingContinuation` holds a truncated
-  // round's reasoning so the split thought is recorded in the reasoning trace as ONE entry when the
-  // continuation lands. Recording it as two would report the continuation as near-identical to the
+  // count that resets on progress, plus a novelty check); the pending accumulators below hold a
+  // truncated round's work so the split thought is recorded in the reasoning trace as ONE entry
+  // when the continuation lands. Recording it as two would report the continuation as near-identical to the
   // round it resumes — high crossSim by construction — and trip the Layer-2 loop-breaker on the very
   // feature it is meant to protect. See agent/continuation.ts.
   const continuation = new ContinuationGate();
+  // The block that comes BACK to the model, in the order it was generated (reasoning, then content
+  // when the round produced any). `pendingReasoning` is the reasoning-only accumulation of the same
+  // split thought, kept apart because the trace takes the two channels separately and picks one:
+  // folding content into the string it judges would feed it the same text twice and shift which
+  // channel Layer-2 measures.
   let pendingContinuation = '';
+  let pendingReasoning = '';
+  // A fresh tail slides the same CONTINUATION_TAIL_CHARS window over the block the previous tail
+  // already carried, so a short continuation round leaves two near-identical tails resident — the
+  // sweep in compaction.ts only clears the older one when a shrink event happens to fire. Shed it
+  // here instead, at carry time. Only ever called when the new tail's window reaches back into the
+  // old one, so what is dropped is the oldest working, which the marker already frames as superseded
+  // rather than as a gap. Idempotent by the same marker the sweep uses.
+  const shedSpentTail = (): void => {
+    for (let i = opts.history.length - 1; i >= 0; i--) {
+      const m = opts.history[i];
+      if (m.role === 'assistant' && m.continuationTail && m.content !== CONTINUATION_SHED_NOTE) {
+        m.content = CONTINUATION_SHED_NOTE;
+        return;
+      }
+    }
+  };
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
@@ -917,10 +944,24 @@ export async function runTurn(opts: {
   // NOT set alongside the tail: sending both channels would pay for the same text twice and make the
   // retention bound fiction. Shared by both cut paths so they cannot drift apart. Returns the chars
   // trimmed, for the user-facing notice.
-  const carryContinuation = (block: string, newText: string): number => {
-    continuation.noteContinuation(newText);
-    pendingContinuation = block;
-    const tail = continuationTail(block);
+  const carryContinuation = (block: {
+    // The cut-off thought so far, chronological — what the tail is cut from.
+    carried: string;
+    // The same thought's reasoning channel only, for the trace when the continuation lands.
+    reasoning: string;
+    // THIS round's newly generated text, for the ladder's novelty check. Never the carried block:
+    // a tail contains the round it resumes, so accumulated-vs-accumulated self-triggers.
+    newText: string;
+  }): number => {
+    continuation.noteContinuation(block.newText);
+    // Shed the previous tail only when this one's window overlaps it. The slide then costs at most
+    // `newText.length` chars of the oldest working and saves the rest of the budget — the trade is
+    // best exactly where the duplication is worst. A round that generated more than the budget
+    // shares no text with the previous tail, so both are kept and coherence wins.
+    if (pendingContinuation && block.newText.length < CONTINUATION_TAIL_CHARS) shedSpentTail();
+    pendingContinuation = block.carried;
+    pendingReasoning = block.reasoning;
+    const tail = continuationTail(block.carried);
     opts.history.push({ role: 'assistant', content: tail.text, continuationTail: true });
     // `harness`: the nudge must reach the model, so it cannot be `meta` — but it is not a turn
     // boundary, and the task-spec pin elects the first tool payload after the newest real user
@@ -1788,18 +1829,31 @@ export async function runTurn(opts: {
       // re-feeding a spiral its own text is what makes it worse. Agent mode only for now: plan mode
       // has its own converge/steer ladder below and is a follow-up.
       if (CONTINUE && verbatimAbortByLength && opts.promptMode !== 'plan') {
-        const gate = continuationGate(roundReasoning);
+        // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
+        // continuation, and judging/carrying only the new half would drop the first one from both
+        // the tail and the trace while leaving its message outside `protect` to be shed.
+        const ceilCarried = pendingContinuation
+          ? `${pendingContinuation}\n${roundReasoning}`
+          : roundReasoning;
+        const ceilReasoning = pendingReasoning
+          ? `${pendingReasoning}\n${roundReasoning}`
+          : roundReasoning;
+        const gate = continuationGate(ceilCarried);
         const allow = continuation.allow(roundReasoning);
         debugLog(
           `[reika:debug] continuation round=${i} cut=ceil continue=${gate.continuable && allow.ok} ` +
             `ratio=${gate.ratio.toFixed(3)} threshold=${gate.threshold.toFixed(3)} ` +
             `allow=${allow.ok}${allow.reason ? ` stop=${allow.reason}` : ''} ` +
             `sim=${allow.sim.toFixed(2)} spent=${continuation.spent} ` +
-            `chars=${roundReasoning.length}\n`,
+            `chars=${ceilCarried.length}\n`,
         );
         if (gate.continuable && allow.ok) {
           opts.onReasoningStatus?.(false);
-          const omitted = carryContinuation(roundReasoning, roundReasoning);
+          const omitted = carryContinuation({
+            carried: ceilCarried,
+            reasoning: ceilReasoning,
+            newText: roundReasoning,
+          });
           opts.onMessage({
             role: 'system',
             tone: 'warn',
@@ -1890,7 +1944,13 @@ export async function runTurn(opts: {
     // A truncated round and the continuation that resumes it are ONE thought. Join them so the
     // trace, the ratio gate and the carried tail all see the whole block; empty unless the previous
     // round was continued.
-    const joinedReasoning = pendingContinuation ? `${pendingContinuation}\n${rsn}` : rsn;
+    const joinedReasoning = pendingReasoning ? `${pendingReasoning}\n${rsn}` : rsn;
+    // What comes back to the model, in generation order. `content` is part of the cut-off thought —
+    // it came LAST, so it is the resume anchor the nudge points at — and a model with no reasoning
+    // channel puts the entire thought there. Carrying only `reasoning` left that model an empty
+    // assistant message under a nudge that claimed "the text above is your own work".
+    const roundText = [rsn, response.content ?? ''].filter(t => t.trim()).join('\n');
+    const carriedBlock = pendingContinuation ? `${pendingContinuation}\n${roundText}` : roundText;
 
     // Continuation decision (#284), taken BEFORE the trace records because a round about to be
     // continued must not be recorded as its own entry. The gate is the repetition RATIO, not which
@@ -1900,16 +1960,18 @@ export async function runTurn(opts: {
     // derived from real data rather than guessed. See agent/continuation.ts.
     const cutOffMidThought = response.finishReason === 'length' && isFinal;
     let continueRound = false;
-    if (CONTINUE && cutOffMidThought && (joinedReasoning.trim() || response.content?.trim())) {
-      const gate = continuationGate(joinedReasoning);
-      const allow = continuation.allow(rsn);
+    if (CONTINUE && cutOffMidThought && carriedBlock.trim()) {
+      // Judged on the block that is actually carried, not on reasoning alone: gating one string and
+      // sending back a different one is a mismatch nobody can reconstruct later.
+      const gate = continuationGate(carriedBlock);
+      const allow = continuation.allow(roundText);
       continueRound = gate.continuable && allow.ok;
       debugLog(
         `[reika:debug] continuation round=${i} continue=${continueRound} ` +
           `ratio=${gate.ratio.toFixed(3)} threshold=${gate.threshold.toFixed(3)} ` +
           `allow=${allow.ok}${allow.reason ? ` stop=${allow.reason}` : ''} ` +
           `sim=${allow.sim.toFixed(2)} spent=${continuation.spent} ` +
-          `chars=${joinedReasoning.length}\n`,
+          `chars=${carriedBlock.length}\n`,
       );
     }
 
@@ -1965,7 +2027,11 @@ export async function runTurn(opts: {
     // Qwen-family template renders prior-turn `reasoning_content` as nothing. Promoting the tail
     // into `content` is what makes it visible.
     if (continueRound) {
-      const omitted = carryContinuation(joinedReasoning, rsn);
+      const omitted = carryContinuation({
+        carried: carriedBlock,
+        reasoning: joinedReasoning,
+        newText: roundText,
+      });
       // UI-only, so the scrollback keeps the thinking the user watched stream rather than the
       // trimmed tail — the same history/onMessage split the truncation notice below uses.
       if (rsn || response.content) {
@@ -1982,6 +2048,7 @@ export async function runTurn(opts: {
     }
     // Not continuing: the held thought (if any) was recorded above, so release it.
     pendingContinuation = '';
+    pendingReasoning = '';
 
     // Generation cut off mid-thought with no tool call (backstop firing, or a spiral
     // hitting the cap): record the partial for the user, nudge the model to continue

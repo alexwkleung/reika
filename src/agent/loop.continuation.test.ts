@@ -47,6 +47,7 @@ afterAll(() => {
   else process.env.REIKA_VERBATIM_ABORT = PRIOR_ABORT;
 });
 const { runTurn } = await import('./loop.js');
+const { CONTINUATION_SHED_NOTE: SHED_NOTE } = await import('./compaction.js');
 const { callModel } = await import('../provider/client.js');
 
 // Long, distinct prose — healthy reasoning keeps selfRepeatRatio near zero.
@@ -73,6 +74,39 @@ const truncated = (reasoning: string): ModelResponse => ({
   finishReason: 'length',
   toolCalls: undefined,
 });
+
+// A model with no reasoning channel — or one whose reasoning the dialect handling strips — puts the
+// whole thought in `content`. The trace already supports this as a fallback channel.
+const truncatedContent = (content: string, reasoning?: string): ModelResponse => ({
+  content,
+  reasoning,
+  finishReason: 'length',
+  toolCalls: undefined,
+});
+
+// Short, distinct prose: under CONTINUATION_TAIL_CHARS, so a continuation round built from it
+// overlaps the tail it resumes (the condition the eager shed is gated on).
+function shortHealthy(n = 25): string {
+  return Array.from(
+    { length: n },
+    (_, i) => `recheck ${i}: offset ${i * 11} maps to column ${i % 7} on the line that follows it`,
+  ).join('\n');
+}
+
+// Long and distinct from `healthy` — a second block that merely REPEATED the first would raise the
+// joined block's selfRepeatRatio and be refused by the gate as degenerate, which is not what this
+// exercises.
+function otherHealthy(n = 400): string {
+  return Array.from(
+    { length: n },
+    (_, i) =>
+      `pass ${i}: the candidate at column ${i * 3} resolves to row ${i + 9}, which the walker ` +
+      `compares against boundary ${i * 5} before advancing past it`,
+  ).join('\n');
+}
+
+const liveTails = (history: Message[]): Message[] =>
+  history.filter(m => m.role === 'assistant' && m.continuationTail && m.content !== SHED_NOTE);
 
 function makeBundle(cwd: string): ContextBundle {
   return {
@@ -227,6 +261,92 @@ describe('truncation continuation (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
       true,
     );
+  });
+
+  it('carries a block that arrived in the CONTENT channel', async () => {
+    // A model with no reasoning channel puts the whole thought in `content`. Carrying only
+    // `reasoning` gave it an empty assistant message under a nudge asserting "the text above is your
+    // own work — it ends mid-thought", which is a pointer to nothing.
+    h.scripted.push(truncatedContent(healthy()), { content: 'done', toolCalls: undefined });
+    const { history } = await run(cwd);
+
+    const carried = history.find(m => m.role === 'assistant' && m.continuationTail);
+    const text = carried?.role === 'assistant' ? carried.content : '';
+    expect(text.trim()).not.toBe('');
+    expect(text).toContain('candidate 120');
+    expect(history.find(isNudge)).toBeDefined();
+  });
+
+  it('carries content that followed reasoning, ending on the newest text', async () => {
+    // Mixed round: the model reasoned, started answering, and was cut. Content came LAST, so it is
+    // the resume anchor the nudge points at — and before this it was dropped from history entirely.
+    const answer = 'so the fix is to clamp pos to lineStart rather than to the newline before it';
+    h.scripted.push(truncatedContent(answer, shortHealthy()), {
+      content: 'done',
+      toolCalls: undefined,
+    });
+    const { history } = await run(cwd);
+
+    const carried = history.find(m => m.role === 'assistant' && m.continuationTail);
+    const text = carried?.role === 'assistant' ? carried.content : '';
+    expect(text).toContain('recheck 0:');
+    expect(text.trimEnd().endsWith(answer)).toBe(true);
+  });
+
+  it('sheds the superseded tail when a second carry overlaps it', async () => {
+    // Each carry cuts a fresh CONTINUATION_TAIL_CHARS window over the SAME block, so a short
+    // continuation round leaves two near-identical tails resident — a standing window cost the
+    // compaction sweep only clears if a shrink event happens to fire.
+    h.scripted.push(truncated(healthy()), truncated(shortHealthy()), {
+      content: 'done',
+      toolCalls: undefined,
+    });
+    const { history } = await run(cwd);
+
+    expect(history.filter(m => m.role === 'assistant' && m.continuationTail)).toHaveLength(2);
+    expect(liveTails(history)).toHaveLength(1);
+    // The surviving tail is the newest one, and it holds BOTH halves of the split thought.
+    const live = liveTails(history)[0];
+    const text = live.role === 'assistant' ? live.content : '';
+    expect(text).toContain('candidate 120');
+    expect(
+      text
+        .trimEnd()
+        .endsWith('recheck 24: offset 264 maps to column 3 on the line that follows it'),
+    ).toBe(true);
+  });
+
+  it('keeps both tails when the continuation round shares no text with the first', async () => {
+    // The new window reaches back into the old tail only when this round generated less than the
+    // budget. Past it there is no overlap, so shedding would drop working the model can still use.
+    h.scripted.push(truncated(healthy()), truncated(otherHealthy()), {
+      content: 'done',
+      toolCalls: undefined,
+    });
+    const { history } = await run(cwd);
+
+    expect(liveTails(history)).toHaveLength(2);
+  });
+
+  it('joins a ceiling cut onto a block already held, rather than replacing it', async () => {
+    // A ceiling cut can land on a round that is ITSELF a continuation. Carrying only the new half
+    // dropped the first from the tail and from the trace, while leaving its message outside
+    // `protect` and shed-eligible. Observable in the trim count: the trimmed head can only exceed
+    // the first block's length if the two were joined.
+    const first = shortHealthy(20);
+    h.stream.push('', healthy(600));
+    h.scripted.push(
+      truncated(first),
+      { content: '', toolCalls: undefined },
+      { content: 'done', toolCalls: undefined },
+    );
+    const { messages } = await run(cwd);
+
+    const notice = messages
+      .filter((m): m is Extract<Message, { role: 'system' }> => m.role === 'system')
+      .find(m => m.content.includes('length ceiling'));
+    const trimmed = Number(/\((\d+) chars/.exec(notice?.content ?? '')?.[1] ?? 0);
+    expect(trimmed).toBeGreaterThan(first.length);
   });
 
   it('does not move the task-spec pin — the nudge is not a turn boundary', async () => {
