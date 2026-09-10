@@ -50,9 +50,13 @@ export const MAX_CONSECUTIVE_CONTINUATIONS = envInt('REIKA_CONTINUE_MAX', 3);
 // continuations that takes, while one restating itself is stopped regardless of the count.
 export const CONTINUATION_NOVELTY_LIMIT = 0.8;
 
+// 0 is a real setting for both knobs, not an unset: REIKA_CONTINUE_MAX=0 carries the tail but spends
+// no continuation, and REIKA_CONTINUE_TAIL_CHARS=0 is the nudge-only ablation — the arm that says
+// whether the win came from the carried text or from the rewritten nudge. A knob that reads as
+// disabled and silently runs at the default would misattribute the run it was set for.
 function envInt(name: string, fallback: number): number {
   const raw = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
 }
 
 // Marker for the trimmed head, in reika's voice so it can't be mistaken for the model's own text.
@@ -99,6 +103,10 @@ export function continuationTail(
   budget: number = CONTINUATION_TAIL_CHARS,
 ): { text: string; omitted: number } {
   if (text.length <= budget) return { text, omitted: 0 };
+  // The nudge-only arm (budget 0): the model is told its work was cut and asked to resume from it,
+  // with none of it carried. Guarded explicitly because `slice(-0)` is `slice(0)` — the whole string,
+  // i.e. a budget of zero would otherwise carry everything.
+  if (budget <= 0) return { text: continuationMarker(text.length), omitted: text.length };
 
   const window = text.slice(-budget);
   const limit = Math.floor(budget * BOUNDARY_SEARCH_FRACTION);

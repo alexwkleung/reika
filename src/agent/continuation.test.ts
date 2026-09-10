@@ -104,6 +104,16 @@ describe('continuationTail', () => {
     expect(out).toContain('qqq');
     expect(out.endsWith('short')).toBe(true);
   });
+
+  it('carries nothing at a budget of zero — the nudge-only arm', () => {
+    // `slice(-0)` is `slice(0)`, so an unguarded zero budget would carry the ENTIRE block: the arm
+    // meant to isolate the nudge would silently measure the largest possible tail instead.
+    const text = 'z'.repeat(500);
+    const { text: out, omitted } = continuationTail(text, 0);
+    expect(omitted).toBe(500);
+    expect(out).not.toContain('zz');
+    expect(out).toBe(continuationMarker(500));
+  });
 });
 
 describe('ContinuationGate', () => {

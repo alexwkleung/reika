@@ -235,8 +235,10 @@ const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // discarding it and nudging a restart. The retry this replaces destroyed a measured 30,270-char
 // block that was cut ONE CLAUSE after solving its problem (selfRepeatRatio 0.014 — below the p90 of
 // healthy blocks), and the restart re-ran the same `gh issue view` plus two greps, putting identical
-// payloads in context twice and feeding the #251/#252 re-fetch cascade. Default-off so the #264
-// re-measurement stays attributable; strict no-op when off. See agent/continuation.ts.
+// payloads in context twice and feeding the #251/#252 re-fetch cascade. ON by default: a live run
+// carried 3/3 truncations with the model resuming its own thread each time, and a refused carry is
+// exactly the previous behavior. It does change what a request carries, so unset it for a run that
+// is measuring context/eviction (#264). Strict no-op when off. See agent/continuation.ts.
 const CONTINUE = process.env.REIKA_CONTINUE === '1';
 // The resume nudge. Four jobs, and the string it replaced ("continue concisely ... no long
 // preamble") failed all four — it read as *start over, briefly*, and the model did exactly that.
