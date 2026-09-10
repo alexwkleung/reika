@@ -1813,6 +1813,13 @@ export async function runTurn(opts: {
     // act on what it has. Bounded by MAX_VERBATIM_RECOVERIES (canAbortVerbatim above), so after the
     // budget is spent a re-spiral runs to the max_tokens wall and the length-retry path takes over.
     if (verbatimAborted) {
+      // Which stop ended a LENGTH cut's carry, when the block itself passed the ratio gate. The
+      // recovery below is shared with the genuinely-degenerate path, and its wording asserts
+      // repetition — true for a ratio abort, true for a novelty refusal (that IS a restatement),
+      // and FALSE for a count refusal, where the model simply spent its continuations on a coherent
+      // thought. Measured 0.063/0.036/0.025/0.000 against a 0.350 threshold across three baseline
+      // runs (#285), while the message told the model, and the user, that it was repeating itself.
+      let ladderStop: 'count' | 'novelty' | undefined;
       // A LENGTH-ceiling cut is not evidence of degeneration (#284). REASONING_HARD_CEIL fires on
       // length alone (`ratio >= abortAt || tooLong`), so a long but coherent thought crossing 32000
       // chars is discarded exactly like a spiral — and told "your reasoning was repeating the same
@@ -1841,6 +1848,9 @@ export async function runTurn(opts: {
             `sim=${allow.sim.toFixed(2)} spent=${continuation.spent} ` +
             `chars=${ceilCarried.length}\n`,
         );
+        // The ratio gate passed but the ladder refused: remember which, so the recovery below does
+        // not diagnose repetition the ratio just said is not there.
+        if (gate.continuable && !allow.ok) ladderStop = allow.reason;
         if (gate.continuable && allow.ok) {
           opts.onReasoningStatus?.(false);
           // Commit the block to scrollback before the notice, the same history/onMessage split the
@@ -1891,18 +1901,28 @@ export async function runTurn(opts: {
         forceVerbatimPlanWrite = true;
         continue;
       }
-      // Agent/chat, first cut within budget → nudge to act on what it has.
+      // Agent/chat, first cut within budget → nudge to act on what it has. The DIRECTIVE is the same
+      // either way — stop reasoning, act on what you have; only the diagnosis differs, and only the
+      // count case gets the truthful one. A model told it was repeating has reason to spend its next
+      // round auditing its own output for repetition, which is more reasoning, which is what got it
+      // cut. See #285.
       if (opts.promptMode !== 'plan' && verbatimRecoveries < MAX_VERBATIM_RECOVERIES) {
+        const spentOnLength = ladderStop === 'count';
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Reasoning was repeating itself — stopped it.',
+          content: spentOnLength
+            ? 'Reasoning kept hitting the length limit — stopped it.'
+            : 'Reasoning was repeating itself — stopped it.',
         });
         opts.history.push({
           role: 'user',
-          content:
-            '(your reasoning was repeating the same text and was stopped — decide from what you ' +
-            'already have and call a tool or give the answer concisely, without long reasoning)',
+          content: spentOnLength
+            ? '(your reasoning kept hitting the length limit without producing an answer or a ' +
+              'tool call, so it was stopped — it was not repeating itself. decide from what you ' +
+              'already have and call a tool or give the answer concisely, without long reasoning)'
+            : '(your reasoning was repeating the same text and was stopped — decide from what you ' +
+              'already have and call a tool or give the answer concisely, without long reasoning)',
           // Not a turn boundary (#287). This fires on exactly the rounds where the task spec matters
           // most — a cut reasoning stream — so leaving it unflagged re-elects the pin to whatever
           // tool result lands next, and the model then re-fetches the spec it was already given.
@@ -1928,7 +1948,7 @@ export async function runTurn(opts: {
       }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
       // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
-      commitSpiralStop(opts, turnStart, fetchedUrls);
+      commitSpiralStop(opts, turnStart, fetchedUrls, ladderStop === 'count' ? 'length' : 'loop');
       return;
     }
 
@@ -2619,6 +2639,11 @@ function commitSpiralStop(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   turnStart: number,
   fetchedUrls: Set<string>,
+  // Why the turn ran out of recoveries. 'loop' is the genuine spiral; 'length' is a coherent thought
+  // that kept crossing the reasoning ceiling and spent its continuations. Telling a user the model
+  // "kept looping" for the second case sends them after their prompt and their model choice when the
+  // cause was a length limit — the diagnosis they need is the opposite one (#285).
+  reason: 'loop' | 'length' = 'loop',
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -2632,9 +2657,13 @@ function commitSpiralStop(
   const m: Message = {
     role: 'assistant',
     content:
-      `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
-      `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
-      `rephrasing or narrowing it, or use a stronger model.`,
+      reason === 'length'
+        ? `I couldn't converge — the reasoning kept hitting the length limit without reaching an ` +
+          `answer, and was stopped to avoid running indefinitely.${examined} This request needed ` +
+          `more uninterrupted reasoning than the limit allows; try narrowing it into smaller steps.`
+        : `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
+          `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
+          `rephrasing or narrowing it, or use a stronger model.`,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
