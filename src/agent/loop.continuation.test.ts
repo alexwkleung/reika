@@ -93,18 +93,6 @@ function shortHealthy(n = 25): string {
   ).join('\n');
 }
 
-// Long and distinct from `healthy` — a second block that merely REPEATED the first would raise the
-// joined block's selfRepeatRatio and be refused by the gate as degenerate, which is not what this
-// exercises.
-function otherHealthy(n = 400): string {
-  return Array.from(
-    { length: n },
-    (_, i) =>
-      `pass ${i}: the candidate at column ${i * 3} resolves to row ${i + 9}, which the walker ` +
-      `compares against boundary ${i * 5} before advancing past it`,
-  ).join('\n');
-}
-
 const liveTails = (history: Message[]): Message[] =>
   history.filter(m => m.role === 'assistant' && m.continuationTail && m.content !== SHED_NOTE);
 
@@ -319,39 +307,30 @@ describe('truncation continuation (integration)', () => {
     expect(text.trimEnd().endsWith(answer)).toBe(true);
   });
 
-  it('sheds the superseded tail when a second carry overlaps it', async () => {
-    // Each carry cuts a fresh CONTINUATION_TAIL_CHARS window over the SAME block, so a short
-    // continuation round leaves two near-identical tails resident — a standing window cost the
-    // compaction sweep only clears if a shrink event happens to fire.
+  it("leaves both tails resident — shedding is compaction's job, not the carry's", async () => {
+    // Each carry cuts a fresh window over the same block, so a short continuation round leaves two
+    // near-identical tails in history. Shedding the older one at carry time was tried and reverted:
+    // rewriting a mid-history assistant message diverged the prefix cache (`cause=mid-history`,
+    // 1785 and 2358 tokens reprocessed against an append-only round's 67) to reclaim window that
+    // was not under pressure. Compaction's pre-pass sheds them when a shrink is already rewriting
+    // those bytes — see compaction.continuation.test.ts.
     h.scripted.push(truncated(healthy()), truncated(shortHealthy()), {
       content: 'done',
       toolCalls: undefined,
     });
     const { history } = await run(cwd);
 
-    expect(history.filter(m => m.role === 'assistant' && m.continuationTail)).toHaveLength(2);
-    expect(liveTails(history)).toHaveLength(1);
-    // The surviving tail is the newest one, and it holds BOTH halves of the split thought.
-    const live = liveTails(history)[0];
-    const text = live.role === 'assistant' ? live.content : '';
+    expect(liveTails(history)).toHaveLength(2);
+    // The newer tail still holds BOTH halves of the split thought, so nothing is lost by keeping
+    // the older one around until the sweep runs.
+    const newest = liveTails(history)[1];
+    const text = newest.role === 'assistant' ? newest.content : '';
     expect(text).toContain('candidate 120');
     expect(
       text
         .trimEnd()
         .endsWith('recheck 24: offset 264 maps to column 3 on the line that follows it'),
     ).toBe(true);
-  });
-
-  it('keeps both tails when the continuation round shares no text with the first', async () => {
-    // The new window reaches back into the old tail only when this round generated less than the
-    // budget. Past it there is no overlap, so shedding would drop working the model can still use.
-    h.scripted.push(truncated(healthy()), truncated(otherHealthy()), {
-      content: 'done',
-      toolCalls: undefined,
-    });
-    const { history } = await run(cwd);
-
-    expect(liveTails(history)).toHaveLength(2);
   });
 
   it('joins a ceiling cut onto a block already held, rather than replacing it', async () => {

@@ -24,7 +24,6 @@ import {
   distillPlanHandoff,
   batchAgePayloads,
   AGE_LOW_FRACTION,
-  CONTINUATION_SHED_NOTE,
 } from './compaction.js';
 import {
   droppedPayloadCount,
@@ -43,12 +42,7 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
-import {
-  CONTINUATION_TAIL_CHARS,
-  ContinuationGate,
-  continuationGate,
-  continuationTail,
-} from './continuation.js';
+import { ContinuationGate, continuationGate, continuationTail } from './continuation.js';
 import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
@@ -933,21 +927,6 @@ export async function runTurn(opts: {
   // channel Layer-2 measures.
   let pendingContinuation = '';
   let pendingReasoning = '';
-  // A fresh tail slides the same CONTINUATION_TAIL_CHARS window over the block the previous tail
-  // already carried, so a short continuation round leaves two near-identical tails resident — the
-  // sweep in compaction.ts only clears the older one when a shrink event happens to fire. Shed it
-  // here instead, at carry time. Only ever called when the new tail's window reaches back into the
-  // old one, so what is dropped is the oldest working, which the marker already frames as superseded
-  // rather than as a gap. Idempotent by the same marker the sweep uses.
-  const shedSpentTail = (): void => {
-    for (let i = opts.history.length - 1; i >= 0; i--) {
-      const m = opts.history[i];
-      if (m.role === 'assistant' && m.continuationTail && m.content !== CONTINUATION_SHED_NOTE) {
-        m.content = CONTINUATION_SHED_NOTE;
-        return;
-      }
-    }
-  };
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
@@ -965,11 +944,15 @@ export async function runTurn(opts: {
     newText: string;
   }): number => {
     continuation.noteContinuation(block.newText);
-    // Shed the previous tail only when this one's window overlaps it. The slide then costs at most
-    // `newText.length` chars of the oldest working and saves the rest of the budget — the trade is
-    // best exactly where the duplication is worst. A round that generated more than the budget
-    // shares no text with the previous tail, so both are kept and coherence wins.
-    if (pendingContinuation && block.newText.length < CONTINUATION_TAIL_CHARS) shedSpentTail();
+    // Successive tails DO overlap — each cuts a fresh window over the same block, so a short
+    // continuation round leaves two near-identical tails resident until a shrink event clears them.
+    // Shedding the older one here was tried and reverted (measured 2026-09-10, REIKA_CONTINUE_MAX=3,
+    // 3 consecutive carries): rewriting a mid-history assistant message turned an append-only round
+    // into `cause=mid-history`, costing 1785 and 2358 tokens of reprocessing (83s and 106s at 21t/s)
+    // against a comparable append-only round's 67 — to reclaim ~1375 tokens of window that was not
+    // under pressure. Compaction's pre-pass is the right home precisely because it only runs when a
+    // shrink is already rewriting those bytes, so the divergence is free; and it is ordered ahead of
+    // both size sweeps, so the tails go first exactly when window IS the binding constraint.
     pendingContinuation = block.carried;
     pendingReasoning = block.reasoning;
     const tail = continuationTail(block.carried);
