@@ -223,6 +223,26 @@ export function batchAgePayloads(
     }
     return n;
   };
+  // Spent continuation tails go BEFORE either size sweep (#284). The sweeps are oldest-first, so a
+  // branch inside them would still lose the race to any older tool payload — and this is the one
+  // thing in the window that is strictly cheaper to drop than anything else. A carried tail cannot
+  // provoke a re-read (the model cannot re-fetch its own thinking, the same reason reasoning ages
+  // first) and, being here at all, has already been superseded: `protect` starts at the assistant
+  // message opening the active roundtrip, so while the continuation this tail feeds is still live
+  // the tail IS that message and this loop never reaches it. Promoting the tail into `content` is
+  // what makes it visible to the chat template; this is what keeps that promotion from becoming a
+  // standing window cost only a fold could clear.
+  for (let i = 0; i < protect; i++) {
+    if (estimate() <= target) {
+      out.kept = survivingCrumbs();
+      return out;
+    }
+    const m = history[i];
+    if (m.role === 'assistant' && m.continuationTail && m.content !== CONTINUATION_SHED_NOTE) {
+      m.content = CONTINUATION_SHED_NOTE;
+      out.marked++;
+    }
+  }
   for (const takeCrumbs of [false, true]) {
     for (let i = 0; i < protect; i++) {
       if (estimate() <= target) {
@@ -289,6 +309,12 @@ function msgChars(m: Message): number {
 // The recap's closing pointer. A single constant because a carried-forward recap already ends with
 // it: appended unconditionally, N folds produced N identical notes (#247).
 const OMISSION_NOTE = '(Older tool outputs were omitted here but can be re-read on demand.)';
+
+// What a spent continuation tail collapses to. Kept as a short note rather than an empty string so
+// the turn still reads as "there was work here that has been acted on", and so the shed is
+// idempotent — the sweep recognizes its own marker instead of re-marking a tail every event.
+export const CONTINUATION_SHED_NOTE =
+  '(reika: earlier cut-off reasoning was continued and is no longer carried.)';
 
 // Tools whose `path` argument names a file the turn actually worked on. `list` takes a DIRECTORY
 // and grep/glob take a search ROOT, so reading the file list off "any call with a path arg" put

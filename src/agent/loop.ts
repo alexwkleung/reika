@@ -42,6 +42,7 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
+import { ContinuationGate, continuationGate, continuationTail } from './continuation.js';
 import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
 import {
@@ -218,6 +219,13 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // its margins are documented at the constants, and they are the argument for the numbers. The one place mid-stream abort is sound; without it the only backstop is the
 // max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
 // independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
+// A positive integer from the environment, or the default. Rejects 0 and negatives: unlike the
+// continuation knobs, a ceiling of 0 would cut every block at the first delta, which is not an arm
+// anyone wants and would read as "the flag disabled it".
+function ceilFromEnv(name: string, fallback: number): number {
+  const raw = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
 // 2 (not 1) so the force-write *recovery round* is itself abort-protected — a deeply-stuck model
 // spirals in the force-write too, and the first budget unit is spent cutting the original spiral.
 const MAX_VERBATIM_RECOVERIES = 2;
@@ -227,9 +235,33 @@ const MAX_VERBATIM_RECOVERIES = 2;
 // healthy single-block max, so genuine long deliberation is untouched. The force-write round uses a
 // tighter ceil: a transform legitimately reasons only a few hundred tokens (observed ~300-400t), so
 // anything near 3000t there is stuck and there's no reason to let it run to 8000.
-const REASONING_HARD_CEIL = 32000;
+// Overridable ONLY as a measurement affordance: the ceiling branch is otherwise unreachable in a
+// bench (a model must produce 32000 chars twice in a row with no tool call in between), and the
+// alternative — editing the constant locally for a run — is how an A/B ends up comparing two
+// different builds. Default unchanged, so a run that does not set it behaves exactly as before.
+const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
+// EXPERIMENT (#284): generation cut off mid-thought carries the model's own work forward instead of
+// discarding it and nudging a restart. The retry this replaces destroyed a measured 30,270-char
+// block that was cut ONE CLAUSE after solving its problem (selfRepeatRatio 0.014 — below the p90 of
+// healthy blocks), and the restart re-ran the same `gh issue view` plus two greps, putting identical
+// payloads in context twice and feeding the #251/#252 re-fetch cascade. ON by default: a live run
+// carried 3/3 truncations with the model resuming its own thread each time, and a refused carry is
+// exactly the previous behavior. It does change what a request carries, so unset it for a run that
+// is measuring context/eviction (#264). Strict no-op when off. See agent/continuation.ts.
+const CONTINUE = process.env.REIKA_CONTINUE === '1';
+// The resume nudge. Four jobs, and the string it replaced ("continue concisely ... no long
+// preamble") failed all four — it read as *start over, briefly*, and the model did exactly that.
+// Attribute the text above as the model's own; anchor the resume point (the tail ends mid-sentence,
+// so "that exact point" needs no interpretation); frame the trim as superseded working rather than a
+// gap, since an over-thinker will audit a gap; and forbid the restart explicitly, because the
+// observed failure re-ran `gh issue view` and two greps and put identical payloads in context twice.
+const CONTINUE_NUDGE =
+  '(your previous response was cut off at the token limit. the text above is your own work — it ' +
+  'ends mid-thought. continue from that exact point. any earlier part was trimmed to fit; what ' +
+  'remains is your most recent working. do not start over, and do not re-run tools you have ' +
+  'already called — their results are above.)';
 // EXPERIMENT (converge retry): instead of giving up the moment the model can't converge — a plan-mode
 // force-write that spiraled, or an agent reasoning loop that reached its terminal — spend ONE more
 // *steered* attempt first: a strong, failure-naming directive ("you looped and kept re-questioning
@@ -881,6 +913,56 @@ export async function runTurn(opts: {
   // Consecutive length-stops recovered from. Reset on any clean (non-truncated) round so
   // the budget is per-spiral, not per-turn.
   let lengthRetries = 0;
+  // Truncation continuation (#284). `continuation` bounds *unproductive* continuing (a consecutive
+  // count that resets on progress, plus a novelty check); the pending accumulators below hold a
+  // truncated round's work so the split thought is recorded in the reasoning trace as ONE entry
+  // when the continuation lands. Recording it as two would report the continuation as near-identical to the
+  // round it resumes — high crossSim by construction — and trip the Layer-2 loop-breaker on the very
+  // feature it is meant to protect. See agent/continuation.ts.
+  const continuation = new ContinuationGate();
+  // The block that comes BACK to the model, in the order it was generated (reasoning, then content
+  // when the round produced any). `pendingReasoning` is the reasoning-only accumulation of the same
+  // split thought, kept apart because the trace takes the two channels separately and picks one:
+  // folding content into the string it judges would feed it the same text twice and shift which
+  // channel Layer-2 measures.
+  let pendingContinuation = '';
+  let pendingReasoning = '';
+  // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
+  // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
+  // though the partial was in history), followed by the resume nudge as role 'user' — the only role
+  // that reaches the model, since messagesToOpenAI drops system messages. Reasoning is deliberately
+  // NOT set alongside the tail: sending both channels would pay for the same text twice and make the
+  // retention bound fiction. Shared by both cut paths so they cannot drift apart. Returns the chars
+  // trimmed, for the user-facing notice.
+  const carryContinuation = (block: {
+    // The cut-off thought so far, chronological — what the tail is cut from.
+    carried: string;
+    // The same thought's reasoning channel only, for the trace when the continuation lands.
+    reasoning: string;
+    // THIS round's newly generated text, for the ladder's novelty check. Never the carried block:
+    // a tail contains the round it resumes, so accumulated-vs-accumulated self-triggers.
+    newText: string;
+  }): number => {
+    continuation.noteContinuation(block.newText);
+    // Successive tails DO overlap — each cuts a fresh window over the same block, so a short
+    // continuation round leaves two near-identical tails resident until a shrink event clears them.
+    // Shedding the older one here was tried and reverted (measured 2026-09-10, REIKA_CONTINUE_MAX=3,
+    // 3 consecutive carries): rewriting a mid-history assistant message turned an append-only round
+    // into `cause=mid-history`, costing 1785 and 2358 tokens of reprocessing (83s and 106s at 21t/s)
+    // against a comparable append-only round's 67 — to reclaim ~1375 tokens of window that was not
+    // under pressure. Compaction's pre-pass is the right home precisely because it only runs when a
+    // shrink is already rewriting those bytes, so the divergence is free; and it is ordered ahead of
+    // both size sweeps, so the tails go first exactly when window IS the binding constraint.
+    pendingContinuation = block.carried;
+    pendingReasoning = block.reasoning;
+    const tail = continuationTail(block.carried);
+    opts.history.push({ role: 'assistant', content: tail.text, continuationTail: true });
+    // `harness`: the nudge must reach the model, so it cannot be `meta` — but it is not a turn
+    // boundary, and the task-spec pin elects the first tool payload after the newest real user
+    // message. Without this, every continuation re-elects the spec to whatever result lands next.
+    opts.history.push({ role: 'user', content: CONTINUE_NUDGE, harness: true });
+    return tail.omitted;
+  };
   // Consecutive plan-mode rounds that surfaced no new information (seenReadOnly didn't grow). Drives
   // the adaptive force-write: a converged or looping model stalls here; a productive one resets it.
   let planStaleRounds = 0;
@@ -1545,6 +1627,9 @@ export async function runTurn(opts: {
     let spinCheckedAt = 0;
     let spinning = false;
     let verbatimAborted = false;
+    // Whether the cut was the pure length ceiling rather than the repetition ratio. The two are very
+    // different events — see the continuation branch in the recovery below (#284).
+    let verbatimAbortByLength = false;
     // Combined abort signal for this round's call: aborts on user ctrl-c (forwarded from opts.signal)
     // OR on a verbatim auto-abort (below). callModel gets THIS signal; the loop's own user-abort
     // checks still read the original opts.signal, so the two causes stay distinguishable afterward.
@@ -1589,6 +1674,7 @@ export async function runTurn(opts: {
           const tooLong = roundReasoning.length >= hardCeil;
           if (canAbortVerbatim && !verbatimAborted && (ratio >= abortAt || tooLong)) {
             verbatimAborted = true;
+            verbatimAbortByLength = tooLong && ratio < abortAt;
             debugLog(
               `[reika:debug] verbatim-abort round=${i} reason=${tooLong ? 'length' : 'ratio'} ` +
                 `ratio=${ratio.toFixed(2)} threshold=${abortAt.toFixed(2)} ceil=${hardCeil} ` +
@@ -1727,6 +1813,70 @@ export async function runTurn(opts: {
     // act on what it has. Bounded by MAX_VERBATIM_RECOVERIES (canAbortVerbatim above), so after the
     // budget is spent a re-spiral runs to the max_tokens wall and the length-retry path takes over.
     if (verbatimAborted) {
+      // Which stop ended a LENGTH cut's carry, when the block itself passed the ratio gate. The
+      // recovery below is shared with the genuinely-degenerate path, and its wording asserts
+      // repetition — true for a ratio abort, true for a novelty refusal (that IS a restatement),
+      // and FALSE for a count refusal, where the model simply spent its continuations on a coherent
+      // thought. Measured 0.063/0.036/0.025/0.000 against a 0.350 threshold across three baseline
+      // runs (#285), while the message told the model, and the user, that it was repeating itself.
+      let ladderStop: 'count' | 'novelty' | undefined;
+      // A LENGTH-ceiling cut is not evidence of degeneration (#284). REASONING_HARD_CEIL fires on
+      // length alone (`ratio >= abortAt || tooLong`), so a long but coherent thought crossing 32000
+      // chars is discarded exactly like a spiral — and told "your reasoning was repeating the same
+      // text", which at a ratio of 0.014 is simply false. The measured block stopped 1,730 chars
+      // (5.4%) short of this ceiling, so which cut landed first was near-arbitrary; two cuts that
+      // close cannot carry opposite semantics. Both therefore route through the same ratio gate. A
+      // RATIO-triggered abort is untouched below — that one is the genuine degenerate case, and
+      // re-feeding a spiral its own text is what makes it worse. Agent mode only for now: plan mode
+      // has its own converge/steer ladder below and is a follow-up.
+      if (CONTINUE && verbatimAbortByLength && opts.promptMode !== 'plan') {
+        // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
+        // continuation, and judging/carrying only the new half would drop the first one from both
+        // the tail and the trace while leaving its message outside `protect` to be shed.
+        const ceilCarried = pendingContinuation
+          ? `${pendingContinuation}\n${roundReasoning}`
+          : roundReasoning;
+        const ceilReasoning = pendingReasoning
+          ? `${pendingReasoning}\n${roundReasoning}`
+          : roundReasoning;
+        const gate = continuationGate(ceilCarried);
+        const allow = continuation.allow(roundReasoning);
+        debugLog(
+          `[reika:debug] continuation round=${i} cut=ceil continue=${gate.continuable && allow.ok} ` +
+            `ratio=${gate.ratio.toFixed(3)} threshold=${gate.threshold.toFixed(3)} ` +
+            `allow=${allow.ok}${allow.reason ? ` stop=${allow.reason}` : ''} ` +
+            `sim=${allow.sim.toFixed(2)} spent=${continuation.spent} ` +
+            `chars=${ceilCarried.length}\n`,
+        );
+        // The ratio gate passed but the ladder refused: remember which, so the recovery below does
+        // not diagnose repetition the ratio just said is not there.
+        if (gate.continuable && !allow.ok) ladderStop = allow.reason;
+        if (gate.continuable && allow.ok) {
+          opts.onReasoningStatus?.(false);
+          // Commit the block to scrollback before the notice, the same history/onMessage split the
+          // token-wall path uses: the live preview is hidden by the line above, so without this the
+          // reasoning the user watched stream — up to REASONING_HARD_CEIL of it, and CARRIED, not
+          // discarded — would vanish from the transcript with only the notice left behind. Note
+          // `onReasoningReset` is deliberately NOT called here; that belongs to the discard path
+          // below, where the block is degenerate and must not be committed.
+          if (roundReasoning) {
+            opts.onMessage({ role: 'assistant', content: '', reasoning: roundReasoning });
+          }
+          const omitted = carryContinuation({
+            carried: ceilCarried,
+            reasoning: ceilReasoning,
+            newText: roundReasoning,
+          });
+          opts.onMessage({
+            role: 'system',
+            tone: 'warn',
+            content: `Reasoning hit the length ceiling — continuing from where it stopped${
+              omitted > 0 ? ` (${omitted} chars of earlier reasoning trimmed)` : ''
+            }.`,
+          });
+          continue;
+        }
+      }
       verbatimRecoveries++;
       opts.onReasoningStatus?.(false);
       // The cut reasoning is degenerate and never committed; hide its live preview so the recovery
@@ -1751,18 +1901,32 @@ export async function runTurn(opts: {
         forceVerbatimPlanWrite = true;
         continue;
       }
-      // Agent/chat, first cut within budget → nudge to act on what it has.
+      // Agent/chat, first cut within budget → nudge to act on what it has. The DIRECTIVE is the same
+      // either way — stop reasoning, act on what you have; only the diagnosis differs, and only the
+      // count case gets the truthful one. A model told it was repeating has reason to spend its next
+      // round auditing its own output for repetition, which is more reasoning, which is what got it
+      // cut. See #285.
       if (opts.promptMode !== 'plan' && verbatimRecoveries < MAX_VERBATIM_RECOVERIES) {
+        const spentOnLength = ladderStop === 'count';
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Reasoning was repeating itself — stopped it.',
+          content: spentOnLength
+            ? 'Reasoning kept hitting the length limit — stopped it.'
+            : 'Reasoning was repeating itself — stopped it.',
         });
         opts.history.push({
           role: 'user',
-          content:
-            '(your reasoning was repeating the same text and was stopped — decide from what you ' +
-            'already have and call a tool or give the answer concisely, without long reasoning)',
+          content: spentOnLength
+            ? '(your reasoning kept hitting the length limit without producing an answer or a ' +
+              'tool call, so it was stopped — it was not repeating itself. decide from what you ' +
+              'already have and call a tool or give the answer concisely, without long reasoning)'
+            : '(your reasoning was repeating the same text and was stopped — decide from what you ' +
+              'already have and call a tool or give the answer concisely, without long reasoning)',
+          // Not a turn boundary (#287). This fires on exactly the rounds where the task spec matters
+          // most — a cut reasoning stream — so leaving it unflagged re-elects the pin to whatever
+          // tool result lands next, and the model then re-fetches the spec it was already given.
+          harness: true,
         });
         continue;
       }
@@ -1784,7 +1948,7 @@ export async function runTurn(opts: {
       }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
       // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
-      commitSpiralStop(opts, turnStart, fetchedUrls);
+      commitSpiralStop(opts, turnStart, fetchedUrls, ladderStop === 'count' ? 'length' : 'loop');
       return;
     }
 
@@ -1804,15 +1968,62 @@ export async function runTurn(opts: {
     // Content rides along as the fallback channel: a model with no reasoning channel (non-thinking,
     // or reasoning stripped by the dialect handling) would otherwise reset the streak every round and
     // get no Layer-2 coverage at all. The trace picks one channel per turn and sticks to it.
-    const { sim, streak, channel } = reasoningTrace.record(
-      { reasoning: rsn, content: response.content },
-      REASONING_LOOP_THRESHOLD,
-    );
-    // Fire on a sustained streak, OR immediately on a near-identical round (no point waiting out the
-    // streak when the reasoning is provably stuck). See REASONING_LOOP_IMMEDIATE.
-    reasoningLoopActive =
-      streak >= REASONING_LOOP_STREAK || (streak >= 1 && sim >= REASONING_LOOP_IMMEDIATE);
-    reasoningChannel = channel;
+    // A truncated round and the continuation that resumes it are ONE thought. Join them so the
+    // trace, the ratio gate and the carried tail all see the whole block; empty unless the previous
+    // round was continued.
+    const joinedReasoning = pendingReasoning ? `${pendingReasoning}\n${rsn}` : rsn;
+    // What comes back to the model, in generation order. `content` is part of the cut-off thought —
+    // it came LAST, so it is the resume anchor the nudge points at — and a model with no reasoning
+    // channel puts the entire thought there. Carrying only `reasoning` left that model an empty
+    // assistant message under a nudge that claimed "the text above is your own work".
+    const roundText = [rsn, response.content ?? ''].filter(t => t.trim()).join('\n');
+    const carriedBlock = pendingContinuation ? `${pendingContinuation}\n${roundText}` : roundText;
+
+    // Continuation decision (#284), taken BEFORE the trace records because a round about to be
+    // continued must not be recorded as its own entry. The gate is the repetition RATIO, not which
+    // cut fired: the max_tokens wall and REASONING_HARD_CEIL landed 5.4% apart on the measured run
+    // (30,270 chars against a 32,000 ceiling), so they cannot carry opposite semantics. Both the
+    // ratio and the verdict are logged on every event so a continuation-specific bar can later be
+    // derived from real data rather than guessed. See agent/continuation.ts.
+    const cutOffMidThought = response.finishReason === 'length' && isFinal;
+    let continueRound = false;
+    if (CONTINUE && cutOffMidThought && carriedBlock.trim()) {
+      // Judged on the block that is actually carried, not on reasoning alone: gating one string and
+      // sending back a different one is a mismatch nobody can reconstruct later.
+      const gate = continuationGate(carriedBlock);
+      const allow = continuation.allow(roundText);
+      continueRound = gate.continuable && allow.ok;
+      debugLog(
+        `[reika:debug] continuation round=${i} continue=${continueRound} ` +
+          `ratio=${gate.ratio.toFixed(3)} threshold=${gate.threshold.toFixed(3)} ` +
+          `allow=${allow.ok}${allow.reason ? ` stop=${allow.reason}` : ''} ` +
+          `sim=${allow.sim.toFixed(2)} spent=${continuation.spent} ` +
+          `chars=${carriedBlock.length}\n`,
+      );
+    }
+
+    // A round about to be continued is HELD, not recorded: truncation split one thought across two
+    // rounds, and recording each half separately reports the second as near-identical to the first
+    // (high crossSim BY CONSTRUCTION), which would fire the Layer-2 loop-breaker on a model that is
+    // simply finishing its sentence. The joined thought is recorded once, when the continuation
+    // lands. Holding also leaves reasoningLoopActive untouched — the previous verdict stands until
+    // there is a complete round to judge.
+    const rec = continueRound
+      ? undefined
+      : reasoningTrace.record(
+          { reasoning: joinedReasoning, content: response.content },
+          REASONING_LOOP_THRESHOLD,
+        );
+    const sim = rec?.sim ?? 0;
+    const streak = rec?.streak ?? 0;
+    const channel: 'reasoning' | 'content' = rec?.channel ?? reasoningChannel;
+    if (rec) {
+      // Fire on a sustained streak, OR immediately on a near-identical round (no point waiting out the
+      // streak when the reasoning is provably stuck). See REASONING_LOOP_IMMEDIATE.
+      reasoningLoopActive =
+        streak >= REASONING_LOOP_STREAK || (streak >= 1 && sim >= REASONING_LOOP_IMMEDIATE);
+      reasoningChannel = channel;
+    }
     if (debugEnabled()) {
       debugLog(
         `[reika:debug] reasoning-loop round=${i} selfRepeat=${selfRepeatRatio(rsn).toFixed(2)} ` +
@@ -1836,6 +2047,35 @@ export async function runTurn(opts: {
         debugLog(`[reika:debug] entropy round=${i} ${formatEntropyReading(reading)}\n`);
       }
     }
+
+    // Cut off mid-thought and worth resuming (#284): carry the model's own work forward rather
+    // than discarding it and asking for a restart. The old retry left the partial in history but
+    // the model never saw it — the cut lands mid-think so the text is all `reasoning`, and a
+    // Qwen-family template renders prior-turn `reasoning_content` as nothing. Promoting the tail
+    // into `content` is what makes it visible.
+    if (continueRound) {
+      const omitted = carryContinuation({
+        carried: carriedBlock,
+        reasoning: joinedReasoning,
+        newText: roundText,
+      });
+      // UI-only, so the scrollback keeps the thinking the user watched stream rather than the
+      // trimmed tail — the same history/onMessage split the truncation notice below uses.
+      if (rsn || response.content) {
+        opts.onMessage({ role: 'assistant', content: response.content ?? '', reasoning: rsn });
+      }
+      opts.onMessage({
+        role: 'system',
+        tone: 'warn',
+        content: `Response cut off at the token limit — continuing from where it stopped${
+          omitted > 0 ? ` (${omitted} chars of earlier reasoning trimmed)` : ''
+        }.`,
+      });
+      continue;
+    }
+    // Not continuing: the held thought (if any) was recorded above, so release it.
+    pendingContinuation = '';
+    pendingReasoning = '';
 
     // Generation cut off mid-thought with no tool call (backstop firing, or a spiral
     // hitting the cap): record the partial for the user, nudge the model to continue
@@ -1866,6 +2106,10 @@ export async function runTurn(opts: {
         role: 'user',
         content:
           '(your previous response was cut off at the token limit — continue concisely: give the answer or call a tool directly, no long preamble)',
+        // Not a turn boundary (#287). This is the fallback for the continuation path — it runs when a
+        // carry is refused, and whenever REIKA_CONTINUE is off — so without the flag the defect the
+        // continuation nudge was fixed for simply reappears one branch over.
+        harness: true,
       });
       opts.onMessage({
         role: 'system',
@@ -1875,6 +2119,10 @@ export async function runTurn(opts: {
       continue;
     }
     lengthRetries = 0;
+    // This round either called a tool or is committing an answer, so the run of unproductive
+    // continuations is over and the next truncation starts from a clean budget. The bound is on
+    // continuing WITHOUT progress, never on continuing itself.
+    continuation.noteProgress();
 
     // If the transform still came back empty (no tools were offered, so any "call" was inert),
     // salvage the gathered analysis directly — the turn must never commit an empty plan.
@@ -2391,6 +2639,11 @@ function commitSpiralStop(
   opts: { history: Message[]; onMessage: (m: Message) => void },
   turnStart: number,
   fetchedUrls: Set<string>,
+  // Why the turn ran out of recoveries. 'loop' is the genuine spiral; 'length' is a coherent thought
+  // that kept crossing the reasoning ceiling and spent its continuations. Telling a user the model
+  // "kept looping" for the second case sends them after their prompt and their model choice when the
+  // cause was a length limit — the diagnosis they need is the opposite one (#285).
+  reason: 'loop' | 'length' = 'loop',
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -2404,9 +2657,13 @@ function commitSpiralStop(
   const m: Message = {
     role: 'assistant',
     content:
-      `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
-      `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
-      `rephrasing or narrowing it, or use a stronger model.`,
+      reason === 'length'
+        ? `I couldn't converge — the reasoning kept hitting the length limit without reaching an ` +
+          `answer, and was stopped to avoid running indefinitely.${examined} This request needed ` +
+          `more uninterrupted reasoning than the limit allows; try narrowing it into smaller steps.`
+        : `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
+          `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
+          `rephrasing or narrowing it, or use a stronger model.`,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };

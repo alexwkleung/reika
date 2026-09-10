@@ -17,6 +17,14 @@ export type Message =
       display?: string;
       nested?: boolean;
       meta?: boolean;
+      // Authored by the harness, not typed by the human: a recovery nudge that must REACH the model
+      // (so it cannot be `meta`, which is dropped from the request) but is not a turn boundary. The
+      // task-spec pin elects "the first tool payload after the newest real user message" (#227), so
+      // without this a nudge re-elects the spec to whatever result lands next. Measured on the
+      // continuation arm: the pin moved off `gh issue view 244` onto a 126-char grep result, then a
+      // 47-char heredoc echo, exactly two rounds after each nudge — and the model then correctly
+      // re-fetched the issue, which is the #251/#252 cascade the nudge exists to avoid.
+      harness?: boolean;
       // Which mode the turn this prompt opened actually ran in. Stamped by the UI on real turns
       // only (never on `meta` command echoes, which happen between turns), so a saved transcript
       // says what each turn was — a plan turn and an agent turn look identical otherwise. Vibe
@@ -47,6 +55,13 @@ export type Message =
       // on the shared message object so the boundary — and the inference engine's prompt-cache
       // prefix — holds across rounds and turns. See agent/compaction.ts batchAgePayloads.
       reasoningAged?: boolean;
+      // EXPERIMENT (REIKA_CONTINUE, #284): this assistant message carries the trimmed tail of a
+      // reasoning block that was cut off mid-thought, promoted into `content` so the chat template
+      // renders it (prior-turn `reasoning_content` is dropped by Qwen-family templates). Marks it
+      // for the aging sweep: protected while the continuation it feeds is live, then the FIRST
+      // thing shed once spent — the same "the model can't re-fetch its own reasoning" logic that
+      // ages reasoning first, which applies again the moment the tail has done its job.
+      continuationTail?: boolean;
     }
   | {
       role: 'tool';
