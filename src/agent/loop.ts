@@ -225,6 +225,13 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // its margins are documented at the constants, and they are the argument for the numbers. The one place mid-stream abort is sound; without it the only backstop is the
 // max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
 // independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
+// A positive integer from the environment, or the default. Rejects 0 and negatives: unlike the
+// continuation knobs, a ceiling of 0 would cut every block at the first delta, which is not an arm
+// anyone wants and would read as "the flag disabled it".
+function ceilFromEnv(name: string, fallback: number): number {
+  const raw = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
 // 2 (not 1) so the force-write *recovery round* is itself abort-protected — a deeply-stuck model
 // spirals in the force-write too, and the first budget unit is spent cutting the original spiral.
 const MAX_VERBATIM_RECOVERIES = 2;
@@ -234,7 +241,11 @@ const MAX_VERBATIM_RECOVERIES = 2;
 // healthy single-block max, so genuine long deliberation is untouched. The force-write round uses a
 // tighter ceil: a transform legitimately reasons only a few hundred tokens (observed ~300-400t), so
 // anything near 3000t there is stuck and there's no reason to let it run to 8000.
-const REASONING_HARD_CEIL = 32000;
+// Overridable ONLY as a measurement affordance: the ceiling branch is otherwise unreachable in a
+// bench (a model must produce 32000 chars twice in a row with no tool call in between), and the
+// alternative — editing the constant locally for a run — is how an A/B ends up comparing two
+// different builds. Default unchanged, so a run that does not set it behaves exactly as before.
+const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // EXPERIMENT (#284): generation cut off mid-thought carries the model's own work forward instead of
