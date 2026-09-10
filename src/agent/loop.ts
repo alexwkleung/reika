@@ -1849,6 +1849,15 @@ export async function runTurn(opts: {
         );
         if (gate.continuable && allow.ok) {
           opts.onReasoningStatus?.(false);
+          // Commit the block to scrollback before the notice, the same history/onMessage split the
+          // token-wall path uses: the live preview is hidden by the line above, so without this the
+          // reasoning the user watched stream — up to REASONING_HARD_CEIL of it, and CARRIED, not
+          // discarded — would vanish from the transcript with only the notice left behind. Note
+          // `onReasoningReset` is deliberately NOT called here; that belongs to the discard path
+          // below, where the block is degenerate and must not be committed.
+          if (roundReasoning) {
+            opts.onMessage({ role: 'assistant', content: '', reasoning: roundReasoning });
+          }
           const omitted = carryContinuation({
             carried: ceilCarried,
             reasoning: ceilReasoning,

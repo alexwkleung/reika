@@ -245,6 +245,18 @@ describe('truncation continuation (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
       false,
     );
+
+    // The thinking the user watched stream is committed to scrollback, ahead of the notice. The
+    // live preview is hidden at the cut, so without this up to REASONING_HARD_CEIL of CARRIED
+    // reasoning would vanish from the transcript with only the notice left behind.
+    const thinkingAt = messages.findIndex(
+      m => m.role === 'assistant' && m.reasoning?.includes('candidate 600'),
+    );
+    const noticeAt = messages.findIndex(
+      m => m.role === 'system' && m.content.includes('length ceiling'),
+    );
+    expect(thinkingAt).toBeGreaterThanOrEqual(0);
+    expect(thinkingAt).toBeLessThan(noticeAt);
   });
 
   it('still discards a ceiling cut when the block IS degenerate', async () => {
@@ -261,6 +273,9 @@ describe('truncation continuation (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating itself'))).toBe(
       true,
     );
+    // A DISCARDED block is not committed to scrollback: it was never carried, and the recovery
+    // notice would be buried under it. That is what onReasoningReset exists for on this path.
+    expect(messages.some(m => m.role === 'assistant' && m.reasoning)).toBe(false);
   });
 
   it('carries a block that arrived in the CONTENT channel', async () => {
