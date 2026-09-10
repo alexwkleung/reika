@@ -1920,6 +1920,10 @@ export async function runTurn(opts: {
           content:
             '(your reasoning was repeating the same text and was stopped — decide from what you ' +
             'already have and call a tool or give the answer concisely, without long reasoning)',
+          // Not a turn boundary (#287). This fires on exactly the rounds where the task spec matters
+          // most — a cut reasoning stream — so leaving it unflagged re-elects the pin to whatever
+          // tool result lands next, and the model then re-fetches the spec it was already given.
+          harness: true,
         });
         continue;
       }
@@ -2099,6 +2103,10 @@ export async function runTurn(opts: {
         role: 'user',
         content:
           '(your previous response was cut off at the token limit — continue concisely: give the answer or call a tool directly, no long preamble)',
+        // Not a turn boundary (#287). This is the fallback for the continuation path — it runs when a
+        // carry is refused, and whenever REIKA_CONTINUE is off — so without the flag the defect the
+        // continuation nudge was fixed for simply reappears one branch over.
+        harness: true,
       });
       opts.onMessage({
         role: 'system',

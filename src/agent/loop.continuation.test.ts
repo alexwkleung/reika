@@ -220,6 +220,10 @@ describe('truncation continuation (integration)', () => {
     const nudge = history.find(isNudge);
     expect(nudge?.content).toContain('concisely');
     expect(messages.some(m => m.role === 'system' && m.content.includes('retrying'))).toBe(true);
+    // The retry nudge is the fallback for this very feature — it runs on a refused carry and
+    // whenever REIKA_CONTINUE is off — so it is not a turn boundary either (#287). Unflagged, the
+    // spec pin it moves is the one the continuation exists to protect.
+    expect(nudge?.harness).toBe(true);
   });
 
   it('carries a block cut by the LENGTH ceiling, not just one cut by the token wall', async () => {
@@ -276,6 +280,13 @@ describe('truncation continuation (integration)', () => {
     // A DISCARDED block is not committed to scrollback: it was never carried, and the recovery
     // notice would be buried under it. That is what onReasoningReset exists for on this path.
     expect(messages.some(m => m.role === 'assistant' && m.reasoning)).toBe(false);
+    // The recovery nudge fires on a cut reasoning stream — exactly when the task spec matters most
+    // — so it must not read as a turn boundary (#287).
+    const recovery = history.find(
+      (m): m is Extract<Message, { role: 'user' }> =>
+        m.role === 'user' && m.content.includes('repeating the same text'),
+    );
+    expect(recovery?.harness).toBe(true);
   });
 
   it('carries a block that arrived in the CONTENT channel', async () => {
