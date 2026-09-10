@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadSkills, parseFrontmatter, parseTriggers } from './skills.js';
 
@@ -244,6 +245,65 @@ describe('loadSkills', () => {
       expect(handoff?.body).toBe('handoff body');
     } finally {
       await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('loads a skill via a symlinked flat file (how `npm run skills:link` installs ours)', async () => {
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'reika-skills-source-'));
+    try {
+      await writeFile(join(sourceRoot, 'issue.md'), 'issue body', 'utf8');
+      const globalDir = process.env.REIKA_SKILLS_DIR as string;
+      await symlink(join(sourceRoot, 'issue.md'), join(globalDir, 'issue.md'));
+      const skills = await loadSkills(cwd);
+      expect(skills.find(s => s.name === 'issue')).toMatchObject({
+        body: 'issue body',
+        source: 'global',
+      });
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// The skills Reika ships in .reika/skills/ load through the same path as a user's own, so a
+// frontmatter typo here ships a skill with no description or no plain-English routing — invisible
+// until someone types the prompt and nothing fires.
+describe('skills shipped in .reika/skills/', () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  let originalEnv: string | undefined;
+
+  beforeEach(async () => {
+    originalEnv = process.env.REIKA_SKILLS_DIR;
+    // Isolate from the developer's own global skills — including symlinks back to these files.
+    process.env.REIKA_SKILLS_DIR = await mkdtemp(join(tmpdir(), 'reika-global-skills-'));
+  });
+
+  afterEach(async () => {
+    const dir = process.env.REIKA_SKILLS_DIR;
+    if (dir) await rm(dir, { recursive: true, force: true });
+    if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
+    else process.env.REIKA_SKILLS_DIR = originalEnv;
+  });
+
+  it('ships the issue and review skills, each with a description, triggers and a body', async () => {
+    const skills = await loadSkills(repoRoot);
+    expect(skills.map(s => s.name)).toEqual(expect.arrayContaining(['issue', 'review']));
+    for (const skill of skills) {
+      expect(skill.source).toBe('project');
+      expect(skill.description).not.toBe('(no description)');
+      expect(skill.triggers.length).toBeGreaterThan(0);
+      expect(skill.body.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('gives no two shipped skills the same trigger phrase', async () => {
+    // matchSkill returns null on a tie, so a shared phrase routes to neither skill.
+    const seen = new Map<string, string>();
+    for (const skill of await loadSkills(repoRoot)) {
+      for (const trigger of skill.triggers) {
+        expect(seen.get(trigger) ?? skill.name).toBe(skill.name);
+        seen.set(trigger, skill.name);
+      }
     }
   });
 });

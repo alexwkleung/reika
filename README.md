@@ -230,6 +230,24 @@ Drop a `*.md` file in a skills directory and it becomes a slash command. Useful 
 - Global: `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
 - Project: `<cwd>/.reika/skills/`
 
+**Skills Reika ships with:**
+
+Two live in this repo, under `.reika/skills/`, so they load automatically when you run Reika on Reika — and so the workflows Reika's own development leans on are readable and reviewable rather than living only in someone's home directory:
+
+| Skill     | What it does                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `/issue`  | Reads a GitHub issue with `gh` (title + comments, since bodies are often empty), then works on it |
+| `/review` | Reads a PR and its linked issue with `gh`, pages the diff, and reviews it in the terminal         |
+
+They are project skills, so they only apply inside this checkout. To get them in every project:
+
+```sh
+npm run skills:link              # symlinks each into ~/.config/reika/skills/ (or $REIKA_SKILLS_DIR)
+npm run skills:link -- --force   # also replace same-named files already there
+```
+
+Symlinks, not copies — `git pull` then updates them everywhere. Optional: nothing else in Reika depends on it, and a same-named skill of your own in the global dir is left alone unless you pass `--force`.
+
 **Layouts (both supported):**
 
 - **Flat file:** `~/.config/reika/skills/review.md` → `/review`
@@ -344,6 +362,7 @@ Anything unreported is left out rather than written as zero: a provider that rep
 - `npm test` / `test:watch` — vitest unit tests
 - `npm run check` — typecheck + lint + format:check + test (use before committing)
 - `npm run eval` — run the eval suite against the configured model
+- `npm run skills:link` — symlink the skills Reika ships (`.reika/skills/`) into your global skills dir
 
 ## Architecture
 

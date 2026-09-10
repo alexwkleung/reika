@@ -763,6 +763,8 @@ Markdown files in `~/.config/reika/skills/` (global) and `<cwd>/.reika/skills/` 
 
 When invoked, the skill body is sent as the user message (verbatim), with any args appended after a blank line. The display in scrollback shows the raw `/skill args` the user typed, not the expanded body. Uses the same `submitToModel` path as regular input, so streaming/abort/approval all work identically.
 
+Reika ships its own skills in `.reika/skills/` (`issue`, `review`) — checked in, so the workflows this repo's development runs on are reviewable and versioned rather than living only in a contributor's `~/.config`. They load as ordinary **project** skills here, and `npm run skills:link` (`scripts/link-skills.sh`) symlinks them into the global dir for use in other projects; it re-points its own links, but never overwrites a same-named file it didn't create unless given `--force`. Two tests in `skills.test.ts` guard the shipped set: every one parses with a description, triggers and a body, and no two share a trigger phrase (a shared phrase ties, and `matchSkill` routes a tie to neither).
+
 Filename validation: `[a-z0-9][a-z0-9_-]*` only. Frontmatter (optional) is parsed with a tiny hand-rolled key:value parser — no `js-yaml` dep. It understands the block-list form (`key:` then `- item` lines) by folding items into the same comma-joined string the inline form yields, so consumers stay on `Record<string, string>`. Per the rule-of-five heuristic, the parser still isn't worth a library until skills grow genuinely nested metadata.
 
 ### Plain-English routing (`skillmatch.ts`)
