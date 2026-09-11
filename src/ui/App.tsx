@@ -1722,8 +1722,6 @@ export function App() {
                   : undefined
               }
             />
-          ) : suggestionState ? (
-            <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
           <Input
             // The question dialog is modal only while its list is up; once the user is typing an
@@ -1733,12 +1731,8 @@ export function App() {
               modelSelect !== null ||
               (question !== null && questionTyping === null)
             }
-            attachedAbove={
-              pending !== null ||
-              question !== null ||
-              modelSelect !== null ||
-              suggestionState !== null
-            }
+            attachedAbove={pending !== null || question !== null || modelSelect !== null}
+            attachedBelow={suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
             mode={mode}
@@ -1755,6 +1749,9 @@ export function App() {
                   : promptPlaceholder()
             }
           />
+          {suggestionState ? (
+            <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
+          ) : null}
           <Status
             model={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
             turns={messages.filter(m => m.role === 'assistant').length}
