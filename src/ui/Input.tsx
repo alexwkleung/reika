@@ -37,6 +37,7 @@ export function Input({
   suggesting,
   history,
   attachedAbove,
+  attachedBelow,
   onPasteImage,
   onPasteText,
 }: {
@@ -51,6 +52,9 @@ export function Input({
   // merge into one continuous frame (the prompt reads as part of the input
   // region rather than a card floating above it).
   attachedAbove?: boolean;
+  // Same idea for the completion list, which hangs off the bottom instead: it
+  // omits its top border and we omit our bottom border.
+  attachedBelow?: boolean;
   // True while the completion/approval overlay owns Up/Down and Return (App
   // navigates/accepts); we leave those keys alone then instead of moving the
   // cursor between lines or submitting.
@@ -360,6 +364,7 @@ export function Input({
     <Box
       borderStyle="round"
       borderTop={!attachedAbove}
+      borderBottom={!attachedBelow}
       paddingX={1}
       marginTop={attachedAbove ? 0 : 1}
     >
