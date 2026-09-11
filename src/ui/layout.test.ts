@@ -45,7 +45,7 @@ describe('hangingWrap', () => {
   });
 
   it('gives the first row less room when the prefix is wider than the indent', () => {
-    // `• Bash` sits between the marker and the args: the first row is short by the name, but the
+    // `⏺︎ Bash` sits between the marker and the args: the first row is short by the name, but the
     // indent the rest hangs from is still the marker's two columns.
     const wide = hangingWrap(words, 30, 2, 8);
     const narrow = hangingWrap(words, 30, 2, 2);

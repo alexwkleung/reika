@@ -162,7 +162,7 @@ describe('renderTxt', () => {
     expect(txt).toContain('You:');
     expect(txt).toContain('Reika:');
     expect(txt).toContain('Thinking:');
-    expect(txt).toContain('• Read(path="a.ts")');
+    expect(txt).toContain('⏺︎ Read(path="a.ts")');
     expect(txt).toContain('↳ Read a.ts');
     expect(txt).toContain('System:');
     expect(txt).toContain('Error:');

@@ -17,7 +17,7 @@ export function contentWidth(indent = 0): number {
   return Math.max(20, (process.stdout.columns || 80) - 2 - indent);
 }
 
-// Wrap `text` so that a marker-prefixed line ("  ↳ Ran: …", "$ …", "• Bash(…)") keeps a HANGING
+// Wrap `text` so that a marker-prefixed line ("  ↳ Ran: …", "$ …", "⏺︎ Bash(…)") keeps a HANGING
 // INDENT: every row after the first lands under the text, not back at column 0.
 //
 // Ink has no hanging indent. A marker and its text share one <Text> (they must — adjacent <Text>
@@ -28,7 +28,7 @@ export function contentWidth(indent = 0): number {
 //
 // `width` is the block's full width including the marker. `hang` is the marker's width, which
 // every continuation row is indented by. `first` is how many columns are already spent on the
-// first row when the marker is not a fixed-width prefix (`• Bash` before its args) — it defaults
+// first row when the marker is not a fixed-width prefix (`⏺︎ Bash` before its args) — it defaults
 // to `hang`, the fixed-marker case.
 export function hangingWrap(text: string, width: number, hang: number, first = hang): string {
   const pad = ' '.repeat(hang);

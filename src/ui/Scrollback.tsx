@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { Box, Static, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
+import stringWidth from 'string-width';
 import type { Message } from '../types.js';
 import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
@@ -149,7 +150,20 @@ const NESTED_INDENT = 4;
 // indent must be the marker's exact rendered width — `↳` measures 1 column, so '  ↳ ' is 4.
 const TOOL_MARKER = '  ↳ ';
 const SHELL_MARKER = '$ ';
-const CALL_MARKER = '• ';
+// U+23FA (the record glyph) with U+FE0E, Variation Selector-15: the selector pins text
+// presentation, so a terminal that would otherwise pull the emoji font and draw a colored,
+// double-width disc draws the monochrome one-column glyph instead. Bigger than `•` (which
+// reads as a list bullet) and, unlike `⏺︎`, centered on the lowercase rather than the cap height.
+//
+// The terminal draws it in ONE column, but string-width (what Ink measures with) scores it as
+// two — so this marker has two widths, and they are used for different things:
+//   CALL_MARKER_WIDTH  — the columns the terminal draws: the hanging indent of continuation rows.
+//   CALL_MARKER_MEASURED — the columns Ink thinks the first row spends: its wrap budget. Budgeting
+//   with the larger number keeps Ink from re-wrapping a row that fills the width; the first row
+//   comes out one column short of what the terminal could fit, which is invisible.
+const CALL_MARKER = '\u23FA\uFE0E ';
+const CALL_MARKER_WIDTH = 2;
+const CALL_MARKER_MEASURED = stringWidth(CALL_MARKER);
 const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
@@ -231,17 +245,17 @@ function renderMessage(
             {msg.toolCalls.map(tc => (
               // One Text with nested colored runs, not two sibling <Text> in a row:
               // when the line wraps (long edit args), Ink drops the boundary char
-              // between adjacent siblings, rendering "• Edit(…)" as "• Edi(…)".
+              // between adjacent siblings, rendering "⏺︎ Edit(…)" as "⏺︎ Edi(…)".
               <Text key={tc.id}>
                 <Text color={theme.tool}>{`${CALL_MARKER}${toolLabel(tc.name)}`}</Text>
                 <Text color={theme.secondary}>
                   {hangingWrap(
                     `(${formatArgs(tc.name, tc.args)})`,
                     contentWidth(indent),
-                    CALL_MARKER.length,
+                    CALL_MARKER_WIDTH,
                     // The name sits between the marker and the args, so the first row has less
-                    // room than the rest — but the indent stays the marker's width.
-                    CALL_MARKER.length + toolLabel(tc.name).length,
+                    // room than the rest — but the indent stays the marker's drawn width.
+                    CALL_MARKER_MEASURED + toolLabel(tc.name).length,
                   )}
                 </Text>
               </Text>
@@ -497,8 +511,8 @@ function wrapText(text: string, width: number): string[] {
 }
 
 // Args whose values are already shown in full elsewhere (the diff view) and only
-// bloat the header — drop them so e.g. an edit reads "• Edit(path=…)" instead of
-// "• Edit(path=…, old_string=…, new_string=…)". Path stays; it's the one bit the
+// bloat the header — drop them so e.g. an edit reads "⏺︎ Edit(path=…)" instead of
+// "⏺︎ Edit(path=…, old_string=…, new_string=…)". Path stays; it's the one bit the
 // diff header doesn't make obvious at a glance.
 const HIDDEN_ARGS: Record<string, ReadonlySet<string>> = {
   edit: new Set(['old_string', 'new_string']),
