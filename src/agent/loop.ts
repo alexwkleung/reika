@@ -789,6 +789,16 @@ export function buildAbsentGrounding(failure: Extract<EditFailure, { kind: 'abse
   );
 }
 
+// One shrink event, as the loop performed it. `age` is a batch-age shed (compaction.ts
+// batchAgePayloads — the fields are its AgeResult); `fold` is a compaction of older turns into a
+// recap. `round` is the tool round within the turn; the UI stamps the turn.
+export type ShrinkEvent =
+  | { kind: 'age'; round: number; marked: number; bulk: number; crumbs: number; kept: number; short: number }
+  | { kind: 'fold'; round: number; removed: number; recapChars: number };
+
+// Session-cumulative shrink counts, threaded across turns via `priorShrink`.
+export type ShrinkCounts = { sheds: number; folds: number };
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -827,6 +837,14 @@ export async function runTurn(opts: {
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
   onContextEstimate?: (tokens: number) => void;
+  // Every shrink event the turn performs — a batch-age shed or a compaction fold — with the
+  // session-cumulative counts after it. The UI shows the counts as ambient status chips (the
+  // gauge sawtooth already shows the events; a counter says how many teeth) and the transcript
+  // saves the events themselves, which is otherwise only in the debug log. `priorShrink` threads
+  // the counts across turns like `priorCalibration`, so the fold notice can number folds
+  // session-wide.
+  onShrink?: (event: ShrinkEvent, counts: ShrinkCounts) => void;
+  priorShrink?: ShrinkCounts;
   // Calibration of the char-based estimate against the provider's real token count,
   // threaded across turns (each turn re-seeds the full history, so the learned factor
   // must persist for the first call's compaction decision to be accurate).
@@ -907,9 +925,12 @@ export async function runTurn(opts: {
         return answered;
       }
     : undefined;
-  // Notify the user at most once per turn that compaction kicked in, even if it runs
-  // again across the turn's tool rounds.
-  let notifiedCompaction = false;
+  // Session-cumulative shrink counts, carried in from previous turns and advanced by every shed
+  // and fold this turn performs. Every fold is announced (a fold is what the model can lose the
+  // task to — #251/#252/#275 — so a second one in the same turn is not less worth seeing than the
+  // first); the ordinal in the notice is session-wide so a transcript reads "fold 3" where a
+  // per-turn count would have restarted.
+  const shrink: ShrinkCounts = { ...(opts.priorShrink ?? { sheds: 0, folds: 0 }) };
   // Consecutive length-stops recovered from. Reset on any clean (non-truncated) round so
   // the budget is per-spiral, not per-turn.
   let lengthRetries = 0;
@@ -1553,6 +1574,8 @@ export async function runTurn(opts: {
           `[reika:debug] round=${i} prefix-stable batch-age marked=${aged.marked} ` +
             `bulk=${aged.bulk} crumbs=${aged.crumbs} kept=${aged.kept} short=${aged.short}\n`,
         );
+        shrink.sheds++;
+        opts.onShrink?.({ kind: 'age', round: i, ...aged }, { ...shrink });
       }
     }
     // Aging stops at the protected tail, so on a small window (system prompt + the active round's
@@ -1599,14 +1622,18 @@ export async function runTurn(opts: {
           debugLog(`[reika:debug] compaction-recap round=${i} | ${line}\n`);
         }
       }
-      if (removed > 0 && !notifiedCompaction) {
-        notifiedCompaction = true;
+      if (removed > 0) {
+        shrink.folds++;
+        const recapChars = recap?.content.length ?? 0;
+        opts.onShrink?.({ kind: 'fold', round: i, removed, recapChars }, { ...shrink });
+        // The recap size is in the notice because stacked recaps are a known failure (#275: 4.1k
+        // → 10.1k across folds) and this line is the only place outside the debug log it shows.
         opts.onMessage({
           role: 'system',
           tone: 'info',
-          content: `Context compacted — folded ${removed} earlier message${
+          content: `Context compacted (fold ${shrink.folds}) — folded ${removed} earlier message${
             removed === 1 ? '' : 's'
-          } into a recap (older tool output still re-readable).`,
+          } into a ${(recapChars / 1000).toFixed(1)}k-char recap (older tool output still re-readable).`,
         });
       }
     }

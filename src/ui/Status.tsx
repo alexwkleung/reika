@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
 import type { Usage } from '../types.js';
 import { theme } from './theme.js';
-import { contextFill, formatElapsed, kFormat } from './format.js';
+import { contextFill, formatElapsed, formatShrink, kFormat } from './format.js';
 
 export function Status({
   model,
@@ -12,6 +12,8 @@ export function Status({
   contextTokens,
   contextWindow,
   contextUsable,
+  sheds,
+  folds,
   cachedTokens,
   pr,
   autoApprove,
@@ -28,6 +30,10 @@ export function Status({
   // The shed ceiling (compactThreshold) when the window is known — what the fill % is measured
   // against, so 100% means "the next request sheds", not "the window is physically full".
   contextUsable?: number;
+  // Session-cumulative shrink events: batch-age sheds and compaction folds. Ambient chips — the
+  // gauge sawtooth already shows the events, the counts say how many teeth.
+  sheds?: number;
+  folds?: number;
   cachedTokens?: number;
   pr?: number | null;
   autoApprove?: 'safe' | 'bypass';
@@ -50,6 +56,8 @@ export function Status({
   // Share of the prompt the provider served from cache last call. Absent when the
   // provider doesn't report it.
   const cache = formatCache(cachedTokens, contextTokens);
+  const shrinkText = formatShrink(sheds ?? 0, folds ?? 0);
+  const shrink = shrinkText ? ` · ${shrinkText}` : '';
   // Which PR the checked-out branch is attached to, when one exists.
   const prBadge = formatPr(pr);
 
@@ -71,6 +79,7 @@ export function Status({
       ) : null}
       <Text color={theme.muted}>{`${model} · turn ${turns} · ${status}${timer}${tokens}`}</Text>
       {ctx ? <Text color={ctxColor}>{ctx}</Text> : null}
+      {shrink ? <Text color={theme.muted}>{shrink}</Text> : null}
       {cache ? <Text color={theme.muted}>{cache}</Text> : null}
       {prBadge ? <Text color={theme.secondary}>{prBadge}</Text> : null}
       <Text color={theme.muted}>{' · '}</Text>

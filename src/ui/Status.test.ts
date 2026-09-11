@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatContext, formatCache, formatPr } from './Status.js';
-import { contextFill, kFormat } from './format.js';
+import { contextFill, formatShrink, kFormat } from './format.js';
 
 describe('kFormat', () => {
   it('shows raw numbers below 1k', () => {
@@ -94,6 +94,16 @@ describe('formatContext', () => {
   it('renders nothing before any context exists', () => {
     expect(formatContext(undefined)).toBe('');
     expect(formatContext(0, 128_000)).toBe('');
+  });
+});
+
+describe('formatShrink', () => {
+  it('pluralizes each count and omits zeros', () => {
+    expect(formatShrink(3, 1)).toBe('3 sheds · 1 fold');
+    expect(formatShrink(1, 2)).toBe('1 shed · 2 folds');
+    expect(formatShrink(5, 0)).toBe('5 sheds');
+    expect(formatShrink(0, 1)).toBe('1 fold');
+    expect(formatShrink(0, 0)).toBe('');
   });
 });
 

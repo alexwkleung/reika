@@ -40,6 +40,16 @@ export function contextFill(contextTokens?: number | null, ceiling?: number): nu
   return contextTokens / ceiling;
 }
 
+// `3 sheds · 1 fold` — the status line's shrink chips and the transcript header's `# shrink:`
+// line, from one place so they can't drift. Empty when nothing has shrunk: the chips are absent,
+// not `0 sheds`, because on a large window they never fire and a zero would be a standing question.
+export function formatShrink(sheds: number, folds: number): string {
+  const parts: string[] = [];
+  if (sheds > 0) parts.push(`${sheds} shed${sheds === 1 ? '' : 's'}`);
+  if (folds > 0) parts.push(`${folds} fold${folds === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+
 // Display name for a tool in the scrollback chip. Tool names are model-facing and picked for the
 // model's benefit — `ask_user` names who is being asked, which a bare `ask` doesn't — but the chip
 // is user-facing, where the one-word shape every other tool has reads better than a raw
