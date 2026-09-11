@@ -40,9 +40,9 @@ export function Approval({
     >
       {/* One Text with nested runs (not siblings): on wrap Ink drops the char at
           a sibling boundary, which would clip a long subject. Mirrors the chat's
-          tool-call line — `• Bash` in tool grey, the subject receding in muted. */}
+          tool-call line — `⏺︎ Bash` in tool grey, the subject receding in muted. */}
       <Text>
-        <Text bold color={theme.tool}>{`• ${capitalize(request.tool)}`}</Text>
+        <Text bold color={theme.tool}>{`⏺︎ ${capitalize(request.tool)}`}</Text>
         <Text color={theme.secondary}>{`  ${request.subject}`}</Text>
       </Text>
       <Box flexDirection="column" marginTop={1}>

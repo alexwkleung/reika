@@ -12,7 +12,7 @@ import type { Message } from '../types.js';
 
 // Regression: a tool-call label rendered as two adjacent <Text> siblings in a row
 // dropped the boundary character when the line wrapped (long edit args), so
-// "• Edit(…)" printed as "• Edi(…)". The label is now a single <Text> with nested
+// "⏺︎ Edit(…)" printed as "⏺︎ Edi(…)". The label is now a single <Text> with nested
 // colored runs, which wraps as one string and keeps every character.
 describe('Scrollback tool-call label', () => {
   it('keeps the full tool name when long args force the line to wrap', () => {
@@ -32,8 +32,8 @@ describe('Scrollback tool-call label', () => {
     );
     const frame = lastFrame() ?? '';
 
-    expect(frame).toContain('• Bash(');
-    expect(frame).not.toMatch(/• Bas\(/);
+    expect(frame).toContain('⏺︎ Bash(');
+    expect(frame).not.toMatch(/⏺︎ Bas\(/);
   });
 
   it('hides an edit’s old_string/new_string but keeps the path', () => {
@@ -57,7 +57,7 @@ describe('Scrollback tool-call label', () => {
     );
     const frame = lastFrame() ?? '';
 
-    expect(frame).toContain('• Edit(path="packages/ui/src/styles.css")');
+    expect(frame).toContain('⏺︎ Edit(path="packages/ui/src/styles.css")');
     expect(frame).not.toContain('old_string');
     expect(frame).not.toContain('new_string');
   });
@@ -538,14 +538,14 @@ describe('Scrollback marker line wrapping', () => {
       head: /^\s+\$ cd /,
     },
     {
-      name: '• tool call',
+      name: '⏺︎ tool call',
       msg: {
         role: 'assistant',
         content: '',
         toolCalls: [{ id: 't1', name: 'bash', args: { command: LONG } }],
       },
-      indent: 1 + 2, // '• '
-      head: /^\s+• Bash\(/,
+      indent: 1 + 2, // '⏺︎ '
+      head: /^\s+⏺︎ Bash\(/,
     },
     {
       name: '❯ system notice',
@@ -740,7 +740,7 @@ describe('Scrollback subagent block spacing', () => {
       },
       { role: 'tool', callId: 't1', summary: 'Read a.ts lines 1–10 of 10' },
     ]);
-    const call = lines.findIndex(l => l.includes('• Read('));
+    const call = lines.findIndex(l => l.includes('⏺︎ Read('));
     const result = lines.findIndex(l => l.includes('↳'));
     expect(result).toBe(call + 1);
   });

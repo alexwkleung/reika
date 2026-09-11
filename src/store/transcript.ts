@@ -278,7 +278,7 @@ function formatToolCall(tc: ToolCall): string {
   const args = Object.entries(tc.args)
     .map(([k, v]) => `${k}=${truncate(JSON.stringify(v), 120)}`)
     .join(', ');
-  return `  • ${capitalize(tc.name)}(${args})`;
+  return `  ⏺︎ ${capitalize(tc.name)}(${args})`;
 }
 
 // Deep-copy a message with every human-facing string field run through the scrubbers. Keeps the
