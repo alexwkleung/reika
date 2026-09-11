@@ -29,10 +29,15 @@ export function kFormat(n: number): string {
   return Math.round(n / 1_000_000_000) + 'B';
 }
 
-// Fraction of the context window currently used, or null when either operand is unknown.
-export function contextFill(contextTokens?: number | null, contextWindow?: number): number | null {
-  if (!contextTokens || !contextWindow) return null;
-  return contextTokens / contextWindow;
+// Fraction of a context ceiling currently used, or null when either operand is unknown. The
+// ceiling callers pass is the USABLE window (compactThreshold: window minus the generation reserve,
+// under the safety factor) when they know it, not the raw window: history is shed at the usable
+// ceiling, so a raw-window fraction tops out well short of 100% and reads as headroom that history
+// will never get. At a 24k window with a 6144 reserve the shed trigger sits at 67% of the raw
+// window, which is also why an `>= 0.8` warning color keyed to the raw fraction never fired.
+export function contextFill(contextTokens?: number | null, ceiling?: number): number | null {
+  if (!contextTokens || !ceiling) return null;
+  return contextTokens / ceiling;
 }
 
 // Display name for a tool in the scrollback chip. Tool names are model-facing and picked for the

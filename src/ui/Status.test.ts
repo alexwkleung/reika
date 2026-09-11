@@ -75,6 +75,18 @@ describe('formatContext', () => {
     expect(formatContext(45_000, 128_000)).toBe(' · ctx 45k/128k (35%)');
   });
 
+  it('measures the percent against the usable ceiling when it is known, keeping the raw ratio', () => {
+    // 24k window, 6144 reserve: compactThreshold ≈ 16,070. A prompt at that size is at the shed
+    // trigger — 100% — even though it fills only 67% of the raw window.
+    expect(formatContext(16_070, 24_000, 16_070)).toBe(' · ctx 16k/24k (100% of 16k)');
+    // Just after a shed (the 0.7 low watermark) reads 70%, not 47%.
+    expect(formatContext(11_249, 24_000, 16_070)).toBe(' · ctx 11k/24k (70% of 16k)');
+  });
+
+  it('can exceed 100% — the request that trips the shed measured above the ceiling', () => {
+    expect(formatContext(17_000, 24_000, 16_070)).toBe(' · ctx 17k/24k (106% of 16k)');
+  });
+
   it('shows only the size when the window is unknown', () => {
     expect(formatContext(45_000)).toBe(' · ctx 45k');
   });

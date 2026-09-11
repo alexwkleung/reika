@@ -24,6 +24,7 @@ import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
 import { saveTranscript, TRANSCRIPT_VERSION, type TranscriptUsage } from '../store/transcript.js';
 import { runTurn } from '../agent/loop.js';
+import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
@@ -894,6 +895,7 @@ export function App() {
       const last = lastUsageRef.current;
       const totals = usageRef.current;
       const window = profile.contextWindow ?? config.contextWindow;
+      const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
       const usage: TranscriptUsage = {
         turns: msgs.filter(m => m.role === 'assistant').length,
         promptTokens: totals.promptTokens,
@@ -903,6 +905,7 @@ export function App() {
         // No call has landed yet, so the context size above is the pre-send estimate.
         ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
         ...(window ? { contextWindow: window } : {}),
+        ...(usable ? { contextUsable: usable } : {}),
         ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
       };
       try {
@@ -1642,6 +1645,15 @@ export function App() {
     await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent');
   };
 
+  // The status line's context gauge: raw window for the ratio, shed ceiling for the percent. Same
+  // operands the transcript header freezes at save time, so the two can't disagree.
+  const statusProfile = config?.profiles[activeProfile];
+  const statusWindow = statusProfile?.contextWindow ?? config?.contextWindow;
+  const statusUsable =
+    statusWindow && config
+      ? Math.round(compactThreshold(statusWindow, statusProfile?.minGenTokens ?? config.minGenTokens))
+      : undefined;
+
   if (status === 'error') {
     return (
       <Box flexDirection="column">
@@ -1759,7 +1771,8 @@ export function App() {
             elapsed={status === 'busy' ? elapsed : null}
             usage={totalUsage}
             contextTokens={lastUsage?.promptTokens ?? estimatedContext}
-            contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
+            contextWindow={statusWindow}
+            contextUsable={statusUsable}
             cachedTokens={lastUsage?.cachedTokens}
             pr={pr}
             autoApprove={

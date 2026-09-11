@@ -364,4 +364,17 @@ describe('usage in the saved record', () => {
     });
     expect(lines).toContain('# ctx:      16k/32k (50%, estimated)');
   });
+
+  it('measures the percent against the usable ceiling when the file carries one', () => {
+    const lines = formatUsageHeader({
+      turns: 11,
+      promptTokens: 110_740,
+      completionTokens: 12_702,
+      contextTokens: 15_925,
+      contextWindow: 24_000,
+      contextUsable: 16_070,
+    });
+    // Matches the status line: the same state the raw-window gauge showed as 66%.
+    expect(lines).toContain('# ctx:      16k/24k (99% of 16k)');
+  });
 });

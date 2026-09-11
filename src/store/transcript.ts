@@ -32,6 +32,9 @@ export type TranscriptUsage = {
   contextTokens?: number | null;
   contextEstimated?: boolean;
   contextWindow?: number;
+  // The shed ceiling the status line measured its percent against (absent in older files, where
+  // the percent was of the raw window).
+  contextUsable?: number;
   // The last call's cached prompt tokens — the numerator behind the status line's `cache N%`.
   lastCachedTokens?: number;
 };
@@ -100,9 +103,12 @@ export function formatUsageHeader(usage: TranscriptUsage): string[] {
   );
   const ctx = usage.contextTokens;
   if (ctx != null && ctx > 0) {
-    const fill = contextFill(ctx, usage.contextWindow);
+    const fill = contextFill(ctx, usage.contextUsable ?? usage.contextWindow);
+    const pct = fill != null ? `${Math.round(fill * 100)}%` : null;
     const notes = [
-      ...(fill != null ? [`${Math.round(fill * 100)}%`] : []),
+      ...(pct != null
+        ? [usage.contextUsable ? `${pct} of ${kFormat(usage.contextUsable)}` : pct]
+        : []),
       ...(usage.contextEstimated ? ['estimated'] : []),
     ];
     const size = fill != null ? `${kFormat(ctx)}/${kFormat(usage.contextWindow!)}` : kFormat(ctx);
