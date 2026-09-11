@@ -39,6 +39,7 @@ Although Reika can work with small and low quantization models, the output and q
 
 ## Tested Models
 
+- Muse Glimmer 30B (IQ3_XXS)
 - Qwen3.8 27B (UD-IQ3_XXS)
 - Qwen3.6 35B A3B (UD-IQ2_M)
 - Qwen3.6 35B A3B (UD-IQ2_XXS)
