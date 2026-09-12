@@ -222,6 +222,15 @@ Approval prompts show a unified diff (or the command for `bash`), with `Approve 
 
 `ask_user` renders the same way: `↑↓` + `Enter` to pick an option, `Tab` to pick one _and_ add a note in your own words, or select the last row — always present — to type your own answer instead, when none of the options is the right frame. One question per turn, and the answer is pinned into context afterwards so it can't be forgotten and re-asked later in the same turn. Small models can and do frame a question around a misreading, so the options are not a summary of the request; that last row is the way out.
 
+## Instructions (`AGENTS.md`)
+
+Standing guidance for the model, loaded into the system prompt once at startup:
+
+- Global: `~/.config/reika/AGENTS.md` — your personal preferences, applied in every project.
+- Project: `<cwd>/AGENTS.md` — the repo's conventions.
+
+When both exist they are merged, global first, with the project file stated as winning where they disagree — so a personal "terse replies, no emoji" rides along without displacing the repo's build/test rules. `CLAUDE.md` is accepted as a fallback name in either location. Each file is capped at 12KB (≈3k tokens); over that it is replaced by its heading outline plus a pointer to read the relevant section, so an oversized file never crowds a small context window.
+
 ## Skills (reusable prompt templates)
 
 Drop a `*.md` file in a skills directory and it becomes a slash command. Useful for saved workflows (`/review`, `/deploy`, `/refactor`, etc.).
