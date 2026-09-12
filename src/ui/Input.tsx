@@ -360,12 +360,18 @@ export function Input({
   const showPlaceholder = !value && !!placeholder && !disabled;
   const view = clampToViewport(value, cursor);
 
+  // marginX={-1} pulls the frame out to the terminal's edge columns, past the App's paddingX={1}:
+  // a box-drawing line runs down the centre of its cell, so a border sharing a column with the
+  // status text below starts half a cell right of the text's ink and reads as a box that's a
+  // touch too narrow. Out one column, the frame encloses the text column instead. Every overlay
+  // that merges into this frame (Approval, Question, ModelSelect, Suggestions) does the same.
   return (
     <Box
       borderStyle="round"
       borderTop={!attachedAbove}
       borderBottom={!attachedBelow}
       paddingX={1}
+      marginX={-1}
       marginTop={attachedAbove ? 0 : 1}
     >
       <Text>{promptText}</Text>

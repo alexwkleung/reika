@@ -25,7 +25,14 @@ export function ModelSelect({
   const termWidth = process.stdout.columns || 100;
   const maxDisplay = Math.max(20, termWidth - 8);
   return (
-    <Box borderStyle="round" borderBottom={false} flexDirection="column" paddingX={1} marginTop={1}>
+    <Box
+      borderStyle="round"
+      borderBottom={false}
+      flexDirection="column"
+      paddingX={1}
+      marginX={-1}
+      marginTop={1}
+    >
       <Text>
         <Text bold color={theme.tool}>
           {'• Model'}
