@@ -106,7 +106,12 @@ describe('shrink events reach the caller', () => {
 
     const folds = events.filter(e => (e.event as { kind: string }).kind === 'fold');
     expect(folds.length).toBeGreaterThanOrEqual(1);
-    const first = folds[0].event as { kind: 'fold'; round: number; removed: number; recapChars: number };
+    const first = folds[0].event as {
+      kind: 'fold';
+      round: number;
+      removed: number;
+      recapChars: number;
+    };
     expect(first.round).toBe(0);
     expect(first.removed).toBeGreaterThan(0);
     // The recap size reported is the spliced recap's — not a count, not an estimate.
@@ -117,7 +122,9 @@ describe('shrink events reach the caller', () => {
     // The notice is numbered session-wide and carries the recap size.
     const notice = notices.find(n => n.startsWith('Context compacted'));
     expect(notice).toBeDefined();
-    expect(notice).toMatch(/^Context compacted \(fold 3\) — folded [1-9]\d* earlier messages? into a \d+\.\dk-char recap/);
+    expect(notice).toMatch(
+      /^Context compacted \(fold 3\) — folded [1-9]\d* earlier messages? into a \d+\.\dk-char recap/,
+    );
   });
 
   it('starts the counts at zero without priorShrink', async () => {
