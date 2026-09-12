@@ -118,4 +118,25 @@ describe('buildSummary', () => {
     const out = buildSummary([], baseUsage, startedAt, baseApprovals);
     expect(out).toContain('Files modified:  (none)');
   });
+
+  it('lists files a bash command changed alongside edit-tool ones', () => {
+    const msgs: Message[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: '1', name: 'edit', args: { path: 'a.ts' } }],
+      },
+      {
+        role: 'tool',
+        callId: '2',
+        summary: "Ran: sed -i '' s/x/y/ b.ts (0 bytes output)",
+        changes: {
+          files: [{ path: 'b.ts', kind: 'modified', hunks: [], added: 1, removed: 1 }],
+          more: 0,
+        },
+      },
+    ];
+    const out = buildSummary(msgs, baseUsage, startedAt, baseApprovals);
+    expect(out).toContain('Files modified:  a.ts, b.ts');
+  });
 });

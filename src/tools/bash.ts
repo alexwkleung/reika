@@ -4,6 +4,7 @@ import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from '
 import { detectDangerousPatterns } from './_danger.js';
 import { recordCapped } from './_spillstats.js';
 import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
+import { changesSince, snapshotTree } from './_treediff.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -46,9 +47,29 @@ export const bashTool: Tool = {
       if (!ok) return { summary: `Bash declined by user: ${command}` };
     }
 
-    return execStream(command, ctx, ctx.bashTimeoutMs);
+    // Bracket the run with a working-tree snapshot so an edit made through the shell (`sed -i`, a
+    // heredoc, a formatter) gets the same visual diff the edit tool gives (#278). Both halves run
+    // in the dispatch gap, off the model's clock, and fail open.
+    const snapshot = await snapshotTree(ctx.cwd, command);
+    const result = await execStream(command, ctx, ctx.bashTimeoutMs);
+    if (!snapshot) return result;
+    const changes = await changesSince(snapshot);
+    // Without a repo the detector is the command text, which sees far less. Said once per cwd, on
+    // the first shell command there, so the narrower coverage is stated before it's discovered —
+    // and never in the model's context, where it could act on none of it.
+    const notice =
+      snapshot.root === null && !noRepoNoticed.has(ctx.cwd)
+        ? { tone: 'info' as const, content: NO_REPO_NOTICE }
+        : undefined;
+    if (notice) noRepoNoticed.add(ctx.cwd);
+    return { ...result, ...(changes ? { changes } : {}), ...(notice ? { notice } : {}) };
   },
 };
+
+const noRepoNoticed = new Set<string>();
+const NO_REPO_NOTICE =
+  'Not a git repo — a shell edit here shows a diff only for files the command names directly ' +
+  '(redirects, sed -i, tee, cp/mv, rm); a formatter or script writing elsewhere shows nothing.';
 
 // Plan mode's bash (#109). The same tool, admitted only for commands `isProvablyReadOnly` can PROVE
 // read-only — so plan mode gains the inspection a pipeline expresses (`grep … | head`, `find`, `wc`)
@@ -84,7 +105,8 @@ export const readOnlyBashTool: Tool = {
     // Prompting only for bash would gate a capability `read` already has, and would train the user
     // to approve bash modals reflexively, weakening the prompt in agent mode where it carries the
     // real decision. The command still renders its chip in scrollback, so nothing runs unseen.
-    return bashTool.run(args, { ...ctx, requestApproval: undefined });
+    // Straight to execStream: a command just proved read-only has no tree diff to take.
+    return execStream(command, ctx, ctx.bashTimeoutMs);
   },
 };
 

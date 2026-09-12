@@ -1,4 +1,5 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -319,6 +320,56 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
       },
     );
     expect(asked).toBe(1);
+  });
+});
+
+// A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in
+// _treediff.test.ts; this checks bash brackets its run with it and stays silent outside a repo.
+describe('bashTool — tree changes', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bash-changes-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('attaches the diff of what the command changed in a git repo', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    await writeFile(join(dir, 'x.txt'), 'a\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync(
+      'git',
+      ['-c', 'user.email=dev@example.com', '-c', 'user.name=dev', 'commit', '-qm', 'i'],
+      {
+        cwd: dir,
+      },
+    );
+    const result = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
+    expect(result.summary).toMatch(/^Ran: /);
+    expect(result.changes?.files.map(f => f.path)).toEqual(['x.txt']);
+    expect(result.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
+  });
+
+  it('carries no changes field when nothing changed', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    const result = await bashTool.run({ command: 'echo hi' }, { cwd: dir });
+    expect(result.summary).toMatch(/^Ran: /);
+    expect(result).not.toHaveProperty('changes');
+  });
+
+  // No repo: the diff is a best shot over the files the command names, and the user is told so —
+  // once per cwd, as a user-facing notice, never in the model's context.
+  it('without a repo, diffs the named file and says once that coverage is narrower', async () => {
+    await writeFile(join(dir, 'x.txt'), 'a\n');
+    const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
+    expect(first.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
+    expect(first.notice?.tone).toBe('info');
+    expect(first.notice?.content).toContain('Not a git repo');
+    expect(first.payload).not.toContain('git repo');
+    const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir });
+    expect(second.changes?.files[0].hunks[0].text).toBe('  a\n  b\n+ c');
+    expect(second).not.toHaveProperty('notice');
   });
 });
 

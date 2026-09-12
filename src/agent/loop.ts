@@ -2351,6 +2351,7 @@ export async function runTurn(opts: {
       let payload: string | undefined;
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
+      let changes: ToolResult['changes'];
       let exitCode: ToolResult['exitCode'];
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
@@ -2441,6 +2442,7 @@ export async function runTurn(opts: {
           payload = result.payload;
           diff = result.diff;
           command = result.command;
+          changes = result.changes;
           exitCode = result.exitCode;
           contentHash = result.contentHash;
           toolNotice = result.notice;
@@ -2583,6 +2585,7 @@ export async function runTurn(opts: {
         payloadId,
         ...(diff ? { diff } : {}),
         ...(command ? { command } : {}),
+        ...(changes ? { changes } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
       };
       opts.history.push(toolMsg);
@@ -2592,14 +2595,12 @@ export async function runTurn(opts: {
       if (groundsPath) {
         readFirst.ground(groundsPath, groundsAuthored ? undefined : opts.history.length - 1);
       }
-      // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
-      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
-      // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
+      // A tool's harness-side-effect receipt (URL grounding, a search provider going down, bash's
+      // no-repo diff coverage) goes out as a standalone system line AFTER its chip — a follow-on to
+      // the action, not stuffed in front of it. Also logged so a run is classifiable in REIKA_DEBUG.
       if (toolNotice) {
         opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
-        debugLog(
-          `[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`,
-        );
+        debugLog(`[reika:debug] round=${i} tool-notice tool=${call.name} ${toolNotice.content}\n`);
       }
       // The plan check-off receipt follows the edit's result line for the same reason: it's a
       // persistent record of a harness side effect of that edit (signal-lifetime rule — the

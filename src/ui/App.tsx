@@ -1540,11 +1540,21 @@ export function App() {
             // RangeError on an absolute path, so an out-of-project write would take
             // the turn down here. write/edit keep a separate `display` string for the
             // user- and model-facing text and never put it on `diff.path`.
-            const written = msg.diff?.path;
-            if (written) {
+            // A bash command's changes qualify the same way, minus deletions and anything that
+            // reached outside cwd (`../` is exactly what `ignore` throws on).
+            const written = [
+              ...(msg.diff?.path ? [msg.diff.path] : []),
+              ...(msg.changes?.files ?? [])
+                .filter(f => f.kind !== 'deleted' && !f.path.startsWith('..'))
+                .map(f => f.path),
+            ];
+            if (written.length > 0) {
               setBundle(prev => {
                 if (!prev) return prev;
-                const next = addFileToIndex(prev.fileIndex, written, prev.ignore);
+                const next = written.reduce(
+                  (idx, p) => addFileToIndex(idx, p, prev.ignore),
+                  prev.fileIndex,
+                );
                 return next === prev.fileIndex ? prev : { ...prev, fileIndex: next };
               });
             }
