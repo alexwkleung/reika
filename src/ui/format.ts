@@ -29,10 +29,25 @@ export function kFormat(n: number): string {
   return Math.round(n / 1_000_000_000) + 'B';
 }
 
-// Fraction of the context window currently used, or null when either operand is unknown.
-export function contextFill(contextTokens?: number | null, contextWindow?: number): number | null {
-  if (!contextTokens || !contextWindow) return null;
-  return contextTokens / contextWindow;
+// Fraction of a context ceiling currently used, or null when either operand is unknown. The
+// ceiling callers pass is the USABLE window (compactThreshold: window minus the generation reserve,
+// under the safety factor) when they know it, not the raw window: history is shed at the usable
+// ceiling, so a raw-window fraction tops out well short of 100% and reads as headroom that history
+// will never get. At a 24k window with a 6144 reserve the shed trigger sits at 67% of the raw
+// window, which is also why an `>= 0.8` warning color keyed to the raw fraction never fired.
+export function contextFill(contextTokens?: number | null, ceiling?: number): number | null {
+  if (!contextTokens || !ceiling) return null;
+  return contextTokens / ceiling;
+}
+
+// `3 sheds · 1 fold` — the status line's shrink chips and the transcript header's `# shrink:`
+// line, from one place so they can't drift. Empty when nothing has shrunk: the chips are absent,
+// not `0 sheds`, because on a large window they never fire and a zero would be a standing question.
+export function formatShrink(sheds: number, folds: number): string {
+  const parts: string[] = [];
+  if (sheds > 0) parts.push(`${sheds} shed${sheds === 1 ? '' : 's'}`);
+  if (folds > 0) parts.push(`${folds} fold${folds === 1 ? '' : 's'}`);
+  return parts.join(' · ');
 }
 
 // Display name for a tool in the scrollback chip. Tool names are model-facing and picked for the

@@ -22,8 +22,14 @@ import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
 import { PayloadStore } from '../store/payloads.js';
-import { saveTranscript, TRANSCRIPT_VERSION, type TranscriptUsage } from '../store/transcript.js';
-import { runTurn } from '../agent/loop.js';
+import {
+  saveTranscript,
+  TRANSCRIPT_VERSION,
+  type TranscriptShrinkEvent,
+  type TranscriptUsage,
+} from '../store/transcript.js';
+import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
+import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
@@ -123,6 +129,13 @@ export function App() {
   // and the pre-send estimate used to fill the gauge before that real count arrives.
   const [lastUsage, setLastUsage] = useState<Usage | null>(null);
   const [estimatedContext, setEstimatedContext] = useState<number | null>(null);
+  // Session-cumulative shrink counts (status chips) and the events behind them (transcript only —
+  // a shed lands every few rounds on a small window, so as scrollback lines they would be noise,
+  // while a saved file wants the timeline). Refs because the loop reads/writes them from a turn
+  // in flight and /save reads them from a handler that may be a render behind (#199).
+  const [shrink, setShrink] = useState<ShrinkCounts>({ sheds: 0, folds: 0 });
+  const shrinkRef = useRef<ShrinkCounts>({ sheds: 0, folds: 0 });
+  const shrinkEventsRef = useRef<TranscriptShrinkEvent[]>([]);
   // Learned char→token calibration for the context estimate, persisted across turns so the
   // first call of each turn (which re-seeds the full history) triggers compaction accurately.
   const calibrationRef = useRef(1);
@@ -771,6 +784,9 @@ export function App() {
       setTotalUsage({ promptTokens: 0, completionTokens: 0 });
       setLastUsage(null);
       setEstimatedContext(null);
+      setShrink({ sheds: 0, folds: 0 });
+      shrinkRef.current = { sheds: 0, folds: 0 };
+      shrinkEventsRef.current = [];
       calibrationRef.current = 1;
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
@@ -894,6 +910,7 @@ export function App() {
       const last = lastUsageRef.current;
       const totals = usageRef.current;
       const window = profile.contextWindow ?? config.contextWindow;
+      const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
       const usage: TranscriptUsage = {
         turns: msgs.filter(m => m.role === 'assistant').length,
         promptTokens: totals.promptTokens,
@@ -903,7 +920,11 @@ export function App() {
         // No call has landed yet, so the context size above is the pre-send estimate.
         ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
         ...(window ? { contextWindow: window } : {}),
+        ...(usable ? { contextUsable: usable } : {}),
         ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+        ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
+          ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
+          : {}),
       };
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
@@ -1580,6 +1601,15 @@ export function App() {
           }));
         },
         onContextEstimate: t => setEstimatedContext(t),
+        priorShrink: shrinkRef.current,
+        onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
+          shrinkRef.current = counts;
+          setShrink(counts);
+          // Stamp the turn the way the status line counts turns (assistant messages so far), so
+          // the saved event lines up with the `turn N` a reader sees in the header.
+          const turn = messagesRef.current.filter(m => m.role === 'assistant').length + 1;
+          shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
+        },
         priorCalibration: calibrationRef.current,
         onCalibration: f => {
           calibrationRef.current = f;
@@ -1641,6 +1671,15 @@ export function App() {
     // so the implement phase picks it up from there (the `messages` closure never would have).
     await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent');
   };
+
+  // The status line's context gauge: raw window for the ratio, shed ceiling for the percent. Same
+  // operands the transcript header freezes at save time, so the two can't disagree.
+  const statusProfile = config?.profiles[activeProfile];
+  const statusWindow = statusProfile?.contextWindow ?? config?.contextWindow;
+  const statusUsable =
+    statusWindow && config
+      ? Math.round(compactThreshold(statusWindow, statusProfile?.minGenTokens ?? config.minGenTokens))
+      : undefined;
 
   if (status === 'error') {
     return (
@@ -1759,7 +1798,10 @@ export function App() {
             elapsed={status === 'busy' ? elapsed : null}
             usage={totalUsage}
             contextTokens={lastUsage?.promptTokens ?? estimatedContext}
-            contextWindow={config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow}
+            contextWindow={statusWindow}
+            contextUsable={statusUsable}
+            sheds={shrink.sheds}
+            folds={shrink.folds}
             cachedTokens={lastUsage?.cachedTokens}
             pr={pr}
             autoApprove={

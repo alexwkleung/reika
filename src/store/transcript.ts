@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { Message, Mode, ToolCall } from '../types.js';
 import { scrubDisplay } from '../ui/scrub.js';
-import { contextFill, formatDurationMs, kFormat } from '../ui/format.js';
+import { contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
@@ -18,6 +18,21 @@ export const TRANSCRIPT_VERSION = 1;
 // Optional as a whole, and optional field-by-field within: a transcript saved before the first
 // call has counts of zero and no context size, and a provider that never reports cache hits leaves
 // the cache fields undefined rather than reporting a false 0%.
+// A shrink event as the loop reported it (agent/loop.ts ShrinkEvent), plus the turn. Declared
+// here rather than imported so the transcript format doesn't depend on the loop's types.
+export type TranscriptShrinkEvent =
+  | {
+      kind: 'age';
+      turn: number;
+      round: number;
+      marked: number;
+      bulk: number;
+      crumbs: number;
+      kept: number;
+      short: number;
+    }
+  | { kind: 'fold'; turn: number; round: number; removed: number; recapChars: number };
+
 export type TranscriptUsage = {
   // Model turns — the status line's `turn N`, counted the same way (assistant messages).
   turns: number;
@@ -32,6 +47,16 @@ export type TranscriptUsage = {
   contextTokens?: number | null;
   contextEstimated?: boolean;
   contextWindow?: number;
+  // The shed ceiling the status line measured its percent against (absent in older files, where
+  // the percent was of the raw window).
+  contextUsable?: number;
+  // Session-cumulative shrink counts (the status line's `shed N · fold N` chips) and the events
+  // behind them, stamped with the turn they landed in. The events are the timeline that the
+  // `aged` flags on the saved messages cannot give — those say WHAT was shed by the end, not when
+  // or in how many steps — and were otherwise only in the debug log. Absent when nothing shrank.
+  sheds?: number;
+  folds?: number;
+  shrinkEvents?: TranscriptShrinkEvent[];
   // The last call's cached prompt tokens — the numerator behind the status line's `cache N%`.
   lastCachedTokens?: number;
 };
@@ -100,9 +125,12 @@ export function formatUsageHeader(usage: TranscriptUsage): string[] {
   );
   const ctx = usage.contextTokens;
   if (ctx != null && ctx > 0) {
-    const fill = contextFill(ctx, usage.contextWindow);
+    const fill = contextFill(ctx, usage.contextUsable ?? usage.contextWindow);
+    const pct = fill != null ? `${Math.round(fill * 100)}%` : null;
     const notes = [
-      ...(fill != null ? [`${Math.round(fill * 100)}%`] : []),
+      ...(pct != null
+        ? [usage.contextUsable ? `${pct} of ${kFormat(usage.contextUsable)}` : pct]
+        : []),
       ...(usage.contextEstimated ? ['estimated'] : []),
     ];
     const size = fill != null ? `${kFormat(ctx)}/${kFormat(usage.contextWindow!)}` : kFormat(ctx);
@@ -110,6 +138,18 @@ export function formatUsageHeader(usage: TranscriptUsage): string[] {
     if (usage.lastCachedTokens != null) {
       const pct = Math.round((usage.lastCachedTokens / ctx) * 100);
       lines.push(`# cache:    ${pct}% of the last prompt (${kFormat(usage.lastCachedTokens)})`);
+    }
+  }
+  if (usage.sheds || usage.folds) {
+    lines.push(`# shrink:   ${formatShrink(usage.sheds ?? 0, usage.folds ?? 0)}`);
+    // One line per event, so a reader can put a re-read or a lost spec next to the shrink that
+    // preceded it without the debug log.
+    for (const e of usage.shrinkEvents ?? []) {
+      lines.push(
+        e.kind === 'age'
+          ? `#   turn ${e.turn} round ${e.round}: shed ${e.marked} (bulk ${e.bulk}, crumbs ${e.crumbs}, kept ${e.kept}${e.short > 0 ? `, short ${e.short}` : ''})`
+          : `#   turn ${e.turn} round ${e.round}: fold ${e.removed} → ${(e.recapChars / 1000).toFixed(1)}k recap`,
+      );
     }
   }
   return lines;

@@ -364,4 +364,52 @@ describe('usage in the saved record', () => {
     });
     expect(lines).toContain('# ctx:      16k/32k (50%, estimated)');
   });
+
+  it('measures the percent against the usable ceiling when the file carries one', () => {
+    const lines = formatUsageHeader({
+      turns: 11,
+      promptTokens: 110_740,
+      completionTokens: 12_702,
+      contextTokens: 15_925,
+      contextWindow: 24_000,
+      contextUsable: 16_070,
+    });
+    // Matches the status line: the same state the raw-window gauge showed as 66%.
+    expect(lines).toContain('# ctx:      16k/24k (99% of 16k)');
+  });
+
+  it('lists shrink counts and the events behind them, stamped by turn', () => {
+    const lines = formatUsageHeader({
+      turns: 9,
+      promptTokens: 90_000,
+      completionTokens: 8_000,
+      contextTokens: 12_000,
+      contextWindow: 24_000,
+      contextUsable: 16_070,
+      sheds: 2,
+      folds: 1,
+      shrinkEvents: [
+        { kind: 'age', turn: 1, round: 4, marked: 6, bulk: 3, crumbs: 2, kept: 1, short: 0 },
+        { kind: 'age', turn: 1, round: 9, marked: 4, bulk: 4, crumbs: 0, kept: 2, short: 812 },
+        { kind: 'fold', turn: 1, round: 9, removed: 14, recapChars: 6_120 },
+      ],
+    });
+    expect(lines).toContain('# shrink:   2 sheds · 1 fold');
+    expect(lines).toContain('#   turn 1 round 4: shed 6 (bulk 3, crumbs 2, kept 1)');
+    // `short` appears only when aging fell short of the watermark — the case that escalates to a
+    // fold in the same round, which the next line then shows.
+    expect(lines).toContain('#   turn 1 round 9: shed 4 (bulk 4, crumbs 0, kept 2, short 812)');
+    expect(lines).toContain('#   turn 1 round 9: fold 14 → 6.1k recap');
+  });
+
+  it('omits the shrink block entirely when nothing shrank', () => {
+    const lines = formatUsageHeader({
+      turns: 1,
+      promptTokens: 0,
+      completionTokens: 0,
+      contextTokens: 8_000,
+      contextWindow: 32_000,
+    });
+    expect(lines.join('\n')).not.toContain('shrink');
+  });
 });
