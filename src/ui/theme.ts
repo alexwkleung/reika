@@ -19,6 +19,12 @@ export const theme = {
   // would collide on the exact axis #172 exists to disambiguate. Apricot instead: it echoes the
   // syntax theme's number/literal tone (highlight.ts), which makes no claim about who is speaking.
   subagent: '#e0b48f',
+  // The `auto approve` badge in the status line. A standing mode, not a warning event, so it
+  // does not take `warning`: the context gauge in the same line turns yellow at 80% fill and
+  // the two were indistinguishable side by side. Soft coral — one step below the `bypass
+  // approvals` red on the same severity ladder, and off the `queued` orange that also lives
+  // in the chrome.
+  autoApprove: '#e8a090',
   error: 'red',
   success: 'green',
   userBg: '#303030',
