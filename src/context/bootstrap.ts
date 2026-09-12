@@ -1,4 +1,5 @@
 import { readFile, readdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ContextBundle } from '../types.js';
@@ -54,11 +55,38 @@ async function summarizeProject(cwd: string): Promise<string> {
 // back to an outline + read pointer instead of the full text.
 const INSTRUCTIONS_BUDGET = 12 * 1024;
 
-async function loadInstructions(cwd: string): Promise<string> {
-  for (const name of ['AGENTS.md', 'CLAUDE.md']) {
+const INSTRUCTIONS_NAMES = ['AGENTS.md', 'CLAUDE.md'];
+const GLOBAL_INSTRUCTIONS_DIR = join(homedir(), '.config', 'reika');
+
+// Global (~/.config/reika/AGENTS.md) carries the user's personal preferences; the project
+// file carries the repo's. Both go in when both exist, global first so the project's more
+// specific guidance sits closer to the conversation and wins where they disagree. A lone
+// project file is passed through byte-for-byte, as before.
+export async function loadInstructions(
+  cwd: string,
+  globalDir: string = GLOBAL_INSTRUCTIONS_DIR,
+): Promise<string> {
+  const [global, project] = await Promise.all([
+    readInstructionsFile(globalDir, '~/.config/reika'),
+    readInstructionsFile(cwd, ''),
+  ]);
+  if (!global) return project;
+  if (!project) return global;
+  return [
+    'Two instructions files apply. Where they disagree, the project file wins.',
+    `--- Global (personal) instructions ---\n${global}`,
+    `--- Project instructions ---\n${project}`,
+  ].join('\n\n');
+}
+
+// `label` is how the file is named to the model — a `~` path for the global file so the
+// outline's read pointer resolves to the right AGENTS.md rather than the project's.
+async function readInstructionsFile(dir: string, label: string): Promise<string> {
+  for (const name of INSTRUCTIONS_NAMES) {
     try {
-      const content = await readFile(join(cwd, name), 'utf8');
-      return content.length > INSTRUCTIONS_BUDGET ? outlineInstructions(content, name) : content;
+      const content = await readFile(join(dir, name), 'utf8');
+      const shown = label ? `${label}/${name}` : name;
+      return content.length > INSTRUCTIONS_BUDGET ? outlineInstructions(content, shown) : content;
     } catch {}
   }
   return '';
