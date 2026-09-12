@@ -136,6 +136,9 @@ describe('post-edit typecheck gate (integration)', () => {
     );
     expect(sentBack).toHaveLength(1);
     expect(sentBack[0].content).toContain('introduced 1 new type error');
+    // Harness-authored, not a turn boundary: without the flag the task-spec pin re-elects to the
+    // next tool result (#287).
+    expect(sentBack[0].harness).toBe(true);
     // The user saw the send-back warning, then a clean-pass confirmation once fixed.
     expect(messages.some(m => m.role === 'system' && m.content.includes('sent back to fix'))).toBe(
       true,
