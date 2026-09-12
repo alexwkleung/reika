@@ -44,7 +44,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/agent/`    | Turn loop, prompt builder, mention parser, history compaction (`compaction.ts`)             |
 | `src/provider/` | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`) |
 | `src/tools/`    | One tool per file; register in `src/tools/index.ts`                                         |
-| `src/context/`  | Bootstrap, repo map, file index (fdir-based), gitignore                                     |
+| `src/context/`  | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore          |
 | `src/search/`   | Web search providers — `types.ts` (interface) + per-provider adapters                       |
 | `src/store/`    | Addressable payload storage                                                                 |
 | `src/ui/`       | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here       |

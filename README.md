@@ -379,6 +379,7 @@ Anything unreported is left out rather than written as zero: a provider that rep
 The big ideas:
 
 - **Bootstrap once.** `bundle.cwd`, `bundle.repoMap`, `bundle.fileIndex`, AGENTS.md, project summary are all built once at startup and kept stable across turns. Critical for prompt caching at the provider.
+- **Repo map.** One line per source file naming its definitions (`path: sym, sym, …`), ranked so the files the rest of the repo reaches for fit first in the `REIKA_REPO_MAP_BUDGET`. Regex-per-language, no parser: TS/JS (exports), Python, Go, Rust, Java/C#, Kotlin, Swift, C/C++/Objective-C, Ruby, PHP, Lua, shell. A language is one entry in `LANGUAGES` (`src/context/repomap.ts`).
 - **Payload aging.** Tool results carry `summary` + `payload`. Only the latest contiguous block of tool results sends `payload` to the model; older ones collapse to `summary`-only. Keeps history token-bounded without losing information the model just acted on.
 - **Single system-prompt builder.** Parameterized; no duplication across modes.
 - **OpenAI-compatible end-to-end.** Local inference engines and cloud providers all work.
