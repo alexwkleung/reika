@@ -83,9 +83,35 @@ export type TranscriptMeta = {
 // can say "turns 4–6 were plan turns" without walking the messages.
 export type ModeRun = { mode: Mode; from: number; to: number };
 
-// What the serializers write alongside the caller's meta: the mode timeline, derived here so the
-// .jsonl header and the .txt header are the same record.
-type FullMeta = TranscriptMeta & { modes: ModeRun[] };
+// What the serializers write alongside the caller's meta: the title and the mode timeline, both
+// derived here so the .jsonl header and the .txt header are the same record. `title` is absent
+// (not empty) when no turn was ever typed, so a loader can tell "untitled" from "" without a rule.
+type FullMeta = TranscriptMeta & { title?: string; modes: ModeRun[] };
+
+export const TITLE_MAX_CHARS = 80;
+
+// The first thing the human typed, as one short line: what a session list or a resume prompt
+// would show for this file (issue #309). Derived at save time rather than stamped by the UI so a
+// future loader parses one field instead of re-walking the messages, and so the title can never
+// disagree with the transcript it heads. `display` wins over `content` for the same reason the
+// scrollback shows it — a skill turn's content is the whole skill body and an image turn's is the
+// OCR text, where `display` is the `/issue 309` or `[Image 1]` the user actually typed. Command
+// echoes and harness nudges are not turns and never qualify.
+export function deriveTitle(messages: Message[]): string | undefined {
+  for (const msg of messages) {
+    if (msg.role !== 'user' || msg.meta || msg.harness) continue;
+    const line = (msg.display ?? msg.content)
+      .split('\n')
+      .map(l => l.trim())
+      .find(l => l.length > 0);
+    if (line === undefined) continue;
+    const collapsed = line.replace(/\s+/g, ' ');
+    return collapsed.length > TITLE_MAX_CHARS
+      ? collapsed.slice(0, TITLE_MAX_CHARS - 1).trimEnd() + '…'
+      : collapsed;
+  }
+  return undefined;
+}
 
 // Collapse the per-turn modes into consecutive runs, in order. A user message carries the mode its
 // turn ran in (stamped by the UI; command echoes are skipped — they sit between turns and would
@@ -163,8 +189,12 @@ export function formatModeRuns(runs: ModeRun[]): string {
     .join(' → ');
 }
 
-function withModes(messages: Message[], meta: TranscriptMeta): FullMeta {
-  return { ...meta, modes: summarizeModes(messages) };
+// `messages` must already be the redacted set when redaction is on: the title is lifted straight
+// out of the first prompt, so a path or secret typed there would otherwise survive in the header
+// of a file whose body scrubbed it.
+function withDerived(messages: Message[], meta: TranscriptMeta): FullMeta {
+  const title = deriveTitle(messages);
+  return { ...meta, ...(title !== undefined ? { title } : {}), modes: summarizeModes(messages) };
 }
 
 type SerializeOptions = {
@@ -192,10 +222,9 @@ export function serializeJsonl(
   opts: SerializeOptions = {},
 ): string {
   const redact = opts.redact !== false;
-  const lines = [JSON.stringify(withModes(messages, redact ? scrubMeta(meta) : meta))];
-  for (const msg of messages) {
-    lines.push(JSON.stringify(redact ? redactMessage(msg, meta.cwd) : msg));
-  }
+  const shown = redact ? messages.map(m => redactMessage(m, meta.cwd)) : messages;
+  const lines = [JSON.stringify(withDerived(shown, redact ? scrubMeta(meta) : meta))];
+  for (const msg of shown) lines.push(JSON.stringify(msg));
   return lines.join('\n') + '\n';
 }
 
@@ -208,25 +237,27 @@ export function renderTxt(
   opts: SerializeOptions = {},
 ): string {
   const redact = opts.redact !== false;
-  const shownCwd = redact ? scrubMeta(meta).cwd : meta.cwd;
+  const shown = redact ? messages.map(m => redactMessage(m, meta.cwd)) : messages;
+  const full = withDerived(shown, redact ? scrubMeta(meta) : meta);
   const out: string[] = [
     '# reika transcript',
+    // First, so the one line a reader skims is the one that says what the session was about.
+    ...(full.title !== undefined ? [`# title:    ${full.title}`] : []),
     `# saved:    ${meta.savedAt}`,
     `# model:    ${meta.model}`,
     `# base:     ${meta.baseURL}`,
-    `# cwd:      ${shownCwd}`,
+    `# cwd:      ${full.cwd}`,
     `# messages: ${meta.messageCount}`,
     // The status line's numbers, when the caller tracked them.
     ...(meta.usage ? formatUsageHeader(meta.usage) : []),
     `# mode:     ${meta.mode} (at save)`,
     // The whole arc up front, so a reader knows what kind of session this was before reading it;
     // each turn below repeats its own mode in the `You [mode]:` label.
-    `# modes:    ${formatModeRuns(summarizeModes(messages))}`,
+    `# modes:    ${formatModeRuns(full.modes)}`,
     `# version:  ${meta.version}`,
     '='.repeat(72),
   ];
-  for (const raw of messages) {
-    const msg = redact ? redactMessage(raw, meta.cwd) : raw;
+  for (const msg of shown) {
     const block = renderMessageTxt(msg);
     if (block !== null) out.push('', block);
   }

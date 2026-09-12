@@ -4,7 +4,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message } from '../types.js';
 import {
+  TITLE_MAX_CHARS,
   TRANSCRIPT_VERSION,
+  deriveTitle,
   formatModeRuns,
   formatUsageHeader,
   renderTxt,
@@ -292,6 +294,57 @@ describe('mode in the saved record', () => {
     expect(txt).toContain('You [plan]:');
     // The `/plan` echo ran between turns — it has no mode of its own to claim.
     expect(txt).toContain('You:\n  /plan');
+  });
+});
+
+describe('title in the saved record', () => {
+  it('is the first typed prompt, in both headers', () => {
+    const meta = JSON.parse(serializeJsonl(MIXED_MODES, META).split('\n')[0]);
+    expect(meta.title).toBe('fix the parser');
+    expect(renderTxt(MIXED_MODES, META)).toContain('# title:    fix the parser');
+  });
+
+  it('skips command echoes and harness nudges, which are not turns', () => {
+    expect(
+      deriveTitle([
+        { role: 'header', model: 'qwen', cwd: '/repo' },
+        { role: 'user', content: '/plan', meta: true },
+        { role: 'user', content: 'nudge', harness: true },
+        { role: 'user', content: 'plan the rewrite', mode: 'plan' },
+      ]),
+    ).toBe('plan the rewrite');
+  });
+
+  it('prefers display over content, so a skill turn is titled by what was typed', () => {
+    expect(
+      deriveTitle([{ role: 'user', content: 'the whole skill body…', display: '/issue 309' }]),
+    ).toBe('/issue 309');
+  });
+
+  it('takes the first non-blank line, collapses whitespace, and caps the length', () => {
+    expect(deriveTitle([{ role: 'user', content: '\n\n  fix   the\tparser \nand more' }])).toBe(
+      'fix the parser',
+    );
+    const long = 'x'.repeat(TITLE_MAX_CHARS + 20);
+    const title = deriveTitle([{ role: 'user', content: long }])!;
+    expect(title.length).toBe(TITLE_MAX_CHARS);
+    expect(title.endsWith('…')).toBe(true);
+  });
+
+  it('is absent, not empty, when nothing was typed', () => {
+    const msgs: Message[] = [{ role: 'header', model: 'qwen', cwd: '/repo' }];
+    expect(deriveTitle(msgs)).toBeUndefined();
+    expect('title' in JSON.parse(serializeJsonl(msgs, META).split('\n')[0])).toBe(false);
+    expect(renderTxt(msgs, META)).not.toContain('# title:');
+  });
+
+  it('is scrubbed like the body, and verbatim under redact:false', () => {
+    const meta = { ...META, cwd: '/Users/someone/Git/proj' };
+    const msgs: Message[] = [{ role: 'user', content: 'read /Users/someone/Git/proj/src/a.ts' }];
+    expect(JSON.parse(serializeJsonl(msgs, meta).split('\n')[0]).title).toBe('read src/a.ts');
+    expect(JSON.parse(serializeJsonl(msgs, meta, { redact: false }).split('\n')[0]).title).toBe(
+      'read /Users/someone/Git/proj/src/a.ts',
+    );
   });
 });
 
