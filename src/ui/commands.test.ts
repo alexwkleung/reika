@@ -3,6 +3,7 @@ import {
   COMMANDS,
   MODE_CYCLE,
   buildImplementPrompt,
+  isSaveCommand,
   nextMode,
   planWritten,
   turnMode,
@@ -139,5 +140,20 @@ describe('buildImplementPrompt', () => {
 
   it('trims surrounding whitespace from the guidance', () => {
     expect(buildImplementPrompt('  do X  ')).toContain('Additional guidance: do X');
+  });
+});
+
+describe('isSaveCommand', () => {
+  it('matches /save with or without --raw, ignoring case and padding', () => {
+    expect(isSaveCommand('/save')).toBe(true);
+    expect(isSaveCommand('/save --raw')).toBe(true);
+    expect(isSaveCommand('  /SAVE ')).toBe(true);
+  });
+
+  it('is a whole-word match — a longer command or a skill sharing the prefix still queues', () => {
+    expect(isSaveCommand('/saved')).toBe(false);
+    expect(isSaveCommand('/save-notes')).toBe(false);
+    expect(isSaveCommand('save')).toBe(false);
+    expect(isSaveCommand('')).toBe(false);
   });
 });

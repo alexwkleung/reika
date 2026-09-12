@@ -42,7 +42,14 @@ import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
-import { buildImplementPrompt, nextMode, planWritten, turnMode, type Mode } from './commands.js';
+import {
+  buildImplementPrompt,
+  isSaveCommand,
+  nextMode,
+  planWritten,
+  turnMode,
+  type Mode,
+} from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
@@ -621,8 +628,11 @@ export function App() {
           // Enter on an already-complete buffer means submit, not re-accept —
           // otherwise every fully-typed command would cost a second Enter.
           // Input's Return handler no-ops while suggesting, so submit from here.
+          // Busy is not a dead key here either (#226): onSubmit queues, or runs /save on the
+          // spot, exactly as it does for a submit that came through Input. An approval dialog
+          // never reaches this branch — the pending handler above owns the keyboard then.
           if (key.return && next === inputValueRef.current) {
-            if (statusRef.current === 'idle' && pendingRef.current === null) void onSubmit(next);
+            void onSubmit(next);
             return;
           }
           setInputValue(next);
@@ -896,6 +906,11 @@ export function App() {
     if (name === 'save') {
       if (!config || !bundle) return;
       const raw = args.trim().toLowerCase() === '--raw';
+      // Mid-turn (#226): the loop hands each finished round to the scrollback as it lands, so a
+      // save now holds everything up to the last completed round. The round still streaming is
+      // not a message yet and is not in it — the receipt says so, so a reader of the transcript
+      // isn't left wondering why it ends without a reply.
+      const midTurn = statusRef.current === 'busy';
       const msgs = messagesRef.current;
       if (msgs.length === 0) {
         setMessages(prev => [...prev, echo, { role: 'system', content: 'Nothing to save yet.' }]);
@@ -941,6 +956,7 @@ export function App() {
             messageCount: msgs.length,
             mode: modeRef.current,
             usage,
+            ...(midTurn ? { midTurn: true as const } : {}),
           },
           { redact: !raw },
         );
@@ -949,7 +965,7 @@ export function App() {
           echo,
           {
             role: 'system',
-            content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
+            content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''}${midTurn ? ' — mid-turn, up to the last completed round; the turn continues' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
           },
         ]);
       } catch (e) {
@@ -980,7 +996,7 @@ export function App() {
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
-          '  /save              save the full conversation to history (--raw skips redaction)',
+          '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
@@ -1352,6 +1368,20 @@ export function App() {
           ...(text ? { notes: text } : {}),
         });
       }
+      return;
+    }
+    // /save runs immediately even while a turn is in flight (#226): the point of saving mid-run
+    // is to snapshot the conversation the moment something looks off and hand it to another
+    // agent, without aborting the turn to get there. It is safe to run now because it only reads
+    // the scrollback and the usage refs — nothing the loop is writing to. Every other command
+    // still waits: the rest either change what the running turn is doing (mode, model, cwd) or
+    // reset it. Booting is excluded — there is no config/bundle to save under yet.
+    if (config && bundle && status !== 'idle' && isSaveCommand(input)) {
+      setInputValue('');
+      setSuggestionState(null);
+      const trimmed = input.trim();
+      setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
+      await handleCommand(trimmed);
       return;
     }
     // While a turn is running (or the session is still booting), don't drop the
