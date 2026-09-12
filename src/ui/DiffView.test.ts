@@ -137,6 +137,19 @@ describe('assignLineNumbers', () => {
     const { lines } = assignLineNumbers(blocks, undefined);
     expect(lines.map(l => l.lineNo)).toEqual([1, 2]);
   });
+
+  // A bash command's second hunk starts at different lines in the old and new file once the first
+  // hunk added or removed lines; removed rows must number by the old file, the rest by the new.
+  it('numbers removed lines from oldStartLine when the two files drifted apart', () => {
+    const blocks = parseDiffBlocks(['  a', '- b', '+ B', '  c']);
+    const { lines } = assignLineNumbers(blocks, 17, 15);
+    expect(lines.map(l => [l.kind, 'side' in l ? l.side : null, l.lineNo])).toEqual([
+      ['context', null, 17],
+      ['paired', 'removed', 16],
+      ['paired', 'added', 18],
+      ['context', null, 19],
+    ]);
+  });
 });
 
 describe('diffStats', () => {

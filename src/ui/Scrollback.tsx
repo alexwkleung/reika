@@ -8,7 +8,7 @@ import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { Header } from './Header.js';
-import { formatDurationMs, toolLabel } from './format.js';
+import { changeLabel, formatDurationMs, toolLabel } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 
 export function Scrollback({
@@ -345,6 +345,35 @@ function renderMessage(
                   )}
                 </Text>
               </Box>
+            ) : null}
+          </Box>
+        ) : null}
+        {msg.changes ? (
+          // Files a bash command changed, drawn like an edit's diff and indented the same, so a
+          // `sed -i` and an edit-tool change read identically under their chips (#278).
+          <Box flexDirection="column" marginTop={1} marginLeft={4}>
+            {msg.changes.files.map((f, fi) => (
+              <Box key={f.path} flexDirection="column" marginTop={fi > 0 ? 1 : 0}>
+                <Text>
+                  <Text color={theme.tool}>{scrubDisplay(f.path)}</Text>
+                  <Text color={theme.muted}>{` ${changeLabel(f)}`}</Text>
+                </Text>
+                {f.hunks.map((h, hi) => (
+                  <Box key={hi} flexDirection="column" marginTop={hi > 0 ? 1 : 0}>
+                    <DiffView
+                      diff={h.text}
+                      path={f.path}
+                      maxWidth={diffViewWidth(indent)}
+                      startLine={h.startLine}
+                      oldStartLine={h.oldStartLine}
+                    />
+                  </Box>
+                ))}
+                {f.omitted ? <Text color={theme.muted}>{`…(${f.omitted} more lines)`}</Text> : null}
+              </Box>
+            ))}
+            {msg.changes.more > 0 ? (
+              <Text color={theme.muted}>{`…${msg.changes.more} more files changed`}</Text>
             ) : null}
           </Box>
         ) : null}

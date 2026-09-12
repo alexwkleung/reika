@@ -12,6 +12,7 @@ export function DiffView({
   path,
   maxWidth,
   startLine,
+  oldStartLine,
 }: {
   diff: string;
   path: string;
@@ -22,10 +23,14 @@ export function DiffView({
   // line-number gutter is rendered (old number for removed lines, new number for
   // added/context). Omit to render without a gutter.
   startLine?: number;
+  // Where the same first line sits in the OLD file, when the two drifted apart — the second hunk
+  // of a multi-hunk diff, after an earlier hunk added or removed lines. Defaults to `startLine`,
+  // which is exact for an edit's single block.
+  oldStartLine?: number;
 }) {
   const lang = detectLanguage(path);
   const blocks = parseDiffBlocks(sanitizeDiffLines(diff));
-  const rows = assignLineNumbers(blocks, startLine);
+  const rows = assignLineNumbers(blocks, startLine, oldStartLine);
   const showGutter = startLine !== undefined;
   // Width of the number column, sized to the largest line number in view.
   const gutterWidth = showGutter ? String(rows.maxLineNo).length : 0;
@@ -140,9 +145,10 @@ type RenderRow =
 export function assignLineNumbers(
   blocks: DiffBlock[],
   startLine: number | undefined,
+  oldStartLine: number = startLine ?? 1,
 ): { lines: RenderRow[]; maxLineNo: number } {
   const lines: RenderRow[] = [];
-  let oldNo = startLine ?? 1;
+  let oldNo = oldStartLine;
   let newNo = startLine ?? 1;
   let maxLineNo = 0;
   const note = (n: number) => {

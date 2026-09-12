@@ -21,6 +21,11 @@ export function buildSummary(
   const files = new Set<string>();
 
   for (const m of messages) {
+    // A file a bash command changed counts the same as one the edit tool changed (#278).
+    if (m.role === 'tool' && m.changes) {
+      for (const f of m.changes.files) files.add(f.path);
+      continue;
+    }
     if (m.role !== 'assistant' || !m.toolCalls) continue;
     for (const tc of m.toolCalls) {
       toolCounts[tc.name] = (toolCounts[tc.name] ?? 0) + 1;

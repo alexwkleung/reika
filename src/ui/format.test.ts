@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatElapsed, formatDurationMs, toolLabel } from './format.js';
+import { changeLabel, formatElapsed, formatDurationMs, toolLabel } from './format.js';
 
 describe('formatElapsed', () => {
   it('renders bare seconds under a minute', () => {
@@ -52,5 +52,14 @@ describe('toolLabel', () => {
 
   it('leaves an empty name alone', () => {
     expect(toolLabel('')).toBe('');
+  });
+});
+
+describe('changeLabel', () => {
+  it('reads like the edit tool stat for a modified file, naming the kind only otherwise', () => {
+    expect(changeLabel({ kind: 'modified', added: 3, removed: 1 })).toBe('(+3 -1)');
+    expect(changeLabel({ kind: 'created', added: 12, removed: 0 })).toBe('(new, +12)');
+    expect(changeLabel({ kind: 'deleted', added: 0, removed: 40 })).toBe('(deleted, -40)');
+    expect(changeLabel({ kind: 'binary', added: 0, removed: 0 })).toBe('(binary)');
   });
 });

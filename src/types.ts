@@ -78,6 +78,8 @@ export type Message =
       rendered?: string;
       diff?: { text: string; path: string; added: number; removed: number; startLine?: number };
       command?: { text: string; outputTail: string; outputTruncated: boolean };
+      // See ToolResult.changes.
+      changes?: TreeChanges;
       // See ToolResult.exitCode. Rides the message so plan progress can be re-derived from history
       // (agent/plantrack.ts replays it) rather than re-parsed out of the summary text. Absent on
       // every non-bash result and on transcripts written before #200.
@@ -130,12 +132,35 @@ export type SampledToken = {
   top?: { token: string; logprob: number }[];
 };
 
+// One file a bash command changed, as the UI draws it. `hunks` is empty for a binary file; past
+// the per-file row cap the rest is counted in `omitted` rather than drawn.
+export type FileChange = {
+  // Relative to the session cwd — `../` when the command reached elsewhere in the repo.
+  path: string;
+  kind: 'modified' | 'created' | 'deleted' | 'binary';
+  hunks: DiffHunk[];
+  added: number;
+  removed: number;
+  omitted?: number;
+};
+
+// Same `+ `/`- `/`  ` line format as an edit's diff, with both files' starting line numbers so a
+// gutter can number removed lines by the old file and the rest by the new one.
+export type DiffHunk = { text: string; startLine: number; oldStartLine: number };
+
+// The changed files that got a diff, and how many more changed past the cap.
+export type TreeChanges = { files: FileChange[]; more: number };
+
 export type ToolResult = {
   summary: string;
   payload?: string;
   display?: string;
   diff?: { text: string; path: string; added: number; removed: number };
   command?: { text: string; outputTail: string; outputTruncated: boolean };
+  // What a `bash` command did to the working tree, for the UI to draw as diffs the way `diff`
+  // draws an edit (#278). Set only when git saw a file change under the command. Display-only,
+  // like `diff`: never serialized into a request. See tools/_treediff.ts.
+  changes?: TreeChanges;
   // The process's exit status, straight from node's 'close' event: a number, or null when a signal
   // killed it. Set by `bash` only, and only once a process actually ran — undefined means "no
   // status to report" (every other tool, and a spawn that never got off the ground), which is what

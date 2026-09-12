@@ -174,6 +174,33 @@ describe('renderTxt', () => {
     expect(renderTxt([msg], META)).not.toContain('me@x.com');
     expect(renderTxt([msg], META, { redact: false })).toContain('me@x.com');
   });
+
+  it('writes the files a bash command changed under its chip, capped the way the UI caps them', () => {
+    const msg: Message = {
+      role: 'tool',
+      callId: 't1',
+      summary: "Ran: sed -i '' s/a/b/ x.ts (0 bytes output)",
+      command: { text: "sed -i '' s/a/b/ x.ts", outputTail: '', outputTruncated: false },
+      changes: {
+        files: [
+          {
+            path: 'x.ts',
+            kind: 'modified',
+            hunks: [{ text: '  ctx\n- a\n+ b', startLine: 1, oldStartLine: 1 }],
+            added: 1,
+            removed: 1,
+            omitted: 4,
+          },
+        ],
+        more: 2,
+      },
+    };
+    const txt = renderTxt([msg], META);
+    expect(txt).toContain('    x.ts (+1 -1)');
+    expect(txt).toContain('    - a\n    + b');
+    expect(txt).toContain('…(4 more lines)');
+    expect(txt).toContain('…2 more files changed');
+  });
 });
 
 // A session that starts in agent mode, drops to shell, plans, then implements — the arc the mode

@@ -2351,6 +2351,7 @@ export async function runTurn(opts: {
       let payload: string | undefined;
       let diff: ToolResult['diff'];
       let command: ToolResult['command'];
+      let changes: ToolResult['changes'];
       let exitCode: ToolResult['exitCode'];
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
@@ -2441,6 +2442,7 @@ export async function runTurn(opts: {
           payload = result.payload;
           diff = result.diff;
           command = result.command;
+          changes = result.changes;
           exitCode = result.exitCode;
           contentHash = result.contentHash;
           toolNotice = result.notice;
@@ -2583,6 +2585,7 @@ export async function runTurn(opts: {
         payloadId,
         ...(diff ? { diff } : {}),
         ...(command ? { command } : {}),
+        ...(changes ? { changes } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
       };
       opts.history.push(toolMsg);

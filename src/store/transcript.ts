@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { Message, Mode, ToolCall } from '../types.js';
 import { scrubDisplay } from '../ui/scrub.js';
-import { contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
+import { changeLabel, contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
@@ -284,6 +284,14 @@ function renderMessageTxt(msg: Message): string | null {
         if (msg.command.outputTruncated) lines.push('    …(earlier output omitted)');
         if (msg.command.outputTail) lines.push(indent(msg.command.outputTail, 4));
       }
+      if (msg.changes) {
+        for (const f of msg.changes.files) {
+          lines.push(`    ${f.path} ${changeLabel(f)}`);
+          for (const h of f.hunks) lines.push(indent(h.text, 4));
+          if (f.omitted) lines.push(`    …(${f.omitted} more lines)`);
+        }
+        if (msg.changes.more > 0) lines.push(`    …${msg.changes.more} more files changed`);
+      }
       return lines.join('\n');
     }
     case 'shell': {
@@ -349,6 +357,18 @@ function redactMessage(msg: Message, cwd: string): Message {
         summary: red(msg.summary),
         ...(msg.payload !== undefined ? { payload: red(msg.payload) } : {}),
         ...(msg.diff ? { diff: { ...msg.diff, text: red(msg.diff.text) } } : {}),
+        ...(msg.changes
+          ? {
+              changes: {
+                ...msg.changes,
+                files: msg.changes.files.map(f => ({
+                  ...f,
+                  path: red(f.path),
+                  hunks: f.hunks.map(h => ({ ...h, text: red(h.text) })),
+                })),
+              },
+            }
+          : {}),
         ...(msg.command
           ? {
               command: {

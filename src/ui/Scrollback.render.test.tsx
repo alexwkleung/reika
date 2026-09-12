@@ -305,6 +305,70 @@ describe('Scrollback command chip', () => {
   });
 });
 
+// Files a bash command changed render under its chip the way an edit's diff does (#278): a path
+// line with the stat tag, then the hunks with a line-number gutter, then what was left out.
+describe('Scrollback bash tree changes', () => {
+  const frameFor = (changes: NonNullable<Extract<Message, { role: 'tool' }>['changes']>) => {
+    const messages: Message[] = [
+      {
+        role: 'tool',
+        callId: 't1',
+        summary: 'Ran: make fix (0 bytes output)',
+        command: { text: 'make fix', outputTail: '', outputTruncated: false },
+        changes,
+      },
+    ];
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return stripAnsi(lastFrame() ?? '');
+  };
+
+  it('draws each changed file with its stat tag and its hunks', () => {
+    const frame = frameFor({
+      files: [
+        {
+          path: 'src/a.ts',
+          kind: 'modified',
+          hunks: [
+            { text: '  keep\n- old\n+ new', startLine: 1, oldStartLine: 1 },
+            { text: '  far\n+ later', startLine: 40, oldStartLine: 39 },
+          ],
+          added: 2,
+          removed: 1,
+        },
+        { path: 'img.png', kind: 'binary', hunks: [], added: 0, removed: 0 },
+      ],
+      more: 0,
+    });
+    expect(frame).toContain('src/a.ts (+2 -1)');
+    expect(frame).toMatch(/2 - old/);
+    expect(frame).toMatch(/2 \+ new/);
+    expect(frame).toMatch(/41 \+ later/);
+    expect(frame).toContain('img.png (binary)');
+    expect(frame).not.toContain('more files changed');
+  });
+
+  it('says what it left out rather than ending quietly', () => {
+    const frame = frameFor({
+      files: [
+        {
+          path: 'gen.ts',
+          kind: 'created',
+          hunks: [{ text: '+ a', startLine: 1, oldStartLine: 1 }],
+          added: 90,
+          removed: 0,
+          omitted: 89,
+        },
+      ],
+      more: 3,
+    });
+    expect(frame).toContain('gen.ts (new, +90)');
+    expect(frame).toContain('…(89 more lines)');
+    expect(frame).toContain('…3 more files changed');
+  });
+});
+
 // Issue #154: a command's output is a stream of terminal instructions, not display text. Tabs
 // measure 0 for Ink but expand to 8 columns on screen, so a wide line looked narrow, went out
 // unwrapped, and the terminal wrapped it at a column Ink knew nothing about — continuation rows

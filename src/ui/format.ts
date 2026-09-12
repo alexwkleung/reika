@@ -62,3 +62,23 @@ export function toolLabel(name: string): string {
   if (override) return override;
   return name.length > 0 ? name[0].toUpperCase() + name.slice(1) : name;
 }
+
+// `(+3 -1)`, `(new, +12)`, `(deleted, -40)`, `(binary)` — the stat tag after a file a bash command
+// changed, in the scrollback and the saved transcript. Reads like the edit tool's `(+a -r)` so a
+// shell edit and a tool edit scan the same, with the kind named only when the counts don't say it.
+export function changeLabel(f: {
+  kind: 'modified' | 'created' | 'deleted' | 'binary';
+  added: number;
+  removed: number;
+}): string {
+  switch (f.kind) {
+    case 'binary':
+      return '(binary)';
+    case 'created':
+      return `(new, +${f.added})`;
+    case 'deleted':
+      return `(deleted, -${f.removed})`;
+    default:
+      return `(+${f.added} -${f.removed})`;
+  }
+}
