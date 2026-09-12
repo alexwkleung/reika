@@ -910,7 +910,9 @@ export function App() {
       const last = lastUsageRef.current;
       const totals = usageRef.current;
       const window = profile.contextWindow ?? config.contextWindow;
-      const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
+      const usable = window
+        ? Math.round(compactThreshold(window, profile.minGenTokens))
+        : undefined;
       const usage: TranscriptUsage = {
         turns: msgs.filter(m => m.role === 'assistant').length,
         promptTokens: totals.promptTokens,
@@ -1688,7 +1690,9 @@ export function App() {
   const statusWindow = statusProfile?.contextWindow ?? config?.contextWindow;
   const statusUsable =
     statusWindow && config
-      ? Math.round(compactThreshold(statusWindow, statusProfile?.minGenTokens ?? config.minGenTokens))
+      ? Math.round(
+          compactThreshold(statusWindow, statusProfile?.minGenTokens ?? config.minGenTokens),
+        )
       : undefined;
 
   if (status === 'error') {

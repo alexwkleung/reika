@@ -793,7 +793,15 @@ export function buildAbsentGrounding(failure: Extract<EditFailure, { kind: 'abse
 // batchAgePayloads — the fields are its AgeResult); `fold` is a compaction of older turns into a
 // recap. `round` is the tool round within the turn; the UI stamps the turn.
 export type ShrinkEvent =
-  | { kind: 'age'; round: number; marked: number; bulk: number; crumbs: number; kept: number; short: number }
+  | {
+      kind: 'age';
+      round: number;
+      marked: number;
+      bulk: number;
+      crumbs: number;
+      kept: number;
+      short: number;
+    }
   | { kind: 'fold'; round: number; removed: number; recapChars: number };
 
 // Session-cumulative shrink counts, threaded across turns via `priorShrink`.
