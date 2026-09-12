@@ -71,7 +71,7 @@ export function Status({
       ) : null}
       {autoApprove ? (
         <>
-          <Text color={autoApprove === 'bypass' ? theme.error : theme.warning}>
+          <Text color={autoApprove === 'bypass' ? theme.error : theme.autoApprove}>
             {autoApprove === 'bypass' ? 'bypass approvals' : 'auto approve'}
           </Text>
           <Text color={theme.muted}>{' · '}</Text>
