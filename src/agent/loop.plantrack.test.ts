@@ -147,6 +147,8 @@ describe('plan progress tracking (integration)', () => {
         m.role === 'user' && m.content.includes('[ ] 2.'),
     );
     expect(sentBack).toHaveLength(1);
+    // Harness-authored, not a turn boundary — the task-spec pin must not move on a bounce (#287).
+    expect(sentBack[0].harness).toBe(true);
     // …with a warn notice for the human.
     expect(
       messages.some(m => m.role === 'system' && m.content.includes('Plan gate: step 2 unchecked')),

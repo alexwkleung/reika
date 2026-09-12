@@ -755,6 +755,26 @@ describe('recap narrative and ranges (#247)', () => {
     expect(line).not.toContain('gone.ts');
   });
 
+  it('does not attribute a harness nudge to the user (#287)', () => {
+    // A recovery nudge is role 'user' so it reaches the model, but it is not something the human
+    // said. Folded, it used to recap as `- User: (your previous response was cut off …)` — the model
+    // then reads a transient steer as a standing request, in a summary that outlives the round.
+    const NUDGE = '(your previous response was cut off at the token limit — continue concisely)';
+    const history: Message[] = [
+      { role: 'user', content: 'fix the diff bug' },
+      ...call('c1', 'read', { path: 'a.ts' }, 'Read a.ts lines 1-40 of 244'),
+      { role: 'user', content: NUDGE, harness: true },
+      ...call('c2', 'grep', { path: 'src', pattern: 'x' }, 'Found 2 matches for /x/'),
+      ...filler(4),
+    ];
+    expect(compactHistory(history, RW, 1, 0)).toBeGreaterThan(0);
+    const recap = (history[1] as { content: string }).content;
+    expect(recap).not.toContain('cut off');
+    expect(recap).not.toContain('- User:');
+    // The work around the nudge is still recorded.
+    expect(recap).toContain('Found 2 matches for /x/');
+  });
+
   it('carries the closing note forward once, not once per fold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...filler(6)];
     compactHistory(history, RW, 1, 0);

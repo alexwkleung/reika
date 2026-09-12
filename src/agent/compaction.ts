@@ -505,8 +505,12 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
       // once (#275). What is left is narrative, and it goes under the budget below.
       const carried = stripOmissionNote(splitSpecBlock(m.content).rest);
       if (carried) priorRecaps.push(carried);
-    } else if (m.role === 'user' && !m.meta) {
+    } else if (m.role === 'user' && !m.meta && !m.harness) {
       // Skip slash-command echoes — they're UI-only and must not re-enter context via the recap.
+      // Skip harness nudges too: a folded "(your previous response was cut off … continue
+      // concisely)" used to recap as `- User: …`, which the model reads as something the human
+      // asked for, in a summary that outlives the round it steered (#287). The nudge is transient
+      // by design; the recap records what the turn did, not how the harness kept it moving.
       flush();
       pending = `- User: ${trunc(m.display ?? m.content)}`;
     } else if (m.role === 'assistant') {

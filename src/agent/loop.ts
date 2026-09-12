@@ -2249,7 +2249,9 @@ export async function runTurn(opts: {
         );
         if (decision.action === 'retry') {
           typecheckGateRounds++;
-          opts.history.push({ role: 'user', content: decision.modelMessage });
+          // `harness`: the send-back must reach the model but is not a turn boundary — without the
+          // flag the task-spec pin re-elects to whatever tool result lands next (#287).
+          opts.history.push({ role: 'user', content: decision.modelMessage, harness: true });
           opts.onMessage({ role: 'system', tone: 'warn', content: decision.userNotice });
           continue;
         }
@@ -2290,7 +2292,8 @@ export async function runTurn(opts: {
         );
         if (gate.action === 'retry' && gate.modelMessage) {
           planGateRounds++;
-          opts.history.push({ role: 'user', content: gate.modelMessage });
+          // Same `harness` reasoning as the typecheck send-back above (#287).
+          opts.history.push({ role: 'user', content: gate.modelMessage, harness: true });
           opts.onMessage({ role: 'system', tone: 'warn', content: gate.userNotice ?? '' });
           continue;
         }
