@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatContext, formatCache, formatPr } from './Status.js';
+import { formatContext, formatCache, formatPr, packChips, type Chip } from './Status.js';
 import { contextFill, formatShrink, kFormat } from './format.js';
 
 describe('kFormat', () => {
@@ -72,23 +72,23 @@ describe('contextFill', () => {
 
 describe('formatContext', () => {
   it('shows tokens, window, and percent when the window is known', () => {
-    expect(formatContext(45_000, 128_000)).toBe(' · ctx 45k/128k (35%)');
+    expect(formatContext(45_000, 128_000)).toBe('ctx 45k/128k (35%)');
   });
 
   it('measures the percent against the usable ceiling when it is known, keeping the raw ratio', () => {
     // 24k window, 6144 reserve: compactThreshold ≈ 16,070. A prompt at that size is at the shed
     // trigger — 100% — even though it fills only 67% of the raw window.
-    expect(formatContext(16_070, 24_000, 16_070)).toBe(' · ctx 16k/24k (100% of 16k)');
+    expect(formatContext(16_070, 24_000, 16_070)).toBe('ctx 16k/24k (100% of 16k)');
     // Just after a shed (the 0.7 low watermark) reads 70%, not 47%.
-    expect(formatContext(11_249, 24_000, 16_070)).toBe(' · ctx 11k/24k (70% of 16k)');
+    expect(formatContext(11_249, 24_000, 16_070)).toBe('ctx 11k/24k (70% of 16k)');
   });
 
   it('can exceed 100% — the request that trips the shed measured above the ceiling', () => {
-    expect(formatContext(17_000, 24_000, 16_070)).toBe(' · ctx 17k/24k (106% of 16k)');
+    expect(formatContext(17_000, 24_000, 16_070)).toBe('ctx 17k/24k (106% of 16k)');
   });
 
   it('shows only the size when the window is unknown', () => {
-    expect(formatContext(45_000)).toBe(' · ctx 45k');
+    expect(formatContext(45_000)).toBe('ctx 45k');
   });
 
   it('renders nothing before any context exists', () => {
@@ -109,7 +109,7 @@ describe('formatShrink', () => {
 
 describe('formatPr', () => {
   it('shows the PR the branch is attached to', () => {
-    expect(formatPr(99)).toBe(' · PR: #99');
+    expect(formatPr(99)).toBe('PR: #99');
   });
 
   it('renders nothing when the branch has no PR', () => {
@@ -121,7 +121,7 @@ describe('formatPr', () => {
 
 describe('formatCache', () => {
   it('shows the cached share of the last prompt', () => {
-    expect(formatCache(40_000, 50_000)).toBe(' · cache 80%');
+    expect(formatCache(40_000, 50_000)).toBe('cache 80%');
   });
 
   it('renders nothing when the provider does not report cache hits', () => {
@@ -130,5 +130,44 @@ describe('formatCache', () => {
 
   it('renders nothing when there is no prompt to compare against', () => {
     expect(formatCache(40_000, 0)).toBe('');
+  });
+});
+
+describe('packChips', () => {
+  const chip = (text: string): Chip => [{ text, color: 'x' }];
+  const texts = (lines: Chip[][]) => lines.map(l => l.map(c => c.map(s => s.text).join('')));
+
+  it('packs chips first-fit, paying for the separator between them', () => {
+    // 'aaaa · bbbb' is 11 columns; a third 4-wide chip needs 18.
+    expect(texts(packChips([chip('aaaa'), chip('bbbb'), chip('cccc')], 12))).toEqual([
+      ['aaaa', 'bbbb'],
+      ['cccc'],
+    ]);
+    expect(texts(packChips([chip('aaaa'), chip('bbbb'), chip('cccc')], 18))).toEqual([
+      ['aaaa', 'bbbb', 'cccc'],
+    ]);
+  });
+
+  it('never splits a chip — one wider than the line gets a line of its own', () => {
+    expect(texts(packChips([chip('ab'), chip('a much longer chip'), chip('cd')], 10))).toEqual([
+      ['ab'],
+      ['a much longer chip'],
+      ['cd'],
+    ]);
+  });
+
+  it('measures a multi-segment chip as one unit, in columns', () => {
+    // 'agent' + ' (hint)' is 12 wide, the token chip 11: together with the separator, 26.
+    const multi: Chip = [
+      { text: 'agent', color: 'a' },
+      { text: ' (hint)', color: 'b' },
+    ];
+    expect(texts(packChips([multi, chip('123k↑ 4.6k↓')], 26))).toEqual([
+      ['agent (hint)', '123k↑ 4.6k↓'],
+    ]);
+    expect(texts(packChips([multi, chip('123k↑ 4.6k↓')], 25))).toEqual([
+      ['agent (hint)'],
+      ['123k↑ 4.6k↓'],
+    ]);
   });
 });
