@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import wrapAnsi from 'wrap-ansi';
 
 // How wide a block actually is, in columns.
@@ -15,6 +16,23 @@ export function contentWidth(indent = 0): number {
   // The App renders everything inside paddingX={1}, so two columns are gone before any block
   // starts. The floor keeps a pathologically narrow terminal from producing a zero-width layout.
   return Math.max(20, (process.stdout.columns || 80) - 2 - indent);
+}
+
+// `contentWidth()` that follows the terminal. Ink re-lays its yoga tree on a resize but does not
+// re-run components, so a component that packs its own lines off `process.stdout.columns` keeps
+// the old width until something else re-renders it — when idle, that's never. Subscribing to the
+// resize event is what makes the packing responsive.
+export function useContentWidth(indent = 0): number {
+  const [width, setWidth] = useState(() => contentWidth(indent));
+  useEffect(() => {
+    const onResize = () => setWidth(contentWidth(indent));
+    onResize();
+    process.stdout.on('resize', onResize);
+    return () => {
+      process.stdout.off('resize', onResize);
+    };
+  }, [indent]);
+  return width;
 }
 
 // Wrap `text` so that a marker-prefixed line ("  ↳ Ran: …", "$ …", "⏺︎ Bash(…)") keeps a HANGING
