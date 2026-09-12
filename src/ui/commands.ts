@@ -52,7 +52,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'stats', desc: 'show full session summary' },
   {
     name: 'save',
-    desc: 'save the full conversation to ~/.config/reika/history (--raw skips redaction)',
+    desc: 'save the full conversation to ~/.config/reika/history, even mid-turn (--raw skips redaction)',
   },
   { name: 'exit', desc: 'exit Reika' },
   { name: 'quit', desc: 'alias of /exit' },
@@ -82,4 +82,11 @@ export function planWritten(messages: Message[]): boolean {
   return messages.some(
     m => m.role === 'assistant' && !!m.planFinal && parsePlanSteps(m.content ?? '').length > 0,
   );
+}
+
+// Whether a submitted line is `/save` (with or without its `--raw` flag). App routes exactly this
+// command past the busy queue (#226); it is a whole-word match so `/saved` or a skill named
+// `/save-notes` still queue like anything else.
+export function isSaveCommand(input: string): boolean {
+  return /^\/save(?:\s|$)/i.test(input.trim());
 }

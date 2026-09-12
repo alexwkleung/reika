@@ -493,3 +493,18 @@ describe('usage in the saved record', () => {
     expect(lines.join('\n')).not.toContain('shrink');
   });
 });
+
+// A save taken while a turn was in flight (#226) ends at the last completed round. The record
+// says so itself, so an agent handed the file reads a snapshot rather than a truncated session.
+describe('mid-turn marker in the saved record', () => {
+  it('carries midTurn on the jsonl meta line and a state line in the txt header', () => {
+    const meta = { ...META, midTurn: true as const };
+    expect(JSON.parse(serializeJsonl(MIXED_MODES, meta).split('\n')[0]).midTurn).toBe(true);
+    expect(renderTxt(MIXED_MODES, meta)).toContain('# state:    mid-turn');
+  });
+
+  it('is absent from a save taken between turns', () => {
+    expect(JSON.parse(serializeJsonl(MIXED_MODES, META).split('\n')[0]).midTurn).toBeUndefined();
+    expect(renderTxt(MIXED_MODES, META)).not.toContain('# state:');
+  });
+});

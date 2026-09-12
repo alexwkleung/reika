@@ -76,6 +76,10 @@ export type TranscriptMeta = {
   // Token/context/cache/turn accounting at save time. Absent from transcripts written before #199
   // and from callers that don't track usage.
   usage?: TranscriptUsage;
+  // Set when the save happened while a turn was in flight (#226). Such a transcript ends at the
+  // last completed round rather than at a reply, and whoever reads it — typically another agent
+  // asked to diagnose the run — should know that is the snapshot, not a truncation.
+  midTurn?: true;
 };
 
 // One unbroken run of turns in the same mode. `from`/`to` are inclusive 1-based turn numbers over
@@ -251,6 +255,11 @@ export function renderTxt(
     // The status line's numbers, when the caller tracked them.
     ...(meta.usage ? formatUsageHeader(meta.usage) : []),
     `# mode:     ${meta.mode} (at save)`,
+    ...(meta.midTurn
+      ? [
+          '# state:    mid-turn (saved while a turn was in flight; ends at the last completed round)',
+        ]
+      : []),
     // The whole arc up front, so a reader knows what kind of session this was before reading it;
     // each turn below repeats its own mode in the `You [mode]:` label.
     `# modes:    ${formatModeRuns(full.modes)}`,

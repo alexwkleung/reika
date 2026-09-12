@@ -67,6 +67,17 @@ const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'assistant', content: 'ok' });
   opts.onUsage?.(CALL_USAGE);
 });
+// A turn that lands one round and then parks until the test releases it — the app stays busy in
+// between, which is the state a mid-turn /save has to work in (#226). The reply that follows the
+// release is the "round still streaming" a mid-turn save must not contain.
+let releaseTurn: (() => void) | null = null;
+const runParkedTurn = async (opts: TurnOpts) => {
+  opts.onMessage({ role: 'user', content: opts.userInput });
+  opts.onMessage({ role: 'assistant', content: 'first round' });
+  opts.onUsage?.(CALL_USAGE);
+  await new Promise<void>(r => (releaseTurn = r));
+  opts.onMessage({ role: 'assistant', content: 'second round' });
+};
 vi.mock('../agent/loop.js', () => ({
   runTurn: (...a: unknown[]) => runTurn(...(a as [TurnOpts])),
 }));
@@ -223,6 +234,78 @@ describe('/save records the status-line accounting', () => {
     expect(meta.usage?.contextEstimated).toBe(true);
     expect(meta.usage?.cachedTokens).toBeUndefined();
     expect(meta.usage?.lastCachedTokens).toBeUndefined();
+    app.unmount();
+  });
+});
+
+// A run that looks wrong is exactly when a transcript is worth handing to another agent, and
+// aborting to get one throws away the run. /save is the one command that skips the busy queue.
+describe('/save while a turn is in flight (#226)', () => {
+  beforeEach(() => {
+    runTurn.mockClear();
+    saveTranscript.mockClear();
+    releaseTurn = null;
+  });
+
+  it('saves on the spot, up to the last completed round, and the turn carries on', async () => {
+    runTurn.mockImplementationOnce(runParkedTurn);
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    for (let i = 0; i < 100 && releaseTurn === null; i++) await tick(20);
+    expect(releaseTurn).not.toBeNull();
+
+    await submit(app, '/save');
+    // Landed while busy: not queued, and the snapshot stops at the round that had finished.
+    expect(saveTranscript).toHaveBeenCalledTimes(1);
+    const { messages, meta } = savedWith();
+    const replies = messages.filter(m => m.role === 'assistant').map(m => m.content);
+    expect(replies).toContain('first round');
+    expect(replies).not.toContain('second round');
+    expect(meta.midTurn).toBe(true);
+    expect(meta.usage).toMatchObject({ turns: 1 });
+    expect(plain(app.lastFrame())).toContain('mid-turn');
+
+    releaseTurn!();
+    await tick(120);
+    // The turn was never interrupted — its remaining round still landed in the scrollback.
+    expect(plain(app.lastFrame())).toContain('second round');
+    // The busy path did not run the command a second time on drain.
+    expect(saveTranscript).toHaveBeenCalledTimes(1);
+    app.unmount();
+  });
+
+  it('honours --raw mid-turn and leaves the marker off a save taken between turns', async () => {
+    runTurn.mockImplementationOnce(runParkedTurn);
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    for (let i = 0; i < 100 && releaseTurn === null; i++) await tick(20);
+
+    await submit(app, '/save --raw');
+    expect(saveTranscript).toHaveBeenCalledTimes(1);
+    expect(saveTranscript.mock.calls[0][3]).toEqual({ redact: false });
+    expect(savedWith().meta.midTurn).toBe(true);
+
+    releaseTurn!();
+    await tick(120);
+    await submit(app, '/save');
+    expect(saveTranscript).toHaveBeenCalledTimes(2);
+    expect(savedWith().meta.midTurn).toBeUndefined();
+    app.unmount();
+  });
+
+  it('still queues every other command until the turn ends', async () => {
+    runTurn.mockImplementationOnce(runParkedTurn);
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    for (let i = 0; i < 100 && releaseTurn === null; i++) await tick(20);
+
+    await submit(app, '/plan');
+    // Queued, not switched: the receipt is up and the mode has not changed.
+    expect(plain(app.lastFrame())).not.toContain('Plan mode');
+    releaseTurn!();
+    await tick(200);
+    await submit(app, '/save');
+    expect(savedWith().meta.mode).toBe('plan');
     app.unmount();
   });
 });
