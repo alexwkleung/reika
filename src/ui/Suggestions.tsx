@@ -19,7 +19,7 @@ export function Suggestions({
   // than above (unlike Approval) because the eye is already on the input line
   // and a long list reads more naturally dropping down from it than stacking up.
   return (
-    <Box borderStyle="round" borderTop={false} flexDirection="column" paddingX={1}>
+    <Box borderStyle="round" borderTop={false} flexDirection="column" paddingX={1} marginX={-1}>
       {state.items.map((item, i) => {
         const selected = i === selectedIndex;
         // One Text with nested runs (not siblings): on wrap Ink drops the char at

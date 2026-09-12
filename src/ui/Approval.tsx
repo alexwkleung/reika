@@ -36,6 +36,7 @@ export function Approval({
       flexDirection="column"
       paddingX={1}
       paddingY={1}
+      marginX={-1}
       marginTop={1}
     >
       {/* One Text with nested runs (not siblings): on wrap Ink drops the char at

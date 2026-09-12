@@ -148,6 +148,20 @@ describe('App layout', () => {
     app.unmount();
   });
 
+  it('draws the input frame one column outside the text it sits among', async () => {
+    // The frame's line runs down the centre of its cell, so a border in the same column as the
+    // status text reads as a box a touch narrower than the text. It goes out to the terminal's
+    // edge columns instead (past the App's paddingX), enclosing the text column on both sides.
+    const app = await mountApp();
+    const rows = plain(app.lastFrame()).split('\n');
+    const top = rows.find(r => r.startsWith('╭'));
+    expect(top).toBeDefined();
+    expect(top!.length).toBe(app.stdout.columns);
+    expect(rows.find(r => /^│ > /.test(r))).toBeDefined();
+    expect(rows.find(r => /^ agent /.test(r))).toBeDefined();
+    app.unmount();
+  });
+
   it('shows the Working indicator above the input during a turn', async () => {
     const app = await mountApp();
     await submit(app, 'hi');

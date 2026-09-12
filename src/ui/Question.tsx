@@ -32,6 +32,7 @@ export function Question({
       flexDirection="column"
       paddingX={1}
       paddingY={1}
+      marginX={-1}
       marginTop={1}
     >
       <Text bold color={theme.tool}>
