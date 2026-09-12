@@ -474,8 +474,8 @@ function ReasoningBlock({
 
 // Grey "bubble" for the user's message: an accent bar flush against the left
 // edge (aligned with the Thinking block's bar), one space of padding after it
-// and a trailing space, plus a blank background row above/below for breathing
-// room.
+// and a trailing space. No blank rows inside the background: the bubble sits
+// as tight as the Thinking block so the two read as one visual language.
 function UserBubble({
   text,
   indent = 0,
@@ -493,8 +493,7 @@ function UserBubble({
   // Subagent(task=…) call above it — which goes through formatArgs — showed it collapsed (#172).
   // The sanitize layer matters here too: rows are padEnd-ed to a fixed width against the grey
   // background, so a tab or escape sequence in a paste would mis-measure and fracture the bubble.
-  const lines = wrapText(scrubOutput(text), contentW);
-  const rows = ['', ...lines, '']; // blank top/bottom rows = vertical padding.
+  const rows = wrapText(scrubOutput(text), contentW);
   // The accent bar means "the user said this". A nested bubble is the parent agent's task text,
   // not the user's, so it takes its own color — see theme.subagent for why it is not `queued`.
   const barColor = nested ? theme.subagent : theme.accent;
