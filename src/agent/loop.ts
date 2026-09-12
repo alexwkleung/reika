@@ -2595,14 +2595,12 @@ export async function runTurn(opts: {
       if (groundsPath) {
         readFirst.ground(groundsPath, groundsAuthored ? undefined : opts.history.length - 1);
       }
-      // A tool's harness-side-effect receipt (e.g. URL grounding) goes out as a standalone system
-      // line AFTER its chip — a follow-on to the edit, not stuffed in front of it. Also logged so a
-      // run is classifiable in REIKA_DEBUG (which URL grounding was otherwise invisible to).
+      // A tool's harness-side-effect receipt (URL grounding, a search provider going down, bash's
+      // no-repo diff coverage) goes out as a standalone system line AFTER its chip — a follow-on to
+      // the action, not stuffed in front of it. Also logged so a run is classifiable in REIKA_DEBUG.
       if (toolNotice) {
         opts.onMessage({ role: 'system', tone: toolNotice.tone, content: toolNotice.content });
-        debugLog(
-          `[reika:debug] round=${i} url-grounding mode=${call.name} ${toolNotice.content}\n`,
-        );
+        debugLog(`[reika:debug] round=${i} tool-notice tool=${call.name} ${toolNotice.content}\n`);
       }
       // The plan check-off receipt follows the edit's result line for the same reason: it's a
       // persistent record of a harness side effect of that edit (signal-lifetime rule — the

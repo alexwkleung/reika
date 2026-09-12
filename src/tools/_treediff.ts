@@ -3,6 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { structuredPatch } from 'diff';
 import type { FileChange, DiffHunk, TreeChanges } from '../types.js';
+import { writeTargets } from './_writetargets.js';
 
 // What a bash command did to the working tree, as a diff the UI can draw (#278). A model that
 // edits through `sed -i` or a heredoc gets the same visual receipt the edit tool gives, so the
@@ -12,8 +13,9 @@ import type { FileChange, DiffHunk, TreeChanges } from '../types.js';
 // is a losing game (`npm run fix`, `prettier --write .`, a heredoc piped into python), and git
 // already keeps the one thing a diff needs — the previous bytes of every clean file. So the
 // snapshot only has to hold the files git ALREADY reports dirty (their previous bytes live nowhere
-// else); anything clean before the run diffs against HEAD. Outside a repo there is no detector and
-// nothing is shown — an honest gap, not a guess.
+// else); anything clean before the run diffs against HEAD. Outside a repo the fallback is the
+// command text after all (_writetargets.ts): deterministic, and a best shot — it snapshots the
+// files the command names and diffs those, and cannot see what a formatter touched.
 //
 // Display-only, like `ToolResult.diff`: nothing here reaches the model. The summary and payload the
 // model sees are byte-identical with or without it.
@@ -39,34 +41,42 @@ type Content = { text: string; binary: boolean };
 type Bytes = Content | null;
 
 export type TreeSnapshot = {
-  root: string;
+  // The repo root, or null when there is no repo and `before` holds the command's named targets.
+  root: string | null;
   cwd: string;
-  // Repo-relative path → bytes before the command, for every path git reported as dirty or
-  // untracked. `null` = the entry was listed but the file was absent on disk (a pending delete).
+  // Repo-relative path (absolute without a repo) → bytes before the command, for every path git
+  // reported as dirty or untracked. `null` = listed but absent on disk (a pending delete, or a
+  // named target that doesn't exist yet).
   before: Map<string, Bytes>;
   // Listed, but too large to keep. Never diffed: with no previous bytes there is nothing to
   // compare against and claiming "unchanged" would be a guess.
   skipped: Set<string>;
 };
 
-// Capture the state a diff will be taken against. `null` when `cwd` isn't in a git repo (or git
-// is unavailable/slow), which callers treat as "no diff" rather than an error.
-export async function snapshotTree(cwd: string): Promise<TreeSnapshot | null> {
+// Capture the state a diff will be taken against. `null` when git is present but can't answer
+// (slow, or too much untracked to read), which callers treat as "no diff" rather than an error.
+export async function snapshotTree(cwd: string, command: string): Promise<TreeSnapshot | null> {
   const root = await git(['rev-parse', '--show-toplevel'], cwd);
-  if (root === null) return null;
-  const listed = await dirtyPaths(root.trim());
-  if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
   // git reports the resolved root; the cwd must be resolved the same way or a project under a
   // symlinked dir (macOS /tmp → /private/tmp) gets every path as a long `../` chain.
+  const realCwd = await realpath(cwd).catch(() => cwd);
   const snap: TreeSnapshot = {
-    root: root.trim(),
-    cwd: await realpath(cwd).catch(() => cwd),
+    root: root?.trim() ?? null,
+    cwd: realCwd,
     before: new Map(),
     skipped: new Set(),
   };
+  let paths: string[];
+  if (snap.root === null) {
+    paths = writeTargets(command, realCwd);
+  } else {
+    const listed = await dirtyPaths(snap.root);
+    if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
+    paths = [...listed.keys()];
+  }
   await Promise.all(
-    [...listed.keys()].map(async p => {
-      const bytes = await readBounded(join(snap.root, p));
+    paths.map(async p => {
+      const bytes = await readBounded(snap.root === null ? p : join(snap.root, p));
       if (bytes === 'oversize') snap.skipped.add(p);
       else snap.before.set(p, bytes);
     }),
@@ -79,7 +89,9 @@ export async function snapshotTree(cwd: string): Promise<TreeSnapshot | null> {
 // now was reverted, committed, or (if untracked) deleted — the snapshot vs. the disk decides which
 // of those actually changed the bytes, so a `git commit` of an existing edit shows nothing.
 export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | null> {
-  const listed = await dirtyPaths(snap.root);
+  if (snap.root === null) return namedChanges(snap);
+  const root = snap.root;
+  const listed = await dirtyPaths(root);
   if (listed === null) return null;
   const candidates = [...new Set([...listed.keys(), ...snap.before.keys()])].filter(
     p => !snap.skipped.has(p),
@@ -90,7 +102,7 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
   const changed: { path: string; before: Bytes | undefined; after: Bytes }[] = [];
   await Promise.all(
     candidates.map(async p => {
-      const after = await readBounded(join(snap.root, p));
+      const after = await readBounded(join(root, p));
       if (after === 'oversize') return;
       if (snap.before.has(p)) {
         const before = snap.before.get(p)!;
@@ -110,16 +122,32 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
       // `--filters` applies the same eol/smudge conversion the worktree copy went through, so a
       // CRLF checkout doesn't diff as a full-file rewrite. A miss (HEAD never had the path, yet it
       // wasn't listed before) or a mode-only change has nothing to draw.
-      const head = await git(['cat-file', '--filters', `HEAD:${c.path}`], snap.root, 'buffer');
+      const head = await git(['cat-file', '--filters', `HEAD:${c.path}`], root, 'buffer');
       if (head === null) continue;
       const decoded = decode(head);
       if (decoded.text === c.after?.text) continue;
       before = decoded;
     }
-    files.push(describeChange(relative(snap.cwd, join(snap.root, c.path)), before, c.after));
+    files.push(describeChange(relative(snap.cwd, join(root, c.path)), before, c.after));
   }
   if (files.length === 0) return null;
   return { files, more: changed.length - Math.min(changed.length, MAX_DIFFED_FILES) };
+}
+
+// No repo: the only files that can be compared are the ones the command named, and every one of
+// them was snapshotted, so this is a straight before/after over that set.
+async function namedChanges(snap: TreeSnapshot): Promise<TreeChanges | null> {
+  const files: FileChange[] = [];
+  let changed = 0;
+  for (const [p, before] of [...snap.before].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const after = await readBounded(p);
+    if (after === 'oversize' || before?.text === after?.text) continue;
+    changed++;
+    if (files.length < MAX_DIFFED_FILES)
+      files.push(describeChange(relative(snap.cwd, p), before, after));
+  }
+  if (files.length === 0) return null;
+  return { files, more: changed - files.length };
 }
 
 function describeChange(path: string, before: Bytes, after: Bytes): FileChange {

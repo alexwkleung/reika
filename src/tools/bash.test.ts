@@ -351,11 +351,25 @@ describe('bashTool — tree changes', () => {
     expect(result.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
   });
 
-  it('carries no changes field when nothing changed, or when there is no repo to ask', async () => {
-    await writeFile(join(dir, 'x.txt'), 'a\n');
-    const result = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
+  it('carries no changes field when nothing changed', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    const result = await bashTool.run({ command: 'echo hi' }, { cwd: dir });
     expect(result.summary).toMatch(/^Ran: /);
     expect(result).not.toHaveProperty('changes');
+  });
+
+  // No repo: the diff is a best shot over the files the command names, and the user is told so —
+  // once per cwd, as a user-facing notice, never in the model's context.
+  it('without a repo, diffs the named file and says once that coverage is narrower', async () => {
+    await writeFile(join(dir, 'x.txt'), 'a\n');
+    const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
+    expect(first.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
+    expect(first.notice?.tone).toBe('info');
+    expect(first.notice?.content).toContain('Not a git repo');
+    expect(first.payload).not.toContain('git repo');
+    const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir });
+    expect(second.changes?.files[0].hunks[0].text).toBe('  a\n  b\n+ c');
+    expect(second).not.toHaveProperty('notice');
   });
 });
 

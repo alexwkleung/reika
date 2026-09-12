@@ -105,9 +105,9 @@ const VALUE_FLAGS: Record<string, Set<string>> = { uniq: new Set(['-f', '-s', '-
 // Split into words the way the shell does, keeping a quoted run with spaces in it as ONE word, then
 // drop the quote characters. Quoting changes nothing about how a command reads its own arguments, so
 // `find . '-delete'` must be seen as the flag it is.
-const WORD_RE = /(?:[^\s'"]|'[^']*'|"[^"]*")+/g;
+export const WORD_RE = /(?:[^\s'"]|'[^']*'|"[^"]*")+/g;
 
-function words(segment: string): string[] {
+export function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
@@ -135,14 +135,14 @@ function segmentIsReadOnly(segment: string, recognized: Set<string>): boolean {
 // Blank out quoted regions while preserving length, so a scan can tell syntax from data and a
 // segment offset still indexes the raw command. An unbalanced quote masks nothing, leaving junk
 // that fails the command-name test above → false.
-function maskQuoted(command: string): string {
+export function maskQuoted(command: string): string {
   return command.replace(/"[^"]*"|'[^']*'/g, m => ' '.repeat(m.length));
 }
 
 // Cut the command at every separator that sits OUTSIDE quotes, returning each segment's RAW text —
 // a search pattern like "a;b" carries separators that are data, not syntax, so the split walks the
 // mask while the slices come from the original.
-function splitSegments(command: string, masked: string): string[] {
+export function splitSegments(command: string, masked: string): string[] {
   const segments: string[] = [];
   let start = 0;
   SEPARATOR_RE.lastIndex = 0;

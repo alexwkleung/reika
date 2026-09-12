@@ -49,14 +49,27 @@ export const bashTool: Tool = {
 
     // Bracket the run with a working-tree snapshot so an edit made through the shell (`sed -i`, a
     // heredoc, a formatter) gets the same visual diff the edit tool gives (#278). Both halves run
-    // in the dispatch gap, off the model's clock, and fail open: no repo, no diff.
-    const snapshot = await snapshotTree(ctx.cwd);
+    // in the dispatch gap, off the model's clock, and fail open.
+    const snapshot = await snapshotTree(ctx.cwd, command);
     const result = await execStream(command, ctx, ctx.bashTimeoutMs);
     if (!snapshot) return result;
     const changes = await changesSince(snapshot);
-    return changes ? { ...result, changes } : result;
+    // Without a repo the detector is the command text, which sees far less. Said once per cwd, on
+    // the first shell command there, so the narrower coverage is stated before it's discovered —
+    // and never in the model's context, where it could act on none of it.
+    const notice =
+      snapshot.root === null && !noRepoNoticed.has(ctx.cwd)
+        ? { tone: 'info' as const, content: NO_REPO_NOTICE }
+        : undefined;
+    if (notice) noRepoNoticed.add(ctx.cwd);
+    return { ...result, ...(changes ? { changes } : {}), ...(notice ? { notice } : {}) };
   },
 };
+
+const noRepoNoticed = new Set<string>();
+const NO_REPO_NOTICE =
+  'Not a git repo — a shell edit here shows a diff only for files the command names directly ' +
+  '(redirects, sed -i, tee, cp/mv, rm); a formatter or script writing elsewhere shows nothing.';
 
 // Plan mode's bash (#109). The same tool, admitted only for commands `isProvablyReadOnly` can PROVE
 // read-only — so plan mode gains the inspection a pipeline expresses (`grep … | head`, `find`, `wc`)
