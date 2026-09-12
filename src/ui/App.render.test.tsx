@@ -219,9 +219,9 @@ describe('App layout', () => {
     await tick(120);
 
     const rows = lines(app);
-    // Last match, not first: queueing also writes a `[Queued] …` receipt into scrollback,
-    // which sits above everything and would make the ordering assertion vacuous.
-    const queued = findLastLine(rows, /\[Queued]/);
+    // The ephemeral `next ›` row, not the `[Queued] …` receipt: the receipt sits in
+    // scrollback above everything and would make the ordering assertion vacuous.
+    const queued = findLastLine(rows, /next › later/);
     const frameTop = findLine(rows, /^╭/);
     const frameBottom = findLine(rows, /^╰/);
     expect(queued).toBeGreaterThanOrEqual(0);
