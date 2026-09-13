@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { messagesToOpenAI } from '../provider/toolcall.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import type { PromptMode } from './prompt.js';
 
 // Mock the client so runTurn's round-0 request is captured instead of sent; the warmer under
@@ -25,6 +25,7 @@ vi.mock('../provider/client.js', () => ({
 const { runTurn } = await import('./loop.js');
 const { callModel } = await import('../provider/client.js');
 const { buildWarmPayload, createPrefixWarmer, shouldSkipWarm, warmKey } = await import('./warm.js');
+const { defaultTools } = await import('../tools/index.js');
 
 function makeBundle(): ContextBundle {
   return {
@@ -89,6 +90,7 @@ async function captureRoundZero(
   history: Message[],
   promptMode: PromptMode,
   config: Config,
+  tools: Tool[] = [],
 ): Promise<{ system: string; history: Message[] }> {
   h.scripted.push({ content: 'final', toolCalls: undefined });
   await runTurn({
@@ -96,7 +98,7 @@ async function captureRoundZero(
     history,
     bundle: makeBundle(),
     config,
-    tools: [],
+    tools,
     payloads: new PayloadStore(),
     onMessage: () => {},
     promptMode,
@@ -155,6 +157,30 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
     // one. The system block — the whole payload at session start — is identical.
     expect(warmMsgs[0]).toEqual(realMsgs[0]);
     expect(warmMsgs[0].role).toBe('system');
+  });
+
+  // The tool-list-keyed rules (ask_user rule 7, the #273 subagent nudge) are the lines most
+  // likely to drift: both sides must derive them from the SAME tool list, not from a flag alone.
+  it('carries the tool-keyed prompt lines identically with the real tool list', async () => {
+    process.env.REIKA_SUBAGENT_NUDGE = '1';
+    try {
+      const config = makeConfig();
+      const tools = defaultTools();
+      const warm = buildWarmPayload({
+        history: [],
+        bundle: makeBundle(),
+        config,
+        tools,
+        promptMode: 'agent',
+        calibration: 1,
+      });
+      const real = await captureRoundZero([], 'agent', config, tools);
+      expect(warm.system).toContain('hand it to subagent');
+      expect(warm.system).toContain('ask_user');
+      expect(warm.system).toBe(real.system);
+    } finally {
+      delete process.env.REIKA_SUBAGENT_NUDGE;
+    }
   });
 
   it('never mutates the caller history', () => {

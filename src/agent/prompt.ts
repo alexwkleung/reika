@@ -10,6 +10,9 @@ export function buildSystemPrompt(opts: {
   // and neither the agent nor the plan prompt may point a model at a tool it does not have — the
   // same coupling the plan prompt keeps with planTools for bash (#109).
   canAsk?: boolean;
+  // Whether `subagent` is in this turn's tool list. Same coupling: subagents run without it (no
+  // recursion) and plan mode never has it, so neither may be pointed at it.
+  canSubagent?: boolean;
 }): string {
   const mode = opts.mode ?? 'agent';
   if (mode === 'chat') {
@@ -79,7 +82,18 @@ function buildAgentPrompt(opts: {
   bundle: ContextBundle;
   planMode?: boolean;
   canAsk?: boolean;
+  canSubagent?: boolean;
 }): string {
+  // EXPERIMENT (#273): the subagent tool has carried its own trigger (">3 files, long reference
+  // chains") since it was added, and the debug logs show it never gets called. The tool's real
+  // value here is context: N reads through a subagent land in the parent as ONE digest payload
+  // instead of N, and payload crowding is what evicts the task spec on a small window (#276). So
+  // this is the same shape as rule 7 — the trigger stays in the description, the prompt supplies
+  // permission — because every rule above says "grep/read it yourself, ground every claim", and in
+  // that frame handing exploration off reads as not doing the work. Scoped to exploration on
+  // purpose: a delegated edit is one the parent never read the file for. Flagged so it A/Bs
+  // against a byte-identical prompt; read per call so toggling it doesn't need a restart.
+  const subagentNudge = opts.canSubagent && process.env.REIKA_SUBAGENT_NUDGE === '1';
   const parts: string[] = [
     [
       'You are a coding assistant operating in a terminal. Be concise.',
@@ -99,6 +113,11 @@ function buildAgentPrompt(opts: {
       ...(opts.canAsk
         ? [
             '7. Stopping to ask is a legitimate outcome, not a failure to try harder: when the code you have read contradicts the request, use ask_user instead of silently picking one reading.',
+          ]
+        : []),
+      ...(subagentNudge
+        ? [
+            `${opts.canAsk ? 8 : 7}. When answering needs reading more than ~3 files and you only need the conclusion, hand it to subagent with a self-contained task — the file paths, the symbols, and what to report back. Its reads stay out of your context; a report from it is grounded the same as your own tool output.`,
           ]
         : []),
     ].join('\n'),
