@@ -62,9 +62,9 @@ export function planTools(): Tool[] {
   // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
   // before any code is written, and the tool touches nothing in the repo. It is also outside the
   // withdrawal set (LOOP_WITHDRAW_TOOLS) on purpose — a model that has been told to stop exploring
-  // still needs a way to say what it cannot decide. The plan PROMPT deliberately stays silent about
-  // it (see prompt.test.ts): the capability is available, but nothing pushes a stalling model toward
-  // a new way to avoid writing the plan.
+  // still needs a way to say what it cannot decide. The plan prompt names it (rule 5, #272), keyed
+  // off this list through `canAsk` exactly as the agent prompt's rule 7 is, so REIKA_ASK=0 removes
+  // the tool and the rule together in both modes.
   if (askEnabled()) tools.push(askUserTool);
   if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
   return tools;
