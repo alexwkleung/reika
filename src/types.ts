@@ -137,7 +137,9 @@ export type SampledToken = {
 export type FileChange = {
   // Relative to the session cwd — `../` when the command reached elsewhere in the repo.
   path: string;
-  kind: 'modified' | 'created' | 'deleted' | 'binary';
+  // `rewritten`: modified, but sharing too little with its previous bytes for a diff to be worth
+  // computing (tools/_diff.ts MAX_EDIT_LENGTH); no hunks, and the counts are the two files' sizes.
+  kind: 'modified' | 'created' | 'deleted' | 'binary' | 'rewritten';
   hunks: DiffHunk[];
   added: number;
   removed: number;

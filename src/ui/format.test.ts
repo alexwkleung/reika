@@ -61,5 +61,8 @@ describe('changeLabel', () => {
     expect(changeLabel({ kind: 'created', added: 12, removed: 0 })).toBe('(new, +12)');
     expect(changeLabel({ kind: 'deleted', added: 0, removed: 40 })).toBe('(deleted, -40)');
     expect(changeLabel({ kind: 'binary', added: 0, removed: 0 })).toBe('(binary)');
+    expect(changeLabel({ kind: 'rewritten', added: 3040, removed: 3000 })).toBe(
+      '(rewritten, 3000 → 3040 lines)',
+    );
   });
 });

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseDiffBlocks, diffStats, assignLineNumbers, sanitizeDiffLines } from './DiffView.js';
+import {
+  parseDiffBlocks,
+  diffStats,
+  assignLineNumbers,
+  sanitizeDiffLines,
+  intraLineParts,
+} from './DiffView.js';
 
 describe('parseDiffBlocks', () => {
   it('returns context-only blocks when no changes', () => {
@@ -165,5 +171,35 @@ describe('diffStats', () => {
 
   it('handles empty diff', () => {
     expect(diffStats('')).toEqual({ added: 0, removed: 0 });
+  });
+});
+
+describe('intraLineParts', () => {
+  it('highlights the changed words of a similar pair, coalescing adjacent segments', () => {
+    const parts = intraLineParts('const x = foo(a, b);', 'const x = bar(a, c);')!;
+    expect(parts.filter(p => p.removed).map(p => p.value)).toEqual(['foo', 'b']);
+    expect(parts.filter(p => p.added).map(p => p.value)).toEqual(['bar', 'c']);
+  });
+
+  it('is null for a pair too different to highlight legibly', () => {
+    expect(intraLineParts('alpha beta gamma', 'one two three four')).toBeNull();
+  });
+
+  // The word diff is Myers too, quadratic in the number of changed words: two long lines with
+  // nothing in common (a minified bundle, a data row) took over a second per row (#244).
+  it('is null, fast, for a long pair past the word-edit cap', () => {
+    const words = 2500;
+    const a = Array.from({ length: words }, (_, i) => `tok${i}(x${i});`).join('');
+    const b = Array.from({ length: words }, (_, i) => `tok${i}(y${i});`).join('');
+    const t = performance.now();
+    expect(intraLineParts(a, b)).toBeNull();
+    expect(performance.now() - t).toBeLessThan(200);
+  });
+
+  it('still highlights a small change inside a long pair', () => {
+    const words = 2500;
+    const a = Array.from({ length: words }, (_, i) => `tok${i}(x${i});`).join('');
+    const parts = intraLineParts(a, a.replace('(x10)', '(z10)'))!;
+    expect(parts.filter(p => p.added).map(p => p.value)).toEqual(['z10']);
   });
 });
