@@ -7,6 +7,10 @@ export type SearchResult = {
 
 export type SearchOptions = {
   maxResults?: number;
+  // A provider that hit a check only a human can clear reports it here: `raised` when it has put
+  // the browser in front of the user and is waiting, `cleared` when the check passed and the
+  // search went on. The provider owns the waiting; the caller owns what the user sees (#238).
+  onChallenge?: (state: 'raised' | 'cleared') => void;
 };
 
 export interface SearchProvider {

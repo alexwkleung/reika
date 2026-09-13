@@ -1,5 +1,5 @@
 import { debugLog } from '../debug.js';
-import { ChromeHost, type BrowserHost } from './_chrome.js';
+import { ChromeHost, type BrowserHost, type TabHandle } from './_chrome.js';
 import { SearchUnavailableError } from './types.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
@@ -92,26 +92,69 @@ type Extracted = {
 // page has to carry the verdict when the wording is unfamiliar.
 const MIN_SERP_ANCHORS = 10;
 
+// A bot check is a gate, not noise: it does not clear on its own, and a solve persists on the
+// profile (observed on a real run — one manual solve, served normally since; #238). So on a
+// challenge the provider does the one thing that can work — puts the window in front of the user
+// and waits for the page to turn into a SERP — rather than retrying with backoff against a wall.
+// The wait is bounded because nobody may be at the desk; past it the search fails the turn the
+// way it did before, with the tab left open and raised so the check can still be completed later.
+const CHALLENGE_WAIT_MS = 120_000;
+const CHALLENGE_POLL_MS = 1_000;
+
+export type CdpProviderOptions = {
+  challengeWaitMs?: number;
+  challengePollMs?: number;
+};
+
 export class CdpSearchProvider implements SearchProvider {
-  constructor(private host: BrowserHost = new ChromeHost()) {}
+  private readonly waitMs: number;
+  private readonly pollMs: number;
+  // One challenge at a time. Parallel searches in a turn are all refused together, and the solve
+  // is profile-wide: the first to hit it raises its own tab and waits, the rest wait on the same
+  // promise and then simply reload — a second raised window would compete for the user's one solve.
+  private challenge?: Promise<void>;
+
+  constructor(
+    private host: BrowserHost = new ChromeHost(),
+    opts: CdpProviderOptions = {},
+  ) {
+    this.waitMs = opts.challengeWaitMs ?? CHALLENGE_WAIT_MS;
+    this.pollMs = opts.challengePollMs ?? CHALLENGE_POLL_MS;
+  }
 
   async search(query: string, opts: SearchOptions = {}): Promise<SearchResult[]> {
     const max = opts.maxResults ?? 8;
+    const url = SEARCH_URL + encodeURIComponent(query);
     const tab = await this.host.newTab();
+    // Set when this tab is showing an unsolved check: closing it would take the challenge away
+    // from the user who was just told to complete it.
+    let holdOpen = false;
     try {
-      await tab.navigate(SEARCH_URL + encodeURIComponent(query));
-      const raw = await tab.evaluate(extractionScript(max));
-      const data = parseExtraction(raw);
+      await tab.navigate(url);
+      let data = parseExtraction(await tab.evaluate(extractionScript(max)));
 
-      // Same principle as #236: a search the harness could not serve has to say so. A CAPTCHA
-      // reported as an empty result set reads to the model as a bad query, and it rewords and
-      // retries against a wall that will refuse every variant identically.
-      if (data.blocked) {
-        throw new SearchUnavailableError(
-          'the search page served a bot check instead of results',
-          'The search browser was challenged. Open its window (the profile at ~/.config/reika/chrome) and complete the check once — it persists for that profile.',
-        );
+      if (interstitial(data)) {
+        const owner = !this.challenge;
+        if (owner) {
+          this.challenge = this.awaitSolve(tab, max, opts).finally(() => {
+            this.challenge = undefined;
+          });
+        }
+        try {
+          await this.challenge;
+        } catch (e) {
+          holdOpen = owner;
+          throw e;
+        }
+        // The solved tab has usually landed on the SERP by itself; the reload is for the tabs that
+        // waited on it, which still show the check they never got to answer.
+        await tab.navigate(url);
+        data = parseExtraction(await tab.evaluate(extractionScript(max)));
+        // Passed the check and still walled: not a challenge any more, and not something waiting
+        // longer can fix. Report it as the wall it is.
+        if (interstitial(data)) throw unavailable(data);
       }
+
       const results: SearchResult[] = (data.results ?? [])
         .filter(r => r.url && r.url.trim().length > 0)
         .slice(0, max)
@@ -121,11 +164,6 @@ export class CdpSearchProvider implements SearchProvider {
           snippet: r.snippet ?? '',
           source: 'brave',
         }));
-      if (results.length === 0 && (data.anchors ?? 0) < MIN_SERP_ANCHORS) {
-        throw new SearchUnavailableError(
-          `the search page returned no result list (${data.anchors ?? 0} links on the page) — likely a challenge or interstitial`,
-        );
-      }
       debugLog(
         `[cdp] "${query}" -> ${results.length} result(s), ${data.anchors ?? 0} links on page`,
       );
@@ -133,9 +171,64 @@ export class CdpSearchProvider implements SearchProvider {
     } finally {
       // The tab closes even when extraction threw; leaking one per failed search would grow the
       // browser's memory for the rest of the session.
-      await tab.close();
+      if (!holdOpen) await tab.close();
     }
   }
+
+  // Raise the tab and poll it until the page stops looking like an interstitial. A failed probe
+  // (the page is mid-navigation after the solve, or the user closed the tab) is not a verdict;
+  // the deadline is. The window goes back down only on success: on timeout it stays where the user
+  // will find it, with the unsolved check on it.
+  private async awaitSolve(tab: TabHandle, max: number, opts: SearchOptions): Promise<void> {
+    await tab.show();
+    opts.onChallenge?.('raised');
+    debugLog('[cdp] bot check: window raised, waiting for the user');
+    const deadline = Date.now() + this.waitMs;
+    let last: Extracted | undefined;
+    for (;;) {
+      await sleep(this.pollMs);
+      try {
+        last = parseExtraction(await tab.evaluate(extractionScript(max)));
+        if (!interstitial(last)) break;
+      } catch {
+        /* mid-navigation; keep polling */
+      }
+      if (Date.now() >= deadline) {
+        debugLog('[cdp] bot check: not completed within the wait');
+        throw unavailable(last ?? { blocked: true }, true);
+      }
+    }
+    debugLog('[cdp] bot check cleared');
+    await tab.hide();
+    opts.onChallenge?.('cleared');
+  }
+}
+
+// Same principle as #236: a search the harness could not serve has to say so. A CAPTCHA reported
+// as an empty result set reads to the model as a bad query, and it rewords and retries against a
+// wall that will refuse every variant identically.
+function interstitial(data: Extracted): boolean {
+  return (
+    !!data.blocked || ((data.results ?? []).length === 0 && (data.anchors ?? 0) < MIN_SERP_ANCHORS)
+  );
+}
+
+function unavailable(data: Extracted, timedOut = false): SearchUnavailableError {
+  const message = data.blocked
+    ? 'the search page served a bot check instead of results'
+    : `the search page returned no result list (${data.anchors ?? 0} links on the page) — likely a challenge or interstitial`;
+  // The remedy is for the user (the model cannot click a checkbox): where the check is, and that
+  // one solve is enough. Only on a timeout — the other way here is a wall the check didn't explain.
+  return new SearchUnavailableError(
+    message,
+    timedOut
+      ? 'The search browser was challenged and the check was not completed in time. Its window is open on the challenge — complete the check once (it persists for that profile), then ask again.'
+      : undefined,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 function parseExtraction(raw: unknown): Extracted {

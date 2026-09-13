@@ -34,14 +34,36 @@ export function createSearchTool(provider: SearchProvider): Tool {
         };
       }
       if (budget) budget.used++;
+      // A bot check the provider raised for the user (#238). While it waits, the live tool line says
+      // what the surfaced browser window is for; once cleared, a persistent receipt records that a
+      // human stepped in — the results alone would not show it, and a transient spinner state is
+      // gone by the time the user looks back.
+      let cleared = false;
+      const onChallenge = (state: 'raised' | 'cleared') => {
+        if (state === 'raised') {
+          ctx.onProgress?.(
+            'The search engine served a bot check. Complete it in the browser window that just opened — the search resumes on its own.\n',
+          );
+        } else cleared = true;
+      };
+      const receipt = () =>
+        cleared
+          ? {
+              notice: {
+                tone: 'info' as const,
+                content:
+                  'Bot check completed in the search browser; the solve persists for its profile.',
+              },
+            }
+          : {};
       try {
-        const raw = await provider.search(query, { maxResults: 8 });
+        const raw = await provider.search(query, { maxResults: 8, onChallenge });
         // Filter out results missing a URL — those are unusable for the model
         // (it can't cite or fetch them) and lead to "undefined" leaking into
         // citations downstream.
         const results = raw.filter(r => r.url && r.url.trim().length > 0);
         if (results.length === 0) {
-          return { summary: `No results for "${query}"` };
+          return { summary: `No results for "${query}"`, ...receipt() };
         }
         const payload = results
           .map((r, i) => `${i + 1}. ${r.title || '(no title)'}\n   ${r.url}\n   ${r.snippet || ''}`)
@@ -49,6 +71,7 @@ export function createSearchTool(provider: SearchProvider): Tool {
         return {
           summary: `Found ${results.length} result(s) for "${query}"`,
           payload,
+          ...receipt(),
         };
       } catch (e) {
         if (e instanceof SearchUnavailableError) {
