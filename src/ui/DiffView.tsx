@@ -203,11 +203,25 @@ export function assignLineNumbers(
   return { lines, maxLineNo };
 }
 
-// Muted dim color for the line-number gutter so it recedes behind the code.
-function Gutter({ gutter }: { gutter: string }) {
+// Muted dim color for the line-number gutter so it recedes behind the code. On a changed row the
+// gutter takes the row's tint too: the number and the line it numbers are one unit, and a tinted
+// block starting two columns in from where the numbers sit read as a block with a notch cut out
+// of its left edge (#331). Continuation rows blank the number but keep the tint, so a wrapped
+// line stays one solid block.
+function Gutter({ gutter, bg }: { gutter: string; bg?: string }) {
   if (!gutter) return null;
-  return <Text color={theme.muted}>{`${gutter} `}</Text>;
+  return (
+    <Text color={bg ? TINTED_GUTTER_FG : theme.muted} backgroundColor={bg}>
+      {`${gutter} `}
+    </Text>
+  );
 }
+
+// `theme.muted` is tuned to recede against the terminal's own background (~5:1 on black); on the
+// green tint it drops to ~2:1 and the digits stop being readable. Lifted a step on tinted rows
+// only — ~3.8:1 on green, ~5.4:1 on red — while staying below the code's default foreground, so
+// the numbers still sit behind the line rather than competing with it.
+const TINTED_GUTTER_FG = '#b0b0b0';
 
 // Continuation rows sit under the code, past where the `+`/`-` prefix ended, so a wrapped line
 // reads as one line and the prefix column stays scannable.
@@ -252,7 +266,7 @@ function WrappedRow({
           <Box key={i}>
             {/* Blanked, not dropped: the gutter still has to hold its columns or the
                 continuation slides left and the code column stops lining up. */}
-            <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} />
+            <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} bg={bg} />
             <Text backgroundColor={bg}>
               {lead}
               {row}
@@ -288,15 +302,19 @@ function ContextLine({
   );
 }
 
-// Dark backgrounds — readable on dark terminals (default fg over a red/green
-// tint). Kept dark enough that the light foreground stays legible, but more
-// saturated than a flat muted tint so the green/red reads clearly.
-const REMOVED_BG = '#5a1d1d';
-const ADDED_BG = '#14532a';
-// Brighter variants for the intra-line word-level highlight, so changed words
-// stand out from the line's base background.
-const REMOVED_HIGHLIGHT_BG = '#8a2a2a';
-const ADDED_HIGHLIGHT_BG = '#1f7a42';
+// Dark backgrounds — readable on dark terminals (the syntax palette over a red/green tint).
+// Saturation is where these read as red and green rather than as a dull tint (#331); luminance is
+// what the pastel foreground needs, so it is held where the previous values had it. The floor is
+// the GRAY comment color on the green line, at ~2.2:1 — it recedes, but it stays readable; the
+// green string and rose variable colors that sit on the same-hue tints stay above 3:1. GitHub's
+// dark-theme tints composite duller than the values these replaced, so they were not the reference.
+const REMOVED_BG = '#6b1a22';
+const ADDED_BG = '#0f5a2c';
+// Brighter variants for the intra-line word-level highlight, so changed words stand out from the
+// line's base background. The changed word is painted in the default foreground, bold, not in
+// syntax colors, so only white-on-tint contrast binds here.
+const REMOVED_HIGHLIGHT_BG = '#a3303a';
+const ADDED_HIGHLIGHT_BG = '#1f8a48';
 
 function PlainChangeLine({
   line,
