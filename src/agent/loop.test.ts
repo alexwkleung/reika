@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import {
   flagRepeatedCall,
+  type RepeatEntry,
   buildAgentLoopLedger,
   buildAbsentGrounding,
   buildEditRecoveryLedger,
@@ -14,7 +15,7 @@ import {
 
 // Convenience: read calls keyed on path+offset.
 const read = (
-  seen: Map<string, number>,
+  seen: Map<string, RepeatEntry>,
   args: Record<string, unknown>,
   summary: string,
   payload: string | undefined = 'body',
@@ -22,34 +23,81 @@ const read = (
 
 describe('flagRepeatedCall', () => {
   it('leaves the first call untouched', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     expect(read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800')).toBe('body');
   });
 
-  it('flags a window-varying re-read from the same offset (the real loop)', () => {
-    const seen = new Map<string, number>();
-    // All start at line 1 with different limits -> different summaries, same (path, offset).
+  it('flags a same-or-wider re-read from the same offset, but not a narrowing one', () => {
+    const seen = new Map<string, RepeatEntry>();
+    // All start at line 1. Widening (100 -> 300) is a repeat: the model already had those bytes.
     read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800');
-    const second = read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
-    const third = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
-    expect(second).toContain('2 times');
-    expect(third).toContain('3 times');
-    expect(second?.startsWith('body')).toBe(true);
+    const wider = read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
+    expect(wider).toContain('2 times');
+    expect(wider?.startsWith('body')).toBe(true);
+    // Narrowing (300 -> 80) is the move the omission marker asks for when the earlier copy was
+    // capped — it returns bytes the model has NOT seen, so it restarts the run rather than
+    // counting toward it. Observed: read(1-300) capped, read(1-150) capped again AND nudged
+    // "won't make progress", and the model spun on the contradiction.
+    const narrower = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
+    expect(narrower).toBe('body');
+    // Repeating the narrow window IS the loop, and is caught on its second step.
+    const again = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
+    expect(again).toContain('2 times');
+  });
+
+  it('treats a default-window read followed by an explicit narrower one as narrowing', () => {
+    // The observed shape: read(path) with no limit is READ_DEFAULT_LIMIT lines, and the follow-up
+    // names a smaller window explicitly. Resolved as the tool resolves it, not as absent-vs-present.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'src/tools/bash.ts' }, 'Read src/tools/bash.ts lines 1-300 of 329');
+    const narrower = read(
+      seen,
+      { path: 'src/tools/bash.ts', offset: 1, limit: 150 },
+      'Read src/tools/bash.ts lines 1-150 of 329',
+    );
+    expect(narrower).toBe('body');
+  });
+
+  it('stops exempting narrowing after a bounded number of descents', () => {
+    // A model shrinking 300 -> 200 -> 100 -> 50 -> 25 -> ... forever is spinning too. Same bound as
+    // readtrace.ts (MAX_NARROWINGS = 3), so the metric and the nudge name the same read as the loop.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
+    expect(read(seen, { path: 'a.ts', limit: 200 }, 'Read a.ts lines 1-200 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 50 }, 'Read a.ts lines 1-50 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 25 }, 'Read a.ts lines 1-25 of 800')).toContain(
+      '2 times',
+    );
+  });
+
+  it('names the remedy that works when the flagged copy was itself capped', () => {
+    // "Identical bytes" was only true when the earlier copy shipped whole; under the fit-to-window
+    // cap the same read can arrive gutted twice. The nudge must not tell the model the one move
+    // that works (a read small enough to arrive whole) is pointless.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'a.ts', limit: 150 }, 'Read a.ts lines 1-150 of 329');
+    const second = read(seen, { path: 'a.ts', limit: 150 }, 'Read a.ts lines 1-150 of 329');
+    expect(second).toContain('same window returns the same bytes');
+    expect(second).toContain('read a range small enough to arrive whole');
+    expect(second).not.toContain('identical bytes');
   });
 
   it('names the exact range in the read nudge (concrete redirect, not generic)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     const second = read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     // Points at the specific range via the summary, and keeps the escalating count.
     expect(second).toContain('Read a.ts lines 1-200 of 800');
     expect(second).toContain('2 times');
-    expect(second).toContain('re-reading the same start line returns identical bytes');
+    expect(second).toContain(
+      're-reading the same start line with the same window returns the same bytes',
+    );
     expect(second?.startsWith('body')).toBe(true);
   });
 
   it('does not flag genuine forward paging (different offsets)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const a = read(seen, { path: 'a.ts', offset: 1 }, 'Read a.ts lines 1-200 of 800', 'b1');
     const b = read(seen, { path: 'a.ts', offset: 200 }, 'Read a.ts lines 200-399 of 800', 'b2');
     const c = read(seen, { path: 'a.ts', offset: 400 }, 'Read a.ts lines 400-599 of 800', 'b3');
@@ -59,7 +107,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('tracks bash repeats keyed on summary (incl. byte count)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const s = 'Ran: grep -n blendAlbums src/server/index.ts (140 bytes output)';
     flagRepeatedCall(seen, 'bash', { command: 'grep -n blendAlbums src/server/index.ts' }, s, 'o');
     const again = flagRepeatedCall(
@@ -73,7 +121,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('does not flag bash when output size differs (changed/flaky command)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     flagRepeatedCall(
       seen,
       'bash',
@@ -92,7 +140,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('bash does NOT clear read-tracking (interspersed grep -n must not reset it)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800');
     flagRepeatedCall(
       seen,
@@ -106,7 +154,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('edit/write resets memory so a later identical read is not flagged', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     flagRepeatedCall(seen, 'edit', { path: 'a.ts' }, 'Edited a.ts', undefined);
     const after = read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
@@ -114,7 +162,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('passes untracked tools (fetch/search) through without flagging or clearing', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     const fetched = flagRepeatedCall(seen, 'fetch_url', { url: 'x' }, 'Fetched x', 'page');
     expect(fetched).toBe('page');
@@ -124,7 +172,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('escalates the grep count across identical-pattern repeats', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const s = 'Found 0 matches for /discover/';
     flagRepeatedCall(seen, 'grep', { pattern: 'discover' }, s, '');
     flagRepeatedCall(seen, 'grep', { pattern: 'discover' }, s, '');
@@ -132,7 +180,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('handles an undefined payload on a repeat without crashing', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts', offset: 999 }, 'Read a.ts: offset 999 past end of file', undefined);
     const out = read(
       seen,
