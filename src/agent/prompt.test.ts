@@ -89,6 +89,67 @@ describe('agent prompt tracks the ask_user tool (#214)', () => {
   });
 });
 
+// The subagent nudge (#273) is a routing rule keyed on the request's shape — NOT rule 7's
+// permission shape, which was the first arm and got 0/2 uptake (see the comment in prompt.ts).
+// Flagged so the baseline arm runs against a byte-identical prompt, and keyed off the tool list so
+// a subagent (no recursion) and plan mode (no subagent tool) are never pointed at a tool they do
+// not have.
+describe('agent prompt subagent nudge (#273)', () => {
+  afterEach(() => {
+    delete process.env.REIKA_SUBAGENT_NUDGE;
+  });
+
+  const agentPrompt = (o: { canAsk?: boolean; canSubagent?: boolean }): string =>
+    buildSystemPrompt({ bundle, mode: 'agent', ...o }).replace(/\s+/g, ' ');
+
+  it('is byte-identical to the unflagged prompt when the flag is unset', () => {
+    delete process.env.REIKA_SUBAGENT_NUDGE;
+    const off = buildSystemPrompt({ bundle, mode: 'agent', canAsk: true });
+    expect(buildSystemPrompt({ bundle, mode: 'agent', canAsk: true, canSubagent: true })).toBe(off);
+    expect(off).not.toContain('subagent');
+  });
+
+  it('adds the line under the flag only when the tool is present', () => {
+    process.env.REIKA_SUBAGENT_NUDGE = '1';
+    expect(agentPrompt({ canAsk: true, canSubagent: true })).toContain(
+      'FIRST tool call is subagent',
+    );
+    expect(agentPrompt({ canAsk: true, canSubagent: false })).not.toContain('subagent');
+    expect(agentPrompt({ canAsk: true })).not.toContain('subagent');
+  });
+
+  // The permission-shaped first arm at the tail of the list got 0/2 uptake: the trigger was a
+  // forecast and the position was where the model's attention isn't. It sits next to rule 2 (the
+  // grep the model reaches for at round 0) and the rules after it renumber — no gap, no duplicate.
+  it('is rule 3, right after the grep rule, and renumbers the rest', () => {
+    process.env.REIKA_SUBAGENT_NUDGE = '1';
+    const p = agentPrompt({ canAsk: true, canSubagent: true });
+    expect(p).toContain('2. To find where something is defined');
+    expect(p).toContain('3. When the request is to trace');
+    expect(p).toContain('4. Before edit');
+    expect(p).toContain('8. Stopping to ask');
+    expect(p).not.toContain('9.');
+    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain('8.');
+  });
+
+  // Scoped to exploration: the value is N reads collapsing into one digest payload in the parent;
+  // a delegated edit is one the parent never read the file for. The closing sentence guards the
+  // negative control — a one-file question must not be delegated.
+  it('frames it around reading and reporting, not delegating edits', () => {
+    process.env.REIKA_SUBAGENT_NUDGE = '1';
+    const p = agentPrompt({ canAsk: true, canSubagent: true });
+    expect(p).toContain('ask for the chain with file and function names, not line numbers');
+    expect(p).toContain('one or two files answer, read yourself');
+    expect(p).not.toMatch(/subagent[^.]*\bedit/);
+  });
+
+  it('never appears in the plan prompt', () => {
+    process.env.REIKA_SUBAGENT_NUDGE = '1';
+    expect(planTools().map(t => t.name)).not.toContain('subagent');
+    expect(buildSystemPrompt({ bundle, mode: 'plan', canAsk: true })).not.toContain('subagent');
+  });
+});
+
 // The plan prompt carries its own ask rule (#272): the plan is a one-shot handoff to an
 // implementation turn with no refinement round between (#46 is open), so a wrong reading of the
 // request costs the whole implementation turn. Same tool-list coupling as the agent prompt, but
