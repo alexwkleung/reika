@@ -116,3 +116,50 @@ describe('search tool — query-level failures stay query-level', () => {
     expect(out.summary).toMatch(/Search failed:/);
   });
 });
+
+// #238: a bot check the provider raised for the user. The provider reports the two moments; the
+// tool decides what the user sees — a live line while the window is up, a persistent receipt after.
+describe('search tool — bot check raised for the user', () => {
+  const challenged = (results: SearchResult[]): SearchProvider => ({
+    async search(_q, opts): Promise<SearchResult[]> {
+      opts?.onChallenge?.('raised');
+      opts?.onChallenge?.('cleared');
+      return results;
+    },
+  });
+
+  it('narrates the raised window on the live tool line and records the solve as a receipt', async () => {
+    const progress: string[] = [];
+    const ctx = { ...ctxWith(), onProgress: (c: string) => progress.push(c) };
+    const tool = createSearchTool(
+      challenged([{ title: 'T', url: 'https://x.example/a', snippet: '' }]),
+    );
+    const out = await tool.run({ query: 'a' }, ctx);
+    expect(progress.join('')).toMatch(/bot check.*browser window/i);
+    expect(out.summary).toMatch(/Found 1 result/);
+    expect(out.notice).toEqual({
+      tone: 'info',
+      content: expect.stringMatching(/Bot check completed/),
+    });
+    // The search answered, so the budget was spent once and nothing latched.
+    expect(ctx.webBudget.searches.used).toBe(1);
+    expect(ctx.searchHealth.unavailable).toBeUndefined();
+  });
+
+  it('keeps the receipt on a solve that then found nothing', async () => {
+    const tool = createSearchTool(challenged([]));
+    const out = await tool.run({ query: 'a' }, ctxWith());
+    expect(out.summary).toMatch(/No results/);
+    expect(out.notice?.tone).toBe('info');
+  });
+
+  it('emits no receipt when no check was raised', async () => {
+    const plain: SearchProvider = {
+      async search(): Promise<SearchResult[]> {
+        return [{ title: 'T', url: 'https://x.example/a', snippet: '' }];
+      },
+    };
+    const out = await createSearchTool(plain).run({ query: 'a' }, ctxWith());
+    expect(out.notice).toBeUndefined();
+  });
+});

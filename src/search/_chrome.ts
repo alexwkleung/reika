@@ -10,6 +10,11 @@ import { SearchUnavailableError } from './types.js';
 export interface TabHandle {
   navigate(url: string): Promise<void>;
   evaluate(expression: string): Promise<unknown>;
+  // Window state, for the one moment a human has to look at the browser: a bot check. `show`
+  // restores the window from minimized and brings this tab to the front; `hide` minimizes it
+  // again. Both best-effort — a window the OS declined to move must never fail a search.
+  show(): Promise<void>;
+  hide(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -58,6 +63,11 @@ export class ChromeHost implements BrowserHost {
     const session = await openSession(tab.webSocketDebuggerUrl);
     const port = this.port;
     const touch = () => this.touch();
+    // The browser works minimized. `open -g` keeps launch from taking focus, but the window it
+    // makes still sits on the desktop, and one reattached from an earlier session is in whatever
+    // state it was left — so the state is enforced per tab, not per launch. Only a bot check
+    // (`show`) is allowed to surface it; see CdpSearchProvider.
+    await setWindowState(session, 'minimized');
     return {
       async navigate(url: string) {
         touch();
@@ -73,6 +83,16 @@ export class ChromeHost implements BrowserHost {
           awaitPromise: true,
         });
         return (res as { result?: { result?: { value?: unknown } } }).result?.result?.value;
+      },
+      async show() {
+        touch();
+        await setWindowState(session, 'normal');
+        // Page.bringToFront is the reliable path: the browser is a separate instance on its own
+        // profile, so macOS app-level activation would raise the user's Chrome instead (#238).
+        await session.call('Page.bringToFront').catch(() => undefined);
+      },
+      async hide() {
+        await setWindowState(session, 'minimized');
       },
       async close() {
         session.close();
@@ -209,6 +229,25 @@ async function waitForReady(session: CdpSession, target: string): Promise<void> 
   }
   // Not fatal: a SERP with a slow third-party beacon still has its results in the DOM.
   debugLog('[cdp] page never settled; extracting anyway');
+}
+
+// Browser.getWindowForTarget defaults to the session's own target, so both calls work from a page
+// session — no browser-level session needed. Best-effort throughout: a window manager that refuses
+// is a cosmetic failure, not a search failure.
+async function setWindowState(
+  session: CdpSession,
+  windowState: 'normal' | 'minimized',
+): Promise<void> {
+  try {
+    const res = (await session.call('Browser.getWindowForTarget')) as {
+      result?: { windowId?: number };
+    };
+    const windowId = res.result?.windowId;
+    if (windowId === undefined) return;
+    await session.call('Browser.setWindowBounds', { windowId, bounds: { windowState } });
+  } catch (e) {
+    debugLog(`[cdp] could not set window state ${windowState}: ${(e as Error).message}`);
+  }
 }
 
 function originOf(url: string): string | undefined {
