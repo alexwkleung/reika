@@ -99,16 +99,19 @@ function buildAgentPrompt(opts: {
   // next to rule 2 because that is what the model did at round 0. The same runs showed the model
   // listing the five files it needed by name before its first call — the task string a subagent
   // needs is something it can already write. Scoped to exploration on purpose: a delegated edit is
-  // one the parent never read the file for. The closing sentence is the guard against
-  // over-application on one-file questions. Flagged so it A/Bs against a byte-identical prompt;
-  // read per call so toggling it doesn't need a restart.
+  // one the parent never read the file for. "Not line numbers": the arm-2 parent asked its subagent
+  // for "exact line references" unprompted, and pinning line numbers for type fields is what drove
+  // the subagent to read types.ts in 14 slices (#340, #341) — the precision costs reads and the
+  // chain doesn't need it. The closing sentence is the guard against over-application on one-file
+  // questions. Flagged so it A/Bs against a byte-identical prompt; read per call so toggling it
+  // doesn't need a restart.
   const subagentNudge = opts.canSubagent && process.env.REIKA_SUBAGENT_NUDGE === '1';
   const rules: string[] = [
     "For any question about this project's code, you MUST use tools before answering. Never describe code from general knowledge.",
     'To find where something is defined, use grep for the symbol name. Do NOT guess file paths or extensions.',
     ...(subagentNudge
       ? [
-          'When the request is to trace, explain, or summarize how something works across several files, your FIRST tool call is subagent: give it the question plus every path and symbol you already know, and ask for the chain with file and function names. Its reads stay out of your context and its report counts as tool output. A question one or two files answer, read yourself.',
+          'When the request is to trace, explain, or summarize how something works across several files, your FIRST tool call is subagent: give it the question plus every path and symbol you already know, and ask for the chain with file and function names, not line numbers. Its reads stay out of your context and its report counts as tool output. A question one or two files answer, read yourself.',
         ]
       : []),
     'Before edit, read the file to see exact text. read output prefixes each line with `NNNNN│` — that gutter is NOT part of the file; copy only the text after `│` into old_string, verbatim including indentation.',

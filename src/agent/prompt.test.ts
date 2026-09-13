@@ -138,7 +138,7 @@ describe('agent prompt subagent nudge (#273)', () => {
   it('frames it around reading and reporting, not delegating edits', () => {
     process.env.REIKA_SUBAGENT_NUDGE = '1';
     const p = agentPrompt({ canAsk: true, canSubagent: true });
-    expect(p).toContain('ask for the chain with file and function names');
+    expect(p).toContain('ask for the chain with file and function names, not line numbers');
     expect(p).toContain('one or two files answer, read yourself');
     expect(p).not.toMatch(/subagent[^.]*\bedit/);
   });
