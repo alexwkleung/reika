@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
-import { grepTool } from './grep.js';
+import { grepTool, normalizePattern } from './grep.js';
 import { resetSpillDir } from './_spill.js';
 
 let cwd: string;
@@ -208,5 +208,33 @@ describe('grepTool whole-file pre-test', () => {
     await writeFile(join(cwd, 'b.ts'), ['foo', 'bar'].join('\n'), 'utf8');
     const result = await grepTool.run({ pattern: 'foo\\s+bar' }, { cwd, ignore: ignore() });
     expect(result.summary).toMatch(/Found 0 matches/);
+  });
+});
+
+describe('normalizePattern (shell-grep dialect)', () => {
+  it('rewrites \\< \\> word anchors to \\b and says so', () => {
+    const { pattern, note } = normalizePattern('\\<foo\\>');
+    expect(pattern).toBe('\\bfoo\\b');
+    expect(note).toContain('\\< \\> → \\b');
+  });
+
+  it('rewrites POSIX bracket classes inside a bracket expression', () => {
+    const { pattern, note } = normalizePattern('[[:space:]]+x[^[:digit:]]');
+    expect(pattern).toBe('[\\s]+x[^0-9]');
+    expect(note).toContain('[:space:]');
+    expect(note).toContain('[:digit:]');
+  });
+
+  it('leaves JS patterns, escapes, and unknown classes untouched', () => {
+    for (const p of ['\\bfoo\\b', '[<>]', 'a\\\\<b', '[[:nope:]]', '(?<=x)y', '\\d+']) {
+      expect(normalizePattern(p)).toEqual({ pattern: p, note: '' });
+    }
+  });
+
+  it('end to end: a shell-grep pattern finds the symbol and the summary shows the rewrite', async () => {
+    await writeFile(join(cwd, 'c.ts'), ['const foo = 1;', 'const foobar = 2;'].join('\n'), 'utf8');
+    const result = await grepTool.run({ pattern: '\\<foo\\>' }, { cwd, ignore: ignore() });
+    expect(result.summary).toMatch(/^Found 1 matches for \/\\bfoo\\b\/ \(rewrote POSIX/);
+    expect(result.payload).toContain('c.ts:1: const foo = 1;');
   });
 });

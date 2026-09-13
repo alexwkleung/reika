@@ -50,7 +50,7 @@ export const grepTool: Tool = {
     required: ['pattern'],
   },
   async run(args, ctx) {
-    const pattern = String(args.pattern);
+    const { pattern, note } = normalizePattern(String(args.pattern));
     const startPath = String(args.path ?? '.');
     const include = args.include ? String(args.include) : undefined;
     // Models often send glob-style filters ("*.css", "**/*.css"); reduce to the
@@ -62,7 +62,7 @@ export const grepTool: Tool = {
       re = new RegExp(pattern);
       preRe = new RegExp(pattern, 'm');
     } catch (e) {
-      return { summary: `Invalid regex: ${(e as Error).message}` };
+      return { summary: `Invalid regex: ${(e as Error).message}${note}` };
     }
     const start = resolveUserPath(ctx.cwd, startPath);
     const st = await stat(start).catch(() => null);
@@ -91,7 +91,7 @@ export const grepTool: Tool = {
     // pre-spill behavior so the flag is a clean A/B.
     if (!spilling || state.inlineEnd === undefined) {
       return {
-        summary: `Found ${state.count}${atCeiling ? '+' : ''} matches for /${pattern}/`,
+        summary: `Found ${state.count}${atCeiling ? '+' : ''} matches for /${pattern}/${note}`,
         payload: state.out.join('\n'),
       };
     }
@@ -106,7 +106,7 @@ export const grepTool: Tool = {
       ? buildSpillFooter({ shown, total, unit: 'matches', ref })
       : buildCappedFooter({ shown, total, unit: 'matches' });
     return {
-      summary: `Found ${total} matches for /${pattern}/ — showing ${shown}`,
+      summary: `Found ${total} matches for /${pattern}/${note} — showing ${shown}`,
       payload: state.out.slice(0, state.inlineEnd).join('\n') + footer,
     };
   },
@@ -210,4 +210,64 @@ async function scanFile(
       if (isHit) state.count++;
     }
   }
+}
+
+// POSIX bracket classes → the JS class fragment that means the same thing.
+const POSIX_CLASSES: Record<string, string> = {
+  alnum: 'a-zA-Z0-9',
+  alpha: 'a-zA-Z',
+  blank: ' \\t',
+  cntrl: '\\x00-\\x1f\\x7f',
+  digit: '0-9',
+  graph: '\\x21-\\x7e',
+  lower: 'a-z',
+  print: '\\x20-\\x7e',
+  punct: '!-\\/:-@\\[-`{-~',
+  space: '\\s',
+  upper: 'A-Z',
+  word: '\\w',
+  xdigit: '0-9A-Fa-f',
+};
+
+// Models trained on shell grep send its dialect: `\<word\>` and `[[:space:]]`. Both COMPILE as
+// JavaScript — `\<` is an identity escape for a literal '<', `[[:space:]]` is the class
+// `[[:space]` followed by a literal ']' — and then match nothing, which reads to a small model
+// as "the symbol doesn't exist" (the silent-zero failure, see PR #102). Rewrite the two forms
+// that have no plausible JS meaning and say so in the summary, so the model learns the dialect
+// instead of guessing at it. Anything else is left alone. Exported for tests.
+export function normalizePattern(raw: string): { pattern: string; note: string } {
+  let out = '';
+  let inClass = false;
+  const rewrites = new Set<string>();
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '\\') {
+      const next = raw[i + 1];
+      if (!inClass && (next === '<' || next === '>')) {
+        out += '\\b';
+        rewrites.add('\\< \\> → \\b');
+        i++;
+        continue;
+      }
+      out += c + (next ?? '');
+      i++;
+      continue;
+    }
+    if (inClass && c === '[' && raw[i + 1] === ':') {
+      const end = raw.indexOf(':]', i + 2);
+      const name = end > 0 ? raw.slice(i + 2, end) : '';
+      const cls = POSIX_CLASSES[name];
+      if (cls) {
+        out += cls;
+        rewrites.add(`[:${name}:] → ${cls}`);
+        i = end + 1;
+        continue;
+      }
+    }
+    if (c === '[' && !inClass) inClass = true;
+    else if (c === ']' && inClass) inClass = false;
+    out += c;
+  }
+  const note = rewrites.size ? ` (rewrote POSIX ${[...rewrites].join(', ')})` : '';
+  return { pattern: out, note };
 }
