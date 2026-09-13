@@ -1,5 +1,8 @@
+import { readFile, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractUrl, fetchUrlTool } from './fetch.js';
+import { resetSpillDir } from './_spill.js';
 import type { WebBudget } from '../types.js';
 
 const originalFetch = globalThis.fetch;
@@ -343,5 +346,100 @@ describe('fetch_url tool — host policy', () => {
     const fetchedUrls = new Set<string>();
     await fetchUrlTool.run({ url: 'http://localhost/' }, { cwd: '/tmp', fetchedUrls });
     expect(fetchedUrls.size).toBe(0);
+  });
+});
+
+// The fetch half of #139. Two cuts can shorten a fetched page — the tool's own 64KB cap, and the
+// context window at serialization — and the spill file is the answer to both: the marker at
+// either cut tells the model to read a narrower range, which for fetch_url is only possible when
+// the page is a local file.
+describe('fetch_url tool — spill (#139)', () => {
+  const dirs: string[] = [];
+
+  beforeEach(() => {
+    resetSpillDir();
+    process.env.REIKA_SPILL = '1';
+  });
+
+  afterEach(async () => {
+    delete process.env.REIKA_SPILL;
+    resetSpillDir();
+    for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  const article = (chars: number): string =>
+    `<html><body><article><p>${'word '.repeat(Math.ceil(chars / 5))}</p></article></body></html>`;
+
+  const locatorOf = (summary: string): string => {
+    const m = /saved to (\S+)\)/.exec(summary);
+    expect(m, summary).not.toBeNull();
+    dirs.push(dirname(m![1]));
+    return m![1];
+  };
+
+  it('saves a page under the tool cap when it is big enough for the window to chop', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(10_000)));
+    const result = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+    const path = locatorOf(result.summary);
+    // The summary carries the locator: it is the only part of the result that survives a
+    // fully-starved window, and the part the model sees when it comes back to the URL later.
+    expect(result.summary).toMatch(/^Fetched https:\/\/example\.com\/doc \(\d+ chars extracted; /);
+    // The payload is the whole page (no tool-cap cut) plus the footer.
+    expect(result.payload).toContain('word word');
+    expect(result.payload).toContain(`(Full page saved to ${path}`);
+    expect(result.payload).toContain('instead of fetching the URL again');
+    expect(result.payload).not.toContain('Showing');
+    // The file is the page, byte for byte.
+    const saved = await readFile(path, 'utf8');
+    expect(result.payload!.startsWith(saved)).toBe(true);
+    expect(saved.length).toBeGreaterThan(9_000);
+  });
+
+  it('saves the whole page and pages the head when the tool cap cuts it', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(100_000)));
+    const result = await fetchUrlTool.run({ url: 'https://example.com/long' }, { cwd: '/tmp' });
+    const path = locatorOf(result.summary);
+    expect(result.summary).toMatch(/\(\d{5,} chars extracted; full page saved to /);
+    expect(result.payload).toContain(`(Showing 65536 of `);
+    expect(result.payload).toContain(`Full page saved to ${path}`);
+    expect(result.payload).toContain('Do not re-run this fetch');
+    // The old "…(truncated, N more chars)" tail is gone — the footer replaces it.
+    expect(result.payload).not.toContain('…(truncated');
+    const saved = await readFile(path, 'utf8');
+    expect(saved.length).toBeGreaterThan(65_536);
+    expect(result.payload!.startsWith(saved.slice(0, 65_536))).toBe(true);
+  });
+
+  it('leaves a small page byte-identical: nothing for the window to chop, nothing to save', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(500)));
+    const result = await fetchUrlTool.run({ url: 'https://example.com/small' }, { cwd: '/tmp' });
+    expect(result.summary).toMatch(
+      /^Fetched https:\/\/example\.com\/small \(\d+ chars extracted\)$/,
+    );
+    expect(result.payload).not.toContain('saved to');
+  });
+
+  it('is a strict no-op with REIKA_SPILL=0: the pre-spill result, truncation tail and all', async () => {
+    process.env.REIKA_SPILL = '0';
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(100_000)));
+    const result = await fetchUrlTool.run({ url: 'https://example.com/long' }, { cwd: '/tmp' });
+    expect(result.summary).toMatch(
+      /^Fetched https:\/\/example\.com\/long \(\d+ chars extracted\)$/,
+    );
+    expect(result.payload).toMatch(/…\(truncated, \d+ more chars\)$/);
+    expect(result.payload).not.toContain('saved to');
+  });
+
+  it('keeps the tool cap for harness callers: extractUrl still truncates by default', async () => {
+    // The grounders and pasted-URL expansion must never spill — a grounding check would write a
+    // file whose locator nobody sees. They get the capped contract they always had, and only the
+    // tool asks for the page uncut.
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(100_000)));
+    const capped = await extractUrl('https://example.com/long');
+    expect(capped.ok && capped.content.length).toBeLessThan(66_000);
+    expect(capped.ok && capped.content).toMatch(/…\(truncated, \d+ more chars\)$/);
+    const uncut = await extractUrl('https://example.com/long', { untruncated: true });
+    expect(uncut.ok && uncut.content.length).toBeGreaterThan(99_000);
+    expect(uncut.ok && uncut.content).not.toContain('…(truncated');
   });
 });

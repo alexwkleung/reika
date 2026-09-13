@@ -421,6 +421,24 @@ is a "rest" to save and the count in the summary is a total rather than a floor,
 real cost here — more scanning on a search broad enough to blow past the inline page. Same
 experimental discipline: constants and helpers together in `_spill.ts`, clearly marked.
 
+**`fetch_url` spills on a different trigger, and its locator rides the summary** (#139). The search
+tools spill what their own cap drops; a fetched page has a second, earlier cut the tool cannot see —
+the context window. A page well under the 64KB tool cap is chopped at serialization once the window
+is nearly full (`capPayload`, head 40% / tail 60%, or the whole payload at cap ≤ 0), and the marker
+at that cut says to read a narrower range. For every other tool that is a real remedy; for
+`fetch_url` there is no narrower fetch, so the observed moves were a re-fetch (same page, chopped the
+same way) or `bash curl` (a second egress, raw HTML, chopped the same way). So the tool saves every
+page over `SPILL_MIN_CHARS` (2048 — the serializer's `SMALL_PAYLOAD_FLOOR_CHARS`, below which a
+payload is always delivered whole), not just over-cap ones, and the marker's advice becomes true:
+the page is a local file and `read` takes a line range. The locator is in the summary as well as
+the footer, the opposite of the search tools' choice above, because the two reasons the summary
+matters are both real for a page: it is the only part of the result that survives a fully-starved
+window, and the model comes back to a URL it already fetched (#296) — there the locator is the
+re-fetch avoided, not stale advice. The cap itself stays in `extractUrl` for the harness callers
+(the URL grounder, pasted-URL expansion): only the tool asks for the page uncut, so a grounding
+check never writes a file whose locator nobody sees. Peak memory is unchanged — the full extraction
+was always in memory before the slice.
+
 The ceiling is `SPILL_MAX_MATCHES` (300), and it is where the two tools stop being symmetric.
 Glob's spill is free — the crawl already holds every path — while grep's is paid on _every_ search
 broad enough to blow past the inline page, whether or not the model ever opens the artifact. Eval

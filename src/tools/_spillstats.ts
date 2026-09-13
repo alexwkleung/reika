@@ -40,7 +40,7 @@ function write(event: Record<string, unknown>): void {
 // for bash, matches/paths for the search tools) — mixing units in one field is fine because
 // `tool` disambiguates and nothing aggregates across tools.
 export function recordCapped(opts: {
-  tool: 'bash' | 'grep' | 'glob';
+  tool: 'bash' | 'grep' | 'glob' | 'fetch_url';
   total: number;
   shown: number;
   // Whether an artifact was written, and whether it held the whole result. `complete: false` is

@@ -815,6 +815,32 @@ describe('messagesToOpenAI', () => {
       expect(tool?.content).toContain('to fit the context window');
       expect(tool?.content).not.toContain('Output continues');
     });
+
+    it('keeps a fetch_url spill locator reachable when the whole page is omitted (#139)', () => {
+      // The marker's remedy is "narrow it" — for fetch_url that is only followable when the page
+      // is a local file, and at cap <= 0 the payload (footer included) is gone. The locator rides
+      // the summary precisely so this branch still hands the model the file.
+      const system = 'S'.repeat(60_000);
+      const locator = '/tmp/reika-ab12cd/fetch-1.txt';
+      const page = `${'word '.repeat(2000)}\n\n(Full page saved to ${locator} — read it.)`;
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'f', name: 'fetch_url', args: {} }] },
+        {
+          role: 'tool',
+          callId: 'f',
+          summary: `Fetched https://example.com/doc (10000 chars extracted; full page saved to ${locator})`,
+          payload: page,
+        },
+      ];
+      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'f') as {
+        content?: string;
+      };
+      expect(tool?.content).toContain('entire output');
+      expect(tool?.content).not.toContain('word word');
+      expect(tool?.content).toContain(`full page saved to ${locator}`);
+    });
   });
 
   it('skips error and system messages (UI-only)', () => {
