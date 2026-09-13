@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractUrl, fetchUrlTool } from './fetch.js';
 import { resetSpillDir } from './_spill.js';
+import { parseSavedPage, resetSavedPages } from './fetch.js';
 import type { WebBudget } from '../types.js';
 
 const originalFetch = globalThis.fetch;
@@ -358,12 +359,14 @@ describe('fetch_url tool — spill (#139)', () => {
 
   beforeEach(() => {
     resetSpillDir();
+    resetSavedPages();
     process.env.REIKA_SPILL = '1';
   });
 
   afterEach(async () => {
     delete process.env.REIKA_SPILL;
     resetSpillDir();
+    resetSavedPages();
     for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
   });
 
@@ -441,5 +444,70 @@ describe('fetch_url tool — spill (#139)', () => {
     const uncut = await extractUrl('https://example.com/long', { untruncated: true });
     expect(uncut.ok && uncut.content.length).toBeGreaterThan(99_000);
     expect(uncut.ok && uncut.content).not.toContain('…(truncated');
+  });
+
+  // #296: the same URL fetched again is served from the saved copy — no request, no budget.
+  describe('repeat fetch of a saved page (#296)', () => {
+    it('serves the second fetch from the file without a network request or budget use', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      const budget = makeBudget(1);
+      const fetchedUrls = new Set<string>();
+      const first = await fetchUrlTool.run(
+        { url: 'https://example.com/doc' },
+        { cwd: '/tmp', webBudget: budget, fetchedUrls },
+      );
+      const path = locatorOf(first.summary);
+      expect(budget.fetches.used).toBe(1);
+      // Budget is now exhausted — a real fetch would be refused. The repeat is not one.
+      const second = await fetchUrlTool.run(
+        { url: 'https://example.com/doc' },
+        { cwd: '/tmp', webBudget: budget, fetchedUrls },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(budget.fetches.used).toBe(1);
+      expect(second.summary).toContain('already fetched this session, served from the saved copy');
+      expect(second.summary).toContain(`full page saved to ${path}`);
+      // Same page, same footer: the model gets what a re-fetch would have returned.
+      expect(second.payload).toBe(first.payload);
+      expect(fetchedUrls.has('https://example.com/doc')).toBe(true);
+      // Both summaries parse to the one locator the recap will list.
+      expect(parseSavedPage(first.summary)).toEqual({ url: 'https://example.com/doc', path });
+      expect(parseSavedPage(second.summary)).toEqual({ url: 'https://example.com/doc', path });
+    });
+
+    it('falls through to a real fetch when the saved file is gone', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      const first = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      const path = locatorOf(first.summary);
+      await rm(path);
+      const second = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(second.summary).not.toContain('served from the saved copy');
+      expect(locatorOf(second.summary)).not.toBe(path);
+    });
+
+    it('does not cache a page too small to have been saved, or anything under REIKA_SPILL=0', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(500)));
+      await fetchUrlTool.run({ url: 'https://example.com/small' }, { cwd: '/tmp' });
+      await fetchUrlTool.run({ url: 'https://example.com/small' }, { cwd: '/tmp' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      locatorOf(
+        (await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' })).summary,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      process.env.REIKA_SPILL = '0';
+      await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it('parseSavedPage rejects failed fetches and unsaved pages', () => {
+      expect(parseSavedPage('Fetch failed: https://x (404 Not Found)')).toBeNull();
+      expect(parseSavedPage('Fetched https://x (900 chars extracted)')).toBeNull();
+    });
   });
 });

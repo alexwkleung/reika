@@ -1,8 +1,15 @@
+import { readFile } from 'node:fs/promises';
 import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
-import type { Tool } from '../types.js';
+import type { Tool, ToolResult } from '../types.js';
 import { classifyPrivateUrl } from './_hosts.js';
-import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
+import {
+  buildCappedFooter,
+  buildSpillFooter,
+  spillEnabled,
+  spillResult,
+  type SpillRef,
+} from './_spill.js';
 import { recordCapped } from './_spillstats.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -19,6 +26,37 @@ const MAX_PAYLOAD_BYTES = 64 * 1024;
 // floor the serializer never cuts below (SMALL_PAYLOAD_FLOOR_CHARS): a payload that small is
 // always delivered whole, so a file for it would be one nobody follows.
 const SPILL_MIN_CHARS = 2048;
+
+// Pages saved this session, by URL (#296). A model whose earlier fetch has aged out of the window
+// fetches the same URL again — the extraction is the expensive part upstream (a second full
+// request for bytes we already hold, and enough of them in a session to read as a bot), and the
+// re-fetch returns the same page to be chopped the same way. Once the page is on disk the repeat
+// is served from the file: no request, no budget, same result shape, and a summary that says so.
+// Session-scoped by construction — the spill directory is per process and removed on exit — and
+// keyed on the URL as the model wrote it, because that is what the model repeats. Not an eviction
+// exemption (the alternative #296 proposed): the page's bytes still age out of context like any
+// other payload; what stays is the one summary line that says where they are.
+const savedPages = new Map<string, { ref: SpillRef; total: number }>();
+
+// Reset between tests, alongside `resetSpillDir`: a fresh spill directory means these paths point
+// at nothing, and the miss path below would recover anyway, but a test should not depend on it.
+export function resetSavedPages(): void {
+  savedPages.clear();
+}
+
+// The one summary shape for a saved page, fresh or served from the file: `compaction.ts` reads the
+// locator back out of it for the recap's "Pages fetched" line, so the tail must stay parseable.
+function savedSummary(url: string, total: number, path: string, cached: boolean): string {
+  const how = cached ? ' — already fetched this session, served from the saved copy' : '';
+  return `Fetched ${url} (${total} chars extracted${how}; full page saved to ${path})`;
+}
+
+// Locator and URL out of a fetch_url summary, for the recap. Null for a failed fetch, a page too
+// small to have been saved, and a spill that did not land.
+export function parseSavedPage(summary: string): { url: string; path: string } | null {
+  const m = /^Fetched (\S+) \(.*; full page saved to (\S+)\)$/.exec(summary);
+  return m ? { url: m[1], path: m[2] } : null;
+}
 // Redirect hops followed before giving up. The chain is walked here rather than handed to fetch's
 // own `redirect: 'follow'` because the host policy has to see every hop: a public URL that 302s to
 // 127.0.0.1 would otherwise pass the check on the URL as written and land on the local address
@@ -137,6 +175,20 @@ export const fetchUrlTool: Tool = {
     if (!/^https?:\/\//i.test(url)) {
       return { summary: `Fetch failed: not an http(s) URL — ${url}` };
     }
+    // Read once per call, like bash: the cap below must match the extraction it is applied to.
+    const spilling = spillEnabled();
+    // A page already saved this session is served from the file, ahead of the budget check: the
+    // budget bounds egress, and this is none. A file that cannot be read (it should not happen
+    // while the session lives, but fail-open is the rule) falls through to an ordinary fetch.
+    const hit = spilling ? savedPages.get(url) : undefined;
+    if (hit) {
+      const full = await readFile(hit.ref.path, 'utf8').catch(() => undefined);
+      if (full !== undefined) {
+        ctx.fetchedUrls?.add(url);
+        return presentSaved(url, full, hit.total, hit.ref, true);
+      }
+      savedPages.delete(url);
+    }
     const budget = ctx.webBudget?.fetches;
     if (budget && budget.used >= budget.max) {
       return {
@@ -144,8 +196,6 @@ export const fetchUrlTool: Tool = {
       };
     }
     if (budget) budget.used++;
-    // Read once per call, like bash: the cap below must match the extraction it is applied to.
-    const spilling = spillEnabled();
     const result = await extractUrl(url, { untruncated: spilling });
     if (!result.ok) {
       return { summary: `Fetch failed: ${url} (${result.error})` };
@@ -188,27 +238,38 @@ export const fetchUrlTool: Tool = {
         : '';
       return { summary: `Fetched ${url} (${total} chars extracted)`, payload: shown + footer };
     }
-    // The locator rides the SUMMARY as well as the footer, and that is the opposite of the choice
-    // the search tools made (`buildSpillFooter`). Their reasoning — the summary outlives payload
-    // aging, and by then a locator is stale advice — is about a page the model has already moved
-    // past. A fetched page is different: the model comes back to it (the same URL re-fetched is
-    // the loop #296 describes), and the summary is also the only part of the result that survives
-    // a fully-starved window (`capPayload` at cap <= 0 drops the entire payload, footer included).
-    // In both of those places the locator is the re-fetch avoided, not stale advice.
-    const footer = overCap
-      ? buildSpillFooter({
-          shown: MAX_PAYLOAD_BYTES,
-          total: String(total),
-          unit: 'chars',
-          ref,
-          saved: 'Full page',
-          subject: 'fetch',
-        })
-      : `\n\n(Full page saved to ${ref.path} — if this output is cut to fit the context window, ` +
-        `read that path with offset/limit instead of fetching the URL again.)`;
-    return {
-      summary: `Fetched ${url} (${total} chars extracted; full page saved to ${ref.path})`,
-      payload: shown + footer,
-    };
+    savedPages.set(url, { ref, total });
+    return presentSaved(url, full, total, ref, false);
   },
 };
+
+// The result for a page that is on disk — fresh from the network or served from the file. The
+// locator rides the SUMMARY as well as the footer, and that is the opposite of the choice the
+// search tools made (`buildSpillFooter`). Their reasoning — the summary outlives payload aging,
+// and by then a locator is stale advice — is about a page the model has already moved past. A
+// fetched page is different: the model comes back to it (the same URL re-fetched is the loop
+// #296 describes), and the summary is also the only part of the result that survives a
+// fully-starved window (`capPayload` at cap <= 0 drops the entire payload, footer included). In
+// both of those places the locator is the re-fetch avoided, not stale advice.
+function presentSaved(
+  url: string,
+  full: string,
+  total: number,
+  ref: SpillRef,
+  cached: boolean,
+): ToolResult {
+  const overCap = total > MAX_PAYLOAD_BYTES;
+  const shown = overCap ? full.slice(0, MAX_PAYLOAD_BYTES) : full;
+  const footer = overCap
+    ? buildSpillFooter({
+        shown: MAX_PAYLOAD_BYTES,
+        total: String(total),
+        unit: 'chars',
+        ref,
+        saved: 'Full page',
+        subject: 'fetch',
+      })
+    : `\n\n(Full page saved to ${ref.path} — if this output is cut to fit the context window, ` +
+      `read that path with offset/limit instead of fetching the URL again.)`;
+  return { summary: savedSummary(url, total, ref.path, cached), payload: shown + footer };
+}

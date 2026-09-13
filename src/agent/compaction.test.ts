@@ -775,6 +775,39 @@ describe('recap narrative and ranges (#247)', () => {
     expect(recap).toContain('Found 2 matches for /x/');
   });
 
+  it('lists saved pages with their locators outside the entry budget (#296)', () => {
+    const loc = '/tmp/reika-ab12cd/fetch-1.txt';
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...call(
+        'c1',
+        'fetch_url',
+        { url: 'https://example.com/doc' },
+        `Fetched https://example.com/doc (10000 chars extracted; full page saved to ${loc})`,
+      ),
+      ...call(
+        'c2',
+        'fetch_url',
+        { url: 'https://example.com/tiny' },
+        'Fetched https://example.com/tiny (300 chars extracted)',
+      ),
+      ...call(
+        'c3',
+        'fetch_url',
+        { url: 'https://example.com/gone' },
+        'Fetch failed: https://example.com/gone (404 Not Found)',
+      ),
+      ...filler(4),
+    ];
+    compactHistory(history, RW, 1, 0);
+    const recap = (history[1] as { content: string }).content;
+    const line = recap.split('\n').find(l => l.startsWith('Pages fetched')) ?? '';
+    expect(line).toContain(`https://example.com/doc → ${loc}`);
+    expect(line).toContain('read the path instead of fetching again');
+    expect(line).not.toContain('tiny');
+    expect(line).not.toContain('gone');
+  });
+
   it('carries the closing note forward once, not once per fold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...filler(6)];
     compactHistory(history, RW, 1, 0);
