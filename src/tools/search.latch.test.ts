@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { createSearchTool } from './search.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createSearchTool, resetSavedSearches } from './search.js';
 import { SearchUnavailableError } from '../search/types.js';
 import type { SearchProvider, SearchResult } from '../search/types.js';
 import type { SearchHealth, ToolContext, WebBudget } from '../types.js';
@@ -31,6 +31,8 @@ const unavailable = () =>
     'every SearXNG engine was unavailable (duckduckgo: CAPTCHA)',
     'Try REIKA_CDP_SEARCH=1.',
   );
+
+beforeEach(resetSavedSearches);
 
 describe('search tool — provider-level failure latch', () => {
   it('reports the failure and latches it on the turn', async () => {
