@@ -1,10 +1,10 @@
 // Turning an image into text the model can read.
 //
-// Behind an interface because the two ways to do this differ in kind, not degree: system OCR
-// yields text that drops straight into the existing string-only context pipeline, while a
-// vision model would need multimodal content parts threaded through serialization and
-// compaction. Issue #49 wants the second eventually; this shape lets it slot in without
-// touching the call sites.
+// Behind an interface so the two readers — system OCR (system.ts) and a configured vision
+// model (vision.ts, #130) — are interchangeable at the call sites. Both yield text: the vision
+// model describes the image and the description drops into the same string-only context
+// pipeline OCR text does, so the main model never needs multimodal content parts threaded
+// through serialization and compaction.
 export type OcrOutcome =
   | { ok: true; text: string }
   // 'unavailable' = no OCR on this platform at all (the caller should say so once and stop

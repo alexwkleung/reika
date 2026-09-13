@@ -36,6 +36,8 @@ export function loadConfig(): Config {
     256,
     parseIntOrUndef(process.env.REIKA_MIN_GEN_TOKENS) ?? DEFAULT_MIN_GEN_TOKENS,
   );
+  const visionBaseURL = emptyToUndefined(process.env.REIKA_VISION_BASE_URL);
+  if (visionBaseURL) validateBaseURL(visionBaseURL, 'REIKA_VISION_BASE_URL');
   const defaultProfile: Profile = {
     model,
     baseURL,
@@ -59,6 +61,9 @@ export function loadConfig(): Config {
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
     subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
+    visionModel: emptyToUndefined(process.env.REIKA_VISION_MODEL),
+    visionBaseURL,
+    visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
