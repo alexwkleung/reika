@@ -98,11 +98,20 @@ function repeatKey(name: string, args: Record<string, unknown>, summary: string)
   return `${name}\0${summary}`;
 }
 
+// Per-key repeat memory. `window` and `narrowings` only matter for reads (see the carve-out in
+// flagRepeatedCall); other tools carry Infinity/0 and behave as a bare counter.
+export type RepeatEntry = { count: number; window: number; narrowings: number };
+
+// How many times a shrinking window may restart the repeat run for one read region — the same
+// bound readtrace.ts uses (MAX_NARROWINGS there), kept in step so the metric and the nudge agree
+// about which read is the loop.
+const MAX_NUDGE_NARROWINGS = 3;
+
 // On a repeat of the same tracked call within a turn, append an escalating redirect to the
 // payload so a looping model gets a "this won't change" signal at the point of recency.
 // Untracked tools (fetch/search/subagent/unknown) pass through; mutating tools reset memory.
 export function flagRepeatedCall(
-  seen: Map<string, number>,
+  seen: Map<string, RepeatEntry>,
   name: string,
   args: Record<string, unknown>,
   summary: string,
@@ -114,20 +123,43 @@ export function flagRepeatedCall(
   }
   if (!TRACKED_TOOLS.has(name)) return payload;
   const key = repeatKey(name, args, summary);
-  const count = (seen.get(key) ?? 0) + 1;
-  seen.set(key, count);
+  const prior = seen.get(key);
+  // Resolved exactly as the read tool resolves it, so a default-window read followed by an explicit
+  // narrower one compares as narrowing rather than as a repeat.
+  const window = name === 'read' ? Math.max(1, Number(args.limit ?? READ_DEFAULT_LIMIT)) : Infinity;
+  let entry: RepeatEntry;
+  if (!prior) {
+    entry = { count: 1, window, narrowings: 0 };
+  } else if (window < prior.window && prior.narrowings < MAX_NUDGE_NARROWINGS) {
+    // A strictly smaller window from the same start line is the move the fit-to-window omission
+    // marker (provider/toolcall.ts capPayload) asks for: the earlier copy arrived with its middle
+    // cut out, and a narrower read is how the model gets those bytes. Observed on a 24k window:
+    // read(1-300) capped -> read(1-150) capped again AND told "re-reading won't make progress" —
+    // the nudge contradicted the marker and the model spun on which one to believe. Restart the
+    // run instead of counting it; repeating the same narrow window afterwards falls through to
+    // the counter, so genuine spinning is still caught a round later. Mirrors readtrace.ts, which
+    // already classes this read as `narrowed` — this is the path whose text the model sees.
+    entry = { count: 1, window, narrowings: prior.narrowings + 1 };
+  } else {
+    entry = { count: prior.count + 1, window, narrowings: prior.narrowings };
+  }
+  seen.set(key, entry);
+  const count = entry.count;
   if (count <= 1) return payload;
   // For reads, point at the exact range (the summary names path + lines) so a weak model gets a
   // concrete redirect, not a generic "do something different". The claim is anchored on the always-
-  // true fact — re-reading the same start line returns identical bytes — rather than on where any
-  // prior copy lives: this read's own payload is live in the next request by construction, so the
-  // nudge needs no liveness check and can't mislead the model into skipping a genuine refetch.
+  // true fact — re-reading the same start line with the same window returns the same bytes —
+  // rather than on where any prior copy lives: this read's own payload is live in the next request
+  // by construction, so the nudge needs no liveness check. "Live" is not "whole", though: the cap
+  // can have cut this copy too, so the remedy named is the one that works in that case as well.
   if (name === 'read') {
     return (
       (payload ?? '') +
       `\n\n(reika: you have re-read this same range ${count} times this turn (${summary}) — ` +
-      `re-reading the same start line returns identical bytes and won't make progress. Act on what ` +
-      `you already have, page to a different part of the file, or open another file.)`
+      `re-reading the same start line with the same window returns the same bytes and won't make ` +
+      `progress. If this copy arrived with its middle omitted, read a range small enough to arrive ` +
+      `whole (the omission marker says how many lines fit). Otherwise act on what you already ` +
+      `have, page to a different part of the file, or open another file.)`
     );
   }
   return (
@@ -1062,7 +1094,7 @@ export async function runTurn(opts: {
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
-  const seenReadOnly = new Map<string, number>();
+  const seenReadOnly = new Map<string, RepeatEntry>();
   // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
@@ -2516,8 +2548,9 @@ export async function runTurn(opts: {
       }
       // Loop-breaker: weak models re-issue the same read/grep/bash and stall on the identical
       // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
-      // on path+offset so window-varying re-reads still count); mutating tools reset the memory
-      // so a read-after-edit isn't flagged. Skipped for unknown tools (nothing produced).
+      // on path+offset so a same-or-wider re-read still counts; a narrowing one is exempt, being
+      // the omission marker's own remedy); mutating tools reset the memory so a read-after-edit
+      // isn't flagged. Skipped for unknown tools (nothing produced).
       if (tool && !refused && !bouncedBlindEdit)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
