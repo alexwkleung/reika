@@ -87,16 +87,54 @@ describe('agent prompt tracks the ask_user tool (#214)', () => {
   it('frames asking as a legitimate outcome rather than an instruction to ask', () => {
     expect(agentPrompt(true)).toContain('Stopping to ask is a legitimate outcome');
   });
+});
 
-  // Deliberate: plan mode's every rule pulls toward converging on a written plan, and a
-  // permission-to-pause line pulls against it — a stalling model would get a new way not to write.
-  // Plan mode resolves ambiguity by iterating on the plan across turns (#46) instead. The tool is
-  // still in planTools for a model that hits a real contradiction; the prompt just doesn't push it.
-  it('leaves the plan prompt alone', () => {
+// The plan prompt carries its own ask rule (#272): the plan is a one-shot handoff to an
+// implementation turn with no refinement round between (#46 is open), so a wrong reading of the
+// request costs the whole implementation turn. Same tool-list coupling as the agent prompt, but
+// deliberately NOT the same line — see the comment on rule 5 in prompt.ts.
+describe('plan prompt tracks the ask_user tool (#272)', () => {
+  afterEach(() => {
+    delete process.env.REIKA_ASK;
+  });
+
+  const planPromptWith = (canAsk?: boolean): string =>
+    buildSystemPrompt({ bundle, mode: 'plan', canAsk }).replace(/\s+/g, ' ');
+
+  it('names ask_user by default, with no flag set', () => {
     delete process.env.REIKA_ASK;
     expect(planTools().map(t => t.name)).toContain('ask_user');
-    const plan = buildSystemPrompt({ bundle, mode: 'plan', canAsk: true });
-    expect(plan).not.toContain('ask_user');
+    expect(planPromptWith(true)).toContain('use ask_user ONCE');
+  });
+
+  it('says nothing about asking when the tool is absent', () => {
+    expect(planPromptWith(false)).not.toContain('ask_user');
+    expect(planPromptWith(undefined)).not.toContain('ask_user');
+  });
+
+  // Every other plan rule pulls toward converging on a written plan; a bare permission-to-pause
+  // (the agent prompt's framing) would pull against that and hand a stalling model a new way not to
+  // write. So the plan rule is pinned to the plan on both sides and must stay that way.
+  it('routes the ask into the plan rather than granting permission to pause', () => {
+    const plan = planPromptWith(true);
+    expect(plan).toContain('before writing the plan, then write the plan for the answer');
+    expect(plan).toContain('never ask instead of writing the plan');
     expect(plan).not.toContain('Stopping to ask');
+  });
+
+  // The ask is for what the code cannot settle — approach, scope, placement — not for what a tool
+  // could answer; a low-quant model asks about everything if the trigger is "when unclear".
+  it('scopes the ask to what the code cannot settle', () => {
+    const plan = planPromptWith(true);
+    expect(plan).toContain('the code you have read does not settle it');
+    expect(plan).toContain('Never ask what grep/read could tell you');
+  });
+
+  // REIKA_ASK=0 is the baseline arm for measuring the rule: tool and rule leave together, so the
+  // comparison runs against a prompt that differs by exactly this block.
+  it('drops the rule with the tool under REIKA_ASK=0', () => {
+    process.env.REIKA_ASK = '0';
+    expect(planTools().map(t => t.name)).not.toContain('ask_user');
+    expect(planPromptWith(false)).not.toContain('ask_user');
   });
 });

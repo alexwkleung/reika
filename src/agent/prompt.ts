@@ -7,8 +7,8 @@ export function buildSystemPrompt(opts: {
   mode?: PromptMode;
   planMode?: boolean;
   // Whether `ask_user` is in this turn's tool list. Subagents run without it (see makeSpawnSubagent),
-  // and the agent prompt must not point a model at a tool it does not have — the same coupling the
-  // plan prompt keeps with planTools (#109).
+  // and neither the agent nor the plan prompt may point a model at a tool it does not have — the
+  // same coupling the plan prompt keeps with planTools for bash (#109).
   canAsk?: boolean;
 }): string {
   const mode = opts.mode ?? 'agent';
@@ -16,7 +16,7 @@ export function buildSystemPrompt(opts: {
     return buildChatPrompt(opts.bundle);
   }
   if (mode === 'plan') {
-    return buildPlanPrompt(opts.bundle);
+    return buildPlanPrompt(opts.bundle, opts.canAsk);
   }
   return buildAgentPrompt(opts);
 }
@@ -25,7 +25,7 @@ export function buildSystemPrompt(opts: {
 // stopping condition is stated explicitly — weak models in a read-only mode have no natural
 // closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
-function buildPlanPrompt(bundle: ContextBundle): string {
+function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean): string {
   // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
   // worse than saying nothing — it won't reach for one it has been told is absent. The default text
   // is left byte-identical so the flag A/Bs against an unchanged prompt.
@@ -50,6 +50,22 @@ function buildPlanPrompt(bundle: ContextBundle): string {
       '3. Do NOT re-read or re-grep something you already examined — act on what you have.',
       '4. End by writing a numbered, file-specific plan of the steps to make the change.',
       '   Each step names the file and what changes. Do not write any code — just the plan.',
+      // Plan mode is a one-shot pass: the plan it writes is handed straight to an implementation
+      // turn with no refinement round in between (#46 is still open), so a plan built on the wrong
+      // reading of the request costs the whole implementation turn, not one edit. That makes the ask
+      // worth its line here (#272) — but it is a different line from the agent prompt's rule 7. That
+      // one is permission (a counterweight to "never give up"); this one is a routing rule, and it is
+      // pinned to the plan on both sides — "before writing the plan", "then write the plan" — because
+      // every other rule above pulls toward converging on a written plan, and a bare
+      // permission-to-pause would hand a stalling model a new way not to write one. Gated on the tool
+      // being present, same as rule 7: pointing a model at a tool it does not have is worse than
+      // saying nothing.
+      ...(canAsk
+        ? [
+            '5. If the request could be planned two different ways — a choice of approach, of scope, or of where the change belongs — and the code you have read does not settle it, use ask_user ONCE, before writing the plan, then write the plan for the answer.',
+            '   Never ask what grep/read could tell you, and never ask instead of writing the plan.',
+          ]
+        : []),
     ].join('\n'),
     `Working directory: ${bundle.cwd}`,
   ];
