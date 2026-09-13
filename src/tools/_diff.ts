@@ -2,6 +2,15 @@ import { diffArrays } from 'diff';
 
 const CONTEXT_LINES = 3;
 
+// Myers (what jsdiff runs) costs O(D²) in the edit distance, not in the file: a diff that shares
+// little between its sides is the expensive one, whatever its size. A wholesale rewrite measured
+// 120ms at 1k lines, 2.9s at 5k and 17s at 12k (M2; #244), synchronously on the TUI thread — and
+// the result is a diff nobody reads, since every row is a `-` or a `+` and DiffView shows 80 of
+// them. So the search stops here (≈55ms at the cap) and the caller draws the change the way the
+// finished diff would have looked anyway: everything removed, everything added. Below the cap
+// the output is byte-identical to the uncapped one; jsdiff only ever returns undefined past it.
+export const MAX_EDIT_LENGTH = 1000;
+
 export function buildEditDiff(
   oldString: string,
   newString: string,
@@ -18,7 +27,11 @@ export function buildEditDiff(
   // Line-level diff so lines that exist on both sides render as context (`  `)
   // rather than being naively dumped as `-` then `+`. Reveals what actually
   // changed instead of repeating the whole block twice.
-  for (const change of diffArrays(oldLines, newLines)) {
+  const changes = diffArrays(oldLines, newLines, { maxEditLength: MAX_EDIT_LENGTH }) ?? [
+    { removed: true, added: false, value: oldLines, count: oldLines.length },
+    { removed: false, added: true, value: newLines, count: newLines.length },
+  ];
+  for (const change of changes) {
     const prefix = change.removed ? '- ' : change.added ? '+ ' : '  ';
     for (const l of change.value) out.push(`${prefix}${l}`);
   }

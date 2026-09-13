@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_EDIT_LENGTH } from './_diff.js';
 import { changesSince, snapshotTree } from './_treediff.js';
 
 // Real git, real files: the module's whole job is reading git's view of the tree, and a mocked
@@ -201,5 +202,62 @@ describe('changesSince', () => {
     expect(f.added).toBe(200);
     expect(f.hunks[0].text.split('\n')).toHaveLength(80);
     expect(f.omitted).toBe(120);
+  });
+
+  // A file that shares almost nothing with its previous bytes (a formatter reflow, a generated
+  // file regenerated, `sed` over every line) is where Myers goes quadratic: seconds per file, on
+  // the TUI thread, after a bash command (#244). It is named as a rewrite with its sizes instead.
+  it('names a file rewritten past the edit cap, with both sizes, instead of diffing it', async () => {
+    const n = MAX_EDIT_LENGTH * 3;
+    await write('gen.txt', numbered(n));
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'gen']);
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    await write(
+      'gen.txt',
+      Array.from({ length: n + 5 }, (_, i) => `row ${i + 1}`).join('\n') + '\n',
+    );
+    const t = performance.now();
+    const [f] = (await changesSince(snap))!.files;
+    expect(performance.now() - t).toBeLessThan(1000);
+    expect(f.kind).toBe('rewritten');
+    expect(f.hunks).toEqual([]);
+    expect(f.removed).toBe(n);
+    expect(f.added).toBe(n + 5);
+    expect(f.omitted).toBeUndefined();
+  });
+
+  it('still diffs a large file whose change is small, exactly', async () => {
+    const n = MAX_EDIT_LENGTH * 3;
+    await write('gen.txt', numbered(n));
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'gen']);
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    await write('gen.txt', numbered(n).replace('line 2000\n', 'line two thousand\n'));
+    const [f] = (await changesSince(snap))!.files;
+    expect(f.kind).toBe('modified');
+    expect([f.removed, f.added]).toEqual([1, 1]);
+    expect(f.hunks[0].startLine).toBe(1997);
+  });
+
+  it('a created or deleted file past the cap is still drawn whole: nothing to pair', async () => {
+    const n = MAX_EDIT_LENGTH * 3;
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    await write('c.txt', numbered(n));
+    await rm(join(dir, 'a.ts'));
+    const { files } = (await changesSince(snap))!;
+    expect(files.map(f => [f.path, f.kind, f.added, f.removed, f.omitted])).toEqual([
+      ['a.ts', 'deleted', 0, 20, undefined],
+      ['c.txt', 'created', n, 0, n - 80],
+    ]);
+    expect(files[1].hunks[0].text.split('\n')).toHaveLength(80);
+    expect(files[1].hunks[0].text.startsWith('+ line 1\n+ line 2\n')).toBe(true);
+  });
+
+  it('an empty created file has no rows and no count', async () => {
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    await write('empty.txt', '');
+    const [f] = (await changesSince(snap))!.files;
+    expect([f.kind, f.added, f.hunks]).toEqual(['created', 0, []]);
   });
 });

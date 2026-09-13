@@ -67,7 +67,7 @@ export function toolLabel(name: string): string {
 // changed, in the scrollback and the saved transcript. Reads like the edit tool's `(+a -r)` so a
 // shell edit and a tool edit scan the same, with the kind named only when the counts don't say it.
 export function changeLabel(f: {
-  kind: 'modified' | 'created' | 'deleted' | 'binary';
+  kind: 'modified' | 'created' | 'deleted' | 'binary' | 'rewritten';
   added: number;
   removed: number;
 }): string {
@@ -78,6 +78,8 @@ export function changeLabel(f: {
       return `(new, +${f.added})`;
     case 'deleted':
       return `(deleted, -${f.removed})`;
+    case 'rewritten':
+      return `(rewritten, ${f.removed} → ${f.added} lines)`;
     default:
       return `(+${f.added} -${f.removed})`;
   }

@@ -339,6 +339,26 @@ function padToWidth(text: string, maxWidth: number): string {
 // Below this, the two lines are too different — inverse highlights cover most
 // of the line and look noisy. Fall back to plain full-line color.
 const INTRA_LINE_SIMILARITY_THRESHOLD = 0.3;
+// Word edits past which the search stops and the line is drawn plain. The threshold above is the
+// same judgement made after the fact, and Myers is O(D²) in that D: a pair of 20KB lines with
+// nothing in common (a minified bundle, a data row) cost 1.3s in the word diff, per row, on the
+// TUI thread (#244); capped, 3ms. Nothing that many changed words could highlight is readable.
+const INTRA_LINE_MAX_EDITS = 200;
+
+// The word-level segments to paint a paired line with, or null when the pair is better drawn as
+// two plain lines: too different to highlight legibly, or too different to be worth finding out.
+// Exported for unit tests.
+export function intraLineParts(
+  oldText: string,
+  newText: string,
+): ReturnType<typeof diffWordsWithSpace> | null {
+  const raw = diffWordsWithSpace(oldText, newText, { maxEditLength: INTRA_LINE_MAX_EDITS });
+  if (raw === undefined) return null;
+  // Coalesce contiguous same-kind segments so adjacent highlights render as
+  // one continuous block (no visual gap between ", " and "Pi" pieces).
+  const parts = coalesceParts(raw);
+  return isWorthIntraLine(parts, oldText, newText) ? parts : null;
+}
 
 // A line that has a counterpart on the other side — render with intra-line
 // word-level diff highlighting via jsdiff, IF the lines are similar enough.
@@ -359,11 +379,9 @@ function PairedLine({
 }) {
   const oldText = side === 'removed' ? line : other;
   const newText = side === 'removed' ? other : line;
-  // Coalesce contiguous same-kind segments so adjacent highlights render as
-  // one continuous block (no visual gap between ", " and "Pi" pieces).
-  const parts = coalesceParts(diffWordsWithSpace(oldText, newText));
+  const parts = intraLineParts(oldText, newText);
 
-  if (!isWorthIntraLine(parts, oldText, newText)) {
+  if (parts === null) {
     return (
       <PlainChangeLine
         line={line}

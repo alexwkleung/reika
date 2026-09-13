@@ -3,6 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { structuredPatch } from 'diff';
 import type { FileChange, DiffHunk, TreeChanges } from '../types.js';
+import { MAX_EDIT_LENGTH } from './_diff.js';
 import { writeTargets } from './_writetargets.js';
 
 // What a bash command did to the working tree, as a diff the UI can draw (#278). A model that
@@ -151,38 +152,78 @@ async function namedChanges(snap: TreeSnapshot): Promise<TreeChanges | null> {
 }
 
 function describeChange(path: string, before: Bytes, after: Bytes): FileChange {
-  const kind = before === null ? 'created' : after === null ? 'deleted' : 'modified';
   if (before?.binary || after?.binary) {
     return { path, kind: 'binary', hunks: [], added: 0, removed: 0 };
   }
-  const patch = structuredPatch('', '', before?.text ?? '', after?.text ?? '', '', '', {
+  // A created or deleted file has nothing to pair, so it never goes through Myers: its rows are
+  // one side's lines, and the cap below must not be able to bail on a 2k-line file the command
+  // wrote whole.
+  if (before === null || after === null) {
+    const kind = before === null ? 'created' : 'deleted';
+    const marker = before === null ? '+' : '-';
+    const rows = splitLines((before ?? after)!.text).map(l => `${marker} ${l}`);
+    return { path, kind, ...foldRows([{ rows, startLine: 1, oldStartLine: 1 }]) };
+  }
+  const patch = structuredPatch('', '', before.text, after.text, '', '', {
     context: CONTEXT_LINES,
+    maxEditLength: MAX_EDIT_LENGTH,
   });
-  const hunks: DiffHunk[] = [];
+  // Past the cap (see _diff.ts): the file shares too little with its previous bytes for a diff to
+  // be worth its cost, or to read as anything but a rewrite. Say so, with the two sizes, rather
+  // than 80 rows of `-`.
+  if (patch === undefined) {
+    return {
+      path,
+      kind: 'rewritten',
+      hunks: [],
+      added: splitLines(after.text).length,
+      removed: splitLines(before.text).length,
+    };
+  }
+  const hunks = patch.hunks.map(h => ({
+    // jsdiff's "\ No newline at end of file" annotation: a fact about bytes, not a line. Same
+    // two-char markers the edit tool emits, so DiffView reads both identically.
+    rows: h.lines.filter(l => !l.startsWith('\\')).map(l => `${l[0]} ${l.slice(1)}`),
+    startLine: h.newStart,
+    oldStartLine: h.oldStart,
+  }));
+  return { path, kind: 'modified', ...foldRows(hunks) };
+}
+
+// Count every row, draw the first MAX_ROWS_PER_FILE, fold the rest into `omitted`.
+function foldRows(
+  hunks: { rows: string[]; startLine: number; oldStartLine: number }[],
+): Pick<FileChange, 'hunks' | 'added' | 'removed' | 'omitted'> {
+  const out: DiffHunk[] = [];
   let added = 0;
   let removed = 0;
   let rows = 0;
   let omitted = 0;
-  for (const h of patch.hunks) {
+  for (const h of hunks) {
     const lines: string[] = [];
-    for (const l of h.lines) {
-      // jsdiff's "\ No newline at end of file" annotation: a fact about bytes, not a line.
-      if (l.startsWith('\\')) continue;
+    for (const l of h.rows) {
       if (l[0] === '+') added++;
       else if (l[0] === '-') removed++;
       if (rows >= MAX_ROWS_PER_FILE) {
         omitted++;
         continue;
       }
-      // Same two-char markers the edit tool emits, so DiffView reads both identically.
-      lines.push(`${l[0]} ${l.slice(1)}`);
+      lines.push(l);
       rows++;
     }
     if (lines.length > 0) {
-      hunks.push({ text: lines.join('\n'), startLine: h.newStart, oldStartLine: h.oldStart });
+      out.push({ text: lines.join('\n'), startLine: h.startLine, oldStartLine: h.oldStartLine });
     }
   }
-  return { path, kind, hunks, added, removed, ...(omitted > 0 ? { omitted } : {}) };
+  return { hunks: out, added, removed, ...(omitted > 0 ? { omitted } : {}) };
+}
+
+// Lines as a diff counts them: a trailing newline ends the last line, it doesn't start an empty one.
+function splitLines(text: string): string[] {
+  if (text === '') return [];
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
 }
 
 // `git status` lists tracked files that differ from HEAD or the index, plus untracked ones. Ignored

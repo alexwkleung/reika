@@ -1,7 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import { buildEditDiff, buildWriteDiff, editDiffStartLine } from './_diff.js';
+import { buildEditDiff, buildWriteDiff, editDiffStartLine, MAX_EDIT_LENGTH } from './_diff.js';
 
 describe('buildEditDiff', () => {
+  // Myers is quadratic in the edit distance; a block rewritten wholesale is the worst case, and
+  // at this size it ran for seconds (#244). Past the cap the diff is the naive dump — every old
+  // line removed, every new line added — which is what the search would have found anyway.
+  it('draws a wholesale rewrite past the edit cap as all - then all +, without the search', () => {
+    const n = MAX_EDIT_LENGTH * 3;
+    const oldLines = Array.from({ length: n }, (_, i) => `old line ${i}`);
+    const newLines = Array.from({ length: n }, (_, i) => `new line ${i}`);
+    const t = performance.now();
+    const diff = buildEditDiff(oldLines.join('\n'), newLines.join('\n'), 'before\n', '\nafter');
+    expect(performance.now() - t).toBeLessThan(1000);
+    const lines = diff.split('\n');
+    expect(lines[0]).toBe('  before');
+    expect(lines.slice(1, n + 1)).toEqual(oldLines.map(l => `- ${l}`));
+    expect(lines.slice(n + 1, 2 * n + 1)).toEqual(newLines.map(l => `+ ${l}`));
+    expect(lines[2 * n + 1]).toBe('  after');
+  });
+
+  it('pairs lines across sides below the cap, however large the block', () => {
+    const n = MAX_EDIT_LENGTH * 3;
+    const oldLines = Array.from({ length: n }, (_, i) => `line ${i}`);
+    const newLines = [...oldLines];
+    newLines[n - 1] = 'changed';
+    const diff = buildEditDiff(oldLines.join('\n'), newLines.join('\n'), '', '');
+    expect(diff.split('\n').filter(l => !l.startsWith('  '))).toEqual([
+      `- line ${n - 1}`,
+      '+ changed',
+    ]);
+  });
+
   it('shows actual changes with surrounding context', () => {
     const oldStr = 'const x = 10;';
     const newStr = 'const x = 20;';
