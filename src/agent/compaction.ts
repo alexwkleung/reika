@@ -8,6 +8,7 @@ import {
   taskSpecIndex,
 } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
+import { parseSavedPage } from '../tools/fetch.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
 const CHARS_PER_TOKEN = 4;
@@ -323,6 +324,9 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write']);
 
 // How many line ranges are spelled out per file before the rest become a count.
 const MAX_RANGES = 3;
+// Pages listed on the recap's "Pages fetched" line. Each entry is a URL plus a locator, ~100
+// chars, so ten is the same order of bytes as the 25-file cap above.
+const MAX_PAGES = 10;
 
 // Share of the recap budget a carried-forward recap may occupy (#275). Half: the earlier session and
 // this fold's own turns each keep a floor, so neither the deep history nor the recent work can be
@@ -450,6 +454,19 @@ function noteFile(
   files.set(path, ranges);
 }
 
+// Record a fetched page against the file it was saved to (#296). The fold drops the page's bytes
+// like any other payload; what the model kept losing with them was the fact that it HAD the page —
+// its next move was to fetch the same URL again, which is the loop the saved copy exists to break
+// (`tools/fetch.ts`). The `·` summary line carries the locator too, but it sits inside the entry
+// budget and is trimmed by round; this line rides outside it, next to "Files touched", so a page
+// the session read stays addressable through every fold. Pages too small to have been saved, and
+// failed fetches, have nothing to point at and are left out.
+function notePage(pages: Map<string, string>, call: ToolCall | undefined, summary: string): void {
+  if (call?.name !== 'fetch_url') return;
+  const saved = parseSavedPage(summary);
+  if (saved) pages.set(saved.url, saved.path);
+}
+
 // Merge overlapping and adjacent ranges so five reads walking one file come back as one span
 // rather than five near-identical ones.
 function mergeRanges(ranges: [number, number][]): [number, number][] {
@@ -484,6 +501,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   const entries: string[] = [];
   const toolCounts: Record<string, number> = {};
   const files = new Map<string, [number, number][]>();
+  const pages = new Map<string, string>();
   // Tool calls by id, so each result can be read together with the call that produced it: the call
   // knows the tool and the path, the result knows what actually happened.
   const calls = new Map<string, ToolCall>();
@@ -526,6 +544,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
       // and nothing else (#247). The result summaries are the record of what was actually done, and
       // they already carry paths, ranges, match counts and exit status.
       noteFile(files, calls.get(m.callId), m.summary);
+      notePage(pages, calls.get(m.callId), m.summary);
       add(`  · ${trunc(m.summary)}`);
     }
   }
@@ -588,6 +607,19 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
       .join(', ');
     const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
     out.push(`Files touched: ${shown}${extra}`);
+  }
+  if (pages.size > 0) {
+    // Same cap discipline as the file list. Insertion order rather than sorted: a URL list has no
+    // useful sort, and the order fetched is the order the model thinks of them in.
+    const all = [...pages.entries()];
+    const shown = all
+      .slice(0, MAX_PAGES)
+      .map(([url, path]) => `${url} → ${path}`)
+      .join(', ');
+    const extra = all.length > MAX_PAGES ? `, +${all.length - MAX_PAGES} more` : '';
+    out.push(
+      `Pages fetched (saved this session — read the path instead of fetching again): ${shown}${extra}`,
+    );
   }
   out.push(OMISSION_NOTE);
 

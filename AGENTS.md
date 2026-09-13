@@ -438,6 +438,19 @@ re-fetch avoided, not stale advice. The cap itself stays in `extractUrl` for the
 (the URL grounder, pasted-URL expansion): only the tool asks for the page uncut, so a grounding
 check never writes a file whose locator nobody sees. Peak memory is unchanged — the full extraction
 was always in memory before the slice.
+**The saved page is also the answer to the same-URL re-fetch** (#296). A model whose fetch has aged
+out of the window fetches the URL again — a second full request upstream for bytes we already hold,
+and a page that comes back to be chopped the same way. `fetch_url` keeps a session map of URL →
+saved file and serves a repeat from the file: no request, no budget (the budget bounds egress, and
+this is none), the same result shape, and a summary that says it was served from the saved copy.
+The alternative #296 proposed — exempt fetch payloads from aging — was not taken: an exemption
+shrinks the pool every other payload ages in, so folds come earlier for everything else, and a
+handful of fetches would pin ~100KB of mostly nav chrome for the session. What has to survive is
+not the bytes but the fact that the session has them, so the compaction recap grows a `Pages
+fetched:` line (URL → locator, capped at 10, outside the entry budget next to `Files touched`),
+the fetch analogue of the file-coverage line — a page the session read stays addressable through
+every fold. Failed fetches and pages under the spill floor have nothing to point at and are left
+out.
 
 The ceiling is `SPILL_MAX_MATCHES` (300), and it is where the two tools stop being symmetric.
 Glob's spill is free — the crawl already holds every path — while grep's is paid on _every_ search
