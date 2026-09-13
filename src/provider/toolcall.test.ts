@@ -777,6 +777,46 @@ describe('messagesToOpenAI', () => {
   });
 
   describe('omission marker (edit-safety wording)', () => {
+    it('says how many lines of this output would arrive whole, in the unit the model controls', () => {
+      // Observed on a 24k window: read(1-300) capped -> the model narrowed to read(1-150), which at
+      // this file's density is 8.7k chars against a ~2k cap — still 4x over, cut again. It cannot
+      // see chars-per-line, so "read a narrower range" alone left it guessing; the marker must say
+      // the number. Density is measured off the payload: 150 lines at ~58 chars each fits ~35.
+      const line = (n: number) => `${String(n).padStart(5)}│${'x'.repeat(50)}`;
+      const payload = Array.from({ length: 150 }, (_, k) => line(k + 1)).join('\n');
+      expect(payload.length).toBeGreaterThan(8000); // the observed shape, not a toy
+      const history: Message[] = [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+        { role: 'tool', callId: 'c', summary: 's', payload },
+        // A second fresh read takes newest-read protection, so the first one is the one capped.
+        { role: 'tool', callId: 'd', summary: 's2', payload: 'Z'.repeat(6000) },
+      ];
+      history[1] = {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'c', name: 'read', args: {} },
+          { id: 'd', name: 'read', args: {} },
+        ],
+      };
+      const out = messagesToOpenAI('S'.repeat(40_000), history, { contextWindow: 16384 });
+      const content =
+        (
+          out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
+            content?: string;
+          }
+        ).content ?? '';
+      expect(content).toContain('omitted here');
+      const m = /about (\d+) lines of this output fit whole/.exec(content);
+      expect(m).not.toBeNull();
+      const fit = Number(m![1]);
+      // Under the floor and above zero — a read of `fit` lines of this file actually ships whole.
+      const perLine = payload.length / 150;
+      expect(fit * perLine).toBeLessThanOrEqual(2048);
+      expect((fit + 1) * perLine).toBeGreaterThan(2048);
+    });
+
     it('warns at the cut point never to span the gap with an edit old_string', () => {
       // The marker already sits AT the cut; it must also tell the model the hidden middle is
       // unknowable — otherwise it builds an old_string across the hole and the edit fails.

@@ -1019,8 +1019,20 @@ function agedToolContent(
   return { content: `${msg.summary}\n\n${skeleton}`, kind: diff ? 'diff' : 'outline' };
 }
 
+// How many lines of THIS payload fit under the small-payload floor, i.e. the largest re-read that
+// arrives whole. Said in lines because that is the unit the model controls (`limit`): it cannot see
+// chars-per-line, and telling it only "narrower" sent one from 300 to 150 lines against a 2k cap —
+// still 4x over, cut a second time, and it never learned why. Density is measured off the payload
+// itself, so a comment-dense source file and a terse grep listing each get their own number.
+function linesThatFitWhole(payload: string): number {
+  const lines = payload.split('\n').length;
+  const perLine = payload.length / Math.max(1, lines);
+  return Math.max(1, Math.floor(SMALL_PAYLOAD_FLOOR_CHARS / perLine));
+}
+
 function capPayload(payload: string, cap: number | undefined): string {
   if (cap === undefined || payload.length <= cap) return payload;
+  const fit = linesThatFitWhole(payload);
   // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two
   // empty slices — "Output continues:" over nothing reads as tool output, not as an omission.
   if (cap <= 0) {
@@ -1033,8 +1045,8 @@ function capPayload(payload: string, cap: number | undefined): string {
       `[reika: entire output (${payload.length} chars) omitted to fit the context window — a ` +
       `context-size limit, not a command error; re-running this exact call won't help. Results of ` +
       `${SMALL_PAYLOAD_FLOOR_CHARS} chars or less are always delivered in full, so re-run it ` +
-      `narrowed to return under that much (a targeted grep for one symbol, or a read of a few ` +
-      `dozen lines). Otherwise work from the summary line above.]`
+      `narrowed to return under that much (a targeted grep for one symbol, or a read of about ` +
+      `${fit} lines of this output). Otherwise work from the summary line above.]`
     );
   }
   const head = Math.floor(cap * HEAD_FRACTION);
@@ -1048,7 +1060,8 @@ function capPayload(payload: string, cap: number | undefined): string {
     `[reika: ${omitted} chars omitted here — the middle of this output is hidden to fit the ` +
     `context window; a context-size limit, not a command error; re-running won't help. Never ` +
     `build an edit old_string from text spanning this gap; read a narrower line range to see ` +
-    `the hidden part. Output continues:]\n\n` +
+    `the hidden part — about ${fit} lines of this output fit whole (${SMALL_PAYLOAD_FLOOR_CHARS} ` +
+    `chars or less is always delivered in full). Output continues:]\n\n` +
     `${payload.slice(payload.length - tail)}`
   );
 }
