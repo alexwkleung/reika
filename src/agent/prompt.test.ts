@@ -89,10 +89,11 @@ describe('agent prompt tracks the ask_user tool (#214)', () => {
   });
 });
 
-// The subagent nudge (#273) is the same shape as rule 7: the trigger already rides the tool
-// description, the prompt line is permission. Flagged so the baseline arm runs against a
-// byte-identical prompt, and keyed off the tool list so a subagent (no recursion) and plan mode
-// (no subagent tool) are never pointed at a tool they do not have.
+// The subagent nudge (#273) is a routing rule keyed on the request's shape — NOT rule 7's
+// permission shape, which was the first arm and got 0/2 uptake (see the comment in prompt.ts).
+// Flagged so the baseline arm runs against a byte-identical prompt, and keyed off the tool list so
+// a subagent (no recursion) and plan mode (no subagent tool) are never pointed at a tool they do
+// not have.
 describe('agent prompt subagent nudge (#273)', () => {
   afterEach(() => {
     delete process.env.REIKA_SUBAGENT_NUDGE;
@@ -110,24 +111,35 @@ describe('agent prompt subagent nudge (#273)', () => {
 
   it('adds the line under the flag only when the tool is present', () => {
     process.env.REIKA_SUBAGENT_NUDGE = '1';
-    expect(agentPrompt({ canAsk: true, canSubagent: true })).toContain('hand it to subagent');
+    expect(agentPrompt({ canAsk: true, canSubagent: true })).toContain(
+      'FIRST tool call is subagent',
+    );
     expect(agentPrompt({ canAsk: true, canSubagent: false })).not.toContain('subagent');
     expect(agentPrompt({ canAsk: true })).not.toContain('subagent');
   });
 
-  // Rule numbering follows rule 7's presence (REIKA_ASK=0 drops it): no gap, no duplicate.
-  it('numbers itself after the ask rule, or in its place', () => {
+  // The permission-shaped first arm at the tail of the list got 0/2 uptake: the trigger was a
+  // forecast and the position was where the model's attention isn't. It sits next to rule 2 (the
+  // grep the model reaches for at round 0) and the rules after it renumber — no gap, no duplicate.
+  it('is rule 3, right after the grep rule, and renumbers the rest', () => {
     process.env.REIKA_SUBAGENT_NUDGE = '1';
-    expect(agentPrompt({ canAsk: true, canSubagent: true })).toContain('8. When answering');
-    expect(agentPrompt({ canAsk: false, canSubagent: true })).toContain('7. When answering');
+    const p = agentPrompt({ canAsk: true, canSubagent: true });
+    expect(p).toContain('2. To find where something is defined');
+    expect(p).toContain('3. When the request is to trace');
+    expect(p).toContain('4. Before edit');
+    expect(p).toContain('8. Stopping to ask');
+    expect(p).not.toContain('9.');
+    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain('8.');
   });
 
   // Scoped to exploration: the value is N reads collapsing into one digest payload in the parent;
-  // a delegated edit is one the parent never read the file for.
+  // a delegated edit is one the parent never read the file for. The closing sentence guards the
+  // negative control — a one-file question must not be delegated.
   it('frames it around reading and reporting, not delegating edits', () => {
     process.env.REIKA_SUBAGENT_NUDGE = '1';
     const p = agentPrompt({ canAsk: true, canSubagent: true });
-    expect(p).toContain('what to report back');
+    expect(p).toContain('ask for the chain with file and function names');
+    expect(p).toContain('one or two files answer, read yourself');
     expect(p).not.toMatch(/subagent[^.]*\bedit/);
   });
 

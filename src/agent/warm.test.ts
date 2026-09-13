@@ -175,7 +175,7 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
         calibration: 1,
       });
       const real = await captureRoundZero([], 'agent', config, tools);
-      expect(warm.system).toContain('hand it to subagent');
+      expect(warm.system).toContain('FIRST tool call is subagent');
       expect(warm.system).toContain('ask_user');
       expect(warm.system).toBe(real.system);
     } finally {
