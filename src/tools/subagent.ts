@@ -3,7 +3,7 @@ import type { Tool } from '../types.js';
 export const subagentTool: Tool = {
   name: 'subagent',
   description:
-    "Spawn a subagent to handle a focused exploration or task in an isolated conversation. Use this when the task requires reading many files (>3) or chasing a long chain of references — the subagent's exploration stays out of your context. The subagent has its own conversation history (no parent context) and runs with read/grep/list/edit/write/bash. It cannot spawn its own subagents. Returns the subagent's final response.",
+    "Spawn a subagent to handle a focused exploration or task in an isolated conversation. Use this when the task requires reading many files (>3) or chasing a long chain of references — the subagent's exploration stays out of your context. The subagent has its own conversation history (no parent context) and runs with read/grep/list/edit/write/bash. It cannot spawn its own subagents. It has a fixed round budget and always returns a report; the report ends with a note naming any file from the task it did not get to read, which you can hand to a second subagent.",
   parameters: {
     type: 'object',
     properties: {
