@@ -57,8 +57,10 @@ export const grepTool: Tool = {
     // suffix after the last '*' so they behave the same as a plain ".css".
     const suffix = include ? include.slice(include.lastIndexOf('*') + 1) : undefined;
     let re: RegExp;
+    let preRe: RegExp;
     try {
       re = new RegExp(pattern);
+      preRe = new RegExp(pattern, 'm');
     } catch (e) {
       return { summary: `Invalid regex: ${(e as Error).message}` };
     }
@@ -76,7 +78,7 @@ export const grepTool: Tool = {
       excluded: 0,
       limit: spilling ? SPILL_MAX_MATCHES : MAX_MATCHES,
     };
-    await walk(start, ctx.cwd, ig, suffix, re, state);
+    await walk(start, ctx.cwd, ig, suffix, re, preRe, state);
     if (state.count === 0 && suffix && state.scanned === 0 && state.excluded > 0) {
       return {
         summary:
@@ -116,13 +118,14 @@ async function walk(
   ig: Ignore | undefined,
   suffix: string | undefined,
   re: RegExp,
+  preRe: RegExp,
   state: GrepState,
 ): Promise<void> {
   if (state.count >= state.limit) return;
   const st = await stat(path).catch(() => null);
   if (!st) return;
   if (st.isFile()) {
-    await scanFile(path, cwd, ig, suffix, re, state);
+    await scanFile(path, cwd, ig, suffix, re, preRe, state);
     return;
   }
   if (!st.isDirectory()) return;
@@ -134,9 +137,9 @@ async function walk(
       const subPath = join(path, entry.name);
       const relSub = relative(cwd, subPath);
       if (ig && relSub.length > 0 && ig.ignores(relSub + '/')) continue;
-      await walk(subPath, cwd, ig, suffix, re, state);
+      await walk(subPath, cwd, ig, suffix, re, preRe, state);
     } else if (entry.isFile()) {
-      await scanFile(join(path, entry.name), cwd, ig, suffix, re, state);
+      await scanFile(join(path, entry.name), cwd, ig, suffix, re, preRe, state);
     }
   }
 }
@@ -147,6 +150,7 @@ async function scanFile(
   ig: Ignore | undefined,
   suffix: string | undefined,
   re: RegExp,
+  preRe: RegExp,
   state: GrepState,
 ): Promise<void> {
   if (suffix && !filePath.endsWith(suffix)) {
@@ -161,6 +165,12 @@ async function scanFile(
   const text = await readFile(filePath, 'utf8').catch(() => null);
   if (text === null) return;
   if (NULL_BYTE_RE.test(text)) return;
+  // Most files in a search hold no hit at all; one whole-text test is ~6x cheaper than splitting
+  // into lines and testing each. It must be a superset of the per-line test: the `m` flag makes
+  // ^/$ see line boundaries (without it `^import` would only ever match line 1). It can still
+  // pass on a cross-line match (`\s` spans '\n') that no single line has — the per-line loop
+  // below stays the arbiter.
+  if (!preRe.test(text)) return;
   const lines = text.split('\n');
 
   // Collect matching line indices, respecting the global match cap.

@@ -188,3 +188,25 @@ describe('grepTool spill (REIKA_SPILL)', () => {
     expect(result.payload).not.toContain('saved to');
   });
 });
+
+describe('grepTool whole-file pre-test', () => {
+  it('still finds ^-anchored and $-anchored matches on lines other than the first/last', async () => {
+    await writeFile(
+      join(cwd, 'a.ts'),
+      ['// header', 'import x from "y";', 'const end;', 'tail'].join('\n'),
+      'utf8',
+    );
+    const anchoredStart = await grepTool.run({ pattern: '^import' }, { cwd, ignore: ignore() });
+    expect(anchoredStart.summary).toMatch(/Found 1 matches/);
+    const anchoredEnd = await grepTool.run({ pattern: 'end;$' }, { cwd, ignore: ignore() });
+    expect(anchoredEnd.summary).toMatch(/Found 1 matches/);
+    const both = await grepTool.run({ pattern: '^const end;$' }, { cwd, ignore: ignore() });
+    expect(both.summary).toMatch(/Found 1 matches/);
+  });
+
+  it('does not report a match that only spans lines', async () => {
+    await writeFile(join(cwd, 'b.ts'), ['foo', 'bar'].join('\n'), 'utf8');
+    const result = await grepTool.run({ pattern: 'foo\\s+bar' }, { cwd, ignore: ignore() });
+    expect(result.summary).toMatch(/Found 0 matches/);
+  });
+});
