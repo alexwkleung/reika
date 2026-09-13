@@ -404,7 +404,7 @@ When the reader is an LLM with a token budget, the case for locality, predictabi
 
 ## Working caveats
 
-- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=safe` (or `true`) for trusted runs: ordinary edits/commands auto-run, but commands matching a dangerous pattern (`rm -rf`, force push, any package install/uninstall, `npx`, `curl`/`wget`, `pkill`/`killall`, etc.) still force a manual approve/reject. This is yolo mode with safeguards. For true no-prompts-ever, set `REIKA_AUTO_APPROVE=bypass` (or `yolo`) — that runs dangerous commands without asking.
+- Approval slows multi-edit sessions. Set `REIKA_AUTO_APPROVE=safe` (or `true`) for trusted runs: ordinary edits/commands auto-run, but commands matching a dangerous pattern (`rm -rf`, `rm -f`, force push, any package install/uninstall, `npx`, `curl`/`wget`, `pkill`/`killall`, etc.) still force a manual approve/reject. This is yolo mode with safeguards. For true no-prompts-ever, set `REIKA_AUTO_APPROVE=bypass` (or `yolo`) — that runs dangerous commands without asking.
 - Subagent quality depends entirely on the model; small models often _cost_ turns rather than save them. Furthermore, the subagent will only run if its configured.
 - The repo map and file index don't auto-refresh after external file changes — `/cd .` re-indexes.
 - Cmd+←/→ on macOS depends on terminal config; Ctrl+A/E always works.
