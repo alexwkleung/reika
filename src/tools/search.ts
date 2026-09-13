@@ -2,6 +2,41 @@ import { SearchUnavailableError } from '../search/types.js';
 import type { SearchProvider } from '../search/types.js';
 import type { Tool } from '../types.js';
 
+// Results kept this session, by query (#297). A search payload ages out of the window like any
+// other; what stays is its summary, which quotes the query verbatim — the cheapest handle there is
+// on a result set, and the one a model actually reuses: it copies the string back into `search`.
+// Serve that repeat from here rather than upstream. A search is a browser round trip (and a bot
+// check risk) on the CDP provider and a spent slot of a 3-per-turn budget on all of them, and the
+// model asking again wants what it had, not a fresh ranking. Keyed on the query as the model wrote
+// it, trimmed, because that is what the summary shows and what gets copied. Not an eviction
+// exemption: the result bytes leave the window on schedule (an exemption would shrink the pool
+// every other payload ages in), and only the one-line query survives. ~2KB per entry, bounded by
+// the turn budget times the session's turns.
+const savedSearches = new Map<string, { payload: string; count: number }>();
+
+// Reset between tests.
+export function resetSavedSearches(): void {
+  savedSearches.clear();
+}
+
+// The one summary shape for a search that found something, fresh or served from the saved set:
+// `compaction.ts` reads the query back out of it for the recap's "Web searches run" line, so the
+// quoted query must stay where it is and the cache note must stay after it.
+function foundSummary(query: string, count: number, cached: boolean): string {
+  const how = cached ? ' — already searched this session, served from the saved results' : '';
+  return `Found ${count} result(s) for "${query}"${how}`;
+}
+
+// The query out of a `search` summary, for the recap. Null for a failed, refused, or empty
+// search: none of those has a result set to come back to. A query containing `"` is quoted as-is,
+// so the match is greedy to the last quote rather than the first.
+export function parseSearchQuery(summary: string): string | null {
+  const m = /^Found \d+ result\(s\) for "(.*)"( — already searched this session[^"]*)?$/.exec(
+    summary,
+  );
+  return m ? m[1] : null;
+}
+
 export function createSearchTool(provider: SearchProvider): Tool {
   return {
     name: 'search',
@@ -17,6 +52,13 @@ export function createSearchTool(provider: SearchProvider): Tool {
     async run(args, ctx) {
       const query = String(args.query ?? '').trim();
       if (!query) return { summary: 'Search failed: empty query' };
+
+      // A repeat of a query this session already ran is served from the saved results, ahead of
+      // the latch and the budget: neither reaches upstream, and this does not either.
+      const hit = savedSearches.get(query);
+      if (hit) {
+        return { summary: foundSummary(query, hit.count, true), payload: hit.payload };
+      }
 
       // A provider-level failure already reported this turn: no browser, a bot check, every engine
       // refused. Re-attempting cannot succeed, so say so without spending a call or the budget —
@@ -68,8 +110,9 @@ export function createSearchTool(provider: SearchProvider): Tool {
         const payload = results
           .map((r, i) => `${i + 1}. ${r.title || '(no title)'}\n   ${r.url}\n   ${r.snippet || ''}`)
           .join('\n\n');
+        savedSearches.set(query, { payload, count: results.length });
         return {
-          summary: `Found ${results.length} result(s) for "${query}"`,
+          summary: foundSummary(query, results.length, false),
           payload,
           ...receipt(),
         };

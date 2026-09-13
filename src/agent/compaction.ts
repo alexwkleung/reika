@@ -9,6 +9,7 @@ import {
 } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
 import { parseSavedPage } from '../tools/fetch.js';
+import { parseSearchQuery } from '../tools/search.js';
 
 // Keep in sync with CHARS_PER_TOKEN in ../provider/tokens.ts.
 const CHARS_PER_TOKEN = 4;
@@ -327,6 +328,9 @@ const MAX_RANGES = 3;
 // Pages listed on the recap's "Pages fetched" line. Each entry is a URL plus a locator, ~100
 // chars, so ten is the same order of bytes as the 25-file cap above.
 const MAX_PAGES = 10;
+// Queries listed on the recap's "Web searches run" line. A query is a few words, so ten is a
+// fraction of what either list above costs.
+const MAX_SEARCHES = 10;
 
 // Share of the recap budget a carried-forward recap may occupy (#275). Half: the earlier session and
 // this fold's own turns each keep a floor, so neither the deep history nor the recent work can be
@@ -467,6 +471,19 @@ function notePage(pages: Map<string, string>, call: ToolCall | undefined, summar
   if (saved) pages.set(saved.url, saved.path);
 }
 
+// Record a web search's query (#297). The fold drops the result list, and rightly — the model
+// usually followed one of eight links, or lifted a snippet from one, and the rest was never worth
+// the window. The query is the cheap handle on that list: the tool serves a repeat of it from the
+// session's saved results (`tools/search.ts`), so a model that wants the list back copies the
+// string and pays nothing. As with pages, the `·` summary line has it too but sits inside the
+// entry budget; this line rides outside it. Searches that found nothing have no list to come back
+// to and are left out.
+function noteSearch(searches: Set<string>, call: ToolCall | undefined, summary: string): void {
+  if (call?.name !== 'search') return;
+  const query = parseSearchQuery(summary);
+  if (query) searches.add(query);
+}
+
 // Merge overlapping and adjacent ranges so five reads walking one file come back as one span
 // rather than five near-identical ones.
 function mergeRanges(ranges: [number, number][]): [number, number][] {
@@ -502,6 +519,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   const toolCounts: Record<string, number> = {};
   const files = new Map<string, [number, number][]>();
   const pages = new Map<string, string>();
+  const searches = new Set<string>();
   // Tool calls by id, so each result can be read together with the call that produced it: the call
   // knows the tool and the path, the result knows what actually happened.
   const calls = new Map<string, ToolCall>();
@@ -545,6 +563,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
       // they already carry paths, ranges, match counts and exit status.
       noteFile(files, calls.get(m.callId), m.summary);
       notePage(pages, calls.get(m.callId), m.summary);
+      noteSearch(searches, calls.get(m.callId), m.summary);
       add(`  · ${trunc(m.summary)}`);
     }
   }
@@ -619,6 +638,19 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
     const extra = all.length > MAX_PAGES ? `, +${all.length - MAX_PAGES} more` : '';
     out.push(
       `Pages fetched (saved this session — read the path instead of fetching again): ${shown}${extra}`,
+    );
+  }
+  if (searches.size > 0) {
+    // "Web" to keep it apart from the plan ledger's `Searches run`, which lists grep patterns.
+    const all = [...searches];
+    const shown = all
+      .slice(0, MAX_SEARCHES)
+      .map(q => `"${q}"`)
+      .join(', ');
+    const extra = all.length > MAX_SEARCHES ? `, +${all.length - MAX_SEARCHES} more` : '';
+    out.push(
+      `Web searches run (results kept this session — repeat the exact query to see them again, ` +
+        `at no budget): ${shown}${extra}`,
     );
   }
   out.push(OMISSION_NOTE);

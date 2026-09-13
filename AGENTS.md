@@ -452,6 +452,18 @@ fetched:` line (URL → locator, capped at 10, outside the entry budget next to 
 the fetch analogue of the file-coverage line — a page the session read stays addressable through
 every fold. Failed fetches and pages under the spill floor have nothing to point at and are left
 out.
+**`search` does the same with the query as the handle** (#297). A result list ages out like any
+payload and should: the model followed one of eight links or lifted one snippet, and the rest was
+never worth the window. What it keeps is the summary, which quotes the query verbatim — a few
+words, and exactly the string a model copies back into `search` when it wants the list again. The
+tool keeps a session map of query → results and serves that repeat from it: no request, no budget,
+no latch check (none of the three reaches upstream), and a summary that says it was served from the
+saved results. Keeping the top few results in the recap instead was considered and not taken — at a
+16k window it is the cost the query avoids, and the served repeat gives the model all eight for
+free. The recap grows a `Web searches run:` line (quoted queries, capped at 10, outside the entry
+budget) — "Web" to keep it apart from the plan ledger's `Searches run`, which lists grep patterns.
+Searches that found nothing or failed have no list to come back to and are neither saved nor
+listed. `parseSearchQuery` lives next to the summary format it reads.
 
 The ceiling is `SPILL_MAX_MATCHES` (300), and it is where the two tools stop being symmetric.
 Glob's spill is free — the crawl already holds every path — while grep's is paid on _every_ search

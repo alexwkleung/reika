@@ -808,6 +808,34 @@ describe('recap narrative and ranges (#247)', () => {
     expect(line).not.toContain('gone');
   });
 
+  it('lists web search queries outside the entry budget, deduped, without empty ones (#297)', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...call(
+        'c1',
+        'search',
+        { query: 'ink useInput enter twice' },
+        'Found 8 result(s) for "ink useInput enter twice"',
+      ),
+      ...call(
+        'c2',
+        'search',
+        { query: 'ink useInput enter twice' },
+        'Found 8 result(s) for "ink useInput enter twice" — already searched this session, served from the saved results',
+      ),
+      ...call('c3', 'search', { query: 'zxqv' }, 'No results for "zxqv"'),
+      ...call('c4', 'grep', { path: 'src', pattern: 'useInput' }, 'Found 2 matches for /useInput/'),
+      ...filler(4),
+    ];
+    compactHistory(history, RW, 1, 0);
+    const recap = (history[1] as { content: string }).content;
+    const line = recap.split('\n').find(l => l.startsWith('Web searches run')) ?? '';
+    expect(line).toContain('repeat the exact query');
+    expect(line.match(/"ink useInput enter twice"/g)).toHaveLength(1);
+    expect(line).not.toContain('zxqv');
+    expect(line).not.toContain('useInput/');
+  });
+
   it('carries the closing note forward once, not once per fold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...filler(6)];
     compactHistory(history, RW, 1, 0);
