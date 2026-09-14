@@ -1708,6 +1708,13 @@ export async function runTurn(opts: {
       ) {
         const n = shrink.folds + 1;
         const directive = buildCompactionReportDirective(n);
+        // Top-level notice first, so the nested block that follows reads as a deliberate side
+        // conversation and not as a stray indent; the fold notice below closes it.
+        opts.onMessage({
+          role: 'system',
+          tone: 'info',
+          content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
+        });
         opts.onPhase?.('thinking');
         opts.onCompactionNote?.(true);
         try {
@@ -1736,16 +1743,17 @@ export async function runTurn(opts: {
           const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
           if (text) {
             note = { n, text };
-            // UI only, never history: a nested header notice, then the note as a nested assistant
-            // message so it renders as markdown and sits indented like a subagent's output — a side
-            // conversation, visibly not the reply.
+            // UI only, never history: the note as a nested assistant message so it renders as
+            // markdown and sits indented like a subagent's output, WITH its reasoning — the trace of
+            // how the note was derived stays in the scrollback for the user, while the model's
+            // history gets only the note (via the recap). compactionNote colors its bar.
             opts.onMessage({
-              role: 'system',
-              tone: 'info',
-              content: `Compaction note ${n} — written by the model before fold ${n}; it replaces the folded history in the recap.`,
+              role: 'assistant',
+              content: text,
+              reasoning: rep.reasoning?.trim() || undefined,
               nested: true,
-            });
-            opts.onMessage({ role: 'assistant', content: text, nested: true } as Message);
+              compactionNote: true,
+            } as Message);
           }
           debugLog(
             `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +

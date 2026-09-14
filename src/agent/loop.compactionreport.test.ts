@@ -148,7 +148,7 @@ describe('compaction report round (#280)', () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     const messages: Message[] = [];
     h.scripted.push(
-      { content: NOTE, toolCalls: undefined },
+      { content: NOTE, reasoning: 'how I got here', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
     const history = bigHistory();
@@ -177,17 +177,25 @@ describe('compaction report round (#280)', () => {
     const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain(compactionNoteHeader(1));
     expect(recap.content).toContain(NOTE);
-    // The note never enters history as an assistant message; the user sees a nested header notice
-    // and the note as a nested (markdown-rendered) assistant message — a side conversation.
+    // The note never enters history as an assistant message. The user sees: a top-level notice
+    // that a note is being asked for, then the note as a nested (markdown-rendered) assistant
+    // message carrying its reasoning as a trace and marked compactionNote, then the fold notice.
     expect(history.some(m => m.role === 'assistant' && m.content === NOTE)).toBe(false);
-    const noticeAt = messages.findIndex(
-      m => m.role === 'system' && m.content.includes('Compaction note 1') && m.nested === true,
+    const startAt = messages.findIndex(
+      m => m.role === 'system' && m.content.includes('compaction note before fold 1'),
     );
-    expect(noticeAt).toBeGreaterThan(-1);
-    const shown = messages[noticeAt + 1] as Message & { role: 'assistant' };
+    expect(startAt).toBeGreaterThan(-1);
+    expect((messages[startAt] as { nested?: boolean }).nested).toBeUndefined();
+    const shown = messages[startAt + 1] as Message & { role: 'assistant' };
     expect(shown.role).toBe('assistant');
     expect(shown.content).toBe(NOTE);
+    expect(shown.reasoning).toBe('how I got here');
     expect(shown.nested).toBe(true);
+    expect(shown.compactionNote).toBe(true);
+    const foldAt = messages.findIndex(
+      m => m.role === 'system' && m.content.includes('Context compacted (fold 1)'),
+    );
+    expect(foldAt).toBe(startAt + 2);
     // The turn still ends on the real reply.
     const last = history[history.length - 1] as Message & { role: 'assistant' };
     expect(last.content).toBe('final');

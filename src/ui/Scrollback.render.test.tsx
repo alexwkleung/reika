@@ -264,6 +264,36 @@ describe('Scrollback nested (subagent) messages', () => {
     }
   });
 
+  // #280: a compaction note's reasoning bar (committed and live) takes the info accent, matching
+  // the spinner, so the thinking on screen reads as compaction work rather than the answer.
+  it('colors a compaction note’s reasoning bar with the info accent', () => {
+    const prevLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const committed = (compactionNote: boolean) =>
+        framePlusApp([
+          {
+            role: 'assistant',
+            content: 'the note',
+            reasoning: 'deriving the note',
+            nested: true,
+            ...(compactionNote ? { compactionNote: true } : {}),
+          },
+        ]);
+      // Ink coalesces adjacent escapes, so match the open code in front of the bar rather than
+      // chalk's exact open+close pair. theme.info is a named color (cyan), theme.reasoning a hex.
+      const cyanBar = '\u001b[36m▎ ';
+      const reasoningBar = chalk
+        .hex(theme.reasoning)('▎ ')
+        .replace(/\u001b\[39m$/, '');
+      expect(committed(true)).toContain(cyanBar);
+      expect(committed(false)).not.toContain(cyanBar);
+      expect(committed(false)).toContain(reasoningBar);
+    } finally {
+      chalk.level = prevLevel;
+    }
+  });
+
   it('leaves the top-level live region byte-identical when not nested', () => {
     const text = 'I should look at the config loader before touching any call sites at all.';
     expect(liveFrame({ streamingReasoning: text, streamingNested: false })).toBe(
