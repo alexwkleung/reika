@@ -8,7 +8,13 @@ import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import { readTool } from '../tools/read.js';
 import { subagentTool } from '../tools/subagent.js';
-import { MAX_SUBAGENTS_PER_TURN, SUBAGENT_REPORT_DIRECTIVE } from './subagentreport.js';
+import { grepTool } from '../tools/grep.js';
+import { writeTool } from '../tools/write.js';
+import {
+  MAX_SUBAGENTS_PER_TURN,
+  SUBAGENT_HOLD_NOTE,
+  SUBAGENT_REPORT_DIRECTIVE,
+} from './subagentreport.js';
 
 // Subagent bounded return (#340), driven through the real runTurn with a scripted model: the last
 // budgeted round of a subagent carries no tools and the report directive, its in-band tool calls
@@ -262,6 +268,134 @@ describe('subagent bounded return (#340)', () => {
     expect(inside).toContain('msg:tool:nested');
     // On return the phase is restored to the parent's dispatch phase.
     expect(events[end + 1]).toBe('phase:tool');
+  });
+
+  // #346: a subagent call is exclusive in its round. The observed hedge — "call subagent
+  // (mandatory first call) and read a few core files in parallel" — truncated the report itself on
+  // the next round's cap. Sibling inspection calls are held; the report is the round's only payload.
+  describe('exclusive round (#346)', () => {
+    const toolMsgs = (history: Message[]) =>
+      history.filter(m => m.role === 'tool') as (Message & { role: 'tool' })[];
+
+    it('holds sibling read/grep calls in the round a subagent is dispatched, whichever side they sit', async () => {
+      const history: Message[] = [];
+      h.scripted.push(
+        {
+          content: '',
+          toolCalls: [
+            { id: 'r1', name: 'read', args: { path: 'a.ts' } },
+            { id: 's1', name: 'subagent', args: { task: 'look at src/a.ts' } },
+            { id: 'g1', name: 'grep', args: { pattern: 'const', path: '.' } },
+          ],
+        },
+        final('sub report'),
+        final('done'),
+      );
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig({ subagentMaxTurns: 2 }),
+        tools: [readTool, grepTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      // Top-level tool messages only (the nested subagent turn has none here — it answered at once).
+      const tools = toolMsgs(history);
+      expect(tools.map(t => t.callId)).toEqual(['r1', 's1', 'g1']);
+      expect(tools[0].summary).toBe('read held — the subagent dispatched this round covers it');
+      expect(tools[0].payload).toBe(SUBAGENT_HOLD_NOTE);
+      expect(tools[0].payload).not.toContain('export const a');
+      expect(tools[1].summary).toContain('Subagent completed');
+      expect(tools[2].summary).toBe('grep held — the subagent dispatched this round covers it');
+      expect(tools[2].payload).toBe(SUBAGENT_HOLD_NOTE);
+    });
+
+    it('does not hold when the spawn itself would be refused by the per-turn cap', async () => {
+      const history: Message[] = [];
+      for (let i = 0; i < MAX_SUBAGENTS_PER_TURN; i++) {
+        h.scripted.push(subagentResponse('look at src/a.ts', `s${i}`), final(`report ${i}`));
+      }
+      // One past the cap, with a read alongside: the spawn is refused, the read must run.
+      h.scripted.push(
+        {
+          content: '',
+          toolCalls: [
+            { id: 'sX', name: 'subagent', args: { task: 'again' } },
+            { id: 'rX', name: 'read', args: { path: 'a.ts' } },
+          ],
+        },
+        final('done'),
+      );
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig(),
+        tools: [readTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      const tools = toolMsgs(history);
+      const last = tools[tools.length - 1];
+      expect(last.callId).toBe('rX');
+      expect(last.summary).toContain('Read a.ts');
+      expect(last.payload).toContain('export const a');
+    });
+
+    it('leaves a mutating sibling alone — a write beside a subagent still runs', async () => {
+      const history: Message[] = [];
+      h.scripted.push(
+        {
+          content: '',
+          toolCalls: [
+            { id: 's1', name: 'subagent', args: { task: 'look at src/a.ts' } },
+            { id: 'w1', name: 'write', args: { path: 'c.ts', content: 'export const c = 3;\n' } },
+          ],
+        },
+        final('sub report'),
+        final('done'),
+      );
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig({ subagentMaxTurns: 2 }),
+        tools: [readTool, writeTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      const tools = toolMsgs(history);
+      expect(tools.find(t => t.callId === 'w1')?.summary).toContain('Wrote');
+    });
+
+    it('does not seed the repeat detector: a real read of a held path afterwards is not a repeat', async () => {
+      const history: Message[] = [];
+      h.scripted.push(
+        {
+          content: '',
+          toolCalls: [
+            { id: 's1', name: 'subagent', args: { task: 'look at src/a.ts' } },
+            { id: 'r1', name: 'read', args: { path: 'a.ts' } },
+          ],
+        },
+        final('sub report'),
+        readResponse('a.ts', 'r2'),
+        final('done'),
+      );
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig({ subagentMaxTurns: 2 }),
+        tools: [readTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      const r2 = toolMsgs(history).find(t => t.callId === 'r2');
+      expect(r2?.payload).toContain('export const a');
+      expect(r2?.payload).not.toContain('re-read this same range');
+    });
   });
 
   it('refuses a spawn past the per-turn cap with a payload that says so', async () => {
