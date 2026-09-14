@@ -68,6 +68,11 @@ import {
   type PlanStep,
 } from './plantrack.js';
 import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
+import {
+  SUBAGENT_REPORT_DIRECTIVE,
+  MAX_SUBAGENTS_PER_TURN,
+  buildCoverageNote,
+} from './subagentreport.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -878,6 +883,11 @@ export async function runTurn(opts: {
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
   onContextEstimate?: (tokens: number) => void;
+  // Subagent bounded return (#340): on the LAST round of the budget, withdraw every tool and
+  // demand the report (SUBAGENT_REPORT_DIRECTIVE), so the turn's final assistant message — which
+  // is what the parent receives as the digest — is a report and never `(reached max turns…)`.
+  // Set by makeSpawnSubagent; the parent turn's cap keeps its honest-exhaustion message.
+  reportAtCap?: boolean;
   // Every shrink event the turn performs — a batch-age shed or a compaction fold — with the
   // session-cumulative counts after it. The UI shows the counts as ambient status chips (the
   // gauge sawtooth already shows the events; a counter says how many teeth) and the transcript
@@ -934,6 +944,8 @@ export async function runTurn(opts: {
     searches: { used: 0, max: opts.config.maxSearchesPerTurn },
     fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
   };
+  // Subagent spawns this turn — the ToolContext is rebuilt per call, so the count lives here.
+  const subagentCalls = { used: 0 };
   // Latched when a search fails for a reason that is a property of the provider rather than the
   // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
   // well find the block cleared, so it is never carried across one.
@@ -1227,6 +1239,14 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
+    // plan force-write (no tools offered, in-band calls dropped) without the transform — the model
+    // reports from its own history, aged payloads and all, because partial and grounded is the
+    // point. Never in the parent turn (reportAtCap is only set by makeSpawnSubagent).
+    const subagentForceReport = !!opts.reportAtCap && i === opts.config.maxTurns - 1;
+    if (subagentForceReport) {
+      debugLog(`[reika:debug] round=${i} subagent-force-report cap=${opts.config.maxTurns}\n`);
+    }
     // Was the force-write triggered by a LOOP (reasoning-loop or verbatim abort) rather than normal
     // convergence (novelty stall / ceiling)? If so the accumulated analysis IS the spiral, so the
     // transform drops it and rebuilds from findings instead of feeding the loop back to itself.
@@ -1483,6 +1503,9 @@ export async function runTurn(opts: {
       // `system +=` in the terminal branch above, which this composition used to overwrite — the
       // steer previously never reached a request; #83.)
       if (convergeSteerNow) suffixParts.push(buildConvergeSteer());
+      // Last of all on a subagent's report round: it must win over every ledger above it, all of
+      // which say some form of "keep working" — the one round the model must not.
+      if (subagentForceReport) suffixParts.push(SUBAGENT_REPORT_DIRECTIVE);
       const suffix = suffixParts.map(p => '\n\n' + p).join('');
       if (prefixStable) {
         // Tail note instead of system suffix: a ledger appearing/changing/clearing in the system
@@ -1505,11 +1528,12 @@ export async function runTurn(opts: {
     // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
     // break, drop the inspection tools so the offered set steers a tool-list-respecting model
     // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
-    const callTools = planForceWrite
-      ? []
-      : withdrawInspection
-        ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
-        : opts.tools;
+    const callTools =
+      planForceWrite || subagentForceReport
+        ? []
+        : withdrawInspection
+          ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
+          : opts.tools;
     // Char budget for the transform turn: the window minus the plan's generation reserve, in chars
     // (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
     // overflows the window on a large task — the real cause of the large-repo 400s.
@@ -2026,7 +2050,7 @@ export async function runTurn(opts: {
     // in-band `<tool_call>` text that the parser recovers (client.ts strips it from content first).
     // Drop those recovered calls so the turn commits the plan instead of looping on a tool we
     // already withdrew — withdrawing tools from the *request* alone doesn't stop an in-band caller.
-    const toolCalls = planForceWrite ? [] : (response.toolCalls ?? []);
+    const toolCalls = planForceWrite || subagentForceReport ? [] : (response.toolCalls ?? []);
     const isFinal = toolCalls.length === 0;
 
     // Record this round's reasoning for the Layer-2 loop detector and refresh the active flag (read
@@ -2199,6 +2223,11 @@ export async function runTurn(opts: {
     let assistantContent = response.content;
     if (planForceWrite && !response.content?.trim()) {
       assistantContent = response.reasoning?.trim() || gatherPlanAnalysis(opts.history);
+    }
+    // A report round that put everything in the reasoning channel still has a report: the
+    // reasoning IS the model's reading of what it found, and it beats `(no output)` to the parent.
+    if (subagentForceReport && !response.content?.trim() && response.reasoning?.trim()) {
+      assistantContent = response.reasoning.trim();
     }
 
     // Plan→agent grounding: when a plan is finalized, verify the symbols/paths it names exist in the
@@ -2481,7 +2510,7 @@ export async function runTurn(opts: {
             requestApproval: opts.requestApproval,
             requestQuestion,
             onProgress: opts.onToolProgress,
-            spawnSubagent: makeSpawnSubagent(opts),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
           });
           summary = result.summary;
@@ -2784,8 +2813,17 @@ function commitAgentLoopStop(
 
 type RunTurnOpts = Parameters<typeof runTurn>[0];
 
-function makeSpawnSubagent(parent: RunTurnOpts) {
+function makeSpawnSubagent(parent: RunTurnOpts, calls: { used: number }) {
   return async (sub: { task: string }): Promise<ToolResult> => {
+    if (calls.used >= MAX_SUBAGENTS_PER_TURN) {
+      return {
+        summary: `Subagent budget for this turn exhausted (${MAX_SUBAGENTS_PER_TURN})`,
+        payload:
+          `(reika: ${MAX_SUBAGENTS_PER_TURN} subagents have already run this turn. Answer from ` +
+          'their reports and your own reads; if something is still missing, say what.)',
+      };
+    }
+    calls.used += 1;
     const subConfig: Config = {
       ...parent.config,
       model: parent.config.subagentModel ?? parent.config.model,
@@ -2812,6 +2850,7 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
       onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
       // streaming + phase callbacks are intentionally not forwarded so the parent's
       // live region stays clean; subagent activity is visible via nested committed messages
+      reportAtCap: true,
     });
 
     const finalAssistant = [...subHistory].reverse().find(m => m.role === 'assistant') as
@@ -2819,11 +2858,14 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
       | undefined;
     const result = finalAssistant?.content ?? '';
     const usedDifferentModel = subConfig.model !== parent.config.model;
+    // What the task named that the subagent never opened — the parent's cue to re-spawn for the
+    // remainder instead of reading it into its own context. See subagentreport.ts.
+    const coverage = buildCoverageNote(sub.task, subHistory);
     return {
       summary: usedDifferentModel
         ? `Subagent (${subConfig.model}) completed (${result.length} chars)`
         : `Subagent completed (${result.length} chars)`,
-      payload: result || '(no output)',
+      payload: (result || '(no output)') + (coverage ? `\n\n${coverage}` : ''),
     };
   };
 }
