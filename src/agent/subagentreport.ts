@@ -21,6 +21,20 @@ export const SUBAGENT_REPORT_DIRECTIVE =
 // its remainder, and one retry.
 export const MAX_SUBAGENTS_PER_TURN = 3;
 
+// A subagent call is exclusive in its round (#346). Returned in place of a sibling inspection call
+// (read/grep/glob/list, or an inspection-shaped bash) issued alongside `subagent`. The first
+// bounded-return run had the parent "call subagent (mandatory first call) and read a few core
+// files in parallel": four fresh payloads shared the window on the next round and all four were
+// truncated — INCLUDING the 6400-char report — after which the parent re-read files the report had
+// already covered because its own capped copies looked incomplete. Holding the siblings is what
+// guarantees the report arrives as the only fresh payload in its round, with the full cap. No
+// content, so it can't re-fuel anything (cf. WITHDRAWAL_DIRECTIVE); it states the rule and the way
+// out.
+export const SUBAGENT_HOLD_NOTE =
+  '(reika: held — the subagent you dispatched this round covers exploration, and its report ' +
+  'arrives with this round. Use the report; hand it anything the report leaves open rather than ' +
+  'reading it here.)';
+
 // Path-like tokens in free text: at least one directory separator and an extension, bare or in
 // backticks, allowed to end a sentence. The parent writes the task as prose ("In src/tools/bash.ts
 // (and any helpers…)"), so the plan grounder's backtick-only extraction would see none of it. The

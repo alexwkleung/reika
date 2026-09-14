@@ -70,6 +70,7 @@ import {
 import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
+  SUBAGENT_HOLD_NOTE,
   MAX_SUBAGENTS_PER_TURN,
   buildCoverageNote,
 } from './subagentreport.js';
@@ -2395,6 +2396,13 @@ export async function runTurn(opts: {
     // Novelty watermark for the adaptive cap: seenReadOnly only gains a key on a first-time
     // (path, offset) / search, so growth across this round means the model learned something new.
     const seenBeforeRound = seenReadOnly.size;
+    // A subagent call is exclusive in its round (#346): sibling inspection calls are held, so the
+    // report is the only fresh payload the next round has to fit. Decided over the whole round up
+    // front — the siblings are held whichever side of the subagent call they were listed on. Not
+    // when the spawn itself would be refused (per-turn cap), which would leave the model with
+    // nothing this round.
+    const subagentInRound =
+      toolCalls.some(c => c.name === 'subagent') && subagentCalls.used < MAX_SUBAGENTS_PER_TURN;
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
@@ -2408,6 +2416,14 @@ export async function runTurn(opts: {
       const refusedBashGrep =
         call.name === 'bash' && isInspectionEscape(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
+      // Held for the subagent (#346): the same inspection set the withdrawal ladder pauses, for the
+      // one round a subagent is dispatched in. Mutating siblings are out of scope — a subagent round
+      // is an exploration round by construction, and an edit alongside one is a different problem.
+      const heldForSubagent =
+        subagentInRound &&
+        !refused &&
+        call.name !== 'subagent' &&
+        (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
       // Never while inspection is withdrawn (the directed read would itself be refused), and only
       // when the edit could actually run (tool resolved). shouldBounce records the bounce, so a
@@ -2489,6 +2505,11 @@ export async function runTurn(opts: {
         summary = `edit paused — read ${blindPath} first, then re-issue the edit`;
         payload = buildReadFirstDirective(blindPath);
         debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath}\n`);
+      } else if (heldForSubagent) {
+        const label = refusedBashGrep ? 'shell inspection' : call.name;
+        summary = `${label} held — the subagent dispatched this round covers it`;
+        payload = SUBAGENT_HOLD_NOTE;
+        debugLog(`[reika:debug] round=${i} held ${call.name} (subagent in round)\n`);
       } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
@@ -2585,7 +2606,7 @@ export async function runTurn(opts: {
       // on path+offset so a same-or-wider re-read still counts; a narrowing one is exempt, being
       // the omission marker's own remedy); mutating tools reset the memory so a read-after-edit
       // isn't flagged. Skipped for unknown tools (nothing produced).
-      if (tool && !refused && !bouncedBlindEdit)
+      if (tool && !refused && !bouncedBlindEdit && !heldForSubagent)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
