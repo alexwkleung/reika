@@ -177,13 +177,17 @@ describe('compaction report round (#280)', () => {
     const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain(compactionNoteHeader(1));
     expect(recap.content).toContain(NOTE);
-    // The note never enters history as an assistant message; the user sees it as a notice.
+    // The note never enters history as an assistant message; the user sees a nested header notice
+    // and the note as a nested (markdown-rendered) assistant message — a side conversation.
     expect(history.some(m => m.role === 'assistant' && m.content === NOTE)).toBe(false);
-    const notice = messages.find(
-      m => m.role === 'system' && m.content.includes('Compaction note 1'),
+    const noticeAt = messages.findIndex(
+      m => m.role === 'system' && m.content.includes('Compaction note 1') && m.nested === true,
     );
-    expect(notice).toBeDefined();
-    expect((notice as { content: string }).content).toContain(NOTE);
+    expect(noticeAt).toBeGreaterThan(-1);
+    const shown = messages[noticeAt + 1] as Message & { role: 'assistant' };
+    expect(shown.role).toBe('assistant');
+    expect(shown.content).toBe(NOTE);
+    expect(shown.nested).toBe(true);
     // The turn still ends on the real reply.
     const last = history[history.length - 1] as Message & { role: 'assistant' };
     expect(last.content).toBe('final');
@@ -228,6 +232,28 @@ describe('compaction report round (#280)', () => {
     expect(recap).toBeDefined();
     expect(recap.content).not.toContain(compactionNoteHeader(1));
     expect(recap.content).toContain('Files touched');
+  });
+
+  // Under PREFIX_STABLE the shed often gets the request under the threshold and the fold then keeps
+  // everything; a note written there has no recap to live in. Here: one huge pinned user message —
+  // the estimate is over the threshold, but the fold cannot remove the pinned message, so nothing
+  // would fold and no report round must be spent.
+  it('does not spend a report round when the fold would remove nothing', async () => {
+    process.env.REIKA_COMPACTION_REPORT = '1';
+    h.scripted.push({ content: 'final', toolCalls: undefined });
+    const history: Message[] = [{ role: 'user', content: 'x'.repeat(60000) }];
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+    });
+    expect(h.captured).toHaveLength(1);
+    expect(directiveOf(h.captured[0])).not.toContain('compaction note');
+    expect(history.some(m => m.role === 'compaction')).toBe(false);
   });
 
   it('never runs in plan mode', async () => {

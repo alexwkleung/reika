@@ -66,14 +66,19 @@ export function shouldCompact(
 // says what was found, the ledger says what was opened.
 export type CompactionNote = { n: number; text: string };
 
-export function compactHistory(
+// Where a fold would cut, or null when there is nothing to fold. Split out of compactHistory so
+// the compaction report round (#280) can ask "will this fold actually remove anything?" before
+// spending a model call on a note: under PREFIX_STABLE the batch-age shed often gets the request
+// under the threshold on its own and the keep-budget walk then keeps everything (observed:
+// `compaction-report n=1 chars=1909` followed by `compaction removed=0`, twice — two notes written
+// into nothing, and the fold counter never moved).
+export function foldPoint(
   history: Message[],
   contextWindow: number,
   calibration = 1,
   minGen = DEFAULT_MIN_GEN_TOKENS,
-  note?: CompactionNote,
-): number {
-  if (!contextWindow) return 0;
+): { recapStart: number; keepFrom: number; avail: number; calib: number } | null {
+  if (!contextWindow) return null;
   // Budgets are in chars but the window is in tokens; divide by the learned char→token
   // calibration so "30% of the available window" holds in *real* tokens, not the
   // heuristic's. Sized off the available room (window − reserve) so the result fits under
@@ -102,7 +107,29 @@ export function compactHistory(
   // thing it's planning for. A leading slash-command echo (meta) is not the task, so don't pin it.
   const first = history[0];
   const recapStart = first && first.role === 'user' && !first.meta ? 1 : 0;
-  if (keepFrom <= recapStart) return 0;
+  if (keepFrom <= recapStart) return null;
+  return { recapStart, keepFrom, avail, calib };
+}
+
+export function wouldFold(
+  history: Message[],
+  contextWindow: number,
+  calibration = 1,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+): boolean {
+  return foldPoint(history, contextWindow, calibration, minGen) !== null;
+}
+
+export function compactHistory(
+  history: Message[],
+  contextWindow: number,
+  calibration = 1,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+  note?: CompactionNote,
+): number {
+  const point = foldPoint(history, contextWindow, calibration, minGen);
+  if (!point) return 0;
+  const { recapStart, keepFrom, avail, calib } = point;
 
   // #251: carry the turn's task-defining payload THROUGH the fold, verbatim. batchAgePayloads
   // already exempts it from aging (#227), but compaction removed it outright, and the recap records

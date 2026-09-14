@@ -79,7 +79,7 @@ import {
   clampCompactionNote,
   compactionReportEnabled,
 } from './compactionreport.js';
-import type { CompactionNote } from './compaction.js';
+import { wouldFold, type CompactionNote } from './compaction.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -871,6 +871,10 @@ export async function runTurn(opts: {
   // committed, so its live region is empty for the duration — the subagent's streaming callbacks
   // are forwarded into it, and this tells the UI to draw them at the nested indent.
   onSubagent?: (active: boolean) => void;
+  // A compaction report round (#280) is running: the model is writing its note into the live
+  // region. Same shape as onSubagent — the UI nests the stream and relabels the spinner — because
+  // the note is a side conversation the same way a subagent is: its reasoning never enters history.
+  onCompactionNote?: (active: boolean) => void;
   // Ephemeral, human-only pulse for the post-edit typecheck: true while a check runs, false when it
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
@@ -1688,11 +1692,24 @@ export async function runTurn(opts: {
       // region like any reply so the user sees the note being written; committed as an info notice
       // so it reads as a harness event, not an answer. Fail-open: an empty or aborted reply folds
       // exactly as before.
+      //
+      // Gated on the fold actually removing something (`wouldFold`, the same walk compactHistory
+      // does): under PREFIX_STABLE the batch-age shed just above often gets the request under the
+      // threshold on its own, and the fold then keeps everything — a note written there has no
+      // recap to live in and is thrown away (observed twice in one run). The note is therefore
+      // written from the post-shed history — outlines and summaries for the aged part, live bytes
+      // for the recent part — which is what the model actually still knows at that moment.
       let note: CompactionNote | undefined;
-      if (compactionReportEnabled() && opts.promptMode !== 'plan' && !opts.signal?.aborted) {
+      if (
+        compactionReportEnabled() &&
+        opts.promptMode !== 'plan' &&
+        !opts.signal?.aborted &&
+        wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens)
+      ) {
         const n = shrink.folds + 1;
         const directive = buildCompactionReportDirective(n);
         opts.onPhase?.('thinking');
+        opts.onCompactionNote?.(true);
         try {
           const rep = await callModel({
             system: prefixStable ? baseSystem : system + '\n\n' + directive,
@@ -1719,11 +1736,16 @@ export async function runTurn(opts: {
           const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
           if (text) {
             note = { n, text };
+            // UI only, never history: a nested header notice, then the note as a nested assistant
+            // message so it renders as markdown and sits indented like a subagent's output — a side
+            // conversation, visibly not the reply.
             opts.onMessage({
               role: 'system',
               tone: 'info',
-              content: `Compaction note ${n} (written by the model before the fold; it replaces the folded history in the recap):\n${text}`,
+              content: `Compaction note ${n} — written by the model before fold ${n}; it replaces the folded history in the recap.`,
+              nested: true,
             });
+            opts.onMessage({ role: 'assistant', content: text, nested: true } as Message);
           }
           debugLog(
             `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
@@ -1733,8 +1755,9 @@ export async function runTurn(opts: {
           if (opts.signal?.aborted) return;
           debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
         } finally {
-          // The live region held the note; a system notice does not clear it the way an assistant
-          // commit does, so the UI is told explicitly before the round's real reply streams.
+          opts.onCompactionNote?.(false);
+          // The live region held the note; if the reply was empty no assistant commit cleared it,
+          // so the UI is told explicitly before the round's real reply streams.
           opts.onReasoningReset?.();
         }
       }
