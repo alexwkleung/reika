@@ -16,12 +16,17 @@ export function Scrollback({
   streaming,
   streamingReasoning,
   streamingTool,
+  streamingNested = false,
   chromeRows = 0,
 }: {
   messages: Message[];
   streaming: string;
   streamingReasoning: string;
   streamingTool: string;
+  // The live blocks belong to a subagent running under the parent's tool call (#342). They render
+  // at NESTED_INDENT so the streaming tail sits where its committed row will land a moment later,
+  // instead of jumping left while live and right on commit.
+  streamingNested?: boolean;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -34,19 +39,38 @@ export function Scrollback({
   // lands in <Static> when the message commits, where the terminal scrolls it natively.
   const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
   const budget = liveTailBudget(active, chromeRows);
+  const indent = streamingNested ? NESTED_INDENT : 0;
+  const live = (
+    <>
+      {streamingReasoning ? (
+        <Box marginTop={1}>
+          <ReasoningBlock text={streamingReasoning} maxLines={budget} indent={indent} />
+        </Box>
+      ) : null}
+      {streaming.trim() ? (
+        <StreamingContent text={streaming} maxLines={budget} indent={indent} />
+      ) : null}
+      {streamingTool ? (
+        <StreamingTool text={streamingTool} maxLines={budget} indent={indent} />
+      ) : null}
+    </>
+  );
 
   return (
     <>
       <Static items={messages}>
         {(msg, i) => <MessageView key={i} msg={msg} prev={messages[i - 1]} />}
       </Static>
-      {streamingReasoning ? (
-        <Box marginTop={1}>
-          <ReasoningBlock text={streamingReasoning} maxLines={budget} />
+      {indent ? (
+        // Same box MessageView gives a nested committed row: the margin plus an explicit width
+        // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
+        // when nested — the top-level live region is left exactly as it was.
+        <Box flexDirection="column" width={contentWidth(indent)} marginLeft={indent}>
+          {live}
         </Box>
-      ) : null}
-      {streaming.trim() ? <StreamingContent text={streaming} maxLines={budget} /> : null}
-      {streamingTool ? <StreamingTool text={streamingTool} maxLines={budget} /> : null}
+      ) : (
+        live
+      )}
     </>
   );
 }
@@ -68,8 +92,8 @@ function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
 }
 
 // Content width for a live block. Matches the width Ink lays the block's <Text> out at.
-function liveContentWidth(): number {
-  return contentWidth();
+function liveContentWidth(indent = 0): number {
+  return contentWidth(indent);
 }
 
 // Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
@@ -109,8 +133,16 @@ export function tailText(
 
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
 // message re-renders the full text in <Static>.
-function StreamingContent({ text, maxLines }: { text: string; maxLines: number }) {
-  const width = liveContentWidth();
+function StreamingContent({
+  text,
+  maxLines,
+  indent = 0,
+}: {
+  text: string;
+  maxLines: number;
+  indent?: number;
+}) {
+  const width = liveContentWidth(indent);
   // Cheap logical-line pre-trim caps markdown render cost on very long streams; the
   // factor keeps enough lines to fill `maxLines` display rows even when each wraps.
   // The render-then-tailDisplay below is what actually bounds the frame height — it
@@ -127,8 +159,16 @@ function StreamingContent({ text, maxLines }: { text: string; maxLines: number }
   );
 }
 
-function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
-  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth());
+function StreamingTool({
+  text,
+  maxLines,
+  indent = 0,
+}: {
+  text: string;
+  maxLines: number;
+  indent?: number;
+}) {
+  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth(indent));
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}

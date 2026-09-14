@@ -209,6 +209,68 @@ describe('Scrollback nested (subagent) messages', () => {
       expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
     }
   });
+
+  // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must
+  // sit at the same indent their committed rows will land at, and wrap inside it — the same
+  // width discipline as the committed nested rows above.
+  const liveFrame = (props: {
+    streaming?: string;
+    streamingReasoning?: string;
+    streamingTool?: string;
+    streamingNested?: boolean;
+  }): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          <Scrollback
+            messages={[]}
+            streaming={props.streaming ?? ''}
+            streamingReasoning={props.streamingReasoning ?? ''}
+            streamingTool={props.streamingTool ?? ''}
+            streamingNested={props.streamingNested}
+          />
+        </Box>,
+      );
+      return lastFrame() ?? '';
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  it('draws a nested live reasoning block at the nested indent, every row behind its bar', () => {
+    const frame = liveFrame({
+      streamingReasoning:
+        'I should look at the config loader before touching any call sites at all.',
+      streamingNested: true,
+    });
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  it('draws nested live content and tool tails at the nested indent, wrapped inside it', () => {
+    const long = 'lorem ipsum dolor sit amet consectetur '.repeat(4).trim();
+    const frame = liveFrame({ streaming: long, streamingTool: long, streamingNested: true });
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(2);
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}\\S`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  it('leaves the top-level live region byte-identical when not nested', () => {
+    const text = 'I should look at the config loader before touching any call sites at all.';
+    expect(liveFrame({ streamingReasoning: text, streamingNested: false })).toBe(
+      liveFrame({ streamingReasoning: text }),
+    );
+    expect(liveFrame({ streamingReasoning: text })).toMatch(/^ ▎/m);
+  });
 });
 
 // Regression: Ink repaints the whole terminal — emitting `\x1b[3J`, which clears
