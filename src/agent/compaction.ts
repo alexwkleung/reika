@@ -1,4 +1,5 @@
 import type { Message, ToolCall } from '../types.js';
+import { compactionNoteHeader } from './compactionreport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
 import {
   TASK_SPEC_PIN_CHARS,
@@ -58,11 +59,19 @@ export function shouldCompact(
 // user-message boundary, so no tool result is ever split from its tool_call) and condenses
 // the rest into a size-bounded recap. Returns the number of messages removed (0 = nothing
 // safe to do). Lossless by reference: raw tool payloads stay in the PayloadStore.
+// `note` (#280): the model's own compaction note, written on the report round just before this
+// fold. When present it leads the recap and supersedes any prior fold's narrative — the model saw
+// that narrative when it wrote the note, and was told to carry forward what still matters — so the
+// recap never stacks (#275). The read ledger still follows it, under what budget is left: the note
+// says what was found, the ledger says what was opened.
+export type CompactionNote = { n: number; text: string };
+
 export function compactHistory(
   history: Message[],
   contextWindow: number,
   calibration = 1,
   minGen = DEFAULT_MIN_GEN_TOKENS,
+  note?: CompactionNote,
 ): number {
   if (!contextWindow) return 0;
   // Budgets are in chars but the window is in tokens; divide by the learned char→token
@@ -119,7 +128,7 @@ export function compactHistory(
   const span = history.slice(recapStart, keepFrom);
   const preserved = carriedSpecBlock(span) ?? electSpecBlock(history, recapStart, keepFrom);
 
-  const recap = buildRecap(span, avail, calib);
+  const recap = buildRecap(span, avail, calib, note);
   history.splice(recapStart, keepFrom - recapStart, {
     role: 'compaction',
     content: preserved ? `${preserved}\n\n${recap}` : recap,
@@ -512,7 +521,11 @@ function describeFile(path: string, ranges: [number, number][]): string {
 // bounded to RECAP_FRACTION of the window: when there's more than fits, the most recent turns are
 // kept and the rest are noted as a count. Any prior recap in the span is carried forward, trimmed to
 // its own share of that budget so repeated folds can't stack.
-function buildRecap(span: Message[], avail: number, calib: number): string {
+// Share of the recap budget a compaction note may take. The rest goes to the read ledger, so a
+// long note still leaves "what was opened" visible — the two answer different questions.
+const NOTE_SHARE = 0.7;
+
+function buildRecap(span: Message[], avail: number, calib: number, note?: CompactionNote): string {
   const recapBudget = (avail * CHARS_PER_TOKEN * RECAP_FRACTION) / calib;
   const priorRecaps: string[] = [];
   const entries: string[] = [];
@@ -581,9 +594,12 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   // measured session grew the recap from 4.1KB to 10.1KB inside a 24k window. Trimmed rather than
   // evicted, because the oldest material is also the most condensed — dropping it whenever a newer
   // turn wants the room would erase the whole early session at the first tight fold.
-  const priorText = priorRecaps.join('\n\n');
+  // A note supersedes the prior narrative (see CompactionNote); without one the prior is carried.
+  const noteBlock = note ? fitNote(note, Math.floor(recapBudget * NOTE_SHARE)) : null;
+  const priorText = note ? '' : priorRecaps.join('\n\n');
   const prior = priorText ? fitEntry(priorText, Math.floor(recapBudget * PRIOR_RECAP_SHARE)) : null;
-  const entryBudget = recapBudget - (prior ? prior.length + 1 : 0);
+  const entryBudget =
+    recapBudget - (prior ? prior.length + 1 : 0) - (noteBlock ? noteBlock.length + 1 : 0);
 
   const kept: string[] = [];
   let used = 0;
@@ -608,6 +624,7 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
   }
 
   const out: string[] = [];
+  if (noteBlock) out.push(noteBlock);
   if (prior) out.push(prior);
   if (omitted > 0) out.push(`(+${omitted} earlier turn${omitted === 1 ? '' : 's'} condensed)`);
   if (kept.length > 0) out.push(kept.join('\n'));
@@ -662,6 +679,16 @@ function buildRecap(span: Message[], avail: number, calib: number): string {
 // entry legible at all, so it is kept and the entry's own `→` rounds are dropped oldest-first —
 // the most recent rounds are the ones that describe where the turn actually got to. Returns null
 // when not even the header fits, in which case the caller keeps nothing rather than a fragment.
+// A note is fitted from the FRONT, unlike a ledger entry (fitEntry keeps the newest rounds): the
+// model leads with what it established, and its header must survive so the words stay its own.
+function fitNote(note: CompactionNote, budget: number): string | null {
+  const header = compactionNoteHeader(note.n);
+  if (header.length + 2 > budget) return null;
+  const room = budget - header.length - 1;
+  const body = note.text.length <= room ? note.text : note.text.slice(0, room - 1).trimEnd() + '…';
+  return `${header}\n${body}`;
+}
+
 function fitEntry(entry: string, budget: number): string | null {
   if (entry.length <= budget) return entry;
   const all = entry.split('\n');

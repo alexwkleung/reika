@@ -1632,6 +1632,11 @@ export function App() {
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);
+          // The compaction report round (#280) streams its note as content and commits it as a
+          // system notice, which does not clear the content preview the way an assistant commit
+          // does — without this the round's real reply would stream onto the note's tail.
+          streamingRef.current = '';
+          setStreaming('');
         },
         onUsage: u => {
           setLastUsage(u);
