@@ -124,6 +124,8 @@ export function App() {
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
+  // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
+  const [subagentLive, setSubagentLive] = useState<boolean>(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1616,6 +1618,7 @@ export function App() {
           if (p !== 'thinking') setReasoningSpin(false);
           setPhase(p);
         },
+        onSubagent: setSubagentLive,
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
@@ -1682,6 +1685,7 @@ export function App() {
       setStreaming('');
       setStreamingReasoning('');
       setStreamingTool('');
+      setSubagentLive(false);
       resetTypecheck();
       setReasoningSpin(false);
       setStatus('idle');
@@ -1750,6 +1754,7 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
+            streamingNested={subagentLive}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
             }
@@ -1771,10 +1776,18 @@ export function App() {
                     ? 'Recovering from a loop'
                     : reasoningSpin
                       ? 'Thinking — may be looping (ctrl-c to abort)'
-                      : undefined
+                      : subagentLive
+                        ? 'Subagent working'
+                        : undefined
               }
               accent={
-                typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
+                typechecking || recovering
+                  ? theme.info
+                  : reasoningSpin
+                    ? theme.warning
+                    : subagentLive
+                      ? theme.subagent
+                      : undefined
               }
             />
           ) : (pasting ?? expanding) ? (

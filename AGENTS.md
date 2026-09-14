@@ -107,6 +107,10 @@ Match the signal's lifetime to whether the user **must** see it. A signal the us
 
 Reserve **ephemeral** UI (spinner text, a transient pulse like the typecheck "checking…" indicator) for _in-progress_ status that's meaningless once the action finishes — never for the result. If a user could reasonably ask "did that even run?" after the fact, it wasn't persistent enough.
 
+### The live region during a subagent
+
+A subagent streams into the parent's live region (#342): `makeSpawnSubagent` forwards every streaming/phase callback and brackets the run with `onSubagent(true|false)`, which `App` turns into `streamingNested` on `Scrollback`. The parent is blocked inside the tool call with its own assistant message already committed, so the region is empty for the whole run — there was never anything to keep it "clean" from, and withholding the callbacks made a subagent a silent block that rendered each round as a batch on commit. Nested live blocks draw at `NESTED_INDENT` inside the same margin-plus-explicit-width box `MessageView` gives a nested committed row, so the streaming tail sits exactly where its committed row lands; the top-level live region is left byte-identical (the wrapper only exists when nested). On return the phase is reset to `'tool'` — the parent is still dispatching that round.
+
 ### Ink wrapping pitfalls
 
 Two interactions to watch for when content can wrap:

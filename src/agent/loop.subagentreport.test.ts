@@ -26,15 +26,26 @@ const h = vi.hoisted(() => ({
   }[],
 }));
 vi.mock('../provider/client.js', () => ({
-  callModel: vi.fn(async (opts: Captured) => {
-    h.captured.push({
-      system: opts.system,
-      tools: opts.tools.map(t => ({ name: t.name })),
-      trailingNote: opts.trailingNote,
-      historyLen: opts.history.length,
-    });
-    return h.scripted.shift() ?? { content: 'done', toolCalls: undefined };
-  }),
+  callModel: vi.fn(
+    async (
+      opts: Captured & {
+        onReasoningDelta?: (t: string) => void;
+        onContentDelta?: (t: string) => void;
+      },
+    ) => {
+      // Streaming: the model "types" a reasoning and content delta before answering, so a test can
+      // see whether they reached the caller's callbacks.
+      opts.onReasoningDelta?.('thinking…');
+      opts.onContentDelta?.('typing…');
+      h.captured.push({
+        system: opts.system,
+        tools: opts.tools.map(t => ({ name: t.name })),
+        trailingNote: opts.trailingNote,
+        historyLen: opts.history.length,
+      });
+      return h.scripted.shift() ?? { content: 'done', toolCalls: undefined };
+    },
+  ),
 }));
 
 const { runTurn } = await import('./loop.js');
@@ -211,6 +222,46 @@ describe('subagent bounded return (#340)', () => {
     expect(toolMsg.payload).toContain('the task named 3 files');
     expect(toolMsg.payload).toContain('read src/a.ts and did not read src/b.ts, src/c.ts');
     expect(toolMsg.payload).toContain('hand them to subagent again');
+  });
+
+  // #342: the subagent streams into the parent's live region. The parent is blocked inside the
+  // tool call with its own assistant message committed, so the region is idle for the duration.
+  it('forwards streaming/phase callbacks and brackets the run with onSubagent', async () => {
+    const history: Message[] = [];
+    const events: string[] = [];
+    h.scripted.push(
+      subagentResponse('look at src/a.ts'),
+      readResponse('a.ts'),
+      final('sub report'),
+      final('done'),
+    );
+    await runTurn({
+      userInput: 'go',
+      history,
+      bundle: makeBundle(cwd),
+      config: makeConfig({ subagentMaxTurns: 2 }),
+      tools: [readTool, subagentTool],
+      payloads: new PayloadStore(),
+      onMessage: m => events.push(`msg:${m.role}${'nested' in m && m.nested ? ':nested' : ''}`),
+      onReasoningDelta: t => events.push(`reasoning:${t}`),
+      onContentDelta: t => events.push(`content:${t}`),
+      onPhase: p => events.push(`phase:${p}`),
+      onSubagent: a => events.push(`subagent:${a}`),
+    });
+    const start = events.indexOf('subagent:true');
+    const end = events.indexOf('subagent:false');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const inside = events.slice(start + 1, end);
+    // The subagent's two rounds streamed reasoning + content into the parent's callbacks, and
+    // committed nested messages between them.
+    expect(inside.filter(e => e === 'reasoning:thinking…')).toHaveLength(2);
+    expect(inside.filter(e => e === 'content:typing…')).toHaveLength(2);
+    expect(inside).toContain('phase:thinking');
+    expect(inside).toContain('msg:assistant:nested');
+    expect(inside).toContain('msg:tool:nested');
+    // On return the phase is restored to the parent's dispatch phase.
+    expect(events[end + 1]).toBe('phase:tool');
   });
 
   it('refuses a spawn past the per-turn cap with a payload that says so', async () => {

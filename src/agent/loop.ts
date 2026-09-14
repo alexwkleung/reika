@@ -859,6 +859,11 @@ export async function runTurn(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
+  // A subagent is running under one of this turn's tool calls (#342): true when it starts, false
+  // when it returns. The parent is blocked inside the call with its own assistant message already
+  // committed, so its live region is empty for the duration — the subagent's streaming callbacks
+  // are forwarded into it, and this tells the UI to draw them at the nested indent.
+  onSubagent?: (active: boolean) => void;
   // Ephemeral, human-only pulse for the post-edit typecheck: true while a check runs, false when it
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
@@ -2837,21 +2842,39 @@ function makeSpawnSubagent(parent: RunTurnOpts, calls: { used: number }) {
     const subTools = parent.tools.filter(t => t.name !== 'subagent' && t.name !== 'ask_user');
     const subHistory: Message[] = [];
 
-    await runTurn({
-      userInput: sub.task,
-      history: subHistory,
-      bundle: parent.bundle,
-      config: subConfig,
-      tools: subTools,
-      payloads: parent.payloads,
-      signal: parent.signal,
-      requestApproval: parent.requestApproval,
-      onUsage: parent.onUsage,
-      onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
-      // streaming + phase callbacks are intentionally not forwarded so the parent's
-      // live region stays clean; subagent activity is visible via nested committed messages
-      reportAtCap: true,
-    });
+    parent.onSubagent?.(true);
+    try {
+      await runTurn({
+        userInput: sub.task,
+        history: subHistory,
+        bundle: parent.bundle,
+        config: subConfig,
+        tools: subTools,
+        payloads: parent.payloads,
+        signal: parent.signal,
+        requestApproval: parent.requestApproval,
+        onUsage: parent.onUsage,
+        onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
+        // Streaming + phase callbacks forward into the parent's live region (#342). They used to be
+        // withheld "so the parent's live region stays clean", but the parent is blocked inside this
+        // tool call with its assistant message already committed — the region is empty for the whole
+        // run, and withholding them made a subagent a silent block that rendered each round as a
+        // batch on commit (a 90-minute spiral was invisible until the log was read). The UI draws
+        // them nested via onSubagent.
+        onContentDelta: parent.onContentDelta,
+        onReasoningDelta: parent.onReasoningDelta,
+        onToolProgress: parent.onToolProgress,
+        onPhase: parent.onPhase,
+        onReasoningStatus: parent.onReasoningStatus,
+        onReasoningReset: parent.onReasoningReset,
+        reportAtCap: true,
+      });
+    } finally {
+      parent.onSubagent?.(false);
+      // The subagent's last phase was its report round ('thinking'); the parent is still
+      // dispatching this round's tools.
+      parent.onPhase?.('tool');
+    }
 
     const finalAssistant = [...subHistory].reverse().find(m => m.role === 'assistant') as
       | (Message & { role: 'assistant' })
