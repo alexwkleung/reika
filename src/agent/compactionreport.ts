@@ -23,9 +23,12 @@ export function compactionReportEnabled(): boolean {
   return process.env.REIKA_COMPACTION_REPORT === '1';
 }
 
-// Hard cap on a note. The directive asks for ~1500 chars; a model that ignores that still cannot
-// take the whole recap budget (RECAP_FRACTION of the window), which the fold sizes the note under.
-export const COMPACTION_NOTE_MAX_CHARS = 2400;
+// Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
+// the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to
+// be 2400 and bit first: a 2400+ char note was cut here while the recap still had room, and the
+// cut landed in its "still open" list — the half the parent reads next. 4000 clears the recap
+// budget at every window that folds (≈ 4.2k chars at 24k) so `fitNote` decides, not this.
+export const COMPACTION_NOTE_MAX_CHARS = 4000;
 
 export function buildCompactionReportDirective(n: number): string {
   return (
