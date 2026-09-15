@@ -17,6 +17,7 @@ export function Scrollback({
   streamingReasoning,
   streamingTool,
   streamingNested = false,
+  streamingBar,
   chromeRows = 0,
 }: {
   messages: Message[];
@@ -27,6 +28,10 @@ export function Scrollback({
   // at NESTED_INDENT so the streaming tail sits where its committed row will land a moment later,
   // instead of jumping left while live and right on commit.
   streamingNested?: boolean;
+  // Color for the live reasoning bar when the stream is something other than the reply — the
+  // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
+  // on screen reads as compaction work. Undefined keeps the normal reasoning color.
+  streamingBar?: string;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -44,7 +49,12 @@ export function Scrollback({
     <>
       {streamingReasoning ? (
         <Box marginTop={1}>
-          <ReasoningBlock text={streamingReasoning} maxLines={budget} indent={indent} />
+          <ReasoningBlock
+            text={streamingReasoning}
+            maxLines={budget}
+            indent={indent}
+            barColor={streamingBar}
+          />
         </Box>
       ) : null}
       {streaming.trim() ? (
@@ -271,7 +281,13 @@ function renderMessage(
     const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} indent={indent} /> : null}
+        {msg.reasoning ? (
+          <ReasoningBlock
+            text={msg.reasoning}
+            indent={indent}
+            barColor={msg.compactionNote ? theme.info : undefined}
+          />
+        ) : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>{renderMarkdown(msg.content!)}</Text>
@@ -474,10 +490,12 @@ function ReasoningBlock({
   text,
   maxLines,
   indent = 0,
+  barColor = theme.reasoning,
 }: {
   text: string;
   maxLines?: number;
   indent?: number;
+  barColor?: string;
 }) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
@@ -497,14 +515,14 @@ function ReasoningBlock({
   return (
     <Box flexDirection="column">
       <Box>
-        <Text color={theme.reasoning}>{'▎ '}</Text>
+        <Text color={barColor}>{'▎ '}</Text>
         <Text bold color={theme.muted}>
           Thinking
         </Text>
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text color={theme.reasoning}>{'▎ '}</Text>
+          <Text color={barColor}>{'▎ '}</Text>
           <Text color={theme.muted}>{line}</Text>
         </Box>
       ))}

@@ -126,6 +126,8 @@ export function App() {
   const [streamingTool, setStreamingTool] = useState<string>('');
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
+  // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
+  const [noteLive, setNoteLive] = useState<boolean>(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1619,6 +1621,7 @@ export function App() {
           setPhase(p);
         },
         onSubagent: setSubagentLive,
+        onCompactionNote: setNoteLive,
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
@@ -1632,6 +1635,11 @@ export function App() {
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);
+          // The compaction report round (#280) streams its note as content and commits it as a
+          // system notice, which does not clear the content preview the way an assistant commit
+          // does — without this the round's real reply would stream onto the note's tail.
+          streamingRef.current = '';
+          setStreaming('');
         },
         onUsage: u => {
           setLastUsage(u);
@@ -1686,6 +1694,7 @@ export function App() {
       setStreamingReasoning('');
       setStreamingTool('');
       setSubagentLive(false);
+      setNoteLive(false);
       resetTypecheck();
       setReasoningSpin(false);
       setStatus('idle');
@@ -1754,7 +1763,8 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
-            streamingNested={subagentLive}
+            streamingNested={subagentLive || noteLive}
+            streamingBar={noteLive ? theme.info : undefined}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
             }
@@ -1776,12 +1786,14 @@ export function App() {
                     ? 'Recovering from a loop'
                     : reasoningSpin
                       ? 'Thinking — may be looping (ctrl-c to abort)'
-                      : subagentLive
-                        ? 'Subagent working'
-                        : undefined
+                      : noteLive
+                        ? 'Writing compaction note'
+                        : subagentLive
+                          ? 'Subagent working'
+                          : undefined
               }
               accent={
-                typechecking || recovering
+                typechecking || recovering || noteLive
                   ? theme.info
                   : reasoningSpin
                     ? theme.warning

@@ -74,6 +74,12 @@ import {
   MAX_SUBAGENTS_PER_TURN,
   buildCoverageNote,
 } from './subagentreport.js';
+import {
+  buildCompactionReportDirective,
+  clampCompactionNote,
+  compactionReportEnabled,
+} from './compactionreport.js';
+import { wouldFold, type CompactionNote } from './compaction.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -865,6 +871,10 @@ export async function runTurn(opts: {
   // committed, so its live region is empty for the duration — the subagent's streaming callbacks
   // are forwarded into it, and this tells the UI to draw them at the nested indent.
   onSubagent?: (active: boolean) => void;
+  // A compaction report round (#280) is running: the model is writing its note into the live
+  // region. Same shape as onSubagent — the UI nests the stream and relabels the spinner — because
+  // the note is a side conversation the same way a subagent is: its reasoning never enters history.
+  onCompactionNote?: (active: boolean) => void;
   // Ephemeral, human-only pulse for the post-edit typecheck: true while a check runs, false when it
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
@@ -884,6 +894,8 @@ export async function runTurn(opts: {
   // (rather than leaving the long looped block sitting below the recovery notice, where it buries the
   // notice and the next round's reasoning appends onto it) makes the notice visible and lets the
   // recovery round stream into a fresh block. UI-only; never touches model-facing history. See #55.
+  // Also fired after a compaction report round (#280), whose note streamed as content and committed
+  // as a notice: the UI drops both previews so the round's real reply starts clean.
   onReasoningReset?: () => void;
   onUsage?: (usage: Usage) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
@@ -1671,11 +1683,98 @@ export async function runTurn(opts: {
       (shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
         agedButAboveWatermark)
     ) {
+      // EXPERIMENT (#280): the report round. One extra model call, tools withdrawn, asking for a
+      // compaction note; the fold below then carries the note as the recap's body instead of the
+      // read ledger (see compactionreport.ts for the measurement behind it). Its own request, not
+      // this round's — the note is captured and the round's real call proceeds after the fold, so
+      // the note-writing reasoning never enters history. Agent mode only for now (plan mode has its
+      // own force-write and transform; keep the blast radius to one path). Streams into the live
+      // region like any reply so the user sees the note being written; committed as an info notice
+      // so it reads as a harness event, not an answer. Fail-open: an empty or aborted reply folds
+      // exactly as before.
+      //
+      // Gated on the fold actually removing something (`wouldFold`, the same walk compactHistory
+      // does): under PREFIX_STABLE the batch-age shed just above often gets the request under the
+      // threshold on its own, and the fold then keeps everything — a note written there has no
+      // recap to live in and is thrown away (observed twice in one run). The note is therefore
+      // written from the post-shed history — outlines and summaries for the aged part, live bytes
+      // for the recent part — which is what the model actually still knows at that moment.
+      let note: CompactionNote | undefined;
+      if (
+        compactionReportEnabled() &&
+        opts.promptMode !== 'plan' &&
+        !opts.signal?.aborted &&
+        wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens)
+      ) {
+        const n = shrink.folds + 1;
+        const directive = buildCompactionReportDirective(n);
+        // Top-level notice first, so the nested block that follows reads as a deliberate side
+        // conversation and not as a stray indent; the fold notice below closes it.
+        opts.onMessage({
+          role: 'system',
+          tone: 'info',
+          content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
+        });
+        opts.onPhase?.('thinking');
+        opts.onCompactionNote?.(true);
+        try {
+          const rep = await callModel({
+            system: prefixStable ? baseSystem : system + '\n\n' + directive,
+            history: opts.history,
+            tools: [],
+            config: opts.config,
+            onContentDelta: opts.onContentDelta,
+            onReasoningDelta: opts.onReasoningDelta,
+            signal: opts.signal,
+            calibration,
+            maxTokens: computeMaxTokens({
+              contextWindow: window,
+              promptTokens: Math.round(rawEstimate() * calibration),
+              userMaxTokens: opts.config.maxTokens,
+            }),
+            prefixStable,
+            trailingNote: prefixStable
+              ? roundSuffix
+                ? `${roundSuffix}\n\n${directive}`
+                : directive
+              : undefined,
+          });
+          if (rep.usage) opts.onUsage?.(rep.usage);
+          const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
+          if (text) {
+            note = { n, text };
+            // UI only, never history: the note as a nested assistant message so it renders as
+            // markdown and sits indented like a subagent's output, WITH its reasoning — the trace of
+            // how the note was derived stays in the scrollback for the user, while the model's
+            // history gets only the note (via the recap). compactionNote colors its bar.
+            opts.onMessage({
+              role: 'assistant',
+              content: text,
+              reasoning: rep.reasoning?.trim() || undefined,
+              nested: true,
+              compactionNote: true,
+            } as Message);
+          }
+          debugLog(
+            `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
+              `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}\n`,
+          );
+        } catch (err) {
+          if (opts.signal?.aborted) return;
+          debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
+        } finally {
+          opts.onCompactionNote?.(false);
+          // The live region held the note; if the reply was empty no assistant commit cleared it,
+          // so the UI is told explicitly before the round's real reply streams.
+          opts.onReasoningReset?.();
+        }
+      }
       const removed = compactHistory(
         opts.history,
         window,
         compactCalibration,
         opts.config.minGenTokens,
+        note,
       );
       // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
       // it is spliced into the model history per turn, while the saved transcript is written from
