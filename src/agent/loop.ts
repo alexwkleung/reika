@@ -81,6 +81,12 @@ import {
   clampCompactionNote,
   compactionReportEnabled,
 } from './compactionreport.js';
+import {
+  buildSubagentAffordance,
+  filesInResult,
+  subagentPressureEnabled,
+  underPressure,
+} from './subagentpressure.js';
 import { wouldFold, type CompactionNote } from './compaction.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
@@ -967,6 +973,8 @@ export async function runTurn(opts: {
   // Subagent budget this turn — the ToolContext is rebuilt per call, so it lives here. `rounds` is
   // the decision count (rounds that dispatched a subagent), `inRound` the width of the current one.
   const subagentCalls: SubagentBudget = { rounds: 0, inRound: 0 };
+  // Pressure affordance (#343) offered this turn — once is the signal; repeating it is noise.
+  let subagentAffordanceOffered = false;
   // Latched when a search fails for a reason that is a property of the provider rather than the
   // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
   // well find the block cleared, so it is never carried across one.
@@ -2654,6 +2662,31 @@ export async function runTurn(opts: {
           contentHash = result.contentHash;
           toolNotice = result.notice;
           editFailure = result.editFailure;
+          // EXPERIMENT (#343): the mid-session subagent trigger. A grep/glob that spans enough
+          // files that reading them would cross the compaction threshold gets a footer pointing at
+          // subagent. Observation-keyed (the files are in the result) and pressure-gated (the
+          // estimate is this round's, the threshold the window's) — see subagentpressure.ts. The
+          // subagent tool being in the list is what keeps this out of subagents and plan mode.
+          if (
+            subagentPressureEnabled() &&
+            !subagentAffordanceOffered &&
+            window &&
+            payload &&
+            (call.name === 'grep' || call.name === 'glob') &&
+            opts.tools.some(t => t.name === 'subagent')
+          ) {
+            const files = filesInResult(call.name, payload);
+            const estimateTokens = Math.round(rawEstimate() * compactCalibration);
+            const thresholdTokens = compactThreshold(window, opts.config.minGenTokens);
+            if (underPressure({ files, estimateTokens, thresholdTokens })) {
+              payload = `${payload}\n\n${buildSubagentAffordance(files)}`;
+              subagentAffordanceOffered = true;
+              debugLog(
+                `[reika:debug] round=${i} subagent-affordance files=${files} ` +
+                  `estimate=${estimateTokens} threshold=${Math.round(thresholdTokens)}\n`,
+              );
+            }
+          }
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
