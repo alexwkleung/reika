@@ -26,24 +26,29 @@ export type ReadClass = 'unique' | 'changed' | 'narrowed' | 'dup-live' | 'dup-ag
 // loop ledger names these so the stop signal is specific.
 export type LoopingRead = { path: string; offset: number; repeats: number };
 
-// Per-file overlap loop (#341). The region key above is (path, offset), so a model that re-reads
-// one file at a dozen DIFFERENT start lines is invisible to it — every slice is `unique` or
-// `narrowed`, repeats=1, and the ladder never engages. Observed twice in one day: a subagent read
-// `types.ts` in 14 slices over 90 minutes; the un-delegated baseline read `_danger.ts` 7 times and
-// `bash.ts` 6 (1-300, 21-48, 21-140, 49-110, 21-48) across five compaction folds, 3h, no answer.
-// The tell is not the count — a 3000-line file paged honestly in ten 300-line chunks is ten reads —
-// it is OVERLAP: forward paging never overlaps an earlier read, and the reconstruction spiral is
-// nothing but overlaps of unchanged bytes. So each file counts reads whose range overlaps any
-// earlier read of the same (unchanged) file, across distinct regions; past this many it is a loop
-// and feeds the same ledger → withdrawal ladder as a region repeat. One narrowing into a capped
-// page's hidden middle is the omission marker's own remedy and is inside the allowance; four is
-// the model rebuilding a file it keeps losing.
-export const FILE_OVERLAP_REPEATS = 4;
+// Per-file coverage-depth loop (#341). The region key above is (path, offset), so a model that
+// re-reads one file at a dozen DIFFERENT start lines is invisible to it — every slice is `unique`
+// or `narrowed`, repeats=1, and the ladder never engages. Observed twice in one day: a subagent
+// read `types.ts` in 14 slices over 90 minutes; the un-delegated baseline read `_danger.ts` 7
+// times and `bash.ts` 6 (1-300, 21-48, 21-140, 49-110, 21-48) across five compaction folds, 3h,
+// no answer.
+//
+// The measure is DEPTH — how many times any one line of an unchanged file has been fetched — not
+// a read count and not an overlap count. A count flags a 3000-line file paged honestly in ten
+// chunks. An overlap count (the first version of this) flagged the omission marker's own remedy:
+// a 244-line read was capped, the model re-paged it in four 60-line chunks that arrived whole,
+// each chunk "overlapped" the capped read, and inspection was withdrawn on a model recovering
+// correctly. Tiling under a capped read fetches each line two or three times at most; the
+// reconstruction spiral fetches the same lines four, five, eight times (`types.ts` 156-185 was
+// under 1-300, 156-300, 156-185, 165-176, 156-165, …). Past this depth the file feeds the same
+// ledger → withdrawal ladder as a region repeat.
+export const FILE_OVERLAP_DEPTH = 4;
 
 type FileEntry = {
   hash: string;
   ranges: Array<[number, number]>;
-  overlaps: number;
+  // Deepest coverage any line of the file has reached, and the round it last deepened.
+  depth: number;
   lastRound: number;
 };
 
@@ -144,29 +149,46 @@ export class ReadTrace {
       lastLive: cls === 'dup-live',
     });
     this.counts[cls]++;
-    this.recordFile(path, offset, window, hash, round);
+    this.recordFile(path, offset, window, hash, round, cls);
     return { cls, repeats };
   }
 
-  // The per-file overlap count (#341). A changed hash resets the file: the model edited it, so
-  // re-reading is a refetch, never a loop.
+  // The per-file coverage depth (#341). A changed hash resets the file: the model edited it, so
+  // re-reading is a refetch, never a loop. Depth of the new range = 1 + the most earlier ranges
+  // stacked on any one line of it; the maximum is attained at a range boundary, so it is enough
+  // to sample the new range's start and each earlier range's start that falls inside it. A
+  // `narrowed` read is recorded (later reads see its range) but never deepens: it is the sanctioned
+  // descent into a capped page, already bounded per region by MAX_NARROWINGS, and the #184
+  // transcript (300 → 70 → 35 → 18 at one offset) would otherwise be depth 4 by construction.
   private recordFile(
     path: string,
     offset: number,
     window: number,
     hash: string,
     round: number,
+    cls: ReadClass,
   ): void {
     const lo = Math.max(1, offset);
     const hi = window === Infinity ? Infinity : lo + window - 1;
     let f = this.files.get(path);
     if (!f || f.hash !== hash) {
-      f = { hash, ranges: [], overlaps: 0, lastRound: round };
+      f = { hash, ranges: [], depth: 0, lastRound: round };
       this.files.set(path, f);
     }
-    if (f.ranges.some(([a, b]) => lo <= b && hi >= a)) {
-      f.overlaps++;
-      f.lastRound = round;
+    if (cls !== 'narrowed') {
+      const points = [lo, ...f.ranges.map(([a]) => a).filter(a => a >= lo && a <= hi)];
+      let depth = 1;
+      for (const p of points) {
+        const stacked = 1 + f.ranges.filter(([a, b]) => p >= a && p <= b).length;
+        if (stacked > depth) depth = stacked;
+      }
+      if (depth > f.depth) {
+        f.depth = depth;
+        f.lastRound = round;
+      } else if (depth >= FILE_OVERLAP_DEPTH) {
+        // Still at the looping depth: keep the file recent so the ledger stays up while it goes on.
+        f.lastRound = round;
+      }
     }
     f.ranges.push([lo, hi]);
   }
@@ -192,14 +214,14 @@ export class ReadTrace {
         out.push({ path: e.path, offset: e.offset, repeats: e.repeats });
       }
     }
-    // File-level overlap loops (#341), after the region entries so a file already named by a
+    // File-level depth loops (#341), after the region entries so a file already named by a
     // region repeat is not listed twice. offset 1 renders as the bare path in the ledger.
     const named = new Set(out.map(l => l.path));
     for (const [path, f] of this.files) {
       if (named.has(path)) continue;
       if (currentRound - f.lastRound > recentWithin) continue;
-      if (f.overlaps >= FILE_OVERLAP_REPEATS) {
-        out.push({ path, offset: 1, repeats: f.overlaps });
+      if (f.depth >= FILE_OVERLAP_DEPTH) {
+        out.push({ path, offset: 1, repeats: f.depth });
       }
     }
     return out;
@@ -219,7 +241,7 @@ export class ReadTrace {
       if (e.repeats >= 3) looped++;
     }
     let overlapped = 0;
-    for (const f of this.files.values()) if (f.overlaps >= FILE_OVERLAP_REPEATS) overlapped++;
+    for (const f of this.files.values()) if (f.depth >= FILE_OVERLAP_DEPTH) overlapped++;
     return (
       `unique=${c.unique} changed=${c.changed} dup-live=${c['dup-live']} dup-aged=${c['dup-aged']} ` +
       `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped} overlapped=${overlapped}`
