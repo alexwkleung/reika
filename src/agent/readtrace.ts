@@ -26,6 +26,27 @@ export type ReadClass = 'unique' | 'changed' | 'narrowed' | 'dup-live' | 'dup-ag
 // loop ledger names these so the stop signal is specific.
 export type LoopingRead = { path: string; offset: number; repeats: number };
 
+// Per-file overlap loop (#341). The region key above is (path, offset), so a model that re-reads
+// one file at a dozen DIFFERENT start lines is invisible to it — every slice is `unique` or
+// `narrowed`, repeats=1, and the ladder never engages. Observed twice in one day: a subagent read
+// `types.ts` in 14 slices over 90 minutes; the un-delegated baseline read `_danger.ts` 7 times and
+// `bash.ts` 6 (1-300, 21-48, 21-140, 49-110, 21-48) across five compaction folds, 3h, no answer.
+// The tell is not the count — a 3000-line file paged honestly in ten 300-line chunks is ten reads —
+// it is OVERLAP: forward paging never overlaps an earlier read, and the reconstruction spiral is
+// nothing but overlaps of unchanged bytes. So each file counts reads whose range overlaps any
+// earlier read of the same (unchanged) file, across distinct regions; past this many it is a loop
+// and feeds the same ledger → withdrawal ladder as a region repeat. One narrowing into a capped
+// page's hidden middle is the omission marker's own remedy and is inside the allowance; four is
+// the model rebuilding a file it keeps losing.
+export const FILE_OVERLAP_REPEATS = 4;
+
+type FileEntry = {
+  hash: string;
+  ranges: Array<[number, number]>;
+  overlaps: number;
+  lastRound: number;
+};
+
 type Entry = {
   hash: string;
   round: number;
@@ -56,6 +77,7 @@ export class ReadTrace {
   // The window is still carried in the entry (not the key) for the narrowing carve-out below, which
   // needs to compare against the previous request rather than fork a new region for every window.
   private seen = new Map<string, Entry>();
+  private files = new Map<string, FileEntry>();
   private counts: Record<ReadClass, number> = {
     unique: 0,
     changed: 0,
@@ -122,7 +144,31 @@ export class ReadTrace {
       lastLive: cls === 'dup-live',
     });
     this.counts[cls]++;
+    this.recordFile(path, offset, window, hash, round);
     return { cls, repeats };
+  }
+
+  // The per-file overlap count (#341). A changed hash resets the file: the model edited it, so
+  // re-reading is a refetch, never a loop.
+  private recordFile(
+    path: string,
+    offset: number,
+    window: number,
+    hash: string,
+    round: number,
+  ): void {
+    const lo = Math.max(1, offset);
+    const hi = window === Infinity ? Infinity : lo + window - 1;
+    let f = this.files.get(path);
+    if (!f || f.hash !== hash) {
+      f = { hash, ranges: [], overlaps: 0, lastRound: round };
+      this.files.set(path, f);
+    }
+    if (f.ranges.some(([a, b]) => lo <= b && hi >= a)) {
+      f.overlaps++;
+      f.lastRound = round;
+    }
+    f.ranges.push([lo, hi]);
   }
 
   // Regions the model is looping on, re-read within the last `recentWithin` rounds of
@@ -146,6 +192,16 @@ export class ReadTrace {
         out.push({ path: e.path, offset: e.offset, repeats: e.repeats });
       }
     }
+    // File-level overlap loops (#341), after the region entries so a file already named by a
+    // region repeat is not listed twice. offset 1 renders as the bare path in the ledger.
+    const named = new Set(out.map(l => l.path));
+    for (const [path, f] of this.files) {
+      if (named.has(path)) continue;
+      if (currentRound - f.lastRound > recentWithin) continue;
+      if (f.overlaps >= FILE_OVERLAP_REPEATS) {
+        out.push({ path, offset: 1, repeats: f.overlaps });
+      }
+    }
     return out;
   }
 
@@ -162,9 +218,11 @@ export class ReadTrace {
       if (e.repeats > maxRepeat) maxRepeat = e.repeats;
       if (e.repeats >= 3) looped++;
     }
+    let overlapped = 0;
+    for (const f of this.files.values()) if (f.overlaps >= FILE_OVERLAP_REPEATS) overlapped++;
     return (
       `unique=${c.unique} changed=${c.changed} dup-live=${c['dup-live']} dup-aged=${c['dup-aged']} ` +
-      `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped}`
+      `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped} overlapped=${overlapped}`
     );
   }
 }
