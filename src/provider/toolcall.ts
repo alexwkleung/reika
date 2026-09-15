@@ -237,7 +237,9 @@ export type CapStats = {
 // Which branch agedToolContent took for one message. `whole` is an aged payload kept verbatim —
 // either because it is a crumb the floor spared (#257) or because its skeleton would have cost more
 // than it did.
-type AgedKind = 'summary' | 'diff' | 'outline' | 'whole';
+// `report` is a subagent's digest kept by its head (#354): a report is already compressed, and
+// its chain/"Established" section leads by construction of the report directive.
+type AgedKind = 'summary' | 'diff' | 'outline' | 'whole' | 'report';
 type AgedContent = { content: string; kind: AgedKind };
 
 // What eviction did to this request, counted where it happens (#260). Aging is otherwise invisible
@@ -352,7 +354,7 @@ export function messagesToOpenAI(
     }
     return capPayload(payload, cap);
   };
-  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0 };
+  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0, report: 0 };
   // Same discipline as applyCap: count where the content is produced, so the line can never
   // describe a serialization that didn't happen.
   const serializeAged = (msg: Extract<Message, { role: 'tool' }>, i: number): string => {
@@ -876,6 +878,26 @@ function shallowestIndent(contents: string[]): number {
   return min === Infinity ? 0 : min;
 }
 
+// How much of a subagent report an aged message keeps. Sized like a compaction note
+// (agent/compactionreport.ts COMPACTION_NOTE_MAX_CHARS): the same class of artifact — the model's
+// own digest of reads — and the same argument for keeping it, that it is already the compressed
+// form. Head-first because the report directive (#344) puts the chain first and "Not covered"
+// last, so a cut tail loses the list of gaps, not the findings. Whole lines, so a cut never lands
+// mid-reference.
+const REPORT_HEAD_CHARS = 2400;
+// The subagent tool's summary shapes (`tools/subagent.ts` via makeSpawnSubagent): "Subagent
+// completed (N chars)" and "Subagent (model) completed (N chars)". A budget refusal is also
+// "Subagent …" but carries a short notice, not a report — it falls under the crumb floor anyway.
+const SUBAGENT_SUMMARY_RE = /^Subagent(?: \([^)]*\))? completed \(/;
+
+function reportHead(payload: string, summary: string): string | null {
+  if (!SUBAGENT_SUMMARY_RE.test(summary)) return null;
+  if (payload.length <= REPORT_HEAD_CHARS) return payload;
+  const cut = payload.lastIndexOf('\n', REPORT_HEAD_CHARS);
+  const head = payload.slice(0, cut > REPORT_HEAD_CHARS / 2 ? cut : REPORT_HEAD_CHARS).trimEnd();
+  return `${head}\n(… report continues — ${payload.length - head.length} chars aged out; the head above is the chain, the cut part was what the subagent did not cover.)`;
+}
+
 function readSkeleton(payload: string, summary: string): string | null {
   const lines = payload.split('\n');
   const first = lines[0].match(READ_GUTTER_RE);
@@ -1006,6 +1028,12 @@ function agedToolContent(
   if (keepWhole ?? msg.payload.length <= SMALL_AGED_PAYLOAD_FLOOR_CHARS) {
     return { content: `${msg.summary}\n\n${msg.payload}`, kind: 'whole' };
   }
+  // A subagent report before the skeletons: neither the diff map nor the read outline can see a
+  // prose digest, so without this branch a 5k report aged to `Subagent completed (5165 chars)` —
+  // a byte count — and the parent went back to reading the files the subagent had read, the exact
+  // context spend delegation was meant to save (#354).
+  const report = reportHead(msg.payload, msg.summary);
+  if (report) return { content: `${msg.summary}\n\n${report}`, kind: 'report' };
   const diff = diffSkeleton(msg.payload);
   const skeleton = diff ?? readSkeleton(msg.payload, msg.summary);
   if (!skeleton) return { content: msg.summary, kind: 'summary' };

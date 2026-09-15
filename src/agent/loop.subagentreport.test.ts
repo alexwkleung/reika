@@ -11,6 +11,7 @@ import { subagentTool } from '../tools/subagent.js';
 import { grepTool } from '../tools/grep.js';
 import { writeTool } from '../tools/write.js';
 import {
+  MAX_SUBAGENTS_PER_ROUND,
   MAX_SUBAGENTS_PER_TURN,
   SUBAGENT_HOLD_NOTE,
   SUBAGENT_REPORT_DIRECTIVE,
@@ -395,6 +396,64 @@ describe('subagent bounded return (#340)', () => {
       const r2 = toolMsgs(history).find(t => t.callId === 'r2');
       expect(r2?.payload).toContain('export const a');
       expect(r2?.payload).not.toContain('re-read this same range');
+    });
+  });
+
+  // #354: the cap counts decisions (rounds), not calls. A four-stage parallel decomposition in one
+  // round is one decision; width within a round is bounded separately.
+  describe('parallel spawns (#354)', () => {
+    const parallel = (n: number, id: string): ModelResponse => ({
+      content: '',
+      toolCalls: Array.from({ length: n }, (_, i) => ({
+        id: `${id}${i}`,
+        name: 'subagent',
+        args: { task: `stage ${i}` },
+      })),
+    });
+    const toolMsgs = (history: Message[]) =>
+      history.filter(m => m.role === 'tool') as (Message & { role: 'tool' })[];
+
+    it('honours a full-width parallel round as one decision', async () => {
+      const history: Message[] = [];
+      h.scripted.push(parallel(MAX_SUBAGENTS_PER_ROUND, 'p'));
+      for (let i = 0; i < MAX_SUBAGENTS_PER_ROUND; i++) h.scripted.push(final(`report ${i}`));
+      // Two more serial decisions are still allowed after it.
+      h.scripted.push(subagentResponse('remainder', 'q'), final('report q'));
+      h.scripted.push(subagentResponse('retry', 'r'), final('report r'));
+      h.scripted.push(subagentResponse('one too many', 'x'), final('done'));
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig(),
+        tools: [readTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      const tools = toolMsgs(history);
+      const honoured = tools.filter(t => t.summary.includes('Subagent completed'));
+      expect(honoured).toHaveLength(MAX_SUBAGENTS_PER_ROUND + 2);
+      expect(tools[tools.length - 1].summary).toContain('budget for this turn exhausted');
+    });
+
+    it('refuses the call past the width bound within one round, and says so', async () => {
+      const history: Message[] = [];
+      h.scripted.push(parallel(MAX_SUBAGENTS_PER_ROUND + 1, 'w'));
+      for (let i = 0; i < MAX_SUBAGENTS_PER_ROUND; i++) h.scripted.push(final(`report ${i}`));
+      h.scripted.push(final('done'));
+      await runTurn({
+        userInput: 'go',
+        history,
+        bundle: makeBundle(cwd),
+        config: makeConfig(),
+        tools: [readTool, subagentTool],
+        payloads: new PayloadStore(),
+        onMessage: () => {},
+      });
+      const tools = toolMsgs(history);
+      expect(tools).toHaveLength(MAX_SUBAGENTS_PER_ROUND + 1);
+      expect(tools[MAX_SUBAGENTS_PER_ROUND].summary).toContain('width for this round exhausted');
+      expect(tools[MAX_SUBAGENTS_PER_ROUND].payload).toContain('Fold this task into a later round');
     });
   });
 

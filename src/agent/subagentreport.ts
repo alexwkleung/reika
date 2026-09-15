@@ -15,11 +15,20 @@ export const SUBAGENT_REPORT_DIRECTIVE =
   'string the task asked for quoted verbatim. Then, under "Not covered:", list every file or ' +
   'question from the task you did not get to. Do not apologise and do not ask to continue.)';
 
-// Subagent calls per parent turn. The coverage note invites a re-spawn for what a subagent left
-// unread, so the loop needs a floor under it: a model that re-spawns on every return would burn
-// N × the subagent cap in rounds and evict the parent's KV prefix each time. 3 covers a task,
-// its remainder, and one retry.
+// Subagent DECISIONS per parent turn — rounds that dispatched at least one subagent. The coverage
+// note invites a re-spawn for what a subagent left unread, so the loop needs a floor under it: a
+// model that re-spawns on every return would burn N × the subagent cap in rounds and evict the
+// parent's KV prefix each time. 3 covers a task, its remainder, and one retry.
+//
+// Counted per round, not per call (#354): a parent that decomposes a task into four stage-wise
+// subagents in ONE round has made one decision, and the fourth call being refused by a cap sized
+// for serial re-spawns left a stage untraced. Width within a round is bounded separately below.
 export const MAX_SUBAGENTS_PER_TURN = 3;
+// Parallel subagent calls honoured within one round. On a single-slot server they run one after
+// another at up to a full subagent budget each, so width is wall-clock: 4 stages is a decomposition,
+// "one per file" is a runaway.
+export const MAX_SUBAGENTS_PER_ROUND = 4;
+export type SubagentBudget = { rounds: number; inRound: number };
 
 // A subagent call is exclusive in its round (#346). Returned in place of a sibling inspection call
 // (read/grep/glob/list, or an inspection-shaped bash) issued alongside `subagent`. The first

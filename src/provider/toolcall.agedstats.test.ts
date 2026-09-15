@@ -108,7 +108,7 @@ describe('aged-payload stats (#260)', () => {
         stats = s;
       },
     });
-    expect(stats).toEqual({ summary: 0, diff: 0, outline: 0, whole: 0 });
+    expect(stats).toEqual({ summary: 0, diff: 0, outline: 0, whole: 0, report: 0 });
   });
 });
 

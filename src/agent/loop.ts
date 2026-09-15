@@ -72,6 +72,8 @@ import {
   SUBAGENT_REPORT_DIRECTIVE,
   SUBAGENT_HOLD_NOTE,
   MAX_SUBAGENTS_PER_TURN,
+  MAX_SUBAGENTS_PER_ROUND,
+  type SubagentBudget,
   buildCoverageNote,
 } from './subagentreport.js';
 import {
@@ -962,8 +964,9 @@ export async function runTurn(opts: {
     searches: { used: 0, max: opts.config.maxSearchesPerTurn },
     fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
   };
-  // Subagent spawns this turn — the ToolContext is rebuilt per call, so the count lives here.
-  const subagentCalls = { used: 0 };
+  // Subagent budget this turn — the ToolContext is rebuilt per call, so it lives here. `rounds` is
+  // the decision count (rounds that dispatched a subagent), `inRound` the width of the current one.
+  const subagentCalls: SubagentBudget = { rounds: 0, inRound: 0 };
   // Latched when a search fails for a reason that is a property of the provider rather than the
   // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
   // well find the block cleared, so it is never carried across one.
@@ -1929,11 +1932,11 @@ export async function runTurn(opts: {
       // Silent when nothing is aged yet, so early rounds add no noise.
       onAgedStats: debugEnabled()
         ? a => {
-            const total = a.summary + a.diff + a.outline + a.whole;
+            const total = a.summary + a.diff + a.outline + a.whole + a.report;
             if (total === 0) return;
             debugLog(
               `[reika:debug] aged-payload round=${i} aged=${total} summary=${a.summary} ` +
-                `diff=${a.diff} outline=${a.outline} whole=${a.whole}\n`,
+                `diff=${a.diff} outline=${a.outline} whole=${a.whole} report=${a.report}\n`,
             );
           }
         : undefined,
@@ -2500,8 +2503,12 @@ export async function runTurn(opts: {
     // front — the siblings are held whichever side of the subagent call they were listed on. Not
     // when the spawn itself would be refused (per-turn cap), which would leave the model with
     // nothing this round.
-    const subagentInRound =
-      toolCalls.some(c => c.name === 'subagent') && subagentCalls.used < MAX_SUBAGENTS_PER_TURN;
+    const roundHasSubagent = toolCalls.some(c => c.name === 'subagent');
+    if (roundHasSubagent) {
+      subagentCalls.rounds += 1;
+      subagentCalls.inRound = 0;
+    }
+    const subagentInRound = roundHasSubagent && subagentCalls.rounds <= MAX_SUBAGENTS_PER_TURN;
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
@@ -2938,17 +2945,28 @@ function commitAgentLoopStop(
 
 type RunTurnOpts = Parameters<typeof runTurn>[0];
 
-function makeSpawnSubagent(parent: RunTurnOpts, calls: { used: number }) {
+function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
   return async (sub: { task: string }): Promise<ToolResult> => {
-    if (calls.used >= MAX_SUBAGENTS_PER_TURN) {
+    // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
+    // allowed", and the width check is against the calls already honoured in this round.
+    if (budget.rounds > MAX_SUBAGENTS_PER_TURN) {
       return {
-        summary: `Subagent budget for this turn exhausted (${MAX_SUBAGENTS_PER_TURN})`,
+        summary: `Subagent budget for this turn exhausted (${MAX_SUBAGENTS_PER_TURN} rounds)`,
         payload:
-          `(reika: ${MAX_SUBAGENTS_PER_TURN} subagents have already run this turn. Answer from ` +
-          'their reports and your own reads; if something is still missing, say what.)',
+          `(reika: subagents have been dispatched in ${MAX_SUBAGENTS_PER_TURN} rounds this turn ` +
+          'already. Answer from their reports and your own reads; if something is still missing, ' +
+          'say what.)',
       };
     }
-    calls.used += 1;
+    if (budget.inRound >= MAX_SUBAGENTS_PER_ROUND) {
+      return {
+        summary: `Subagent width for this round exhausted (${MAX_SUBAGENTS_PER_ROUND})`,
+        payload:
+          `(reika: ${MAX_SUBAGENTS_PER_ROUND} subagents already run in this round, one after ` +
+          'another. Fold this task into a later round once their reports are in.)',
+      };
+    }
+    budget.inRound += 1;
     const subConfig: Config = {
       ...parent.config,
       model: parent.config.subagentModel ?? parent.config.model,
