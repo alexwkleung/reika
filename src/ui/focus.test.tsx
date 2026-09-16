@@ -7,7 +7,6 @@ import { FOCUS_REPORT_OFF, FOCUS_REPORT_ON, isFocusKeypress, parseFocusEvent } f
 const FOCUS_IN = '\x1b[I';
 const FOCUS_OUT = '\x1b[O';
 const BLOCK = '\x1b[7m'; // inverse video: the drawn cursor
-const FAINT_BLOCK = '\x1b[2m\x1b[7m'; // the unfocused variant
 
 // Let Ink flush the keypress through React state into the next frame.
 const tick = (ms = 30): Promise<void> => new Promise(r => setTimeout(r, ms));
@@ -49,27 +48,26 @@ describe('focus sequences', () => {
 });
 
 describe('Input on window focus change', () => {
-  it('holds the cursor solid and faint while unfocused, and blinks again on focus', async () => {
+  it('holds the cursor solid while unfocused, and blinks again on focus', async () => {
     const { stdin, lastFrame, frames } = render(<Harness />);
     await tick();
     stdin.write('ab');
     await tick();
     expect(lastFrame()).toContain(BLOCK);
-    expect(lastFrame()).not.toContain(FAINT_BLOCK);
 
     stdin.write(FOCUS_OUT);
     await tick();
-    expect(lastFrame()).toContain(FAINT_BLOCK);
-    // Past a full blink period every frame still carries the block: no blink, no repaint churn.
+    expect(lastFrame()).toContain(BLOCK);
+    // Past a full blink period the block is still there and nothing was repainted: no blink,
+    // no churn.
     const from = frames.length;
     await tick(700);
     expect(frames.length).toBe(from);
-    expect(lastFrame()).toContain(FAINT_BLOCK);
+    expect(lastFrame()).toContain(BLOCK);
 
     stdin.write(FOCUS_IN);
     await tick();
     expect(lastFrame()).toContain(BLOCK);
-    expect(lastFrame()).not.toContain(FAINT_BLOCK);
     // Blinking resumed: within a period the block goes away, and comes back.
     await tick(600);
     expect(lastFrame()).not.toContain(BLOCK);
@@ -77,14 +75,17 @@ describe('Input on window focus change', () => {
     expect(lastFrame()).toContain(BLOCK);
   });
 
-  it('applies the same treatment to the placeholder cursor', async () => {
-    const { stdin, lastFrame } = render(<Harness placeholder="ask anything" />);
+  it('holds the placeholder cursor the same way', async () => {
+    const { stdin, lastFrame, frames } = render(<Harness placeholder="ask anything" />);
     await tick();
     expect(lastFrame()).toContain(`${BLOCK}a`);
 
     stdin.write(FOCUS_OUT);
     await tick();
-    expect(lastFrame()).toContain(`${FAINT_BLOCK}a`);
+    const from = frames.length;
+    await tick(700);
+    expect(frames.length).toBe(from);
+    expect(lastFrame()).toContain(`${BLOCK}a`);
     expect(plain(lastFrame())).toContain('ask anything');
   });
 

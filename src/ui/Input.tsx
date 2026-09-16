@@ -81,9 +81,9 @@ export function Input({
   // terminal's blink setting can't reach it — we toggle visibility ourselves.
   // Re-running on value/cursor change snaps it solid and restarts the timer, so
   // the block is always visible the instant you type or move. An unfocused
-  // window holds it solid instead (#352): the terminal's own cursor does the
-  // same, and a window nobody is looking at shouldn't be repainting twice a
-  // second.
+  // window holds it solid instead (#352): the terminal's own cursor stops
+  // blinking too, and a window nobody is looking at shouldn't be repainting
+  // twice a second.
   useEffect(() => {
     if (disabled) return;
     setBlinkOn(true);
@@ -389,7 +389,7 @@ export function Input({
         <Box>
           {blinkOn ? (
             <>
-              <Text>{cursorBlock(placeholder[0], windowFocused)}</Text>
+              <Text>{`${INVERSE_ON}${placeholder[0]}${INVERSE_OFF}`}</Text>
               <Text color={theme.muted}>{placeholder.slice(1)}</Text>
             </>
           ) : (
@@ -397,7 +397,7 @@ export function Input({
           )}
         </Box>
       ) : (
-        <Text>{renderWithCursor(view.text, view.cursor, !disabled && blinkOn, windowFocused)}</Text>
+        <Text>{renderWithCursor(view.text, view.cursor, !disabled && blinkOn)}</Text>
       )}
     </Box>
   );
@@ -444,22 +444,7 @@ export function clampToViewport(
   };
 }
 
-// The cursor cell. Focused: a full inverse-video block. Unfocused: the same block, faint —
-// still marks the position, but reads as inactive the way the terminal's own hollow cursor
-// does. A true outline isn't drawable with SGR (there is no per-cell border), so faint is the
-// nearest a text cell gets.
-function cursorBlock(ch: string, windowFocused: boolean): string {
-  return windowFocused
-    ? INVERSE_ON + ch + INVERSE_OFF
-    : DIM_ON + INVERSE_ON + ch + INVERSE_OFF + DIM_OFF;
-}
-
-function renderWithCursor(
-  value: string,
-  cursor: number,
-  visible: boolean,
-  windowFocused: boolean,
-): string {
+function renderWithCursor(value: string, cursor: number, visible: boolean): string {
   if (!visible) return value;
   const before = value.slice(0, cursor);
   const ch = value[cursor];
@@ -468,7 +453,7 @@ function renderWithCursor(
   // instead, and re-emit the newline after it so the line break is preserved.
   const at = ch === undefined || ch === '\n' ? ' ' : ch;
   const after = ch === '\n' ? '\n' + value.slice(cursor + 1) : value.slice(cursor + 1);
-  return before + cursorBlock(at, windowFocused) + after;
+  return before + INVERSE_ON + at + INVERSE_OFF + after;
 }
 
 function wordForward(value: string, cursor: number): number {
