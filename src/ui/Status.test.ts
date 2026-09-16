@@ -120,8 +120,8 @@ describe('formatPr', () => {
 });
 
 describe('formatCache', () => {
-  it('shows the cached share of the last prompt', () => {
-    expect(formatCache(40_000, 50_000)).toBe('cache 80%');
+  it('shows the cached share of the last prompt and its size', () => {
+    expect(formatCache(40_000, 50_000)).toBe('80% cached (40k)');
   });
 
   it('renders nothing when the provider does not report cache hits', () => {
