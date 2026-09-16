@@ -21,7 +21,7 @@ const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '
 // grey (Scrollback), which is what keeps a live indicator distinct from a finished one.
 // Resting brightness. A tinted label reads dimmer than grey at the same max channel (the other
 // channels drop with the hue), so this sits a step above theme.muted's 0x80 to compensate.
-const BASE = 0x99;
+const BASE = 0xa8;
 const PEAK = 0xd2; // brightest level at the tip.
 const SHIMMER_RADIUS = 2; // band reaches this many chars either side of the tip.
 // How much of the accent's chroma the label keeps. 1 would be the pure hue (a cyan label's red

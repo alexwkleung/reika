@@ -49,23 +49,23 @@ describe('shimmerRamp', () => {
 
   it('falls back to neutral grey for an unrecognised accent', () => {
     expect(shimmerRamp('not-a-color')).toEqual([
-      '#a7a7a7',
-      '#c4c4c4',
+      '#b3b3b3',
+      '#c8c8c8',
       '#d2d2d2',
-      '#c4c4c4',
-      '#a7a7a7',
+      '#c8c8c8',
+      '#b3b3b3',
     ]);
-    expect(shimmerBase('not-a-color')).toBe('#999999');
+    expect(shimmerBase('not-a-color')).toBe('#a8a8a8');
   });
 
   it('rests a step above muted so the tint does not read as dimmer than the old grey', () => {
     for (const accent of [theme.accent, theme.warning, theme.subagent, 'cyan']) {
       const base = shimmerBase(accent);
-      expect(Math.max(...rgb(base))).toBe(0x99);
+      expect(Math.max(...rgb(base))).toBe(0xa8);
       // The band's rim is only a quarter step above the resting color: it feathers down to
       // the base rather than snapping.
       const rim = Math.max(...rgb(shimmerRamp(accent)[0]));
-      expect(rim - 0x99).toBe(0x0e);
+      expect(rim - 0xa8).toBe(0x0b);
     }
   });
 });
