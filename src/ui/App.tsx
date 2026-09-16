@@ -73,7 +73,7 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 const TYPECHECK_LINGER_MS = 650;
 
 // Only the startup splash lives in the dedicated header <Static>. The compact
-// header (after /cd or /model) flows through the message stream instead — Ink
+// header (after /cd) flows through the message stream instead — Ink
 // honors a single <Static>, so appending to this one after the message log's
 // Static takes over would render nowhere.
 type HeaderItem = {
@@ -452,6 +452,8 @@ export function App() {
   // the command line that triggered it (the picker already echoed on open).
   // `cfg` overrides the config state for the same-render case where the caller just
   // registered an ad-hoc profile via setConfig and the closure hasn't caught up.
+  // No compact header here (#376): the system line names the model and the status
+  // bar chip already reflects it, so the header was a third copy of the same fact.
   const applyModelSwitch = (target: string, echo?: Message, cfg: Config | null = config): void => {
     if (!cfg) return;
     const next = cfg.profiles[target];
@@ -461,7 +463,6 @@ export function App() {
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
-      ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
       {
         role: 'system' as const,
         content: next.adhoc
