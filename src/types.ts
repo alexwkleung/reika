@@ -110,7 +110,6 @@ export type Message =
   // window. Lives only in the model-facing history (merged into the system prompt by
   // messagesToOpenAI); the UI keeps the full scrollback separately.
   | { role: 'compaction'; content: string; nested?: boolean }
-  | { role: 'header'; model: string; cwd: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
 export type Usage = {

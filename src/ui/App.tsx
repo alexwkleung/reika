@@ -72,10 +72,9 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
 const TYPECHECK_LINGER_MS = 650;
 
-// Only the startup splash lives in the dedicated header <Static>. The compact
-// header (after /cd) flows through the message stream instead — Ink
-// honors a single <Static>, so appending to this one after the message log's
-// Static takes over would render nowhere.
+// Only the startup splash lives in the dedicated header <Static> — Ink honors a
+// single <Static>, so appending to this one after the message log's Static takes
+// over would render nowhere. /cd and /model report through system lines instead.
 type HeaderItem = {
   kind: 'splash';
   model: string;
@@ -452,8 +451,6 @@ export function App() {
   // the command line that triggered it (the picker already echoed on open).
   // `cfg` overrides the config state for the same-render case where the caller just
   // registered an ad-hoc profile via setConfig and the closure hasn't caught up.
-  // No compact header here (#376): the system line names the model and the status
-  // bar chip already reflects it, so the header was a third copy of the same fact.
   const applyModelSwitch = (target: string, echo?: Message, cfg: Config | null = config): void => {
     if (!cfg) return;
     const next = cfg.profiles[target];
@@ -892,11 +889,7 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
-        setMessages(prev => [
-          ...prev,
-          { role: 'header', model: config.model, cwd: newBundle.cwd },
-          { role: 'system', content: `cwd is now ${newCwd}` },
-        ]);
+        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
           ...prev,
