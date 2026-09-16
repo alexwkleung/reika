@@ -969,6 +969,8 @@ export async function runTurn(opts: {
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
   const turnStart = Date.now();
+  // What the model can be pointed at this turn — see ToolContext.toolNames.
+  const toolNames: ReadonlySet<string> = new Set(opts.tools.map(t => t.name));
   // One budget per user turn — caps total search + fetch calls across all
   // internal model→tool rounds. Subagent calls get their own budget.
   const webBudget: WebBudget = {
@@ -2670,6 +2672,7 @@ export async function runTurn(opts: {
             webBudget,
             searchHealth,
             fetchedUrls,
+            toolNames,
             resolvedDeps,
             groundedUrls,
             askedQuestions,

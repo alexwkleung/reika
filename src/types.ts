@@ -276,6 +276,11 @@ export type ToolContext = {
   // Tools push successfully-fetched URLs here; the loop stamps them onto the
   // final assistant message as `sources`, rendered deterministically in scrollback.
   fetchedUrls?: Set<string>;
+  // Names of every tool in this turn's list. A tool result must not point the model at a tool it
+  // does not have (the coupling the prompts keep through `canAsk`/`canSubagent`): fetch_url's
+  // spill locator says "read that path", which in chat mode — fetch_url and search only — is a
+  // dead end (#377). Undefined means unknown, and a tool treats unknown as the full agent set.
+  toolNames?: ReadonlySet<string>;
   // Dependency package names whose installed type surface has already been injected into a
   // tool result this turn (see tools/_deps.ts). edit/write consult and extend it so each
   // imported dep is grounded at most once per turn — bounded bloat, no re-injection.
