@@ -5,11 +5,12 @@ import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import { Splash } from './Splash.js';
 
-// Issue #154, third surface. The splash's cwd is a label-and-value ROW rendered inside
-// <Static> — where Ink lays a row out at its children's intrinsic width and lets it overflow
-// rather than wrapping it. A deep cwd therefore ran off the right edge and the TERMINAL broke it,
-// mid-path, at column 0 of the next line: the one ragged row in an otherwise aligned block. An
-// explicit width puts the wrap back under Ink, which breaks it under the value column instead.
+// Issue #154, third surface. The splash's cwd is a value in a text COLUMN beside the drawn mark,
+// rendered inside <Static> — where Ink lays a row out at its children's intrinsic width and lets
+// it overflow rather than wrapping it. A deep cwd therefore ran off the right edge and the
+// TERMINAL broke it, mid-path, at column 0 of the next line: the one ragged row in an otherwise
+// aligned block. An explicit width on the column puts the wrap back under Ink, which breaks it
+// under the column instead.
 const DEEP_CWD =
   '~/Projects/acme-platform/services/checkout/packages/worker-runtime/src/handlers/webhooks/stripe';
 
@@ -31,14 +32,16 @@ describe('Splash width', () => {
     for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(width());
   });
 
-  it('breaks the wrapped cwd under the value column, not at the margin', () => {
+  it('breaks the wrapped cwd under the text column, not at the margin', () => {
     const rows = inShell(<Splash model="qwen3-coder-30b" cwd={DEEP_CWD} version="0.0.1" />);
-    const first = rows.findIndex(r => r.includes('cwd:'));
+    const first = rows.findIndex(r => r.includes('~/Projects'));
     expect(first).toBeGreaterThanOrEqual(0);
     const valueCol = rows[first].indexOf('~/Projects');
     const continuation = rows[first + 1];
-    // Ink's own wrap keeps the hanging indent; a terminal wrap would start at column 0.
-    expect(continuation.slice(0, valueCol).trim()).toBe('');
-    expect(continuation.trim().length).toBeGreaterThan(0);
+    // Ink's own wrap keeps the column indent; a terminal wrap would start at column 0. The
+    // continuation shares its row with the drawn mark, so only the gutter before the column
+    // must be blank.
+    expect(continuation.slice(valueCol - 2, valueCol).trim()).toBe('');
+    expect(continuation.slice(valueCol).trim().length).toBeGreaterThan(0);
   });
 });
