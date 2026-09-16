@@ -196,11 +196,13 @@ export function formatContext(
 }
 
 // `89% cached (40k)` — the share of the last prompt the provider served from cache, and how
-// many tokens that was (#360). Empty when unavailable.
+// many tokens that was (#360). Empty when unavailable. A cold call is `0% cached` with no count:
+// `(0)` would only repeat the percent. The count stays when it's nonzero but rounds to 0% —
+// `0% cached (200)` is the one place it says something the percent can't.
 export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
   if (cachedTokens == null || !contextTokens) return '';
   const pct = Math.round((cachedTokens / contextTokens) * 100);
-  return `${pct}% cached (${kFormat(cachedTokens)})`;
+  return cachedTokens > 0 ? `${pct}% cached (${kFormat(cachedTokens)})` : `${pct}% cached`;
 }
 
 // `PR: #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell).
