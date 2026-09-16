@@ -51,7 +51,7 @@ describe('sanitizeTerminalText', () => {
     expect(sanitizeTerminalText(`x${ESC}[Ky`)).toBe('xy');
   });
 
-  it('strips the sequences node\'s util.stripVTControlCharacters leaks (#363)', () => {
+  it("strips the sequences node's util.stripVTControlCharacters leaks (#363)", () => {
     // Why strip-ansi stays a dependency: node's built-in carries an older regex on 18/20/22/23
     // (synced to strip-ansi's only in the 24.x and 26.x lines). Its OSC branch rejects payloads
     // with spaces and its SGR branch only knows `;`, so both fall through to the CSI branch,

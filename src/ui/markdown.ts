@@ -23,7 +23,6 @@ const terminalExtension = markedTerminal(
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),
     em: (text: string) => chalk.italic(text),
-    blockquote: (text: string) => chalk.dim(text),
     hr: () => chalk.dim('─'.repeat(40)),
     del: (text: string) => chalk.dim(text),
     // marked-terminal v7 passes raw markdown to listitem without parsing inline
@@ -110,6 +109,37 @@ terminalExtension.renderer.code = function (this: unknown, ...args: unknown[]): 
     args[1] = resolveLanguage(lang);
   }
   return renderCode.apply(this, args).replace(stripTabIndent, '');
+};
+
+// marked-terminal renders a blockquote as a dim paragraph sitting `tab` columns in, which
+// reads as an indent accident rather than a quote (#353). Draw a left border instead. `│`,
+// not the `▎` the chat bubbles use: that glyph is a legend (its color says who is speaking),
+// and a quote inside the model's prose makes no such claim. Replacing the renderer rather
+// than the `blockquote` option because the stock one `trim()`s the body before indenting,
+// which eats the first line's own indent: a list inside a quote came out with its first
+// bullet two columns left of the rest. Nested quotes stack: the inner render is `│ text`
+// and the outer prefixes it again, landing `│ │ text`. Blank lines between quoted
+// paragraphs carry a bare bar so the border is continuous.
+const renderBlockquote = terminalExtension.renderer.blockquote;
+terminalExtension.renderer.blockquote = function (
+  this: { parser: { parse(tokens: unknown): string } },
+  ...args: unknown[]
+): string {
+  const [token] = args;
+  let body: string;
+  if (token && typeof token === 'object' && 'tokens' in token) {
+    body = this.parser.parse((token as { tokens: unknown }).tokens);
+  } else if (typeof token === 'string') {
+    body = token;
+  } else {
+    return renderBlockquote.apply(this, args);
+  }
+  // Styled per call, not at module load: chalk.level is decided after import in tests.
+  const bar = chalk.dim('│');
+  const lines = body.replace(/^\n+|\n+$/g, '').split('\n');
+  return (
+    lines.map(line => (line.length > 0 ? `${bar} ${chalk.dim(line)}` : bar)).join('\n') + '\n\n'
+  );
 };
 
 marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
