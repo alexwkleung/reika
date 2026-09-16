@@ -510,4 +510,74 @@ describe('fetch_url tool — spill (#139)', () => {
       expect(parseSavedPage('Fetched https://x (900 chars extracted)')).toBeNull();
     });
   });
+
+  // #377: chat mode has fetch_url and search only. A locator handed to it names tools it does not
+  // have — `read` comes back "Unknown tool", fetching the path "not an http(s) URL" — so the file
+  // is still written (the #296 cache runs off it) but the model is never told about it.
+  describe('model without a read tool (#377)', () => {
+    const chat = { cwd: '/tmp', toolNames: new Set(['fetch_url', 'search']) };
+
+    it('saves the page but keeps the locator out of the summary and footer', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(10_000)));
+      const result = await fetchUrlTool.run({ url: 'https://example.com/doc' }, chat);
+      expect(result.summary).toMatch(
+        /^Fetched https:\/\/example\.com\/doc \(\d+ chars extracted\)$/,
+      );
+      expect(parseSavedPage(result.summary)).toBeNull();
+      expect(result.payload).toContain('word word');
+      expect(result.payload).not.toContain('saved to');
+      expect(result.payload).not.toContain('reika-');
+      expect(result.payload).not.toMatch(/\bread\b/);
+    });
+
+    it('owns an over-cap cut without naming a remedy it cannot offer', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(100_000)));
+      const result = await fetchUrlTool.run({ url: 'https://example.com/long' }, chat);
+      expect(result.summary).toMatch(
+        /^Fetched https:\/\/example\.com\/long \(\d+ chars extracted\)$/,
+      );
+      expect(result.payload).toContain('(Showing 65536 of ');
+      expect(result.payload).toContain('not reachable in this mode');
+      expect(result.payload).toContain('Do not re-run this fetch');
+      expect(result.payload).not.toContain('saved to');
+      expect(result.payload).not.toContain('could not be saved');
+      expect(result.payload).not.toContain('offset/limit');
+      expect(result.payload!.length).toBeLessThan(65_536 + 300);
+    });
+
+    it('still serves the repeat fetch from the file, and still says nothing about it', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      const budget = makeBudget(1);
+      const first = await fetchUrlTool.run(
+        { url: 'https://example.com/doc' },
+        { ...chat, webBudget: budget },
+      );
+      const second = await fetchUrlTool.run(
+        { url: 'https://example.com/doc' },
+        { ...chat, webBudget: budget },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(budget.fetches.used).toBe(1);
+      expect(second.summary).toContain('served from the saved copy');
+      expect(second.summary).not.toContain('saved to');
+      expect(second.payload).toBe(first.payload);
+    });
+
+    it('is keyed on `read`, not on mode: a plan-shaped list still gets the locator', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(10_000)));
+      const result = await fetchUrlTool.run(
+        { url: 'https://example.com/doc' },
+        { cwd: '/tmp', toolNames: new Set(['read', 'grep', 'fetch_url']) },
+      );
+      locatorOf(result.summary);
+      expect(result.payload).toContain('Full page saved to');
+    });
+
+    it('treats an unknown tool list as the full set (the default result is unchanged)', async () => {
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(10_000)));
+      const result = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      locatorOf(result.summary);
+    });
+  });
 });

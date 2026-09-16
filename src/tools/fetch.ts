@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { classifyPrivateUrl } from './_hosts.js';
 import {
   buildCappedFooter,
@@ -46,9 +46,23 @@ export function resetSavedPages(): void {
 
 // The one summary shape for a saved page, fresh or served from the file: `compaction.ts` reads the
 // locator back out of it for the recap's "Pages fetched" line, so the tail must stay parseable.
-function savedSummary(url: string, total: number, path: string, cached: boolean): string {
+// Without a `path` — a model that cannot follow one (#377) — the locator clause is left off and
+// the summary is the unsaved shape, which `parseSavedPage` rejects: the recap has no business
+// listing a file for a model that has no way to open it either.
+function savedSummary(url: string, total: number, cached: boolean, path?: string): string {
   const how = cached ? ' — already fetched this session, served from the saved copy' : '';
-  return `Fetched ${url} (${total} chars extracted${how}; full page saved to ${path})`;
+  const where = path ? `; full page saved to ${path}` : '';
+  return `Fetched ${url} (${total} chars extracted${how}${where})`;
+}
+
+// Whether the model can follow a spill locator. The footer names `read` (and `grep`; bash works
+// too), and every tool list that has any of them has `read` — plan mode has read+grep, agent mode
+// all three — so `read` alone is the key. Chat mode has none of them (fetch_url and search only,
+// `chatTools`), and a locator handed to it is a dead end: `read` comes back "Unknown tool", and
+// fetching the path comes back "not an http(s) URL" (#377). Unknown (no list passed — a test, or
+// a caller outside the loop) is treated as the agent set, so the default result is unchanged.
+function canFollowLocator(ctx: ToolContext): boolean {
+  return ctx.toolNames ? ctx.toolNames.has('read') : true;
 }
 
 // Locator and URL out of a fetch_url summary, for the recap. Null for a failed fetch, a page too
@@ -185,7 +199,7 @@ export const fetchUrlTool: Tool = {
       const full = await readFile(hit.ref.path, 'utf8').catch(() => undefined);
       if (full !== undefined) {
         ctx.fetchedUrls?.add(url);
-        return presentSaved(url, full, hit.total, hit.ref, true);
+        return presentSaved(url, full, hit.total, hit.ref, true, canFollowLocator(ctx));
       }
       savedPages.delete(url);
     }
@@ -239,7 +253,7 @@ export const fetchUrlTool: Tool = {
       return { summary: `Fetched ${url} (${total} chars extracted)`, payload: shown + footer };
     }
     savedPages.set(url, { ref, total });
-    return presentSaved(url, full, total, ref, false);
+    return presentSaved(url, full, total, ref, false, canFollowLocator(ctx));
   },
 };
 
@@ -251,15 +265,30 @@ export const fetchUrlTool: Tool = {
 // #296 describes), and the summary is also the only part of the result that survives a
 // fully-starved window (`capPayload` at cap <= 0 drops the entire payload, footer included). In
 // both of those places the locator is the re-fetch avoided, not stale advice.
+//
+// `locate` false (#377) keeps the file — the repeat-fetch cache above is served from it and needs
+// no help from the model — but says nothing about it: the summary is the unsaved shape, an
+// under-cap page gets no footer, and an over-cap page gets a footer that owns the cut without
+// naming a remedy. Not `buildCappedFooter`: its "could not be saved" is the wrong lie in the other
+// direction. What the model gets is the pre-spill result for the tool cap, which is the right
+// floor for a mode that never had a way past it, plus the one sentence that stops the re-fetch.
 function presentSaved(
   url: string,
   full: string,
   total: number,
   ref: SpillRef,
   cached: boolean,
+  locate: boolean,
 ): ToolResult {
   const overCap = total > MAX_PAYLOAD_BYTES;
   const shown = overCap ? full.slice(0, MAX_PAYLOAD_BYTES) : full;
+  if (!locate) {
+    const footer = overCap
+      ? `\n\n(Showing ${MAX_PAYLOAD_BYTES} of ${total} chars. The rest is not reachable in this ` +
+        `mode — work from the head shown above. Do not re-run this fetch to see it.)`
+      : '';
+    return { summary: savedSummary(url, total, cached), payload: shown + footer };
+  }
   const footer = overCap
     ? buildSpillFooter({
         shown: MAX_PAYLOAD_BYTES,
@@ -271,5 +300,5 @@ function presentSaved(
       })
     : `\n\n(Full page saved to ${ref.path} — if this output is cut to fit the context window, ` +
       `read that path with offset/limit instead of fetching the URL again.)`;
-  return { summary: savedSummary(url, total, ref.path, cached), payload: shown + footer };
+  return { summary: savedSummary(url, total, cached, ref.path), payload: shown + footer };
 }
