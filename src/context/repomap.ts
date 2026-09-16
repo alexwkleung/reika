@@ -154,9 +154,10 @@ export async function buildRepoMap(
   cwd: string,
   ig: Ignore,
   budget: number = DEFAULT_BUDGET,
+  limits: CrawlLimits = DEFAULT_CRAWL_LIMITS,
 ): Promise<string> {
   const files: FileEntry[] = [];
-  await walk(cwd, cwd, ig, files);
+  await walk(cwd, ig, files, limits);
 
   const symbolToFiles = new Map<string, Set<string>>();
   for (const f of files) {
@@ -224,33 +225,69 @@ export async function buildRepoMap(
   return lines.join('\n');
 }
 
-async function walk(dir: string, root: string, ig: Ignore, out: FileEntry[]): Promise<void> {
-  const items = await readdir(dir, { withFileTypes: true }).catch(() => null);
-  if (!items) return;
-  for (const entry of items) {
-    if (entry.isDirectory()) {
-      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
-      const subRel = relative(root, join(dir, entry.name));
-      if (subRel.length > 0 && ig.ignores(subRel + '/')) continue;
-      await walk(join(dir, entry.name), root, ig, out);
-      continue;
+// Bounds on the crawl, not on the map: past these the ranking stops seeing files, which is
+// the right way to degrade. A home directory holds ~49k source files and reading them all took
+// 20s of startup (#362); a large single project (llama.cpp: 1.8k files, 350 dirs) sits well
+// inside both caps. Breadth-first, sorted, so the budget goes to the shallow files a map should
+// name first and the same tree yields the same map every run.
+export type CrawlLimits = { dirs: number; files: number };
+export const DEFAULT_CRAWL_LIMITS: CrawlLimits = { dirs: 4000, files: 3000 };
+const READ_BATCH = 32;
+
+async function walk(
+  root: string,
+  ig: Ignore,
+  out: FileEntry[],
+  limits: CrawlLimits,
+): Promise<void> {
+  const queue: string[] = [root];
+  let dirs = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const dir = queue[i];
+    if (++dirs > limits.dirs) return;
+    const items = await readdir(dir, { withFileTypes: true }).catch(() => null);
+    if (!items) continue;
+    items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const candidates: Array<{ full: string; relPath: string; ext: string }> = [];
+    for (const entry of items) {
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+        const subRel = relative(root, join(dir, entry.name));
+        if (subRel.length > 0 && ig.ignores(subRel + '/')) continue;
+        queue.push(join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = extname(entry.name);
+      if (!LANGUAGE_BY_EXT.has(ext)) continue;
+      if (SKIP_FILES.some(re => re.test(entry.name))) continue;
+      const full = join(dir, entry.name);
+      const relPath = relative(root, full);
+      if (ig.ignores(relPath)) continue;
+      if (out.length + candidates.length >= limits.files) break;
+      candidates.push({ full, relPath, ext });
     }
-    if (!entry.isFile()) continue;
-    const ext = extname(entry.name);
-    if (!LANGUAGE_BY_EXT.has(ext)) continue;
-    if (SKIP_FILES.some(re => re.test(entry.name))) continue;
-    const full = join(dir, entry.name);
-    const relPath = relative(root, full);
-    if (ig.ignores(relPath)) continue;
-    const st = await stat(full).catch(() => null);
-    if (!st || st.size > MAX_FILE_BYTES) continue;
-    const text = await readFile(full, 'utf8').catch(() => null);
-    if (text === null) continue;
-    out.push({
-      path: relPath,
-      symbols: extractSymbols(text, ext),
-      identifiers: new Set(text.match(IDENTIFIER_RE) ?? []),
-    });
+    const capped = out.length + candidates.length >= limits.files;
+    // A directory's files are read a batch at a time rather than one by one (the walk was
+    // latency-bound), in listing order so `out` is stable; the batch bounds how many 200KB
+    // buffers are live at once in a flat directory of thousands of files.
+    for (let j = 0; j < candidates.length; j += READ_BATCH) {
+      const read = await Promise.all(
+        candidates.slice(j, j + READ_BATCH).map(async c => {
+          const st = await stat(c.full).catch(() => null);
+          if (!st || st.size > MAX_FILE_BYTES) return null;
+          const text = await readFile(c.full, 'utf8').catch(() => null);
+          if (text === null) return null;
+          return {
+            path: c.relPath,
+            symbols: extractSymbols(text, c.ext),
+            identifiers: new Set(text.match(IDENTIFIER_RE) ?? []),
+          };
+        }),
+      );
+      for (const entry of read) if (entry) out.push(entry);
+    }
+    if (capped) return;
   }
 }
 

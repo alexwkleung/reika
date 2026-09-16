@@ -5,9 +5,15 @@ import { relative } from 'node:path';
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage', 'out']);
 const MAX_FILES = 10_000;
 
+// The cap is applied inside the crawl, not only to its result: a home directory holds ~500k
+// files and matching every one against the ignore rules took 20s to keep 10k of them (#362).
+// Which 10k a tree past the cap keeps is whatever the crawl reached first (roughly the shallow
+// end), so the index is only deterministic for trees under the cap. It feeds `@` autocomplete
+// alone, never the prompt, so that is acceptable where a full crawl is not.
 export async function buildFileIndex(cwd: string, ig: Ignore): Promise<string[]> {
   const crawler = new fdir()
     .withRelativePaths()
+    .withMaxFiles(MAX_FILES)
     .exclude((dirName, dirPath) => {
       // .reika/ is our own scratch dir (skills, handoff docs, etc.) — keep it
       // visible to `@` autocomplete and tool walks. Other dot-dirs stay hidden.
