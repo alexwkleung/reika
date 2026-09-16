@@ -351,9 +351,13 @@ const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
 // anyway). Rationale: every mid-history byte change forces the engine to re-process from that
 // point — and SWA/hybrid-memory models (no partial-prefix restore) re-process the WHOLE prompt on
 // ANY divergence, observed at ~3 min/request on a 35B. Requires REIKA_CONTEXT_WINDOW (sticky
-// liveness needs the batch-aging watermark to bound it); silently inactive without one. Off by
-// default for A/B; strict no-op when off.
-const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE === '1';
+// liveness needs the batch-aging watermark to bound it); silently inactive without one. On by
+// default since #181: measured on a 27B at 22.9 tok/s prefill, a mid-context edit re-processed
+// 8453 tokens (7.9 min) where an append was 25 tokens (3.5 s), and flag-off the prefix diverges
+// from round 2 of every tool-using turn — a cost the engine cannot absorb (`--cache-reuse` was
+// byte-identical). `REIKA_PREFIX_STABLE=0` restores the per-round aging as the A/B baseline;
+// strict no-op when off.
+const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE !== '0';
 // EXPERIMENT (dropped-payload notice, #227): tell the model, once per request, that some tool
 // results above show only a summary because their output was dropped. Flagged rather than shipped
 // on, because it is a *prompt-level* bet and this repo's history says those often bench null (the
