@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { theme } from './theme.js';
 import { isLargePaste } from './pastes.js';
+import { isFocusKeypress, useTerminalFocus } from './focus.js';
 import type { Mode } from './commands.js';
 
 const INVERSE_ON = '\x1b[7m';
@@ -73,18 +74,23 @@ export function Input({
   const [cursor, setCursor] = useState(value.length);
   const [blinkOn, setBlinkOn] = useState(true);
   const lastValueRef = useRef(value);
+  const windowFocused = useTerminalFocus();
 
   // Blink the drawn cursor (~530ms, the classic terminal rate). We draw our own
   // block via inverse video rather than the real terminal cursor, so the
   // terminal's blink setting can't reach it — we toggle visibility ourselves.
   // Re-running on value/cursor change snaps it solid and restarts the timer, so
-  // the block is always visible the instant you type or move.
+  // the block is always visible the instant you type or move. An unfocused
+  // window holds it solid instead (#352): the terminal's own cursor does the
+  // same, and a window nobody is looking at shouldn't be repainting twice a
+  // second.
   useEffect(() => {
     if (disabled) return;
     setBlinkOn(true);
+    if (!windowFocused) return;
     const id = setInterval(() => setBlinkOn(on => !on), 530);
     return () => clearInterval(id);
-  }, [value, cursor, disabled]);
+  }, [value, cursor, disabled, windowFocused]);
 
   // Kept current each render so the raw-stdin listener (which closes over them
   // once) always sees the latest value/cursor without re-subscribing.
@@ -208,6 +214,10 @@ export function Input({
 
   useInput(
     (input, key) => {
+      // A focus report, not a keystroke (focus.ts): it would otherwise be inserted as text —
+      // or, mid-paste, glued into the paste.
+      if (isFocusKeypress(input) && !key.ctrl && !key.meta) return;
+
       // Mid-paste. Chunk boundaries land anywhere, so whatever arrives inside the window is
       // paste content — including a fragment Ink parsed as Return (a chunk that begins at a
       // line break), which is exactly the split that submits half a paste. A ctrl chord can't
@@ -379,7 +389,7 @@ export function Input({
         <Box>
           {blinkOn ? (
             <>
-              <Text>{`${INVERSE_ON}${placeholder[0]}${INVERSE_OFF}`}</Text>
+              <Text>{cursorBlock(placeholder[0], windowFocused)}</Text>
               <Text color={theme.muted}>{placeholder.slice(1)}</Text>
             </>
           ) : (
@@ -387,7 +397,7 @@ export function Input({
           )}
         </Box>
       ) : (
-        <Text>{renderWithCursor(view.text, view.cursor, !disabled, blinkOn)}</Text>
+        <Text>{renderWithCursor(view.text, view.cursor, !disabled && blinkOn, windowFocused)}</Text>
       )}
     </Box>
   );
@@ -434,13 +444,23 @@ export function clampToViewport(
   };
 }
 
+// The cursor cell. Focused: a full inverse-video block. Unfocused: the same block, faint —
+// still marks the position, but reads as inactive the way the terminal's own hollow cursor
+// does. A true outline isn't drawable with SGR (there is no per-cell border), so faint is the
+// nearest a text cell gets.
+function cursorBlock(ch: string, windowFocused: boolean): string {
+  return windowFocused
+    ? INVERSE_ON + ch + INVERSE_OFF
+    : DIM_ON + INVERSE_ON + ch + INVERSE_OFF + DIM_OFF;
+}
+
 function renderWithCursor(
   value: string,
   cursor: number,
-  focused: boolean,
-  blinkOn: boolean,
+  visible: boolean,
+  windowFocused: boolean,
 ): string {
-  if (!focused || !blinkOn) return value;
+  if (!visible) return value;
   const before = value.slice(0, cursor);
   const ch = value[cursor];
   // At a line break or the end of the buffer there's no glyph to invert, so the
@@ -448,7 +468,7 @@ function renderWithCursor(
   // instead, and re-emit the newline after it so the line break is preserved.
   const at = ch === undefined || ch === '\n' ? ' ' : ch;
   const after = ch === '\n' ? '\n' + value.slice(cursor + 1) : value.slice(cursor + 1);
-  return before + INVERSE_ON + at + INVERSE_OFF + after;
+  return before + cursorBlock(at, windowFocused) + after;
 }
 
 function wordForward(value: string, cursor: number): number {
