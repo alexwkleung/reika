@@ -3,6 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { structuredPatch } from 'diff';
 import type { FileChange, DiffHunk, TreeChanges } from '../types.js';
+import { mapLimit } from '../limit.js';
 import { MAX_EDIT_LENGTH } from './_diff.js';
 import { writeTargets } from './_writetargets.js';
 
@@ -29,6 +30,10 @@ const SNAPSHOT_MAX_BYTES = 512 * 1024;
 // bash call is free at the dozens a working session has and not at the thousands an untracked
 // build or data directory has; showing nothing there beats a visible pause on every command.
 const MAX_DIRTY_ENTRIES = 2000;
+// Reads in flight at once across a snapshot. Above the dozens a working session has, so the common
+// case is as wide as it was; at the entry cap it holds the live buffers to 64 × SNAPSHOT_MAX_BYTES
+// instead of 2000 open files (#338).
+const READ_CONCURRENCY = 64;
 // Files that get a rendered diff. Past this they are still counted (`more`), because a `git
 // checkout` touching 300 files is something the user should see the size of, not the body of.
 const MAX_DIFFED_FILES = 8;
@@ -75,13 +80,11 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
     if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
     paths = [...listed.keys()];
   }
-  await Promise.all(
-    paths.map(async p => {
-      const bytes = await readBounded(snap.root === null ? p : join(snap.root, p));
-      if (bytes === 'oversize') snap.skipped.add(p);
-      else snap.before.set(p, bytes);
-    }),
-  );
+  await mapLimit(paths, READ_CONCURRENCY, async p => {
+    const bytes = await readBounded(snap.root === null ? p : join(snap.root, p));
+    if (bytes === 'oversize') snap.skipped.add(p);
+    else snap.before.set(p, bytes);
+  });
   return snap;
 }
 
@@ -101,20 +104,18 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
   // only for the files that get rendered — a formatter sweeping 200 files must not cost 200 git
   // processes. A path HEAD doesn't have (untracked, or staged as new) was created by the command.
   const changed: { path: string; before: Bytes | undefined; after: Bytes }[] = [];
-  await Promise.all(
-    candidates.map(async p => {
-      const after = await readBounded(join(root, p));
-      if (after === 'oversize') return;
-      if (snap.before.has(p)) {
-        const before = snap.before.get(p)!;
-        if (before?.text !== after?.text) changed.push({ path: p, before, after });
-        return;
-      }
-      const code = listed.get(p) ?? '';
-      const created = code === '??' || code[0] === 'A';
-      changed.push({ path: p, before: created ? null : undefined, after });
-    }),
-  );
+  await mapLimit(candidates, READ_CONCURRENCY, async p => {
+    const after = await readBounded(join(root, p));
+    if (after === 'oversize') return;
+    if (snap.before.has(p)) {
+      const before = snap.before.get(p)!;
+      if (before?.text !== after?.text) changed.push({ path: p, before, after });
+      return;
+    }
+    const code = listed.get(p) ?? '';
+    const created = code === '??' || code[0] === 'A';
+    changed.push({ path: p, before: created ? null : undefined, after });
+  });
   changed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const files: FileChange[] = [];
   for (const c of changed.slice(0, MAX_DIFFED_FILES)) {

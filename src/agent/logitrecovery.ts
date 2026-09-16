@@ -9,6 +9,7 @@
 // llama.cpp/vllm honor logit_bias; backends without a /tokenize endpoint (e.g. Ollama) yield no
 // token ids, so buildRuminationLogitBias returns null and the caller stops honestly — the recovery
 // is self-gating on tokenizer availability.
+import { mapLimit } from '../limit.js';
 import { tokenize } from '../provider/transport.js';
 
 // Generic glue + reasoning filler: words too topic-independent to identify the loop, so biasing them
@@ -134,6 +135,9 @@ export function buildLogitBias(opts: {
 
 const BIAS_WORD_MAX = 12; // distinct ruminated words to target
 const BIAS_WORD_MIN_LEN = 4; // skip short glue words
+// /tokenize calls in flight at once. One recovery is up to two dozen tiny requests; a burst that
+// wide is harmless on llama.cpp but is a rate-limit trip on a hosted endpoint (#338).
+const TOKENIZE_CONCURRENCY = 4;
 const BIAS_VALUE = -4; // mild: reshapes the distribution, never bans (a ban is -100 / false)
 const BIAS_CAP = 24; // hard ceiling on the number of biased token ids
 
@@ -164,13 +168,15 @@ export async function buildRuminationLogitBias(opts: {
 
 // First token id of each word's " word" tokenization (leading space = how it appears mid-text, so
 // the first id is the token that *starts* the word). Biasing entry tokens breaks the loop's re-entry
-// without suppressing the word's subword pieces, which recur in healthy text. Tokenized in parallel;
-// a word whose tokenize() returns null (endpoint absent) is dropped.
+// without suppressing the word's subword pieces, which recur in healthy text. Tokenized a few at a
+// time; a word whose tokenize() returns null (endpoint absent) is dropped.
 async function firstTokenIds(
   opts: { baseURL: string; apiKey: string; signal?: AbortSignal },
   words: string[],
 ): Promise<number[]> {
-  const results = await Promise.all(words.map(w => tokenize({ ...opts, content: ` ${w}` })));
+  const results = await mapLimit(words, TOKENIZE_CONCURRENCY, w =>
+    tokenize({ ...opts, content: ` ${w}` }),
+  );
   const ids: number[] = [];
   for (const r of results) if (r && r.length > 0) ids.push(r[0]);
   return ids;

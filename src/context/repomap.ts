@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
 import type { Ignore } from 'ignore';
+import { mapLimit } from '../limit.js';
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage', 'out']);
 // Go test files define only TestXxx/BenchmarkXxx, which pass the exported-name filter below
@@ -232,7 +233,7 @@ export async function buildRepoMap(
 // name first and the same tree yields the same map every run.
 export type CrawlLimits = { dirs: number; files: number };
 export const DEFAULT_CRAWL_LIMITS: CrawlLimits = { dirs: 4000, files: 3000 };
-const READ_BATCH = 32;
+const READ_CONCURRENCY = 32;
 
 async function walk(
   root: string,
@@ -268,25 +269,21 @@ async function walk(
       candidates.push({ full, relPath, ext });
     }
     const capped = out.length + candidates.length >= limits.files;
-    // A directory's files are read a batch at a time rather than one by one (the walk was
-    // latency-bound), in listing order so `out` is stable; the batch bounds how many 200KB
-    // buffers are live at once in a flat directory of thousands of files.
-    for (let j = 0; j < candidates.length; j += READ_BATCH) {
-      const read = await Promise.all(
-        candidates.slice(j, j + READ_BATCH).map(async c => {
-          const st = await stat(c.full).catch(() => null);
-          if (!st || st.size > MAX_FILE_BYTES) return null;
-          const text = await readFile(c.full, 'utf8').catch(() => null);
-          if (text === null) return null;
-          return {
-            path: c.relPath,
-            symbols: extractSymbols(text, c.ext),
-            identifiers: new Set(text.match(IDENTIFIER_RE) ?? []),
-          };
-        }),
-      );
-      for (const entry of read) if (entry) out.push(entry);
-    }
+    // A directory's files are read a bounded number at a time rather than one by one (the walk was
+    // latency-bound), with results in listing order so `out` is stable; the bound caps how many
+    // 200KB buffers are live at once in a flat directory of thousands of files.
+    const read = await mapLimit(candidates, READ_CONCURRENCY, async c => {
+      const st = await stat(c.full).catch(() => null);
+      if (!st || st.size > MAX_FILE_BYTES) return null;
+      const text = await readFile(c.full, 'utf8').catch(() => null);
+      if (text === null) return null;
+      return {
+        path: c.relPath,
+        symbols: extractSymbols(text, c.ext),
+        identifiers: new Set(text.match(IDENTIFIER_RE) ?? []),
+      };
+    });
+    for (const entry of read) if (entry) out.push(entry);
     if (capped) return;
   }
 }
