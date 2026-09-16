@@ -19,7 +19,9 @@ const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '
 // (nearly) the accent itself, so a typecheck reads cyan, a subagent apricot, a suspected loop
 // yellow — the whole line, not just one glyph. The closing "Worked for …" line stays muted
 // grey (Scrollback), which is what keeps a live indicator distinct from a finished one.
-const BASE = 0x80; // dim baseline — the luminance of theme.muted (#808080).
+// Resting brightness. A tinted label reads dimmer than grey at the same max channel (the other
+// channels drop with the hue), so this sits a step above theme.muted's 0x80 to compensate.
+const BASE = 0x99;
 const PEAK = 0xd2; // brightest level at the tip.
 const SHIMMER_RADIUS = 2; // band reaches this many chars either side of the tip.
 // How much of the accent's chroma the label keeps. 1 would be the pure hue (a cyan label's red
