@@ -296,8 +296,6 @@ export async function saveTranscript(
 
 function renderMessageTxt(msg: Message): string | null {
   switch (msg.role) {
-    case 'header':
-      return `── ${msg.model} · ${msg.cwd} ──`;
     case 'user':
       return labelled(msg.mode ? `You [${msg.mode}]` : 'You', msg.display ?? msg.content);
     case 'assistant': {
@@ -421,10 +419,6 @@ function redactMessage(msg: Message, cwd: string): Message {
       };
     case 'shell':
       return { ...msg, command: red(msg.command), output: red(msg.output) };
-    // The header's cwd is an absolute path by construction — it's the one field that leaks the
-    // home prefix even in a transcript whose messages never quote a path.
-    case 'header':
-      return { ...msg, cwd: red(msg.cwd) };
     case 'system':
     case 'error':
     case 'compaction':

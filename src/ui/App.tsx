@@ -72,10 +72,9 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
 const TYPECHECK_LINGER_MS = 650;
 
-// Only the startup splash lives in the dedicated header <Static>. The compact
-// header (after /cd or /model) flows through the message stream instead — Ink
-// honors a single <Static>, so appending to this one after the message log's
-// Static takes over would render nowhere.
+// Only the startup splash lives in the dedicated header <Static> — Ink honors a
+// single <Static>, so appending to this one after the message log's Static takes
+// over would render nowhere. /cd and /model report through system lines instead.
 type HeaderItem = {
   kind: 'splash';
   model: string;
@@ -461,7 +460,6 @@ export function App() {
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
-      ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
       {
         role: 'system' as const,
         content: next.adhoc
@@ -891,11 +889,7 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
-        setMessages(prev => [
-          ...prev,
-          { role: 'header', model: config.model, cwd: newBundle.cwd },
-          { role: 'system', content: `cwd is now ${newCwd}` },
-        ]);
+        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
           ...prev,
