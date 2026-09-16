@@ -901,3 +901,81 @@ describe('Scrollback subagent block spacing', () => {
     expect(result).toBe(call + 1);
   });
 });
+
+// Regression (#385): <Static> prints `items.slice(n)` where n is the length it saw last render,
+// so a mode switch that swaps `messages` for the other side's stash — or /new replacing it with a
+// two-line receipt — printed nothing when the new array was no longer than the old one, and
+// reprinted already-shown stash rows when it was longer. The scrollback log is append-only by
+// message identity: each object prints once, when it first appears.
+describe('Scrollback append-only log', () => {
+  const sb = (messages: Message[]) => (
+    <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+  );
+  const rows = (frames: string[]): string[] =>
+    frames
+      .map(stripAnsi)
+      .join('\n')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+  const count = (frames: string[], text: string): number =>
+    rows(frames).filter(l => l.endsWith(text)).length;
+
+  it('prints the banner after a round trip through /chat from a fresh session', () => {
+    const chatEcho: Message = { role: 'user', content: '/chat', meta: true };
+    const chatBanner: Message = { role: 'system', content: 'Chat mode.' };
+    const agentEcho: Message = { role: 'user', content: '/agent', meta: true };
+    const agentBanner: Message = { role: 'system', content: 'Agent mode.' };
+    const { rerender, frames } = render(sb([]));
+    // → chat: the agent stash is empty, so the array is just the trailing pair.
+    rerender(sb([chatEcho, chatBanner]));
+    // → agent: the empty agent stash comes back plus a new trailing pair — same length as before.
+    rerender(sb([agentEcho, agentBanner]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual(['▎ /chat', '❯ Chat mode.', '▎ /agent', '❯ Agent mode.']);
+  });
+
+  it('does not reprint a restored stash that is already on screen', () => {
+    const a1: Message = { role: 'system', content: 'agent one' };
+    const a2: Message = { role: 'system', content: 'agent two' };
+    const a3: Message = { role: 'system', content: 'agent three' };
+    const chatBanner: Message = { role: 'system', content: 'Chat mode.' };
+    const agentBanner: Message = { role: 'system', content: 'Agent mode.' };
+    const { rerender, frames } = render(sb([a1, a2, a3]));
+    rerender(sb([chatBanner]));
+    // Restoring three rows after a one-row chat side used to reprint a2 and a3.
+    rerender(sb([a1, a2, a3, agentBanner]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual([
+      '❯ agent one',
+      '❯ agent two',
+      '❯ agent three',
+      '❯ Chat mode.',
+      '❯ Agent mode.',
+    ]);
+    expect(count([frames.at(-1) ?? ''], 'agent two')).toBe(1);
+  });
+
+  it('prints the /new receipt after a conversation longer than the receipt', () => {
+    const history: Message[] = [
+      { role: 'system', content: 'one' },
+      { role: 'system', content: 'two' },
+      { role: 'system', content: 'three' },
+    ];
+    const echo: Message = { role: 'user', content: '/new', meta: true };
+    const notice: Message = { role: 'system', content: 'New session.' };
+    const { rerender, frames } = render(sb(history));
+    rerender(sb([echo, notice]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last.slice(-2)).toEqual(['▎ /new', '❯ New session.']);
+  });
+
+  it('is a no-op for an ordinary append', () => {
+    const a: Message = { role: 'system', content: 'first' };
+    const b: Message = { role: 'system', content: 'second' };
+    const { rerender, frames } = render(sb([a]));
+    rerender(sb([a, b]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual(['❯ first', '❯ second']);
+  });
+});

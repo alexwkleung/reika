@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
@@ -65,10 +66,11 @@ export function Scrollback({
     </>
   );
 
+  const scrollback = useScrollbackLog(messages);
   return (
     <>
-      <Static items={messages}>
-        {(msg, i) => <MessageView key={i} msg={msg} prev={messages[i - 1]} />}
+      <Static items={scrollback}>
+        {(msg, i) => <MessageView key={i} msg={msg} prev={scrollback[i - 1]} />}
       </Static>
       {indent ? (
         // Same box MessageView gives a nested committed row: the margin plus an explicit width
@@ -82,6 +84,32 @@ export function Scrollback({
       )}
     </>
   );
+}
+
+// What <Static> actually gets: the session's terminal scrollback, which only ever grows.
+//
+// `messages` is the ACTIVE conversation, and it is not append-only: a mode switch across the chat
+// boundary swaps in the other side's stash, /new replaces it with a two-line receipt. <Static>
+// can't follow that — it renders `items.slice(n)` where n is the length it saw last render, and
+// the terminal keeps everything it already printed. So a swap that leaves the array no longer
+// than before prints nothing (the "Agent mode." banner after a round trip through /chat, the /new
+// receipt after any real conversation — #385), and one that leaves it longer reprints a slice of
+// the restored stash that is already on screen.
+//
+// Append-only by identity instead: every message object is printed exactly once, the first time
+// it appears, in the order it appeared. Restored messages were printed back when they were live;
+// only the trailing echo + banner are new. Nothing in `messages` is ever edited in place after it
+// commits (the live stream is separate state), so identity is the right key.
+function useScrollbackLog(messages: Message[]): Message[] {
+  const seen = useRef(new WeakSet<Message>());
+  const log = useRef<Message[]>([]);
+  return useMemo(() => {
+    const fresh = messages.filter(m => !seen.current.has(m));
+    if (fresh.length === 0) return log.current;
+    for (const m of fresh) seen.current.add(m);
+    log.current = [...log.current, ...fresh];
+    return log.current;
+  }, [messages]);
 }
 
 // Per-block budget for the live region, in *display* rows. Ink repaints the whole
