@@ -17,14 +17,16 @@ import { debugLog } from '../debug.js';
 
 const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
 
-// 30 minutes. Generous enough to cover a full re-prefill near the context window on slow local
-// hardware (~17.5 min for 24k tokens at 23 tok/s), short enough that a genuinely hung server still
-// fails on its own rather than wedging the session forever.
-export const DEFAULT_REQUEST_TIMEOUT_MS = 1_800_000;
+// No timeout by default (issue #382). Any finite cap is a guess about the user's hardware: 30 min
+// covered a 24k re-prefill at 23 tok/s, but a model streamed off SSD can sit silent for far longer
+// and still be working. The user already has the right tool for a server that really is hung —
+// Esc cancels the request through `signal` — and the spinner shows how long they've waited. A
+// hard cap only ever kills a legitimate turn.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 0;
 
-// `REIKA_REQUEST_TIMEOUT_MS` in ms; `0` disables the stream timeouts entirely (undici's own
-// meaning for 0). Anything unparseable or negative falls back to the default rather than
-// surprising the user with an instant-abort typo.
+// `REIKA_REQUEST_TIMEOUT_MS` in ms; a positive value caps the silent wait, `0` disables the stream
+// timeouts entirely (undici's own meaning for 0). Anything unparseable or negative falls back to
+// the default rather than surprising the user with an instant-abort typo.
 export function requestTimeoutMs(): number {
   const raw = (process.env.REIKA_REQUEST_TIMEOUT_MS ?? '').trim();
   if (raw === '') return DEFAULT_REQUEST_TIMEOUT_MS;
@@ -116,9 +118,12 @@ export function streamTimeoutMessage(): string {
   const which = installed
     ? 'REIKA_REQUEST_TIMEOUT_MS'
     : "undici's default (reika could not install its own dispatcher on this runtime)";
+  // Only our own knob is actionable; when undici's limit fired there is nothing to raise.
+  const fix = installed
+    ? 'raise REIKA_REQUEST_TIMEOUT_MS (ms), or unset it to wait indefinitely (the default).'
+    : 'retry with a smaller prompt.';
   return (
     `the server sent nothing for ${Math.round(ms / 1000)}s and the request was aborted by ${which}. ` +
-    `A local model still prefilling a large prompt looks exactly like this — raise ` +
-    `REIKA_REQUEST_TIMEOUT_MS (ms), or set it to 0 to wait indefinitely.`
+    `A local model still prefilling a large prompt looks exactly like this — ${fix}`
   );
 }
