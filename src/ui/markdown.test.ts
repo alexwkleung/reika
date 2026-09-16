@@ -120,6 +120,15 @@ describe('renderMarkdown lists', () => {
   });
 });
 
+describe('renderMarkdown links', () => {
+  it('renders the link text and href, never `undefined`', () => {
+    const out = renderMarkdown('see [the docs](https://example.com/docs) here');
+    expect(out).not.toContain('undefined');
+    expect(out).toContain('the docs');
+    expect(out).toContain('https://example.com/docs');
+  });
+});
+
 describe('renderMarkdown blockquotes', () => {
   it('draws a left border instead of an indent', () => {
     const out = renderMarkdown('> quoted line');
@@ -242,5 +251,71 @@ describe('markdown terminal-unsafe characters', () => {
 
   it('leaves ordinary prose unchanged', () => {
     expect(renderMarkdown('Just a **sentence** with `code`.')).toContain('sentence');
+  });
+});
+
+// Every rendered line has to fit the App's content width (columns minus the paddingX gutter),
+// or Ink hard-wraps the last word onto a row of its own. Lists were the exposure: tight items
+// kept the model's own soft line breaks unreflowed and then took the list tab, loose items
+// were reflowed at the full width and then indented by tab + marker.
+describe('renderMarkdown wraps to the content width', () => {
+  const COLS = 60;
+  const CONTENT = COLS - 2;
+  const setColumns = (value: number | undefined) =>
+    Object.defineProperty(process.stdout, 'columns', { value, configurable: true });
+  const prev = process.stdout.columns;
+  afterEach(() => setColumns(prev));
+
+  const widths = (out: string) => out.split('\n').map(l => l.length);
+  const LONG = 'the quick brown fox jumps over the lazy dog again and again and again';
+
+  it('reflows a tight list item across the model’s own soft line breaks', () => {
+    setColumns(COLS);
+    // A model that hard-wraps its prose at the pane width, plus the list tab, overflowed by two.
+    const line = 'Guinness World Record: In 2011, they were recognized for the';
+    const out = renderMarkdown(`7. ${line}\n   most followers at the time.\n8. next item`);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(CONTENT);
+    expect(out).not.toContain('the\n'); // the model's own break is gone
+    expect(out).toContain('  8. next item');
+  });
+
+  it('keeps every line of a loose list inside the content width', () => {
+    setColumns(COLS);
+    const out = renderMarkdown(`- ${LONG}\n\n- ${LONG}`);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(CONTENT);
+  });
+
+  it('hangs continuation lines under the item text', () => {
+    setColumns(COLS);
+    const [first, second] = renderMarkdown(`10. ${LONG}`).split('\n');
+    expect(first.startsWith('  10. ')).toBe(true);
+    expect(second.startsWith('      ')).toBe(true);
+    expect(second.charAt(6)).not.toBe(' ');
+  });
+
+  it('puts a nested list on its own lines, narrower still', () => {
+    setColumns(COLS);
+    const out = renderMarkdown(`- parent\n  - ${LONG}\n- sibling`);
+    const lines = out.split('\n');
+    expect(lines[0]).toBe('  • parent');
+    expect(lines[1].startsWith('    • ')).toBe(true);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(CONTENT);
+    expect(lines.at(-1)).toBe('  • sibling');
+  });
+
+  it('accounts for the blockquote bar', () => {
+    setColumns(COLS);
+    const out = renderMarkdown(`> ${LONG}`);
+    expect(Math.max(...widths(out))).toBeLessThanOrEqual(CONTENT);
+    expect(out.split('\n').every(l => l.startsWith('│ '))).toBe(true);
+  });
+
+  it('reads the terminal width at render time, not import time', () => {
+    setColumns(COLS);
+    const narrow = Math.max(...widths(renderMarkdown(LONG)));
+    setColumns(120);
+    const wide = Math.max(...widths(renderMarkdown(LONG)));
+    expect(narrow).toBeLessThanOrEqual(CONTENT);
+    expect(wide).toBe(LONG.length);
   });
 });
