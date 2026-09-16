@@ -311,4 +311,26 @@ describe('buildRepoMap', () => {
     const map = await buildRepoMap(dir, ignore().add('gen/'));
     expect(map).toBe('lib.go: Real');
   });
+
+  it('stops reading at the file cap, keeping the shallow files first', async () => {
+    await write({
+      'z.py': 'def root_last():\n    pass\n',
+      'a/nested.py': 'def nested_first():\n    pass\n',
+      'b.py': 'def root_first():\n    pass\n',
+    });
+    // Two of three: the root's files are all read before any subdirectory is opened, and the
+    // cut is not reported as a budget omission — the map simply never saw the third file.
+    const map = await buildRepoMap(dir, ignore(), undefined, { dirs: 4000, files: 2 });
+    expect(map.split('\n').sort()).toEqual(['b.py: root_first', 'z.py: root_last']);
+  });
+
+  it('stops descending at the directory cap', async () => {
+    await write({
+      'top.rs': 'pub fn top() {}\n',
+      'a/mid.rs': 'pub fn mid() {}\n',
+      'a/b/low.rs': 'pub fn low() {}\n',
+    });
+    const map = await buildRepoMap(dir, ignore(), undefined, { dirs: 2, files: 3000 });
+    expect(map.split('\n').sort()).toEqual(['a/mid.rs: mid', 'top.rs: top']);
+  });
 });

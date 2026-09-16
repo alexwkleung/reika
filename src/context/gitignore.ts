@@ -8,7 +8,10 @@ import { shouldSkipDir } from '../tools/_walk.js';
 // paths, so nested files are folded in with their patterns re-rooted (see scopePattern). Parents
 // are added before children, which is also git's precedence: a child's `!keep` can re-include
 // what the root ignored.
-export async function loadGitignore(cwd: string): Promise<Ignore> {
+export async function loadGitignore(
+  cwd: string,
+  limits: NestedLimits = DEFAULT_NESTED_LIMITS,
+): Promise<Ignore> {
   const ig = ignore();
   for (const path of [join(cwd, '.gitignore'), join(cwd, '.git', 'info', 'exclude')]) {
     try {
@@ -17,48 +20,54 @@ export async function loadGitignore(cwd: string): Promise<Ignore> {
       // missing file is fine
     }
   }
-  await addNested(cwd, '', ig, 0, { files: 0 });
+  await addNested(cwd, ig, limits);
   return ig;
 }
 
-// Bounded so a huge or pathological tree can't turn bootstrap into a full crawl: the file index
-// stops at 10k files and this stops well before that matters.
-const MAX_NESTED_DEPTH = 8;
-const MAX_NESTED_FILES = 200;
+// Bounded so a huge or pathological tree can't turn bootstrap into a full crawl. The depth and
+// file caps alone were not enough: a home directory has ~19k directories within 8 levels and
+// almost no nested .gitignore files, so the walk ran 9s to find nothing (#362). The directory
+// cap is what bounds the time; the walk is breadth-first so it spends that budget on the
+// shallow `packages/x/.gitignore` shape nested files actually take, not on one deep subtree.
+export type NestedLimits = { depth: number; files: number; dirs: number };
+export const DEFAULT_NESTED_LIMITS: NestedLimits = { depth: 8, files: 200, dirs: 2000 };
 
-// Shared across the whole recursion: the file cap is tree-wide, depth is per branch.
-type Budget = { files: number };
-
-async function addNested(
-  cwd: string,
-  rel: string,
-  ig: Ignore,
-  depth: number,
-  b: Budget,
-): Promise<void> {
-  if (depth >= MAX_NESTED_DEPTH) return;
-  let entries;
-  try {
-    entries = await readdir(join(cwd, rel), { withFileTypes: true });
-  } catch {
-    return;
-  }
-  // Directory listings are not ordered; sort so the matcher is built the same way every run.
-  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  for (const entry of entries) {
-    if (!entry.isDirectory() || shouldSkipDir(entry.name)) continue;
-    const sub = rel ? `${rel}/${entry.name}` : entry.name;
-    // Rules accumulated so far decide whether to look inside — an ignored dir's own .gitignore
-    // can't re-include anything (git doesn't read it either).
-    if (ig.ignores(sub + '/')) continue;
+async function addNested(cwd: string, ig: Ignore, limits: NestedLimits): Promise<void> {
+  const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
+  let dirs = 0;
+  let files = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const { rel, depth } = queue[i];
+    if (++dirs > limits.dirs) return;
+    let entries;
     try {
-      const text = await readFile(join(cwd, sub, '.gitignore'), 'utf8');
-      if (++b.files > MAX_NESTED_FILES) return;
-      ig.add(scopeGitignore(sub, text));
+      entries = await readdir(join(cwd, rel), { withFileTypes: true });
     } catch {
-      // no nested file here
+      continue;
     }
-    await addNested(cwd, sub, ig, depth + 1, b);
+    // Directory listings are not ordered; sort so the matcher is built the same way every run.
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // The root's own file was read by the caller. The listing already says whether a nested one
+    // exists, so no readFile is attempted (and no ENOENT thrown) in the many directories without.
+    if (rel !== '' && entries.some(e => e.name === '.gitignore' && e.isFile())) {
+      try {
+        const text = await readFile(join(cwd, rel, '.gitignore'), 'utf8');
+        if (++files > limits.files) return;
+        ig.add(scopeGitignore(rel, text));
+      } catch {
+        // vanished between listing and read
+      }
+    }
+    if (depth + 1 >= limits.depth) continue;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || shouldSkipDir(entry.name)) continue;
+      const sub = rel ? `${rel}/${entry.name}` : entry.name;
+      // Rules accumulated so far decide whether to look inside — an ignored dir's own .gitignore
+      // can't re-include anything (git doesn't read it either). Every ancestor's file has been
+      // folded in by now: breadth-first visits a directory only after all shallower ones.
+      if (ig.ignores(sub + '/')) continue;
+      queue.push({ rel: sub, depth: depth + 1 });
+    }
   }
 }
 
