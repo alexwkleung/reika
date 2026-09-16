@@ -120,6 +120,45 @@ describe('renderMarkdown lists', () => {
   });
 });
 
+describe('renderMarkdown blockquotes', () => {
+  it('draws a left border instead of an indent', () => {
+    const out = renderMarkdown('> quoted line');
+    expect(out).toBe('│ quoted line');
+  });
+
+  it('keeps the border continuous across a blank line between quoted paragraphs', () => {
+    const out = renderMarkdown('> first\n>\n> second');
+    expect(out).toBe('│ first\n│\n│ second');
+  });
+
+  it('stacks the bar on nested quotes', () => {
+    const out = renderMarkdown('> outer\n>\n> > inner');
+    expect(out).toBe('│ outer\n│\n│ │ inner');
+  });
+
+  it('separates the quote from surrounding paragraphs with one blank line', () => {
+    const out = renderMarkdown('before\n\n> quote\n\nafter');
+    expect(out).toBe('before\n\n│ quote\n\nafter');
+  });
+
+  it('keeps every bullet of a quoted list at the same column', () => {
+    // marked-terminal's stock renderer trim()s the body before indenting, which eats the
+    // first bullet's own list indent and left it two columns off from the rest.
+    const out = renderMarkdown('> - one\n> - two');
+    const [first, second] = out.split('\n');
+    expect(first).toBe('│   • one');
+    expect(second).toBe('│   • two');
+  });
+
+  it('still runs inline renderers inside the quote', () => {
+    const out = renderMarkdown('> see `a:b` and **bold**');
+    expect(out).toContain('a:b');
+    expect(out).toContain('bold');
+    expect(out).not.toContain('*#COLON|*');
+    expect(out).not.toContain('**');
+  });
+});
+
 describe('renderMarkdown tables', () => {
   const table = '| Flag | Default |\n| --- | --- |\n| `REIKA_WARM` | off |';
 
