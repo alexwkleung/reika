@@ -587,15 +587,17 @@ analysis across rounds (and a `repeat_penalty` can't suppress what's no longer i
 Keeping a small recent window is the balance — raise the env var to trade tokens for
 chain-of-thought continuity, lower it under context pressure.
 
-**Prefix-stable mode (`REIKA_PREFIX_STABLE=1`, default off, experimental — issue #69).** The
-layers above buy window room by _rewriting earlier request bytes_: payload aging rewrites the
-previous round's tool messages every round, reasoning pruning drops older `reasoning_content`
-mid-history, and the regenerated ledgers/nudges mutate the system block. Every such rewrite
-invalidates the inference engine's prompt-prefix cache from that byte on — and SWA/hybrid-memory
-models can't partially restore at all, so ANY divergence re-processes the FULL prompt (observed
-~3 min/request on a 35B at 17k tokens). When on (requires `REIKA_CONTEXT_WINDOW`; silently
-inactive without one), requests stay **append-only between shrink events**: payloads stay live
-with byte-frozen renders (`Message.rendered`, stamped only on the real call path — estimates
+**Prefix-stable mode (`REIKA_PREFIX_STABLE`, default ON with a window since #181; `=0` is the
+baseline arm — issue #69).** The layers above buy window room by _rewriting earlier request
+bytes_: payload aging rewrites the previous round's tool messages every round, reasoning pruning
+drops older `reasoning_content` mid-history, and the regenerated ledgers/nudges mutate the system
+block. Every such rewrite invalidates the inference engine's prompt-prefix cache from that byte
+on — and SWA/hybrid-memory models can't partially restore at all, so ANY divergence re-processes
+the FULL prompt (observed ~3 min/request on a 35B at 17k tokens; #181 priced one mid-context edit
+on a 27B at 22.9 tok/s prefill: 8453 tokens re-processed, 7.9 min, against 25 tokens / 3.5 s for
+an append — and `--cache-reuse` on the engine side was byte-identical, so only the harness can
+fix it). When on (requires `REIKA_CONTEXT_WINDOW`; silently inactive without one), requests stay
+**append-only between shrink events**: payloads stay live with byte-frozen renders (`Message.rendered`, stamped only on the real call path — estimates
 never stamp, so freezing doesn't depend on debug timing) until the calibrated estimate crosses
 the same threshold compaction uses, then `batchAgePayloads` (`compaction.ts`) sheds them
 oldest-first down to a 0.7 watermark (`AGE_LOW_FRACTION`, overridable via

@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import ignore from 'ignore';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
@@ -10,6 +10,16 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 // counts, so the status line can show how many times the window has been worked and a saved
 // transcript can carry the events when debug isn't on. The fold notice is numbered session-wide
 // and carries the recap size, which is the number #275's stacked recaps made worth seeing.
+//
+// Pinned to the flag-off path so the seeded history goes straight to a fold: under
+// REIKA_PREFIX_STABLE (on by default since #181) the batch-age shed fires first and is itself a
+// counted event — loop.shrink.prefixstable.test.ts covers that arm on the same history.
+const PRIOR_STABLE = process.env.REIKA_PREFIX_STABLE;
+process.env.REIKA_PREFIX_STABLE = '0';
+afterAll(() => {
+  if (PRIOR_STABLE === undefined) delete process.env.REIKA_PREFIX_STABLE;
+  else process.env.REIKA_PREFIX_STABLE = PRIOR_STABLE;
+});
 
 const h = vi.hoisted(() => ({ scripted: [] as ModelResponse[] }));
 vi.mock('../provider/client.js', () => ({
