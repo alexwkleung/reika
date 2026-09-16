@@ -43,6 +43,19 @@ describe('Status', () => {
     expect(lastFrame()).not.toContain('shed');
     expect(lastFrame()).not.toContain('fold');
   });
+
+  // The approval chip describes a gate; chat mode's tools never ask and shell mode never runs
+  // the model, so there the chip would be a standing claim about nothing (#373).
+  it.each(['chat', 'shell'])('hides the approval chip in %s mode', modeTag => {
+    const { lastFrame } = render(<Status {...BASE} modeTag={modeTag} autoApprove="bypass" />);
+    expect(lastFrame()).toContain(modeTag);
+    expect(lastFrame()).not.toContain('bypass approvals');
+  });
+
+  it.each(['agent', 'plan', 'vibe'])('keeps the approval chip in %s mode', modeTag => {
+    const { lastFrame } = render(<Status {...BASE} modeTag={modeTag} autoApprove="safe" />);
+    expect(lastFrame()).toContain('auto approve');
+  });
 });
 
 // A full status at 40 columns. Before #295 the row Box handed each sibling <Text> its own
