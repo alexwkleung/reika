@@ -77,6 +77,7 @@ import {
   buildCoverageNote,
 } from './subagentreport.js';
 import {
+  COMPACTION_REPORT_RETRY,
   buildCompactionReportDirective,
   clampCompactionNote,
   compactionReportEnabled,
@@ -1729,28 +1730,48 @@ export async function runTurn(opts: {
         opts.onPhase?.('thinking');
         opts.onCompactionNote?.(true);
         try {
-          const rep = await callModel({
-            system: prefixStable ? baseSystem : system + '\n\n' + directive,
-            history: opts.history,
-            tools: [],
-            config: opts.config,
-            onContentDelta: opts.onContentDelta,
-            onReasoningDelta: opts.onReasoningDelta,
-            signal: opts.signal,
-            calibration,
-            maxTokens: computeMaxTokens({
-              contextWindow: window,
-              promptTokens: Math.round(rawEstimate() * calibration),
-              userMaxTokens: opts.config.maxTokens,
-            }),
-            prefixStable,
-            trailingNote: prefixStable
-              ? roundSuffix
-                ? `${roundSuffix}\n\n${directive}`
-                : directive
-              : undefined,
-          });
+          const report = (suffix: string) =>
+            callModel({
+              system: prefixStable ? baseSystem : system + '\n\n' + suffix,
+              history: opts.history,
+              tools: [],
+              config: opts.config,
+              onContentDelta: opts.onContentDelta,
+              onReasoningDelta: opts.onReasoningDelta,
+              signal: opts.signal,
+              calibration,
+              maxTokens: computeMaxTokens({
+                contextWindow: window,
+                promptTokens: Math.round(rawEstimate() * calibration),
+                userMaxTokens: opts.config.maxTokens,
+              }),
+              prefixStable,
+              trailingNote: prefixStable
+                ? roundSuffix
+                  ? `${roundSuffix}\n\n${suffix}`
+                  : suffix
+                : undefined,
+            });
+          let rep = await report(directive);
           if (rep.usage) opts.onUsage?.(rep.usage);
+          // Diagnosable from the log: an empty content channel with a recovered in-band call is the
+          // model trying to read instead of writing; a `length` stop is the budget.
+          const describe = (r: typeof rep): string =>
+            `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
+            `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
+          let retried = false;
+          if (!rep.content?.trim() && !opts.signal?.aborted) {
+            debugLog(
+              `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
+            );
+            opts.onReasoningReset?.();
+            retried = true;
+            const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
+            if (again.usage) opts.onUsage?.(again.usage);
+            // Keep whichever reply has a note in the content channel; failing both, the first
+            // reasoning is the better fallback (it is the longer, less nagged thinking).
+            if (again.content?.trim()) rep = again;
+          }
           const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
           if (text) {
             note = { n, text };
@@ -1768,7 +1789,8 @@ export async function runTurn(opts: {
           }
           debugLog(
             `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
-              `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}\n`,
+              `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
+              `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
           );
         } catch (err) {
           if (opts.signal?.aborted) return;

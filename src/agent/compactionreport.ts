@@ -19,9 +19,24 @@
 // Flag read per call so toggling needs no restart; strict no-op when off — the baseline arm's
 // requests are byte-identical.
 
+// On by default since 2026-09-15: three folds on the payload-lifecycle prompt carried the note
+// (1→2 complete with the clamp out of the way; 3 degraded to a reasoning fallback but still on
+// target), and the trace prompt went 11 rounds / 1 fold / 7-of-7 against a baseline that folded
+// five times and never answered. `0` keeps the baseline arm reproducible.
 export function compactionReportEnabled(): boolean {
-  return process.env.REIKA_COMPACTION_REPORT === '1';
+  return process.env.REIKA_COMPACTION_REPORT !== '0';
 }
+
+// Sent once when the report round's reply carried no note in the content channel. Observed on the
+// third fold of a run at 91% context: the model ignored "tools are withdrawn", emitted an in-band
+// tool call (stripped, leaving content empty), and its reasoning ended in "Let me search for those
+// function calls to verify" — a thinking stream, not a note. The reasoning fallback still catches
+// that, but as first-person prose with no file:line refs and no open list. One retry, then the
+// fallback: a second generation is cheap next to the fold's reprocess, and bounded.
+export const COMPACTION_REPORT_RETRY =
+  '(reika: your reply carried no note — the content was empty or was a tool call, and tools are ' +
+  'withdrawn for this reply. Write the compaction note now, as your reply, not as a tool call: ' +
+  'what you have established with file paths and function names, then what is still open.)';
 
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
 // the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to

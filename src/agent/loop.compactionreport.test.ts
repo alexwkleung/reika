@@ -126,6 +126,7 @@ describe('compaction report round (#280)', () => {
   });
 
   it('is a strict no-op with the flag off: one call, no directive, ledger recap', async () => {
+    process.env.REIKA_COMPACTION_REPORT = '0';
     h.scripted.push({ content: 'final', toolCalls: undefined });
     const history = bigHistory();
     await runTurn({
@@ -201,10 +202,48 @@ describe('compaction report round (#280)', () => {
     expect(last.content).toBe('final');
   });
 
+  // An empty content channel gets ONE retry with the sharper directive (observed: the model
+  // emitted an in-band tool call instead of the note at 91% context). The retry's note wins when
+  // it has one; failing both, the first reply's reasoning is the fallback.
+  it('retries once on an empty note and takes the retry when it carries one', async () => {
+    process.env.REIKA_COMPACTION_REPORT = '1';
+    h.scripted.push(
+      {
+        content: '',
+        reasoning: 'let me search for that',
+        toolCalls: [{ id: 'x', name: 'read', args: { path: 'a.ts' } }],
+      },
+      { content: 'RETRY NOTE: established a; open b', toolCalls: undefined },
+      { content: 'final', toolCalls: undefined },
+    );
+    const history = bigHistory();
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+    });
+    expect(h.captured).toHaveLength(3);
+    expect(directiveOf(h.captured[0])).toContain(buildCompactionReportDirective(1));
+    expect(directiveOf(h.captured[0])).not.toContain('your reply carried no note');
+    expect(h.captured[1].tools).toEqual([]);
+    expect(directiveOf(h.captured[1])).toContain('your reply carried no note');
+    const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
+    expect(recap.content).toContain('RETRY NOTE: established a');
+    expect(recap.content).not.toContain('let me search');
+    const last = history[history.length - 1] as Message & { role: 'assistant' };
+    expect(last.content).toBe('final');
+  });
+
   it('falls back to the reasoning channel, and folds as before when the note is empty', async () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     h.scripted.push(
       { content: '', reasoning: 'reasoned note', toolCalls: undefined },
+      // The retry comes back empty too: the FIRST reasoning is the fallback.
+      { content: '', reasoning: 'second try', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
     let history = bigHistory();
@@ -223,6 +262,7 @@ describe('compaction report round (#280)', () => {
     h.scripted.length = 0;
     h.captured.length = 0;
     h.scripted.push(
+      { content: '', toolCalls: undefined },
       { content: '', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
