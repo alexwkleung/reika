@@ -98,8 +98,8 @@ describe('Status wrap', () => {
       'qwen3-coder-30b-a3b-instruct · turn 12',
       'idle · 123k↑ 4.6k↓',
       'ctx 11k/24k (70% of 16k)',
-      '3 sheds · 1 fold · cache 80% · PR: #99',
-      'ctrl-c to exit',
+      '3 sheds · 1 fold · 80% cached (9.0k)',
+      'PR: #99 · ctrl-c to exit',
     ]);
     // The App's paddingX={1} takes two columns off the terminal's 40.
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(38);

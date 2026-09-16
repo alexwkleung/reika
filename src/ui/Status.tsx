@@ -195,10 +195,12 @@ export function formatContext(
     : `ctx ${size} (${pct}%)`;
 }
 
-// `cache 89%` (cached share of the last prompt), empty when unavailable.
+// `89% cached (40k)` — the share of the last prompt the provider served from cache, and how
+// many tokens that was (#360). Empty when unavailable.
 export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
   if (cachedTokens == null || !contextTokens) return '';
-  return `cache ${Math.round((cachedTokens / contextTokens) * 100)}%`;
+  const pct = Math.round((cachedTokens / contextTokens) * 100);
+  return `${pct}% cached (${kFormat(cachedTokens)})`;
 }
 
 // `PR: #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell).
