@@ -73,7 +73,10 @@ export function Status({
       { text: ' (shift+tab to cycle)', color: theme.muted },
     ]);
   }
-  if (autoApprove) {
+  // The approval chip only means something where a tool can ask: chat mode's tools (fetch,
+  // search) never request approval and shell mode never runs the model, so in both the chip
+  // would promise a gate that nothing goes through (#373).
+  if (autoApprove && modeTag !== 'chat' && modeTag !== 'shell') {
     chips.push([
       {
         text: autoApprove === 'bypass' ? 'bypass approvals' : 'auto approve',
