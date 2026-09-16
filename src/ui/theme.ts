@@ -28,12 +28,16 @@ export const theme = {
   error: 'red',
   success: 'green',
   userBg: '#303030',
-  // Status-line mode tags. The two heavily-used modes get soft accents so they
-  // read at a glance (without clashing with the yellow warning); the secondary
-  // modes sit back in grey.
+  // Status-line mode tags. Every mode gets its own soft hue so the tag reads at a glance
+  // (none of them near the yellow warning); the heavily-used modes take the brighter pastels
+  // and the secondary ones sit a step back in saturation.
   modeAgent: '#d7a8d7', // soft magenta, echoes inlineCode — the default workhorse
   modePlan: '#8fd0c8', // soft teal-cyan; also the plan-checklist header (PlanProgress) — teal = plan everywhere
   modeVibe: '#b4aee0', // soft periwinkle between plan teal and agent magenta — vibe runs both phases
-  modeChat: '#a0a0a0', // slightly lighter than muted — secondary, recedes
+  // Heather: a desaturated violet, greyer and darker than the vibe periwinkle and agent magenta
+  // on either side of it in hue. Purple-tinted so it no longer reads as a disabled/grey chip
+  // (#380), but the low saturation keeps it a secondary mode that recedes next to the two
+  // pastel workhorses.
+  modeChat: '#a892c4',
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
 } as const;
