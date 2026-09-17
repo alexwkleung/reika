@@ -3,6 +3,7 @@ import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { classifyPrivateUrl } from './_hosts.js';
+import { errorCode, offlineCode, rootMessage } from './_net.js';
 import {
   buildCappedFooter,
   buildSpillFooter,
@@ -88,7 +89,10 @@ export type UrlExtraction =
   // refused connection, timeout, or no internet at all). The two are indistinguishable in `error`
   // text but mean very different things to a grounder: a 404 is a real dead link; a thrown request
   // might just be an offline machine, so it must not be reported as an invented URL on its own.
-  | { ok: false; reached: boolean; error: string };
+  // `code` is the socket-level error code when the failure had one (ENOTFOUND, ECONNREFUSED…),
+  // dug out of undici's `cause` chain. It is what separates "this host" from "no network" for the
+  // tool's offline latch; the grounders read only `reached`.
+  | { ok: false; reached: boolean; error: string; code?: string };
 
 export type ExtractOptions = {
   // Allow addresses that only resolve on this machine or this LAN (loopback, RFC1918, link-local).
@@ -166,7 +170,11 @@ export async function extractUrl(url: string, opts: ExtractOptions = {}): Promis
     }
     return { ok: false, reached: true, error: `too many redirects (${MAX_REDIRECTS})` };
   } catch (e) {
-    return { ok: false, reached: false, error: (e as Error).message };
+    // undici reports every socket failure as `TypeError: fetch failed` and keeps the real error
+    // on `cause`. The outer text tells a model nothing — "fetch failed" reads as "try again" —
+    // so the message and code come from the root of the chain.
+    const code = errorCode(e);
+    return { ok: false, reached: false, error: rootMessage(e), ...(code ? { code } : {}) };
   } finally {
     clearTimeout(timer);
   }
@@ -203,6 +211,12 @@ export const fetchUrlTool: Tool = {
       }
       savedPages.delete(url);
     }
+    // The network went down earlier this turn (#392): every URL fails the same way, so say so
+    // without a request or a budget slot. After the saved-page check, which needs no network.
+    const offline = ctx.webHealth?.offline;
+    if (offline) {
+      return { summary: `Fetch skipped: still offline this turn (${offline})` };
+    }
     const budget = ctx.webBudget?.fetches;
     if (budget && budget.used >= budget.max) {
       return {
@@ -212,6 +226,21 @@ export const fetchUrlTool: Tool = {
     if (budget) budget.used++;
     const result = await extractUrl(url, { untruncated: spilling });
     if (!result.ok) {
+      const down = offlineCode(result);
+      if (down) {
+        // Latch the turn and refund the call, as the search tool does for a refused provider: the
+        // budget bounds egress, and a request that never left the machine is none. The notice is
+        // for the user and emitted once, on the failure that sets the latch.
+        if (ctx.webHealth) ctx.webHealth.offline = down;
+        if (budget) budget.used--;
+        return {
+          summary: `Fetch failed: ${url} (${result.error}) — the network is unreachable, so no web call can succeed this turn`,
+          notice: {
+            tone: 'warn',
+            content: `Network unreachable (${down}) — web tools are paused for the rest of this turn.`,
+          },
+        };
+      }
       return { summary: `Fetch failed: ${url} (${result.error})` };
     }
     // Record the URL only on success so the loop can stamp it as a source on

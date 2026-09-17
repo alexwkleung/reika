@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createSearchTool, resetSavedSearches } from './search.js';
 import { SearchUnavailableError } from '../search/types.js';
 import type { SearchProvider, SearchResult } from '../search/types.js';
-import type { SearchHealth, ToolContext, WebBudget } from '../types.js';
+import type { WebHealth, ToolContext, WebBudget } from '../types.js';
 
-function ctxWith(max = 3): ToolContext & { webBudget: WebBudget; searchHealth: SearchHealth } {
+function ctxWith(max = 3): ToolContext & { webBudget: WebBudget; webHealth: WebHealth } {
   return {
     cwd: '/tmp',
     webBudget: { searches: { used: 0, max }, fetches: { used: 0, max: 5 } },
-    searchHealth: {},
-  } as ToolContext & { webBudget: WebBudget; searchHealth: SearchHealth };
+    webHealth: {},
+  } as ToolContext & { webBudget: WebBudget; webHealth: WebHealth };
 }
 
 const failing = (err: Error): SearchProvider => ({
@@ -40,7 +40,7 @@ describe('search tool — provider-level failure latch', () => {
     const tool = createSearchTool(failing(unavailable()));
     const out = await tool.run({ query: 'a' }, ctx);
     expect(out.summary).toMatch(/Search failed: every SearXNG engine was unavailable/);
-    expect(ctx.searchHealth.unavailable).toMatch(/every SearXNG engine/);
+    expect(ctx.webHealth.unavailable).toMatch(/every SearXNG engine/);
   });
 
   it('does not re-attempt the provider once latched', async () => {
@@ -96,7 +96,7 @@ describe('search tool — query-level failures stay query-level', () => {
     await tool.run({ query: 'a' }, ctx);
     await tool.run({ query: 'b' }, ctx);
     expect(calls).toBe(2);
-    expect(ctx.searchHealth.unavailable).toBeUndefined();
+    expect(ctx.webHealth.unavailable).toBeUndefined();
     expect(ctx.webBudget.searches.used).toBe(2);
   });
 
@@ -112,7 +112,7 @@ describe('search tool — query-level failures stay query-level', () => {
     expect(second.summary).toMatch(/budget exceeded/i);
   });
 
-  it('works with no searchHealth on the context at all', async () => {
+  it('works with no webHealth on the context at all', async () => {
     const tool = createSearchTool(failing(unavailable()));
     const out = await tool.run({ query: 'a' }, { cwd: '/tmp' } as ToolContext);
     expect(out.summary).toMatch(/Search failed:/);
@@ -145,7 +145,7 @@ describe('search tool — bot check raised for the user', () => {
     });
     // The search answered, so the budget was spent once and nothing latched.
     expect(ctx.webBudget.searches.used).toBe(1);
-    expect(ctx.searchHealth.unavailable).toBeUndefined();
+    expect(ctx.webHealth.unavailable).toBeUndefined();
   });
 
   it('keeps the receipt on a solve that then found nothing', async () => {
@@ -163,5 +163,32 @@ describe('search tool — bot check raised for the user', () => {
     };
     const out = await createSearchTool(plain).run({ query: 'a' }, ctxWith());
     expect(out.notice).toBeUndefined();
+  });
+});
+
+// #392: the network going down is found by a fetch, but it blocks searches just the same.
+describe('search tool — offline latch set by fetch_url', () => {
+  it('skips the provider without spending budget once the turn is offline', async () => {
+    calls = 0;
+    const ctx = ctxWith();
+    ctx.webHealth.offline = 'ENOTFOUND';
+    const tool = createSearchTool(counting(new Error('should not run')));
+    const out = await tool.run({ query: 'a' }, ctx);
+    expect(out.summary).toBe('Search skipped: still offline this turn (ENOTFOUND)');
+    expect(calls).toBe(0);
+    expect(ctx.webBudget.searches.used).toBe(0);
+  });
+
+  it('still serves a query already saved this session — no network needed', async () => {
+    const ctx = ctxWith();
+    const tool = createSearchTool({
+      async search() {
+        return [{ title: 'T', url: 'https://x.example/a', snippet: '' }];
+      },
+    });
+    await tool.run({ query: 'a' }, ctx);
+    ctx.webHealth.offline = 'ENOTFOUND';
+    const again = await tool.run({ query: 'a' }, ctx);
+    expect(again.summary).toMatch(/served from the saved results/);
   });
 });

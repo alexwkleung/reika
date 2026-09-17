@@ -90,7 +90,7 @@ describe('search tool — saved results (#297)', () => {
     await tool.run({ query: 'q' }, { cwd: '/tmp', webBudget: budget });
     const out = await tool.run(
       { query: 'q' },
-      { cwd: '/tmp', webBudget: budget, searchHealth: { unavailable: 'no browser' } },
+      { cwd: '/tmp', webBudget: budget, webHealth: { unavailable: 'no browser' } },
     );
     expect(out.summary).toMatch(/^Found 2 result\(s\) for "q" — already searched/);
     expect(provider.search).toHaveBeenCalledOnce();

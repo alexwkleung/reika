@@ -1,4 +1,5 @@
 import { debugLog } from '../debug.js';
+import { rootMessage } from '../tools/_net.js';
 import { SearchUnavailableError } from './types.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
@@ -30,10 +31,25 @@ export class SearxngProvider implements SearchProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const res = await fetch(url.toString(), {
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(url.toString(), {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+      } catch (e) {
+        // The instance itself could not be reached — refused, unresolvable, timed out. That is a
+        // property of the provider, not the query: there is one host, and rewording the query
+        // does not bring it up. Raised as unavailable so the tool latches the turn instead of
+        // letting the model spend three searches finding out the same thing three times (#392).
+        const detail = controller.signal.aborted
+          ? `no answer in ${REQUEST_TIMEOUT_MS / 1000}s`
+          : rootMessage(e);
+        throw new SearchUnavailableError(
+          `SearXNG at ${this.baseUrl} could not be reached (${detail})`,
+          `SearXNG at ${this.baseUrl} did not answer (${detail}). Check that the instance is running and reachable, or set REIKA_CDP_SEARCH=1 to search through Chrome instead.`,
+        );
+      }
       if (!res.ok) {
         throw new Error(`SearXNG ${res.status} ${res.statusText}`);
       }
