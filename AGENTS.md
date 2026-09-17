@@ -113,6 +113,24 @@ Reserve **ephemeral** UI (spinner text, a transient pulse like the typecheck "ch
 
 A subagent streams into the parent's live region (#342): `makeSpawnSubagent` forwards every streaming/phase callback and brackets the run with `onSubagent(true|false)`, which `App` turns into `streamingNested` on `Scrollback`. The parent is blocked inside the tool call with its own assistant message already committed, so the region is empty for the whole run — there was never anything to keep it "clean" from, and withholding the callbacks made a subagent a silent block that rendered each round as a batch on commit. Nested live blocks draw at `NESTED_INDENT` inside the same margin-plus-explicit-width box `MessageView` gives a nested committed row, so the streaming tail sits exactly where its committed row lands; the top-level live region is left byte-identical (the wrapper only exists when nested). On return the phase is reset to `'tool'` — the parent is still dispatching that round.
 
+### Atomic frames (`ui/syncframe.ts`, #345)
+
+Ink paints a frame as `eraseLines + output`, and a `<Static>` commit is three writes (erase the
+live region, write the committed rows, redraw the live region). The terminal may paint between
+any two of them, and a 7KB frame arrives over the pty in several reads anyway. Invisible when the
+process is on-CPU; under memory pressure (a 27B model on a 16GB machine swapping this process out
+between writes) the erased state gets painted and the UI flickers. `cli.tsx` therefore renders to
+`createSyncedStdout(process.stdout)`: every write in a tick is coalesced into one `stream.write`
+(Ink issues a frame's writes synchronously, so the microtask boundary is the frame edge) and
+wrapped in DEC private mode 2026, which makes a supporting terminal buffer until the closing
+sequence and paint once. Measured over a pty on a full tool-call turn: 314 writes → 285, every
+one a balanced BSU…ESU frame, ~1% more bytes. The `process.exit` hook flushes synchronously and
+then passes later writes straight through — the focus-report reset and Ink's final frame land
+after it, with no tick left to run a queued flush. A pipe (tests, CI) gets the raw stream, so
+render tests never see the sequences. `REIKA_SYNC_OUTPUT=0` is the kill switch. Everything but
+`write` reads through to the real stream, so `columns`/`rows`/resize are the same whichever handle
+a component holds.
+
 ### Ink wrapping pitfalls
 
 Two interactions to watch for when content can wrap:
