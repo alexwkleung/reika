@@ -348,6 +348,7 @@ reika -p --mode plan "how would you add X"           # agent (default) | plan | 
 reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
 reika -p --save "..."                                # write the transcript like /save
 reika -p "/verify the input box"                     # run a skill, with the rest as guidance
+npm run -s dev -- -p "..."                           # from a checkout: -- so npm doesn't eat -p, -s to keep its banner off stdout
 ```
 
 - **Approvals** follow `REIKA_AUTO_APPROVE` with no prompt to fall back on: `bypass` runs everything, `safe` runs ordinary edits/commands and _declines_ anything the danger scan flags, `off` declines every edit and command (the model is told). `ask_user` is never offered.

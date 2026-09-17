@@ -40,7 +40,10 @@ describe('parseHeadlessArgs', () => {
 
   it('rejects a stray positional', () => {
     expect(() => parseHeadlessArgs(['-p', 'x', 'y'])).toThrow(/unexpected argument y/);
-    expect(() => parseHeadlessArgs(['x'])).toThrow(/unexpected argument x/);
+  });
+
+  it('points a -p-less prompt at the npm -- separator (npm eats -p itself)', () => {
+    expect(() => parseHeadlessArgs(['hi'])).toThrow(/npm run dev -- -p/);
   });
 
   it('--help is headless on its own', () => {

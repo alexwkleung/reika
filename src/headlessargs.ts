@@ -63,6 +63,12 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
     } else if (headless && args.prompt === undefined) {
       // `reika -p --json "text"` — a positional after the flags is still the prompt.
       args.prompt = a;
+    } else if (!headless) {
+      // A bare positional is a prompt that lost its -p. The usual way: `npm run dev -p "…"`, where
+      // npm takes -p as its own flag and passes only the text through.
+      throw new Error(
+        `unexpected argument ${a} — a prompt needs -p (with npm run dev, put -- first: npm run dev -- -p "…")\n${HEADLESS_USAGE}`,
+      );
     } else {
       throw new Error(`unexpected argument ${a}\n${HEADLESS_USAGE}`);
     }
