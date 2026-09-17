@@ -4,6 +4,9 @@ import {
   flagRepeatedCall,
   type RepeatEntry,
   buildAgentLoopLedger,
+  buildWithdrawalDirective,
+  withdrawalRemedy,
+  withdrawnToolsPhrase,
   buildAbsentGrounding,
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
@@ -12,6 +15,20 @@ import {
   shouldWithdrawInspection,
   buildPlanTransformInput,
 } from './loop.js';
+
+// The three tool lists the withdrawal text has to speak to: agent (everything), minimal mode's
+// bash-only (#391), and chat (neither an editor nor a shell).
+const AGENT_TOOLS: ReadonlySet<string> = new Set([
+  'read',
+  'list',
+  'grep',
+  'glob',
+  'edit',
+  'write',
+  'bash',
+]);
+const MINIMAL_TOOLS: ReadonlySet<string> = new Set(['bash']);
+const CHAT_TOOLS: ReadonlySet<string> = new Set(['fetch_url', 'search']);
 
 // Convenience: read calls keyed on path+offset.
 const read = (
@@ -194,10 +211,14 @@ describe('flagRepeatedCall', () => {
 
 describe('buildAgentLoopLedger', () => {
   it('names the looping files and gives a stop-or-explain directive', () => {
-    const ledger = buildAgentLoopLedger([
-      { path: 'packages/ui/src/api/sse.ts', offset: 1, repeats: 3 },
-      { path: 'packages/server/src/http/chat.ts', offset: 201, repeats: 3 },
-    ]);
+    const ledger = buildAgentLoopLedger(
+      [
+        { path: 'packages/ui/src/api/sse.ts', offset: 1, repeats: 3 },
+        { path: 'packages/server/src/http/chat.ts', offset: 201, repeats: 3 },
+      ],
+      false,
+      AGENT_TOOLS,
+    );
     // Names both files (the one past line 1 carries its offset), persists the "already read" fact,
     // and offers the non-edit escape so a cornered model isn't forced into a wrong change.
     expect(ledger).toContain('packages/ui/src/api/sse.ts');
@@ -208,8 +229,8 @@ describe('buildAgentLoopLedger', () => {
 
   it('escalates to a hard pause directive once inspection tools are withdrawn', () => {
     const looping = [{ path: 'packages/server/src/http/chat.ts', offset: 151, repeats: 3 }];
-    const soft = buildAgentLoopLedger(looping, false);
-    const hard = buildAgentLoopLedger(looping, true);
+    const soft = buildAgentLoopLedger(looping, false, AGENT_TOOLS);
+    const hard = buildAgentLoopLedger(looping, true, AGENT_TOOLS);
     // Soft tier: still frames re-reading as unhelpful. Hard tier: states reading is paused.
     expect(soft).toContain('Re-reading them returns identical bytes');
     expect(soft).not.toContain('PAUSED');
@@ -226,14 +247,14 @@ describe('buildAgentLoopLedger', () => {
       offset: 1,
       repeats: 3,
     }));
-    const ledger = buildAgentLoopLedger(many);
+    const ledger = buildAgentLoopLedger(many, false, AGENT_TOOLS);
     expect(ledger).toContain('f0.ts');
     expect(ledger).toContain('f7.ts');
     expect(ledger).not.toContain('f8.ts'); // sliced at 8
   });
 
   it('adds a "complete → say so and stop" out to the withdrawn directive (post-edit loops)', () => {
-    const hard = buildAgentLoopLedger([{ path: 'a.ts', offset: 1, repeats: 3 }], true);
+    const hard = buildAgentLoopLedger([{ path: 'a.ts', offset: 1, repeats: 3 }], true, AGENT_TOOLS);
     expect(hard).toContain('if the change is already complete');
   });
 
@@ -241,16 +262,86 @@ describe('buildAgentLoopLedger', () => {
     // The agent-mode reasoning-loop arm passes an empty `looping` (each read paged a fresh region /
     // the same grep kept returning 0 matches, so ReadTrace saw no repeat). The ledger must still fire
     // a stop directive without naming any file, and keep the blocker escape for the can't-find case.
-    const soft = buildAgentLoopLedger([], false);
+    const soft = buildAgentLoopLedger([], false, AGENT_TOOLS);
     expect(soft).toContain('repeated the same reasoning and searches');
     expect(soft).not.toContain('identical bytes'); // file-specific phrasing suppressed
     expect(soft).toContain('a symbol your searches');
     expect(soft).not.toContain('PAUSED');
 
-    const hard = buildAgentLoopLedger([], true);
+    const hard = buildAgentLoopLedger([], true, AGENT_TOOLS);
     expect(hard).toContain('repeated the same reasoning and searches');
     expect(hard).toContain('PAUSED');
     expect(hard).toContain('Make the edit');
+  });
+
+  it('names a remedy the turn actually has when there are no edit tools', () => {
+    // #391: in a bash-only mode "make the edit with the edit/write tools" is a pointer at two tools
+    // the model cannot see, and a model told to reach for an absent tool reaches for nothing.
+    // Flattened: the hand-wrapping is presentation, the content is the invariant.
+    const hard = buildAgentLoopLedger([], true, MINIMAL_TOOLS).replace(/\n/g, ' ');
+    expect(hard).toContain('PAUSED');
+    expect(hard).not.toContain('edit/write');
+    expect(hard).toContain('running the command that applies it');
+    // The escapes that need no tool at all survive in every mode.
+    expect(hard).toContain('state specifically what is still blocking you');
+    expect(hard).toContain('if the change is already complete');
+  });
+});
+
+describe('withdrawal text follows the turn tool list', () => {
+  it('names only the inspection surface the mode actually has', () => {
+    expect(withdrawnToolsPhrase(AGENT_TOOLS)).toBe(
+      'inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail)',
+    );
+    // Minimal mode has no read/grep/glob/list to pause, so it must not claim to have paused them.
+    expect(withdrawnToolsPhrase(MINIMAL_TOOLS)).toBe(
+      'read-only shell commands (grep/cat/tail and similar inspection)',
+    );
+    // Plan mode's default list is the other way round: the named tools, no shell.
+    expect(withdrawnToolsPhrase(new Set(['read', 'grep', 'glob', 'list']))).toBe(
+      'inspection tools (read/grep/glob/list)',
+    );
+  });
+
+  it('picks the remedy from the tools on offer', () => {
+    expect(withdrawalRemedy(AGENT_TOOLS)).toContain('edit/write tools');
+    expect(withdrawalRemedy(MINIMAL_TOOLS)).toContain('running the command that applies it');
+    // Neither an editor nor a shell: the remedy has to be one that needs no tool.
+    expect(withdrawalRemedy(CHAT_TOOLS)).toBe('Answer from what you already have');
+  });
+
+  it('leaves agent mode byte-identical to the pre-list-aware text', () => {
+    // House rule: a change that only adds a new mode must not move the bytes of the existing one,
+    // or every measurement taken against the old text silently stops comparing.
+    expect(buildWithdrawalDirective(AGENT_TOOLS)).toBe(
+      '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
+        'are paused because you have repeated the same reads or searches without making progress. You ' +
+        'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
+        'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
+        'Reading and searching are unavailable until you make progress.)',
+    );
+    expect(buildAgentLoopLedger([], true, AGENT_TOOLS)).toContain(
+      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write\n' +
+        'tools, state specifically what is still blocking you, or — if the change is already complete —\n' +
+        'say so and stop.',
+    );
+  });
+
+  it('builds a directive that points at nothing absent', () => {
+    const agent = buildWithdrawalDirective(AGENT_TOOLS);
+    expect(agent).toContain('read/grep/glob/list');
+    expect(agent).toContain('edit/write tools');
+
+    const minimal = buildWithdrawalDirective(MINIMAL_TOOLS);
+    // The whole point: no phantom tool names anywhere in the sentence.
+    for (const absent of ['read/grep/glob/list', 'edit/write', 'glob', 'list']) {
+      expect(minimal).not.toContain(absent);
+    }
+    expect(minimal).toContain('read-only shell commands (grep/cat/tail and similar inspection)');
+    expect(minimal).toContain('running the command that applies it');
+    // Still says what it is and how to get out of it.
+    expect(minimal).toContain('are paused because you have repeated the same reads or searches');
+    expect(minimal).toContain('say so and stop');
   });
 });
 
