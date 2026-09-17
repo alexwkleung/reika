@@ -47,7 +47,7 @@ export const theme = {
   // chalk.dim, which on a light-on-dark terminal is a fainter white — indistinguishable from
   // the surrounding sentence (#397). A creamy lavender-blue: bluer and paler than the vibe
   // periwinkle so a link never reads as a mode tag, and well off the reasoning cornflower
-  // that marks the Thinking bar. Color only, no underline — underline promises a click,
-  // and terminals without OSC 8 can't deliver one.
+  // that marks the Thinking bar. Underlined only on terminals that take OSC 8 hyperlinks
+  // (markdown.ts): an underline promises a click, and elsewhere there is none to deliver.
   link: '#aac0f0',
 } as const;
