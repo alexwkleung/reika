@@ -624,7 +624,7 @@ export function App() {
       // has anywhere to go.
       return;
     }
-    // Shift+Tab cycles agent → plan → vibe → chat → shell. Only while idle — mode picks the
+    // Shift+Tab cycles agent → plan → minimal → vibe → chat → shell. Only while idle — mode picks the
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
@@ -1032,7 +1032,7 @@ export function App() {
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-          '  shift+tab          cycle mode (agent → plan → vibe → chat → shell)',
+          '  shift+tab          cycle mode (agent → plan → minimal → vibe → chat → shell)',
         ].join('\n');
         break;
       case 'model': {

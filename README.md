@@ -325,7 +325,7 @@ Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file co
 
 ## Modes
 
-`Shift+Tab` cycles through them (agent → plan → vibe → chat → shell), or switch directly with the slash commands below.
+`Shift+Tab` cycles through them (agent → plan → minimal → vibe → chat → shell), or switch directly with the slash commands below.
 
 - **Agent** (default): input goes to the model; it can call tools
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
