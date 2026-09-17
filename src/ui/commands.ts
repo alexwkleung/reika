@@ -4,11 +4,10 @@ import { parsePlanSteps } from '../agent/plantrack.js';
 // Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
 export type { Mode };
 
-// Shift+Tab cycling order: the model-driven modes first (agent → plan → vibe → minimal), then the
-// isolated ones (chat → shell), wrapping back to agent. Minimal sits last of the work modes because
-// switching into it mid-session is the unusual path — its saving is the upfront load a running
-// session has already paid for, so it is normally launched via REIKA_DEFAULT_MODE.
-export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'vibe', 'minimal', 'chat', 'shell'];
+// Shift+Tab cycling order: the model-driven modes first (agent → plan → minimal → vibe), then the
+// isolated ones (chat → shell), wrapping back to agent. Minimal sits right after plan (#400): the
+// three single-turn modes are adjacent, and vibe — the plan→implement chain — closes the group.
+export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'minimal', 'vibe', 'chat', 'shell'];
 
 export function nextMode(current: Mode): Mode {
   return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
