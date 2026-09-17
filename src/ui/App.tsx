@@ -394,7 +394,7 @@ export function App() {
             {
               role: 'system',
               content:
-                'No network — search and fetch_url are off for this session. Restart reika once you are back online to get them back.',
+                'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
               tone: 'warn',
             },
           ]);
