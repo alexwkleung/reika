@@ -43,4 +43,11 @@ export const theme = {
   modeMinimal: '#9aa8b8',
   modeChat: '#a892c4',
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
+  // URLs in the model's prose: bare ones and the `(href)` of a markdown link. They were
+  // chalk.dim, which on a light-on-dark terminal is a fainter white — indistinguishable from
+  // the surrounding sentence (#397). A creamy lavender-blue: bluer and paler than the vibe
+  // periwinkle so a link never reads as a mode tag, and well off the reasoning cornflower
+  // that marks the Thinking bar. Underlined only on terminals that take OSC 8 hyperlinks
+  // (markdown.ts): an underline promises a click, and elsewhere there is none to deliver.
+  link: '#aac0f0',
 } as const;

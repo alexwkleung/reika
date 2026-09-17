@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
+import { supportsHyperlink } from 'supports-hyperlinks';
 import wrapAnsi from 'wrap-ansi';
 import { theme } from './theme.js';
 import { codeTheme, resolveLanguage } from './highlight.js';
@@ -51,7 +52,17 @@ const terminalExtension = markedTerminal(
     // where the terminal supports one — and hands that single string to `link`. A
     // (href, title, text) signature here read the third argument and printed `undefined`.
     link: (composed: string) => composed,
-    href: (href: string) => chalk.dim(href),
+    // Both a bare URL (GFM autolink) and a `[text](href)` land here; see theme.link. Underlined
+    // only where marked-terminal is also wrapping it in an OSC 8 hyperlink — the same check it
+    // makes (`supportsHyperlinks.stdout`) — so the underline promises a click exactly when the
+    // terminal can deliver one. On such a terminal a `[text](href)` shows only `text`, so this
+    // is also the one cue that the word is a link and not a colored word. The function form
+    // rather than the cached `.stdout`: it re-reads the env, which is how the tests reach this
+    // branch (marked-terminal's own copy is fixed at import, so the tests can't see its OSC 8).
+    href: (href: string) => {
+      const painted = chalk.hex(theme.link);
+      return supportsHyperlink(process.stdout) ? painted.underline(href) : painted(href);
+    },
     reflowText: true,
     showSectionPrefix: false,
     tab: TAB_WIDTH,
