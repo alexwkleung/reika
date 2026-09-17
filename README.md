@@ -337,6 +337,25 @@ Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file co
   - `REIKA_PLAN_BASH=1` (experimental) registers a read-only `bash` in plan (and vibe) mode, for the inspection a pipeline expresses that `read`/`grep`/`glob`/`list` cannot — `grep … | head`, `find`, `wc -l`. A strict allowlist classifier (`tools/_readonly.ts`) decides: only listed inspection commands and pipelines of them run, and redirection, command substitution, `sed`/`awk` and anything unlisted are refused with the rule and the way out stated in the result. It runs without an approval prompt — the classifier has proved the command cannot mutate anything, and plan mode's other four tools already read arbitrary paths silently — while the ordinary `bash` in agent mode prompts exactly as before. The plan system prompt tracks the flag, so it stops claiming commands will fail.
 - **Vibe**: `/vibe` to enter — the full plan→implement pipeline on every prompt. Each prompt first runs as a plan-mode turn (read-only tools, same convergence machinery), and if it ends with a written plan, the plan is implemented immediately as a normal agent turn — no `/implement` needed. A plan phase that is aborted (ctrl-c) or dead-ends without a plan stops there; nothing chains. Approvals are untouched: the implement phase prompts for edits and commands exactly like agent mode, so `REIKA_AUTO_APPROVE` / `/approvals` remain the only things that change what auto-runs. Probably not the mode for maximum quality — it exists to watch a local model go end-to-end on its own. `REIKA_DEFAULT_MODE=vibe` starts the session in vibe mode. `/agent` returns. Status bar shows a `vibe` tag when active.
 
+## Headless mode
+
+`reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout (#52) — for scripts, other harnesses, and letting an agent run reika itself against a model server. Same config, same turn: the loop, tools, compaction, and skills are the ones the TUI runs, so a headless run is a faithful stand-in when debugging.
+
+```sh
+reika -p "summarize what this repo does"
+echo "explain src/agent/loop.ts" | reika -p          # prompt from stdin
+reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | chat
+reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
+reika -p --save "..."                                # write the transcript like /save
+reika -p "/verify the input box"                     # run a skill, with the rest as guidance
+npm run -s dev -- -p "..."                           # from a checkout: -- so npm doesn't eat -p, -s to keep its banner off stdout
+```
+
+- **Approvals** follow `REIKA_AUTO_APPROVE` with no prompt to fall back on: `bypass` runs everything, `safe` runs ordinary edits/commands and _declines_ anything the danger scan flags, `off` declines every edit and command (the model is told). `ask_user` is never offered.
+- **stdout is the reply only** — notices the TUI would put in the scrollback (a fold, a declined command, a skill match) go to stderr, and `REIKA_DEBUG=1` still writes the log file.
+- **Exit status**: 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted (ctrl-c aborts the turn cleanly).
+- One turn per process; `--mode vibe` still chains plan → implement inside it.
+
 ## Slash commands
 
 Type `/` in the input to see suggestions. Highlights:

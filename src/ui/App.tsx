@@ -16,6 +16,7 @@ import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { Question, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import { autoApproves } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
@@ -726,12 +727,12 @@ export function App() {
   };
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
-    const hasWarnings = !!req.warnings && req.warnings.length > 0;
-    // 'safe' (env) and the session toggle both auto-approve ordinary actions, but a flagged
-    // dangerous command still falls through to the prompt. 'bypass' never reaches here —
-    // requestApproval is undefined in that mode (see runTurn wiring below).
-    const envSafe = config?.autoApprove === 'safe';
-    if ((sessionAutoApproveRef.current || envSafe) && !hasWarnings) {
+    // 'safe' (env) and the session toggle are the same policy (approval.ts, shared with the
+    // headless runner): ordinary actions auto-run, a flagged dangerous command still falls
+    // through to the prompt. 'bypass' never reaches here — requestApproval is undefined in that
+    // mode (see runTurn wiring below).
+    const policy = sessionAutoApproveRef.current ? 'safe' : (config?.autoApprove ?? 'off');
+    if (autoApproves(policy, req)) {
       setApprovals(a => ({ ...a, approved: a.approved + 1 }));
       return Promise.resolve(true);
     }
