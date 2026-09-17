@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { render } from 'ink';
 import { App } from './ui/App.js';
+import { createSyncedStdout } from './ui/syncframe.js';
 import { sweepStaleSpills } from './tools/_spill.js';
 
 // Spill directories are removed on a normal exit, but SIGHUP (closing the terminal window),
@@ -10,4 +11,6 @@ import { sweepStaleSpills } from './tools/_spill.js';
 // that is already gone must never delay first paint, and it fails open on its own.
 void sweepStaleSpills();
 
-render(<App />, { exitOnCtrlC: false });
+// Frames go out as one synchronized write each (#345) so a swapped-out process can't leave the
+// terminal painting a half-erased screen between Ink's writes.
+render(<App />, { exitOnCtrlC: false, stdout: createSyncedStdout(process.stdout) });
