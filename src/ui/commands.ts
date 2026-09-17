@@ -4,9 +4,11 @@ import { parsePlanSteps } from '../agent/plantrack.js';
 // Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
 export type { Mode };
 
-// Shift+Tab cycling order: the model-driven modes first (agent → plan → vibe), then the
-// isolated ones (chat → shell), wrapping back to agent.
-export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'vibe', 'chat', 'shell'];
+// Shift+Tab cycling order: the model-driven modes first (agent → plan → vibe → minimal), then the
+// isolated ones (chat → shell), wrapping back to agent. Minimal sits last of the work modes because
+// switching into it mid-session is the unusual path — its saving is the upfront load a running
+// session has already paid for, so it is normally launched via REIKA_DEFAULT_MODE.
+export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'vibe', 'minimal', 'chat', 'shell'];
 
 export function nextMode(current: Mode): Mode {
   return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
@@ -19,6 +21,35 @@ export function nextMode(current: Mode): Mode {
 // reading "plan turn, agent turn" would misdescribe how the work was done.
 export function turnMode(current: Mode, active: Mode): Mode {
   return current === 'vibe' ? 'vibe' : active;
+}
+
+// Which tool list and system prompt a mode's turn gets. Extracted from App, where both were
+// three-armed ternaries duplicated across the warm path and the submit path — a fourth mode made
+// four places to keep in agreement, and the two paths MUST agree or a warm request builds a prefix
+// the submit then misses on (#69/#81).
+//
+// `vibe` maps to plan here because its first internal phase is a plan turn; its implement phase
+// submits with an explicit 'agent' override, the same way /implement does.
+export function turnTools<T>(mode: Mode, lists: { agent: T; plan: T; chat: T; minimal: T }): T {
+  if (mode === 'chat') return lists.chat;
+  if (mode === 'plan' || mode === 'vibe') return lists.plan;
+  if (mode === 'minimal') return lists.minimal;
+  return lists.agent;
+}
+
+// The PromptMode a mode's turn runs under. Minimal is deliberately absent from the result type: it
+// runs as an 'agent' turn and carries its difference in the prompt's `minimal` flag, so that every
+// `promptMode === 'agent'` branch in the loop — plan-handoff distill, plan progress, the done-gates
+// — keeps working for it. See agent/prompt.ts.
+export function turnPromptMode(mode: Mode): 'agent' | 'plan' | 'chat' {
+  if (mode === 'chat') return 'chat';
+  if (mode === 'plan' || mode === 'vibe') return 'plan';
+  return 'agent';
+}
+
+// Whether a mode's turn uses the minimal (no upfront context, shell-only) system prompt.
+export function isMinimalPrompt(mode: Mode): boolean {
+  return mode === 'minimal';
 }
 
 export type CommandSpec = {
@@ -35,6 +66,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'chat', desc: 'enter chat mode (no filesystem/shell tools; isolated context)' },
   { name: 'plan', desc: 'enter plan mode (read-only exploration; ends with a written plan)' },
   { name: 'vibe', desc: 'enter vibe mode (every prompt plans first, then implements the plan)' },
+  {
+    name: 'minimal',
+    desc: 'enter minimal mode (shell only; no repo map, project summary, or AGENTS.md loaded)',
+  },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },
   {

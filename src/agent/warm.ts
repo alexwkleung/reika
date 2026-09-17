@@ -26,6 +26,9 @@ export type WarmContext = {
   config: Config;
   tools: Tool[];
   promptMode: PromptMode;
+  // Minimal mode (#391). Separate from promptMode because a minimal turn sends promptMode 'agent'
+  // with a very different system prompt — see loop.ts buildRoundZeroPrefix.
+  minimalPrompt?: boolean;
   calibration: number;
 };
 
@@ -53,7 +56,10 @@ export function warmKey(ctx: WarmContext): string {
         : 0;
   const fingerprint = last ? `${last.role}:${lastLen}` : 'empty';
   return [
-    ctx.promptMode,
+    // Minimal rides in the key beside promptMode, not folded into it: agent and minimal BOTH send
+    // promptMode 'agent', so without this the two would share a key and a mode switch would serve
+    // a warm built from the other one's prefix — a guaranteed miss, and a silent one.
+    ctx.minimalPrompt ? `${ctx.promptMode}+minimal` : ctx.promptMode,
     ctx.config.model,
     ctx.config.baseURL,
     ctx.bundle.hash,
@@ -71,6 +77,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     history,
     bundle: ctx.bundle,
     promptMode: ctx.promptMode,
+    minimalPrompt: ctx.minimalPrompt,
     tools: ctx.tools,
     contextWindow: ctx.config.contextWindow,
     calibration: ctx.calibration,

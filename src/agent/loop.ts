@@ -614,6 +614,10 @@ export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
+  // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
+  // full-context prefix for a turn that will send the bare one.
+  minimalPrompt?: boolean;
   // Needed only for the ask_user/subagent gates in the agent prompt, but it has to be the SAME list runTurn
   // will send: the warm prefix is worthless if it diverges from round 0 by a line.
   tools: Tool[];
@@ -627,6 +631,7 @@ export function buildRoundZeroPrefix(opts: {
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
     canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });
@@ -693,14 +698,80 @@ const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // sooner so the cap has to truncate less often. Deliberately not the cap's 2.5 floor: that would
 // compact at ~40% of a normal prose window and waste most of the context.
 const COMPACTION_CALIBRATION_FLOOR = 1;
+// How to name what was just paused, from this turn's actual tool list. The withdrawal ladder pauses
+// two things — the INSPECTION_TOOLS set, refused at dispatch, and the read-only shell commands
+// `isInspectionEscape` catches — and a mode that has only one of the two must not be told about the
+// other. Falls back to the bare noun rather than an empty string: withdrawal can only fire on a turn
+// that looped, which needs some inspection surface, so the fallback is unreachable in practice and
+// exists so the sentence is never malformed.
+export function withdrawnToolsPhrase(toolNames: ReadonlySet<string>): string {
+  const named = [...INSPECTION_TOOLS].filter(n => toolNames.has(n));
+  const shell = toolNames.has('bash');
+  // The full-list branch is spelled out rather than assembled so agent mode's text stays
+  // byte-identical to what it was before this became list-aware.
+  if (named.length > 0 && shell) {
+    return `inspection tools (${named.join('/')}, and read-only shell commands like grep/cat/tail)`;
+  }
+  if (named.length > 0) return `inspection tools (${named.join('/')})`;
+  if (shell) return 'read-only shell commands (grep/cat/tail and similar inspection)';
+  return 'inspection tools';
+}
+
+// What a withdrawn model still has to ACT with, named from the same list (#377: a tool result must
+// never point the model at a tool it does not have — and a model told to reach for a tool it cannot
+// see does not reach for anything). Agent mode has edit/write. Minimal mode (#391) has only bash,
+// where the remedy is a writing command and still available: withdrawal pauses the INSPECTION half
+// of bash, never the mutating half, precisely so real work survives the pause. Chat mode has
+// neither, so the only remedies left are the two that need no tool at all — which is why this is a
+// remedy CLAUSE rather than a tool name spliced into a fixed sentence.
+export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return 'Make the edit the task requires with the edit/write tools';
+  }
+  if (toolNames.has('bash')) {
+    return 'Make the change the task requires by running the command that applies it';
+  }
+  return 'Answer from what you already have';
+}
+
+// The hard tier of the loop ledger, hand-wrapped per mode. The remedy differs (see
+// withdrawalRemedy) but the two escapes that need no tool at all — name the blocker, or stop if the
+// change is done — survive in every mode: they are what keeps a cornered model from being forced
+// into a wrong change. The edit/write branch is spelled out with its original line breaks so agent
+// mode's suffix stays byte-identical.
+function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return [
+      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
+      'tools, state specifically what is still blocking you, or — if the change is already complete —',
+      'say so and stop.',
+    ];
+  }
+  if (toolNames.has('bash')) {
+    return [
+      'Reading and searching are now PAUSED. Make the change the task requires by running the',
+      'command that applies it, state specifically what is still blocking you, or — if the change',
+      'is already complete — say so and stop.',
+    ];
+  }
+  return [
+    'Reading and searching are now PAUSED. Answer from what you already have, state specifically',
+    'what is still blocking you, or — if the change is already complete — say so and stop.',
+  ];
+}
+
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
-// inflate context; it just states the rule and the way out.
-const WITHDRAWAL_DIRECTIVE =
-  '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
-  'are paused because you have repeated the same reads or searches without making progress. You ' +
-  'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
-  'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
-  'Reading and searching are unavailable until you make progress.)';
+// inflate context; it just states the rule and the way out. Built per turn rather than held as a
+// const because both halves — what is paused, and what to do instead — depend on the tool list.
+export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string {
+  return (
+    `(reika: ${withdrawnToolsPhrase(toolNames)} are paused because you have repeated the same ` +
+    'reads or searches without making progress. You already have what you need. ' +
+    `${withdrawalRemedy(toolNames)}, state what is specifically blocking you, or — if the change ` +
+    'is already complete — say so and stop. Reading and searching are unavailable until you make ' +
+    'progress.)'
+  );
+}
 
 // Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop has
 // stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), with exactly one
@@ -740,7 +811,11 @@ export function shouldWithdrawInspection(opts: {
 // it gives a cornered model an out that isn't a premature wrong edit (e.g. naming a symbol its
 // searches can't find — exactly the observed 0-match grep loop). `withdrawn` adds the harder line
 // once we've escalated to pulling the inspection tools.
-export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false): string {
+export function buildAgentLoopLedger(
+  looping: LoopingRead[],
+  withdrawn: boolean,
+  toolNames: ReadonlySet<string>,
+): string {
   const files = looping
     .slice(0, 8)
     .map(l => (l.offset > 1 ? `${l.path}:L${l.offset}` : l.path))
@@ -755,11 +830,7 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
       : 'You have repeated the same reasoning and searches several times this turn without converging on the task.',
   );
   if (withdrawn) {
-    lines.push(
-      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
-      'tools, state specifically what is still blocking you, or — if the change is already complete —',
-      'say so and stop.',
-    );
+    lines.push(...withdrawnLedgerLines(toolNames));
   } else if (files) {
     lines.push(
       'Re-reading them returns identical bytes — it will not surface anything new. Stop gathering and',
@@ -995,6 +1066,9 @@ export async function runTurn(opts: {
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   signal?: AbortSignal;
   promptMode?: PromptMode;
+  // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
+  // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
+  minimalPrompt?: boolean;
 }): Promise<void> {
   const userMsg: Message = {
     role: 'user',
@@ -1005,11 +1079,12 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  // canAsk/canSubagent must match what buildRoundZeroPrefix passes, or the warm prefix diverges
-  // from round 0.
+  // canAsk/canSubagent/minimal must match what buildRoundZeroPrefix passes, or the warm prefix
+  // diverges from round 0.
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
     canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });
@@ -1582,7 +1657,7 @@ export async function runTurn(opts: {
       if (editRecoveryGrounding) {
         suffixParts.push(buildEditRecoveryLedger(editRecoveryGrounding));
       } else if (loopDetected) {
-        suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection));
+        suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection, toolNames));
       }
       // Last, so the strongest directive sits closest to generation. (Composed here rather than
       // `system +=` in the terminal branch above, which this composition used to overwrite — the
@@ -2689,7 +2764,7 @@ export async function runTurn(opts: {
         // read-only bash is paused; a build/git bash would have run).
         const label = refusedBashGrep ? 'shell inspection' : call.name;
         summary = `${label} paused — make the edit or say what's blocking you`;
-        payload = WITHDRAWAL_DIRECTIVE;
+        payload = buildWithdrawalDirective(toolNames);
         debugLog(
           `[reika:debug] round=${i} refused ${call.name}${
             refusedBashGrep ? ' (bash-grep)' : ''
