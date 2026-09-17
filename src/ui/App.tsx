@@ -20,7 +20,7 @@ import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
-import { chatTools, defaultTools, planTools } from '../tools/index.js';
+import { chatTools, defaultTools, minimalTools, planTools } from '../tools/index.js';
 import { isOffline } from '../tools/_net.js';
 import { PayloadStore } from '../store/payloads.js';
 import {
@@ -45,10 +45,13 @@ import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
+  isMinimalPrompt,
   isSaveCommand,
   nextMode,
   planWritten,
   turnMode,
+  turnPromptMode,
+  turnTools,
   type Mode,
 } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
@@ -698,10 +701,17 @@ export function App() {
         history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfileRef.current),
-        // Same mapping as submitToModel below; vibe's first internal turn is a plan turn, so
-        // it warms the plan prefix.
-        tools: m === 'chat' ? chatToolsList : m === 'plan' || m === 'vibe' ? planTools() : tools,
-        promptMode: m === 'chat' ? 'chat' : m === 'plan' || m === 'vibe' ? 'plan' : 'agent',
+        // Same mapping as submitToModel below, through the same helpers so the two cannot drift —
+        // a warm that builds a different prefix than the submit is a guaranteed cache miss.
+        // Vibe's first internal turn is a plan turn, so it warms the plan prefix.
+        tools: turnTools(m, {
+          agent: tools,
+          plan: planTools(),
+          chat: chatToolsList,
+          minimal: minimalTools(),
+        }),
+        promptMode: turnPromptMode(m),
+        minimalPrompt: isMinimalPrompt(m),
         calibration: calibrationRef.current,
       });
     }
@@ -846,7 +856,8 @@ export function App() {
       name === 'agent' ||
       name === 'chat' ||
       name === 'plan' ||
-      name === 'vibe'
+      name === 'vibe' ||
+      name === 'minimal'
     ) {
       const banner =
         name === 'shell'
@@ -857,7 +868,9 @@ export function App() {
               ? 'Plan mode — read-only exploration; will end with a written plan. /agent to execute it.'
               : name === 'vibe'
                 ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
-                : 'Agent mode.';
+                : name === 'minimal'
+                  ? 'Minimal mode — shell only, and no repo map, project summary, or AGENTS.md in the prompt. The model works from what commands show it. /agent to return.'
+                  : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
     }
@@ -885,9 +898,15 @@ export function App() {
         ]);
       }
       // The user bubble renders as `/implement` (displayOverride) while the model receives the
-      // built prompt; 'agent' forces this turn's tools + promptMode regardless of the not-yet-
-      // flushed mode state.
-      await submitToModel(buildImplementPrompt(args), raw, 'agent');
+      // built prompt; the override forces this turn's tools + promptMode regardless of the
+      // not-yet-flushed mode state. 'agent' for every mode but minimal, which stays itself —
+      // handing a minimal session the full tool list and the whole repo map for one turn would
+      // undo the only thing the mode does, and silently.
+      await submitToModel(
+        buildImplementPrompt(args),
+        raw,
+        mode === 'minimal' ? 'minimal' : 'agent',
+      );
       return;
     }
     if (name === 'cd') {
@@ -1555,13 +1574,20 @@ export function App() {
         history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfile),
-        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
-        tools: activeMode === 'chat' ? chatToolsList : activeMode === 'plan' ? planTools() : tools,
+        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools. Minimal
+        // mode: the shell alone, with a prompt carrying no project context (#391).
+        tools: turnTools(activeMode, {
+          agent: tools,
+          plan: planTools(),
+          chat: chatToolsList,
+          minimal: minimalTools(),
+        }),
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
         requestQuestion,
-        promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
+        promptMode: turnPromptMode(activeMode),
+        minimalPrompt: isMinimalPrompt(activeMode),
         onMessage: raw => {
           // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
           // saved transcript can say what each turn was. See store/transcript.ts summarizeModes.

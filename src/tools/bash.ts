@@ -66,6 +66,26 @@ export const bashTool: Tool = {
   },
 };
 
+// Minimal mode's bash (#391). The same tool with the same behavior — only the description differs,
+// because the default one opens by telling the model to "prefer the dedicated tools (read, grep,
+// edit, write, list) when they fit" and in minimal mode none of those exist. That sentence rides
+// the prefix on EVERY round, so it is a worse phantom pointer than the withdrawal directive's:
+// that one only appears once a loop is active, this one is in front of the model from round 0.
+//
+// It replaces the steer rather than just deleting it. The default description's real job is
+// routing — when to reach for the shell instead of something else — and in a one-tool mode the
+// equivalent job is telling the model this IS the whole surface, so it doesn't spend a round
+// discovering that by calling something absent. Named commands rather than a bare "you only have
+// bash": a weak model handed a shell and no project context needs somewhere concrete to start,
+// and these are the shapes the harness can see (tools/_writetargets.ts) when they mutate.
+export const minimalBashTool: Tool = {
+  ...bashTool,
+  description:
+    'Execute a shell command in the working directory. This is your only tool: everything — ' +
+    'reading files (cat, sed -n), searching (grep, find), editing (a heredoc, sed -i, or a ' +
+    'redirect), building, testing, and git — goes through it. Single string, run via /bin/sh.',
+};
+
 const noRepoNoticed = new Set<string>();
 const NO_REPO_NOTICE =
   'Not a git repo — a shell edit here shows a diff only for files the command names directly ' +

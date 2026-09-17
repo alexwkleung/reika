@@ -5,7 +5,7 @@ import { grepTool } from './grep.js';
 import { globTool } from './glob.js';
 import { editTool } from './edit.js';
 import { writeTool } from './write.js';
-import { bashTool, readOnlyBashTool } from './bash.js';
+import { bashTool, minimalBashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
 import { askUserTool } from './ask.js';
 import { fetchUrlTool } from './fetch.js';
@@ -80,6 +80,26 @@ export function planTools(): Tool[] {
   // the tool and the rule together in both modes.
   if (askEnabled()) tools.push(askUserTool);
   if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
+  return tools;
+}
+
+// Minimal mode (#391): the shell, and nothing else. For setups where the upfront context load and
+// its prefill are the cost that matters — SSD-streamed models that are beefy but absurdly slow —
+// and for testing the harness against a model with no project information to lean on.
+//
+// No web tools even when a provider is configured: the mode's premise is that the model works from
+// what the shell shows it, and `search` is the one tool whose results are neither the repo nor
+// anything the harness can ground. `fetch_url` goes with it rather than staying unconditional as it
+// does in agent mode, since the two affordances that put URLs in front of the model here
+// (pasted-link expansion, URL grounding) are prompt-level and unaffected.
+//
+// `ask_user` stays, on the same reasoning it stays in plan mode: it loads no context, touches
+// nothing, and costs one tool definition, and the prompt's permission rule is keyed to its presence
+// through `canAsk` — so REIKA_ASK=0 removes the tool and the rule together here too. "Bash only"
+// is about the work surface, not a literal count of one.
+export function minimalTools(): Tool[] {
+  const tools: Tool[] = [minimalBashTool];
+  if (askEnabled()) tools.push(askUserTool);
   return tools;
 }
 

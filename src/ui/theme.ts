@@ -38,6 +38,9 @@ export const theme = {
   // on either side of it in hue. Purple-tinted so it no longer reads as a disabled/grey chip
   // (#380), but the low saturation keeps it a secondary mode that recedes next to the two
   // pastel workhorses.
+  // Minimal: a desaturated slate, deliberately the quietest of the work-mode tags — the mode is
+  // the harness doing LESS, and the chip should not read as louder than agent's.
+  modeMinimal: '#9aa8b8',
   modeChat: '#a892c4',
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
 } as const;

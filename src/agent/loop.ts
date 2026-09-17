@@ -614,6 +614,10 @@ export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
+  // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
+  // full-context prefix for a turn that will send the bare one.
+  minimalPrompt?: boolean;
   // Needed only for the ask_user/subagent gates in the agent prompt, but it has to be the SAME list runTurn
   // will send: the warm prefix is worthless if it diverges from round 0 by a line.
   tools: Tool[];
@@ -627,6 +631,7 @@ export function buildRoundZeroPrefix(opts: {
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
     canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });
@@ -1061,6 +1066,9 @@ export async function runTurn(opts: {
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   signal?: AbortSignal;
   promptMode?: PromptMode;
+  // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
+  // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
+  minimalPrompt?: boolean;
 }): Promise<void> {
   const userMsg: Message = {
     role: 'user',
@@ -1071,11 +1079,12 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  // canAsk/canSubagent must match what buildRoundZeroPrefix passes, or the warm prefix diverges
-  // from round 0.
+  // canAsk/canSubagent/minimal must match what buildRoundZeroPrefix passes, or the warm prefix
+  // diverges from round 0.
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
     canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });

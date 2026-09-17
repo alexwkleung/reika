@@ -6,6 +6,12 @@ export function buildSystemPrompt(opts: {
   bundle: ContextBundle;
   mode?: PromptMode;
   planMode?: boolean;
+  // Minimal mode (#391). Deliberately a flag on the agent prompt rather than a fourth PromptMode:
+  // the loop has six `promptMode === 'agent'` branches (plan-handoff distill, seedPlanProgress, the
+  // plan done-gate), and a new mode value would switch all of them off silently — the opposite of
+  // "context management stays the same, only the tools and upfront context are chopped off". So
+  // minimal runs as an agent turn in every respect except this prompt and its tool list.
+  minimal?: boolean;
   // Whether `ask_user` is in this turn's tool list. Subagents run without it (see makeSpawnSubagent),
   // and neither the agent nor the plan prompt may point a model at a tool it does not have — the
   // same coupling the plan prompt keeps with planTools for bash (#109).
@@ -21,7 +27,56 @@ export function buildSystemPrompt(opts: {
   if (mode === 'plan') {
     return buildPlanPrompt(opts.bundle, opts.canAsk);
   }
+  if (opts.minimal) {
+    return buildMinimalPrompt(opts.bundle, opts.canAsk);
+  }
   return buildAgentPrompt(opts);
+}
+
+// Minimal mode (#391): the shell, and no project information at all. No projectSummary, no repoMap,
+// no instructions — that omission IS the mode, so this function takes the bundle only for its cwd.
+//
+// The rules are written from scratch rather than filtered down from buildAgentPrompt, because
+// almost every agent rule names something that does not exist here: rule 2 is grep, rule 3 is the
+// `NNNNN│` gutter contract between `read` and `edit`, rule 6 is about registries and the read tool.
+// A filtered list would have left the model with the two vaguest rules and none of the concrete
+// ones. What survives is what is actually mode-independent:
+//
+//  - Rule 1 is the agent prompt's rule 1, unchanged in substance: ground every claim in a command,
+//    never answer from general knowledge. It matters MORE here, not less — with no repo map the
+//    model has nothing but its priors to confabulate from, and this is the mode where a confident
+//    wrong path costs a whole round.
+//  - Rule 2 is the orientation step the other modes get for free from the bundle. Stated as a first
+//    move rather than a suggestion: the observed failure of a context-less model is not that it
+//    explores badly, it is that it starts editing a file it guessed the path of.
+//  - Rule 3 is the read-before-write rule, re-expressed for the shell. `cat` before a heredoc is
+//    the same contract as read-before-edit, and it is the one the harness cannot enforce here (the
+//    read-first gate keys on the edit tool, which is absent).
+//  - Rule 4 is the recovery rule, narrowed to what recovery means with one tool: a different
+//    command, not a different tool.
+//  - Rule 5 is the ask_user permission, kept verbatim from the agent prompt and gated on the tool
+//    exactly as it is there.
+function buildMinimalPrompt(bundle: ContextBundle, canAsk?: boolean): string {
+  const rules: string[] = [
+    "For any question about this project's code, you MUST run a command and read its output before answering. Never describe code from general knowledge — you have been given no project information, so anything you have not looked at you do not know.",
+    'You are starting blind. Before anything else, orient yourself: list the directory, then read the files that matter. Never guess a path, a filename, or an extension — check that it exists first.',
+    'Before you change a file, read it (`cat`, or `sed -n` for a range). Write it back with a heredoc, `sed -i`, or a redirect. Never rewrite a file you have not just read.',
+    'If a command fails, do not give up — try a different command. A missing tool, a wrong path, or an empty result is information, not a dead end.',
+    ...(canAsk
+      ? [
+          'Stopping to ask is a legitimate outcome, not a failure to try harder: when what you have read contradicts the request, use ask_user instead of silently picking one reading.',
+        ]
+      : []),
+  ];
+  return [
+    [
+      'You are a coding assistant operating in a terminal. Be concise.',
+      'You have one tool: a shell. Everything you do goes through it.',
+      'Rules:',
+      ...rules.map((r, i) => `${i + 1}. ${r}`),
+    ].join('\n'),
+    `Working directory: ${bundle.cwd}`,
+  ].join('\n\n');
 }
 
 // EXPERIMENT (plan mode): read-only exploration that must converge on a written plan. The

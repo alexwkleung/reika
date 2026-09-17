@@ -364,12 +364,14 @@ export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
 // messages carry it (see Message['user'].mode); ui/commands.ts re-exports it.
-export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal';
 
 // Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
 // eligible — chat isolates history and shell bypasses the model entirely, so neither makes
-// sense as a launch default.
-export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe'>;
+// sense as a launch default. `minimal` is eligible and is the one people are most likely to
+// LAUNCH in rather than switch to: its whole point is skipping the upfront context load, and a
+// session that starts in agent mode has already paid for it (#391).
+export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal'>;
 
 export type Config = {
   baseURL: string;
