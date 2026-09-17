@@ -21,6 +21,7 @@ import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
 import { chatTools, defaultTools, planTools } from '../tools/index.js';
+import { isOffline } from '../tools/_net.js';
 import { PayloadStore } from '../store/payloads.js';
 import {
   saveTranscript,
@@ -362,8 +363,11 @@ export function App() {
         ]);
         setConfig(cfg);
         setBundle(b);
-        setTools(defaultTools(cfg));
-        setChatToolsList(chatTools(cfg));
+        // No route out → no web tools this session (#392). Checked once, here, because the tool
+        // list is part of the cached prefix; the per-turn latch in the tools covers a drop later.
+        const offline = isOffline();
+        setTools(defaultTools(cfg, { offline }));
+        setChatToolsList(chatTools(cfg, { offline }));
         setHeaderItems(prev => [
           ...prev,
           {
@@ -384,6 +388,17 @@ export function App() {
         debugLog(formatBudget(b, runtime));
         const warn = budgetWarning(b, runtime);
         if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
+        if (offline) {
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'system',
+              content:
+                'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
+              tone: 'warn',
+            },
+          ]);
+        }
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);

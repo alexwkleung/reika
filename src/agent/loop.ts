@@ -9,7 +9,7 @@ import type {
   Tool,
   ToolResult,
   Usage,
-  SearchHealth,
+  WebHealth,
   WebBudget,
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
@@ -983,9 +983,10 @@ export async function runTurn(opts: {
   // Pressure affordance (#343) offered this turn — once is the signal; repeating it is noise.
   let subagentAffordanceOffered = false;
   // Latched when a search fails for a reason that is a property of the provider rather than the
-  // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
-  // well find the block cleared, so it is never carried across one.
-  const searchHealth: SearchHealth = {};
+  // query (no browser, bot check, every engine refused), or when a fetch finds the network down
+  // (#392). Per-turn like webBudget: the next turn may well find the block cleared or the wifi
+  // back, so it is never carried across one.
+  const webHealth: WebHealth = {};
   // Track URLs successfully fetched this turn. Stamped onto the final assistant
   // message as `sources` for deterministic citation rendering (no model recall).
   const fetchedUrls = new Set<string>();
@@ -2670,7 +2671,7 @@ export async function runTurn(opts: {
             cwd: opts.bundle.cwd,
             ignore: opts.bundle.ignore,
             webBudget,
-            searchHealth,
+            webHealth,
             fetchedUrls,
             toolNames,
             resolvedDeps,

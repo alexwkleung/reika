@@ -219,8 +219,10 @@ The agent has these tools. Optional tools register only when their config is pre
 | `bash`      | Run a shell command (streamed output, danger-pattern warnings)        | yes                     | —                                                  |
 | `subagent`  | Spawn an isolated subagent for focused exploration                    | no (its own tools may)  | —                                                  |
 | `search`    | Web search (returns title + URL + snippet, up to 8)                   | no                      | requires `REIKA_SEARXNG_URL` or `REIKA_CDP_SEARCH` |
-| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)              | no                      | always registered                                  |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)              | no                      | always registered while online                     |
 | `ask_user`  | Ask you ONE multiple-choice question mid-turn and wait for the answer | no (it _is_ the prompt) | `REIKA_ASK=0` removes it                           |
+
+Offline, neither web tool registers: if no interface has a routable address at startup, `search` and `fetch_url` are left out for the session (a scrollback line says so; restart once you're back online). If the network drops mid-session, the first `fetch_url` that finds no route pauses both tools for the rest of that turn rather than letting the model retry against nothing.
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 

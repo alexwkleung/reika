@@ -15,7 +15,14 @@ import { CdpSearchProvider } from '../search/cdp.js';
 import { ChromeHost } from '../search/_chrome.js';
 import type { SearchProvider } from '../search/types.js';
 
-export function defaultTools(config?: Config): Tool[] {
+// `offline` (#392): the machine has no route out (tools/_net.ts `isOffline`), so neither web
+// tool goes in the list — a tool the model can see is a tool it will call, and every call would
+// fail. Decided once at startup and held for the session on purpose: the tool list is part of the
+// round-0 prefix, and changing it mid-session throws away the KV cache (#69/#81). The caller
+// prints the reason to the scrollback so a missing `search` is not a mystery.
+export type ToolListOptions = { offline?: boolean };
+
+export function defaultTools(config?: Config, opts: ToolListOptions = {}): Tool[] {
   const tools: Tool[] = [
     readTool,
     listTool,
@@ -25,13 +32,19 @@ export function defaultTools(config?: Config): Tool[] {
     writeTool,
     bashTool,
     subagentTool,
-    // Unconditional, unlike `search`: fetching a known URL needs no provider or credential, and
-    // the harness itself puts URLs in front of the model (pasted-link expansion, URL grounding)
-    // that it must be able to follow up on. Gating it behind the search provider left a reika
-    // without SearXNG unable to read a link the user had just handed it.
-    fetchUrlTool,
+    ...webTools(config, opts),
   ];
   if (askEnabled()) tools.push(askUserTool);
+  return tools;
+}
+
+// The web pair. `fetch_url` is unconditional, unlike `search`: fetching a known URL needs no
+// provider or credential, and the harness itself puts URLs in front of the model (pasted-link
+// expansion, URL grounding) that it must be able to follow up on. Gating it behind the search
+// provider left a reika without SearXNG unable to read a link the user had just handed it.
+function webTools(config: Config | undefined, opts: ToolListOptions): Tool[] {
+  if (opts.offline) return [];
+  const tools: Tool[] = [fetchUrlTool];
   const search = makeSearchProvider(config);
   if (search) tools.push(createSearchTool(search));
   return tools;
@@ -71,11 +84,8 @@ export function planTools(): Tool[] {
 }
 
 // Tools available in chat mode — knowledge-only, no filesystem or shell access.
-export function chatTools(config?: Config): Tool[] {
-  const tools: Tool[] = [fetchUrlTool];
-  const search = makeSearchProvider(config);
-  if (search) tools.push(createSearchTool(search));
-  return tools;
+export function chatTools(config?: Config, opts: ToolListOptions = {}): Tool[] {
+  return webTools(config, opts);
 }
 
 // Exported for the precedence test: which provider wins when both are configured is a rule, and a
