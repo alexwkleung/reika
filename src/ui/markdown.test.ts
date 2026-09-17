@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
 import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
+import { theme } from './theme.js';
 
 describe('stripReasoningMarkdown', () => {
   it('strips bold markers', () => {
@@ -126,6 +127,27 @@ describe('renderMarkdown links', () => {
     expect(out).not.toContain('undefined');
     expect(out).toContain('the docs');
     expect(out).toContain('https://example.com/docs');
+  });
+
+  // chalk.level is 0 under vitest (non-TTY), which strips every style — force colors on so the
+  // assertions below see the escape codes.
+  const savedLevel = chalk.level;
+  afterEach(() => {
+    chalk.level = savedLevel;
+  });
+
+  it('paints a bare URL in the link color, not dim (#397)', () => {
+    chalk.level = 3;
+    const out = renderMarkdown('see https://example.com/docs here');
+    expect(out).toContain(chalk.hex(theme.link)('https://example.com/docs'));
+    expect(out).not.toContain('\u001b[2m'); // dim, the old style
+  });
+
+  it('paints the href of a markdown link the same way', () => {
+    chalk.level = 3;
+    const out = renderMarkdown('see [the docs](https://example.com/docs) here');
+    expect(out).toContain(chalk.hex(theme.link)('https://example.com/docs'));
+    expect(out).not.toContain('\u001b[2m');
   });
 });
 

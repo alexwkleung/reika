@@ -51,7 +51,8 @@ const terminalExtension = markedTerminal(
     // where the terminal supports one — and hands that single string to `link`. A
     // (href, title, text) signature here read the third argument and printed `undefined`.
     link: (composed: string) => composed,
-    href: (href: string) => chalk.dim(href),
+    // Both a bare URL (GFM autolink) and a `[text](href)` land here; see theme.link.
+    href: (href: string) => chalk.hex(theme.link)(href),
     reflowText: true,
     showSectionPrefix: false,
     tab: TAB_WIDTH,
