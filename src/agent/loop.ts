@@ -54,6 +54,7 @@ import {
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
+import { writeTargets } from '../tools/_writetargets.js';
 import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
@@ -66,6 +67,7 @@ import {
   ranSuccessfully,
   MAX_PLAN_GATE_ROUNDS,
   type PlanStep,
+  type StepMatch,
 } from './plantrack.js';
 import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
 import {
@@ -108,6 +110,52 @@ const TRACKED_TOOLS = new Set(['read', 'grep', 'list', 'glob', 'bash']);
 // NOT including `bash`: it's used for read-only greps far more than mutation here, and letting
 // it clear would wipe read-tracking between every interspersed `bash grep`.
 const MUTATING_TOOLS = new Set(['write', 'edit']);
+
+// Whether a call is ABOUT to write to the working tree, asked before dispatch. `bash` counts when
+// the command names files it will write — a model editing through `sed -i`, a heredoc, or `tee` is
+// mutating the repo as surely as the edit tool is, and the two done-gates below exist to verify
+// exactly that (#278). Best-effort for bash by construction: writeTargets sees the shapes a model
+// reaches for and cannot see `npm run fix` or a script that writes wherever it likes. That is the
+// right failure here — the only consumer is the typecheck baseline, which must be captured BEFORE
+// the command runs and whose whole design is fail-open (no baseline = no gate). A miss costs one
+// unverified turn; a false positive would cost a tsc run on a turn that never edited.
+//
+// Deliberately NOT folded into MUTATING_TOOLS itself: that set also resets the repeat memory in
+// flagRepeatedCall, where bash is excluded on purpose (it runs read-only greps far more often than
+// it mutates, and letting it clear would wipe read-tracking between interspersed `bash grep`s).
+// Same question, different answers, so they stay separate predicates.
+export function willMutate(name: string, args: Record<string, unknown>, cwd: string): boolean {
+  if (MUTATING_TOOLS.has(name)) return true;
+  if (name !== 'bash') return false;
+  return writeTargets(String(args.command ?? ''), cwd).length > 0;
+}
+
+// The file a mutating call anchors its tsconfig walk-up on. For edit/write that is the path it was
+// given; for bash, the first file the command names, which is as good an anchor as any when one
+// command touches several (they are resolved against the same cwd, so a monorepo command editing
+// two packages picks one — the alternative, a tsconfig per target, would mean a baseline per
+// config, and the gate's whole budget is one). Re-parses the command that `willMutate` already
+// parsed; it runs at most once per turn (typecheckBaselineAttempted), on a pure string.
+export function typecheckAnchor(
+  name: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): string | undefined {
+  if (MUTATING_TOOLS.has(name)) return typeof args.path === 'string' ? args.path : undefined;
+  if (name !== 'bash') return undefined;
+  return writeTargets(String(args.command ?? ''), cwd)[0];
+}
+
+// Whether a call DID change the working tree, asked after dispatch. Inside a repo `changes` is
+// git-backed (tools/_treediff.ts), so for bash this is the accurate half of the pair and catches
+// what writeTargets cannot — the formatter, the codegen script, `npm run fix`. edit/write keep
+// their existing semantics: the ATTEMPT counts, failed or not, because a failed edit is what puts
+// the turn in edit-recovery. Only bash has to have actually landed something, since "the model ran
+// a command" is not evidence it edited anything.
+export function didMutate(name: string, changes: ToolResult['changes']): boolean {
+  if (MUTATING_TOOLS.has(name)) return true;
+  return name === 'bash' && !!changes && changes.files.length > 0;
+}
 
 // The repeat key for a call. `read` normalizes away `limit` and keys on (path, offset): a
 // model that re-reads from the same position with a different window — read(path, limit=100)
@@ -2607,22 +2655,26 @@ export async function runTurn(opts: {
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
       // local model is saturating the box) and only on turns that actually edit. Fail-open: a
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
+      // `willMutate`, not MUTATING_TOOLS: a shell edit is an edit, and a turn that does its writing
+      // through bash used to finish unverified.
       if (
         !typecheckBaselineAttempted &&
         tool &&
         !refused &&
         !bouncedBlindEdit &&
-        MUTATING_TOOLS.has(call.name)
+        willMutate(call.name, call.args, opts.bundle.cwd)
       ) {
         typecheckBaselineAttempted = true;
         // Resolve the governing tsconfig from the file being edited (walk-up, bounded at cwd) so a
         // monorepo subpackage edit is checked against that package's config, not just a root one —
         // and so the baseline and the final check pin the same config. null → undefined leaves the
         // closure on its detection fallback (which agrees: no config found = gate stays off).
+        // For bash the anchor is the first file the command names — writeTargets returns them
+        // resolved against cwd, which detectTsProject's own resolve() accepts unchanged.
         typecheckTsconfig =
           (await detectTsProject(
             opts.bundle.cwd,
-            typeof call.args.path === 'string' ? call.args.path : undefined,
+            typecheckAnchor(call.name, call.args, opts.bundle.cwd),
           )) ?? undefined;
         const base = await typecheck();
         typecheckBaseline = base.ran ? base.diagnostics : null;
@@ -2781,8 +2833,13 @@ export async function runTurn(opts: {
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
       // A BOUNCED edit doesn't: the harness withheld it, nothing ran, and the directed read that
       // follows must stay eligible for the normal read-loop ladder if the model spins instead.
+      // `didMutate`, not MUTATING_TOOLS: a bash command that actually changed the tree has edited,
+      // and the plan done-gate keys off this. Split from the edit-recovery block below, which stays
+      // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
+      // fields (old_string failures, args.path, a rendered diff) that a shell command has no
+      // analogue for.
+      if (!bouncedBlindEdit && didMutate(call.name, changes)) editingStarted = true;
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
-        editingStarted = true;
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
         // stop. `Edited …` is the success prefix from tools/edit.ts; anything else is a non-apply.
@@ -2824,6 +2881,33 @@ export async function runTurn(opts: {
           // editFailure is set only for the not-found case; other failures (multiple/mixed) leave it
           // undefined, which the dead-end treats as "not groundable" and stops as before.
           lastEditFailure = editFailure;
+        }
+      }
+      // File steps implemented through the shell: the same path/content check-off an edit gets,
+      // keyed on the files the tree diff says the command actually changed (#278) rather than on
+      // the command text. Load-bearing now that a shell edit counts as editing (`didMutate`) — the
+      // done-gate below bounces an implementing turn that leaves file-bearing steps unchecked, so
+      // without this a bash-only turn would bounce every round until its budget ran out, with no
+      // way to ever check a step off. Deliberately not gated on the exit status, unlike the command
+      // check-off: a command that wrote the file and then exited non-zero still wrote it, and the
+      // diff is the observation. One command can land several files, so each is applied. Keyed on
+      // `bash` rather than on `changes` alone, though only bash sets it today: a tool that both
+      // reported changes AND ran the edit block above would check two steps off for one edit.
+      if (planSteps && call.name === 'bash' && changes) {
+        let match: StepMatch | null = null;
+        for (const f of changes.files) {
+          const hit = applyPlanEdit(planSteps, f.path, f.hunks.map(hk => hk.text).join('\n'));
+          if (hit) match = hit;
+        }
+        if (match) {
+          opts.onPlanProgress?.(planSteps);
+          const done = planSteps.filter(s => s.done).length;
+          const via =
+            match.by === 'content' ? ' — matched by edit content; the plan names another file' : '';
+          planCheckoff =
+            done === planSteps.length
+              ? `Plan complete — all ${planSteps.length} steps checked off.`
+              : `Plan step ${planSteps[match.index].n} checked off (${done}/${planSteps.length})${via}.`;
         }
       }
       // Command steps ("run typecheck/tests"): a successful bash run whose command contains the
@@ -2982,6 +3066,14 @@ function commitAgentLoopStop(
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
+    // A shell edit names its files in the tool message's git-backed `changes`, not in the call's
+    // args — the command text is `sed -i …`, and parsing it here would be a worse answer than the
+    // one the detector already computed (#278). Since bash now counts as editing (`didMutate`),
+    // without this a bash-only turn stopped on "I made changes" with nothing after it.
+    if (m.role === 'tool') {
+      for (const f of m.changes?.files ?? []) files.add(f.path);
+      continue;
+    }
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
       if ((tc.name === 'edit' || tc.name === 'write') && typeof tc.args.path === 'string') {

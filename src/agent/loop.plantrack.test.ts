@@ -35,6 +35,10 @@ const writeResponse = (path: string, content: string): ModelResponse => ({
   content: '',
   toolCalls: [{ id: 'w1', name: 'write', args: { path, content } }],
 });
+const bashResponse = (command: string): ModelResponse => ({
+  content: '',
+  toolCalls: [{ id: 'b1', name: 'bash', args: { command } }],
+});
 
 const PLAN = [
   'The plan:',
@@ -192,6 +196,55 @@ describe('plan progress tracking (integration)', () => {
       messages.some(m => m.role === 'system' && m.content.includes('Plan complete — all 2 steps')),
     ).toBe(true);
     // No bounce happened: everything was observed done.
+    expect(messages.some(m => m.role === 'system' && m.content.includes('Plan gate'))).toBe(false);
+  });
+
+  it('checks a file step off when the shell is what wrote the file, and gates the turn', async () => {
+    // The bash-only shape (#391's minimal mode, and any model that prefers a heredoc). A shell
+    // write now counts as editing, so the done-gate applies to this turn — which means the file
+    // steps have to be checkable off the tree diff, or the gate would bounce it every round with
+    // no way out. Round 2 finishes early with step 2 pending and gets bounced; round 4 finishes.
+    h.scripted.push(
+      bashResponse("mkdir -p src && cat > src/app.ts <<'EOF'\nexport const app = 1;\nEOF"),
+      finalResponse('all done'),
+      bashResponse("cat > src/lib.ts <<'EOF'\nexport const lib = 1;\nEOF"),
+      finalResponse('done for real'),
+    );
+    const priorHistory: Message[] = [
+      { role: 'user', content: 'plan the thing' },
+      { role: 'assistant', content: PLAN, planFinal: true },
+    ];
+
+    const { history, messages, snapshots } = await run(cwd, priorHistory);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(4);
+    // Both file steps checked off by the shell writes; the pathless step 3 never gates.
+    expect(snapshots.at(-1)?.map(s => s.done)).toEqual([true, true, false]);
+    expect(
+      messages.some(
+        m => m.role === 'system' && m.content.includes('Plan step 1 checked off (1/3)'),
+      ),
+    ).toBe(true);
+    // The early finish was bounced — which only happens because the shell write set editingStarted.
+    const sentBack = history.filter(
+      (m): m is Extract<Message, { role: 'user' }> =>
+        m.role === 'user' && m.content.includes('[ ] 2.'),
+    );
+    expect(sentBack).toHaveLength(1);
+  });
+
+  it('does not gate a turn whose shell commands changed nothing', async () => {
+    // The other half: a read-only turn — a question about the plan, not an implementation pass —
+    // must never be bounced, and `grep` is not an edit however many files it names.
+    h.scripted.push(bashResponse('grep -rn app src || true'), finalResponse('had a look'));
+    const priorHistory: Message[] = [
+      { role: 'user', content: 'plan the thing' },
+      { role: 'assistant', content: PLAN, planFinal: true },
+    ];
+
+    const { messages } = await run(cwd, priorHistory);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
     expect(messages.some(m => m.role === 'system' && m.content.includes('Plan gate'))).toBe(false);
   });
 
