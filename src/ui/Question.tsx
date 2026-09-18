@@ -48,9 +48,12 @@ export function Question({
           </Text>
         </Box>
       ) : (
+        // Numbered so a row with a description reads as one entry and the list as a list — four
+        // full-sentence labels with indented sub-lines otherwise ran together as a paragraph.
         <Box flexDirection="column" marginTop={1}>
           {request.options.map((o, i) => {
             const selected = i === selectedIndex;
+            const num = `${i + 1}. `;
             return (
               <Box key={i} flexDirection="column">
                 {/* One Text with nested runs (not siblings): on wrap Ink drops the char at a
@@ -60,18 +63,24 @@ export function Question({
                   <Text bold color={selected ? theme.accent : undefined}>
                     {selected ? '› ' : '  '}
                   </Text>
+                  <Text color={selected ? theme.accent : theme.secondary}>{num}</Text>
                   <Text bold={selected} color={selected ? theme.accent : undefined}>
                     {o.label}
                   </Text>
                   {o.recommended ? <Text color={theme.info}>{'  (recommended)'}</Text> : null}
                 </Text>
-                {o.description ? <Text color={theme.muted}>{`    ${o.description}`}</Text> : null}
+                {o.description ? (
+                  <Text color={theme.muted}>{`${' '.repeat(2 + num.length)}${o.description}`}</Text>
+                ) : null}
               </Box>
             );
           })}
           <Text>
             <Text bold color={selectedIndex === request.options.length ? theme.accent : undefined}>
               {selectedIndex === request.options.length ? '› ' : '  '}
+            </Text>
+            <Text color={selectedIndex === request.options.length ? theme.accent : theme.secondary}>
+              {`${request.options.length + 1}. `}
             </Text>
             <Text
               bold={selectedIndex === request.options.length}
@@ -86,7 +95,7 @@ export function Question({
         <Text color={theme.muted}>
           {typing
             ? 'enter submit  ·  ctrl-c abort'
-            : '↑↓ navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
+            : '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
         </Text>
       </Box>
     </Box>

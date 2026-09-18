@@ -51,8 +51,21 @@ describe('Question dialog', () => {
   });
 
   it('marks the selected row, including the type-your-own row', () => {
-    expect(frame(req, 0)).toMatch(/›\s+Flag only inline bodies/);
-    expect(frame(req, req.options.length)).toMatch(new RegExp(`›\\s+${OWN_ANSWER_LABEL}`));
+    expect(frame(req, 0)).toMatch(/›\s+1\. Flag only inline bodies/);
+    expect(frame(req, req.options.length)).toMatch(new RegExp(`›\\s+3\\. ${OWN_ANSWER_LABEL}`));
+  });
+
+  // Four full-sentence labels with indented descriptions read as one paragraph without a number
+  // anchoring each entry; the description sits under the label text, not under the number.
+  it('numbers every row contiguously and indents descriptions under the label', () => {
+    const out = frame(req, 1);
+    const lines = out.split('\n');
+    const label = lines.findIndex(l => l.includes('1. Flag only inline bodies'));
+    expect(label).toBeGreaterThan(-1);
+    expect(lines[label + 1].indexOf('Keeps python3')).toBe(lines[label].indexOf('Flag only'));
+    expect(out).toMatch(/2\. Flag every interpreter invocation/);
+    expect(out).toMatch(/3\. Something else/);
+    expect(out).toContain('1-9 navigate');
   });
 
   it('renders an option with no description', () => {
