@@ -52,8 +52,10 @@ export function Question({
       <Text bold color={theme.tool}>
         {'• Question'}
       </Text>
+      {/* Bold so the question reads above the choices: unselected rows are plain, and the selected
+          one is set apart by the accent color, not by weight alone. */}
       <Box marginTop={1}>
-        <Text>{request.question}</Text>
+        <Text bold>{request.question}</Text>
       </Box>
       {typing ? (
         <Box flexDirection="column" marginTop={1}>
