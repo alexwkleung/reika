@@ -63,8 +63,7 @@ const iface = (address: string, family: 'IPv4' | 'IPv6', internal = false): Ifac
   family,
   internal,
 });
-const ifaces = (m: Record<string, Iface[]>) =>
-  m as unknown as Parameters<typeof isOffline>[0];
+const ifaces = (m: Record<string, Iface[]>) => m as unknown as Parameters<typeof isOffline>[0];
 
 describe('isOffline', () => {
   it('is online with a routable IPv4 address on any interface', () => {
