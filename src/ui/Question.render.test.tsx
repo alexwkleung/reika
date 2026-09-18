@@ -68,6 +68,44 @@ describe('Question dialog', () => {
     expect(out).toContain('1-9 navigate');
   });
 
+  // Ink has no hanging indent: a wrapped label's second row would otherwise land flush left,
+  // detached from its number. The `(recommended)` tag rides the same wrap so it can't be pushed
+  // onto a flush-left row of its own.
+  it('wraps long labels and descriptions under the label text, not the marker', () => {
+    const long: QuestionRequest = {
+      question: 'q?',
+      options: [
+        {
+          label:
+            'Everything above Quick start: tagline, Why, The Challenge, Status, Note, and Tested Models',
+          description:
+            'The narrowest reading — rewrite the pitch paragraph and nothing else, leaving every section below it as it is.',
+          recommended: true,
+        },
+        { label: 'B' },
+      ],
+    };
+    const { lastFrame } = render(
+      <Box flexDirection="column" paddingX={1}>
+        <Question request={long} selectedIndex={0} width={50} />
+      </Box>,
+    );
+    const lines = stripAnsi(lastFrame() ?? '').split('\n');
+    const first = lines.findIndex(l => l.includes('1. Everything'));
+    const col = lines[first].indexOf('Everything');
+    // First non-blank column past the dialog's left border.
+    const startCol = (l: string) => l.indexOf('│') + 1 + l.slice(l.indexOf('│') + 1).search(/\S/);
+    expect(first).toBeGreaterThan(-1);
+    // Every row between the first label row and option 2 is a continuation or the description,
+    // and all of them start at the label's column.
+    const second = lines.findIndex(l => l.includes('2. B'));
+    expect(second - first).toBeGreaterThan(2);
+    for (const l of lines.slice(first + 1, second)) {
+      expect(startCol(l)).toBe(col);
+    }
+    expect(lines.slice(first, second).join('\n')).toContain('(recommended)');
+  });
+
   it('renders an option with no description', () => {
     const out = frame({ question: 'q?', options: [{ label: 'A' }, { label: 'B' }] });
     expect(out).toContain('A');

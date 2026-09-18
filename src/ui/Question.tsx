@@ -1,6 +1,11 @@
 import { Box, Text } from 'ink';
 import type { QuestionRequest } from '../types.js';
+import { hangingWrap, useContentWidth } from './layout.js';
 import { theme } from './theme.js';
+
+// The dialog's own border plus its paddingX={1}, on top of the App padding contentWidth already
+// accounts for — the same chrome Approval pays for its diff.
+const DIALOG_CHROME = 4;
 
 // Label shown for the row that hands the answer over to the input box. It is always last and always
 // present: the model's three options being collectively wrong is the real risk of a menu, and this
@@ -19,12 +24,21 @@ export function Question({
   request,
   selectedIndex,
   typing,
+  width,
 }: {
   request: QuestionRequest;
   selectedIndex: number;
   typing?: QuestionTyping | null;
+  // Columns the rows may use; defaults to the live terminal width. Tests pass one to pin the wrap.
+  width?: number;
 }) {
+  const liveWidth = useContentWidth(DIALOG_CHROME);
+  const cols = width ?? liveWidth;
   const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
+  // Labels are full sentences and wrap on any ordinary terminal. Ink has no hanging indent, so a
+  // continuation row would land flush left under the marker, detached from its number
+  // (issue #167's shape). Pre-wrapping each row keeps every continuation under the label text.
+  const hang = '› 1. '.length;
   return (
     <Box
       borderStyle="round"
@@ -54,6 +68,12 @@ export function Question({
           {request.options.map((o, i) => {
             const selected = i === selectedIndex;
             const num = `${i + 1}. `;
+            const tag = o.recommended ? '  (recommended)' : '';
+            // Wrapped as one string so the tag can't be pushed onto its own flush-left row, then
+            // split back at the tag so it keeps its own color.
+            const wrapped = hangingWrap(o.label + tag, cols, hang);
+            const tagAt = tag ? wrapped.lastIndexOf(tag.trimStart()) : -1;
+            const label = tagAt >= 0 ? wrapped.slice(0, tagAt) : wrapped;
             return (
               <Box key={i} flexDirection="column">
                 {/* One Text with nested runs (not siblings): on wrap Ink drops the char at a
@@ -65,12 +85,14 @@ export function Question({
                   </Text>
                   <Text color={selected ? theme.accent : theme.secondary}>{num}</Text>
                   <Text bold={selected} color={selected ? theme.accent : undefined}>
-                    {o.label}
+                    {label}
                   </Text>
-                  {o.recommended ? <Text color={theme.info}>{'  (recommended)'}</Text> : null}
+                  {tagAt >= 0 ? <Text color={theme.info}>{wrapped.slice(tagAt)}</Text> : null}
                 </Text>
                 {o.description ? (
-                  <Text color={theme.muted}>{`${' '.repeat(2 + num.length)}${o.description}`}</Text>
+                  <Text color={theme.muted}>
+                    {' '.repeat(hang) + hangingWrap(o.description, cols, hang)}
+                  </Text>
                 ) : null}
               </Box>
             );
@@ -86,7 +108,7 @@ export function Question({
               bold={selectedIndex === request.options.length}
               color={selectedIndex === request.options.length ? theme.accent : theme.secondary}
             >
-              {OWN_ANSWER_LABEL}
+              {hangingWrap(OWN_ANSWER_LABEL, cols, hang)}
             </Text>
           </Text>
         </Box>
