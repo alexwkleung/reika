@@ -297,7 +297,7 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 
 ### Plain-English routing (`triggers`)
 
-You don't have to remember the slash command. `triggers:` lists phrases that route an ordinary prompt to the skill — matched **deterministically in the harness**, never by the model. Writing "review the branch for me" gets you a one-line hint that `/review` exists; the turn runs normally either way.
+You don't have to remember the slash command. `triggers:` lists phrases that route an ordinary prompt to the skill — matched **deterministically in the harness**, never by the model. Writing "review the branch for me" gets you a one-line hint that `/review` exists and that the prompt was sent unchanged; the turn runs normally either way.
 
 The frontmatter accepts any YAML list shape (`triggers: a, b`, `triggers: [a, b]`, or a `- ` block list). The skill's own name is always an implicit trigger, so a skill called `verify` routes "verify my changes" with no `triggers:` at all.
 
