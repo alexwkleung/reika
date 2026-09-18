@@ -139,6 +139,94 @@ describe('changesSince', () => {
     expect(f.hunks[0].text).toBe('  keep\n- dirty');
   });
 
+  // HEAD moves (#337): a checkout, merge, reset, or an edit committed in the same call leaves the
+  // tree clean against the new head, so status lists nothing and the diff has to come from the
+  // two commits.
+  describe('when the command moved HEAD', () => {
+    const branchWith = (name: string, edits: () => Promise<void>): Promise<void> =>
+      (async () => {
+        sh('git', ['checkout', '-qb', name]);
+        await edits();
+        sh('git', ['add', '-A']);
+        sh('git', ['commit', '-qm', name]);
+        sh('git', ['checkout', '-q', 'main']);
+      })();
+
+    beforeEach(() => {
+      sh('git', ['branch', '-qM', 'main']);
+    });
+
+    it('a checkout diffs each file against the commit HEAD was on', async () => {
+      await branchWith('feature', async () => {
+        await write('a.ts', numbered(20).replace('line 2\n', 'LINE 2\n'));
+        await write('c.txt', 'new on branch\n');
+        await rm(join(dir, 'sub/b.ts'));
+      });
+      const snap = (await snapshotTree(dir, 'git checkout feature'))!;
+      sh('git', ['checkout', '-q', 'feature']);
+      const { files, more } = (await changesSince(snap))!;
+      expect(more).toBe(0);
+      expect(files.map(f => [f.path, f.kind, f.added, f.removed])).toEqual([
+        ['a.ts', 'modified', 1, 1],
+        ['c.txt', 'created', 1, 0],
+        ['sub/b.ts', 'deleted', 0, 1],
+      ]);
+      expect(files[0].hunks[0].text).toContain('- line 2\n+ LINE 2');
+    });
+
+    it('an edit committed in the same call still shows', async () => {
+      const snap = (await snapshotTree(dir, "sed -i '' s/x/y/ a.ts && git commit -qam edit"))!;
+      await write('a.ts', numbered(20).replace('line 5\n', 'LINE 5\n'));
+      sh('git', ['commit', '-qam', 'edit']);
+      const [f] = (await changesSince(snap))!.files;
+      expect(f.path).toBe('a.ts');
+      expect(f.hunks[0].text).toContain('- line 5\n+ LINE 5');
+    });
+
+    it('a merge shows what it brought in, and a reset shows what it took away', async () => {
+      await branchWith('feature', () => write('c.txt', 'merged\n'));
+      const merged = (await snapshotTree(dir, 'git merge feature'))!;
+      sh('git', ['merge', '-q', 'feature']);
+      const { files } = (await changesSince(merged))!;
+      expect(files.map(f => [f.path, f.kind])).toEqual([['c.txt', 'created']]);
+      expect(files[0].hunks[0].text).toBe('+ merged');
+
+      const reset = (await snapshotTree(dir, 'git reset --hard HEAD~1'))!;
+      sh('git', ['reset', '-q', '--hard', 'HEAD~1']);
+      const undone = (await changesSince(reset))!.files;
+      expect(undone.map(f => [f.path, f.kind])).toEqual([['c.txt', 'deleted']]);
+      expect(undone[0].hunks[0].text).toBe('- merged');
+    });
+
+    it('a dirty file the checkout carried over unchanged is not reported', async () => {
+      await branchWith('feature', () => write('c.txt', 'new on branch\n'));
+      await write('sub/b.ts', 'keep\ndirty\n');
+      await write('untracked.txt', 'mine\n');
+      const snap = (await snapshotTree(dir, 'git checkout feature'))!;
+      sh('git', ['checkout', '-q', 'feature']);
+      const { files } = (await changesSince(snap))!;
+      expect(files.map(f => f.path)).toEqual(['c.txt']);
+    });
+
+    it('a commit that only saves an existing edit still shows nothing', async () => {
+      await write('sub/b.ts', 'keep\ndirty\n');
+      const snap = (await snapshotTree(dir, 'git commit -am save'))!;
+      sh('git', ['commit', '-qam', 'save']);
+      expect(await changesSince(snap)).toBeNull();
+    });
+
+    it('counts the files a large switch touched without drawing them all', async () => {
+      await branchWith('wide', async () => {
+        for (let i = 0; i < 11; i++) await write(`f${String(i).padStart(2, '0')}.txt`, 'x\n');
+      });
+      const snap = (await snapshotTree(dir, 'git checkout wide'))!;
+      sh('git', ['checkout', '-q', 'wide']);
+      const changes = (await changesSince(snap))!;
+      expect(changes.files).toHaveLength(8);
+      expect(changes.more).toBe(3);
+    });
+  });
+
   it('names a binary file without drawing its bytes', async () => {
     const snap = (await snapshotTree(dir, 'echo'))!;
     await writeFile(join(dir, 'blob.bin'), Buffer.from([0xff, 0xfe, 0x00, 0x41, 0x80]));
