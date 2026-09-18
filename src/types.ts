@@ -307,9 +307,13 @@ export type ToolContext = {
   askedQuestions?: string[];
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
-  // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/
-  // install isn't killed prematurely. Undefined falls back to the bash tool's own default.
+  // Bash bounds, ms, threaded from Config; undefined falls back to the bash tool's own defaults.
+  // The ceiling is wall-clock; idle is time without output — the one that catches a hung command.
   bashTimeoutMs?: number;
+  bashIdleMs?: number;
+  // The turn's abort signal. A running command is killed on it, so ctrl-c reaches the child
+  // instead of waiting out whatever bound would have ended it.
+  signal?: AbortSignal;
 };
 
 export type ToolParameters = {
@@ -409,10 +413,13 @@ export type Config = {
   reasoningRounds: number;
   maxSearchesPerTurn: number;
   maxFetchesPerTurn: number;
-  // Wall-clock timeout for a single bash command, ms (REIKA_BASH_TIMEOUT_MS). Builds, installs
-  // and full test suites routinely exceed the old 120s; 5 min covers them without letting a
-  // hung command hold the agent loop too long.
+  // Bounds on a single bash command, ms (#408). `bashTimeoutMs` (REIKA_BASH_TIMEOUT_MS) is the
+  // wall-clock ceiling, sized for a slow build or a full test suite; `bashIdleMs`
+  // (REIKA_BASH_IDLE_MS) kills a command that has written nothing for that long, which is the
+  // shape of a hang — a server, a watcher, a prompt — and is what keeps a stuck small model from
+  // spending the whole ceiling on it. 0 disables either.
   bashTimeoutMs: number;
+  bashIdleMs: number;
   // Preferred OCR languages for pasted images (REIKA_OCR_LANGS, BCP-47, comma-separated).
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
   // first entry.
