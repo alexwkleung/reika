@@ -578,6 +578,12 @@ export function App() {
         setQuestionSelected(i => Math.min(last, i + 1));
         return;
       }
+      // A digit jumps the cursor to that numbered row (the type-your-own row is `last + 1`). It
+      // moves, never submits: Enter stays the one key that answers.
+      if (/^[1-9]$/.test(input) && Number(input) - 1 <= last) {
+        setQuestionSelected(Number(input) - 1);
+        return;
+      }
       // Tab on an option: take it, but add a note in your own words. The model gets both.
       if (key.tab && questionSelectedRef.current < last) {
         const forIndex = questionSelectedRef.current;
