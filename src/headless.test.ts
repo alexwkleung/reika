@@ -97,6 +97,9 @@ describe('buildHeadlessInput', () => {
     );
     expect(out.modelText).toBe('VERIFY BODY\n\nthe input box');
     expect(out.skill).toBe('verify');
+    expect(out.notices[0]).toMatch(
+      /Skill \/verify applied — its body was sent as this prompt, with/,
+    );
   });
 
   it('rejects an unknown /<skill>', async () => {
@@ -114,7 +117,7 @@ describe('buildHeadlessInput', () => {
     );
     expect(out.modelText.startsWith('VERIFY BODY\n\n')).toBe(true);
     expect(out.skill).toBe('verify');
-    expect(out.notices[0]).toMatch(/Applied skill \/verify/);
+    expect(out.notices[0]).toMatch(/Skill \/verify applied — its body was prepended/);
   });
 
   it('never injects in plan mode', async () => {

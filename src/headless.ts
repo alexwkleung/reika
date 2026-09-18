@@ -53,6 +53,9 @@ export async function buildHeadlessInput(
     const skill = bundle.skills.find(s => s.name === name);
     if (!skill) throw new Error(`unknown skill /${name}`);
     const extra = rest.join(' ').trim();
+    notices.push(
+      `Skill /${skill.name} applied — its body was sent as this prompt${extra ? ', with your text after it' : ''}.`,
+    );
     return {
       modelText: extra ? `${skill.body}\n\n${extra}` : skill.body,
       skill: skill.name,
@@ -74,7 +77,9 @@ export async function buildHeadlessInput(
     (mode === 'agent' || mode === 'vibe') &&
     shouldAutoInject(match, config.contextWindow);
   if (match && auto) {
-    notices.push(`Applied skill /${match.skill.name} (matched: ${match.matched.join(', ')})`);
+    notices.push(
+      `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
+    );
     return { modelText: `${match.skill.body}\n\n${modelText}`, skill: match.skill.name, notices };
   }
   return { modelText, notices };

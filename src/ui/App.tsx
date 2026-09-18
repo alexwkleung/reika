@@ -1185,6 +1185,13 @@ export function App() {
           const extra = expandPastes(args.trim(), pastedTextsRef.current);
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
           pendingSkillRef.current = skill.name;
+          // Same receipt shape as auto-routing: the bubble echoes what was typed, and only
+          // this line says the body is what the model got (#398).
+          pendingNoticesRef.current.push({
+            role: 'system',
+            content: `Skill /${skill.name} applied — its body was sent as this prompt${extra ? ', with your text after it' : ''}.`,
+            tone: 'info',
+          });
           // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
           // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
           // bubble reads `/issue 14` while the model receives the skill body. Pre-appending
@@ -1343,7 +1350,9 @@ export function App() {
     if (auto) {
       pendingNoticesRef.current.push({
         role: 'system',
-        content: `Applied skill /${match.skill.name} (matched: ${match.matched.join(', ')})`,
+        // Says what actually happened, not just that something matched: the body is in the
+        // prompt the model receives, and nothing between here and the request removes it (#398).
+        content: `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
         tone: 'info',
       });
       pendingSkillRef.current = match.skill.name;
@@ -1351,9 +1360,14 @@ export function App() {
     }
     if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
     suggestedSkillsRef.current.add(match.skill.name);
+    // A hint, not a handoff: the prompt goes through as typed. Said outright — "run it with /x"
+    // read as an instruction to go do that instead (#398).
+    const tail = config?.skillAuto
+      ? ''
+      : ', or set REIKA_SKILL_AUTO=1 to apply strong matches automatically';
     pendingNoticesRef.current.push({
       role: 'system',
-      content: `This looks like /${match.skill.name} — ${match.skill.description}. Run it with /${match.skill.name} to use the skill.`,
+      content: `Skill hint: /${match.skill.name} — ${match.skill.description}. Prompt sent unchanged; start with /${match.skill.name} to apply it${tail}.`,
       tone: 'info',
     });
     return modelText;
