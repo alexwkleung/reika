@@ -2809,6 +2809,8 @@ export async function runTurn(opts: {
             onProgress: opts.onToolProgress,
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
+            bashIdleMs: opts.config.bashIdleMs,
+            signal: opts.signal,
           });
           summary = result.summary;
           payload = result.payload;

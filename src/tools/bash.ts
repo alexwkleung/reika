@@ -1,12 +1,20 @@
 import { spawn } from 'node:child_process';
-import type { Tool, ToolResult } from '../types.js';
+import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
 import { recordCapped } from './_spillstats.js';
 import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
 import { changesSince, snapshotTree } from './_treediff.js';
 
-const DEFAULT_TIMEOUT_MS = 300_000;
+// Two bounds, because "long-running" and "stuck" are different shapes (#408). A build or a test
+// suite keeps writing for as long as it runs; a command the model should never have started — a
+// dev server, `tail -f`, a prompt waiting on stdin — goes silent. So the absolute ceiling is sized
+// for real work, and the idle bound is what actually catches the stuck class. Idle equals the old
+// absolute default on purpose: anything that finished under it still does. Zero disables either.
+const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_IDLE_MS = 5 * 60_000;
+// After SIGTERM to the group, how long a holdout gets before SIGKILL.
+const KILL_GRACE_MS = 2_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
 const OUTPUT_TAIL_LINES = 10;
@@ -51,7 +59,7 @@ export const bashTool: Tool = {
     // heredoc, a formatter) gets the same visual diff the edit tool gives (#278). Both halves run
     // in the dispatch gap, off the model's clock, and fail open.
     const snapshot = await snapshotTree(ctx.cwd, command);
-    const result = await execStream(command, ctx, ctx.bashTimeoutMs);
+    const result = await execStream(command, ctx);
     if (!snapshot) return result;
     const changes = await changesSince(snapshot);
     // Without a repo the detector is the command text, which sees far less. Said once per cwd, on
@@ -126,7 +134,7 @@ export const readOnlyBashTool: Tool = {
     // to approve bash modals reflexively, weakening the prompt in agent mode where it carries the
     // real decision. The command still renders its chip in scrollback, so nothing runs unseen.
     // Straight to execStream: a command just proved read-only has no tree diff to take.
-    return execStream(command, ctx, ctx.bashTimeoutMs);
+    return execStream(command, ctx);
   },
 };
 
@@ -158,16 +166,46 @@ export class TailWindow {
   }
 }
 
-export function execStream(
-  command: string,
-  ctx: { cwd: string; onProgress?: (chunk: string) => void },
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<ToolResult> {
+// Process groups still running, so a reika exit takes them along: `detached` puts each command in
+// its own group (that is what makes the kill below reach the whole pipeline), and a group of its own
+// is one the terminal's hangup no longer sweeps up.
+const liveGroups = new Set<number>();
+process.once('exit', () => {
+  for (const pid of liveGroups) {
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      // Already gone.
+    }
+  }
+});
+
+type StopReason = 'ceiling' | 'idle' | 'abort';
+
+export type ExecContext = Pick<
+  ToolContext,
+  'cwd' | 'onProgress' | 'bashTimeoutMs' | 'bashIdleMs' | 'signal'
+>;
+
+export function execStream(command: string, ctx: ExecContext): Promise<ToolResult> {
+  const timeoutMs = ctx.bashTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const idleMs = ctx.bashIdleMs ?? DEFAULT_IDLE_MS;
   return new Promise(resolve => {
-    const proc = spawn('/bin/sh', ['-c', command], { cwd: ctx.cwd });
+    if (ctx.signal?.aborted) {
+      resolve({ summary: `Bash aborted: ${command} (not run)` });
+      return;
+    }
+    // stdin is /dev/null, not a pipe we never write: a command that reads it (`cat`, a `read`, an
+    // interactive installer's prompt) gets EOF at once instead of the idle bound five minutes on.
+    const proc = spawn('/bin/sh', ['-c', command], {
+      cwd: ctx.cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (proc.pid != null) liveGroups.add(proc.pid);
     const buffer: string[] = [];
     let totalBytes = 0;
-    let timedOut = false;
+    let stopped: StopReason | null = null;
     // Read once at spawn, not per chunk: a flag flipped mid-run would otherwise spill half a
     // command's output and describe it as the whole tail.
     const spilling = spillEnabled();
@@ -186,6 +224,7 @@ export function execStream(
 
     const append = (chunk: Buffer): void => {
       const text = chunk.toString('utf8');
+      armIdle();
       ctx.onProgress?.(text);
       rawBytes += text.length;
       uiTail.push(text);
@@ -200,13 +239,48 @@ export function execStream(
     proc.stdout.on('data', append);
     proc.stderr.on('data', append);
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      proc.kill('SIGTERM');
-    }, timeoutMs);
+    // Signals go to the group, not to `sh`: `sh -c 'cd x && npm run dev'` forks, and killing only
+    // the shell left the server running with our stdout pipe open — 'close' never fired, and the
+    // "ceiling" was no bound at all (measured: `sleep 3; echo` killed at 100ms, resolved at 3s).
+    const killGroup = (sig: NodeJS.Signals): void => {
+      if (proc.pid == null) return;
+      try {
+        process.kill(-proc.pid, sig);
+      } catch {
+        try {
+          proc.kill(sig);
+        } catch {
+          // Already gone.
+        }
+      }
+    };
+    let killId: NodeJS.Timeout | undefined;
+    const stop = (reason: StopReason): void => {
+      if (stopped) return;
+      stopped = reason;
+      killGroup('SIGTERM');
+      killId = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+    };
+    const ceilingId = timeoutMs > 0 ? setTimeout(() => stop('ceiling'), timeoutMs) : undefined;
+    let idleId: NodeJS.Timeout | undefined;
+    const armIdle = (): void => {
+      if (idleMs <= 0) return;
+      clearTimeout(idleId);
+      idleId = setTimeout(() => stop('idle'), idleMs);
+    };
+    armIdle();
+    const onAbort = (): void => stop('abort');
+    ctx.signal?.addEventListener('abort', onAbort, { once: true });
+    const cleanup = (): void => {
+      clearTimeout(ceilingId);
+      clearTimeout(idleId);
+      clearTimeout(killId);
+      ctx.signal?.removeEventListener('abort', onAbort);
+      if (proc.pid != null) liveGroups.delete(proc.pid);
+    };
 
     proc.on('close', (code, signal) => {
-      clearTimeout(timeoutId);
+      cleanup();
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
       const base = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
@@ -220,13 +294,11 @@ export function execStream(
       // wrong number in the model's context is not worth the tidiness of that claim.
       const reported = rawBytes;
       const done = (payload: string): void => {
-        if (timedOut) {
-          resolve({
-            summary: `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
-            payload,
-            command: display,
-            exitCode: code,
-          });
+        if (stopped) {
+          // Loud, and in the payload as well as the summary: a model that reads a killed command
+          // as a slow one re-runs it as is, and the idle case is the one where that never ends.
+          const [summary, note] = stoppedResult(command, stopped, timeoutMs, idleMs);
+          resolve({ summary, payload: `${payload}\n${note}`, command: display, exitCode: code });
         } else {
           // The status is *surfaced*, not reclassified (#200). A non-zero exit used to read
           // `Bash failed:`, which is wrong for the many commands that exit non-zero as ordinary
@@ -295,7 +367,7 @@ export function execStream(
     });
 
     proc.on('error', err => {
-      clearTimeout(timeoutId);
+      cleanup();
       resolve({
         summary: `Bash failed: ${command} (${err.message})`,
         payload: buffer.join('') || err.message,
@@ -303,6 +375,29 @@ export function execStream(
       });
     });
   });
+}
+
+function stoppedResult(
+  command: string,
+  reason: StopReason,
+  timeoutMs: number,
+  idleMs: number,
+): [summary: string, note: string] {
+  switch (reason) {
+    case 'ceiling':
+      return [
+        `Bash timeout: ${command} (killed after ${timeoutMs / 1000}s)`,
+        `…(killed: hit the ${timeoutMs / 1000}s ceiling. Narrow the command or run part of it.)`,
+      ];
+    case 'idle':
+      return [
+        `Bash timeout: ${command} (no output for ${idleMs / 1000}s, killed)`,
+        `…(killed: no output for ${idleMs / 1000}s — the command hangs or never exits, ` +
+          'such as a server or a watcher. Do not re-run it as is.)',
+      ];
+    case 'abort':
+      return [`Bash aborted: ${command} (killed by user)`, '…(killed by the user)'];
+  }
 }
 
 // A bare line-search (grep/rg/etc.) returns only matching lines, never the surrounding

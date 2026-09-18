@@ -26,6 +26,7 @@ const CONFIG: Config = {
   maxSearchesPerTurn: 3,
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
+  bashIdleMs: 1000,
   pasteFetch: false,
   skillAuto: false,
   anon: false,

@@ -43,6 +43,7 @@ const config = (): Config => ({
   maxSearchesPerTurn: 0,
   maxFetchesPerTurn: 0,
   bashTimeoutMs: 5000,
+  bashIdleMs: 5000,
   pasteFetch: false,
   skillAuto: false,
   anon: false,

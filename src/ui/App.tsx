@@ -1226,9 +1226,16 @@ export function App() {
     setStatus('busy');
     toolRef.current = '';
     setStreamingTool('');
+    // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the UI
+    // is blocked on it just the same.
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const result = await execStream(command, {
         cwd: bundle.cwd,
+        bashTimeoutMs: config?.bashTimeoutMs,
+        bashIdleMs: config?.bashIdleMs,
+        signal: controller.signal,
         onProgress: chunk => {
           toolRef.current += chunk;
           scheduleToolFlush();
@@ -1249,6 +1256,7 @@ export function App() {
       }
       toolRef.current = '';
       setStreamingTool('');
+      abortRef.current = null;
       setStatus('idle');
     }
   };
