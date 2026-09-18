@@ -208,21 +208,24 @@ export function assignLineNumbers(
 // block starting two columns in from where the numbers sit read as a block with a notch cut out
 // of its left edge (#331). Continuation rows blank the number but keep the tint, so a wrapped
 // line stays one solid block.
-function Gutter({ gutter, bg }: { gutter: string; bg?: string }) {
+function Gutter({ gutter, bg, side }: { gutter: string; bg?: string; side?: Side }) {
   if (!gutter) return null;
   return (
-    <Text color={bg ? TINTED_GUTTER_FG : theme.muted} backgroundColor={bg}>
+    <Text color={side ? MARKER_FG[side] : theme.muted} backgroundColor={bg}>
       {`${gutter} `}
     </Text>
   );
 }
 
-// `theme.muted` is tuned to recede against the terminal's own background (~5:1 on black); on the
-// green tint it drops to ~2:1 and the digits stop being readable. Lifted a step on tinted rows
-// only — ~3.8:1 on green, ~5.4:1 on red — while staying below the code's default foreground, so
-// the numbers still sit behind the line rather than competing with it.
-const TINTED_GUTTER_FG = '#b0b0b0';
+type Side = 'removed' | 'added';
 
+// The digits and the `+`/`-` marker on a changed row echo the header's `+n -n` in the row's own
+// hue. Fixed hex, not the ANSI `green`/`red` the header uses: the row is already tinted in that
+// hue, and a terminal palette's red on REMOVED_BG lands anywhere from 3.7:1 down to 2.1:1 (iTerm's
+// default) — the digits sank into the block. This pair sits at a matched ~4.9:1 on its tint,
+// above the ~3.8:1 the previous neutral gray managed on green, and below the code's default
+// foreground so the numbers still recede behind the line rather than competing with it.
+const MARKER_FG: Record<Side, string> = { added: '#6fdc8c', removed: '#f28b8b' };
 // Continuation rows sit under the code, past where the `+`/`-` prefix ended, so a wrapped line
 // reads as one line and the prefix column stays scannable.
 const CONTINUATION = '  ';
@@ -245,15 +248,16 @@ function WrappedRow({
   prefix,
   gutter,
   maxWidth,
-  bg,
+  side,
 }: {
   content: string;
   prefix: string;
   gutter: string;
   maxWidth: number;
   // Omitted for context lines: only `+`/`-` rows are tinted, and an untinted row needs no padding.
-  bg?: string;
+  side?: Side;
 }) {
+  const bg = side ? ROW_BG[side] : undefined;
   const rows = wrapAnsi(content, Math.max(1, maxWidth - prefix.length), {
     trim: false,
     hard: true,
@@ -266,9 +270,9 @@ function WrappedRow({
           <Box key={i}>
             {/* Blanked, not dropped: the gutter still has to hold its columns or the
                 continuation slides left and the code column stops lining up. */}
-            <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} bg={bg} />
+            <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} bg={bg} side={side} />
             <Text backgroundColor={bg}>
-              {lead}
+              {side && i === 0 ? chalk.hex(MARKER_FG[side])(lead) : lead}
               {row}
               {bg ? padToWidth(lead + row, maxWidth) : ''}
             </Text>
@@ -310,11 +314,18 @@ function ContextLine({
 // dark-theme tints composite duller than the values these replaced, so they were not the reference.
 const REMOVED_BG = '#6b1a22';
 const ADDED_BG = '#0f5a2c';
+const ROW_BG: Record<Side, string> = { added: ADDED_BG, removed: REMOVED_BG };
 // Brighter variants for the intra-line word-level highlight, so changed words stand out from the
-// line's base background. The changed word is painted in the default foreground, bold, not in
-// syntax colors, so only white-on-tint contrast binds here.
+// line's base background. The changed word is painted in one fixed foreground, not in syntax
+// colors, so only that one contrast binds here.
 const REMOVED_HIGHLIGHT_BG = '#a3303a';
 const ADDED_HIGHLIGHT_BG = '#1f8a48';
+// The changed word's foreground. Not bold, and not the terminal's default: the brighter tint
+// already marks the span, and bold on top of it read as glare; the default fg is whatever the
+// terminal theme picked, which on a pure-white theme is that same glare. Half a step below white
+// — 3.6:1 on the green highlight, 5.6:1 on the red — so the word still reads as the brightest
+// thing on the row without shouting.
+const HIGHLIGHT_FG = '#e8e8e8';
 
 function PlainChangeLine({
   line,
@@ -329,7 +340,6 @@ function PlainChangeLine({
   maxWidth: number;
   gutter: string;
 }) {
-  const bg = side === 'added' ? ADDED_BG : REMOVED_BG;
   const prefix = side === 'added' ? '+ ' : '- ';
   return (
     <WrappedRow
@@ -337,7 +347,7 @@ function PlainChangeLine({
       prefix={prefix}
       gutter={gutter}
       maxWidth={maxWidth}
-      bg={bg}
+      side={side}
     />
   );
 }
@@ -411,7 +421,6 @@ function PairedLine({
     );
   }
 
-  const bg = side === 'added' ? ADDED_BG : REMOVED_BG;
   const highlightBg = side === 'added' ? ADDED_HIGHLIGHT_BG : REMOVED_HIGHLIGHT_BG;
   const prefix = side === 'added' ? '+ ' : '- ';
 
@@ -424,13 +433,15 @@ function PairedLine({
       if (side === 'removed' && p.added) return '';
       if (side === 'added' && p.removed) return '';
       const isChange = side === 'removed' ? p.removed : p.added;
-      // Brighter background + bold for the changed portion — stands out against the line's own.
-      return isChange ? chalk.bgHex(highlightBg).bold(p.value) : highlightCode(p.value, language);
+      // Brighter background for the changed portion — stands out against the line's own.
+      return isChange
+        ? chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value)
+        : highlightCode(p.value, language);
     })
     .join('');
 
   return (
-    <WrappedRow content={painted} prefix={prefix} gutter={gutter} maxWidth={maxWidth} bg={bg} />
+    <WrappedRow content={painted} prefix={prefix} gutter={gutter} maxWidth={maxWidth} side={side} />
   );
 }
 
