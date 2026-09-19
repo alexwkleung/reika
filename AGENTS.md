@@ -702,6 +702,10 @@ Bootstrap loads `.gitignore` (and `.git/info/exclude`, plus nested `.gitignore` 
 
 `loadConfig()` reads dotenv from cwd `.env` first, then `~/.config/reika/.env` as fallback. Shell env vars take precedence over both (dotenv's no-override default). Order matters — don't reorder without thinking about precedence.
 
+## Last session state (#365, `src/laststate.ts`)
+
+`~/.config/reika/state.json` holds `{ mode, profile }` from the last session, and the TUI opens on them. Precedence is **launch env > saved state > `.env`**: `config.ts` snapshots `Object.keys(process.env)` before dotenv runs (`setAtLaunch`) — the keys already there are the ones the shell handed us, which dotenv's no-override default keeps intact — so `REIKA_DEFAULT_MODE`/`REIKA_PLAN_EXPERIMENT` at launch pins the mode and `REIKA_MODEL` at launch pins the profile to `default`. A shell-rc `export` is indistinguishable from a command-line flag and counts as one. Saving is two `useEffect`s in `App.tsx` on `mode` and `activeProfile`, not a call at each switch site, so a new route to a mode (`/implement`, `/clear`, the picker, cycling) can't miss it; only `DefaultMode`s persist (`persistableMode`), and the profile effect waits for the config so the initial `'default'` can't overwrite the value being restored. A saved profile the config lacks (ad-hoc `/model` targets included) falls back to `default`. Fail-open both ways; headless never touches it. Resuming off the env default prints a persistent `Resumed …` line — a plan-mode start answers a task with a plan, so the user must see it. App render tests mock the module: the real one would start a test in whatever mode the developer used last.
+
 ## Profiles
 
 `Config.profiles` is a map of named `Profile` objects (`model` + `baseURL` + `apiKey`). The "default" profile is always present, derived from the flat `REIKA_MODEL`/`BASE_URL`/`API_KEY` keys. Additional profiles come from `REIKA_PROFILES=kimi,gpt4` + per-profile `REIKA_<NAME>_MODEL` etc.

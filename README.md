@@ -207,6 +207,8 @@ Then in-session:
 
 Conversation history persists across switches; if styles clash, run `/new` first. Token counter accumulates across models/profiles for a single session bill.
 
+The selection persists: the next session opens on the profile you last switched to (see [Last session state](#last-session-state)).
+
 ## Tools
 
 The agent has these tools. Optional tools register only when their config is present:
@@ -327,7 +329,7 @@ Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file co
 
 ## Modes
 
-`Shift+Tab` cycles through them (agent → plan → minimal → vibe → chat → shell), or switch directly with the slash commands below.
+`Shift+Tab` cycles through them (agent → plan → minimal → vibe → chat → shell), or switch directly with the slash commands below. The mode you end a session in is the one the next session opens in (see [Last session state](#last-session-state)).
 
 - **Agent** (default): input goes to the model; it can call tools
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
@@ -338,6 +340,16 @@ Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file co
   - `REIKA_READ_FIRST=1` (experimental) prevents blind edits during implementation: the first `edit` to a file with no `read` (or prior successful edit/write) this turn is withheld once, with a directive to read the file and re-issue the edit from its actual bytes — reading first instead of reasoning about an `old_string` failure after the fact. One bounce per file per turn; a re-issued edit always runs.
   - **Read-only `bash`** (on by default; `REIKA_PLAN_BASH=0` removes it) is registered in plan (and vibe) mode, for the inspection a pipeline expresses that `read`/`grep`/`glob`/`list` cannot — `grep … | head`, `find`, `wc -l`. A strict allowlist classifier (`tools/_readonly.ts`) decides: only listed inspection commands and pipelines of them run, and redirection, command substitution, `sed`/`awk` and anything unlisted are refused with the rule and the way out stated in the result. It runs without an approval prompt — the classifier has proved the command cannot mutate anything, and plan mode's other four tools already read arbitrary paths silently — while the ordinary `bash` in agent mode prompts exactly as before. The plan system prompt tracks the flag, so under `=0` it goes back to saying commands are unavailable.
 - **Vibe**: `/vibe` to enter — the full plan→implement pipeline on every prompt. Each prompt first runs as a plan-mode turn (read-only tools, same convergence machinery), and if it ends with a written plan, the plan is implemented immediately as a normal agent turn — no `/implement` needed. A plan phase that is aborted (ctrl-c) or dead-ends without a plan stops there; nothing chains. Approvals are untouched: the implement phase prompts for edits and commands exactly like agent mode, so `REIKA_AUTO_APPROVE` / `/approvals` remain the only things that change what auto-runs. Probably not the mode for maximum quality — it exists to watch a local model go end-to-end on its own. `REIKA_DEFAULT_MODE=vibe` starts the session in vibe mode. `/agent` returns. Status bar shows a `vibe` tag when active.
+
+## Last session state
+
+Reika remembers the mode and profile you last used in `~/.config/reika/state.json` and opens the next session on them — a `/model kimi` or `/plan` carries over without touching `.env`. When it does, the scrollback says so (`Resumed plan mode and profile 'kimi' (kimi-k2) from the last session.`). The precedence is:
+
+1. **Given at launch** — `REIKA_DEFAULT_MODE=plan reika`, `REIKA_MODEL=x reika`, or an `export` in your shell rc. A value the shell hands Reika is what _this_ session should be, and wins.
+2. **The last session** — `state.json`.
+3. **`.env` files** — `REIKA_DEFAULT_MODE` / `REIKA_MODEL` there are the defaults the saved state overrides.
+
+Only the launchable modes are remembered (agent, plan, minimal, vibe); ending in chat or shell leaves the last work mode on record. A saved profile the config no longer has — a removed `REIKA_PROFILES` entry, or an ad-hoc `/model some-new-model` that was never in `.env` — falls back to `default` rather than being recreated. `/new` resets to agent and `default`, and that is remembered too. Headless runs (`-p`) neither read nor write it: a script's behaviour should follow from its env, not from the last interactive session. Delete the file to forget.
 
 ## Headless mode
 
