@@ -293,7 +293,10 @@ claim 131k on a `-c 24576` server and then nothing compacts). Probed once at sta
 `/model` switch to a profile without one, recorded on that profile only (`contextWindowProbed`)
 so an ad-hoc profile inheriting from it re-probes rather than carrying another model's number;
 a server that reports nothing leaves the window unset — the gauge shows absolute tokens and
-nothing is capped. Each layer has a non-obvious invariant — don't "simplify" them without
+nothing is capped. A probe that never **reached** a server (llama-server still loading when
+reika started) is asked again at the next submit, awaited so the window governs that turn; one
+the server answered without a window is not, since asking again changes nothing
+(`ContextWindowProbe.reached`, `windowRetryRef` in `App.tsx`). Each layer has a non-obvious invariant — don't "simplify" them without
 reading why:
 
 - **Calibration** (`loop.ts`): the char/4 token estimate (`tokens.ts`) systematically

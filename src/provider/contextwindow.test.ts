@@ -130,7 +130,7 @@ describe('probeContextWindow', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(
       probeContextWindow({ baseURL: 'http://127.0.0.1:8000', apiKey: '', model: 'm' }),
-    ).resolves.toBe(24000);
+    ).resolves.toEqual({ window: 24000, reached: true });
     expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
       'http://127.0.0.1:8000/models',
       'http://127.0.0.1:8000/v1/models',
@@ -142,18 +142,18 @@ describe('probeContextWindow', () => {
   it('GETs {baseURL}/models with the key and returns the floored window', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => llamaListing(24576) }));
     vi.stubGlobal('fetch', fetchMock);
-    await expect(probeContextWindow(opts)).resolves.toBe(24000);
+    await expect(probeContextWindow(opts)).resolves.toEqual({ window: 24000, reached: true });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://localhost:8080/v1/models');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer k');
   });
 
-  it('is undefined on a non-2xx, a bad body, or a network failure — never a throw', async () => {
+  it('reports no window on a non-2xx, a bad body, or a listing without one — reached', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, json: async () => ({}) })),
     );
-    await expect(probeContextWindow(opts)).resolves.toBeUndefined();
+    await expect(probeContextWindow(opts)).resolves.toEqual({ reached: true });
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -163,13 +163,21 @@ describe('probeContextWindow', () => {
         },
       })),
     );
-    await expect(probeContextWindow(opts)).resolves.toBeUndefined();
+    await expect(probeContextWindow(opts)).resolves.toEqual({ reached: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ data: [] }) })),
+    );
+    await expect(probeContextWindow(opts)).resolves.toEqual({ reached: true });
+  });
+
+  it('reports unreached when nothing answers — never a throw', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
         throw new TypeError('fetch failed');
       }),
     );
-    await expect(probeContextWindow(opts)).resolves.toBeUndefined();
+    await expect(probeContextWindow(opts)).resolves.toEqual({ reached: false });
   });
 });

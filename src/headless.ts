@@ -109,7 +109,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
           .catch(() => {})
       : Promise.resolve(),
   ]);
-  if (probed) cfg = withProbedWindow(cfg, 'default', probed);
+  if (probed?.window) cfg = withProbedWindow(cfg, 'default', probed.window);
   const config = resolveProfile(cfg, 'default');
   const offline = isOffline();
   if (offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');

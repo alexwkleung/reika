@@ -236,6 +236,10 @@ export function App() {
   // action, never as an announcement in front of it. Flushed by submitToModel's user echo, which
   // runTurn always emits first, so nothing can strand here.
   const pendingNoticesRef = useRef<Message[]>([]);
+  // Profiles whose window probe (#417) never reached the server — llama-server still loading when
+  // reika started. Asked again at the next submit, when the turn needs the server up anyway. A
+  // probe the server answered without a window is not retried: the answer would not change.
+  const windowRetryRef = useRef(new Set<string>());
   // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
@@ -387,7 +391,8 @@ export function App() {
                 .catch(() => {})
             : Promise.resolve(),
         ]);
-        if (probed) cfg = withProbedWindow(cfg, 'default', probed);
+        if (probed?.window) cfg = withProbedWindow(cfg, 'default', probed.window);
+        if (probed && !probed.reached) windowRetryRef.current.add('default');
         setConfig(cfg);
         setBundle(b);
         // No route out → no web tools this session (#392). Checked once, here, because the tool
@@ -413,8 +418,9 @@ export function App() {
         // force here is `default`, and a later /model switch reports its own window in /stats.
         const runtime = resolveProfile(cfg, 'default');
         debugLog(formatBudget(b, runtime));
-        if (probed) {
-          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(probed) }]);
+        if (probed?.window) {
+          const w = probed.window;
+          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
         }
         const warn = budgetWarning(b, runtime);
         if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
@@ -506,7 +512,8 @@ export function App() {
     // is instant, and a turn submitted before the answer lands runs without a window, as it
     // would have anyway.
     if (next.contextWindow == null) {
-      void probeContextWindow(next).then(w => {
+      void probeContextWindow(next).then(({ window: w, reached }) => {
+        if (!reached) windowRetryRef.current.add(target);
         if (!w) return;
         setConfig(prev => (prev ? withProbedWindow(prev, target, w) : prev));
         setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
@@ -1621,6 +1628,20 @@ export function App() {
     const recordedMode = turnMode(modeRef.current, activeMode);
     setStatus('busy');
     setPhase('thinking');
+    // The startup probe found no server; this turn is about to need one, so ask again first and
+    // let the window govern this turn rather than the next. Awaited: a server that is up answers
+    // in milliseconds, and one that is not fails the chat call right after anyway.
+    let turnConfig = config;
+    const profile = config.profiles[activeProfile];
+    if (windowRetryRef.current.has(activeProfile) && profile?.contextWindow == null) {
+      const { window: w, reached } = await probeContextWindow(profile);
+      if (reached) windowRetryRef.current.delete(activeProfile);
+      if (w) {
+        turnConfig = withProbedWindow(config, activeProfile, w);
+        setConfig(turnConfig);
+        pendingNoticesRef.current.push({ role: 'system', content: probedWindowNotice(w) });
+      }
+    }
     resetTypecheck();
     setReasoningSpin(false);
     streamingRef.current = '';
@@ -1644,7 +1665,7 @@ export function App() {
         // and folds older spans in place, and both must survive to the next turn (#183).
         history: modelHistoryRef.current,
         bundle,
-        config: resolveProfile(config, activeProfile),
+        config: resolveProfile(turnConfig, activeProfile),
         // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools. Minimal
         // mode: the shell alone, with a prompt carrying no project context (#391).
         tools: turnTools(activeMode, {
