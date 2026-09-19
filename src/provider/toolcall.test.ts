@@ -16,7 +16,7 @@ const {
   droppedPayloadCount,
   hasDroppedPayloads,
   lastUserMessageIndex,
-  messagesToOpenAI,
+  messagesToChatParams,
   taskSpecIndex,
 } = await import('./toolcall.js');
 
@@ -29,9 +29,9 @@ function requestChars(out: unknown[]): number {
   }, 0);
 }
 
-describe('messagesToOpenAI', () => {
+describe('messagesToChatParams', () => {
   it('prepends the system prompt as the first message', () => {
-    const out = messagesToOpenAI('SYSTEM', []);
+    const out = messagesToChatParams('SYSTEM', []);
     expect(out[0]).toEqual({ role: 'system', content: 'SYSTEM' });
   });
 
@@ -40,7 +40,7 @@ describe('messagesToOpenAI', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     expect(out).toHaveLength(3);
     expect(out[1]).toEqual({ role: 'user', content: 'hi' });
     expect(out[2]).toMatchObject({ role: 'assistant', content: 'hello' });
@@ -56,7 +56,7 @@ describe('messagesToOpenAI', () => {
       },
       { role: 'tool', callId: 'call_1', summary: 'Read foo' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const assistant = out[2] as { content: unknown; tool_calls?: unknown[] };
     expect(assistant.content).toBeNull();
     expect(assistant.tool_calls).toHaveLength(1);
@@ -72,7 +72,7 @@ describe('messagesToOpenAI', () => {
       },
       { role: 'tool', callId: 'call_1', summary: 'Found matches' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const toolMsg = out[3] as { role: string; tool_call_id: string; name?: string };
     expect(toolMsg.role).toBe('tool');
     expect(toolMsg.tool_call_id).toBe('call_1');
@@ -86,7 +86,7 @@ describe('messagesToOpenAI', () => {
       { role: 'user', content: '/new', meta: true },
       { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     expect(out).toEqual([
       { role: 'system', content: 'sys' },
       { role: 'user', content: '(continue)' },
@@ -107,7 +107,7 @@ describe('messagesToOpenAI', () => {
       ...round('grep', 'Found 9 matches for /x/'),
       ...round('read', 'Read a.css lines 1-10 of 20'),
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const names = out.filter(m => m.role === 'tool').map(m => (m as { name?: string }).name);
     expect(names).toEqual(['edit', 'grep', 'read']);
   });
@@ -130,7 +130,7 @@ describe('messagesToOpenAI', () => {
       },
       { role: 'tool', callId: 'fresh', summary: 'fresh summary', payload: 'FRESH PAYLOAD' },
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -169,7 +169,7 @@ describe('messagesToOpenAI', () => {
         ...later('a', 'A'.repeat(3000)),
         ...later('b', 'B'.repeat(3000)),
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
       // Everything else outside the trailing block still ages normally.
       expect(contentFor(out, 'a')).not.toContain('AAA');
@@ -182,7 +182,7 @@ describe('messagesToOpenAI', () => {
         ...later('a', 'A'.repeat(120_000)),
         ...later('b', 'B'.repeat(120_000)),
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 8192 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 8192 });
       expect(contentFor(out, 'spec')).toContain('ISSUE BODY: the thing to fix');
     });
 
@@ -193,7 +193,7 @@ describe('messagesToOpenAI', () => {
         ...later('a', 'A'.repeat(3000)),
         ...later('b', 'B'.repeat(3000)),
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).toBe('Ran: gh issue view 213 (505 bytes output)');
     });
 
@@ -207,7 +207,7 @@ describe('messagesToOpenAI', () => {
         ...later('a', 'A'.repeat(3000)),
         ...later('b', 'B'.repeat(3000)),
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
       expect(contentFor(out, 'a')).toContain('AAA'); // the new turn's opening call is pinned now
     });
@@ -233,7 +233,7 @@ describe('messagesToOpenAI', () => {
         { role: 'tool', callId: 'small2', summary: 'Found 2 matches', payload: 'n'.repeat(1800) },
         { role: 'tool', callId: 'read', summary: 'Read z', payload: 'R'.repeat(4000) },
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 8192, calibration: 1 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 8192, calibration: 1 });
       expect(contentFor(out, 'spec')).toContain('SSS'); // the pin still holds…
       // …and the whole request still fits the window at the char/4 baseline.
       expect(requestChars(out)).toBeLessThanOrEqual(8192 * 4);
@@ -246,7 +246,10 @@ describe('messagesToOpenAI', () => {
         ...later('a', 'A'.repeat(3000)),
       ];
       (history[2] as Message & { role: 'tool' }).aged = true;
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384, prefixStable: true });
+      const out = messagesToChatParams('sys', history, {
+        contextWindow: 16384,
+        prefixStable: true,
+      });
       expect(contentFor(out, 'spec')).not.toContain('ISSUE BODY');
     });
   });
@@ -258,7 +261,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c', summary: 's', payload: big },
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -274,7 +277,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c', summary: 's', payload: big },
     ];
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
@@ -301,7 +304,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c', summary: 's', payload: big },
     ];
-    const out = messagesToOpenAI(system, history, { contextWindow: window, calibration: 0.9 });
+    const out = messagesToChatParams(system, history, { contextWindow: window, calibration: 0.9 });
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
@@ -318,7 +321,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
       { role: 'tool', callId: 'c', summary: 's', payload },
     ];
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
@@ -341,7 +344,7 @@ describe('messagesToOpenAI', () => {
       { role: 'tool', callId: 'a', summary: 's', payload: big },
       { role: 'tool', callId: 'b', summary: 's', payload: big },
     ];
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
     const a = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'a') as {
       content?: string;
     };
@@ -361,7 +364,7 @@ describe('messagesToOpenAI', () => {
       { role: 'tool', callId: 'c', summary: 's', payload: big },
     ];
     const len = (cal: number): number => {
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: cal });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384, calibration: cal });
       const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
         content?: string;
       };
@@ -381,7 +384,7 @@ describe('messagesToOpenAI', () => {
     ];
     // Even with an absurdly low learned calibration, the floor on the fresh conversion
     // keeps the serialized request within the window.
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: 0.1 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384, calibration: 0.1 });
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
       content?: string;
     };
@@ -439,7 +442,7 @@ describe('messagesToOpenAI', () => {
       // so nothing but the shared budget can save it. Charging the 55k retained chars at 2.5 put the
       // budget ~1.7x under water and this came back as the "entire output omitted" marker.
       const fresh = 'export function play(): void {}\n'.repeat(250); // ~8k chars
-      const out = messagesToOpenAI('sys prompt', retainedTurn(fresh), {
+      const out = messagesToChatParams('sys prompt', retainedTurn(fresh), {
         contextWindow: WINDOW,
         calibration: 1,
         prefixStable: true,
@@ -457,7 +460,7 @@ describe('messagesToOpenAI', () => {
       // The bound the cap now actually guarantees: measured bytes at the learned calibration
       // (floored at char/4) plus everything unmeasured at the pessimistic 2.5 stays inside the
       // window. Driven by an oversized fresh payload so the cap is the binding constraint.
-      const out = messagesToOpenAI('sys prompt', retainedTurn('Z'.repeat(200_000)), {
+      const out = messagesToChatParams('sys prompt', retainedTurn('Z'.repeat(200_000)), {
         contextWindow: WINDOW,
         calibration: 1,
         prefixStable: true,
@@ -492,7 +495,7 @@ describe('messagesToOpenAI', () => {
           },
           { role: 'tool', callId: 'c', summary: 'Ran: build', payload: 'Z'.repeat(100_000) },
         ];
-        const out = messagesToOpenAI('sys', history, {
+        const out = messagesToChatParams('sys', history, {
           contextWindow: 16384,
           calibration: 1,
           reasoningRounds: 2, // keep both rounds' reasoning, so only WHERE it sits differs
@@ -522,7 +525,7 @@ describe('messagesToOpenAI', () => {
         payload: 'file.ts:12: hit\n'.repeat(7),
       },
     ];
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384, calibration: 1.3 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384, calibration: 1.3 });
     const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'g') as {
       content?: string;
     };
@@ -537,7 +540,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c', summary: 's', payload: small },
     ];
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 }) as unknown as Array<{
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384 }) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -568,7 +571,7 @@ describe('messagesToOpenAI', () => {
         { role: 'user', content: 'implement' },
         ...readRound('r', payload),
       ];
-      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(system, history, { contextWindow: 16384 });
       expect(contentFor(out, 'r')).toContain(payload);
       expect(contentFor(out, 'r')).not.toContain('omitted');
     });
@@ -594,7 +597,7 @@ describe('messagesToOpenAI', () => {
         },
         { role: 'tool', callId: 'r', summary: 'Read a lines 1-500 of 500', payload: readPayload },
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'r')).toContain(readPayload); // verbatim
       expect(contentFor(out, 'r')).not.toContain('omitted');
       expect(contentFor(out, 'b')).toContain('to fit the context window'); // bash pays instead
@@ -617,7 +620,7 @@ describe('messagesToOpenAI', () => {
         { role: 'tool', callId: 'r1', summary: 'Read a lines 1-999 of 999', payload: oldPayload },
         { role: 'tool', callId: 'r2', summary: 'Read b lines 1-500 of 500', payload: newPayload },
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'r2')).toContain(newPayload);
       expect(contentFor(out, 'r1')).toContain('to fit the context window');
       expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
@@ -631,7 +634,7 @@ describe('messagesToOpenAI', () => {
         { role: 'user', content: 'go' },
         ...readRound('r', 'Z'.repeat(100_000)),
       ];
-      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(system, history, { contextWindow: 16384 });
       expect(contentFor(out, 'r')).toContain('to fit the context window');
       expect(requestChars(out) * (2.5 / 4)).toBeLessThanOrEqual(16384 + 31_000 * (2.5 / 4));
     });
@@ -650,7 +653,7 @@ describe('messagesToOpenAI', () => {
         { role: 'assistant', content: '', toolCalls: [{ id: 'call_0', name: 'read', args: {} }] },
         { role: 'tool', callId: 'call_0', summary: 'Read a.css lines 515-534 of 2376', payload },
       ];
-      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(system, history, { contextWindow: 16384 });
       const tools = out.filter(m => m.role === 'tool') as Array<{ content: string; name?: string }>;
       expect(tools[1].content).toContain(payload); // verbatim — protection recognized the read
       expect(tools[1].content).not.toContain('omitted');
@@ -660,7 +663,7 @@ describe('messagesToOpenAI', () => {
       const system = 'S'.repeat(31_000);
       const payload = 'const z = 3;\n'.repeat(170);
       const history: Message[] = [{ role: 'user', content: 'go' }, ...readRound('r', payload)];
-      const out = messagesToOpenAI(system, history, {
+      const out = messagesToChatParams(system, history, {
         contextWindow: 16384,
         prefixStable: true,
         stampRenders: true,
@@ -689,7 +692,7 @@ describe('messagesToOpenAI', () => {
         { role: 'assistant', content: '', toolCalls: [{ id: 'g', name: 'grep', args: {} }] },
         { role: 'tool', callId: 'g', summary: 'Found 1 matches', payload },
       ];
-      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(STARVED, history, { contextWindow: 16384 });
       expect(contentFor(out, 'g')).toContain(payload);
       expect(contentFor(out, 'g')).not.toContain('omitted');
     });
@@ -717,7 +720,7 @@ describe('messagesToOpenAI', () => {
         },
         { role: 'tool', callId: 'r', summary: 'Read a lines 1-10 of 10', payload: newest },
       ];
-      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(STARVED, history, { contextWindow: 16384 });
       expect(contentFor(out, 'b')).toContain(small);
       expect(contentFor(out, 'r')).toContain(newest);
     });
@@ -738,7 +741,7 @@ describe('messagesToOpenAI', () => {
         { role: 'tool', callId: 'g', summary: 'Found 1 matches', payload: small },
         { role: 'tool', callId: 'b', summary: 'Ran: build (100000 bytes output)', payload: big },
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       expect(contentFor(out, 'g')).toContain(small);
       expect(contentFor(out, 'b')).toContain('to fit the context window');
       expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
@@ -764,7 +767,7 @@ describe('messagesToOpenAI', () => {
           payload: `${k}`.repeat(2000),
         })),
       ];
-      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(STARVED, history, { contextWindow: 16384 });
       const kept = Array.from({ length: 8 }, (_, k) => contentFor(out, `g${k}`)).filter(
         c => !c.includes('omitted'),
       );
@@ -780,7 +783,7 @@ describe('messagesToOpenAI', () => {
         { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'bash', args: {} }] },
         { role: 'tool', callId: 'c', summary: 'Ran: build', payload: 'Z'.repeat(5000) },
       ];
-      const out = messagesToOpenAI(STARVED, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(STARVED, history, { contextWindow: 16384 });
       const content = contentFor(out, 'c');
       expect(content).toContain('5000 chars'); // the size that failed
       expect(content).toContain('2048 chars or less'); // the size that would not
@@ -811,7 +814,7 @@ describe('messagesToOpenAI', () => {
           { id: 'd', name: 'read', args: {} },
         ],
       };
-      const out = messagesToOpenAI('S'.repeat(40_000), history, { contextWindow: 16384 });
+      const out = messagesToChatParams('S'.repeat(40_000), history, { contextWindow: 16384 });
       const content =
         (
           out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
@@ -836,7 +839,7 @@ describe('messagesToOpenAI', () => {
         { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
         { role: 'tool', callId: 'c', summary: 's', payload: 'Z'.repeat(100_000) },
       ];
-      const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+      const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
       const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
         content?: string;
       };
@@ -858,7 +861,7 @@ describe('messagesToOpenAI', () => {
           payload: 'Z'.repeat(5000),
         },
       ];
-      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(system, history, { contextWindow: 16384 });
       const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'c') as {
         content?: string;
       };
@@ -884,7 +887,7 @@ describe('messagesToOpenAI', () => {
           payload: page,
         },
       ];
-      const out = messagesToOpenAI(system, history, { contextWindow: 16384 });
+      const out = messagesToChatParams(system, history, { contextWindow: 16384 });
       const tool = out.find(m => (m as { tool_call_id?: string }).tool_call_id === 'f') as {
         content?: string;
       };
@@ -901,7 +904,7 @@ describe('messagesToOpenAI', () => {
       { role: 'system', content: 'a slash command output' },
       { role: 'assistant', content: 'ok' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const roles = out.map(m => m.role);
     expect(roles).toEqual(['system', 'user', 'assistant']);
   });
@@ -912,7 +915,7 @@ describe('messagesToOpenAI', () => {
       { role: 'user', content: 'real question' },
       { role: 'assistant', content: 'real answer' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     expect(out.map(m => m.role)).toEqual(['system', 'user', 'assistant']);
     expect(out.find(m => m.role === 'user')?.content).toBe('real question');
   });
@@ -922,7 +925,7 @@ describe('messagesToOpenAI', () => {
       { role: 'compaction', content: 'RECAP OF EARLIER TURNS' },
       { role: 'user', content: 'now do this' },
     ];
-    const out = messagesToOpenAI('BASE SYSTEM', history);
+    const out = messagesToChatParams('BASE SYSTEM', history);
     // Exactly one system message, carrying both the base prompt and the recap.
     expect(out.filter(m => m.role === 'system')).toHaveLength(1);
     expect(out[0].role).toBe('system');
@@ -946,7 +949,7 @@ describe('messagesToOpenAI', () => {
       },
       { role: 'tool', callId: 'c1', summary: 'r1' },
     ];
-    const out = messagesToOpenAI('BASE', history);
+    const out = messagesToChatParams('BASE', history);
     const users = out.filter(m => m.role === 'user');
     expect(users).toHaveLength(1); // the request must contain a user turn
     expect(users[0].content).toContain('add web search'); // recap (carrying the task) surfaced as user
@@ -961,7 +964,7 @@ describe('messagesToOpenAI', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c1', summary: 'r1' },
     ];
-    const out = messagesToOpenAI('BASE', history);
+    const out = messagesToChatParams('BASE', history);
     const users = out.filter(m => m.role === 'user');
     expect(users).toHaveLength(1);
     expect(users[0].content).toBe('(continue)');
@@ -986,7 +989,7 @@ describe('messagesToOpenAI', () => {
       },
       { role: 'tool', callId: 'c2', summary: 'r2' },
     ];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const assistants = out.filter(m => m.role === 'assistant') as Array<{
       reasoning_content?: string;
     }>;
@@ -997,7 +1000,7 @@ describe('messagesToOpenAI', () => {
 
   it('drops reasoning from a completed (final-answer) assistant message', () => {
     const history: Message[] = [{ role: 'assistant', content: 'answer', reasoning: 'thinking…' }];
-    const out = messagesToOpenAI('sys', history);
+    const out = messagesToChatParams('sys', history);
     const assistant = out[1] as { reasoning_content?: string };
     expect(assistant.reasoning_content).toBeUndefined();
   });
@@ -1018,7 +1021,7 @@ describe('messagesToOpenAI', () => {
       ...round(2),
       ...round(3),
     ];
-    const out = messagesToOpenAI('sys', history, { reasoningRounds: 2 });
+    const out = messagesToChatParams('sys', history, { reasoningRounds: 2 });
     const reasonings = out
       .filter(m => m.role === 'assistant')
       .map(m => (m as { reasoning_content?: string }).reasoning_content);
@@ -1040,7 +1043,7 @@ describe('messagesToOpenAI', () => {
       { role: 'user', content: 'next' },
       { role: 'assistant', content: 'done' },
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -1134,7 +1137,7 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
       .content;
 
   it('keeps file and hunk headers when the diff ages out', () => {
-    const out = messagesToOpenAI('sys', history(DIFF), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(DIFF), { contextWindow: 8192 });
     const aged = contentFor(out, 'd');
     expect(aged).toContain('Ran: gh pr diff 225');
     expect(aged).toContain('diff --git a/src/tools/_spill.test.ts');
@@ -1145,7 +1148,7 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
   });
 
   it('tells the model it no longer has the hunks, and that disk wins', () => {
-    const out = messagesToOpenAI('sys', history(DIFF), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(DIFF), { contextWindow: 8192 });
     const aged = contentFor(out, 'd');
     expect(aged).toContain('no longer in context');
     expect(aged).toContain('do not state what one adds');
@@ -1157,7 +1160,7 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
       { length: 4000 },
       (_, i) => `@@ -${i},6 +${i},7 @@ hunk ${i}\n+body line that must not be kept ${i}`,
     ).join('\n');
-    const out = messagesToOpenAI('sys', history(huge), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(huge), { contextWindow: 8192 });
     const aged = contentFor(out, 'd');
     expect(aged.length).toBeLessThan(2048);
     expect(aged).toContain('further structural line(s) were dropped as well');
@@ -1165,7 +1168,7 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
   });
 
   it('leaves a non-diff payload aging to its summary alone', () => {
-    const out = messagesToOpenAI(
+    const out = messagesToChatParams(
       'sys',
       history('just some command output\nwith no hunks\n'.repeat(60)),
       {
@@ -1182,12 +1185,12 @@ describe('aged diff keeps a structural skeleton (#227 follow-up)', () => {
     const tail = Array.from({ length: 60 }, () =>
       ['+      // Gone already.', '+    }', '+  }', '+  return removed;'].join('\n'),
     ).join('\n');
-    const out = messagesToOpenAI('sys', history(tail), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(tail), { contextWindow: 8192 });
     expect(contentFor(out, 'd')).toBe('Ran: gh pr diff 225 (15169 bytes output)');
   });
 
   it('does not touch the diff while it is still live', () => {
-    const out = messagesToOpenAI('sys', history(DIFF).slice(0, 5), { contextWindow: 32768 });
+    const out = messagesToChatParams('sys', history(DIFF).slice(0, 5), { contextWindow: 32768 });
     const live = contentFor(out, 'd');
     expect(live).toContain('+  sweepStaleSpills,');
     expect(live).not.toContain('no longer in context');
@@ -1231,7 +1234,7 @@ describe('aged read keeps a declaration outline (#260)', () => {
       .content;
 
   it('keeps top-level declarations with their line numbers, and drops the bodies', () => {
-    const out = messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(FILE), { contextWindow: 8192 });
     const aged = contentFor(out, 'r');
     expect(aged).toContain('Read src/tools/_spill.ts lines 1-244 of 244');
     expect(aged).toContain('export function spillResult(text: string): string {');
@@ -1243,7 +1246,10 @@ describe('aged read keeps a declaration outline (#260)', () => {
   });
 
   it('tells the model to re-read a narrow range rather than the whole file', () => {
-    const aged = contentFor(messagesToOpenAI('sys', history(FILE), { contextWindow: 8192 }), 'r');
+    const aged = contentFor(
+      messagesToChatParams('sys', history(FILE), { contextWindow: 8192 }),
+      'r',
+    );
     expect(aged).toContain('no longer in context');
     expect(aged).toContain('narrow line range');
     expect(aged).toContain('the file is right');
@@ -1256,14 +1262,17 @@ describe('aged read keeps a declaration outline (#260)', () => {
         g(i * 2 + 2, '  body line kept never;'),
       ].join('\n'),
     ).join('\n');
-    const aged = contentFor(messagesToOpenAI('sys', history(huge), { contextWindow: 8192 }), 'r');
+    const aged = contentFor(
+      messagesToChatParams('sys', history(huge), { contextWindow: 8192 }),
+      'r',
+    );
     expect(aged.length).toBeLessThan(2048);
     expect(aged).toContain('further structural line(s) were dropped as well');
     expect(aged).not.toContain('body line kept never');
   });
 
   it('ages command output to its summary alone — no gutter, no outline', () => {
-    const out = messagesToOpenAI(
+    const out = messagesToChatParams(
       'sys',
       history('export function looksLikeCode() {}\nplain\n'.repeat(60)),
       { contextWindow: 8192 },
@@ -1277,12 +1286,12 @@ describe('aged read keeps a declaration outline (#260)', () => {
       g(220, '  return x;'),
       g(221, '}'),
     ].join('\n');
-    const out = messagesToOpenAI('sys', history(body), { contextWindow: 8192 });
+    const out = messagesToChatParams('sys', history(body), { contextWindow: 8192 });
     expect(contentFor(out, 'r')).toBe('Read src/tools/_spill.ts lines 1-244 of 244');
   });
 
   it('does not touch the read while it is still live', () => {
-    const out = messagesToOpenAI('sys', history(FILE).slice(0, 5), { contextWindow: 32768 });
+    const out = messagesToChatParams('sys', history(FILE).slice(0, 5), { contextWindow: 32768 });
     const live = contentFor(out, 'r');
     expect(live).toContain('const ref = makeRef(text);');
     expect(live).not.toContain('no longer in context');
@@ -1405,7 +1414,7 @@ describe('a skeletoned diff still counts as dropped', () => {
     expect(hasDroppedPayloads(history, true)).toBe(true);
 
     // ...and the thing it counted really does render as more than its summary.
-    const out = messagesToOpenAI('sys', history, {
+    const out = messagesToChatParams('sys', history, {
       contextWindow: 8192,
       prefixStable: true,
     }) as Array<{
@@ -1431,7 +1440,7 @@ describe('a skeletoned diff still counts as dropped', () => {
       { role: 'tool', callId: 'd', summary: 'Ran: gh pr diff', payload: tiny, aged: true },
     ];
     expect(droppedPayloadCount(history, true)).toBe(1);
-    const out = messagesToOpenAI('sys', history, {
+    const out = messagesToChatParams('sys', history, {
       contextWindow: 8192,
       prefixStable: true,
     }) as Array<{ tool_call_id?: string; content: string }>;
@@ -1494,7 +1503,7 @@ describe('dedupToolContent', () => {
 
 // EXPERIMENT (REIKA_PREFIX_STABLE, issue #69): prefix-stable serialization — sticky payload
 // liveness, byte-frozen renders, sticky reasoning retention, and the trailing harness note.
-describe('messagesToOpenAI prefix-stable', () => {
+describe('messagesToChatParams prefix-stable', () => {
   const toolRound = (id: string, payload?: string): Message[] => [
     {
       role: 'assistant',
@@ -1510,7 +1519,7 @@ describe('messagesToOpenAI prefix-stable', () => {
       ...toolRound('old', 'OLD PAYLOAD'),
       ...toolRound('fresh', 'FRESH PAYLOAD'),
     ];
-    const out = messagesToOpenAI('sys', history, { prefixStable: true });
+    const out = messagesToChatParams('sys', history, { prefixStable: true });
     const tools = out.filter(m => m.role === 'tool') as Array<{ content: string }>;
     expect(tools[0].content).toContain('OLD PAYLOAD');
     expect(tools[1].content).toContain('FRESH PAYLOAD');
@@ -1524,7 +1533,7 @@ describe('messagesToOpenAI prefix-stable', () => {
       ...toolRound('fresh', 'FRESH PAYLOAD'),
     ];
     (history[2] as Message & { role: 'tool' }).aged = true;
-    const out = messagesToOpenAI('sys', history, { prefixStable: true });
+    const out = messagesToChatParams('sys', history, { prefixStable: true });
     const tools = out.filter(m => m.role === 'tool') as Array<{ content: string }>;
     expect(tools[0].content).toBe('old summary');
     expect(tools[1].content).toContain('FRESH PAYLOAD');
@@ -1533,9 +1542,9 @@ describe('messagesToOpenAI prefix-stable', () => {
   it('stamps rendered bytes only when stampRenders is set (never on estimates)', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'PAYLOAD')];
     const toolMsg = history[2] as Message & { role: 'tool' };
-    messagesToOpenAI('sys', history, { prefixStable: true });
+    messagesToChatParams('sys', history, { prefixStable: true });
     expect(toolMsg.rendered).toBeUndefined();
-    messagesToOpenAI('sys', history, { prefixStable: true, stampRenders: true });
+    messagesToChatParams('sys', history, { prefixStable: true, stampRenders: true });
     expect(toolMsg.rendered).toContain('PAYLOAD');
   });
 
@@ -1544,12 +1553,12 @@ describe('messagesToOpenAI prefix-stable', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', bigPayload)];
     const toolMsg = history[2] as Message & { role: 'tool' };
     // First real call: no window pressure — payload rendered in full and stamped.
-    messagesToOpenAI('sys', history, { prefixStable: true, stampRenders: true });
+    messagesToChatParams('sys', history, { prefixStable: true, stampRenders: true });
     const stamped = toolMsg.rendered!;
     expect(stamped).toContain(bigPayload);
     // Later call under a tiny window that would truncate hard: the frozen bytes must not change,
     // or the mid-history rewrite invalidates the engine's prefix cache.
-    const out = messagesToOpenAI('sys', history, {
+    const out = messagesToChatParams('sys', history, {
       prefixStable: true,
       stampRenders: true,
       contextWindow: 1024,
@@ -1568,13 +1577,13 @@ describe('messagesToOpenAI prefix-stable', () => {
       { ...toolRound('r2')[0], reasoning: 'think 2' } as Message,
       toolRound('r2')[1],
     ];
-    const out = messagesToOpenAI('sys', history, { prefixStable: true, reasoningRounds: 1 });
+    const out = messagesToChatParams('sys', history, { prefixStable: true, reasoningRounds: 1 });
     const reasonings = out
       .filter(m => m.role === 'assistant')
       .map(m => (m as { reasoning_content?: string }).reasoning_content);
     expect(reasonings).toEqual(['think 1', 'think 2']);
     (history[1] as Message & { role: 'assistant' }).reasoningAged = true;
-    const out2 = messagesToOpenAI('sys', history, { prefixStable: true, reasoningRounds: 1 });
+    const out2 = messagesToChatParams('sys', history, { prefixStable: true, reasoningRounds: 1 });
     const reasonings2 = out2
       .filter(m => m.role === 'assistant')
       .map(m => (m as { reasoning_content?: string }).reasoning_content);
@@ -1583,13 +1592,13 @@ describe('messagesToOpenAI prefix-stable', () => {
 
   it('appends the trailing note as the final user message', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
-    const out = messagesToOpenAI('sys', history, { trailingNote: '--- reika status ---' });
+    const out = messagesToChatParams('sys', history, { trailingNote: '--- reika status ---' });
     const last = out[out.length - 1] as { role: string; content: string };
     expect(last).toEqual({ role: 'user', content: '--- reika status ---' });
   });
 
   it('counts the trailing note as the user message a user-requiring template needs', () => {
-    const out = messagesToOpenAI('sys', [], { trailingNote: 'note' });
+    const out = messagesToChatParams('sys', [], { trailingNote: 'note' });
     expect(out.filter(m => m.role === 'user')).toHaveLength(1);
     expect((out[1] as { content: string }).content).toBe('note');
   });

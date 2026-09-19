@@ -1172,7 +1172,7 @@ export async function runTurn(opts: {
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
-  // that reaches the model, since messagesToOpenAI drops system messages. Reasoning is deliberately
+  // that reaches the model, since messagesToChatParams drops system messages. Reasoning is deliberately
   // NOT set alongside the tail: sending both channels would pay for the same text twice and make the
   // retention bound fiction. Shared by both cut paths so they cannot drift apart. Returns the chars
   // trimmed, for the user-facing notice.
@@ -2466,7 +2466,7 @@ export async function runTurn(opts: {
         opts.history.push(partial);
         opts.onMessage(partial);
       }
-      // The nudge must be role 'user' to reach the model (messagesToOpenAI drops system
+      // The nudge must be role 'user' to reach the model (messagesToChatParams drops system
       // messages). Push it to history but don't surface it as a user bubble — it isn't the
       // user's input. The UI sees a separate 'warn' system notice instead (same split
       // compaction uses: model-facing message in history, UI-only notice via onMessage).
@@ -2569,7 +2569,7 @@ export async function runTurn(opts: {
       // the edits introduced new type errors, send the model back to fix them instead of letting it
       // finish on broken code — the harness verifies so the weak model doesn't have to. The model's
       // premature answer stays in the scrollback (same as the length-retry path); a 'user' message
-      // carries the errors to the model (system messages get dropped by messagesToOpenAI), and a
+      // carries the errors to the model (system messages get dropped by messagesToChatParams), and a
       // 'warn' notice tells the human. Bounded by MAX_TYPECHECK_GATE_ROUNDS: past the cap it commits
       // dirty with a notice rather than looping. Fail-open: no baseline or an unrunnable final check
       // just lets the turn end.

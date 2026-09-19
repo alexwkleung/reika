@@ -31,7 +31,7 @@ vi.mock('../provider/client.js', () => ({
   }),
 }));
 
-const { messagesToOpenAI } = await import('../provider/toolcall.js');
+const { messagesToChatParams } = await import('../provider/toolcall.js');
 const { runTurn } = await import('./loop.js');
 const { buildWarmPayload } = await import('./warm.js');
 
@@ -138,8 +138,8 @@ describe('warm prefix under REIKA_DEDUP_PAYLOADS', () => {
       reasoningRounds: config.reasoningRounds,
       minGenTokens: config.minGenTokens,
     };
-    const warmMsgs = messagesToOpenAI(warm.system, warm.history, opts);
-    const realMsgs = messagesToOpenAI(real.system, real.history, opts);
+    const warmMsgs = messagesToChatParams(warm.system, warm.history, opts);
+    const realMsgs = messagesToChatParams(real.system, real.history, opts);
     // Dedup actually engaged in the warm payload (the duplicate re-read collapsed to a stub) —
     // otherwise this test would pass vacuously with the flag broken.
     const flat = JSON.stringify(warmMsgs);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agedContentChars, messagesToOpenAI, type AgedStats } from './toolcall.js';
+import { agedContentChars, messagesToChatParams, type AgedStats } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #260 verification run 1: three re-reads and two folds in one 19-round /review, and nothing in the
@@ -47,7 +47,7 @@ const history = (payload: string): Message[] => [
 
 function serialize(h: Message[]): { aged: string; stats: AgedStats } {
   let stats: AgedStats | undefined;
-  const out = messagesToOpenAI('sys', h, {
+  const out = messagesToChatParams('sys', h, {
     contextWindow: 8192,
     onAgedStats: s => {
       stats = s;
@@ -102,7 +102,7 @@ describe('aged-payload stats (#260)', () => {
 
   it('reports nothing when no payload is aged', () => {
     let stats: AgedStats | undefined;
-    messagesToOpenAI('sys', history(CLI_TSX).slice(0, 3), {
+    messagesToChatParams('sys', history(CLI_TSX).slice(0, 3), {
       contextWindow: 32768,
       onAgedStats: s => {
         stats = s;

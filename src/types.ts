@@ -108,7 +108,7 @@ export type Message =
     }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
-  // messagesToOpenAI); the UI keeps the full scrollback separately.
+  // messagesToChatParams); the UI keeps the full scrollback separately.
   | { role: 'compaction'; content: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 

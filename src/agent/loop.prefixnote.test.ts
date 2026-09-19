@@ -16,7 +16,7 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 // actual cost sat in three shrink events.
 //
 // A unit test on PrefixTrace can't catch a loop that never passes the flag, so this drives runTurn
-// and serializes through the REAL messagesToOpenAI — the note's position in the request is the
+// and serializes through the REAL messagesToChatParams — the note's position in the request is the
 // whole premise, and a hand-built message list would just re-assert it.
 const PRIOR: Record<string, string | undefined> = {};
 for (const k of [
@@ -39,7 +39,7 @@ afterAll(() => {
 
 const h = vi.hoisted(() => ({ scripted: [] as ModelResponse[] }));
 vi.mock('../provider/client.js', async () => {
-  const { messagesToOpenAI: toOpenAI } = await import('../provider/toolcall.js');
+  const { messagesToChatParams: toChatParams } = await import('../provider/toolcall.js');
   return {
     // Mirrors client.ts's own composition so onRequest sees the bytes a real call would send.
     callModel: vi.fn(
@@ -52,7 +52,7 @@ vi.mock('../provider/client.js', async () => {
         onRequest?: (m: unknown[]) => void;
       }) => {
         opts.onRequest?.(
-          toOpenAI(opts.system, opts.history, {
+          toChatParams(opts.system, opts.history, {
             contextWindow: opts.config.contextWindow,
             reasoningRounds: opts.config.reasoningRounds,
             minGenTokens: opts.config.minGenTokens,

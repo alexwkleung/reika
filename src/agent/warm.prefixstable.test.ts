@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os';
 import ignore from 'ignore';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
-import { messagesToOpenAI } from '../provider/toolcall.js';
+import { messagesToChatParams } from '../provider/toolcall.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 import type { PromptMode } from './prompt.js';
@@ -107,7 +107,7 @@ function priorTurn(): Message[] {
 // Serialize the way client.ts does for a prefix-stable request, WITHOUT stamping (comparison
 // only — the bytes are identical either way, stamping merely persists them).
 const serialize = (c: Config, system: string, history: Message[], trailingNote?: string) =>
-  messagesToOpenAI(system, history, {
+  messagesToChatParams(system, history, {
     contextWindow: c.contextWindow,
     calibration: 1,
     reasoningRounds: c.reasoningRounds,

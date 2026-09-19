@@ -10,7 +10,7 @@ afterAll(() => {
   else process.env.REIKA_DEDUP_PAYLOADS = PRIOR;
 });
 
-const { messagesToOpenAI } = await import('./toolcall.js');
+const { messagesToChatParams } = await import('./toolcall.js');
 
 // Total serialized characters of a built request — content plus tool_call JSON.
 function requestChars(out: unknown[]): number {
@@ -21,7 +21,7 @@ function requestChars(out: unknown[]): number {
   }, 0);
 }
 
-describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
+describe('messagesToChatParams with REIKA_DEDUP_PAYLOADS=1', () => {
   it('collapses a repeated aged read trail while keeping the current read whole', () => {
     // The model re-read A three rounds running. Rounds 1-2 have aged to summary-only; round 3 is the
     // fresh block. The byte-identical aged summary in round 2 is the cross-round attractor — it gets
@@ -47,7 +47,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
       ...readA('c2'),
       ...readA('c3', 'PAYLOAD_A_FRESH'),
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -77,7 +77,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
       { role: 'tool', callId: 'a', summary: 'Read A lines 1-5 of 5', payload: 'DUP_BODY' },
       { role: 'tool', callId: 'b', summary: 'Read A lines 1-5 of 5', payload: 'DUP_BODY' },
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -111,7 +111,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
       (out.find(m => (m as { tool_call_id?: string }).tool_call_id === id) as { content: string })
         .content;
 
-    const out = messagesToOpenAI('sys', history, { contextWindow: 16384 });
+    const out = messagesToChatParams('sys', history, { contextWindow: 16384 });
     expect(contentFor(out, 'b')).toContain('you already have it'); // dup stubbed, not capped
     expect(contentFor(out, 'b')).not.toContain('to fit the context window');
     expect(contentFor(out, 'a')).toContain('to fit the context window'); // survivor still capped
@@ -124,7 +124,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
       { role: 'tool', callId: 'a', summary: 's', payload: `${big}A` },
       { role: 'tool', callId: 'b', summary: 's', payload: `${big}B` },
     ];
-    const controlOut = messagesToOpenAI('sys', control, { contextWindow: 16384 });
+    const controlOut = messagesToChatParams('sys', control, { contextWindow: 16384 });
     expect(contentFor(out, 'a').length).toBeGreaterThan(contentFor(controlOut, 'a').length * 1.5);
     expect(requestChars(out)).toBeLessThanOrEqual(16384 * 4);
   });
@@ -142,7 +142,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
       { role: 'assistant', content: '', toolCalls: [{ id: 'e2', name: 'edit', args: {} }] },
       { role: 'tool', callId: 'e2', summary: fail },
     ];
-    const out = messagesToOpenAI('sys', history) as unknown as Array<{
+    const out = messagesToChatParams('sys', history) as unknown as Array<{
       tool_call_id?: string;
       content?: string;
     }>;
@@ -182,7 +182,7 @@ describe('messagesToOpenAI with REIKA_DEDUP_PAYLOADS=1', () => {
         { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'bash', args: {} }] },
         { role: 'tool', callId: 'c2', summary },
       ];
-      const out = messagesToOpenAI('sys', history) as unknown as Array<{
+      const out = messagesToChatParams('sys', history) as unknown as Array<{
         tool_call_id?: string;
         content?: string;
       }>;
