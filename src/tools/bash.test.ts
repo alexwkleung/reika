@@ -451,19 +451,19 @@ describe('planTools — REIKA_PLAN_BASH gate', () => {
     delete process.env.REIKA_PLAN_BASH;
   });
 
-  it('omits bash by default', () => {
+  it('adds the read-only bash by default', () => {
     delete process.env.REIKA_PLAN_BASH;
-    expect(planTools().map(t => t.name)).not.toContain('bash');
-  });
-
-  it('adds the read-only bash under the flag', () => {
-    process.env.REIKA_PLAN_BASH = '1';
     const bash = planTools().find(t => t.name === 'bash');
     expect(bash).toBe(readOnlyBashTool);
   });
 
+  it('omits bash under =0', () => {
+    process.env.REIKA_PLAN_BASH = '0';
+    expect(planTools().map(t => t.name)).not.toContain('bash');
+  });
+
   it('never adds the unrestricted bash', () => {
-    process.env.REIKA_PLAN_BASH = '1';
+    delete process.env.REIKA_PLAN_BASH;
     expect(planTools()).not.toContain(bashTool);
   });
 });

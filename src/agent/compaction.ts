@@ -864,10 +864,10 @@ export function distillPlanHandoff(
 // gatherPlanFindings.
 function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   const files = new Set<string>();
-  // Exploration done through `bash` (REIKA_PLAN_BASH) carries `command`, not `path`, so without this
-  // the digest's "Files examined" line silently under-reports the plan phase — the agent turn would
-  // inherit a handoff claiming less was explored than actually was. See buildPlanLedger in loop.ts,
-  // which goes blind the same way for the same reason.
+  // Exploration through plan mode's read-only `bash` (#109) carries `command`, not `path`, so
+  // without this the digest's "Files examined" line silently under-reports the plan phase — the
+  // agent turn would inherit a handoff claiming less was explored than actually was. See
+  // buildPlanLedger in loop.ts, which goes blind the same way for the same reason.
   const commands = new Set<string>();
   const priorRecaps: string[] = [];
   for (const m of span) {

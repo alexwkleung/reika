@@ -85,9 +85,9 @@ function buildMinimalPrompt(bundle: ContextBundle, canAsk?: boolean): string {
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
 function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean): string {
   // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
-  // worse than saying nothing — it won't reach for one it has been told is absent. The default text
-  // is left byte-identical so the flag A/Bs against an unchanged prompt.
-  const planBash = process.env.REIKA_PLAN_BASH === '1';
+  // worse than saying nothing — it won't reach for one it has been told is absent. The `=0` text
+  // is the pre-#109 prompt byte-for-byte, so the baseline arm A/Bs against an unchanged prompt.
+  const planBash = process.env.REIKA_PLAN_BASH !== '0';
   const parts: string[] = [
     [
       'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',

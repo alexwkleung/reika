@@ -27,22 +27,22 @@ describe('plan prompt tracks planTools (#109)', () => {
     delete process.env.REIKA_PLAN_BASH;
   });
 
-  it('says commands are unavailable while bash is not in the tool list', () => {
+  it('offers read-only bash by default, while bash IS in the tool list', () => {
     delete process.env.REIKA_PLAN_BASH;
-    expect(planTools().map(t => t.name)).not.toContain('bash');
-    expect(planPromptFlat()).toContain('CANNOT edit, write, or run commands');
-  });
-
-  it('offers read-only bash while bash IS in the tool list', () => {
-    process.env.REIKA_PLAN_BASH = '1';
     expect(planTools().map(t => t.name)).toContain('bash');
     const prompt = planPromptFlat();
     expect(prompt).toContain('READ-ONLY shell commands through bash');
     expect(prompt).not.toContain('or run commands');
   });
 
+  it('says commands are unavailable under =0, when bash is not in the tool list', () => {
+    process.env.REIKA_PLAN_BASH = '0';
+    expect(planTools().map(t => t.name)).not.toContain('bash');
+    expect(planPromptFlat()).toContain('CANNOT edit, write, or run commands');
+  });
+
   it('never offers writing, under either setting', () => {
-    for (const flag of [undefined, '1']) {
+    for (const flag of [undefined, '0']) {
       if (flag) process.env.REIKA_PLAN_BASH = flag;
       else delete process.env.REIKA_PLAN_BASH;
       expect(planPromptFlat()).toMatch(/CANNOT edit/);

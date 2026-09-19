@@ -56,7 +56,7 @@ describe('read-only bash in plan mode (integration, #109)', () => {
     cwd = await mkdtemp(join(tmpdir(), 'reika-planbash-'));
     await writeFile(join(cwd, 'target.txt'), 'untouched', 'utf8');
     h.scripted.length = 0;
-    process.env.REIKA_PLAN_BASH = '1';
+    delete process.env.REIKA_PLAN_BASH;
   });
   afterEach(async () => {
     delete process.env.REIKA_PLAN_BASH;
@@ -109,8 +109,8 @@ describe('read-only bash in plan mode (integration, #109)', () => {
     expect(await readFile(join(cwd, 'target.txt'), 'utf8')).toBe('untouched');
   });
 
-  it('does not offer bash at all with the flag off', async () => {
-    delete process.env.REIKA_PLAN_BASH;
+  it('does not offer bash at all under =0', async () => {
+    process.env.REIKA_PLAN_BASH = '0';
     expect(planTools().map(t => t.name)).not.toContain('bash');
   });
 });
