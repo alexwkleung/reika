@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoApproves } from './approval.js';
+import { autoApproveForced, autoApproves, effectiveAutoApprove } from './approval.js';
 import type { ApprovalRequest } from './types.js';
 
 const plain: ApprovalRequest = { tool: 'bash', subject: '/repo', preview: 'ls' };
@@ -24,5 +24,41 @@ describe('autoApproves', () => {
 
   it('bypass is not a policy here — callers drop the gate instead', () => {
     expect(autoApproves('bypass', plain)).toBe(false);
+  });
+});
+
+describe('effectiveAutoApprove', () => {
+  const unset = { autoApprove: 'safe' as const, autoApproveExplicit: false };
+  const envSafe = { autoApprove: 'safe' as const, autoApproveExplicit: true };
+  const envOff = { autoApprove: 'off' as const, autoApproveExplicit: true };
+  const envBypass = { autoApprove: 'bypass' as const, autoApproveExplicit: true };
+
+  it('no config yet means nothing auto-runs', () => {
+    expect(effectiveAutoApprove(null, null)).toBe('off');
+    expect(effectiveAutoApprove(null, true)).toBe('off');
+  });
+
+  it('the unset default is safe until the session toggles it off', () => {
+    expect(effectiveAutoApprove(unset, null)).toBe('safe');
+    expect(effectiveAutoApprove(unset, false)).toBe('off');
+    expect(effectiveAutoApprove(unset, true)).toBe('safe');
+  });
+
+  it('an explicit off is off until the session toggles it on', () => {
+    expect(effectiveAutoApprove(envOff, null)).toBe('off');
+    expect(effectiveAutoApprove(envOff, true)).toBe('safe');
+  });
+
+  it('an explicit safe or bypass shadows the session toggle', () => {
+    expect(effectiveAutoApprove(envSafe, false)).toBe('safe');
+    expect(effectiveAutoApprove(envBypass, false)).toBe('bypass');
+  });
+
+  it('autoApproveForced is true only for an explicit non-off mode', () => {
+    expect(autoApproveForced(unset)).toBe(false);
+    expect(autoApproveForced(envOff)).toBe(false);
+    expect(autoApproveForced(envSafe)).toBe(true);
+    expect(autoApproveForced(envBypass)).toBe(true);
+    expect(autoApproveForced({ autoApprove: 'off' })).toBe(false);
   });
 });

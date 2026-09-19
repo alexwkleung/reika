@@ -388,6 +388,9 @@ export type Config = {
   maxTurns: number;
   repoMapBudget: number;
   autoApprove: AutoApproveMode;
+  // True when REIKA_AUTO_APPROVE was set: `safe` is the default when it isn't, and the session
+  // toggle (/approvals) has to know whether a `safe` came from the env or from that default.
+  autoApproveExplicit?: boolean;
   subagentModel?: string;
   subagentBaseURL?: string;
   subagentApiKey?: string;

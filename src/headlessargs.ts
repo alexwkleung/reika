@@ -24,9 +24,9 @@ export const HEADLESS_USAGE = `usage: reika -p [prompt] [--mode agent|plan|vibe|
   --save                save the transcript to ~/.config/reika/history like /save
   -h, --help            show this
 
-A prompt starting with /<skill> runs that skill. Approvals follow REIKA_AUTO_APPROVE: with no
-prompt to fall back on, anything 'safe' would have asked about is declined, and 'off' declines
-every edit and command. ask_user is never offered. Exit status: 0 on a reply, 1 on an error,
+A prompt starting with /<skill> runs that skill. Approvals follow REIKA_AUTO_APPROVE (default
+'safe'): with no prompt to fall back on, anything 'safe' would have asked about is declined,
+and 'off' declines every edit and command. ask_user is never offered. Exit status: 0 on a reply, 1 on an error,
 130 when interrupted.`;
 
 const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 'chat']);

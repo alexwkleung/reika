@@ -55,6 +55,7 @@ export function loadConfig(): Config {
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
+    autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
@@ -126,13 +127,18 @@ function emptyToUndefined(s: string | undefined): string | undefined {
 
 // REIKA_AUTO_APPROVE controls how much runs without a confirmation prompt:
 //   'safe' (also 'true'/'1') — auto-approve ordinary actions; commands flagged dangerous
-//                              (see bash.ts danger patterns) still prompt.
+//                              (see bash.ts danger patterns) and writes outside the project
+//                              still prompt. The default when unset.
 //   'bypass' (also 'yolo')   — approve everything, including dangerous commands. True yolo.
-//   anything else / unset    — 'off': confirm every action.
+//   'off' (also 'false'/'0') — confirm every action. Any unrecognized value lands here too:
+//                              a typo in a permission setting should cost prompts, not safety.
 // 'true'/'1' map to 'safe' (not 'bypass') so the common opt-in keeps the safety net; full
-// bypass has to be asked for by name.
+// bypass has to be asked for by name. Unset is 'safe' rather than 'off' because the danger
+// scan already holds back everything an in-repo `git checkout` can't undo, and confirming each
+// ordinary edit made every multi-edit session a click-through.
 function parseAutoApprove(raw: string | undefined): AutoApproveMode {
   switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
     case 'safe':
     case 'true':
     case '1':

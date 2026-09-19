@@ -16,7 +16,7 @@ import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { Question, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
-import { autoApproves } from '../approval.js';
+import { autoApproveForced, autoApproves, effectiveAutoApprove } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
@@ -191,7 +191,9 @@ export function App() {
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
   const [exitArmed, setExitArmed] = useState(false);
-  const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
+  // null = untouched, so the effective mode falls through to the config default (safe when
+  // REIKA_AUTO_APPROVE is unset) — see effectiveAutoApprove.
+  const [sessionAutoApprove, setSessionAutoApprove] = useState<boolean | null>(null);
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
   const [pr, setPr] = useState<number | null>(null);
@@ -266,7 +268,7 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
-  const sessionAutoApproveRef = useRef(false);
+  const sessionAutoApproveRef = useRef<boolean | null>(null);
   sessionAutoApproveRef.current = sessionAutoApprove;
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
@@ -733,11 +735,11 @@ export function App() {
   };
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
-    // 'safe' (env) and the session toggle are the same policy (approval.ts, shared with the
-    // headless runner): ordinary actions auto-run, a flagged dangerous command still falls
-    // through to the prompt. 'bypass' never reaches here — requestApproval is undefined in that
-    // mode (see runTurn wiring below).
-    const policy = sessionAutoApproveRef.current ? 'safe' : (config?.autoApprove ?? 'off');
+    // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
+    // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
+    // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
+    // that mode (see runTurn wiring below).
+    const policy = effectiveAutoApprove(config, sessionAutoApproveRef.current);
     if (autoApproves(policy, req)) {
       setApprovals(a => ({ ...a, approved: a.approved + 1 }));
       return Promise.resolve(true);
@@ -837,7 +839,7 @@ export function App() {
       prefillRateRef.current = undefined;
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
-      setSessionAutoApprove(false);
+      setSessionAutoApprove(null);
       setMode('agent');
       setActiveProfile('default');
       return;
@@ -1100,12 +1102,11 @@ export function App() {
         return;
       }
       case 'approvals': {
-        const envMode = config?.autoApprove ?? 'off';
-        const envOn = envMode !== 'off';
+        const envOn = config ? autoApproveForced(config) : false;
         const target = args.trim().toLowerCase();
         if (target === 'on' || target === 'off') {
           if (envOn) {
-            response = `auto-approve is forced to '${envMode}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
+            response = `auto-approve is forced to '${config?.autoApprove}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
             break;
           }
           setSessionAutoApprove(target === 'on');
@@ -1116,8 +1117,15 @@ export function App() {
           response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
           break;
         }
-        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'.
-        const effectiveMode = envOn ? envMode : sessionAutoApprove ? 'safe' : 'off';
+        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'; unset is 'safe'.
+        const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
+        const source = envOn
+          ? `REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`
+          : sessionAutoApprove !== null
+            ? 'session toggle'
+            : config?.autoApproveExplicit
+              ? 'REIKA_AUTO_APPROVE=off (env)'
+              : 'default (REIKA_AUTO_APPROVE unset)';
         const desc =
           effectiveMode === 'bypass'
             ? 'bypass — everything runs without confirmation, including dangerous commands'
@@ -1127,7 +1135,7 @@ export function App() {
         response = [
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
-          `  source: ${envOn ? `REIKA_AUTO_APPROVE=${envMode} (env)` : sessionAutoApprove ? 'session toggle' : '(disabled)'}`,
+          `  source: ${source}`,
           '',
           envOn
             ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
@@ -1940,7 +1948,7 @@ export function App() {
             autoApprove={
               config?.autoApprove === 'bypass'
                 ? 'bypass'
-                : config?.autoApprove === 'safe' || sessionAutoApprove
+                : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
                   ? 'safe'
                   : undefined
             }
