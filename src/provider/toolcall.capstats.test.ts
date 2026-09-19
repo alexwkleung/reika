@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messagesToOpenAI, type CapStats } from './toolcall.js';
+import { messagesToChatParams, type CapStats } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #253: the fit-to-window cap is sized from the room left after everything else in the request, so
@@ -13,7 +13,7 @@ const round = (id: string, payload: string): Message[] => [
 
 function capture(history: Message[], contextWindow?: number): CapStats {
   let stats: CapStats | undefined;
-  messagesToOpenAI('SYSTEM', history, {
+  messagesToChatParams('SYSTEM', history, {
     contextWindow,
     minGenTokens: 1024,
     onCapStats: s => {
@@ -53,7 +53,7 @@ describe('payload-cap stats (#253)', () => {
     const payload = 'y'.repeat(120_000);
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', payload)];
     let stats: CapStats | undefined;
-    const msgs = messagesToOpenAI('SYSTEM', history, {
+    const msgs = messagesToChatParams('SYSTEM', history, {
       contextWindow: 8192,
       minGenTokens: 1024,
       onCapStats: s => {

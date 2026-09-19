@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os';
 import ignore from 'ignore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
-import { messagesToOpenAI } from '../provider/toolcall.js';
+import { messagesToChatParams } from '../provider/toolcall.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import type { PromptMode } from './prompt.js';
@@ -129,8 +129,8 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
       const real = await captureRoundZero(preTurn.slice(), promptMode, config);
 
       expect(warm.system).toBe(real.system);
-      const warmMsgs = messagesToOpenAI(warm.system, warm.history, serializeOpts(config));
-      const realMsgs = messagesToOpenAI(real.system, real.history, serializeOpts(config));
+      const warmMsgs = messagesToChatParams(warm.system, warm.history, serializeOpts(config));
+      const realMsgs = messagesToChatParams(real.system, real.history, serializeOpts(config));
       // Real request = warm request + exactly the trailing user message.
       expect(realMsgs.length).toBe(warmMsgs.length + 1);
       expect(realMsgs.slice(0, warmMsgs.length)).toEqual(warmMsgs);
@@ -152,8 +152,8 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
       calibration: 1,
     });
     const real = await captureRoundZero([], 'agent', config);
-    const warmMsgs = messagesToOpenAI(warm.system, warm.history, serializeOpts(config));
-    const realMsgs = messagesToOpenAI(real.system, real.history, serializeOpts(config));
+    const warmMsgs = messagesToChatParams(warm.system, warm.history, serializeOpts(config));
+    const realMsgs = messagesToChatParams(real.system, real.history, serializeOpts(config));
     // The warm gets the `(continue)` backstop as its user turn; the real request has the typed
     // one. The system block — the whole payload at session start — is identical.
     expect(warmMsgs[0]).toEqual(realMsgs[0]);

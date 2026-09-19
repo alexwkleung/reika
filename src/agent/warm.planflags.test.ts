@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os';
 import ignore from 'ignore';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
-import { messagesToOpenAI } from '../provider/toolcall.js';
+import { messagesToChatParams } from '../provider/toolcall.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 
@@ -146,8 +146,8 @@ describe('warm prefix under REIKA_PLAN_ALIGN + REIKA_PLAN_HANDOFF', () => {
       reasoningRounds: config.reasoningRounds,
       minGenTokens: config.minGenTokens,
     };
-    const warmMsgs = messagesToOpenAI(warm.system, warm.history, opts);
-    const realMsgs = messagesToOpenAI(real.system, real.history, opts);
+    const warmMsgs = messagesToChatParams(warm.system, warm.history, opts);
+    const realMsgs = messagesToChatParams(real.system, real.history, opts);
     expect(realMsgs.length).toBe(warmMsgs.length + 1);
     expect(realMsgs.slice(0, warmMsgs.length)).toEqual(warmMsgs);
   });

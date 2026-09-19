@@ -2,7 +2,7 @@ import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
-import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
+import { messagesToChatParams, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
@@ -74,7 +74,7 @@ export async function callModel(opts: {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
   }
-  const messages = messagesToOpenAI(opts.system, opts.history, {
+  const messages = messagesToChatParams(opts.system, opts.history, {
     contextWindow: opts.config.contextWindow,
     calibration: opts.calibration,
     reasoningRounds: opts.config.reasoningRounds,
@@ -106,7 +106,7 @@ export async function callModel(opts: {
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
-    ...(opts.tools.length > 0 ? { tools: toolsToOpenAI(opts.tools) } : {}),
+    ...(opts.tools.length > 0 ? { tools: toolsToChatTools(opts.tools) } : {}),
     stream: true,
     stream_options: { include_usage: true },
     ...(maxTokens ? { max_tokens: maxTokens } : {}),

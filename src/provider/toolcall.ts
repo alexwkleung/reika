@@ -252,7 +252,9 @@ type AgedContent = { content: string; kind: AgedKind };
 // records, so a verification run could not tell an outline that fired from one that never did.
 export type AgedStats = Record<AgedKind, number>;
 
-export function messagesToOpenAI(
+// The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
+// transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
+export function messagesToChatParams(
   system: string,
   history: Message[],
   opts?: {
@@ -516,7 +518,7 @@ function newestLiveReadIndex(
 // Does this request drop any tool payload it once carried? True when at least one tool message
 // LOSES its payload despite having had one — i.e. content the model saw and no longer has. Counted
 // off `aged`/position, never off the rendered bytes, so it tracks the two serialization branches in
-// messagesToOpenAI without depending on what they emit; the loop turns a true into the one-line
+// messagesToChatParams without depending on what they emit; the loop turns a true into the one-line
 // notice that says so (#227). "Lost the payload" is not the same as "serializes to the summary
 // alone": an aged *diff* also carries a bounded structural skeleton (agedToolContent), and it still
 // counts — the hunk bodies are gone, which is the thing the notice is about. Keep it that way; a
@@ -1118,7 +1120,7 @@ function findToolNameForCall(history: Message[], toolIdx: number): string | unde
   return undefined;
 }
 
-export function toolsToOpenAI(tools: Tool[]): ChatTool[] {
+export function toolsToChatTools(tools: Tool[]): ChatTool[] {
   return tools.map(t => ({
     type: 'function',
     function: {

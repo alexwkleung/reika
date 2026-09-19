@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messagesToOpenAI, type AgedStats } from './toolcall.js';
+import { messagesToChatParams, type AgedStats } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #354: a subagent report is already a digest. Aged, it used to serialize as its summary —
@@ -29,7 +29,7 @@ const history = (summary: string, payload: string): Message[] => [
 
 function serialize(h: Message[]): { aged: string; stats: AgedStats } {
   let stats: AgedStats | undefined;
-  const out = messagesToOpenAI('sys', h, {
+  const out = messagesToChatParams('sys', h, {
     contextWindow: 8192,
     onAgedStats: s => {
       stats = s;
