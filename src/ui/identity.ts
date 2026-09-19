@@ -41,7 +41,7 @@ const MIN_TOKEN_LEN = 3;
 // handle visible in prose, so short tokens lose the bare-word match. There is no clean length
 // cut — "grace", "victor", "oliver" are all names AND words — so this is a judgement call, not a
 // derivation: 7 is where a collision with a code identifier or a common word gets rare, while
-// distinctive handles (`octocat`, `alexwkleung`) still clear it. Multi-word names are exempt: a
+// distinctive handles (`octocat`, `monalisa`) still clear it. Multi-word names are exempt: a
 // two-word phrase effectively can't collide, so "Mona Lisa" always matches as a phrase.
 //
 // The cost, stated plainly: a SHORT handle is scrubbed in paths and URLs (`github.com/max/repo`,
