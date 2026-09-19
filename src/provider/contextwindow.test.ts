@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { floorContextWindow, parseContextWindow, probeContextWindow } from './contextwindow.js';
+import {
+  floorContextWindow,
+  modelsEndpoints,
+  parseContextWindow,
+  probeContextWindow,
+} from './contextwindow.js';
 
 const llamaListing = (n_ctx: number, id = 'qwen3.8-27b', aliases: string[] = []) => ({
   object: 'list',
@@ -60,6 +65,18 @@ describe('parseContextWindow', () => {
     expect(parseContextWindow(body, 'c')).toBeUndefined();
   });
 
+  it('reads a top-level n_ctx, the shape a router in front of llama.cpp lifts it to', () => {
+    const body = {
+      object: 'list',
+      data: [
+        { id: 'lfm2.5-8b-a1b', object: 'model' },
+        { id: 'hermes-3-8b', object: 'model', n_ctx: 16384 },
+      ],
+    };
+    expect(parseContextWindow(body, 'hermes-3-8b')).toBe(16000);
+    expect(parseContextWindow(body, 'lfm2.5-8b-a1b')).toBeUndefined();
+  });
+
   it('reads vLLM max_model_len and the generic context_length', () => {
     expect(parseContextWindow({ data: [{ id: 'v', max_model_len: 40960 }] }, 'v')).toBe(40000);
     expect(parseContextWindow({ data: [{ id: 'p', context_length: 65536 }] }, 'p')).toBe(65000);
@@ -86,8 +103,39 @@ describe('parseContextWindow', () => {
   });
 });
 
+describe('modelsEndpoints', () => {
+  it('tries only {base}/models under a /v1 base', () => {
+    expect(modelsEndpoints('http://localhost:8080/v1/')).toEqual([
+      'http://localhost:8080/v1/models',
+    ]);
+  });
+
+  it('falls through to /v1/models when the base has no /v1 suffix', () => {
+    expect(modelsEndpoints('http://127.0.0.1:8000')).toEqual([
+      'http://127.0.0.1:8000/models',
+      'http://127.0.0.1:8000/v1/models',
+    ]);
+  });
+});
+
 describe('probeContextWindow', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('reaches /v1/models when a bare base answers 404 on /models', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith('/v1/models')
+        ? { ok: true, json: async () => ({ data: [{ id: 'm', n_ctx: 24576 }] }) }
+        : { ok: false, json: async () => ({ error: 'not found' }) },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      probeContextWindow({ baseURL: 'http://127.0.0.1:8000', apiKey: '', model: 'm' }),
+    ).resolves.toBe(24000);
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+      'http://127.0.0.1:8000/models',
+      'http://127.0.0.1:8000/v1/models',
+    ]);
+  });
 
   const opts = { baseURL: 'http://localhost:8080/v1/', apiKey: 'k', model: 'qwen3.8-27b' };
 

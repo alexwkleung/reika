@@ -7,6 +7,7 @@
 //   - llama.cpp: `meta.n_ctx` — the slot's size (what `-c`/`-np` actually leave a request), NOT
 //     `meta.n_ctx_train`, which is the model's trained length and would claim 131k on a server
 //     started with `-c 24576`, after which nothing ever compacts and the request 400s.
+//   - a router in front of llama.cpp: the same `n_ctx`, lifted to the entry's top level.
 //   - vLLM: `max_model_len`.
 //   - `context_length`: the generic spelling some proxies use.
 // A server that reports none of these (Ollama's shim, OpenAI, a bare router) yields undefined and
@@ -21,6 +22,7 @@ const WINDOW_GRANULARITY = 1000;
 type ModelEntry = {
   id?: unknown;
   aliases?: unknown;
+  n_ctx?: unknown;
   context_length?: unknown;
   max_model_len?: unknown;
   meta?: { n_ctx?: unknown };
@@ -46,10 +48,18 @@ export function parseContextWindow(body: unknown, model: string): number | undef
     entries.find(e => Array.isArray(e.aliases) && e.aliases.includes(model)) ??
     (entries.length === 1 ? entries[0] : undefined);
   if (!entry) return undefined;
-  for (const raw of [entry.meta?.n_ctx, entry.max_model_len, entry.context_length]) {
+  for (const raw of [entry.meta?.n_ctx, entry.n_ctx, entry.max_model_len, entry.context_length]) {
     if (typeof raw === 'number') return floorContextWindow(raw);
   }
   return undefined;
+}
+
+// `{baseURL}/models` first, matching how chat/completions is appended. A router configured
+// without the `/v1` suffix can still serve chat on the bare path while listing models only under
+// `/v1/models` (observed), so that is the second try; the chat URL is never touched.
+export function modelsEndpoints(baseURL: string): string[] {
+  const base = baseURL.replace(/\/+$/, '');
+  return base.endsWith('/v1') ? [`${base}/models`] : [`${base}/models`, `${base}/v1/models`];
 }
 
 export async function probeContextWindow(opts: {
@@ -57,14 +67,18 @@ export async function probeContextWindow(opts: {
   apiKey: string;
   model: string;
 }): Promise<number | undefined> {
-  try {
-    const res = await fetch(`${opts.baseURL.replace(/\/+$/, '')}/models`, {
-      headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    if (!res.ok) return undefined;
-    return parseContextWindow(await res.json(), opts.model);
-  } catch {
-    return undefined;
+  for (const url of modelsEndpoints(opts.baseURL)) {
+    try {
+      const res = await fetch(url, {
+        headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      if (!res.ok) continue;
+      const window = parseContextWindow(await res.json(), opts.model);
+      if (window) return window;
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
