@@ -117,7 +117,7 @@ function promptPlaceholder(): string {
 // payload cap), so the user is told where the number came from — a gauge denominator alone
 // reads as configured.
 function probedWindowNotice(window: number): string {
-  return `Context window ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
+  return `Context window of ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
 }
 
 export function App() {
