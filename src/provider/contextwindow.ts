@@ -62,23 +62,31 @@ export function modelsEndpoints(baseURL: string): string[] {
   return base.endsWith('/v1') ? [`${base}/models`] : [`${base}/models`, `${base}/v1/models`];
 }
 
+// `reached` splits the two ways a probe comes back empty: the server answered and reports no
+// window (Ollama's shim, OpenAI, a router entry without `n_ctx`) — asking again changes nothing —
+// or nothing answered at all (llama-server still loading the model when reika started), where
+// the next submit is the right moment to ask again.
+export type ContextWindowProbe = { window?: number; reached: boolean };
+
 export async function probeContextWindow(opts: {
   baseURL: string;
   apiKey: string;
   model: string;
-}): Promise<number | undefined> {
+}): Promise<ContextWindowProbe> {
+  let reached = false;
   for (const url of modelsEndpoints(opts.baseURL)) {
     try {
       const res = await fetch(url, {
         headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
+      reached = true;
       if (!res.ok) continue;
       const window = parseContextWindow(await res.json(), opts.model);
-      if (window) return window;
+      if (window) return { window, reached };
     } catch {
       continue;
     }
   }
-  return undefined;
+  return { reached };
 }
