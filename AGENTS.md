@@ -285,9 +285,16 @@ Same experimental discipline throughout: keep each subsystem's constants/helpers
 
 ## Context management
 
-Three layers keep a long session inside the model's window. They only engage when
-`REIKA_CONTEXT_WINDOW` is set (otherwise the gauge shows absolute tokens and nothing is
-capped). Each has a non-obvious invariant — don't "simplify" them without reading why:
+Three layers keep a long session inside the model's window. They only engage when a window is
+known: `REIKA_CONTEXT_WINDOW`, or failing that what the endpoint reports (#417,
+`provider/contextwindow.ts` — `GET /v1/models`, llama.cpp's per-slot `meta.n_ctx` or vLLM's
+`max_model_len`, floored to the thousand; never `n_ctx_train`, the trained length, which would
+claim 131k on a `-c 24576` server and then nothing compacts). Probed once at startup and on a
+`/model` switch to a profile without one, recorded on that profile only (`contextWindowProbed`)
+so an ad-hoc profile inheriting from it re-probes rather than carrying another model's number;
+a server that reports nothing leaves the window unset — the gauge shows absolute tokens and
+nothing is capped. Each layer has a non-obvious invariant — don't "simplify" them without
+reading why:
 
 - **Calibration** (`loop.ts`): the char/4 token estimate (`tokens.ts`) systematically
   under-counts dense tokenizers (code/JSON/CJK). After each call we learn

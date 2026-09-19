@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { loadConfig, resolveDefaultMode, resolveProfile } from './config.js';
+import { loadConfig, resolveDefaultMode, resolveProfile, withProbedWindow } from './config.js';
+import { probeContextWindow } from './provider/contextwindow.js';
 import { bootstrap } from './context/bootstrap.js';
 import { chatTools, defaultTools, minimalTools, planTools } from './tools/index.js';
 import { isOffline } from './tools/_net.js';
@@ -96,16 +97,20 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     return 1;
   }
 
-  const cfg = loadConfig();
-  const config = resolveProfile(cfg, 'default');
-  const [bundle] = await Promise.all([
+  let cfg = loadConfig();
+  const [bundle, probed] = await Promise.all([
     bootstrap(process.cwd(), cfg.repoMapBudget),
+    cfg.profiles.default.contextWindow == null
+      ? probeContextWindow(cfg.profiles.default)
+      : Promise.resolve(undefined),
     cfg.anon
       ? detectIdentity(process.cwd())
           .then(setIdentity)
           .catch(() => {})
       : Promise.resolve(),
   ]);
+  if (probed) cfg = withProbedWindow(cfg, 'default', probed);
+  const config = resolveProfile(cfg, 'default');
   const offline = isOffline();
   if (offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
   // No one is at the keyboard, so ask_user is never offered — a model that can see it will call

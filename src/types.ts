@@ -348,6 +348,9 @@ export type Profile = {
   // Total context window of the model, used as the denominator for the context-fill
   // gauge. Undefined when unknown (the gauge then shows absolute tokens, no percentage).
   contextWindow?: number;
+  // The window above came from the endpoint's model listing (#417), not the env. It belongs to
+  // this profile's model: a profile inheriting from this one must not carry it over.
+  contextWindowProbed?: boolean;
   // Generation room reserved from the window, in tokens. Drives the per-turn max_tokens
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
