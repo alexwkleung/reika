@@ -29,6 +29,7 @@ const ENV_KEYS = [
   'REIKA_MINIMAL_MIN_GEN_TOKENS',
   'REIKA_DEFAULT_MODE',
   'REIKA_PLAN_EXPERIMENT',
+  'REIKA_AUTO_APPROVE',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -457,5 +458,54 @@ describe('resolveDefaultMode', () => {
     expect(resolveDefaultMode()).toBe('vibe');
     process.env.REIKA_DEFAULT_MODE = 'agent';
     expect(resolveDefaultMode()).toBe('agent');
+  });
+});
+
+describe('loadConfig — auto-approve', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is safe, and not explicit — so the session toggle can still turn it off', () => {
+    const c = loadConfig();
+    expect(c.autoApprove).toBe('safe');
+    expect(c.autoApproveExplicit).toBe(false);
+  });
+
+  it('an explicit safe/true/1 is safe and explicit', () => {
+    for (const v of ['safe', 'true', '1', ' TRUE ']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      const c = loadConfig();
+      expect(c.autoApprove, v).toBe('safe');
+      expect(c.autoApproveExplicit, v).toBe(true);
+    }
+  });
+
+  it('bypass/yolo is bypass', () => {
+    for (const v of ['bypass', 'yolo']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      expect(loadConfig().autoApprove, v).toBe('bypass');
+    }
+  });
+
+  it('an explicit off/false/0 turns the default off', () => {
+    for (const v of ['off', 'false', '0']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      const c = loadConfig();
+      expect(c.autoApprove, v).toBe('off');
+      expect(c.autoApproveExplicit, v).toBe(true);
+    }
+  });
+
+  it('an unrecognized value is off, not the default — a typo costs prompts, not safety', () => {
+    process.env.REIKA_AUTO_APPROVE = 'sfae';
+    expect(loadConfig().autoApprove).toBe('off');
+  });
+
+  it('a blank value reads as unset', () => {
+    process.env.REIKA_AUTO_APPROVE = '  ';
+    const c = loadConfig();
+    expect(c.autoApprove).toBe('safe');
+    expect(c.autoApproveExplicit).toBe(false);
   });
 });
