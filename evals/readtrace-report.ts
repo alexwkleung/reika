@@ -4,7 +4,9 @@
 // task rather than a fixture eval.
 //
 //   REIKA_DROPPED_LEDGER (#227 part 2): does telling the model "re-run that call if you need it"
-//   make it re-fetch aged results? `dup-aged`, `maxrepeat` and `looped` are that, directly.
+//   make it re-fetch aged results? `dup-aged`, `maxrepeat` and `looped` are that, directly — for
+//   a task that fetches through `read`; a `bash`-fetching task (`/review`) is invisible to them.
+//   On by default since 2026-09-18, so the baseline arm is the one that sets `=0`.
 //
 //   The task-spec pin (#227 part 1): is it holding when it should? `spec-pin … holding=true` means
 //   the spec has fallen outside the trailing block and the pin is the only reason it survives.
