@@ -1,13 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import {
+
+// This file is the dedup-OFF baseline arm: several fixtures below use byte-identical payloads as
+// a convenience, which the now-default dedup layer would stub. The flag is a module const read at
+// import time, and a static import is hoisted above any env assignment, so the module must come
+// in through a dynamic import AFTER the pin (the pattern warm.dedup.test.ts uses for the ON arm).
+const PRIOR_DEDUP = process.env.REIKA_DEDUP_PAYLOADS;
+process.env.REIKA_DEDUP_PAYLOADS = '0';
+afterAll(() => {
+  if (PRIOR_DEDUP === undefined) delete process.env.REIKA_DEDUP_PAYLOADS;
+  else process.env.REIKA_DEDUP_PAYLOADS = PRIOR_DEDUP;
+});
+const {
   dedupToolContent,
   droppedPayloadCount,
   hasDroppedPayloads,
   lastUserMessageIndex,
   messagesToOpenAI,
   taskSpecIndex,
-} from './toolcall.js';
+} = await import('./toolcall.js');
 
 // Total serialized characters of a built request — content plus tool_call JSON.
 function requestChars(out: unknown[]): number {
@@ -1015,9 +1026,9 @@ describe('messagesToOpenAI', () => {
     expect(reasonings).toEqual([undefined, 'think 2', 'think 3']);
   });
 
-  it('does not dedup repeated tool content when the flag is off (default)', () => {
-    // Two aged, byte-identical read summaries. With REIKA_DEDUP_PAYLOADS unset, both survive verbatim
-    // — the dedup layer is strictly opt-in.
+  it('does not dedup repeated tool content when the flag is off', () => {
+    // Two aged, byte-identical read summaries. With REIKA_DEDUP_PAYLOADS=0 (the baseline arm), both
+    // survive verbatim — the dedup layer is a strict no-op when off.
     const history: Message[] = [
       { role: 'user', content: 'go' },
       { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] },

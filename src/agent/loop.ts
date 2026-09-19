@@ -409,7 +409,8 @@ const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE !== '0';
 // EXPERIMENT (dropped-payload notice, #227): tell the model, once per request, that some tool
 // results above show only a summary because their output was dropped. Flagged rather than shipped
 // on, because it is a *prompt-level* bet and this repo's history says those often bench null (the
-// preventive-alignment layer; REIKA_DEDUP_PAYLOADS). It also has a real downside to measure, not
+// preventive-alignment layer; REIKA_DEDUP_PAYLOADS, since defaulted on as a riskless no-op). It also
+// has a real downside to measure, not
 // just an absent upside: "re-run that call" can induce re-fetching of aged results, which costs
 // rounds and re-inflates the fresh block — the dup-aged read loop the ledger→withdrawal ladder
 // exists for. ON by default since 2026-09-18: a single-variable A/B on `/review 225` (n=3 off, 2 on)
