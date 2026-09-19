@@ -202,6 +202,33 @@ function parseIntOrUndef(s: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Records a window the endpoint reported (#417) on one profile. The profile only — never the
+// top-level `contextWindow`, which every profile reads as its fallback and which would hand the
+// default model's window to a different model on a /model switch.
+export function withProbedWindow(config: Config, profileName: string, window: number): Config {
+  const profile = config.profiles[profileName];
+  if (!profile) return config;
+  return {
+    ...config,
+    profiles: {
+      ...config.profiles,
+      [profileName]: { ...profile, contextWindow: window, contextWindowProbed: true },
+    },
+  };
+}
+
+// A new profile built on `from` (an ad-hoc /model target) takes its connection settings but not
+// a probed window: that number was measured for `from`'s model, and the new one gets its own probe.
+export function inheritProfile(from: Profile, model: string): Profile {
+  const { contextWindowProbed: _probed, ...rest } = from;
+  return {
+    ...rest,
+    model,
+    contextWindow: from.contextWindowProbed ? undefined : from.contextWindow,
+    adhoc: true,
+  };
+}
+
 export function resolveProfile(config: Config, profileName: string): Config {
   const profile = config.profiles[profileName];
   if (!profile) return config;

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig, resolveDefaultMode, resolveProfile } from './config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  resolveDefaultMode,
+  resolveProfile,
+  withProbedWindow,
+} from './config.js';
 
 const ENV_KEYS = [
   'REIKA_MODEL',
@@ -359,6 +365,49 @@ describe('contextWindow', () => {
     const cfg = loadConfig();
     const resolved = resolveProfile(cfg, 'kimi');
     expect(resolved.contextWindow).toBe(131072);
+  });
+});
+
+describe('withProbedWindow (#417)', () => {
+  it('sets the window on that profile only, marked as probed, and resolves through', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    const cfg = withProbedWindow(loadConfig(), 'default', 24000);
+    expect(cfg.profiles.default.contextWindow).toBe(24000);
+    expect(cfg.profiles.default.contextWindowProbed).toBe(true);
+    expect(resolveProfile(cfg, 'default').contextWindow).toBe(24000);
+    // The top-level fallback stays unset: kimi's model was never measured.
+    expect(cfg.contextWindow).toBeUndefined();
+    expect(cfg.profiles.kimi.contextWindow).toBeUndefined();
+    expect(resolveProfile(cfg, 'kimi').contextWindow).toBeUndefined();
+  });
+
+  it('is a no-op for an unknown profile', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    expect(withProbedWindow(cfg, 'nope', 24000)).toBe(cfg);
+  });
+});
+
+describe('inheritProfile (#417)', () => {
+  it('keeps a configured window and connection settings', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    process.env.REIKA_API_KEY = 'k';
+    const from = loadConfig().profiles.default;
+    const p = inheritProfile(from, 'other');
+    expect(p).toMatchObject({ model: 'other', apiKey: 'k', contextWindow: 16384, adhoc: true });
+    expect(p.contextWindowProbed).toBeUndefined();
+  });
+
+  it('drops a probed window — it was measured for the other model', () => {
+    process.env.REIKA_MODEL = 'm';
+    const from = withProbedWindow(loadConfig(), 'default', 24000).profiles.default;
+    const p = inheritProfile(from, 'other');
+    expect(p.contextWindow).toBeUndefined();
+    expect(p.contextWindowProbed).toBeUndefined();
+    expect(p.model).toBe('other');
   });
 });
 

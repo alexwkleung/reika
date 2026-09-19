@@ -10,12 +10,20 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
+import { kFormat } from './format.js';
 import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import { Question, type QuestionTyping } from './Question.js';
-import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  resolveDefaultMode,
+  resolveProfile,
+  withProbedWindow,
+} from '../config.js';
+import { probeContextWindow } from '../provider/contextwindow.js';
 import { autoApproveForced, autoApproves, effectiveAutoApprove } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
@@ -103,6 +111,13 @@ function promptPlaceholder(): string {
   if (!clipboardImageSupported()) return base;
   const withHint = `${base}, ctrl-v for images`;
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
+}
+
+// A window the harness took off the endpoint changes what the session does (compaction, the
+// payload cap), so the user is told where the number came from — a gauge denominator alone
+// reads as configured.
+function probedWindowNotice(window: number): string {
+  return `Context window ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
 }
 
 export function App() {
@@ -349,7 +364,7 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
-        const cfg = loadConfig();
+        let cfg = loadConfig();
         // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git
         // subprocesses cost ~28ms warm, which is pure added latency to first paint if serialized.
         // Measured on this repo: 29ms bootstrap + 28ms detect = 56ms serial, 36ms concurrent —
@@ -359,14 +374,20 @@ export function App() {
         // the token set is loaded before any message can be rendered or saved. Detection is
         // best-effort — a failure leaves the scrubber a no-op rather than blocking startup, the
         // same fail-open posture as the other scrub layers.
-        const [b] = await Promise.all([
+        // The window probe (#417) rides the same concurrency: a local server answers in
+        // milliseconds, and it must land before the budget report below reads the window.
+        const [b, probed] = await Promise.all([
           bootstrap(process.cwd(), cfg.repoMapBudget),
+          cfg.profiles.default.contextWindow == null
+            ? probeContextWindow(cfg.profiles.default)
+            : Promise.resolve(undefined),
           cfg.anon
             ? detectIdentity(process.cwd())
                 .then(setIdentity)
                 .catch(() => {})
             : Promise.resolve(),
         ]);
+        if (probed) cfg = withProbedWindow(cfg, 'default', probed);
         setConfig(cfg);
         setBundle(b);
         // No route out → no web tools this session (#392). Checked once, here, because the tool
@@ -392,6 +413,9 @@ export function App() {
         // force here is `default`, and a later /model switch reports its own window in /stats.
         const runtime = resolveProfile(cfg, 'default');
         debugLog(formatBudget(b, runtime));
+        if (probed) {
+          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(probed) }]);
+        }
         const warn = budgetWarning(b, runtime);
         if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
         if (offline) {
@@ -478,6 +502,16 @@ export function App() {
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
+    // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
+    // is instant, and a turn submitted before the answer lands runs without a window, as it
+    // would have anyway.
+    if (next.contextWindow == null) {
+      void probeContextWindow(next).then(w => {
+        if (!w) return;
+        setConfig(prev => (prev ? withProbedWindow(prev, target, w) : prev));
+        setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+      });
+    }
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
@@ -1071,7 +1105,7 @@ export function App() {
               ...config,
               profiles: {
                 ...config.profiles,
-                [target]: { ...inherit, model: args.trim(), adhoc: true },
+                [target]: inheritProfile(inherit, args.trim()),
               },
             };
             setConfig(withAdhoc);
