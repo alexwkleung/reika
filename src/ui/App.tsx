@@ -24,6 +24,13 @@ import {
   withProbedWindow,
 } from '../config.js';
 import { probeContextWindow } from '../provider/contextwindow.js';
+import {
+  loadLastState,
+  persistableMode,
+  saveLastState,
+  startMode,
+  startProfile,
+} from '../laststate.js';
 import { autoApproveForced, autoApproves, effectiveAutoApprove } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
@@ -187,9 +194,10 @@ export function App() {
   } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
-  // REIKA_DEFAULT_MODE picks the launch mode (agent/plan/vibe; REIKA_PLAN_EXPERIMENT=1 is the
-  // legacy alias for plan). /plan, /vibe and /agent still toggle it at any time regardless.
-  const [mode, setMode] = useState<Mode>(resolveDefaultMode);
+  // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
+  // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
+  // /vibe and /agent still toggle it at any time regardless.
+  const [mode, setMode] = useState<Mode>(() => startMode(loadLastState()));
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -369,6 +377,9 @@ export function App() {
     (async () => {
       try {
         let cfg = loadConfig();
+        // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
+        // the probe and the splash so both describe the model the session actually opens on.
+        const profile = startProfile(cfg, loadLastState());
         // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git
         // subprocesses cost ~28ms warm, which is pure added latency to first paint if serialized.
         // Measured on this repo: 29ms bootstrap + 28ms detect = 56ms serial, 36ms concurrent —
@@ -382,8 +393,8 @@ export function App() {
         // milliseconds, and it must land before the budget report below reads the window.
         const [b, probed] = await Promise.all([
           bootstrap(process.cwd(), cfg.repoMapBudget),
-          cfg.profiles.default.contextWindow == null
-            ? probeContextWindow(cfg.profiles.default)
+          cfg.profiles[profile].contextWindow == null
+            ? probeContextWindow(cfg.profiles[profile])
             : Promise.resolve(undefined),
           cfg.anon
             ? detectIdentity(process.cwd())
@@ -391,32 +402,48 @@ export function App() {
                 .catch(() => {})
             : Promise.resolve(),
         ]);
-        if (probed?.window) cfg = withProbedWindow(cfg, 'default', probed.window);
-        if (probed && !probed.reached) windowRetryRef.current.add('default');
+        if (probed?.window) cfg = withProbedWindow(cfg, profile, probed.window);
+        if (probed && !probed.reached) windowRetryRef.current.add(profile);
         setConfig(cfg);
+        setActiveProfile(profile);
         setBundle(b);
         // No route out → no web tools this session (#392). Checked once, here, because the tool
         // list is part of the cached prefix; the per-turn latch in the tools covers a drop later.
         const offline = isOffline();
         setTools(defaultTools(cfg, { offline }));
         setChatToolsList(chatTools(cfg, { offline }));
+        // Startup only: a later /model switch reports its own window in /stats.
+        const runtime = resolveProfile(cfg, profile);
         setHeaderItems(prev => [
           ...prev,
           {
             kind: 'splash',
-            model: cfg.model,
+            model: runtime.model,
             cwd: b.cwd,
             version: VERSION,
             subagent:
-              cfg.subagentModel && cfg.subagentModel !== cfg.model ? cfg.subagentModel : undefined,
+              cfg.subagentModel && cfg.subagentModel !== runtime.model
+                ? cfg.subagentModel
+                : undefined,
           },
         ]);
+        // Opening somewhere other than where the env alone would put the session is a fact the
+        // user has to see — a plan-mode start answers a task with a plan, not edits — so it gets a
+        // persistent line, not just the status-bar tag.
+        const resumed = [
+          ...(modeRef.current !== resolveDefaultMode() ? [`${modeRef.current} mode`] : []),
+          ...(profile !== 'default' ? [`profile '${profile}' (${runtime.model})`] : []),
+        ];
+        if (resumed.length > 0) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: `Resumed ${resumed.join(' and ')} from the last session.` },
+          ]);
+        }
         // The window/reserve arithmetic decides how much room reads and history get, and a
         // configuration that leaves too little degrades silently — reads truncated every round,
         // the model re-reading the same file (#262). Report the numbers to the log always, and
-        // say so in the scrollback when they fall under the floor. Startup only: the profile in
-        // force here is `default`, and a later /model switch reports its own window in /stats.
-        const runtime = resolveProfile(cfg, 'default');
+        // say so in the scrollback when they fall under the floor.
         debugLog(formatBudget(b, runtime));
         if (probed?.window) {
           const w = probed.window;
@@ -449,6 +476,19 @@ export function App() {
     },
     [],
   );
+
+  // Every route to a new mode or profile (slash command, Shift+Tab, /implement, /clear, the
+  // picker) lands here, so the saved state can't miss one. The profile waits for the config, since
+  // until then 'default' is only the initial state and would overwrite the value about to be
+  // restored.
+  useEffect(() => {
+    const persisted = persistableMode(mode);
+    if (persisted) saveLastState({ mode: persisted });
+  }, [mode]);
+  const configLoaded = config !== null;
+  useEffect(() => {
+    if (configLoaded) saveLastState({ profile: activeProfile });
+  }, [configLoaded, activeProfile]);
 
   useEffect(() => {
     if (!exitRequested) return;

@@ -4,6 +4,7 @@ import { render } from 'ink-testing-library';
 import type { Config, ContextBundle, Message, Usage } from '../types.js';
 import type { TranscriptMeta } from '../store/transcript.js';
 import type * as ConfigModule from '../config.js';
+import type * as LastStateModule from '../laststate.js';
 import type * as TranscriptModule from '../store/transcript.js';
 
 // /save is the only consumer of the per-turn mode stamp (#118), and the stamp is applied in App
@@ -51,6 +52,13 @@ vi.mock('../config.js', async () => {
 });
 
 vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+
+// The real module reads and writes ~/.config/reika/state.json (#365); the test must neither start
+// in whoever ran it last's mode nor leave its own behind.
+vi.mock('../laststate.js', async () => {
+  const actual = await vi.importActual<typeof LastStateModule>('../laststate.js');
+  return { ...actual, loadLastState: () => ({}), saveLastState: () => {} };
+});
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 
 // A turn that settles immediately, emitting the prompt echo the real loop emits first, a one-line

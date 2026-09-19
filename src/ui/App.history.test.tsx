@@ -3,6 +3,7 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import type { Config, ContextBundle, Message } from '../types.js';
 import type * as ConfigModule from '../config.js';
+import type * as LastStateModule from '../laststate.js';
 
 // The model-facing history is a separate array from the scrollback (#183): the loop folds spans of
 // it into a `compaction` recap, and that fold must SURVIVE to the next turn. Seeding each turn from
@@ -51,6 +52,13 @@ vi.mock('../config.js', async () => {
 });
 
 vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+
+// The real module reads and writes ~/.config/reika/state.json (#365); the test must neither start
+// in whoever ran it last's mode nor leave its own behind.
+vi.mock('../laststate.js', async () => {
+  const actual = await vi.importActual<typeof LastStateModule>('../laststate.js');
+  return { ...actual, loadLastState: () => ({}), saveLastState: () => {} };
+});
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 
 type TurnOpts = {

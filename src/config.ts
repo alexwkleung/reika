@@ -6,8 +6,15 @@ import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
 // dotenv defaults to no-override, so loading cwd first then global gives the right order.
+// The keys already present before dotenv runs are the ones set at launch (`REIKA_X=1 reika`, or an
+// export in the shell rc); the persisted session state (#365) defers to those and beats the files.
+const launchEnvKeys = new Set(Object.keys(process.env));
 dotenv.config();
 dotenv.config({ path: join(homedir(), '.config', 'reika', '.env') });
+
+export function setAtLaunch(name: string): boolean {
+  return launchEnvKeys.has(name);
+}
 
 export function loadConfig(): Config {
   // REIKA_MODEL is a comma-separated list of models served by the default base URL.
