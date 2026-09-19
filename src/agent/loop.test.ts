@@ -466,14 +466,18 @@ describe('buildSteadySystem', () => {
     expect(at(0).startsWith('BASE\n\n')).toBe(true);
   });
 
-  it('emits no dropped-payload notice while REIKA_DROPPED_LEDGER is unset (#227)', () => {
-    // Strict no-op when off. This file sets no flags, so it is the honest default-config check —
-    // the flag-on compositions live in loop.droppedpayload*.test.ts.
+  it('emits the dropped-payload notice in the default config (#227, on since 2026-09-18)', () => {
+    // This file sets no flags, so it is the honest default-config check. The four compositions
+    // live in loop.droppedpayload*.test.ts; the `=0` no-op guard in loop.droppedpayload.off.test.ts.
+    // c1 is the pinned spec (#228) and c3 is the live trailing block, so c2 is the one that was
+    // actually dropped — without it the notice has nothing to fire on, on either arm.
     const dropped: Message[] = [
       ...explored.slice(0, 2),
       { role: 'tool', callId: 'c1', summary: 'Ran: gh (505 bytes output)', payload: 'ISSUE' },
       { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c2', summary: 'Read b.ts', payload: 'BODY' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c3', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c3', summary: 'Read c.ts', payload: 'FRESH' },
     ];
     for (const promptMode of ['agent', 'plan'] as const) {
       const s = buildSteadySystem({
@@ -483,7 +487,7 @@ describe('buildSteadySystem', () => {
         round: 0,
         planSteps: null,
       });
-      expect(s).not.toContain('dropped to make room');
+      expect(s).toContain('dropped to make room');
     }
   });
 

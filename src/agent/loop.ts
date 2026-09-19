@@ -349,9 +349,9 @@ const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // healthy blocks), and the restart re-ran the same `gh issue view` plus two greps, putting identical
 // payloads in context twice and feeding the #251/#252 re-fetch cascade. ON by default: a live run
 // carried 3/3 truncations with the model resuming its own thread each time, and a refused carry is
-// exactly the previous behavior. It does change what a request carries, so unset it for a run that
+// exactly the previous behavior. It does change what a request carries, so set `=0` for a run that
 // is measuring context/eviction (#264). Strict no-op when off. See agent/continuation.ts.
-const CONTINUE = process.env.REIKA_CONTINUE === '1';
+const CONTINUE = process.env.REIKA_CONTINUE !== '0';
 // The resume nudge. Four jobs, and the string it replaced ("continue concisely ... no long
 // preamble") failed all four — it read as *start over, briefly*, and the model did exactly that.
 // Attribute the text above as the model's own; anchor the resume point (the tail ends mid-sentence,
@@ -412,9 +412,13 @@ const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE !== '0';
 // preventive-alignment layer; REIKA_DEDUP_PAYLOADS). It also has a real downside to measure, not
 // just an absent upside: "re-run that call" can induce re-fetching of aged results, which costs
 // rounds and re-inflates the fresh block — the dup-aged read loop the ledger→withdrawal ladder
-// exists for. `read-trace-summary` (dup-aged / maxrepeat / looped, emitted per turn) is the metric;
-// run it against the same task with the flag on and off. Strict no-op when off.
-const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER === '1';
+// exists for. ON by default since 2026-09-18: a single-variable A/B on `/review 225` (n=3 off, 2 on)
+// split exactly as predicted — the baseline reconstructed a dropped diff from memory and only then
+// doubted itself, the ledger arm said "the output got dropped, let me re-run it" and re-fetched —
+// and the feared re-fetch loop never showed, with the withdrawal ladder bounding it if it does.
+// `=0` is the baseline arm. `read-trace-summary` is blind to it on a bash-fetching task (it records
+// `read` only); transcripts are the instrument. Strict no-op when off.
+const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
 // EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
 // blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
 // a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
@@ -891,10 +895,11 @@ export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
 export function buildDroppedPayloadLedger(): string {
   return [
     '--- reika status (auto-generated — not user input) ---',
-    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`).',
-    `${DROPPED_LEDGER_MARKER}; it is not in your context any more. That is a context`,
-    'limit, not a failed command, and it does not mean you already handled the result. If you need',
-    'what one of them returned, re-run that call — do not answer from memory of it.',
+    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`)',
+    `or a short outline of the output. ${DROPPED_LEDGER_MARKER}; it is not in your context`,
+    'any more. That is a context limit, not a failed command, and it does not mean you already',
+    'handled the result. If you need what one of them returned, re-run that call — do not answer',
+    'from memory of it.',
   ].join('\n');
 }
 
