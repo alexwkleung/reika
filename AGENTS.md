@@ -377,14 +377,19 @@ capped). Each has a non-obvious invariant — don't "simplify" them without read
   the cap arithmetic at once. The ledger is 415 chars, flat, and touches no budget walk. Composition
   order matters — it goes first, ahead of the other ledgers, in **both** `buildSteadySystem` and the
   agent loop's inline mirror, or the warm prefix diverges from round 0 (`warm.test.ts` locks them).
-- **Payload dedup** (`REIKA_DEDUP_PAYLOADS=1`, default off, experimental — `toolcall.ts`
-  `dedupToolContent`): collapses a tool message whose serialized content byte-identically repeats an
-  earlier one (an aged summary trail like `Read A / Read A / Read A`, or simultaneous parallel-read
-  payloads within a round) to a back-reference, so raw repetition never accumulates in context to
-  prime a loop — deterministic, keep-first, and it frees the stubbed dup's window budget for the
-  survivors. Benched **null** on multi-file coding turns (payload-aging already collapses cross-round
-  re-reads to summaries, so the surviving dedup surface is rare); kept as cheap riskless optionality
-  for a summary-trail-heavy workload. Strict no-op when off.
+- **Payload dedup** (default on since 2026-09-18; `REIKA_DEDUP_PAYLOADS=0` is the baseline arm —
+  `toolcall.ts` `dedupToolContent`): collapses a tool message whose serialized content
+  byte-identically repeats an earlier one (an aged summary trail like `Read A / Read A / Read A`, or
+  simultaneous parallel-read payloads within a round) to a back-reference, so raw repetition never
+  accumulates in context to prime a loop — deterministic, keep-first, and it frees the stubbed dup's
+  window budget for the survivors. Benched **null** on multi-file coding turns (payload-aging already
+  collapses cross-round re-reads to summaries, so the surviving dedup surface is rare). It is
+  **bypassed whenever prefix-stable is active** (a stub flipping on a later duplicate is a mid-history
+  rewrite), so with a context window set it changes nothing; it reaches only the no-window and
+  `REIKA_PREFIX_STABLE=0` setups — where per-round aging already rewrites mid-history every request,
+  so a stub costs no cache validity, and where every older payload is a summary, so the trail it
+  collapses is the whole tool history. Defaulted on for that reason: null upside measured, no
+  downside found, and `.env.example` had shipped it on already. Strict no-op when off.
 - **Compaction** (`compaction.ts`): once the calibrated estimate crosses
   `(window − minGenTokens) × 0.9` — i.e. when the prompt would leave less than the generation
   reserve (plus slack) — the oldest turns fold into one recap message (merged into the system

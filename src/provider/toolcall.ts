@@ -39,8 +39,13 @@ const SENT_DENSITY_FLOOR = 1;
 // collapsing that repetition before it feeds back removes the fuel a loop needs, one step EARLIER than
 // the reactive read-trace ledger (which only nags once the loop is already forming). Deterministic and
 // model-agnostic — it changes only what is re-serialized, never sampling, so it carries none of the
-// operator-provenance risk the sampling levers do. Strict no-op when off. See dedupToolContent.
-const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS === '1';
+// operator-provenance risk the sampling levers do. ON by default since 2026-09-18: it benched null
+// (not negative) on windowed local turns, where prefix-stable bypasses it anyway (below), and the
+// setups it does reach — no REIKA_CONTEXT_WINDOW, or REIKA_PREFIX_STABLE=0 — already rewrite
+// mid-history every round, so a stub costs no cache validity that per-round aging hadn't spent. In
+// those setups every non-trailing payload is a summary, which is exactly the trail it collapses.
+// `=0` is the baseline arm; strict no-op when off. See dedupToolContent.
+const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS !== '0';
 // Replaces a stubbed FRESH payload (an identical full result still simultaneously in context — a
 // parallel or in-band re-read of one file within a single round). The summary is kept, so the model
 // still sees what the result was; only the duplicated body is dropped.
