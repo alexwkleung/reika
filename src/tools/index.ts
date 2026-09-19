@@ -65,11 +65,12 @@ function askEnabled(): boolean {
 // mode structurally cannot mutate the repo. The only failure mode left is over-exploration, which the
 // ledger + convergence nudge target.
 //
-// REIKA_PLAN_BASH=1 (default off, experimental — #109) adds `readOnlyBashTool`: the shell, narrowed
-// to commands `isReadOnlyShell` can PROVE read-only. Plan mode's guarantee is unchanged in kind — it
-// still cannot mutate the repo — but it is now enforced by a classifier rather than by the tool's
-// absence, so it is flagged separately from plan mode itself and can be turned off on its own. Read
-// per call, not at module load, so toggling it doesn't need a restart.
+// `readOnlyBashTool` (#109) is the shell, narrowed to commands `isProvablyReadOnly` can PROVE
+// read-only. ON by default since 2026-09-18: plan mode is agent mode minus mutation, and a pipeline
+// (`grep … | head`, `find`, `wc -l`) is inspection the four dedicated tools cannot express. The
+// guarantee is unchanged in kind — plan mode still cannot mutate the repo — but it is enforced by
+// a classifier rather than by the tool's absence, which is why `REIKA_PLAN_BASH=0` can still take
+// it back out on its own. Read per call, not at module load, so toggling it doesn't need a restart.
 export function planTools(): Tool[] {
   const tools = [readTool, listTool, grepTool, globTool];
   // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
@@ -79,7 +80,7 @@ export function planTools(): Tool[] {
   // off this list through `canAsk` exactly as the agent prompt's rule 7 is, so REIKA_ASK=0 removes
   // the tool and the rule together in both modes.
   if (askEnabled()) tools.push(askUserTool);
-  if (process.env.REIKA_PLAN_BASH === '1') tools.push(readOnlyBashTool);
+  if (process.env.REIKA_PLAN_BASH !== '0') tools.push(readOnlyBashTool);
   return tools;
 }
 

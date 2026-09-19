@@ -526,11 +526,11 @@ export function buildPlanTransformInput(
 function buildPlanLedger(history: Message[], round: number): string {
   const files = new Set<string>();
   const searches = new Set<string>();
-  // Under REIKA_PLAN_BASH the model can explore through `bash`, whose call carries `command` and
-  // neither `path` nor `pattern`. Without this the ledger goes blind exactly when that tool is used:
-  // it would report "Nothing examined yet" every round to a model that had just read half the repo,
-  // and the round-1/2 "you can probably stop" nudge (which keys on having examined something) would
-  // never fire. The convergence pressure is the whole point of the ledger, so it has to see them.
+  // Plan mode's read-only `bash` (#109) explores through a call that carries `command` and neither
+  // `path` nor `pattern`. Without this the ledger goes blind exactly when that tool is used: it would
+  // report "Nothing examined yet" every round to a model that had just read half the repo, and the
+  // round-1/2 "you can probably stop" nudge (which keys on having examined something) would never
+  // fire. The convergence pressure is the whole point of the ledger, so it has to see them.
   const commands = new Set<string>();
   for (const m of history) {
     if (m.role !== 'assistant') continue;
