@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   captured: [] as {
     system: string;
     tools: { name: string }[];
+    toolChoice?: 'none';
     trailingNote?: string;
     historyLen: number;
   }[],
@@ -28,6 +29,7 @@ vi.mock('../provider/client.js', () => ({
     async (opts: {
       system: string;
       tools: Tool[];
+      toolChoice?: 'none';
       trailingNote?: string;
       history: Message[];
       onContentDelta?: (t: string) => void;
@@ -37,6 +39,7 @@ vi.mock('../provider/client.js', () => ({
       h.captured.push({
         system: opts.system,
         tools: opts.tools.map(t => ({ name: t.name })),
+        toolChoice: opts.toolChoice,
         trailingNote: opts.trailingNote,
         historyLen: opts.history.length,
       });
@@ -146,7 +149,7 @@ describe('compaction report round (#280)', () => {
     expect(recap.content).not.toContain(compactionNoteHeader(1));
   });
 
-  it('spends one tools-withdrawn call on the note before the fold, and the recap carries it', async () => {
+  it('spends one call-forbidden round on the note before the fold, and the recap carries it', async () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     const messages: Message[] = [];
     h.scripted.push(
@@ -165,15 +168,18 @@ describe('compaction report round (#280)', () => {
       onMessage: m => messages.push(m),
     });
     expect(h.captured).toHaveLength(2);
-    // Report call: no tools, numbered directive, the UNFOLDED history (the note is written from the
-    // material that is about to be dropped).
+    // Report call: the round's tools kept with calls forbidden (#426 — withholding them re-rendered
+    // the system turn and re-prefilled the whole request), numbered directive, the UNFOLDED history
+    // (the note is written from the material that is about to be dropped).
     const rep = h.captured[0];
-    expect(rep.tools).toEqual([]);
+    expect(rep.tools.map(t => t.name)).toEqual(['read']);
+    expect(rep.toolChoice).toBe('none');
     expect(directiveOf(rep)).toContain(buildCompactionReportDirective(1));
     expect(rep.historyLen).toBe(before + 1);
     // Real call: tools back, no directive, folded history with the note leading the recap.
     const real = h.captured[1];
     expect(real.tools.map(t => t.name)).toEqual(['read']);
+    expect(real.toolChoice).toBeUndefined();
     expect(directiveOf(real)).not.toContain('compaction note');
     expect(real.historyLen).toBeLessThan(rep.historyLen);
     const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
@@ -230,7 +236,7 @@ describe('compaction report round (#280)', () => {
     expect(h.captured).toHaveLength(3);
     expect(directiveOf(h.captured[0])).toContain(buildCompactionReportDirective(1));
     expect(directiveOf(h.captured[0])).not.toContain('your reply carried no note');
-    expect(h.captured[1].tools).toEqual([]);
+    expect(h.captured[1].toolChoice).toBe('none');
     expect(directiveOf(h.captured[1])).toContain('your reply carried no note');
     const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain('RETRY NOTE: established a');

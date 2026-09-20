@@ -31,6 +31,7 @@ import {
   hasDroppedPayloads,
   lastUserMessageIndex,
   taskSpecIndex,
+  toolsToChatTools,
 } from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
@@ -1063,6 +1064,11 @@ export async function runTurn(opts: {
   // rate to price themselves with — and those are the expensive ones.
   priorPrefillRate?: number;
   onPrefillRate?: (rate: number) => void;
+  // Session-long prefix-divergence trace (#426). The engine's cache still holds the previous turn's
+  // last request when a new turn starts, so the comparison is only meaningful across the boundary
+  // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
+  // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
+  prefixTrace?: PrefixTrace;
   onToolProgress?: (chunk: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
@@ -1305,8 +1311,9 @@ export async function runTurn(opts: {
   let roundSuffix: string | undefined;
   // Prefix-divergence instrumentation (REIKA_DEBUG-only): measures, per request, how much of the
   // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
-  // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
-  const prefixTrace = new PrefixTrace();
+  // The caller's session-long trace when it has one (App/headless), so the turn boundary is
+  // measured too; a subagent gets its own, so concurrent turns don't cross-contaminate.
+  const prefixTrace = opts.prefixTrace ?? new PrefixTrace();
   // What that divergence costs (issue #195). Prefill is ~80% of wall clock on a slow local endpoint,
   // so the cache line is only actionable annotated with the tokens it reprocessed and the seconds
   // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
@@ -1695,12 +1702,14 @@ export async function runTurn(opts: {
     // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
     // break, drop the inspection tools so the offered set steers a tool-list-respecting model
     // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
-    const callTools =
-      planForceWrite || subagentForceReport
-        ? []
-        : withdrawInspection
-          ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
-          : opts.tools;
+    // The subagent's report round keeps the list and forbids calls with `tool_choice` instead
+    // (#426): the template renders the tool list into the system turn, so withholding it would
+    // re-prefill the subagent's whole context on its last round.
+    const callTools = planForceWrite
+      ? []
+      : withdrawInspection
+        ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
+        : opts.tools;
     // Char budget for the transform turn: the window minus the plan's generation reserve, in chars
     // (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
     // overflows the window on a large task — the real cause of the large-repo 400s.
@@ -1871,7 +1880,12 @@ export async function runTurn(opts: {
             callModel({
               system: prefixStable ? baseSystem : system + '\n\n' + suffix,
               history: opts.history,
-              tools: [],
+              // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
+              // Sending none rendered a different system turn: on the measured 24k runs the note
+              // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
+              // re-prefilled it again — two full prefills per fold, one of them for nothing.
+              tools: callTools,
+              toolChoice: 'none',
               config: opts.config,
               onContentDelta: opts.onContentDelta,
               onReasoningDelta: opts.onReasoningDelta,
@@ -1887,6 +1901,30 @@ export async function runTurn(opts: {
                 ? roundSuffix
                   ? `${roundSuffix}\n\n${suffix}`
                   : suffix
+                : undefined,
+              // The note round is a request like any other, so it gets its own prefix-cache line:
+              // before #426 it was the one request the trace never saw, and the fold's line that
+              // followed compared against the round before it.
+              onRequest: debugEnabled()
+                ? msgs => {
+                    const d = prefixTrace.record(msgs, {
+                      trailingNote: prefixStable,
+                      tools: toolsToChatTools(callTools),
+                    });
+                    const pct =
+                      d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+                    const tok = reprocessedTokens(
+                      d,
+                      Math.round(rawEstimate(opts.history, callTools) * calibration),
+                    );
+                    debugLog(
+                      `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
+                        `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
+                        `msgs=${d.stableMessages}/${d.totalMessages}` +
+                        (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                        ` ${formatPrefillCost(tok, prefillRate.get(), false)}\n`,
+                    );
+                  }
                 : undefined,
             });
           let rep = await report(directive);
@@ -2076,6 +2114,7 @@ export async function runTurn(opts: {
       logitBias,
       prefixStable,
       trailingNote: roundSuffix,
+      toolChoice: subagentForceReport ? 'none' : undefined,
       // Measurement only (issue #134), and only when something will read it: the debug log is the
       // sole consumer, so an un-logged run never pays the larger streaming payload.
       logprobs: ENTROPY_LOGPROBS && debugEnabled() ? ENTROPY_TOP_K : undefined,
@@ -2113,7 +2152,10 @@ export async function runTurn(opts: {
         ? msgs => {
             // `trailingNote` lets the trace tell the note's own slot apart from real history
             // churn — without it every append reads as `mid-history firstChanged=assistant` (#253).
-            const d = prefixTrace.record(msgs, { trailingNote: !!roundSuffix });
+            const d = prefixTrace.record(msgs, {
+              trailingNote: !!roundSuffix,
+              tools: toolsToChatTools(callTools),
+            });
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
             roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
             roundReprocessBounded = d.cause === 'first-request';

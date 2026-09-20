@@ -105,4 +105,27 @@ describe('PrefixTrace', () => {
     expect(d.cause).toBe('shrunk');
     expect(d.changedRole).toBe('user');
   });
+
+  it('reports a changed tool list ahead of everything, with nothing stable (#426)', () => {
+    const t = new PrefixTrace();
+    const tools = [{ type: 'function', function: { name: 'read' } }];
+    t.record([sys('S'), user('hi')], { tools });
+    // Byte-identical messages plus an append, but the tools were withheld: the template renders
+    // the list into the system turn, so the engine sees a different prompt from the top.
+    const d = t.record([sys('S'), user('hi'), tool('r')], { tools: [] });
+    expect(d.cause).toBe('tools-changed');
+    expect(d.stableChars).toBe(0);
+    expect(d.stableMessages).toBe(0);
+    // Restoring the list is another change; the same list again is back to normal.
+    expect(t.record([sys('S'), user('hi'), tool('r')], { tools }).cause).toBe('tools-changed');
+    expect(t.record([sys('S'), user('hi'), tool('r'), tool('r2')], { tools }).cause).toBe(
+      'append-only',
+    );
+  });
+
+  it('treats an unstated tool list as unchanged', () => {
+    const t = new PrefixTrace();
+    t.record([sys('S'), user('hi')]);
+    expect(t.record([sys('S'), user('hi'), tool('r')]).cause).toBe('append-only');
+  });
 });

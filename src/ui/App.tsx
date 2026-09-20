@@ -47,6 +47,7 @@ import {
   type TranscriptUsage,
 } from '../store/transcript.js';
 import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
+import { PrefixTrace } from '../agent/prefixtrace.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
@@ -181,6 +182,8 @@ export function App() {
   // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
   // enough to measure one. See agent/prefillcost.ts.
   const prefillRateRef = useRef<number | undefined>(undefined);
+  // Session-long so the prefix-cache line prices the turn boundary too (#426); see runTurn's opt.
+  const prefixTraceRef = useRef(new PrefixTrace());
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -964,6 +967,7 @@ export function App() {
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
       prefillRateRef.current = undefined;
+      prefixTraceRef.current = new PrefixTrace();
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
@@ -1927,6 +1931,7 @@ export function App() {
         onPrefillRate: r => {
           prefillRateRef.current = r;
         },
+        prefixTrace: prefixTraceRef.current,
       });
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);

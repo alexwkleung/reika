@@ -8,6 +8,7 @@ import { isOffline } from './tools/_net.js';
 import { PayloadStore } from './store/payloads.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
 import { runTurn } from './agent/loop.js';
+import { PrefixTrace } from './agent/prefixtrace.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
@@ -150,6 +151,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   const usage: { last?: Usage } = {};
   let calibration: number | undefined;
   let prefillRate: number | undefined;
+  const prefixTrace = new PrefixTrace();
   let shrink = { sheds: 0, folds: 0 };
 
   const turn = (modelText: string, active: HeadlessMode, skill?: string): Promise<void> =>
@@ -192,6 +194,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
       onPrefillRate: r => {
         prefillRate = r;
       },
+      prefixTrace,
     });
 
   let failed: Error | null = null;
