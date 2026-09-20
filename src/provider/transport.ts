@@ -52,6 +52,12 @@ export type ChatCompletionRequest = {
   // the fields or reject the request, which client.ts degrades from (one retry without them).
   logprobs?: boolean;
   top_logprobs?: number;
+  // `none` keeps the tool list in the request — and so in the prompt the template renders — while
+  // forbidding a call. The report rounds (compaction note, subagent bounded return) use it instead
+  // of sending no tools: templates render the list into the system turn (Qwen3.8 puts it BEFORE
+  // the system prompt), so dropping it diverges the prompt from its first bytes and the round
+  // re-prefills everything. Honored by llama.cpp/vllm/OpenAI; client.ts degrades from a rejection.
+  tool_choice?: 'none';
 };
 
 // A streamed delta chunk. Field unions cover provider variants:

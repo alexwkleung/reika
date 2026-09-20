@@ -23,7 +23,13 @@ export type PrefixCause =
   // round was a pure append and the note was displaced by it (see the `trailingNote` option).
   | 'trailing-note'
   // This request is shorter than the last (compaction spliced messages out).
-  | 'shrunk';
+  | 'shrunk'
+  // The tool list differs from the previous request's (a report round that withheld tools, the
+  // loop-breaking withdrawal). Templates render the list into the system turn — Qwen3.8 puts it
+  // BEFORE the system prompt — so this invalidates from the first bytes whatever the messages did;
+  // reported ahead of every message-level cause, with nothing counted stable, since the trace
+  // cannot see where a given template places it (#426).
+  | 'tools-changed';
 
 export type PrefixDivergence = {
   cause: PrefixCause;
@@ -40,6 +46,7 @@ export class PrefixTrace {
   private prev: string[] | null = null;
   private prevRoles: string[] = [];
   private prevHadNote = false;
+  private prevTools = '';
 
   // `trailingNote` says the final message of THIS request is the transient harness note (loop
   // ledger / nudge) that prefix-stable mode rides at the end of the prompt. It is regenerated every
@@ -48,20 +55,33 @@ export class PrefixTrace {
   // the next record() names that case instead of reporting `mid-history firstChanged=assistant` for
   // what was a pure append. See issue #253: on a 24k run this was a constant 436 chars/round, and
   // the label made it read as reasoning-aging invalidating the cache on every single round.
-  record(messages: Array<{ role: string }>, opts?: { trailingNote?: boolean }): PrefixDivergence {
+  //
+  // `tools` is the request's tool list as serialized on the wire (any stable string form). The
+  // messages alone cannot show a tool-list change, and that was how the report round's full
+  // re-prefill stayed invisible: byte-identical messages, no tools, `trailing-note` in the log.
+  record(
+    messages: Array<{ role: string }>,
+    opts?: { trailingNote?: boolean; tools?: unknown },
+  ): PrefixDivergence {
     const cur = messages.map(m => JSON.stringify(m));
     const roles = messages.map(m => m.role);
+    const tools = opts?.tools === undefined ? '' : JSON.stringify(opts.tools);
     const prev = this.prev;
     const prevRoles = this.prevRoles;
     const prevHadNote = this.prevHadNote;
+    const prevTools = this.prevTools;
     this.prev = cur;
     this.prevRoles = roles;
     this.prevHadNote = !!opts?.trailingNote;
+    this.prevTools = tools;
 
     const totalChars = cur.reduce((a, s) => a + s.length, 0);
     const base = { totalMessages: cur.length, totalChars };
     if (!prev) {
       return { cause: 'first-request', stableMessages: 0, stableChars: 0, ...base };
+    }
+    if (tools !== prevTools) {
+      return { cause: 'tools-changed', stableMessages: 0, stableChars: 0, ...base };
     }
     let i = 0;
     while (i < prev.length && i < cur.length && prev[i] === cur[i]) i++;

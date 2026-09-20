@@ -22,12 +22,19 @@ import {
 // are dropped, its reply is the digest the parent receives, and the digest carries the coverage
 // note for what the task named but the subagent never read.
 
-type Captured = { system: string; tools: Tool[]; trailingNote?: string; history: Message[] };
+type Captured = {
+  system: string;
+  tools: Tool[];
+  toolChoice?: 'none';
+  trailingNote?: string;
+  history: Message[];
+};
 const h = vi.hoisted(() => ({
   scripted: [] as ModelResponse[],
   captured: [] as {
     system: string;
     tools: { name: string }[];
+    toolChoice?: 'none';
     trailingNote?: string;
     historyLen: number;
   }[],
@@ -47,6 +54,7 @@ vi.mock('../provider/client.js', () => ({
       h.captured.push({
         system: opts.system,
         tools: opts.tools.map(t => ({ name: t.name })),
+        toolChoice: opts.toolChoice,
         trailingNote: opts.trailingNote,
         historyLen: opts.history.length,
       });
@@ -138,13 +146,17 @@ describe('subagent bounded return (#340)', () => {
       reportAtCap: true,
     });
     expect(h.captured).toHaveLength(3);
-    // Earlier rounds: tools offered, no directive.
+    // Earlier rounds: tools offered and callable, no directive.
     expect(h.captured[0].tools.map(t => t.name)).toEqual(['read']);
+    expect(h.captured[0].toolChoice).toBeUndefined();
     expect(h.captured[0].system + (h.captured[0].trailingNote ?? '')).not.toContain(
       SUBAGENT_REPORT_DIRECTIVE,
     );
-    // Report round: no tools, directive present (system suffix or tail note, whichever channel).
-    expect(h.captured[2].tools).toEqual([]);
+    // Report round: the tools stay in the request with calls forbidden (#426 — dropping the list
+    // re-rendered the system turn and re-prefilled the whole context), directive present (system
+    // suffix or tail note, whichever channel).
+    expect(h.captured[2].tools.map(t => t.name)).toEqual(['read']);
+    expect(h.captured[2].toolChoice).toBe('none');
     expect(h.captured[2].system + (h.captured[2].trailingNote ?? '')).toContain(
       SUBAGENT_REPORT_DIRECTIVE,
     );
@@ -219,8 +231,8 @@ describe('subagent bounded return (#340)', () => {
       payloads: new PayloadStore(),
       onMessage: () => {},
     });
-    // Subagent report round: no tools + directive, in the nested run (4th model call overall).
-    expect(h.captured[3].tools).toEqual([]);
+    // Subagent report round: calls forbidden + directive, in the nested run (4th model call overall).
+    expect(h.captured[3].toolChoice).toBe('none');
     expect(h.captured[3].system + (h.captured[3].trailingNote ?? '')).toContain(
       SUBAGENT_REPORT_DIRECTIVE,
     );
