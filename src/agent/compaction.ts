@@ -120,6 +120,31 @@ export function wouldFold(
   return foldPoint(history, contextWindow, calibration, minGen) !== null;
 }
 
+// Will this shrink event end in a fold? Answered BEFORE the batch-age shed runs, on a throwaway
+// copy of the history, so the compaction note (#280) can be written from the live bytes it is
+// about to lose and as a pure append on the previous request — measured at the first live fold
+// after #428, the note written post-shed paid the shed's mid-history rewrite (9k tokens, 416s)
+// and the fold then paid its own (9.3k, 431s): two full invalidations in one event, where the
+// note request could have been the ~1.5k-token append it is when the shed lands on the real
+// request instead. The decision is the loop's own, replayed: once the event fires, the shed stops
+// at the low watermark or runs out of candidates, and the fold follows exactly when the estimate
+// is still above that watermark — `shouldCompact || agedButAboveWatermark` reduces to that — and
+// the fold-point walk keeps something to fold. Shallow copies are enough: the shed only sets
+// per-message marks (`aged`, `reasoningAged`, `rendered`, a spent continuation's content), and the
+// walks read fields, never identity. Callers pass the calibrated estimate they would shed under.
+export function foldAfterShed(
+  history: Message[],
+  estimate: (h: Message[]) => number,
+  contextWindow: number,
+  calibration = 1,
+  minGen = DEFAULT_MIN_GEN_TOKENS,
+): boolean {
+  const copy = history.map(m => ({ ...m }));
+  batchAgePayloads(copy, () => estimate(copy), contextWindow, minGen);
+  const target = compactThreshold(contextWindow, minGen) * AGE_LOW_FRACTION;
+  return estimate(copy) > target && wouldFold(copy, contextWindow, calibration, minGen);
+}
+
 export function compactHistory(
   history: Message[],
   contextWindow: number,
