@@ -27,8 +27,26 @@ describe('matchSkill', () => {
 
   it('scores multi-word triggers higher than single words', () => {
     const m = matchSkill('can you run the app for me', [skill('run', ['run the app'])]);
-    // 'run' (1) + 'run the app' (3)
-    expect(m?.score).toBe(4);
+    expect(m?.score).toBe(3);
+  });
+
+  it('does not count a phrase twice through a longer phrase that contains it', () => {
+    // The implicit name `issue` rides inside "issue number"; counted separately, every two-word
+    // trigger containing the name cleared the auto bar on its own.
+    const m = matchSkill('the issue number is shown twice', [skill('issue', ['issue number'])]);
+    expect(m?.matched).toEqual(['issue number']);
+    expect(m?.score).toBe(2);
+    const two = matchSkill('review pr 420', [skill('review', ['review pr', 'pr review'])]);
+    expect(two?.matched).toEqual(['review pr']);
+  });
+
+  it('records whether a matched phrase opens the prompt, past a courtesy lead', () => {
+    const skills = [skill('review', ['review pr'])];
+    expect(matchSkill('review pr 420', skills)?.leading).toBe(true);
+    expect(matchSkill('ok please review pr 420', skills)?.leading).toBe(true);
+    expect(matchSkill("let's review pr 420", skills)?.leading).toBe(true);
+    expect(matchSkill('there is a bug in the review pr path', skills)?.leading).toBe(false);
+    expect(matchSkill('the review pr path', skills)?.leading).toBe(false);
   });
 
   it('requires whole-word matches', () => {
@@ -86,6 +104,51 @@ describe('shouldAutoInject', () => {
     const m = matchSkill('verify the deploy', [skill('verify', ['deploy'])])!;
     expect(m.score).toBe(2);
     expect(shouldAutoInject(m, 32_000)).toBe(true);
+  });
+
+  // The shipped skills against prompts that merely mention their nouns: each one cleared the
+  // score bar before the shape gate, prepending a body that opens with "run `gh pr view`".
+  const shipped = [
+    skill('issue', ['work on issue', 'gh issue', 'fix issue', 'look at issue', 'issue number']),
+    skill('review', [
+      'review pr',
+      'pr review',
+      'review the pull request',
+      'pull request',
+      'code review',
+    ]),
+  ];
+
+  it('refuses a match that is not in the command position', () => {
+    const descriptions = [
+      'the code review comments say we should rename this',
+      'add a pull request template to the repo',
+      'there is an issue with the pr review flow in App.tsx',
+      'why does gh issue list hang in bash mode',
+      'the issue number is shown twice in the header',
+    ];
+    for (const p of descriptions) {
+      const m = matchSkill(p, shipped);
+      expect(m, p).not.toBeNull();
+      expect(shouldAutoInject(m!, 24_000), p).toBe(false);
+    }
+  });
+
+  it('accepts a command with its arguments', () => {
+    for (const p of [
+      'work on issue 412',
+      'review pr 420',
+      'please review the pull request',
+      'gh issue 12, focus on the tests',
+    ]) {
+      expect(shouldAutoInject(matchSkill(p, shipped)!, 24_000), p).toBe(true);
+    }
+  });
+
+  it('refuses a leading phrase buried in a long prompt', () => {
+    const p =
+      'review pr 420 but first explain how the compaction note is fitted into the recap and why';
+    expect(shouldAutoInject(matchSkill(p, shipped)!, 24_000)).toBe(false);
   });
 
   it('refuses a body too large for the window', () => {

@@ -967,8 +967,8 @@ export function App() {
     if (name === 'implement') {
       // Shortcut for the plan→agent handoff: flip to agent mode and submit "execute the plan
       // above" so the user doesn't have to /agent then hand-write the prompt. The plan sits in
-      // `messages` from prior renders, so it's in the history slice submitToModel sends; with
-      // REIKA_PLAN_HANDOFF=1 the loop folds the exploration into a digest automatically.
+      // `messages` from prior renders, so it's in the history slice submitToModel sends; the loop
+      // folds the exploration into a digest automatically (REIKA_PLAN_HANDOFF, default on).
       if (mode === 'shell' || mode === 'chat') {
         setMessages(prev => [
           ...prev,

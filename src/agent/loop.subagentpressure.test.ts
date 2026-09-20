@@ -106,6 +106,7 @@ describe('subagent pressure affordance (#343)', () => {
   });
 
   it('is a strict no-op with the flag off', async () => {
+    process.env.REIKA_SUBAGENT_PRESSURE = '0';
     h.scripted.push(grep('g1'), final('done'));
     const tools = await run();
     expect(tools[0].payload).not.toContain('files match');
