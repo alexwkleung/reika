@@ -378,12 +378,13 @@ const MAX_CONVERGE_RETRIES = 1; // one strong push; the user can retry fully aft
 // Tighter reasoning ceil for a steered plan-mode retry than a normal force-write (12000): if the steer
 // is ignored and it re-spirals, cut it fast (~2k tokens) rather than burning the full force-write ceil.
 const STEER_RETRY_REASONING_CEIL = 8000;
-// EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
-// a compact digest at the start of each agent turn, so the plan stays salient instead of being
-// buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
-// a clean A/B; independent of REIKA_PLAN_EXPERIMENT (which only sets the *starting* mode, so reusing
-// it would skip distillation whenever plan mode is reached via /plan). Strict no-op when off.
-const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
+// Plan→agent handoff: fold the plan-mode exploration that precedes a written plan into a compact
+// digest at the start of each agent turn, so the plan stays salient instead of being buried under
+// the raw read transcript (agent/compaction.ts distillPlanHandoff). On by default since 2026-09-19;
+// `REIKA_PLAN_HANDOFF=0` is the baseline arm. Independent of REIKA_PLAN_EXPERIMENT (which only sets
+// the *starting* mode, so reusing it would skip distillation whenever plan mode is reached via
+// /plan). Strict no-op when off.
+const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF !== '0';
 // EXPERIMENT (plan alignment, #68): during agent turns that execute a written plan, keep the
 // harness-tracked step checklist in the system suffix each round (buildPlanProgressLedger) and
 // bounce a turn that tries to finish with file-bearing steps unchecked (decidePlanGate, the plan
@@ -2827,7 +2828,7 @@ export async function runTurn(opts: {
           contentHash = result.contentHash;
           toolNotice = result.notice;
           editFailure = result.editFailure;
-          // EXPERIMENT (#343): the mid-session subagent trigger. A grep/glob that spans enough
+          // The mid-session subagent trigger (#343). A grep/glob that spans enough
           // files that reading them would cross the compaction threshold gets a footer pointing at
           // subagent. Observation-keyed (the files are in the result) and pressure-gated (the
           // estimate is this round's, the threshold the window's) — see subagentpressure.ts. The

@@ -1,4 +1,5 @@
-// EXPERIMENT (#343, REIKA_SUBAGENT_PRESSURE=1): the mid-session subagent trigger, harness-driven.
+// The mid-session subagent trigger (#343), harness-driven. On by default since 2026-09-19;
+// `REIKA_SUBAGENT_PRESSURE=0` is the baseline arm.
 //
 // The routing rule (#335) handles a request that ARRIVES trace-shaped. Mid-session the model has
 // something it never has at round 0 — a grep or glob result — and "N files match" is an
@@ -16,10 +17,15 @@
 //
 // Rides the payload as a footer, where the spill and cap footers already live: capPayload keeps
 // head and tail, so a footer survives the cap. Once per turn. Never inside a subagent (it has no
-// subagent tool). Flag read per call; strict no-op when off.
+// subagent tool), and never without a known context window — the loop's gate needs a threshold
+// to measure against, so with no window the footer cannot fire. Flag read per call; strict no-op
+// when off. The one live run so far (#280 fold-2 session): fired at round 1, heard ("given context
+// pressure, maybe a subagent…"), declined for trust — "I should read the main files myself". The
+// barrier is perceived report precision, not the trigger; the default buys the trigger at the cost
+// of one ~330-char footer that ages with its payload.
 
 export function subagentPressureEnabled(): boolean {
-  return process.env.REIKA_SUBAGENT_PRESSURE === '1';
+  return process.env.REIKA_SUBAGENT_PRESSURE !== '0';
 }
 
 // The tool description's own trigger (">3 files").
