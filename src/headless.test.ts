@@ -70,7 +70,7 @@ describe('finalReply', () => {
 
 const config = {
   pasteFetch: false,
-  skillAuto: true,
+  skillAuto: 'apply',
   contextWindow: 24000,
 } as unknown as Config;
 
@@ -118,6 +118,18 @@ describe('buildHeadlessInput', () => {
     expect(out.modelText.startsWith('VERIFY BODY\n\n')).toBe(true);
     expect(out.skill).toBe('verify');
     expect(out.notices[0]).toMatch(/Skill \/verify applied — its body was prepended/);
+  });
+
+  it("sends the prompt as typed under the interactive default 'ask' — nobody to ask", async () => {
+    const out = await buildHeadlessInput(
+      'please verify the change',
+      { ...config, skillAuto: 'ask' } as Config,
+      bundleWith([verify]),
+      'agent',
+    );
+    expect(out.modelText).toBe('please verify the change');
+    expect(out.skill).toBeUndefined();
+    expect(out.notices).toEqual([]);
   });
 
   it('never injects in plan mode', async () => {

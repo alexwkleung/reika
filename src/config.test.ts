@@ -36,6 +36,7 @@ const ENV_KEYS = [
   'REIKA_DEFAULT_MODE',
   'REIKA_PLAN_EXPERIMENT',
   'REIKA_AUTO_APPROVE',
+  'REIKA_SKILL_AUTO',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -556,5 +557,31 @@ describe('loadConfig — auto-approve', () => {
     const c = loadConfig();
     expect(c.autoApprove).toBe('safe');
     expect(c.autoApproveExplicit).toBe(false);
+  });
+});
+
+describe('REIKA_SKILL_AUTO (#425)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is ask — the confirm dialog made a wrong pick a keystroke, not a turn', () => {
+    expect(loadConfig().skillAuto).toBe('ask');
+    process.env.REIKA_SKILL_AUTO = 'ASK ';
+    expect(loadConfig().skillAuto).toBe('ask');
+  });
+
+  it("apply, and the pre-#425 spelling '1', are apply — the only value that changes headless", () => {
+    for (const v of ['apply', '1', 'true']) {
+      process.env.REIKA_SKILL_AUTO = v;
+      expect(loadConfig().skillAuto, v).toBe('apply');
+    }
+  });
+
+  it('off/0 and any typo are off — a typo costs a hint line, not a rewritten prompt', () => {
+    for (const v of ['off', '0', 'false', 'aks']) {
+      process.env.REIKA_SKILL_AUTO = v;
+      expect(loadConfig().skillAuto, v).toBe('off');
+    }
   });
 });

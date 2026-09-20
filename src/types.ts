@@ -367,6 +367,11 @@ export type Profile = {
 //              patterns) still prompt. The warnings break-glass.
 //   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
 export type AutoApproveMode = 'off' | 'safe' | 'bypass';
+// 'off' — a match only earns the one-line hint. 'ask' (default) — the TUI opens the confirm dialog
+// (#425); headless, with nobody to ask, sends the prompt as typed. 'apply' — the TUI still asks
+// (a human present is never a reason to inject silently), and headless applies a strong match
+// without asking, under the tighter 12-word gate.
+export type SkillAutoMode = 'off' | 'ask' | 'apply';
 
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
@@ -434,9 +439,8 @@ export type Config = {
   // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
   // exists because it's an outbound request on a machine that may be offline or airgapped.
   pasteFetch: boolean;
-  // Let a command-shaped skill match rewrite the prompt instead of only being suggested
-  // (REIKA_SKILL_AUTO=1, default off, experimental). See skillmatch.ts for why off.
-  skillAuto: boolean;
+  // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
+  skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in
   // the scrollback and saved transcripts (REIKA_ANON=1, default off). Display only — the model
   // still receives everything verbatim. See ui/identity.ts.

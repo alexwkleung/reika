@@ -15,6 +15,7 @@ import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
+import { SKILL_CONFIRM_APPLY, SKILL_CONFIRM_SEND, SkillConfirm } from './SkillConfirm.js';
 import { Question, type QuestionTyping } from './Question.js';
 import {
   inheritProfile,
@@ -52,7 +53,7 @@ import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { expandPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldAutoInject } from '../skillmatch.js';
+import { matchSkill, shouldConfirmInject, type SkillMatch } from '../skillmatch.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
@@ -194,6 +195,14 @@ export function App() {
   } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
+  // The skill confirm (#425): the harness asking, before submit, whether a strongly matched skill
+  // should be applied. Modal like Approval; resolves to the skill name to apply, null for "send as
+  // typed", or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
+  const [skillConfirm, setSkillConfirm] = useState<{
+    match: SkillMatch;
+    resolve: (choice: string | null | 'abort') => void;
+  } | null>(null);
+  const [skillConfirmSelected, setSkillConfirmSelected] = useState<number>(SKILL_CONFIRM_SEND);
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
@@ -238,6 +247,10 @@ export function App() {
   // than picked by position (#275); no downstream code can tell, since the turn's content is just
   // the skill body.
   const pendingSkillRef = useRef<string | undefined>(undefined);
+  // A queued prompt's skill-confirm answer, put back here by the queue drain just before the
+  // replay (the way images go back onto imageAttachmentsRef) so the replay routes on the decision
+  // taken at keypress instead of asking again at drain, when nobody may be at the desk (#425).
+  const queuedSkillRouteRef = useRef<string | null | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
@@ -295,6 +308,10 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
+  const skillConfirmRef = useRef<typeof skillConfirm>(null);
+  skillConfirmRef.current = skillConfirm;
+  const skillConfirmSelectedRef = useRef<number>(SKILL_CONFIRM_SEND);
+  skillConfirmSelectedRef.current = skillConfirmSelected;
   const sessionAutoApproveRef = useRef<boolean | null>(null);
   sessionAutoApproveRef.current = sessionAutoApprove;
   const modeRef = useRef<Mode>('agent');
@@ -585,6 +602,13 @@ export function App() {
         setQuestion(null);
         setQuestionTyping(null);
       }
+      // An open skill confirm closes first, like the /model picker, and the turn (if one is
+      // running) keeps going: the dialog is about the prompt being submitted, not the turn.
+      if (!hadPending && !questionRef.current && skillConfirmRef.current) {
+        skillConfirmRef.current.resolve('abort');
+        setSkillConfirm(null);
+        return;
+      }
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
         return;
@@ -695,6 +719,28 @@ export function App() {
       // user's behalf and tell the model to proceed without them. Approval binds no escape for
       // the same reason: ctrl-c is the one way out of a modal that decides something.
       // Modal while the list is up: the input is disabled, so no other key has anywhere to go.
+      return;
+    }
+    const sc = skillConfirmRef.current;
+    if (sc) {
+      // Digits and y/n only move the cursor, as in the question dialog: Enter is the one key that
+      // answers, and y lands on Apply — the row Approval-trained fingers expect to be first.
+      if (key.upArrow) {
+        setSkillConfirmSelected(i => Math.max(SKILL_CONFIRM_SEND, i - 1));
+      } else if (key.downArrow) {
+        setSkillConfirmSelected(i => Math.min(SKILL_CONFIRM_APPLY, i + 1));
+      } else if (input === '1' || input === 'n' || input === 'N') {
+        setSkillConfirmSelected(SKILL_CONFIRM_SEND);
+      } else if (input === '2' || input === 'y' || input === 'Y') {
+        setSkillConfirmSelected(SKILL_CONFIRM_APPLY);
+      } else if (key.return) {
+        const apply = skillConfirmSelectedRef.current === SKILL_CONFIRM_APPLY;
+        setSkillConfirm(null);
+        sc.resolve(apply ? sc.match.skill.name : null);
+      }
+      // No escape, for the reason Approval and Question bind none: a split arrow sequence arrives
+      // as a bare escape on a loaded pty. Modal: the input is disabled, so nothing else has
+      // anywhere to go.
       return;
     }
     const ms = modelSelectRef.current;
@@ -1436,21 +1482,48 @@ export function App() {
     });
   };
 
+  // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
+  // a strong match opens the confirm dialog rather than injecting — the user is the classifier,
+  // and the keyword matcher's false positives (a prompt that merely opens with the skill's noun)
+  // stop costing a turn. Resolves to the skill name to apply, null for "send as typed", 'abort'
+  // for ctrl-c, or undefined when nothing needed asking. Runs BEFORE the busy queue and the
+  // expansions so a queued prompt carries its answer and no fetch precedes the question.
+  const decideSkillRoute = async (prompt: string): Promise<string | null | 'abort' | undefined> => {
+    // A queued prompt replaying: the answer was taken when it was typed.
+    if (queuedSkillRouteRef.current !== undefined) {
+      const decided = queuedSkillRouteRef.current;
+      queuedSkillRouteRef.current = undefined;
+      return decided;
+    }
+    if (config?.skillAuto === 'off' || !config || !bundle) return undefined;
+    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
+    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
+    // plan-mode prompt and the progress ledger. There it stays a suggestion.
+    if (modeRef.current !== 'agent' && modeRef.current !== 'vibe') return undefined;
+    const match = matchSkill(prompt, bundle.skills);
+    const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
+    if (!match || !shouldConfirmInject(match, window)) return undefined;
+    setSkillConfirmSelected(SKILL_CONFIRM_SEND);
+    return new Promise(resolve => {
+      // Deferred past the current keypress dispatch: Ink hands the Enter that submitted to every
+      // useInput handler, and opening synchronously would let the dialog's own handler see it
+      // and answer "send as typed" on the spot.
+      queueMicrotask(() => setSkillConfirm({ match, resolve }));
+    });
+  };
+
   // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
   // words (never the expanded text — a fetched page or an @mention'd file mentioning "verify" is
   // not a request to run /verify); `modelText` is what actually gets sent, returned unchanged
-  // unless auto-injection fires.
-  const routeSkill = (prompt: string, modelText: string): string => {
+  // unless the skill is applied. `route` is the confirm dialog's answer when it fired.
+  const routeSkill = (
+    prompt: string,
+    modelText: string,
+    route: string | null | undefined,
+  ): string => {
     const match = matchSkill(prompt, bundle?.skills ?? []);
     if (!match) return modelText;
-    const window = config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow;
-    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
-    // plan-mode prompt and the progress ledger. There it stays a suggestion.
-    const auto =
-      config?.skillAuto === true &&
-      (modeRef.current === 'agent' || modeRef.current === 'vibe') &&
-      shouldAutoInject(match, window);
-    if (auto) {
+    if (route === match.skill.name) {
       pendingNoticesRef.current.push({
         role: 'system',
         // Says what actually happened, not just that something matched: the body is in the
@@ -1461,16 +1534,19 @@ export function App() {
       pendingSkillRef.current = match.skill.name;
       return `${match.skill.body}\n\n${modelText}`;
     }
+    // The dialog replaces the hint when it fires: the user has just seen the skill and declined
+    // it, and a line saying "start with /x to apply it" right after that is the nag.
+    if (route === null) {
+      suggestedSkillsRef.current.add(match.skill.name);
+      return modelText;
+    }
     if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
     suggestedSkillsRef.current.add(match.skill.name);
     // A hint, not a handoff: the prompt goes through as typed. Said outright — "run it with /x"
     // read as an instruction to go do that instead (#398).
-    const tail = config?.skillAuto
-      ? ''
-      : ', or set REIKA_SKILL_AUTO=1 to apply strong matches automatically';
     pendingNoticesRef.current.push({
       role: 'system',
-      content: `Skill hint: /${match.skill.name} — ${match.skill.description}. Prompt sent unchanged; start with /${match.skill.name} to apply it${tail}.`,
+      content: `Skill hint: /${match.skill.name} — ${match.skill.description}. Prompt sent unchanged; start with /${match.skill.name} to apply it.`,
       tone: 'info',
     });
     return modelText;
@@ -1482,17 +1558,21 @@ export function App() {
   // regular image pipeline (hasImageMarker → attachImageBlocks) applies.
   // onSubmit re-seals itself while busy, so a still-busy replay just lands
   // back on the queue.
+  // Held while a skill confirm is up too: a replay under an open dialog could open a second one
+  // over it, and the first prompt's answer would never arrive.
   useEffect(() => {
-    if (status !== 'idle' || pending !== null || queueRef.current.length === 0) return;
+    if (status !== 'idle' || pending !== null || skillConfirm !== null) return;
+    if (queueRef.current.length === 0) return;
     const [next, ...rest] = queueRef.current;
     queueRef.current = rest;
     setQueue(rest);
     const images = next.images ?? [];
     imageAttachmentsRef.current = images;
+    queuedSkillRouteRef.current = next.skill;
     const markers = images.map(img => img.marker).join(' ');
     void onSubmit(next.content + (markers ? ` ${markers}` : ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pending, queue]);
+  }, [status, pending, skillConfirm, queue]);
 
   const onSubmit = async (input: string) => {
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
@@ -1542,9 +1622,14 @@ export function App() {
       const trimmed = input.trim();
       const images = imageAttachmentsRef.current;
       if (!trimmed && images.length === 0) return;
+      // Asked now, while the user is at the keyboard, and carried on the entry: the drain may
+      // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
+      const route = await decideSkillRoute(trimmed);
+      if (route === 'abort') return;
       const msg: QueuedMessage = {
         content: trimmed,
         images: images.length > 0 ? images : undefined,
+        ...(route !== undefined ? { skill: route } : {}),
       };
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
@@ -1560,9 +1645,13 @@ export function App() {
     // slot cache on disconnect, so an interrupted warm still pays off). Unconditional: slash
     // commands (/cd re-bundles, /model switches) and shell submits also land here.
     warmerRef.current.cancel('submit');
+    const trimmed = input.trim();
+    // Before the box clears: the confirm dialog sits over the input, and the prompt it is asking
+    // about should still be visible underneath. A ctrl-c leaves it there to edit.
+    const route = await decideSkillRoute(trimmed);
+    if (route === 'abort') return;
     setInputValue('');
     setSuggestionState(null);
-    const trimmed = input.trim();
     if (!trimmed) return;
     // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
     setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
@@ -1605,7 +1694,7 @@ export function App() {
       modelText = attachImageBlocks(expansion.augmented, imageAttachmentsRef.current);
       imageAttachmentsRef.current = [];
       if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
-      modelText = routeSkill(trimmed, modelText);
+      modelText = routeSkill(trimmed, modelText, route);
       // Last, so everything above reads the user's own words: a marker is the paste's stand-in
       // for @mention, URL and skill matching alike — text the user pasted is content, not a
       // request to fetch a link inside it. The marker survives in `display`, keeping the user
@@ -1997,6 +2086,8 @@ export function App() {
                   : undefined
               }
             />
+          ) : skillConfirm ? (
+            <SkillConfirm match={skillConfirm.match} selectedIndex={skillConfirmSelected} />
           ) : null}
           <Input
             // The question dialog is modal only while its list is up; once the user is typing an
@@ -2004,9 +2095,12 @@ export function App() {
             disabled={
               pending !== null ||
               modelSelect !== null ||
+              skillConfirm !== null ||
               (question !== null && questionTyping === null)
             }
-            attachedAbove={pending !== null || question !== null || modelSelect !== null}
+            attachedAbove={
+              pending !== null || question !== null || modelSelect !== null || skillConfirm !== null
+            }
             attachedBelow={suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}

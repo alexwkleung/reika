@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AutoApproveMode, Config, DefaultMode, Profile } from './types.js';
+import type { AutoApproveMode, Config, DefaultMode, Profile, SkillAutoMode } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
@@ -80,7 +80,7 @@ export function loadConfig(): Config {
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
     pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
-    skillAuto: process.env.REIKA_SKILL_AUTO === '1',
+    skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,
     // and the lookup costs three git subprocesses at startup that are pure waste when unused.
@@ -153,6 +153,26 @@ function parseAutoApprove(raw: string | undefined): AutoApproveMode {
     case 'bypass':
     case 'yolo':
       return 'bypass';
+    default:
+      return 'off';
+  }
+}
+
+// REIKA_SKILL_AUTO, three-valued like REIKA_AUTO_APPROVE. Unset is 'ask': once the confirm
+// dialog made a wrong pick cost a keystroke instead of a turn, the reason to keep routing off by
+// default went with it. 'apply' (also '1', the pre-#425 spelling, which then meant silent
+// injection) is the only value that changes headless — a script that never opted in must not
+// start receiving skill bodies because the interactive default moved. Anything unrecognized is
+// 'off': a typo should cost a hint line, not a rewritten prompt.
+function parseSkillAuto(raw: string | undefined): SkillAutoMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'ask':
+      return 'ask';
+    case 'apply':
+    case '1':
+    case 'true':
+      return 'apply';
     default:
       return 'off';
   }

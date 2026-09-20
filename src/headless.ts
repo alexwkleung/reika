@@ -70,11 +70,12 @@ export async function buildHeadlessInput(
   let modelText = expansion.augmented;
   if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
   // Same exclusion as App.routeSkill: a skill body landing in plan mode competes with the plan
-  // prompt. Headless has no one to suggest it to, so a non-injecting match is silent.
+  // prompt. Headless has no one to suggest it to, so a non-injecting match is silent — and no one
+  // to ask, so only 'apply' injects; the interactive default 'ask' sends the prompt as typed.
   const match = matchSkill(prompt, bundle.skills);
   const auto =
     match &&
-    config.skillAuto &&
+    config.skillAuto === 'apply' &&
     (mode === 'agent' || mode === 'vibe') &&
     shouldAutoInject(match, config.contextWindow);
   if (match && auto) {

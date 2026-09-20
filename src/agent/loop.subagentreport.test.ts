@@ -99,7 +99,7 @@ function makeConfig(over: Partial<Config> = {}): Config {
     bashTimeoutMs: 5000,
     bashIdleMs: 5000,
     pasteFetch: false,
-    skillAuto: false,
+    skillAuto: 'off',
     anon: false,
     ...over,
   };
