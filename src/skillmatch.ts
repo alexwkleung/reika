@@ -116,10 +116,19 @@ export function matchSkill(prompt: string, skills: Skill[]): SkillMatch | null {
   return ranked[0].score >= SUGGEST_MIN_SCORE ? ranked[0] : null;
 }
 
-// Whether a match is strong enough to rewrite the prompt rather than just mention the skill.
+// Whether a match is strong enough to rewrite the prompt rather than just mention the skill,
+// with nobody to ask (headless). The word cap is what prices a silent wrong pick.
 export function shouldAutoInject(match: SkillMatch, contextWindowTokens?: number): boolean {
+  return shouldConfirmInject(match, contextWindowTokens) && match.words <= AUTO_MAX_WORDS;
+}
+
+// Whether a match is strong enough to ASK about (#425): the auto gate minus the word cap. With a
+// human confirming, the long-tail command — `review pr 420 but first explain how…` — can be
+// offered instead of only suggested. `leading` stays: without it "add a pull request template"
+// would prompt every time, which is the nag.
+export function shouldConfirmInject(match: SkillMatch, contextWindowTokens?: number): boolean {
   if (match.score < AUTO_MIN_SCORE) return false;
-  if (!match.leading || match.words > AUTO_MAX_WORDS) return false;
+  if (!match.leading) return false;
   const maxChars = contextWindowTokens
     ? contextWindowTokens * DENSE_CHARS_PER_TOKEN * AUTO_BODY_WINDOW_FRACTION
     : AUTO_BODY_CHARS_FALLBACK;

@@ -29,7 +29,7 @@ const CONFIG: Config = {
   bashTimeoutMs: 1000,
   bashIdleMs: 1000,
   pasteFetch: false,
-  skillAuto: false,
+  skillAuto: 'off',
   anon: false,
 };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchSkill, shouldAutoInject } from './skillmatch.js';
+import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
 import type { Skill } from './skills.js';
 
 function skill(name: string, triggers: string[] = [], body = 'do the thing'): Skill {
@@ -149,6 +149,36 @@ describe('shouldAutoInject', () => {
     const p =
       'review pr 420 but first explain how the compaction note is fitted into the recap and why';
     expect(shouldAutoInject(matchSkill(p, shipped)!, 24_000)).toBe(false);
+  });
+
+  // The confirm dialog (#425) is the auto gate minus the word cap: with a human answering, the
+  // long-tail command can be asked about instead of only suggested — but a description that
+  // merely mentions the nouns must still not prompt, or the dialog becomes the nag.
+  describe('shouldConfirmInject', () => {
+    it('asks about a leading phrase in a long prompt the silent gate refuses', () => {
+      const p =
+        'review pr 420 but first explain how the compaction note is fitted into the recap and why';
+      const m = matchSkill(p, shipped)!;
+      expect(shouldAutoInject(m, 24_000)).toBe(false);
+      expect(shouldConfirmInject(m, 24_000)).toBe(true);
+    });
+
+    it('still refuses a match outside the command position', () => {
+      for (const p of [
+        'add a pull request template to the repo',
+        'the issue number is shown twice in the header',
+      ]) {
+        expect(shouldConfirmInject(matchSkill(p, shipped)!, 24_000), p).toBe(false);
+      }
+    });
+
+    it('still refuses a single-word match and an oversized body', () => {
+      expect(shouldConfirmInject(matchSkill('verify this', [skill('verify')])!, 24_000)).toBe(
+        false,
+      );
+      const big = skill('launch', ['run the app'], 'x'.repeat(20_000));
+      expect(shouldConfirmInject(matchSkill('run the app', [big])!, 16_000)).toBe(false);
+    });
   });
 
   it('refuses a body too large for the window', () => {
