@@ -19,10 +19,14 @@ const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '
 // (nearly) the accent itself, so a typecheck reads cyan, a subagent apricot, a suspected loop
 // yellow — the whole line, not just one glyph. The closing "Worked for …" line stays muted
 // grey (Scrollback), which is what keeps a live indicator distinct from a finished one.
-// Resting brightness. A tinted label reads dimmer than grey at the same max channel (the other
-// channels drop with the hue), so this sits a step above theme.muted's 0x80 to compensate.
-const BASE = 0xa8;
-const PEAK = 0xd2; // brightest level at the tip.
+// Resting and peak lightness as CIE L* (0–100), not channel levels (#429): at one channel
+// level a magenta label sits ~9 L* under a yellow one (its channels carry far less of the
+// luminance weight), so the default turn read dimmer than every harness state and its sweep
+// was the faintest. Solving the channel level per hue makes every accent rest at the same
+// lightness and sweep by the same amount. Base lands a step above theme.muted's L* 54, the
+// live/finished distinction.
+const BASE_L = 63;
+const PEAK_L = 77; // brightest level at the tip.
 const SHIMMER_RADIUS = 2; // band reaches this many chars either side of the tip.
 // How much of the accent's chroma the label keeps. 1 would be the pure hue (a cyan label's red
 // channel pinned to 0, which goes murky at the dim end); a little white mixed in keeps the
@@ -69,6 +73,30 @@ function tinted(h: [number, number, number], v: number): string {
     .join('')}`;
 }
 
+// CIE L* of an sRGB hex: the lightness the eye actually reads.
+export function lightness(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const lin = (c: number) => {
+    const s = c / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const y = 0.2126 * lin((n >> 16) & 0xff) + 0.7152 * lin((n >> 8) & 0xff) + 0.0722 * lin(n & 0xff);
+  return 116 * (y > 0.008856 ? Math.cbrt(y) : 7.787 * y + 16 / 116) - 16;
+}
+
+// The tint of `h` that lands nearest lightness `L`. Lightness is monotone in `v`, so a bisection
+// over the 256 levels finds it; a target brighter than the hue can reach clamps to full.
+function tintAtLightness(h: [number, number, number], L: number): string {
+  let lo = 0;
+  let hi = 255;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (lightness(tinted(h, mid)) < L) lo = mid + 1;
+    else hi = mid;
+  }
+  return tinted(h, lo);
+}
+
 // The brightness ramp for one accent, tip in the middle, with a cosine falloff so the edges
 // feather (~25% bright at the band's rim) rather than stepping hard to the baseline. Exported
 // for tests; cached because the accent set is tiny and the component re-renders every tick.
@@ -80,15 +108,21 @@ export function shimmerRamp(accent: string): string[] {
   const ramp = Array.from({ length: SHIMMER_RADIUS * 2 + 1 }, (_, i) => {
     const d = i - SHIMMER_RADIUS;
     const w = (1 + Math.cos((Math.PI * d) / (SHIMMER_RADIUS + 1))) / 2; // 1 at tip → ~0 at rim.
-    return tinted(h, BASE + (PEAK - BASE) * w);
+    return tintAtLightness(h, BASE_L + (PEAK_L - BASE_L) * w);
   });
   ramps.set(accent, ramp);
   return ramp;
 }
 
-// The label's resting color: the accent at the muted baseline brightness.
+// The label's resting color: the accent at the baseline lightness. Cached like the ramp.
+const bases = new Map<string, string>();
 export function shimmerBase(accent: string): string {
-  return tinted(hue(accent), BASE);
+  let base = bases.get(accent);
+  if (!base) {
+    base = tintAtLightness(hue(accent), BASE_L);
+    bases.set(accent, base);
+  }
+  return base;
 }
 const SHIMMER_HALF = SHIMMER_RADIUS; // band reaches this far from the tip.
 

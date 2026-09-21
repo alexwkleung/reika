@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shimmerBase, shimmerRamp } from './Working.js';
+import { lightness, shimmerBase, shimmerRamp } from './Working.js';
 import { theme } from './theme.js';
 
 // The label carries the spinner's hue (#349): a hex accent keeps its channel ratios across the
@@ -20,8 +20,8 @@ describe('shimmerRamp', () => {
     const lum = ramp.map(c => Math.max(...rgb(c)));
     expect(lum[2]).toBeGreaterThan(lum[1]);
     expect(lum[1]).toBeGreaterThan(lum[0]);
-    // The tip lands near the accent's own brightness, not the flat grey peak.
-    expect(lum[2]).toBe(0xd2);
+    // The tip sits at the peak lightness, whatever channel level that takes for the hue.
+    expect(lightness(ramp[2])).toBeCloseTo(77, 0);
   });
 
   it('keeps the accent hue: the dominant channel stays dominant', () => {
@@ -49,23 +49,37 @@ describe('shimmerRamp', () => {
 
   it('falls back to neutral grey for an unrecognised accent', () => {
     expect(shimmerRamp('not-a-color')).toEqual([
-      '#b3b3b3',
-      '#c8c8c8',
-      '#d2d2d2',
-      '#c8c8c8',
-      '#b3b3b3',
+      '#a2a2a2',
+      '#b5b5b5',
+      '#bfbfbf',
+      '#b5b5b5',
+      '#a2a2a2',
     ]);
-    expect(shimmerBase('not-a-color')).toBe('#a8a8a8');
+    expect(shimmerBase('not-a-color')).toBe('#999999');
   });
 
-  it('rests a step above muted so the tint does not read as dimmer than the old grey', () => {
+  it('rests every accent at one lightness, a step above muted (#429)', () => {
+    // Channel levels are solved per hue: at one level the default magenta sat ~9 L* under the
+    // yellow spin hint and read as the dim one, its sweep the faintest.
+    const mutedL = lightness(theme.muted);
     for (const accent of [theme.accent, theme.warning, theme.subagent, 'cyan']) {
       const base = shimmerBase(accent);
-      expect(Math.max(...rgb(base))).toBe(0xa8);
+      expect(lightness(base)).toBeCloseTo(63, 0);
+      expect(lightness(base)).toBeGreaterThan(mutedL + 8);
       // The band's rim is only a quarter step above the resting color: it feathers down to
       // the base rather than snapping.
-      const rim = Math.max(...rgb(shimmerRamp(accent)[0]));
-      expect(rim - 0xa8).toBe(0x0b);
+      const rim = lightness(shimmerRamp(accent)[0]);
+      expect(rim - lightness(base)).toBeCloseTo(3.5, 0);
+    }
+  });
+
+  it('sweeps every accent by the same lightness', () => {
+    const lift = (accent: string) =>
+      lightness(shimmerRamp(accent)[2]) - lightness(shimmerBase(accent));
+    const magenta = lift(theme.accent);
+    expect(magenta).toBeCloseTo(14, 0);
+    for (const accent of [theme.warning, theme.subagent, 'cyan']) {
+      expect(Math.abs(lift(accent) - magenta)).toBeLessThan(0.5);
     }
   });
 });
