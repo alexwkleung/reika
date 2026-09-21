@@ -68,6 +68,7 @@ describe('computeSuggestions — /model arguments', () => {
     { name: 'qwen2.5-coder', model: 'Qwen2.5-Coder' },
     { name: 'glm-4', model: 'GLM-4' },
     { name: 'big', model: 'deepseek-chat' },
+    { name: 'muse-spark', model: 'Muse-Spark', group: 'go' },
   ];
 
   it('lists all targets after "/model "', () => {
@@ -77,6 +78,7 @@ describe('computeSuggestions — /model arguments', () => {
       '/model qwen2.5-coder',
       '/model glm-4',
       '/model big',
+      '/model muse-spark',
     ]);
   });
 
@@ -95,6 +97,12 @@ describe('computeSuggestions — /model arguments', () => {
     const displays = state?.items.map(i => i.display) ?? [];
     expect(displays).toContain('/model qwen2.5-coder');
     expect(displays).toContain('/model big  —  deepseek-chat');
+    expect(displays).toContain('/model muse-spark  (go)');
+  });
+
+  it("matches a named profile's extra models on the profile name", () => {
+    const state = computeSuggestions('/model go', [], [], TARGETS);
+    expect(state?.items.map(i => i.value)).toEqual(['/model muse-spark']);
   });
 
   it('returns null with no match or a second argument', () => {
