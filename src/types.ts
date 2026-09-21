@@ -359,6 +359,10 @@ export type Profile = {
   // connection settings are inherited from the profile active at switch time. The flag
   // keeps the UI honest about the model being off-config (switch message, picker marker).
   adhoc?: boolean;
+  // The named profile whose extra model this is (REIKA_<NAME>_MODEL=a,b — `b` is keyed by its
+  // own name but belongs to that profile's connection). The picker shows the name so a router's
+  // models read as one group; the key stays the model so `/model b` works.
+  group?: string;
 };
 
 // How much runs without a confirmation prompt.

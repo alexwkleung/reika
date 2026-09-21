@@ -134,7 +134,7 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
     for (const m of profileModels.slice(1)) {
       const key = m.toLowerCase();
       if (key === 'default' || profiles[key]) continue;
-      profiles[key] = { ...profiles[lower], model: m };
+      profiles[key] = { ...profiles[lower], model: m, group: lower };
     }
   }
   return profiles;

@@ -218,7 +218,11 @@ describe('loadConfig — multi-model named profile', () => {
     const cfg = loadConfig();
     expect(Object.keys(cfg.profiles).sort()).toEqual(['default', 'go', 'muse-spark']);
     expect(cfg.profiles.go.model).toBe('flash');
-    expect(cfg.profiles['muse-spark']).toEqual({ ...cfg.profiles.go, model: 'Muse-Spark' });
+    expect(cfg.profiles['muse-spark']).toEqual({
+      ...cfg.profiles.go,
+      model: 'Muse-Spark',
+      group: 'go',
+    });
     expect(cfg.models).toEqual(['local']);
   });
 
