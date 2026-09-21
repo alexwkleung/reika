@@ -59,14 +59,18 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
+    // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
+    // cached round is nearly free on both local and API, so it is sized where a healthy complex
+    // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
-    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
+    // Not a backstop: the last round IS the report round (#340), so this stays tight.
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '8', 10),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
