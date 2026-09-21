@@ -3,6 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { structuredPatch } from 'diff';
 import type { FileChange, DiffHunk, TreeChanges } from '../types.js';
+import { mapLimit } from '../limit.js';
 import { MAX_EDIT_LENGTH } from './_diff.js';
 import { writeTargets } from './_writetargets.js';
 
@@ -14,9 +15,13 @@ import { writeTargets } from './_writetargets.js';
 // is a losing game (`npm run fix`, `prettier --write .`, a heredoc piped into python), and git
 // already keeps the one thing a diff needs — the previous bytes of every clean file. So the
 // snapshot only has to hold the files git ALREADY reports dirty (their previous bytes live nowhere
-// else); anything clean before the run diffs against HEAD. Outside a repo the fallback is the
-// command text after all (_writetargets.ts): deterministic, and a best shot — it snapshots the
-// files the command names and diffs those, and cannot see what a formatter touched.
+// else); anything clean before the run diffs against the commit HEAD was on. That commit is part
+// of the snapshot (#337): a `git checkout`, `merge`, `reset`, or an edit committed in the same
+// call leaves the tree clean against the NEW head, so status lists nothing — the files that changed
+// are the ones `git diff old..new` names, and their previous bytes are at the old commit. Outside a
+// repo the fallback is the command text after all (_writetargets.ts): deterministic, and a best
+// shot — it snapshots the files the command names and diffs those, and cannot see what a formatter
+// touched.
 //
 // Display-only, like `ToolResult.diff`: nothing here reaches the model. The summary and payload the
 // model sees are byte-identical with or without it.
@@ -29,6 +34,10 @@ const SNAPSHOT_MAX_BYTES = 512 * 1024;
 // bash call is free at the dozens a working session has and not at the thousands an untracked
 // build or data directory has; showing nothing there beats a visible pause on every command.
 const MAX_DIRTY_ENTRIES = 2000;
+// Reads in flight at once across a snapshot. Above the dozens a working session has, so the common
+// case is as wide as it was; at the entry cap it holds the live buffers to 64 × SNAPSHOT_MAX_BYTES
+// instead of 2000 open files (#338).
+const READ_CONCURRENCY = 64;
 // Files that get a rendered diff. Past this they are still counted (`more`), because a `git
 // checkout` touching 300 files is something the user should see the size of, not the body of.
 const MAX_DIFFED_FILES = 8;
@@ -44,6 +53,8 @@ type Bytes = Content | null;
 export type TreeSnapshot = {
   // The repo root, or null when there is no repo and `before` holds the command's named targets.
   root: string | null;
+  // The commit HEAD was on. `null` without a repo, or before the first commit.
+  head: string | null;
   cwd: string;
   // Repo-relative path (absolute without a repo) → bytes before the command, for every path git
   // reported as dirty or untracked. `null` = listed but absent on disk (a pending delete, or a
@@ -57,12 +68,16 @@ export type TreeSnapshot = {
 // Capture the state a diff will be taken against. `null` when git is present but can't answer
 // (slow, or too much untracked to read), which callers treat as "no diff" rather than an error.
 export async function snapshotTree(cwd: string, command: string): Promise<TreeSnapshot | null> {
-  const root = await git(['rev-parse', '--show-toplevel'], cwd);
+  const [root, head] = await Promise.all([
+    git(['rev-parse', '--show-toplevel'], cwd),
+    git(['rev-parse', 'HEAD'], cwd),
+  ]);
   // git reports the resolved root; the cwd must be resolved the same way or a project under a
   // symlinked dir (macOS /tmp → /private/tmp) gets every path as a long `../` chain.
   const realCwd = await realpath(cwd).catch(() => cwd);
   const snap: TreeSnapshot = {
     root: root?.trim() ?? null,
+    head: head?.trim() ?? null,
     cwd: realCwd,
     before: new Map(),
     skipped: new Set(),
@@ -75,61 +90,76 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
     if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
     paths = [...listed.keys()];
   }
-  await Promise.all(
-    paths.map(async p => {
-      const bytes = await readBounded(snap.root === null ? p : join(snap.root, p));
-      if (bytes === 'oversize') snap.skipped.add(p);
-      else snap.before.set(p, bytes);
-    }),
-  );
+  await mapLimit(paths, READ_CONCURRENCY, async p => {
+    const bytes = await readBounded(snap.root === null ? p : join(snap.root, p));
+    if (bytes === 'oversize') snap.skipped.add(p);
+    else snap.before.set(p, bytes);
+  });
   return snap;
 }
 
 // Every file whose bytes differ from the snapshot, in path order. A file git lists now but didn't
-// before was clean, so it changed and HEAD holds its previous bytes. One it listed before but not
-// now was reverted, committed, or (if untracked) deleted — the snapshot vs. the disk decides which
-// of those actually changed the bytes, so a `git commit` of an existing edit shows nothing.
+// before was clean, so it changed and the old head holds its previous bytes. One it listed before
+// but not now was reverted, committed, or (if untracked) deleted — the snapshot vs. the disk
+// decides which of those actually changed the bytes, so a `git commit` of an existing edit shows
+// nothing. When HEAD moved, the files that differ between the two commits are candidates too:
+// clean against both, they are in no status listing.
 export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | null> {
   if (snap.root === null) return namedChanges(snap);
   const root = snap.root;
-  const listed = await dirtyPaths(root);
+  const [listed, head] = await Promise.all([dirtyPaths(root), git(['rev-parse', 'HEAD'], root)]);
   if (listed === null) return null;
-  const candidates = [...new Set([...listed.keys(), ...snap.before.keys()])].filter(
-    p => !snap.skipped.has(p),
-  );
-  // `before: undefined` = tracked and clean before the run; its HEAD bytes are fetched below, and
-  // only for the files that get rendered — a formatter sweeping 200 files must not cost 200 git
-  // processes. A path HEAD doesn't have (untracked, or staged as new) was created by the command.
-  const changed: { path: string; before: Bytes | undefined; after: Bytes }[] = [];
-  await Promise.all(
-    candidates.map(async p => {
+  const moved = snap.head !== null && head !== null && head.trim() !== snap.head;
+  const between = moved
+    ? await commitDiff(root, snap.head!, head!.trim())
+    : new Map<string, string>();
+  if (between === null) return null;
+  const candidates = [
+    ...new Set([...listed.keys(), ...snap.before.keys(), ...between.keys()]),
+  ].filter(p => !snap.skipped.has(p));
+  // Decide what changed without keeping any bytes: a `git checkout` can name thousands of files,
+  // and only the ones drawn below are read again.
+  const changed: { path: string; created: boolean }[] = [];
+  await mapLimit(candidates, READ_CONCURRENCY, async p => {
+    if (snap.before.has(p)) {
       const after = await readBounded(join(root, p));
-      if (after === 'oversize') return;
-      if (snap.before.has(p)) {
-        const before = snap.before.get(p)!;
-        if (before?.text !== after?.text) changed.push({ path: p, before, after });
-        return;
-      }
-      const code = listed.get(p) ?? '';
-      const created = code === '??' || code[0] === 'A';
-      changed.push({ path: p, before: created ? null : undefined, after });
-    }),
-  );
+      if (after === 'oversize' || snap.before.get(p)?.text === after?.text) return;
+      changed.push({ path: p, created: false });
+      return;
+    }
+    // Clean before the run, so it changed. Created unless the old head had it — which the commit
+    // diff says outright, and status says only when HEAD is where it was.
+    const created = between.has(p)
+      ? between.get(p) === 'A'
+      : listed.get(p) === '??' || listed.get(p)?.[0] === 'A';
+    changed.push({ path: p, created });
+  });
   changed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const files: FileChange[] = [];
   for (const c of changed.slice(0, MAX_DIFFED_FILES)) {
-    let before = c.before;
-    if (before === undefined) {
-      // `--filters` applies the same eol/smudge conversion the worktree copy went through, so a
-      // CRLF checkout doesn't diff as a full-file rewrite. A miss (HEAD never had the path, yet it
-      // wasn't listed before) or a mode-only change has nothing to draw.
-      const head = await git(['cat-file', '--filters', `HEAD:${c.path}`], root, 'buffer');
-      if (head === null) continue;
-      const decoded = decode(head);
-      if (decoded.text === c.after?.text) continue;
-      before = decoded;
+    const after = await readBounded(join(root, c.path));
+    if (after === 'oversize') continue;
+    let before: Bytes;
+    if (snap.before.has(c.path)) {
+      before = snap.before.get(c.path)!;
+    } else if (c.created) {
+      before = null;
+    } else {
+      // The old head's bytes, fetched only for files that get rendered — a formatter sweeping 200
+      // files must not cost 200 git processes. `--filters` applies the same eol/smudge conversion
+      // the worktree copy went through, so a CRLF checkout doesn't diff as a full-file rewrite. A
+      // miss (no commit had the path, yet it wasn't listed before) or a mode-only change has
+      // nothing to draw.
+      const old = await git(
+        ['cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
+        root,
+        'buffer',
+      );
+      if (old === null) continue;
+      before = decode(old);
+      if (before.text === after?.text) continue;
     }
-    files.push(describeChange(relative(snap.cwd, join(root, c.path)), before, c.after));
+    files.push(describeChange(relative(snap.cwd, join(root, c.path)), before, after));
   }
   if (files.length === 0) return null;
   return { files, more: changed.length - Math.min(changed.length, MAX_DIFFED_FILES) };
@@ -242,6 +272,22 @@ async function dirtyPaths(root: string): Promise<Map<string, string> | null> {
     // disk (or, for a copy, untouched), so it isn't a candidate.
     if (entry[0] === 'R' || entry[0] === 'C') i++;
   }
+  return paths;
+}
+
+// Paths whose content differs between two commits, with git's letter for each (A/M/D/T). Renames
+// are left undetected on purpose: the old path is gone from disk and the new one appeared, and a
+// deleted-plus-created pair is what the tree actually did.
+async function commitDiff(
+  root: string,
+  from: string,
+  to: string,
+): Promise<Map<string, string> | null> {
+  const out = await git(['diff', '--name-status', '--no-renames', '-z', from, to], root);
+  if (out === null) return null;
+  const paths = new Map<string, string>();
+  const tokens = out.split('\0');
+  for (let i = 0; i + 1 < tokens.length; i += 2) paths.set(tokens[i + 1], tokens[i][0]);
   return paths;
 }
 

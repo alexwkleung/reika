@@ -120,8 +120,16 @@ describe('formatPr', () => {
 });
 
 describe('formatCache', () => {
-  it('shows the cached share of the last prompt', () => {
-    expect(formatCache(40_000, 50_000)).toBe('cache 80%');
+  it('shows the cached share of the last prompt and its size', () => {
+    expect(formatCache(40_000, 50_000)).toBe('80% cached (40k)');
+  });
+
+  it('drops the count on a cold call, where it would only repeat the percent', () => {
+    expect(formatCache(0, 50_000)).toBe('0% cached');
+  });
+
+  it('keeps the count when a small hit rounds to 0%', () => {
+    expect(formatCache(200, 50_000)).toBe('0% cached (200)');
   });
 
   it('renders nothing when the provider does not report cache hits', () => {

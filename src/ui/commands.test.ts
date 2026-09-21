@@ -13,7 +13,8 @@ import type { Message } from '../types.js';
 describe('nextMode — Shift+Tab cycling', () => {
   it('cycles agent → plan → vibe → chat → shell → agent', () => {
     expect(nextMode('agent')).toBe('plan');
-    expect(nextMode('plan')).toBe('vibe');
+    expect(nextMode('plan')).toBe('minimal');
+    expect(nextMode('minimal')).toBe('vibe');
     expect(nextMode('vibe')).toBe('chat');
     expect(nextMode('chat')).toBe('shell');
     expect(nextMode('shell')).toBe('agent');

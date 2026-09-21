@@ -435,18 +435,35 @@ function verbLabels(command: string): string[] {
   return hits;
 }
 
+// `rm` in command position: not docker's `--rm` flag, and not the `rm` subcommand of a tool
+// that removes something other than files (`docker rm -f app`, `npm rm`, `aws s3 rm`,
+// `terraform state rm`) — those carry their own labels, and a second "force delete" on
+// `docker rm -f` would be a misleading one. A blocklist on purpose: an unlisted wrapper
+// (`timeout 5 rm`, `busybox rm`) still gates, while an unlisted carrier costs one extra label.
+// `git rm` is deliberately NOT excluded — with -f/-r it deletes from the working tree too.
+const RM_LEAD = String.raw`(?<![\w-])(?<!\b(?:docker|podman|nerdctl|npm|pnpm|yarn|bun|s3|gsutil|state|volume|image|container|network|secret|config|context|stack|service|node|plugin|buildx|compose|manifest|mc|azcopy)\s+)rm(?=\s)`;
+// GNU rm accepts options after operands, so `rm build -rf` is `rm -rf build` and `rm -f -r x`
+// is `rm -rf x`: each flag is looked for anywhere in the segment rather than in a fixed slot,
+// and the combined spellings (`-rf`, `-fr`, `-Rf`, `-vrf`) satisfy both at once. Recursion and
+// force are then classified by which flags the segment has and lacks, so every rm reads as
+// exactly one of the three labels below.
+const RM_SEG = String.raw`[^&;|\n()\x60]*`;
+const RM_R = String.raw`\s(?:--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)(?![\w-])`;
+const RM_F = String.raw`\s(?:--force|-[a-zA-Z]*f[a-zA-Z]*)(?![\w-])`;
+function rmFlags(has: string[], lacks: string[]): RegExp {
+  const look = [...has.map(f => `(?=${RM_SEG}${f})`), ...lacks.map(f => `(?!${RM_SEG}${f})`)];
+  return new RegExp(RM_LEAD + look.join(''));
+}
+
 const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  {
-    re: /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\b/,
-    label: 'Recursive force delete (rm -rf)',
-  },
+  { re: rmFlags([RM_R, RM_F], []), label: 'Recursive force delete (rm -rf)' },
   // Recursive deletion is recursive deletion; -f only suppresses the prompts nothing was going
-  // to show anyway. The lookahead keeps `rm -rf` on its own more specific label above, while
-  // still catching the split-flag form (`rm -f -r x`) that pattern misses.
-  {
-    re: /\brm\s+(?:-{1,2}[\w-]+\s+)*(?:--recursive\b|-(?!\w*f)[a-zA-Z]*[rR])/,
-    label: 'Recursive delete (rm -r)',
-  },
+  // to show anyway.
+  { re: rmFlags([RM_R], [RM_F]), label: 'Recursive delete (rm -r)' },
+  // A plain `rm file` is as targeted as an edit and stays ungated; -f is the flag that says
+  // "don't ask" — it deletes write-protected files, and it is what a model reaches for when a
+  // plain rm complained (#293). Gated on the same footing as the recursive forms above.
+  { re: rmFlags([RM_F], [RM_R]), label: 'Force delete (rm -f)' },
   {
     re: /\bfind\b[^&;|]*\s(?:-delete\b|-exec\s+rm\b)/,
     label: 'Delete files by search (find -delete)',

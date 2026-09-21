@@ -28,12 +28,26 @@ export const theme = {
   error: 'red',
   success: 'green',
   userBg: '#303030',
-  // Status-line mode tags. The two heavily-used modes get soft accents so they
-  // read at a glance (without clashing with the yellow warning); the secondary
-  // modes sit back in grey.
+  // Status-line mode tags. Every mode gets its own soft hue so the tag reads at a glance
+  // (none of them near the yellow warning); the heavily-used modes take the brighter pastels
+  // and the secondary ones sit a step back in saturation.
   modeAgent: '#d7a8d7', // soft magenta, echoes inlineCode — the default workhorse
   modePlan: '#8fd0c8', // soft teal-cyan; also the plan-checklist header (PlanProgress) — teal = plan everywhere
   modeVibe: '#b4aee0', // soft periwinkle between plan teal and agent magenta — vibe runs both phases
-  modeChat: '#a0a0a0', // slightly lighter than muted — secondary, recedes
+  // Heather: a desaturated violet, greyer and darker than the vibe periwinkle and agent magenta
+  // on either side of it in hue. Purple-tinted so it no longer reads as a disabled/grey chip
+  // (#380), but the low saturation keeps it a secondary mode that recedes next to the two
+  // pastel workhorses.
+  // Minimal: a desaturated slate, deliberately the quietest of the work-mode tags — the mode is
+  // the harness doing LESS, and the chip should not read as louder than agent's.
+  modeMinimal: '#9aa8b8',
+  modeChat: '#a892c4',
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
+  // URLs in the model's prose: bare ones and the `(href)` of a markdown link. They were
+  // chalk.dim, which on a light-on-dark terminal is a fainter white — indistinguishable from
+  // the surrounding sentence (#397). A creamy lavender-blue: bluer and paler than the vibe
+  // periwinkle so a link never reads as a mode tag, and well off the reasoning cornflower
+  // that marks the Thinking bar. Underlined only on terminals that take OSC 8 hyperlinks
+  // (markdown.ts): an underline promises a click, and elsewhere there is none to deliver.
+  link: '#aac0f0',
 } as const;

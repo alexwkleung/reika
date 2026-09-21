@@ -539,16 +539,26 @@ describe('detectDangerousPatterns — work-destroying git verbs', () => {
 });
 
 describe('detectDangerousPatterns — destructive filesystem gaps', () => {
-  it('flags recursive rm without -f, including the split-flag form', () => {
-    for (const cmd of ['rm -r build/', 'rm -f -r build/', 'rm --recursive build/']) {
-      expect(detectDangerousPatterns(cmd)).toContain('Recursive delete (rm -r)');
+  it('flags recursive rm without -f', () => {
+    for (const cmd of ['rm -r build/', 'rm -R build/', 'rm --recursive build/']) {
+      expect(detectDangerousPatterns(cmd)).toEqual(['Recursive delete (rm -r)']);
     }
   });
 
-  it('keeps rm -rf on its own more specific label', () => {
-    const hits = detectDangerousPatterns('rm -rf /tmp/foo');
-    expect(hits).toContain('Recursive force delete (rm -rf)');
-    expect(hits).not.toContain('Recursive delete (rm -r)');
+  it('reads every spelling of recursive+force as rm -rf, and only as rm -rf', () => {
+    // Split flags and GNU's options-after-operands are the same command as `rm -rf`.
+    for (const cmd of [
+      'rm -rf /tmp/foo',
+      'rm -fr x',
+      'rm -Rf x',
+      'rm -vrf x',
+      'rm -f -r build/',
+      'rm -r -f build/',
+      'rm build -rf',
+      'rm --recursive --force build',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toEqual(['Recursive force delete (rm -rf)']);
+    }
   });
 
   it('flags find that deletes', () => {
@@ -583,9 +593,68 @@ describe('detectDangerousPatterns — destructive filesystem gaps', () => {
     ]);
   });
 
-  it('does NOT flag plain deletes or non-recursive flags', () => {
-    expect(detectDangerousPatterns('rm file.txt')).toEqual([]);
-    expect(detectDangerousPatterns('rm -f file.txt')).toEqual([]);
+  it('does NOT flag plain deletes or flags that neither recurse nor force', () => {
+    for (const cmd of ['rm file.txt', 'rm -v x', 'rm -i x', 'rm -d emptydir', 'rmdir -f x']) {
+      expect(detectDangerousPatterns(cmd)).toEqual([]);
+    }
+  });
+});
+
+describe('detectDangerousPatterns — rm -f (#293)', () => {
+  it('flags force delete in every flag spelling, on its own label', () => {
+    for (const cmd of [
+      'rm -f file.txt',
+      'rm --force x',
+      'rm -fv x',
+      'rm -vf x',
+      'rm -v -f x',
+      'rm x -f',
+      'rm -f *.log',
+      'rm -f --preserve-root x',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toEqual(['Force delete (rm -f)']);
+    }
+  });
+
+  it('sees rm -f nested inside a larger command', () => {
+    for (const cmd of [
+      'cd build && rm -f out.js',
+      'ls; rm -f y',
+      'echo $(rm -f y)',
+      'find . -name "*.log" | xargs rm -f',
+      'xargs -0 rm -f',
+      'FOO=1 rm -f x',
+      'timeout 5 rm -f x',
+      "sh -c 'rm -f x'",
+      'bash -c "cd /tmp && rm -f x"',
+      'rm -f x\nls -R',
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toContain('Force delete (rm -f)');
+    }
+    expect(detectDangerousPatterns('sudo rm -f x')).toEqual([
+      'Force delete (rm -f)',
+      'Privilege escalation (sudo)',
+    ]);
+  });
+
+  it('does NOT read a tool subcommand or the --rm flag as a file delete', () => {
+    // These already carry their own labels; a second "force delete" would be a misleading one.
+    for (const [cmd, label] of [
+      ['docker rm -f app', 'Cluster/container mutation (docker rm)'],
+      ['docker volume rm -f data', 'Cluster/container mutation (docker volume rm)'],
+      ['npm rm -f lodash', 'Package uninstall (npm/pnpm/yarn/bun)'],
+      ['docker run --rm -f x ubuntu', 'Cluster/container mutation (docker run)'],
+      ['aws s3 rm --recursive s3://b', 'Cloud resource change (mutating cloud CLI verb)'],
+      ['terraform state rm -f x', 'Infrastructure change (terraform/pulumi)'],
+    ]) {
+      expect(detectDangerousPatterns(cmd)).toEqual([label]);
+    }
+    expect(detectDangerousPatterns('cat rm-notes.md')).toEqual([]);
+  });
+
+  it('keeps git rm gated: with -f or -r it deletes from the working tree too', () => {
+    expect(detectDangerousPatterns('git rm -f x')).toEqual(['Force delete (rm -f)']);
+    expect(detectDangerousPatterns('git rm -r --cached x')).toEqual(['Recursive delete (rm -r)']);
   });
 });
 

@@ -1,17 +1,46 @@
 import chalk from 'chalk';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
+import { supportsHyperlink } from 'supports-hyperlinks';
+import wrapAnsi from 'wrap-ansi';
 import { theme } from './theme.js';
 import { codeTheme, resolveLanguage } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
+import { contentWidth } from './layout.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
-// in its source) and restores it in a final pass. See the listitem override.
+// in its source) and restores it in a final pass. See renderInlineMarkdown.
 const COLON_SENTINEL = /\*#COLON\|\*/g;
 
 // Left indent marked-terminal applies to block elements (code, blockquotes,
 // lists). We keep it for those but strip it back off code blocks below.
 const TAB_WIDTH = 2;
+
+// Columns already spoken for to the left of the block being rendered: a list's tab plus
+// marker, a blockquote's bar. The list and blockquote renderers bump it around their body
+// parse so the paragraph renderer wraps prose to the width that is actually left, nested
+// blocks compounding naturally. A module-level counter is safe because marked.parse is
+// synchronous. Before this, marked-terminal reflowed every paragraph at the full width
+// and the list then indented it by tab + `7. `, so each full line ran five columns over
+// and Ink hard-wrapped the last word onto a line of its own.
+let blockIndent = 0;
+
+// The width of the block the render lands in, set per call by renderMarkdown. Read per render,
+// not at import, so a pane resized after launch keeps wrapping to its real width. The default is
+// the top-level scrollback width; a nested row (a subagent's reply, a compaction note) is four
+// columns narrower, and wrapping to the top-level width there left every full line four columns
+// over for Ink to re-wrap — the last word of each line on a row of its own, flush left (#431).
+let renderWidth = contentWidth();
+
+function proseWidth(): number {
+  return Math.max(20, renderWidth - blockIndent);
+}
+
+// marked-terminal's `width` option. Set far past any terminal so its own reflow never
+// breaks a line: it still collapses soft newlines and applies its entity/emoji transform,
+// and the paragraph override below does the actual wrapping at proseWidth(). Not
+// MAX_SAFE_INTEGER: the stock hr renderer allocates an array this long.
+const NEVER_REFLOW = 1 << 20;
 
 // marked-terminal calls renderer callbacks with multiple args (text, ordered, etc.).
 // Passing chalk methods directly causes the extra args to be string-joined onto
@@ -23,50 +52,23 @@ const terminalExtension = markedTerminal(
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),
     em: (text: string) => chalk.italic(text),
-    blockquote: (text: string) => chalk.dim(text),
-    hr: () => chalk.dim('─'.repeat(40)),
     del: (text: string) => chalk.dim(text),
-    // marked-terminal v7 passes raw markdown to listitem without parsing inline
-    // tokens (strong, codespan, em, etc.). Re-parse the text so our inline
-    // renderers actually run.
-    listitem: (text: string) => {
-      try {
-        const inline = marked.parseInline(text, { async: false });
-        const rendered = typeof inline === 'string' ? inline : text;
-        // marked-terminal escapes colons inside codespans to a sentinel and
-        // unescapes them in a final pass that already ran before this override.
-        // Our nested parseInline re-introduces the sentinel, so undo it here or
-        // inline-code colons leak as `*#COLON|*`.
-        return rendered.replace(COLON_SENTINEL, ':');
-      } catch {
-        return text;
-      }
-    },
-    // marked-terminal builds every list item with a hardcoded '* ' bullet and
-    // relies on its default `list` to renumber/re-bullet and trim. Overriding
-    // `list` (to dodge the multi-arg chalk bug) skips all of that, which is why
-    // bullets render as a literal '*' and a stray leading blank line creeps in.
-    // Replicate the needed bits: trim, number ordered items, and use a real '•'.
-    list: (body: string, ordered?: boolean) => {
-      const lines = body
-        .trim()
-        .split('\n')
-        .filter(line => line.length > 0);
-      if (!ordered) {
-        return lines.map(line => line.replace(/^(\s*)\* /, '$1• ')).join('\n');
-      }
-      let n = 0;
-      return lines
-        .map(line => (/^\s*\* /.test(line) ? line.replace('* ', `${++n}. `) : line))
-        .join('\n');
-    },
     paragraph: (text: string) => text,
-    // marked-terminal passes (href, title, text) at runtime, but @types/marked-terminal
-    // only allows (text) => string. Cast through unknown so we can render the link text.
-    link: ((_href: string, _title: string | null, text: string) => chalk.bold(text)) as unknown as (
-      s: string,
-    ) => string,
-    href: (href: string) => chalk.dim(href),
+    // marked-terminal composes the whole link first — `text (href)`, or an OSC 8 hyperlink
+    // where the terminal supports one — and hands that single string to `link`. A
+    // (href, title, text) signature here read the third argument and printed `undefined`.
+    link: (composed: string) => composed,
+    // Both a bare URL (GFM autolink) and a `[text](href)` land here; see theme.link. Underlined
+    // only where marked-terminal is also wrapping it in an OSC 8 hyperlink — the same check it
+    // makes (`supportsHyperlinks.stdout`) — so the underline promises a click exactly when the
+    // terminal can deliver one. On such a terminal a `[text](href)` shows only `text`, so this
+    // is also the one cue that the word is a link and not a colored word. The function form
+    // rather than the cached `.stdout`: it re-reads the env, which is how the tests reach this
+    // branch (marked-terminal's own copy is fixed at import, so the tests can't see its OSC 8).
+    href: (href: string) => {
+      const painted = chalk.hex(theme.link);
+      return supportsHyperlink(process.stdout) ? painted.underline(href) : painted(href);
+    },
     reflowText: true,
     showSectionPrefix: false,
     tab: TAB_WIDTH,
@@ -74,9 +76,8 @@ const terminalExtension = markedTerminal(
     // reads like an error. Bold white keeps the table itself monochrome so the
     // only color inside it comes from inline code (pastel pink); grey border.
     tableOptions: { style: { head: ['white', 'bold'], border: ['grey'] } },
-    // Wrap at terminal width minus the App's paddingX gutter on both sides.
-    // marked-terminal then breaks on word boundaries instead of Ink character-wrapping.
-    width: Math.max(40, (process.stdout.columns || 80) - 2),
+    // See NEVER_REFLOW: line breaking happens in the paragraph override at proseWidth().
+    width: NEVER_REFLOW,
     // marked-terminal does its own fenced-code highlighting via cli-highlight and
     // ignores any `code` renderer override; the theme must be supplied through
     // this second `highlightOptions` argument instead.
@@ -112,9 +113,125 @@ terminalExtension.renderer.code = function (this: unknown, ...args: unknown[]): 
   return renderCode.apply(this, args).replace(stripTabIndent, '');
 };
 
+// The stock paragraph has already run marked-terminal's transform (entity unescape, emoji,
+// colon sentinel) and its reflow, which at NEVER_REFLOW only collapses soft newlines and
+// turns hard breaks into real ones. Break lines here, at the width left after enclosing
+// blocks. `hard` splits a bare URL longer than the line instead of letting it overflow.
+const renderParagraph = terminalExtension.renderer.paragraph;
+terminalExtension.renderer.paragraph = function (this: unknown, ...args: unknown[]): string {
+  const body = renderParagraph.apply(this, args).replace(/\n+$/, '');
+  return wrapAnsi(body, proseWidth(), { hard: true }) + '\n\n';
+};
+
+// A renderer override rather than the `hr` option: the stock renderer builds a `width`-long
+// string before handing it to that option, which at NEVER_REFLOW is a megabyte per rule.
+terminalExtension.renderer.hr = () => chalk.dim('─'.repeat(40)) + '\n\n';
+
+type ListItemToken = {
+  task?: boolean;
+  checked?: boolean;
+  loose?: boolean;
+  tokens: { type: string }[];
+};
+type ListToken = { ordered: boolean; start: number | ''; items: ListItemToken[] };
+
+// Lay lists out here rather than through marked-terminal's list/listitem pair. Its tight
+// items go through `text`, which never reflows, so a model that hard-wraps its own prose
+// at ~120 columns had those breaks kept verbatim and then pushed two columns right by the
+// list tab; on a pane near that width the last word of each line spilled onto its own row.
+// Its loose items were reflowed at the full width and then indented (see blockIndent). And
+// its nested-list fixup looks for the `*` bullet the old `list` option had already rewritten
+// to `•`, so nested bullets glued onto the parent's last line. Each item's `text` tokens are
+// parsed as paragraphs, which is what runs the inline renderers (marked-terminal's `text`
+// hands the raw markdown through) and the wrapping above; other blocks (nested lists, code,
+// quotes) parse as themselves. Continuation lines hang under the item text, and so does a
+// nested list: only the outermost list takes the block tab, so a child bullet sits at its
+// parent's text column rather than a further tab in.
+let listDepth = 0;
+const renderList = terminalExtension.renderer.list;
+terminalExtension.renderer.list = function (
+  this: { parser: { parse(tokens: unknown[]): string } },
+  ...args: unknown[]
+): string {
+  const [token] = args;
+  if (!token || typeof token !== 'object' || !('items' in token)) {
+    return renderList.apply(this, args);
+  }
+  const list = token as ListToken;
+  const start = typeof list.start === 'number' ? list.start : 1;
+  const tab = ' '.repeat(listDepth === 0 ? TAB_WIDTH : 0);
+  const out: string[] = [];
+  list.items.forEach((item, i) => {
+    const marker =
+      (list.ordered ? `${start + i}. ` : '• ') +
+      (item.task ? (item.checked ? '[x] ' : '[ ] ') : '');
+    const hang = ' '.repeat(marker.length);
+    const taken = tab.length + marker.length;
+    blockIndent += taken;
+    listDepth += 1;
+    let body: string;
+    try {
+      body = item.tokens
+        .map(t =>
+          this.parser
+            .parse([t.type === 'text' ? { ...t, type: 'paragraph' } : t])
+            .replace(/\n+$/, ''),
+        )
+        .filter(chunk => chunk.length > 0)
+        .join(item.loose ? '\n\n' : '\n');
+    } finally {
+      blockIndent -= taken;
+      listDepth -= 1;
+    }
+    body.split('\n').forEach((line, j) => {
+      if (j === 0) out.push(tab + marker + line);
+      else out.push(line.length > 0 ? tab + hang + line : '');
+    });
+  });
+  return out.join('\n') + '\n\n';
+};
+
+// marked-terminal renders a blockquote as a dim paragraph sitting `tab` columns in, which
+// reads as an indent accident rather than a quote (#353). Draw a left border instead. `│`,
+// not the `▎` the chat bubbles use: that glyph is a legend (its color says who is speaking),
+// and a quote inside the model's prose makes no such claim. Replacing the renderer rather
+// than the `blockquote` option because the stock one `trim()`s the body before indenting,
+// which eats the first line's own indent: a list inside a quote came out with its first
+// bullet two columns left of the rest. Nested quotes stack: the inner render is `│ text`
+// and the outer prefixes it again, landing `│ │ text`. Blank lines between quoted
+// paragraphs carry a bare bar so the border is continuous.
+const renderBlockquote = terminalExtension.renderer.blockquote;
+terminalExtension.renderer.blockquote = function (
+  this: { parser: { parse(tokens: unknown): string } },
+  ...args: unknown[]
+): string {
+  const [token] = args;
+  let body: string;
+  if (token && typeof token === 'object' && 'tokens' in token) {
+    blockIndent += 2; // the `│ ` bar
+    try {
+      body = this.parser.parse((token as { tokens: unknown }).tokens);
+    } finally {
+      blockIndent -= 2;
+    }
+  } else if (typeof token === 'string') {
+    body = token;
+  } else {
+    return renderBlockquote.apply(this, args);
+  }
+  // Styled per call, not at module load: chalk.level is decided after import in tests.
+  const bar = chalk.dim('│');
+  const lines = body.replace(/^\n+|\n+$/g, '').split('\n');
+  return (
+    lines.map(line => (line.length > 0 ? `${bar} ${chalk.dim(line)}` : bar)).join('\n') + '\n\n'
+  );
+};
+
 marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
 
-export function renderMarkdown(content: string): string {
+// `width` is the columns the rendered block has — `contentWidth(indent)` for a scrollback row.
+export function renderMarkdown(content: string, width = contentWidth()): string {
+  renderWidth = width;
   try {
     // Sanitize the SOURCE, never the output (which carries the highlighter's own escape codes).
     // A model answering about Go or a Makefile emits tab-indented code fences, and marked-terminal

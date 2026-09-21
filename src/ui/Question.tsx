@@ -1,6 +1,11 @@
 import { Box, Text } from 'ink';
 import type { QuestionRequest } from '../types.js';
+import { hangingWrap, useContentWidth } from './layout.js';
 import { theme } from './theme.js';
+
+// The dialog's own border plus its paddingX={1}, on top of the App padding contentWidth already
+// accounts for — the same chrome Approval pays for its diff.
+const DIALOG_CHROME = 4;
 
 // Label shown for the row that hands the answer over to the input box. It is always last and always
 // present: the model's three options being collectively wrong is the real risk of a menu, and this
@@ -19,12 +24,21 @@ export function Question({
   request,
   selectedIndex,
   typing,
+  width,
 }: {
   request: QuestionRequest;
   selectedIndex: number;
   typing?: QuestionTyping | null;
+  // Columns the rows may use; defaults to the live terminal width. Tests pass one to pin the wrap.
+  width?: number;
 }) {
+  const liveWidth = useContentWidth(DIALOG_CHROME);
+  const cols = width ?? liveWidth;
   const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
+  // Labels are full sentences and wrap on any ordinary terminal. Ink has no hanging indent, so a
+  // continuation row would land flush left under the marker, detached from its number
+  // (issue #167's shape). Pre-wrapping each row keeps every continuation under the label text.
+  const hang = '› 1. '.length;
   return (
     <Box
       borderStyle="round"
@@ -38,8 +52,10 @@ export function Question({
       <Text bold color={theme.tool}>
         {'• Question'}
       </Text>
+      {/* Bold so the question reads above the choices: unselected rows are plain, and the selected
+          one is set apart by the accent color, not by weight alone. */}
       <Box marginTop={1}>
-        <Text>{request.question}</Text>
+        <Text bold>{request.question}</Text>
       </Box>
       {typing ? (
         <Box flexDirection="column" marginTop={1}>
@@ -48,9 +64,18 @@ export function Question({
           </Text>
         </Box>
       ) : (
+        // Numbered so a row with a description reads as one entry and the list as a list — four
+        // full-sentence labels with indented sub-lines otherwise ran together as a paragraph.
         <Box flexDirection="column" marginTop={1}>
           {request.options.map((o, i) => {
             const selected = i === selectedIndex;
+            const num = `${i + 1}. `;
+            const tag = o.recommended ? '  (recommended)' : '';
+            // Wrapped as one string so the tag can't be pushed onto its own flush-left row, then
+            // split back at the tag so it keeps its own color.
+            const wrapped = hangingWrap(o.label + tag, cols, hang);
+            const tagAt = tag ? wrapped.lastIndexOf(tag.trimStart()) : -1;
+            const label = tagAt >= 0 ? wrapped.slice(0, tagAt) : wrapped;
             return (
               <Box key={i} flexDirection="column">
                 {/* One Text with nested runs (not siblings): on wrap Ink drops the char at a
@@ -60,12 +85,17 @@ export function Question({
                   <Text bold color={selected ? theme.accent : undefined}>
                     {selected ? '› ' : '  '}
                   </Text>
+                  <Text color={selected ? theme.accent : theme.secondary}>{num}</Text>
                   <Text bold={selected} color={selected ? theme.accent : undefined}>
-                    {o.label}
+                    {label}
                   </Text>
-                  {o.recommended ? <Text color={theme.info}>{'  (recommended)'}</Text> : null}
+                  {tagAt >= 0 ? <Text color={theme.info}>{wrapped.slice(tagAt)}</Text> : null}
                 </Text>
-                {o.description ? <Text color={theme.muted}>{`    ${o.description}`}</Text> : null}
+                {o.description ? (
+                  <Text color={theme.muted}>
+                    {' '.repeat(hang) + hangingWrap(o.description, cols, hang)}
+                  </Text>
+                ) : null}
               </Box>
             );
           })}
@@ -73,11 +103,14 @@ export function Question({
             <Text bold color={selectedIndex === request.options.length ? theme.accent : undefined}>
               {selectedIndex === request.options.length ? '› ' : '  '}
             </Text>
+            <Text color={selectedIndex === request.options.length ? theme.accent : theme.secondary}>
+              {`${request.options.length + 1}. `}
+            </Text>
             <Text
               bold={selectedIndex === request.options.length}
               color={selectedIndex === request.options.length ? theme.accent : theme.secondary}
             >
-              {OWN_ANSWER_LABEL}
+              {hangingWrap(OWN_ANSWER_LABEL, cols, hang)}
             </Text>
           </Text>
         </Box>
@@ -86,7 +119,7 @@ export function Question({
         <Text color={theme.muted}>
           {typing
             ? 'enter submit  ·  ctrl-c abort'
-            : '↑↓ navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
+            : '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
         </Text>
       </Box>
     </Box>

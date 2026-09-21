@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback } from './Scrollback.js';
+import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
 
@@ -208,6 +209,125 @@ describe('Scrollback nested (subagent) messages', () => {
       expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
       expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
     }
+  });
+
+  // #431: markdown wrapped to the top-level width and then landed in a box four columns
+  // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
+  // bullet, on a row of its own and flush left, under no hanging indent. The compaction note
+  // is where it showed (a nested assistant reply with prose and a constants list).
+  it('wraps a nested reply’s prose and bullets inside the nested box', () => {
+    const sentence = 'Tuned constants drift from their documented values, unchecked and unnoticed';
+    const content = `Task: ${sentence} (state OPEN).\n\nConstants:\n\n- \`src/agent/loop.ts\`: ${sentence}\n- \`src/agent/compaction.ts\`: ${sentence}`;
+    const frame = framePlusApp([
+      { role: 'assistant', content, nested: true, compactionNote: true },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(4);
+    for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    // Ink's own wrap was a no-op: the rows are the markdown's, wrapped to the nested width,
+    // each sitting at the nested indent.
+    const expected = stripAnsi(renderMarkdown(content, COLS - 2 - INDENT))
+      .split('\n')
+      .filter(l => l.trim())
+      .map(l => ' '.repeat(1 + INDENT) + l);
+    expect(rows.map(r => r.trimEnd())).toEqual(expected);
+    // A bullet's continuation row hangs under its text, not under the marker.
+    const bullets = rows.filter(r => r.trimStart().startsWith('•'));
+    expect(bullets.length).toBe(2);
+    const after = rows[rows.indexOf(bullets[0]) + 1];
+    expect(after).toMatch(new RegExp(`^ {${1 + INDENT + 4}}\\S`));
+  });
+
+  // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must
+  // sit at the same indent their committed rows will land at, and wrap inside it — the same
+  // width discipline as the committed nested rows above.
+  const liveFrame = (props: {
+    streaming?: string;
+    streamingReasoning?: string;
+    streamingTool?: string;
+    streamingNested?: boolean;
+  }): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          <Scrollback
+            messages={[]}
+            streaming={props.streaming ?? ''}
+            streamingReasoning={props.streamingReasoning ?? ''}
+            streamingTool={props.streamingTool ?? ''}
+            streamingNested={props.streamingNested}
+          />
+        </Box>,
+      );
+      return lastFrame() ?? '';
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  it('draws a nested live reasoning block at the nested indent, every row behind its bar', () => {
+    const frame = liveFrame({
+      streamingReasoning:
+        'I should look at the config loader before touching any call sites at all.',
+      streamingNested: true,
+    });
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  it('draws nested live content and tool tails at the nested indent, wrapped inside it', () => {
+    const long = 'lorem ipsum dolor sit amet consectetur '.repeat(4).trim();
+    const frame = liveFrame({ streaming: long, streamingTool: long, streamingNested: true });
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(2);
+    for (const row of rows) {
+      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}\\S`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  // #280: a compaction note's reasoning bar (committed and live) takes the info accent, matching
+  // the spinner, so the thinking on screen reads as compaction work rather than the answer.
+  it('colors a compaction note’s reasoning bar with the info accent', () => {
+    const prevLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const committed = (compactionNote: boolean) =>
+        framePlusApp([
+          {
+            role: 'assistant',
+            content: 'the note',
+            reasoning: 'deriving the note',
+            nested: true,
+            ...(compactionNote ? { compactionNote: true } : {}),
+          },
+        ]);
+      // Ink coalesces adjacent escapes, so match the open code in front of the bar rather than
+      // chalk's exact open+close pair. theme.info is a named color (cyan), theme.reasoning a hex.
+      const cyanBar = '\u001b[36m▎ ';
+      const reasoningBar = chalk
+        .hex(theme.reasoning)('▎ ')
+        .replace(/\u001b\[39m$/, '');
+      expect(committed(true)).toContain(cyanBar);
+      expect(committed(false)).not.toContain(cyanBar);
+      expect(committed(false)).toContain(reasoningBar);
+    } finally {
+      chalk.level = prevLevel;
+    }
+  });
+
+  it('leaves the top-level live region byte-identical when not nested', () => {
+    const text = 'I should look at the config loader before touching any call sites at all.';
+    expect(liveFrame({ streamingReasoning: text, streamingNested: false })).toBe(
+      liveFrame({ streamingReasoning: text }),
+    );
+    expect(liveFrame({ streamingReasoning: text })).toMatch(/^ ▎/m);
   });
 });
 
@@ -807,5 +927,83 @@ describe('Scrollback subagent block spacing', () => {
     const call = lines.findIndex(l => l.includes('⏺︎ Read('));
     const result = lines.findIndex(l => l.includes('↳'));
     expect(result).toBe(call + 1);
+  });
+});
+
+// Regression (#385): <Static> prints `items.slice(n)` where n is the length it saw last render,
+// so a mode switch that swaps `messages` for the other side's stash — or /new replacing it with a
+// two-line receipt — printed nothing when the new array was no longer than the old one, and
+// reprinted already-shown stash rows when it was longer. The scrollback log is append-only by
+// message identity: each object prints once, when it first appears.
+describe('Scrollback append-only log', () => {
+  const sb = (messages: Message[]) => (
+    <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+  );
+  const rows = (frames: string[]): string[] =>
+    frames
+      .map(stripAnsi)
+      .join('\n')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+  const count = (frames: string[], text: string): number =>
+    rows(frames).filter(l => l.endsWith(text)).length;
+
+  it('prints the banner after a round trip through /chat from a fresh session', () => {
+    const chatEcho: Message = { role: 'user', content: '/chat', meta: true };
+    const chatBanner: Message = { role: 'system', content: 'Chat mode.' };
+    const agentEcho: Message = { role: 'user', content: '/agent', meta: true };
+    const agentBanner: Message = { role: 'system', content: 'Agent mode.' };
+    const { rerender, frames } = render(sb([]));
+    // → chat: the agent stash is empty, so the array is just the trailing pair.
+    rerender(sb([chatEcho, chatBanner]));
+    // → agent: the empty agent stash comes back plus a new trailing pair — same length as before.
+    rerender(sb([agentEcho, agentBanner]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual(['▎ /chat', '❯ Chat mode.', '▎ /agent', '❯ Agent mode.']);
+  });
+
+  it('does not reprint a restored stash that is already on screen', () => {
+    const a1: Message = { role: 'system', content: 'agent one' };
+    const a2: Message = { role: 'system', content: 'agent two' };
+    const a3: Message = { role: 'system', content: 'agent three' };
+    const chatBanner: Message = { role: 'system', content: 'Chat mode.' };
+    const agentBanner: Message = { role: 'system', content: 'Agent mode.' };
+    const { rerender, frames } = render(sb([a1, a2, a3]));
+    rerender(sb([chatBanner]));
+    // Restoring three rows after a one-row chat side used to reprint a2 and a3.
+    rerender(sb([a1, a2, a3, agentBanner]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual([
+      '❯ agent one',
+      '❯ agent two',
+      '❯ agent three',
+      '❯ Chat mode.',
+      '❯ Agent mode.',
+    ]);
+    expect(count([frames.at(-1) ?? ''], 'agent two')).toBe(1);
+  });
+
+  it('prints the /new receipt after a conversation longer than the receipt', () => {
+    const history: Message[] = [
+      { role: 'system', content: 'one' },
+      { role: 'system', content: 'two' },
+      { role: 'system', content: 'three' },
+    ];
+    const echo: Message = { role: 'user', content: '/new', meta: true };
+    const notice: Message = { role: 'system', content: 'New session.' };
+    const { rerender, frames } = render(sb(history));
+    rerender(sb([echo, notice]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last.slice(-2)).toEqual(['▎ /new', '❯ New session.']);
+  });
+
+  it('is a no-op for an ordinary append', () => {
+    const a: Message = { role: 'system', content: 'first' };
+    const b: Message = { role: 'system', content: 'second' };
+    const { rerender, frames } = render(sb([a]));
+    rerender(sb([a, b]));
+    const last = rows([frames.at(-1) ?? '']);
+    expect(last).toEqual(['❯ first', '❯ second']);
   });
 });

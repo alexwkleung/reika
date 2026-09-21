@@ -10,17 +10,35 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
+import { kFormat } from './format.js';
 import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
+import { SKILL_CONFIRM_APPLY, SKILL_CONFIRM_SEND, SkillConfirm } from './SkillConfirm.js';
 import { Question, type QuestionTyping } from './Question.js';
-import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  resolveDefaultMode,
+  resolveProfile,
+  withProbedWindow,
+} from '../config.js';
+import { probeContextWindow } from '../provider/contextwindow.js';
+import {
+  loadLastState,
+  persistableMode,
+  saveLastState,
+  startMode,
+  startProfile,
+} from '../laststate.js';
+import { autoApproveForced, autoApproves, effectiveAutoApprove } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
-import { chatTools, defaultTools, planTools } from '../tools/index.js';
+import { chatTools, defaultTools, minimalTools, planTools } from '../tools/index.js';
+import { isOffline } from '../tools/_net.js';
 import { PayloadStore } from '../store/payloads.js';
 import {
   saveTranscript,
@@ -29,13 +47,14 @@ import {
   type TranscriptUsage,
 } from '../store/transcript.js';
 import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
+import { PrefixTrace } from '../agent/prefixtrace.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { expandPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldAutoInject } from '../skillmatch.js';
+import { matchSkill, shouldConfirmInject, type SkillMatch } from '../skillmatch.js';
 import { imageReader } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
@@ -45,10 +64,13 @@ import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
+  isMinimalPrompt,
   isSaveCommand,
   nextMode,
   planWritten,
   turnMode,
+  turnPromptMode,
+  turnTools,
   type Mode,
 } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
@@ -73,10 +95,9 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
 const TYPECHECK_LINGER_MS = 650;
 
-// Only the startup splash lives in the dedicated header <Static>. The compact
-// header (after /cd or /model) flows through the message stream instead — Ink
-// honors a single <Static>, so appending to this one after the message log's
-// Static takes over would render nowhere.
+// Only the startup splash lives in the dedicated header <Static> — Ink honors a
+// single <Static>, so appending to this one after the message log's Static takes
+// over would render nowhere. /cd and /model report through system lines instead.
 type HeaderItem = {
   kind: 'splash';
   model: string;
@@ -102,6 +123,13 @@ function promptPlaceholder(): string {
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
 }
 
+// A window the harness took off the endpoint changes what the session does (compaction, the
+// payload cap), so the user is told where the number came from — a gauge denominator alone
+// reads as configured.
+function probedWindowNotice(window: number): string {
+  return `Context window of ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
+}
+
 export function App() {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -125,6 +153,10 @@ export function App() {
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
+  // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
+  const [subagentLive, setSubagentLive] = useState<boolean>(false);
+  // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
+  const [noteLive, setNoteLive] = useState<boolean>(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [bundle, setBundle] = useState<ContextBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +183,8 @@ export function App() {
   // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
   // enough to measure one. See agent/prefillcost.ts.
   const prefillRateRef = useRef<number | undefined>(undefined);
+  // Session-long so the prefix-cache line prices the turn boundary too (#426); see runTurn's opt.
+  const prefixTraceRef = useRef(new PrefixTrace());
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -165,9 +199,18 @@ export function App() {
   } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
-  // REIKA_DEFAULT_MODE picks the launch mode (agent/plan/vibe; REIKA_PLAN_EXPERIMENT=1 is the
-  // legacy alias for plan). /plan, /vibe and /agent still toggle it at any time regardless.
-  const [mode, setMode] = useState<Mode>(resolveDefaultMode);
+  // The skill confirm (#425): the harness asking, before submit, whether a strongly matched skill
+  // should be applied. Modal like Approval; resolves to the skill name to apply, null for "send as
+  // typed", or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
+  const [skillConfirm, setSkillConfirm] = useState<{
+    match: SkillMatch;
+    resolve: (choice: string | null | 'abort') => void;
+  } | null>(null);
+  const [skillConfirmSelected, setSkillConfirmSelected] = useState<number>(SKILL_CONFIRM_SEND);
+  // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
+  // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
+  // /vibe and /agent still toggle it at any time regardless.
+  const [mode, setMode] = useState<Mode>(() => startMode(loadLastState()));
   const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
@@ -184,7 +227,9 @@ export function App() {
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
   const [exitArmed, setExitArmed] = useState(false);
-  const [sessionAutoApprove, setSessionAutoApprove] = useState(false);
+  // null = untouched, so the effective mode falls through to the config default (safe when
+  // REIKA_AUTO_APPROVE is unset) — see effectiveAutoApprove.
+  const [sessionAutoApprove, setSessionAutoApprove] = useState<boolean | null>(null);
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
   const [pr, setPr] = useState<number | null>(null);
@@ -206,12 +251,20 @@ export function App() {
   // than picked by position (#275); no downstream code can tell, since the turn's content is just
   // the skill body.
   const pendingSkillRef = useRef<string | undefined>(undefined);
+  // A queued prompt's skill-confirm answer, put back here by the queue drain just before the
+  // replay (the way images go back onto imageAttachmentsRef) so the replay routes on the decision
+  // taken at keypress instead of asking again at drain, when nobody may be at the desk (#425).
+  const queuedSkillRouteRef = useRef<string | null | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
   // action, never as an announcement in front of it. Flushed by submitToModel's user echo, which
   // runTurn always emits first, so nothing can strand here.
   const pendingNoticesRef = useRef<Message[]>([]);
+  // Profiles whose window probe (#417) never reached the server — llama-server still loading when
+  // reika started. Asked again at the next submit, when the turn needs the server up anyway. A
+  // probe the server answered without a window is not retried: the answer would not change.
+  const windowRetryRef = useRef(new Set<string>());
   // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
@@ -259,7 +312,11 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
-  const sessionAutoApproveRef = useRef(false);
+  const skillConfirmRef = useRef<typeof skillConfirm>(null);
+  skillConfirmRef.current = skillConfirm;
+  const skillConfirmSelectedRef = useRef<number>(SKILL_CONFIRM_SEND);
+  skillConfirmSelectedRef.current = skillConfirmSelected;
+  const sessionAutoApproveRef = useRef<boolean | null>(null);
   sessionAutoApproveRef.current = sessionAutoApprove;
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
@@ -340,7 +397,10 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
-        const cfg = loadConfig();
+        let cfg = loadConfig();
+        // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
+        // the probe and the splash so both describe the model the session actually opens on.
+        const profile = startProfile(cfg, loadLastState());
         // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git
         // subprocesses cost ~28ms warm, which is pure added latency to first paint if serialized.
         // Measured on this repo: 29ms bootstrap + 28ms detect = 56ms serial, 36ms concurrent —
@@ -350,38 +410,79 @@ export function App() {
         // the token set is loaded before any message can be rendered or saved. Detection is
         // best-effort — a failure leaves the scrubber a no-op rather than blocking startup, the
         // same fail-open posture as the other scrub layers.
-        const [b] = await Promise.all([
+        // The window probe (#417) rides the same concurrency: a local server answers in
+        // milliseconds, and it must land before the budget report below reads the window.
+        const [b, probed] = await Promise.all([
           bootstrap(process.cwd(), cfg.repoMapBudget),
+          cfg.profiles[profile].contextWindow == null
+            ? probeContextWindow(cfg.profiles[profile])
+            : Promise.resolve(undefined),
           cfg.anon
             ? detectIdentity(process.cwd())
                 .then(setIdentity)
                 .catch(() => {})
             : Promise.resolve(),
         ]);
+        if (probed?.window) cfg = withProbedWindow(cfg, profile, probed.window);
+        if (probed && !probed.reached) windowRetryRef.current.add(profile);
         setConfig(cfg);
+        setActiveProfile(profile);
         setBundle(b);
-        setTools(defaultTools(cfg));
-        setChatToolsList(chatTools(cfg));
+        // No route out → no web tools this session (#392). Checked once, here, because the tool
+        // list is part of the cached prefix; the per-turn latch in the tools covers a drop later.
+        const offline = isOffline();
+        setTools(defaultTools(cfg, { offline }));
+        setChatToolsList(chatTools(cfg, { offline }));
+        // Startup only: a later /model switch reports its own window in /stats.
+        const runtime = resolveProfile(cfg, profile);
         setHeaderItems(prev => [
           ...prev,
           {
             kind: 'splash',
-            model: cfg.model,
+            model: runtime.model,
             cwd: b.cwd,
             version: VERSION,
             subagent:
-              cfg.subagentModel && cfg.subagentModel !== cfg.model ? cfg.subagentModel : undefined,
+              cfg.subagentModel && cfg.subagentModel !== runtime.model
+                ? cfg.subagentModel
+                : undefined,
           },
         ]);
+        // Opening somewhere other than where the env alone would put the session is a fact the
+        // user has to see — a plan-mode start answers a task with a plan, not edits — so it gets a
+        // persistent line, not just the status-bar tag.
+        const resumed = [
+          ...(modeRef.current !== resolveDefaultMode() ? [`${modeRef.current} mode`] : []),
+          ...(profile !== 'default' ? [`profile '${profile}' (${runtime.model})`] : []),
+        ];
+        if (resumed.length > 0) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: `Resumed ${resumed.join(' and ')} from the last session.` },
+          ]);
+        }
         // The window/reserve arithmetic decides how much room reads and history get, and a
         // configuration that leaves too little degrades silently — reads truncated every round,
         // the model re-reading the same file (#262). Report the numbers to the log always, and
-        // say so in the scrollback when they fall under the floor. Startup only: the profile in
-        // force here is `default`, and a later /model switch reports its own window in /stats.
-        const runtime = resolveProfile(cfg, 'default');
+        // say so in the scrollback when they fall under the floor.
         debugLog(formatBudget(b, runtime));
+        if (probed?.window) {
+          const w = probed.window;
+          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+        }
         const warn = budgetWarning(b, runtime);
         if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
+        if (offline) {
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'system',
+              content:
+                'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
+              tone: 'warn',
+            },
+          ]);
+        }
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
@@ -396,6 +497,19 @@ export function App() {
     },
     [],
   );
+
+  // Every route to a new mode or profile (slash command, Shift+Tab, /implement, /clear, the
+  // picker) lands here, so the saved state can't miss one. The profile waits for the config, since
+  // until then 'default' is only the initial state and would overwrite the value about to be
+  // restored.
+  useEffect(() => {
+    const persisted = persistableMode(mode);
+    if (persisted) saveLastState({ mode: persisted });
+  }, [mode]);
+  const configLoaded = config !== null;
+  useEffect(() => {
+    if (configLoaded) saveLastState({ profile: activeProfile });
+  }, [configLoaded, activeProfile]);
 
   useEffect(() => {
     if (!exitRequested) return;
@@ -455,10 +569,20 @@ export function App() {
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
+    // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
+    // is instant, and a turn submitted before the answer lands runs without a window, as it
+    // would have anyway.
+    if (next.contextWindow == null) {
+      void probeContextWindow(next).then(({ window: w, reached }) => {
+        if (!reached) windowRetryRef.current.add(target);
+        if (!w) return;
+        setConfig(prev => (prev ? withProbedWindow(prev, target, w) : prev));
+        setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+      });
+    }
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
-      ...(bundle ? [{ role: 'header' as const, model: next.model, cwd: bundle.cwd }] : []),
       {
         role: 'system' as const,
         content: next.adhoc
@@ -481,6 +605,13 @@ export function App() {
         questionRef.current.resolve(null);
         setQuestion(null);
         setQuestionTyping(null);
+      }
+      // An open skill confirm closes first, like the /model picker, and the turn (if one is
+      // running) keeps going: the dialog is about the prompt being submitted, not the turn.
+      if (!hadPending && !questionRef.current && skillConfirmRef.current) {
+        skillConfirmRef.current.resolve('abort');
+        setSkillConfirm(null);
+        return;
       }
       if (statusRef.current === 'busy' && abortRef.current) {
         abortRef.current.abort();
@@ -558,6 +689,12 @@ export function App() {
         setQuestionSelected(i => Math.min(last, i + 1));
         return;
       }
+      // A digit jumps the cursor to that numbered row (the type-your-own row is `last + 1`). It
+      // moves, never submits: Enter stays the one key that answers.
+      if (/^[1-9]$/.test(input) && Number(input) - 1 <= last) {
+        setQuestionSelected(Number(input) - 1);
+        return;
+      }
       // Tab on an option: take it, but add a note in your own words. The model gets both.
       if (key.tab && questionSelectedRef.current < last) {
         const forIndex = questionSelectedRef.current;
@@ -588,6 +725,28 @@ export function App() {
       // Modal while the list is up: the input is disabled, so no other key has anywhere to go.
       return;
     }
+    const sc = skillConfirmRef.current;
+    if (sc) {
+      // Digits and y/n only move the cursor, as in the question dialog: Enter is the one key that
+      // answers, and y lands on Apply — the row Approval-trained fingers expect to be first.
+      if (key.upArrow) {
+        setSkillConfirmSelected(i => Math.max(SKILL_CONFIRM_SEND, i - 1));
+      } else if (key.downArrow) {
+        setSkillConfirmSelected(i => Math.min(SKILL_CONFIRM_APPLY, i + 1));
+      } else if (input === '1' || input === 'n' || input === 'N') {
+        setSkillConfirmSelected(SKILL_CONFIRM_SEND);
+      } else if (input === '2' || input === 'y' || input === 'Y') {
+        setSkillConfirmSelected(SKILL_CONFIRM_APPLY);
+      } else if (key.return) {
+        const apply = skillConfirmSelectedRef.current === SKILL_CONFIRM_APPLY;
+        setSkillConfirm(null);
+        sc.resolve(apply ? sc.match.skill.name : null);
+      }
+      // No escape, for the reason Approval and Question bind none: a split arrow sequence arrives
+      // as a bare escape on a loaded pty. Modal: the input is disabled, so nothing else has
+      // anywhere to go.
+      return;
+    }
     const ms = modelSelectRef.current;
     if (ms) {
       if (key.upArrow) {
@@ -605,7 +764,7 @@ export function App() {
       // has anywhere to go.
       return;
     }
-    // Shift+Tab cycles agent → plan → vibe → chat → shell. Only while idle — mode picks the
+    // Shift+Tab cycles agent → plan → minimal → vibe → chat → shell. Only while idle — mode picks the
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
@@ -682,10 +841,17 @@ export function App() {
         history: modelHistoryRef.current,
         bundle,
         config: resolveProfile(config, activeProfileRef.current),
-        // Same mapping as submitToModel below; vibe's first internal turn is a plan turn, so
-        // it warms the plan prefix.
-        tools: m === 'chat' ? chatToolsList : m === 'plan' || m === 'vibe' ? planTools() : tools,
-        promptMode: m === 'chat' ? 'chat' : m === 'plan' || m === 'vibe' ? 'plan' : 'agent',
+        // Same mapping as submitToModel below, through the same helpers so the two cannot drift —
+        // a warm that builds a different prefix than the submit is a guaranteed cache miss.
+        // Vibe's first internal turn is a plan turn, so it warms the plan prefix.
+        tools: turnTools(m, {
+          agent: tools,
+          plan: planTools(),
+          chat: chatToolsList,
+          minimal: minimalTools(),
+        }),
+        promptMode: turnPromptMode(m),
+        minimalPrompt: isMinimalPrompt(m),
         calibration: calibrationRef.current,
       });
     }
@@ -700,12 +866,12 @@ export function App() {
   };
 
   const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
-    const hasWarnings = !!req.warnings && req.warnings.length > 0;
-    // 'safe' (env) and the session toggle both auto-approve ordinary actions, but a flagged
-    // dangerous command still falls through to the prompt. 'bypass' never reaches here —
-    // requestApproval is undefined in that mode (see runTurn wiring below).
-    const envSafe = config?.autoApprove === 'safe';
-    if ((sessionAutoApproveRef.current || envSafe) && !hasWarnings) {
+    // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
+    // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
+    // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
+    // that mode (see runTurn wiring below).
+    const policy = effectiveAutoApprove(config, sessionAutoApproveRef.current);
+    if (autoApproves(policy, req)) {
       setApprovals(a => ({ ...a, approved: a.approved + 1 }));
       return Promise.resolve(true);
     }
@@ -802,9 +968,10 @@ export function App() {
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
       prefillRateRef.current = undefined;
+      prefixTraceRef.current = new PrefixTrace();
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
-      setSessionAutoApprove(false);
+      setSessionAutoApprove(null);
       setMode('agent');
       setActiveProfile('default');
       return;
@@ -830,7 +997,8 @@ export function App() {
       name === 'agent' ||
       name === 'chat' ||
       name === 'plan' ||
-      name === 'vibe'
+      name === 'vibe' ||
+      name === 'minimal'
     ) {
       const banner =
         name === 'shell'
@@ -841,15 +1009,17 @@ export function App() {
               ? 'Plan mode — read-only exploration; will end with a written plan. /agent to execute it.'
               : name === 'vibe'
                 ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
-                : 'Agent mode.';
+                : name === 'minimal'
+                  ? 'Minimal mode — shell only, and no repo map, project summary, or AGENTS.md in the prompt. The model works from what commands show it. /agent to return.'
+                  : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
     }
     if (name === 'implement') {
       // Shortcut for the plan→agent handoff: flip to agent mode and submit "execute the plan
       // above" so the user doesn't have to /agent then hand-write the prompt. The plan sits in
-      // `messages` from prior renders, so it's in the history slice submitToModel sends; with
-      // REIKA_PLAN_HANDOFF=1 the loop folds the exploration into a digest automatically.
+      // `messages` from prior renders, so it's in the history slice submitToModel sends; the loop
+      // folds the exploration into a digest automatically (REIKA_PLAN_HANDOFF, default on).
       if (mode === 'shell' || mode === 'chat') {
         setMessages(prev => [
           ...prev,
@@ -869,9 +1039,15 @@ export function App() {
         ]);
       }
       // The user bubble renders as `/implement` (displayOverride) while the model receives the
-      // built prompt; 'agent' forces this turn's tools + promptMode regardless of the not-yet-
-      // flushed mode state.
-      await submitToModel(buildImplementPrompt(args), raw, 'agent');
+      // built prompt; the override forces this turn's tools + promptMode regardless of the
+      // not-yet-flushed mode state. 'agent' for every mode but minimal, which stays itself —
+      // handing a minimal session the full tool list and the whole repo map for one turn would
+      // undo the only thing the mode does, and silently.
+      await submitToModel(
+        buildImplementPrompt(args),
+        raw,
+        mode === 'minimal' ? 'minimal' : 'agent',
+      );
       return;
     }
     if (name === 'cd') {
@@ -888,11 +1064,7 @@ export function App() {
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
         setBundle(newBundle);
-        setMessages(prev => [
-          ...prev,
-          { role: 'header', model: config.model, cwd: newBundle.cwd },
-          { role: 'system', content: `cwd is now ${newCwd}` },
-        ]);
+        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
           ...prev,
@@ -1001,7 +1173,7 @@ export function App() {
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-          '  shift+tab          cycle mode (agent → plan → vibe → chat → shell)',
+          '  shift+tab          cycle mode (agent → plan → minimal → vibe → chat → shell)',
         ].join('\n');
         break;
       case 'model': {
@@ -1031,7 +1203,7 @@ export function App() {
               ...config,
               profiles: {
                 ...config.profiles,
-                [target]: { ...inherit, model: args.trim(), adhoc: true },
+                [target]: inheritProfile(inherit, args.trim()),
               },
             };
             setConfig(withAdhoc);
@@ -1062,12 +1234,11 @@ export function App() {
         return;
       }
       case 'approvals': {
-        const envMode = config?.autoApprove ?? 'off';
-        const envOn = envMode !== 'off';
+        const envOn = config ? autoApproveForced(config) : false;
         const target = args.trim().toLowerCase();
         if (target === 'on' || target === 'off') {
           if (envOn) {
-            response = `auto-approve is forced to '${envMode}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
+            response = `auto-approve is forced to '${config?.autoApprove}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
             break;
           }
           setSessionAutoApprove(target === 'on');
@@ -1078,8 +1249,15 @@ export function App() {
           response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
           break;
         }
-        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'.
-        const effectiveMode = envOn ? envMode : sessionAutoApprove ? 'safe' : 'off';
+        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'; unset is 'safe'.
+        const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
+        const source = envOn
+          ? `REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`
+          : sessionAutoApprove !== null
+            ? 'session toggle'
+            : config?.autoApproveExplicit
+              ? 'REIKA_AUTO_APPROVE=off (env)'
+              : 'default (REIKA_AUTO_APPROVE unset)';
         const desc =
           effectiveMode === 'bypass'
             ? 'bypass — everything runs without confirmation, including dangerous commands'
@@ -1089,7 +1267,7 @@ export function App() {
         response = [
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
-          `  source: ${envOn ? `REIKA_AUTO_APPROVE=${envMode} (env)` : sessionAutoApprove ? 'session toggle' : '(disabled)'}`,
+          `  source: ${source}`,
           '',
           envOn
             ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
@@ -1153,6 +1331,13 @@ export function App() {
           const extra = expandPastes(args.trim(), pastedTextsRef.current);
           const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
           pendingSkillRef.current = skill.name;
+          // Same receipt shape as auto-routing: the bubble echoes what was typed, and only
+          // this line says the body is what the model got (#398).
+          pendingNoticesRef.current.push({
+            role: 'system',
+            content: `Skill /${skill.name} applied — its body was sent as this prompt${extra ? ', with your text after it' : ''}.`,
+            tone: 'info',
+          });
           // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
           // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
           // bubble reads `/issue 14` while the model receives the skill body. Pre-appending
@@ -1181,9 +1366,16 @@ export function App() {
     setStatus('busy');
     toolRef.current = '';
     setStreamingTool('');
+    // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the UI
+    // is blocked on it just the same.
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const result = await execStream(command, {
         cwd: bundle.cwd,
+        bashTimeoutMs: config?.bashTimeoutMs,
+        bashIdleMs: config?.bashIdleMs,
+        signal: controller.signal,
         onProgress: chunk => {
           toolRef.current += chunk;
           scheduleToolFlush();
@@ -1204,6 +1396,7 @@ export function App() {
       }
       toolRef.current = '';
       setStreamingTool('');
+      abortRef.current = null;
       setStatus('idle');
     }
   };
@@ -1300,34 +1493,71 @@ export function App() {
     });
   };
 
+  // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
+  // a strong match opens the confirm dialog rather than injecting — the user is the classifier,
+  // and the keyword matcher's false positives (a prompt that merely opens with the skill's noun)
+  // stop costing a turn. Resolves to the skill name to apply, null for "send as typed", 'abort'
+  // for ctrl-c, or undefined when nothing needed asking. Runs BEFORE the busy queue and the
+  // expansions so a queued prompt carries its answer and no fetch precedes the question.
+  const decideSkillRoute = async (prompt: string): Promise<string | null | 'abort' | undefined> => {
+    // A queued prompt replaying: the answer was taken when it was typed.
+    if (queuedSkillRouteRef.current !== undefined) {
+      const decided = queuedSkillRouteRef.current;
+      queuedSkillRouteRef.current = undefined;
+      return decided;
+    }
+    if (config?.skillAuto === 'off' || !config || !bundle) return undefined;
+    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
+    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
+    // plan-mode prompt and the progress ledger. There it stays a suggestion.
+    if (modeRef.current !== 'agent' && modeRef.current !== 'vibe') return undefined;
+    const match = matchSkill(prompt, bundle.skills);
+    const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
+    if (!match || !shouldConfirmInject(match, window)) return undefined;
+    setSkillConfirmSelected(SKILL_CONFIRM_SEND);
+    return new Promise(resolve => {
+      // Deferred past the current keypress dispatch: Ink hands the Enter that submitted to every
+      // useInput handler, and opening synchronously would let the dialog's own handler see it
+      // and answer "send as typed" on the spot.
+      queueMicrotask(() => setSkillConfirm({ match, resolve }));
+    });
+  };
+
   // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
   // words (never the expanded text — a fetched page or an @mention'd file mentioning "verify" is
   // not a request to run /verify); `modelText` is what actually gets sent, returned unchanged
-  // unless auto-injection fires.
-  const routeSkill = (prompt: string, modelText: string): string => {
+  // unless the skill is applied. `route` is the confirm dialog's answer when it fired.
+  const routeSkill = (
+    prompt: string,
+    modelText: string,
+    route: string | null | undefined,
+  ): string => {
     const match = matchSkill(prompt, bundle?.skills ?? []);
     if (!match) return modelText;
-    const window = config?.profiles[activeProfile]?.contextWindow ?? config?.contextWindow;
-    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
-    // plan-mode prompt and the progress ledger. There it stays a suggestion.
-    const auto =
-      config?.skillAuto === true &&
-      (modeRef.current === 'agent' || modeRef.current === 'vibe') &&
-      shouldAutoInject(match, window);
-    if (auto) {
+    if (route === match.skill.name) {
       pendingNoticesRef.current.push({
         role: 'system',
-        content: `Applied skill /${match.skill.name} (matched: ${match.matched.join(', ')})`,
+        // Says what actually happened, not just that something matched: the body is in the
+        // prompt the model receives, and nothing between here and the request removes it (#398).
+        content: `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
         tone: 'info',
       });
       pendingSkillRef.current = match.skill.name;
       return `${match.skill.body}\n\n${modelText}`;
     }
+    // The dialog replaces the hint when it fires: the user has just seen the skill and declined
+    // it, and a line saying "start with /x to apply it" right after that is the nag.
+    if (route === null) {
+      suggestedSkillsRef.current.add(match.skill.name);
+      return modelText;
+    }
     if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
     suggestedSkillsRef.current.add(match.skill.name);
+    // A hint, not a handoff: the prompt goes through as typed. Said outright — "run it with /x"
+    // read as an instruction to go do that instead (#398).
     pendingNoticesRef.current.push({
       role: 'system',
-      content: `This looks like /${match.skill.name} — ${match.skill.description}. Run it with /${match.skill.name} to use the skill.`,
+      content: `Skill hint: /${match.skill.name} — ${match.skill.description}. Prompt sent unchanged; start with /${match.skill.name} to apply it.`,
       tone: 'info',
     });
     return modelText;
@@ -1339,17 +1569,21 @@ export function App() {
   // regular image pipeline (hasImageMarker → attachImageBlocks) applies.
   // onSubmit re-seals itself while busy, so a still-busy replay just lands
   // back on the queue.
+  // Held while a skill confirm is up too: a replay under an open dialog could open a second one
+  // over it, and the first prompt's answer would never arrive.
   useEffect(() => {
-    if (status !== 'idle' || pending !== null || queueRef.current.length === 0) return;
+    if (status !== 'idle' || pending !== null || skillConfirm !== null) return;
+    if (queueRef.current.length === 0) return;
     const [next, ...rest] = queueRef.current;
     queueRef.current = rest;
     setQueue(rest);
     const images = next.images ?? [];
     imageAttachmentsRef.current = images;
+    queuedSkillRouteRef.current = next.skill;
     const markers = images.map(img => img.marker).join(' ');
     void onSubmit(next.content + (markers ? ` ${markers}` : ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pending, queue]);
+  }, [status, pending, skillConfirm, queue]);
 
   const onSubmit = async (input: string) => {
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
@@ -1399,9 +1633,14 @@ export function App() {
       const trimmed = input.trim();
       const images = imageAttachmentsRef.current;
       if (!trimmed && images.length === 0) return;
+      // Asked now, while the user is at the keyboard, and carried on the entry: the drain may
+      // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
+      const route = await decideSkillRoute(trimmed);
+      if (route === 'abort') return;
       const msg: QueuedMessage = {
         content: trimmed,
         images: images.length > 0 ? images : undefined,
+        ...(route !== undefined ? { skill: route } : {}),
       };
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
@@ -1417,9 +1656,13 @@ export function App() {
     // slot cache on disconnect, so an interrupted warm still pays off). Unconditional: slash
     // commands (/cd re-bundles, /model switches) and shell submits also land here.
     warmerRef.current.cancel('submit');
+    const trimmed = input.trim();
+    // Before the box clears: the confirm dialog sits over the input, and the prompt it is asking
+    // about should still be visible underneath. A ctrl-c leaves it there to edit.
+    const route = await decideSkillRoute(trimmed);
+    if (route === 'abort') return;
     setInputValue('');
     setSuggestionState(null);
-    const trimmed = input.trim();
     if (!trimmed) return;
     // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
     setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
@@ -1460,7 +1703,7 @@ export function App() {
       modelText = attachImageBlocks(expansion.augmented, imageAttachmentsRef.current);
       imageAttachmentsRef.current = [];
       if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
-      modelText = routeSkill(trimmed, modelText);
+      modelText = routeSkill(trimmed, modelText, route);
       // Last, so everything above reads the user's own words: a marker is the paste's stand-in
       // for @mention, URL and skill matching alike — text the user pasted is content, not a
       // request to fetch a link inside it. The marker survives in `display`, keeping the user
@@ -1523,6 +1766,20 @@ export function App() {
     const recordedMode = turnMode(modeRef.current, activeMode);
     setStatus('busy');
     setPhase('thinking');
+    // The startup probe found no server; this turn is about to need one, so ask again first and
+    // let the window govern this turn rather than the next. Awaited: a server that is up answers
+    // in milliseconds, and one that is not fails the chat call right after anyway.
+    let turnConfig = config;
+    const profile = config.profiles[activeProfile];
+    if (windowRetryRef.current.has(activeProfile) && profile?.contextWindow == null) {
+      const { window: w, reached } = await probeContextWindow(profile);
+      if (reached) windowRetryRef.current.delete(activeProfile);
+      if (w) {
+        turnConfig = withProbedWindow(config, activeProfile, w);
+        setConfig(turnConfig);
+        pendingNoticesRef.current.push({ role: 'system', content: probedWindowNotice(w) });
+      }
+    }
     resetTypecheck();
     setReasoningSpin(false);
     streamingRef.current = '';
@@ -1546,14 +1803,21 @@ export function App() {
         // and folds older spans in place, and both must survive to the next turn (#183).
         history: modelHistoryRef.current,
         bundle,
-        config: resolveProfile(config, activeProfile),
-        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools.
-        tools: activeMode === 'chat' ? chatToolsList : activeMode === 'plan' ? planTools() : tools,
+        config: resolveProfile(turnConfig, activeProfile),
+        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools. Minimal
+        // mode: the shell alone, with a prompt carrying no project context (#391).
+        tools: turnTools(activeMode, {
+          agent: tools,
+          plan: planTools(),
+          chat: chatToolsList,
+          minimal: minimalTools(),
+        }),
         payloads,
         signal: controller.signal,
         requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
         requestQuestion,
-        promptMode: activeMode === 'chat' ? 'chat' : activeMode === 'plan' ? 'plan' : 'agent',
+        promptMode: turnPromptMode(activeMode),
+        minimalPrompt: isMinimalPrompt(activeMode),
         onMessage: raw => {
           // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
           // saved transcript can say what each turn was. See store/transcript.ts summarizeModes.
@@ -1621,6 +1885,8 @@ export function App() {
           if (p !== 'thinking') setReasoningSpin(false);
           setPhase(p);
         },
+        onSubagent: setSubagentLive,
+        onCompactionNote: setNoteLive,
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
@@ -1634,6 +1900,11 @@ export function App() {
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);
+          // The compaction report round (#280) streams its note as content and commits it as a
+          // system notice, which does not clear the content preview the way an assistant commit
+          // does — without this the round's real reply would stream onto the note's tail.
+          streamingRef.current = '';
+          setStreaming('');
         },
         onUsage: u => {
           setLastUsage(u);
@@ -1665,6 +1936,7 @@ export function App() {
         onPrefillRate: r => {
           prefillRateRef.current = r;
         },
+        prefixTrace: prefixTraceRef.current,
       });
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
@@ -1687,6 +1959,8 @@ export function App() {
       setStreaming('');
       setStreamingReasoning('');
       setStreamingTool('');
+      setSubagentLive(false);
+      setNoteLive(false);
       resetTypecheck();
       setReasoningSpin(false);
       setStatus('idle');
@@ -1755,6 +2029,8 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
+            streamingNested={subagentLive || noteLive}
+            streamingBar={noteLive ? theme.info : undefined}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
             }
@@ -1776,10 +2052,20 @@ export function App() {
                     ? 'Recovering from a loop'
                     : reasoningSpin
                       ? 'Thinking — may be looping (ctrl-c to abort)'
-                      : undefined
+                      : noteLive
+                        ? 'Writing compaction note'
+                        : subagentLive
+                          ? 'Subagent working'
+                          : undefined
               }
               accent={
-                typechecking || recovering ? theme.info : reasoningSpin ? theme.warning : undefined
+                typechecking || recovering || noteLive
+                  ? theme.info
+                  : reasoningSpin
+                    ? theme.warning
+                    : subagentLive
+                      ? theme.subagent
+                      : undefined
               }
             />
           ) : (pasting ?? expanding) ? (
@@ -1810,6 +2096,8 @@ export function App() {
                   : undefined
               }
             />
+          ) : skillConfirm ? (
+            <SkillConfirm match={skillConfirm.match} selectedIndex={skillConfirmSelected} />
           ) : null}
           <Input
             // The question dialog is modal only while its list is up; once the user is typing an
@@ -1817,9 +2105,12 @@ export function App() {
             disabled={
               pending !== null ||
               modelSelect !== null ||
+              skillConfirm !== null ||
               (question !== null && questionTyping === null)
             }
-            attachedAbove={pending !== null || question !== null || modelSelect !== null}
+            attachedAbove={
+              pending !== null || question !== null || modelSelect !== null || skillConfirm !== null
+            }
             attachedBelow={suggestionState !== null}
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
@@ -1856,7 +2147,7 @@ export function App() {
             autoApprove={
               config?.autoApprove === 'bypass'
                 ? 'bypass'
-                : config?.autoApprove === 'safe' || sessionAutoApprove
+                : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
                   ? 'safe'
                   : undefined
             }

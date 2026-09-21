@@ -39,8 +39,13 @@ const SENT_DENSITY_FLOOR = 1;
 // collapsing that repetition before it feeds back removes the fuel a loop needs, one step EARLIER than
 // the reactive read-trace ledger (which only nags once the loop is already forming). Deterministic and
 // model-agnostic — it changes only what is re-serialized, never sampling, so it carries none of the
-// operator-provenance risk the sampling levers do. Strict no-op when off. See dedupToolContent.
-const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS === '1';
+// operator-provenance risk the sampling levers do. ON by default since 2026-09-18: it benched null
+// (not negative) on windowed local turns, where prefix-stable bypasses it anyway (below), and the
+// setups it does reach — no REIKA_CONTEXT_WINDOW, or REIKA_PREFIX_STABLE=0 — already rewrite
+// mid-history every round, so a stub costs no cache validity that per-round aging hadn't spent. In
+// those setups every non-trailing payload is a summary, which is exactly the trail it collapses.
+// `=0` is the baseline arm; strict no-op when off. See dedupToolContent.
+const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS !== '0';
 // Replaces a stubbed FRESH payload (an identical full result still simultaneously in context — a
 // parallel or in-band re-read of one file within a single round). The summary is kept, so the model
 // still sees what the result was; only the duplicated body is dropped.
@@ -237,7 +242,9 @@ export type CapStats = {
 // Which branch agedToolContent took for one message. `whole` is an aged payload kept verbatim —
 // either because it is a crumb the floor spared (#257) or because its skeleton would have cost more
 // than it did.
-type AgedKind = 'summary' | 'diff' | 'outline' | 'whole';
+// `report` is a subagent's digest kept by its head (#354): a report is already compressed, and
+// its chain/"Established" section leads by construction of the report directive.
+type AgedKind = 'summary' | 'diff' | 'outline' | 'whole' | 'report';
 type AgedContent = { content: string; kind: AgedKind };
 
 // What eviction did to this request, counted where it happens (#260). Aging is otherwise invisible
@@ -245,7 +252,9 @@ type AgedContent = { content: string; kind: AgedKind };
 // records, so a verification run could not tell an outline that fired from one that never did.
 export type AgedStats = Record<AgedKind, number>;
 
-export function messagesToOpenAI(
+// The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
+// transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
+export function messagesToChatParams(
   system: string,
   history: Message[],
   opts?: {
@@ -352,7 +361,7 @@ export function messagesToOpenAI(
     }
     return capPayload(payload, cap);
   };
-  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0 };
+  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0, report: 0 };
   // Same discipline as applyCap: count where the content is produced, so the line can never
   // describe a serialization that didn't happen.
   const serializeAged = (msg: Extract<Message, { role: 'tool' }>, i: number): string => {
@@ -509,7 +518,7 @@ function newestLiveReadIndex(
 // Does this request drop any tool payload it once carried? True when at least one tool message
 // LOSES its payload despite having had one — i.e. content the model saw and no longer has. Counted
 // off `aged`/position, never off the rendered bytes, so it tracks the two serialization branches in
-// messagesToOpenAI without depending on what they emit; the loop turns a true into the one-line
+// messagesToChatParams without depending on what they emit; the loop turns a true into the one-line
 // notice that says so (#227). "Lost the payload" is not the same as "serializes to the summary
 // alone": an aged *diff* also carries a bounded structural skeleton (agedToolContent), and it still
 // counts — the hunk bodies are gone, which is the thing the notice is about. Keep it that way; a
@@ -876,6 +885,26 @@ function shallowestIndent(contents: string[]): number {
   return min === Infinity ? 0 : min;
 }
 
+// How much of a subagent report an aged message keeps. Sized like a compaction note
+// (agent/compactionreport.ts COMPACTION_NOTE_MAX_CHARS): the same class of artifact — the model's
+// own digest of reads — and the same argument for keeping it, that it is already the compressed
+// form. Head-first because the report directive (#344) puts the chain first and "Not covered"
+// last, so a cut tail loses the list of gaps, not the findings. Whole lines, so a cut never lands
+// mid-reference.
+const REPORT_HEAD_CHARS = 2400;
+// The subagent tool's summary shapes (`tools/subagent.ts` via makeSpawnSubagent): "Subagent
+// completed (N chars)" and "Subagent (model) completed (N chars)". A budget refusal is also
+// "Subagent …" but carries a short notice, not a report — it falls under the crumb floor anyway.
+const SUBAGENT_SUMMARY_RE = /^Subagent(?: \([^)]*\))? completed \(/;
+
+function reportHead(payload: string, summary: string): string | null {
+  if (!SUBAGENT_SUMMARY_RE.test(summary)) return null;
+  if (payload.length <= REPORT_HEAD_CHARS) return payload;
+  const cut = payload.lastIndexOf('\n', REPORT_HEAD_CHARS);
+  const head = payload.slice(0, cut > REPORT_HEAD_CHARS / 2 ? cut : REPORT_HEAD_CHARS).trimEnd();
+  return `${head}\n(… report continues — ${payload.length - head.length} chars aged out; the head above is the chain, the cut part was what the subagent did not cover.)`;
+}
+
 function readSkeleton(payload: string, summary: string): string | null {
   const lines = payload.split('\n');
   const first = lines[0].match(READ_GUTTER_RE);
@@ -1006,6 +1035,12 @@ function agedToolContent(
   if (keepWhole ?? msg.payload.length <= SMALL_AGED_PAYLOAD_FLOOR_CHARS) {
     return { content: `${msg.summary}\n\n${msg.payload}`, kind: 'whole' };
   }
+  // A subagent report before the skeletons: neither the diff map nor the read outline can see a
+  // prose digest, so without this branch a 5k report aged to `Subagent completed (5165 chars)` —
+  // a byte count — and the parent went back to reading the files the subagent had read, the exact
+  // context spend delegation was meant to save (#354).
+  const report = reportHead(msg.payload, msg.summary);
+  if (report) return { content: `${msg.summary}\n\n${report}`, kind: 'report' };
   const diff = diffSkeleton(msg.payload);
   const skeleton = diff ?? readSkeleton(msg.payload, msg.summary);
   if (!skeleton) return { content: msg.summary, kind: 'summary' };
@@ -1019,8 +1054,20 @@ function agedToolContent(
   return { content: `${msg.summary}\n\n${skeleton}`, kind: diff ? 'diff' : 'outline' };
 }
 
+// How many lines of THIS payload fit under the small-payload floor, i.e. the largest re-read that
+// arrives whole. Said in lines because that is the unit the model controls (`limit`): it cannot see
+// chars-per-line, and telling it only "narrower" sent one from 300 to 150 lines against a 2k cap —
+// still 4x over, cut a second time, and it never learned why. Density is measured off the payload
+// itself, so a comment-dense source file and a terse grep listing each get their own number.
+function linesThatFitWhole(payload: string): number {
+  const lines = payload.split('\n').length;
+  const perLine = payload.length / Math.max(1, lines);
+  return Math.max(1, Math.floor(SMALL_PAYLOAD_FLOOR_CHARS / perLine));
+}
+
 function capPayload(payload: string, cap: number | undefined): string {
   if (cap === undefined || payload.length <= cap) return payload;
+  const fit = linesThatFitWhole(payload);
   // Budget exhausted entirely: say so plainly instead of sandwiching the marker between two
   // empty slices — "Output continues:" over nothing reads as tool output, not as an omission.
   if (cap <= 0) {
@@ -1033,8 +1080,8 @@ function capPayload(payload: string, cap: number | undefined): string {
       `[reika: entire output (${payload.length} chars) omitted to fit the context window — a ` +
       `context-size limit, not a command error; re-running this exact call won't help. Results of ` +
       `${SMALL_PAYLOAD_FLOOR_CHARS} chars or less are always delivered in full, so re-run it ` +
-      `narrowed to return under that much (a targeted grep for one symbol, or a read of a few ` +
-      `dozen lines). Otherwise work from the summary line above.]`
+      `narrowed to return under that much (a targeted grep for one symbol, or a read of about ` +
+      `${fit} lines of this output). Otherwise work from the summary line above.]`
     );
   }
   const head = Math.floor(cap * HEAD_FRACTION);
@@ -1048,7 +1095,8 @@ function capPayload(payload: string, cap: number | undefined): string {
     `[reika: ${omitted} chars omitted here — the middle of this output is hidden to fit the ` +
     `context window; a context-size limit, not a command error; re-running won't help. Never ` +
     `build an edit old_string from text spanning this gap; read a narrower line range to see ` +
-    `the hidden part. Output continues:]\n\n` +
+    `the hidden part — about ${fit} lines of this output fit whole (${SMALL_PAYLOAD_FLOOR_CHARS} ` +
+    `chars or less is always delivered in full). Output continues:]\n\n` +
     `${payload.slice(payload.length - tail)}`
   );
 }
@@ -1072,7 +1120,7 @@ function findToolNameForCall(history: Message[], toolIdx: number): string | unde
   return undefined;
 }
 
-export function toolsToOpenAI(tools: Tool[]): ChatTool[] {
+export function toolsToChatTools(tools: Tool[]): ChatTool[] {
   return tools.map(t => ({
     type: 'function',
     function: {

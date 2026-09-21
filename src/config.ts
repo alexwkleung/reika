@@ -1,13 +1,20 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AutoApproveMode, Config, DefaultMode, Profile } from './types.js';
+import type { AutoApproveMode, Config, DefaultMode, Profile, SkillAutoMode } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
 // dotenv defaults to no-override, so loading cwd first then global gives the right order.
+// The keys already present before dotenv runs are the ones set at launch (`REIKA_X=1 reika`, or an
+// export in the shell rc); the persisted session state (#365) defers to those and beats the files.
+const launchEnvKeys = new Set(Object.keys(process.env));
 dotenv.config();
 dotenv.config({ path: join(homedir(), '.config', 'reika', '.env') });
+
+export function setAtLaunch(name: string): boolean {
+  return launchEnvKeys.has(name);
+}
 
 export function loadConfig(): Config {
   // REIKA_MODEL is a comma-separated list of models served by the default base URL.
@@ -54,13 +61,18 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
+    // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
+    // cached round is nearly free on both local and API, so it is sized where a healthy complex
+    // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
+    autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
-    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
+    // Not a backstop: the last round IS the report round (#340), so this stays tight.
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '8', 10),
     visionModel: emptyToUndefined(process.env.REIKA_VISION_MODEL),
     visionBaseURL,
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
@@ -70,13 +82,14 @@ export function loadConfig(): Config {
     profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
-    bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '300000', 10),
+    bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '1800000', 10),
+    bashIdleMs: parseInt(process.env.REIKA_BASH_IDLE_MS ?? '300000', 10),
     // Floor at 1 so the active tool-call round always keeps its reasoning (required for
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
     pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
-    skillAuto: process.env.REIKA_SKILL_AUTO === '1',
+    skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,
     // and the lookup costs three git subprocesses at startup that are pure waste when unused.
@@ -105,8 +118,15 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
     const lower = name.toLowerCase();
     if (lower === 'default') continue;
     const upper = name.toUpperCase();
-    const profileModel = process.env[`REIKA_${upper}_MODEL`];
-    if (!profileModel) continue;
+    // Comma-separated like REIKA_MODEL: the profile is its first model, and each extra becomes an
+    // auto-profile keyed by its own name on the same connection — a hosted router with a menu of
+    // models is one profile, not one per model.
+    const profileModels = (process.env[`REIKA_${upper}_MODEL`] ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (profileModels.length === 0) continue;
+    const profileModel = profileModels[0];
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
     const profileContextWindow = parseIntOrUndef(process.env[`REIKA_${upper}_CONTEXT_WINDOW`]);
     const profileMinGen = parseIntOrUndef(process.env[`REIKA_${upper}_MIN_GEN_TOKENS`]);
@@ -120,6 +140,11 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
       minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
     };
+    for (const m of profileModels.slice(1)) {
+      const key = m.toLowerCase();
+      if (key === 'default' || profiles[key]) continue;
+      profiles[key] = { ...profiles[lower], model: m, group: lower };
+    }
   }
   return profiles;
 }
@@ -130,13 +155,18 @@ function emptyToUndefined(s: string | undefined): string | undefined {
 
 // REIKA_AUTO_APPROVE controls how much runs without a confirmation prompt:
 //   'safe' (also 'true'/'1') — auto-approve ordinary actions; commands flagged dangerous
-//                              (see bash.ts danger patterns) still prompt.
+//                              (see bash.ts danger patterns) and writes outside the project
+//                              still prompt. The default when unset.
 //   'bypass' (also 'yolo')   — approve everything, including dangerous commands. True yolo.
-//   anything else / unset    — 'off': confirm every action.
+//   'off' (also 'false'/'0') — confirm every action. Any unrecognized value lands here too:
+//                              a typo in a permission setting should cost prompts, not safety.
 // 'true'/'1' map to 'safe' (not 'bypass') so the common opt-in keeps the safety net; full
-// bypass has to be asked for by name.
+// bypass has to be asked for by name. Unset is 'safe' rather than 'off' because the danger
+// scan already holds back everything an in-repo `git checkout` can't undo, and confirming each
+// ordinary edit made every multi-edit session a click-through.
 function parseAutoApprove(raw: string | undefined): AutoApproveMode {
   switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
     case 'safe':
     case 'true':
     case '1':
@@ -149,7 +179,28 @@ function parseAutoApprove(raw: string | undefined): AutoApproveMode {
   }
 }
 
-// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', or 'vibe'.
+// REIKA_SKILL_AUTO, three-valued like REIKA_AUTO_APPROVE. Unset is 'ask': once the confirm
+// dialog made a wrong pick cost a keystroke instead of a turn, the reason to keep routing off by
+// default went with it. 'apply' (also '1', the pre-#425 spelling, which then meant silent
+// injection) is the only value that changes headless — a script that never opted in must not
+// start receiving skill bodies because the interactive default moved. Anything unrecognized is
+// 'off': a typo should cost a hint line, not a rewritten prompt.
+function parseSkillAuto(raw: string | undefined): SkillAutoMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'ask':
+      return 'ask';
+    case 'apply':
+    case '1':
+    case 'true':
+      return 'apply';
+    default:
+      return 'off';
+  }
+}
+
+// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe', or
+// 'minimal'.
 // An unrecognized value falls back to 'agent' — fail-open, since a startup warning would have
 // nowhere safe to go (stderr corrupts the Ink frame). REIKA_PLAN_EXPERIMENT=1 is the older,
 // narrower spelling of REIKA_DEFAULT_MODE=plan, kept as an alias; an explicit REIKA_DEFAULT_MODE
@@ -165,6 +216,8 @@ export function resolveDefaultMode(): DefaultMode {
       return 'plan';
     case 'vibe':
       return 'vibe';
+    case 'minimal':
+      return 'minimal';
     default:
       return process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent';
   }
@@ -195,6 +248,33 @@ function parseIntOrUndef(s: string | undefined): number | undefined {
   if (!s || s.trim() === '') return undefined;
   const n = parseInt(s, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+// Records a window the endpoint reported (#417) on one profile. The profile only — never the
+// top-level `contextWindow`, which every profile reads as its fallback and which would hand the
+// default model's window to a different model on a /model switch.
+export function withProbedWindow(config: Config, profileName: string, window: number): Config {
+  const profile = config.profiles[profileName];
+  if (!profile) return config;
+  return {
+    ...config,
+    profiles: {
+      ...config.profiles,
+      [profileName]: { ...profile, contextWindow: window, contextWindowProbed: true },
+    },
+  };
+}
+
+// A new profile built on `from` (an ad-hoc /model target) takes its connection settings but not
+// a probed window: that number was measured for `from`'s model, and the new one gets its own probe.
+export function inheritProfile(from: Profile, model: string): Profile {
+  const { contextWindowProbed: _probed, ...rest } = from;
+  return {
+    ...rest,
+    model,
+    contextWindow: from.contextWindowProbed ? undefined : from.contextWindow,
+    adhoc: true,
+  };
 }
 
 export function resolveProfile(config: Config, profileName: string): Config {

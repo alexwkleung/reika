@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 import {
   flagRepeatedCall,
+  type RepeatEntry,
   buildAgentLoopLedger,
+  buildWithdrawalDirective,
+  withdrawalRemedy,
+  withdrawnToolsPhrase,
   buildAbsentGrounding,
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
@@ -12,9 +16,23 @@ import {
   buildPlanTransformInput,
 } from './loop.js';
 
+// The three tool lists the withdrawal text has to speak to: agent (everything), minimal mode's
+// bash-only (#391), and chat (neither an editor nor a shell).
+const AGENT_TOOLS: ReadonlySet<string> = new Set([
+  'read',
+  'list',
+  'grep',
+  'glob',
+  'edit',
+  'write',
+  'bash',
+]);
+const MINIMAL_TOOLS: ReadonlySet<string> = new Set(['bash']);
+const CHAT_TOOLS: ReadonlySet<string> = new Set(['fetch_url', 'search']);
+
 // Convenience: read calls keyed on path+offset.
 const read = (
-  seen: Map<string, number>,
+  seen: Map<string, RepeatEntry>,
   args: Record<string, unknown>,
   summary: string,
   payload: string | undefined = 'body',
@@ -22,34 +40,81 @@ const read = (
 
 describe('flagRepeatedCall', () => {
   it('leaves the first call untouched', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     expect(read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800')).toBe('body');
   });
 
-  it('flags a window-varying re-read from the same offset (the real loop)', () => {
-    const seen = new Map<string, number>();
-    // All start at line 1 with different limits -> different summaries, same (path, offset).
+  it('flags a same-or-wider re-read from the same offset, but not a narrowing one', () => {
+    const seen = new Map<string, RepeatEntry>();
+    // All start at line 1. Widening (100 -> 300) is a repeat: the model already had those bytes.
     read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800');
-    const second = read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
-    const third = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
-    expect(second).toContain('2 times');
-    expect(third).toContain('3 times');
-    expect(second?.startsWith('body')).toBe(true);
+    const wider = read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
+    expect(wider).toContain('2 times');
+    expect(wider?.startsWith('body')).toBe(true);
+    // Narrowing (300 -> 80) is the move the omission marker asks for when the earlier copy was
+    // capped — it returns bytes the model has NOT seen, so it restarts the run rather than
+    // counting toward it. Observed: read(1-300) capped, read(1-150) capped again AND nudged
+    // "won't make progress", and the model spun on the contradiction.
+    const narrower = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
+    expect(narrower).toBe('body');
+    // Repeating the narrow window IS the loop, and is caught on its second step.
+    const again = read(seen, { path: 'a.ts', limit: 80 }, 'Read a.ts lines 1-80 of 800');
+    expect(again).toContain('2 times');
+  });
+
+  it('treats a default-window read followed by an explicit narrower one as narrowing', () => {
+    // The observed shape: read(path) with no limit is READ_DEFAULT_LIMIT lines, and the follow-up
+    // names a smaller window explicitly. Resolved as the tool resolves it, not as absent-vs-present.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'src/tools/bash.ts' }, 'Read src/tools/bash.ts lines 1-300 of 329');
+    const narrower = read(
+      seen,
+      { path: 'src/tools/bash.ts', offset: 1, limit: 150 },
+      'Read src/tools/bash.ts lines 1-150 of 329',
+    );
+    expect(narrower).toBe('body');
+  });
+
+  it('stops exempting narrowing after a bounded number of descents', () => {
+    // A model shrinking 300 -> 200 -> 100 -> 50 -> 25 -> ... forever is spinning too. Same bound as
+    // readtrace.ts (MAX_NARROWINGS = 3), so the metric and the nudge name the same read as the loop.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'a.ts', limit: 300 }, 'Read a.ts lines 1-300 of 800');
+    expect(read(seen, { path: 'a.ts', limit: 200 }, 'Read a.ts lines 1-200 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 50 }, 'Read a.ts lines 1-50 of 800')).toBe('body');
+    expect(read(seen, { path: 'a.ts', limit: 25 }, 'Read a.ts lines 1-25 of 800')).toContain(
+      '2 times',
+    );
+  });
+
+  it('names the remedy that works when the flagged copy was itself capped', () => {
+    // "Identical bytes" was only true when the earlier copy shipped whole; under the fit-to-window
+    // cap the same read can arrive gutted twice. The nudge must not tell the model the one move
+    // that works (a read small enough to arrive whole) is pointless.
+    const seen = new Map<string, RepeatEntry>();
+    read(seen, { path: 'a.ts', limit: 150 }, 'Read a.ts lines 1-150 of 329');
+    const second = read(seen, { path: 'a.ts', limit: 150 }, 'Read a.ts lines 1-150 of 329');
+    expect(second).toContain('same window returns the same bytes');
+    expect(second).toContain('read a range small enough to arrive whole');
+    expect(second).not.toContain('identical bytes');
   });
 
   it('names the exact range in the read nudge (concrete redirect, not generic)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     const second = read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     // Points at the specific range via the summary, and keeps the escalating count.
     expect(second).toContain('Read a.ts lines 1-200 of 800');
     expect(second).toContain('2 times');
-    expect(second).toContain('re-reading the same start line returns identical bytes');
+    expect(second).toContain(
+      're-reading the same start line with the same window returns the same bytes',
+    );
     expect(second?.startsWith('body')).toBe(true);
   });
 
   it('does not flag genuine forward paging (different offsets)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const a = read(seen, { path: 'a.ts', offset: 1 }, 'Read a.ts lines 1-200 of 800', 'b1');
     const b = read(seen, { path: 'a.ts', offset: 200 }, 'Read a.ts lines 200-399 of 800', 'b2');
     const c = read(seen, { path: 'a.ts', offset: 400 }, 'Read a.ts lines 400-599 of 800', 'b3');
@@ -59,7 +124,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('tracks bash repeats keyed on summary (incl. byte count)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const s = 'Ran: grep -n blendAlbums src/server/index.ts (140 bytes output)';
     flagRepeatedCall(seen, 'bash', { command: 'grep -n blendAlbums src/server/index.ts' }, s, 'o');
     const again = flagRepeatedCall(
@@ -73,7 +138,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('does not flag bash when output size differs (changed/flaky command)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     flagRepeatedCall(
       seen,
       'bash',
@@ -92,7 +157,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('bash does NOT clear read-tracking (interspersed grep -n must not reset it)', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts', limit: 100 }, 'Read a.ts lines 1-100 of 800');
     flagRepeatedCall(
       seen,
@@ -106,7 +171,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('edit/write resets memory so a later identical read is not flagged', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     flagRepeatedCall(seen, 'edit', { path: 'a.ts' }, 'Edited a.ts', undefined);
     const after = read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
@@ -114,7 +179,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('passes untracked tools (fetch/search) through without flagging or clearing', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts' }, 'Read a.ts lines 1-200 of 800');
     const fetched = flagRepeatedCall(seen, 'fetch_url', { url: 'x' }, 'Fetched x', 'page');
     expect(fetched).toBe('page');
@@ -124,7 +189,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('escalates the grep count across identical-pattern repeats', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     const s = 'Found 0 matches for /discover/';
     flagRepeatedCall(seen, 'grep', { pattern: 'discover' }, s, '');
     flagRepeatedCall(seen, 'grep', { pattern: 'discover' }, s, '');
@@ -132,7 +197,7 @@ describe('flagRepeatedCall', () => {
   });
 
   it('handles an undefined payload on a repeat without crashing', () => {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, RepeatEntry>();
     read(seen, { path: 'a.ts', offset: 999 }, 'Read a.ts: offset 999 past end of file', undefined);
     const out = read(
       seen,
@@ -146,10 +211,14 @@ describe('flagRepeatedCall', () => {
 
 describe('buildAgentLoopLedger', () => {
   it('names the looping files and gives a stop-or-explain directive', () => {
-    const ledger = buildAgentLoopLedger([
-      { path: 'packages/ui/src/api/sse.ts', offset: 1, repeats: 3 },
-      { path: 'packages/server/src/http/chat.ts', offset: 201, repeats: 3 },
-    ]);
+    const ledger = buildAgentLoopLedger(
+      [
+        { path: 'packages/ui/src/api/sse.ts', offset: 1, repeats: 3 },
+        { path: 'packages/server/src/http/chat.ts', offset: 201, repeats: 3 },
+      ],
+      false,
+      AGENT_TOOLS,
+    );
     // Names both files (the one past line 1 carries its offset), persists the "already read" fact,
     // and offers the non-edit escape so a cornered model isn't forced into a wrong change.
     expect(ledger).toContain('packages/ui/src/api/sse.ts');
@@ -160,8 +229,8 @@ describe('buildAgentLoopLedger', () => {
 
   it('escalates to a hard pause directive once inspection tools are withdrawn', () => {
     const looping = [{ path: 'packages/server/src/http/chat.ts', offset: 151, repeats: 3 }];
-    const soft = buildAgentLoopLedger(looping, false);
-    const hard = buildAgentLoopLedger(looping, true);
+    const soft = buildAgentLoopLedger(looping, false, AGENT_TOOLS);
+    const hard = buildAgentLoopLedger(looping, true, AGENT_TOOLS);
     // Soft tier: still frames re-reading as unhelpful. Hard tier: states reading is paused.
     expect(soft).toContain('Re-reading them returns identical bytes');
     expect(soft).not.toContain('PAUSED');
@@ -178,14 +247,14 @@ describe('buildAgentLoopLedger', () => {
       offset: 1,
       repeats: 3,
     }));
-    const ledger = buildAgentLoopLedger(many);
+    const ledger = buildAgentLoopLedger(many, false, AGENT_TOOLS);
     expect(ledger).toContain('f0.ts');
     expect(ledger).toContain('f7.ts');
     expect(ledger).not.toContain('f8.ts'); // sliced at 8
   });
 
   it('adds a "complete → say so and stop" out to the withdrawn directive (post-edit loops)', () => {
-    const hard = buildAgentLoopLedger([{ path: 'a.ts', offset: 1, repeats: 3 }], true);
+    const hard = buildAgentLoopLedger([{ path: 'a.ts', offset: 1, repeats: 3 }], true, AGENT_TOOLS);
     expect(hard).toContain('if the change is already complete');
   });
 
@@ -193,16 +262,86 @@ describe('buildAgentLoopLedger', () => {
     // The agent-mode reasoning-loop arm passes an empty `looping` (each read paged a fresh region /
     // the same grep kept returning 0 matches, so ReadTrace saw no repeat). The ledger must still fire
     // a stop directive without naming any file, and keep the blocker escape for the can't-find case.
-    const soft = buildAgentLoopLedger([], false);
+    const soft = buildAgentLoopLedger([], false, AGENT_TOOLS);
     expect(soft).toContain('repeated the same reasoning and searches');
     expect(soft).not.toContain('identical bytes'); // file-specific phrasing suppressed
     expect(soft).toContain('a symbol your searches');
     expect(soft).not.toContain('PAUSED');
 
-    const hard = buildAgentLoopLedger([], true);
+    const hard = buildAgentLoopLedger([], true, AGENT_TOOLS);
     expect(hard).toContain('repeated the same reasoning and searches');
     expect(hard).toContain('PAUSED');
     expect(hard).toContain('Make the edit');
+  });
+
+  it('names a remedy the turn actually has when there are no edit tools', () => {
+    // #391: in a bash-only mode "make the edit with the edit/write tools" is a pointer at two tools
+    // the model cannot see, and a model told to reach for an absent tool reaches for nothing.
+    // Flattened: the hand-wrapping is presentation, the content is the invariant.
+    const hard = buildAgentLoopLedger([], true, MINIMAL_TOOLS).replace(/\n/g, ' ');
+    expect(hard).toContain('PAUSED');
+    expect(hard).not.toContain('edit/write');
+    expect(hard).toContain('running the command that applies it');
+    // The escapes that need no tool at all survive in every mode.
+    expect(hard).toContain('state specifically what is still blocking you');
+    expect(hard).toContain('if the change is already complete');
+  });
+});
+
+describe('withdrawal text follows the turn tool list', () => {
+  it('names only the inspection surface the mode actually has', () => {
+    expect(withdrawnToolsPhrase(AGENT_TOOLS)).toBe(
+      'inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail)',
+    );
+    // Minimal mode has no read/grep/glob/list to pause, so it must not claim to have paused them.
+    expect(withdrawnToolsPhrase(MINIMAL_TOOLS)).toBe(
+      'read-only shell commands (grep/cat/tail and similar inspection)',
+    );
+    // Plan mode's default list is the other way round: the named tools, no shell.
+    expect(withdrawnToolsPhrase(new Set(['read', 'grep', 'glob', 'list']))).toBe(
+      'inspection tools (read/grep/glob/list)',
+    );
+  });
+
+  it('picks the remedy from the tools on offer', () => {
+    expect(withdrawalRemedy(AGENT_TOOLS)).toContain('edit/write tools');
+    expect(withdrawalRemedy(MINIMAL_TOOLS)).toContain('running the command that applies it');
+    // Neither an editor nor a shell: the remedy has to be one that needs no tool.
+    expect(withdrawalRemedy(CHAT_TOOLS)).toBe('Answer from what you already have');
+  });
+
+  it('leaves agent mode byte-identical to the pre-list-aware text', () => {
+    // House rule: a change that only adds a new mode must not move the bytes of the existing one,
+    // or every measurement taken against the old text silently stops comparing.
+    expect(buildWithdrawalDirective(AGENT_TOOLS)).toBe(
+      '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
+        'are paused because you have repeated the same reads or searches without making progress. You ' +
+        'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
+        'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
+        'Reading and searching are unavailable until you make progress.)',
+    );
+    expect(buildAgentLoopLedger([], true, AGENT_TOOLS)).toContain(
+      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write\n' +
+        'tools, state specifically what is still blocking you, or — if the change is already complete —\n' +
+        'say so and stop.',
+    );
+  });
+
+  it('builds a directive that points at nothing absent', () => {
+    const agent = buildWithdrawalDirective(AGENT_TOOLS);
+    expect(agent).toContain('read/grep/glob/list');
+    expect(agent).toContain('edit/write tools');
+
+    const minimal = buildWithdrawalDirective(MINIMAL_TOOLS);
+    // The whole point: no phantom tool names anywhere in the sentence.
+    for (const absent of ['read/grep/glob/list', 'edit/write', 'glob', 'list']) {
+      expect(minimal).not.toContain(absent);
+    }
+    expect(minimal).toContain('read-only shell commands (grep/cat/tail and similar inspection)');
+    expect(minimal).toContain('running the command that applies it');
+    // Still says what it is and how to get out of it.
+    expect(minimal).toContain('are paused because you have repeated the same reads or searches');
+    expect(minimal).toContain('say so and stop');
   });
 });
 
@@ -327,14 +466,18 @@ describe('buildSteadySystem', () => {
     expect(at(0).startsWith('BASE\n\n')).toBe(true);
   });
 
-  it('emits no dropped-payload notice while REIKA_DROPPED_LEDGER is unset (#227)', () => {
-    // Strict no-op when off. This file sets no flags, so it is the honest default-config check —
-    // the flag-on compositions live in loop.droppedpayload*.test.ts.
+  it('emits the dropped-payload notice in the default config (#227, on since 2026-09-18)', () => {
+    // This file sets no flags, so it is the honest default-config check. The four compositions
+    // live in loop.droppedpayload*.test.ts; the `=0` no-op guard in loop.droppedpayload.off.test.ts.
+    // c1 is the pinned spec (#228) and c3 is the live trailing block, so c2 is the one that was
+    // actually dropped — without it the notice has nothing to fire on, on either arm.
     const dropped: Message[] = [
       ...explored.slice(0, 2),
       { role: 'tool', callId: 'c1', summary: 'Ran: gh (505 bytes output)', payload: 'ISSUE' },
       { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'read', args: {} }] },
       { role: 'tool', callId: 'c2', summary: 'Read b.ts', payload: 'BODY' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c3', name: 'read', args: {} }] },
+      { role: 'tool', callId: 'c3', summary: 'Read c.ts', payload: 'FRESH' },
     ];
     for (const promptMode of ['agent', 'plan'] as const) {
       const s = buildSteadySystem({
@@ -344,7 +487,7 @@ describe('buildSteadySystem', () => {
         round: 0,
         planSteps: null,
       });
-      expect(s).not.toContain('dropped to make room');
+      expect(s).toContain('dropped to make room');
     }
   });
 

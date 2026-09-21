@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
@@ -7,7 +8,6 @@ import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
-import { Header } from './Header.js';
 import { changeLabel, formatDurationMs, toolLabel } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 
@@ -16,12 +16,22 @@ export function Scrollback({
   streaming,
   streamingReasoning,
   streamingTool,
+  streamingNested = false,
+  streamingBar,
   chromeRows = 0,
 }: {
   messages: Message[];
   streaming: string;
   streamingReasoning: string;
   streamingTool: string;
+  // The live blocks belong to a subagent running under the parent's tool call (#342). They render
+  // at NESTED_INDENT so the streaming tail sits where its committed row will land a moment later,
+  // instead of jumping left while live and right on commit.
+  streamingNested?: boolean;
+  // Color for the live reasoning bar when the stream is something other than the reply — the
+  // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
+  // on screen reads as compaction work. Undefined keeps the normal reasoning color.
+  streamingBar?: string;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -34,21 +44,72 @@ export function Scrollback({
   // lands in <Static> when the message commits, where the terminal scrolls it natively.
   const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
   const budget = liveTailBudget(active, chromeRows);
-
-  return (
+  const indent = streamingNested ? NESTED_INDENT : 0;
+  const live = (
     <>
-      <Static items={messages}>
-        {(msg, i) => <MessageView key={i} msg={msg} prev={messages[i - 1]} />}
-      </Static>
       {streamingReasoning ? (
         <Box marginTop={1}>
-          <ReasoningBlock text={streamingReasoning} maxLines={budget} />
+          <ReasoningBlock
+            text={streamingReasoning}
+            maxLines={budget}
+            indent={indent}
+            barColor={streamingBar}
+          />
         </Box>
       ) : null}
-      {streaming.trim() ? <StreamingContent text={streaming} maxLines={budget} /> : null}
-      {streamingTool ? <StreamingTool text={streamingTool} maxLines={budget} /> : null}
+      {streaming.trim() ? (
+        <StreamingContent text={streaming} maxLines={budget} indent={indent} />
+      ) : null}
+      {streamingTool ? (
+        <StreamingTool text={streamingTool} maxLines={budget} indent={indent} />
+      ) : null}
     </>
   );
+
+  const scrollback = useScrollbackLog(messages);
+  return (
+    <>
+      <Static items={scrollback}>
+        {(msg, i) => <MessageView key={i} msg={msg} prev={scrollback[i - 1]} />}
+      </Static>
+      {indent ? (
+        // Same box MessageView gives a nested committed row: the margin plus an explicit width
+        // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
+        // when nested — the top-level live region is left exactly as it was.
+        <Box flexDirection="column" width={contentWidth(indent)} marginLeft={indent}>
+          {live}
+        </Box>
+      ) : (
+        live
+      )}
+    </>
+  );
+}
+
+// What <Static> actually gets: the session's terminal scrollback, which only ever grows.
+//
+// `messages` is the ACTIVE conversation, and it is not append-only: a mode switch across the chat
+// boundary swaps in the other side's stash, /new replaces it with a two-line receipt. <Static>
+// can't follow that — it renders `items.slice(n)` where n is the length it saw last render, and
+// the terminal keeps everything it already printed. So a swap that leaves the array no longer
+// than before prints nothing (the "Agent mode." banner after a round trip through /chat, the /new
+// receipt after any real conversation — #385), and one that leaves it longer reprints a slice of
+// the restored stash that is already on screen.
+//
+// Append-only by identity instead: every message object is printed exactly once, the first time
+// it appears, in the order it appeared. Restored messages were printed back when they were live;
+// only the trailing echo + banner are new. Nothing in `messages` is ever edited in place after it
+// commits (the live stream is separate state), so identity is the right key.
+function useScrollbackLog(messages: Message[]): Message[] {
+  const seen = useRef(new WeakSet<Message>());
+  const log = useRef<Message[]>([]);
+  return useMemo(() => {
+    const fresh = messages.filter(m => !seen.current.has(m));
+    if (fresh.length === 0) return log.current;
+    for (const m of fresh) seen.current.add(m);
+    log.current = [...log.current, ...fresh];
+    return log.current;
+  }, [messages]);
 }
 
 // Per-block budget for the live region, in *display* rows. Ink repaints the whole
@@ -68,8 +129,8 @@ function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
 }
 
 // Content width for a live block. Matches the width Ink lays the block's <Text> out at.
-function liveContentWidth(): number {
-  return contentWidth();
+function liveContentWidth(indent = 0): number {
+  return contentWidth(indent);
 }
 
 // Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
@@ -109,15 +170,23 @@ export function tailText(
 
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
 // message re-renders the full text in <Static>.
-function StreamingContent({ text, maxLines }: { text: string; maxLines: number }) {
-  const width = liveContentWidth();
+function StreamingContent({
+  text,
+  maxLines,
+  indent = 0,
+}: {
+  text: string;
+  maxLines: number;
+  indent?: number;
+}) {
+  const width = liveContentWidth(indent);
   // Cheap logical-line pre-trim caps markdown render cost on very long streams; the
   // factor keeps enough lines to fill `maxLines` display rows even when each wraps.
   // The render-then-tailDisplay below is what actually bounds the frame height — it
   // measures the *rendered* output (markdown can expand lines, e.g. code fences) in
   // wrapped display rows, which is what Ink counts against the viewport.
   const pre = tailText(text, maxLines * 4);
-  const tail = tailDisplay(renderMarkdown(pre.text), maxLines, width);
+  const tail = tailDisplay(renderMarkdown(pre.text, width), maxLines, width);
   const truncated = pre.truncated || tail.truncated;
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -127,8 +196,16 @@ function StreamingContent({ text, maxLines }: { text: string; maxLines: number }
   );
 }
 
-function StreamingTool({ text, maxLines }: { text: string; maxLines: number }) {
-  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth());
+function StreamingTool({
+  text,
+  maxLines,
+  indent = 0,
+}: {
+  text: string;
+  maxLines: number;
+  indent?: number;
+}) {
+  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth(indent));
   return (
     <Box flexDirection="column" marginTop={1}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
@@ -199,9 +276,6 @@ function renderMessage(
   if (msg.role === 'user') {
     return <UserBubble text={msg.display ?? msg.content} indent={indent} nested={ctx.nested} />;
   }
-  if (msg.role === 'header') {
-    return <Header model={msg.model} cwd={msg.cwd} />;
-  }
   if (msg.role === 'shell') {
     // Scrubbed exactly like the bash tool's command/outputTail above. Shell mode runs the same
     // commands through the same terminal — the only difference is that no model sees them — so
@@ -231,10 +305,16 @@ function renderMessage(
     const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} indent={indent} /> : null}
+        {msg.reasoning ? (
+          <ReasoningBlock
+            text={msg.reasoning}
+            indent={indent}
+            barColor={msg.compactionNote ? theme.info : undefined}
+          />
+        ) : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
-            <Text>{renderMarkdown(msg.content!)}</Text>
+            <Text>{renderMarkdown(msg.content!, contentWidth(indent))}</Text>
           </Box>
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
@@ -434,10 +514,12 @@ function ReasoningBlock({
   text,
   maxLines,
   indent = 0,
+  barColor = theme.reasoning,
 }: {
   text: string;
   maxLines?: number;
   indent?: number;
+  barColor?: string;
 }) {
   const term = process.stdout.columns || 80;
   const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
@@ -457,14 +539,14 @@ function ReasoningBlock({
   return (
     <Box flexDirection="column">
       <Box>
-        <Text color={theme.reasoning}>{'▎ '}</Text>
+        <Text color={barColor}>{'▎ '}</Text>
         <Text bold color={theme.muted}>
           Thinking
         </Text>
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text color={theme.reasoning}>{'▎ '}</Text>
+          <Text color={barColor}>{'▎ '}</Text>
           <Text color={theme.muted}>{line}</Text>
         </Box>
       ))}

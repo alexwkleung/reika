@@ -10,7 +10,7 @@
 // bad-run tail on top.
 //
 // So this replays real histories through the REAL aging code (batchAgePayloads, compactHistory,
-// messagesToOpenAI, PrefixTrace — imported, never reimplemented) at each watermark, and prices the
+// messagesToChatParams, PrefixTrace — imported, never reimplemented) at each watermark, and prices the
 // result with the per-token costs measured in #231 on this stack.
 //
 // WHAT THIS CANNOT ANSWER: the behavioural half. A lower watermark ages more payloads, the model
@@ -30,7 +30,7 @@
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '../src/types.js';
 import { estimateRequestTokens } from '../src/provider/tokens.js';
-import { messagesToOpenAI } from '../src/provider/toolcall.js';
+import { messagesToChatParams } from '../src/provider/toolcall.js';
 import { PrefixTrace } from '../src/agent/prefixtrace.js';
 
 // Per-token prices measured on the local llama.cpp stack in #231 (Qwen3.8-27B UD-IQ3_XXS, M2 16GB).
@@ -142,7 +142,7 @@ async function replay(
     if (fired) arm.events++;
     if (shouldCompact(estimate(), window, minGen)) compactHistory(live, window, 1, minGen);
 
-    const msgs = messagesToOpenAI(system, live, {
+    const msgs = messagesToChatParams(system, live, {
       contextWindow: window,
       reasoningRounds: 1,
       minGenTokens: minGen,

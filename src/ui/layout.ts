@@ -6,7 +6,7 @@ import wrapAnsi from 'wrap-ansi';
 // Ink lays a <Static> row out at its INTRINSIC width, not the terminal's: a Box in row direction
 // hands each child the width it asks for and lets the row overflow. A column of <Text> wraps
 // (the child inherits the parent's width), which is why most of the scrollback behaves — but a
-// label-and-value row (`cwd:  <path>`, the header line) does not, and a long value runs off the
+// label-and-value row (the splash's `cwd:  <path>`) does not, and a long value runs off the
 // edge for the TERMINAL to wrap, mid-token, with no hanging indent. Giving the row an explicit
 // width is what puts the wrap back under Ink's control.
 //

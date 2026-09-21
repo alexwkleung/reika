@@ -9,7 +9,7 @@ import type {
   Tool,
   ToolResult,
   Usage,
-  SearchHealth,
+  WebHealth,
   WebBudget,
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
@@ -31,6 +31,7 @@ import {
   hasDroppedPayloads,
   lastUserMessageIndex,
   taskSpecIndex,
+  toolsToChatTools,
 } from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
@@ -54,6 +55,7 @@ import {
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
+import { writeTargets } from '../tools/_writetargets.js';
 import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
@@ -66,8 +68,30 @@ import {
   ranSuccessfully,
   MAX_PLAN_GATE_ROUNDS,
   type PlanStep,
+  type StepMatch,
 } from './plantrack.js';
 import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
+import {
+  SUBAGENT_REPORT_DIRECTIVE,
+  SUBAGENT_HOLD_NOTE,
+  MAX_SUBAGENTS_PER_TURN,
+  MAX_SUBAGENTS_PER_ROUND,
+  type SubagentBudget,
+  buildCoverageNote,
+} from './subagentreport.js';
+import {
+  COMPACTION_REPORT_RETRY,
+  buildCompactionReportDirective,
+  clampCompactionNote,
+  compactionReportEnabled,
+} from './compactionreport.js';
+import {
+  buildSubagentAffordance,
+  filesInResult,
+  subagentPressureEnabled,
+  underPressure,
+} from './subagentpressure.js';
+import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -88,6 +112,52 @@ const TRACKED_TOOLS = new Set(['read', 'grep', 'list', 'glob', 'bash']);
 // it clear would wipe read-tracking between every interspersed `bash grep`.
 const MUTATING_TOOLS = new Set(['write', 'edit']);
 
+// Whether a call is ABOUT to write to the working tree, asked before dispatch. `bash` counts when
+// the command names files it will write — a model editing through `sed -i`, a heredoc, or `tee` is
+// mutating the repo as surely as the edit tool is, and the two done-gates below exist to verify
+// exactly that (#278). Best-effort for bash by construction: writeTargets sees the shapes a model
+// reaches for and cannot see `npm run fix` or a script that writes wherever it likes. That is the
+// right failure here — the only consumer is the typecheck baseline, which must be captured BEFORE
+// the command runs and whose whole design is fail-open (no baseline = no gate). A miss costs one
+// unverified turn; a false positive would cost a tsc run on a turn that never edited.
+//
+// Deliberately NOT folded into MUTATING_TOOLS itself: that set also resets the repeat memory in
+// flagRepeatedCall, where bash is excluded on purpose (it runs read-only greps far more often than
+// it mutates, and letting it clear would wipe read-tracking between interspersed `bash grep`s).
+// Same question, different answers, so they stay separate predicates.
+export function willMutate(name: string, args: Record<string, unknown>, cwd: string): boolean {
+  if (MUTATING_TOOLS.has(name)) return true;
+  if (name !== 'bash') return false;
+  return writeTargets(String(args.command ?? ''), cwd).length > 0;
+}
+
+// The file a mutating call anchors its tsconfig walk-up on. For edit/write that is the path it was
+// given; for bash, the first file the command names, which is as good an anchor as any when one
+// command touches several (they are resolved against the same cwd, so a monorepo command editing
+// two packages picks one — the alternative, a tsconfig per target, would mean a baseline per
+// config, and the gate's whole budget is one). Re-parses the command that `willMutate` already
+// parsed; it runs at most once per turn (typecheckBaselineAttempted), on a pure string.
+export function typecheckAnchor(
+  name: string,
+  args: Record<string, unknown>,
+  cwd: string,
+): string | undefined {
+  if (MUTATING_TOOLS.has(name)) return typeof args.path === 'string' ? args.path : undefined;
+  if (name !== 'bash') return undefined;
+  return writeTargets(String(args.command ?? ''), cwd)[0];
+}
+
+// Whether a call DID change the working tree, asked after dispatch. Inside a repo `changes` is
+// git-backed (tools/_treediff.ts), so for bash this is the accurate half of the pair and catches
+// what writeTargets cannot — the formatter, the codegen script, `npm run fix`. edit/write keep
+// their existing semantics: the ATTEMPT counts, failed or not, because a failed edit is what puts
+// the turn in edit-recovery. Only bash has to have actually landed something, since "the model ran
+// a command" is not evidence it edited anything.
+export function didMutate(name: string, changes: ToolResult['changes']): boolean {
+  if (MUTATING_TOOLS.has(name)) return true;
+  return name === 'bash' && !!changes && changes.files.length > 0;
+}
+
 // The repeat key for a call. `read` normalizes away `limit` and keys on (path, offset): a
 // model that re-reads from the same position with a different window — read(path, limit=100)
 // then limit=300 then limit=80, all starting at line 1 — is looping even though each summary
@@ -98,11 +168,20 @@ function repeatKey(name: string, args: Record<string, unknown>, summary: string)
   return `${name}\0${summary}`;
 }
 
+// Per-key repeat memory. `window` and `narrowings` only matter for reads (see the carve-out in
+// flagRepeatedCall); other tools carry Infinity/0 and behave as a bare counter.
+export type RepeatEntry = { count: number; window: number; narrowings: number };
+
+// How many times a shrinking window may restart the repeat run for one read region — the same
+// bound readtrace.ts uses (MAX_NARROWINGS there), kept in step so the metric and the nudge agree
+// about which read is the loop.
+const MAX_NUDGE_NARROWINGS = 3;
+
 // On a repeat of the same tracked call within a turn, append an escalating redirect to the
 // payload so a looping model gets a "this won't change" signal at the point of recency.
 // Untracked tools (fetch/search/subagent/unknown) pass through; mutating tools reset memory.
 export function flagRepeatedCall(
-  seen: Map<string, number>,
+  seen: Map<string, RepeatEntry>,
   name: string,
   args: Record<string, unknown>,
   summary: string,
@@ -114,20 +193,43 @@ export function flagRepeatedCall(
   }
   if (!TRACKED_TOOLS.has(name)) return payload;
   const key = repeatKey(name, args, summary);
-  const count = (seen.get(key) ?? 0) + 1;
-  seen.set(key, count);
+  const prior = seen.get(key);
+  // Resolved exactly as the read tool resolves it, so a default-window read followed by an explicit
+  // narrower one compares as narrowing rather than as a repeat.
+  const window = name === 'read' ? Math.max(1, Number(args.limit ?? READ_DEFAULT_LIMIT)) : Infinity;
+  let entry: RepeatEntry;
+  if (!prior) {
+    entry = { count: 1, window, narrowings: 0 };
+  } else if (window < prior.window && prior.narrowings < MAX_NUDGE_NARROWINGS) {
+    // A strictly smaller window from the same start line is the move the fit-to-window omission
+    // marker (provider/toolcall.ts capPayload) asks for: the earlier copy arrived with its middle
+    // cut out, and a narrower read is how the model gets those bytes. Observed on a 24k window:
+    // read(1-300) capped -> read(1-150) capped again AND told "re-reading won't make progress" —
+    // the nudge contradicted the marker and the model spun on which one to believe. Restart the
+    // run instead of counting it; repeating the same narrow window afterwards falls through to
+    // the counter, so genuine spinning is still caught a round later. Mirrors readtrace.ts, which
+    // already classes this read as `narrowed` — this is the path whose text the model sees.
+    entry = { count: 1, window, narrowings: prior.narrowings + 1 };
+  } else {
+    entry = { count: prior.count + 1, window, narrowings: prior.narrowings };
+  }
+  seen.set(key, entry);
+  const count = entry.count;
   if (count <= 1) return payload;
   // For reads, point at the exact range (the summary names path + lines) so a weak model gets a
   // concrete redirect, not a generic "do something different". The claim is anchored on the always-
-  // true fact — re-reading the same start line returns identical bytes — rather than on where any
-  // prior copy lives: this read's own payload is live in the next request by construction, so the
-  // nudge needs no liveness check and can't mislead the model into skipping a genuine refetch.
+  // true fact — re-reading the same start line with the same window returns the same bytes —
+  // rather than on where any prior copy lives: this read's own payload is live in the next request
+  // by construction, so the nudge needs no liveness check. "Live" is not "whole", though: the cap
+  // can have cut this copy too, so the remedy named is the one that works in that case as well.
   if (name === 'read') {
     return (
       (payload ?? '') +
       `\n\n(reika: you have re-read this same range ${count} times this turn (${summary}) — ` +
-      `re-reading the same start line returns identical bytes and won't make progress. Act on what ` +
-      `you already have, page to a different part of the file, or open another file.)`
+      `re-reading the same start line with the same window returns the same bytes and won't make ` +
+      `progress. If this copy arrived with its middle omitted, read a range small enough to arrive ` +
+      `whole (the omission marker says how many lines fit). Otherwise act on what you already ` +
+      `have, page to a different part of the file, or open another file.)`
     );
   }
   return (
@@ -248,9 +350,9 @@ const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
 // healthy blocks), and the restart re-ran the same `gh issue view` plus two greps, putting identical
 // payloads in context twice and feeding the #251/#252 re-fetch cascade. ON by default: a live run
 // carried 3/3 truncations with the model resuming its own thread each time, and a refused carry is
-// exactly the previous behavior. It does change what a request carries, so unset it for a run that
+// exactly the previous behavior. It does change what a request carries, so set `=0` for a run that
 // is measuring context/eviction (#264). Strict no-op when off. See agent/continuation.ts.
-const CONTINUE = process.env.REIKA_CONTINUE === '1';
+const CONTINUE = process.env.REIKA_CONTINUE !== '0';
 // The resume nudge. Four jobs, and the string it replaced ("continue concisely ... no long
 // preamble") failed all four — it read as *start over, briefly*, and the model did exactly that.
 // Attribute the text above as the model's own; anchor the resume point (the tail ends mid-sentence,
@@ -277,12 +379,13 @@ const MAX_CONVERGE_RETRIES = 1; // one strong push; the user can retry fully aft
 // Tighter reasoning ceil for a steered plan-mode retry than a normal force-write (12000): if the steer
 // is ignored and it re-spirals, cut it fast (~2k tokens) rather than burning the full force-write ceil.
 const STEER_RETRY_REASONING_CEIL = 8000;
-// EXPERIMENT (plan→agent handoff): fold the plan-mode exploration that precedes a written plan into
-// a compact digest at the start of each agent turn, so the plan stays salient instead of being
-// buried under the raw read transcript (agent/compaction.ts distillPlanHandoff). Off by default for
-// a clean A/B; independent of REIKA_PLAN_EXPERIMENT (which only sets the *starting* mode, so reusing
-// it would skip distillation whenever plan mode is reached via /plan). Strict no-op when off.
-const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF === '1';
+// Plan→agent handoff: fold the plan-mode exploration that precedes a written plan into a compact
+// digest at the start of each agent turn, so the plan stays salient instead of being buried under
+// the raw read transcript (agent/compaction.ts distillPlanHandoff). On by default since 2026-09-19;
+// `REIKA_PLAN_HANDOFF=0` is the baseline arm. Independent of REIKA_PLAN_EXPERIMENT (which only sets
+// the *starting* mode, so reusing it would skip distillation whenever plan mode is reached via
+// /plan). Strict no-op when off.
+const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF !== '0';
 // EXPERIMENT (plan alignment, #68): during agent turns that execute a written plan, keep the
 // harness-tracked step checklist in the system suffix each round (buildPlanProgressLedger) and
 // bounce a turn that tries to finish with file-bearing steps unchecked (decidePlanGate, the plan
@@ -298,18 +401,27 @@ const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
 // anyway). Rationale: every mid-history byte change forces the engine to re-process from that
 // point — and SWA/hybrid-memory models (no partial-prefix restore) re-process the WHOLE prompt on
 // ANY divergence, observed at ~3 min/request on a 35B. Requires REIKA_CONTEXT_WINDOW (sticky
-// liveness needs the batch-aging watermark to bound it); silently inactive without one. Off by
-// default for A/B; strict no-op when off.
-const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE === '1';
+// liveness needs the batch-aging watermark to bound it); silently inactive without one. On by
+// default since #181: measured on a 27B at 22.9 tok/s prefill, a mid-context edit re-processed
+// 8453 tokens (7.9 min) where an append was 25 tokens (3.5 s), and flag-off the prefix diverges
+// from round 2 of every tool-using turn — a cost the engine cannot absorb (`--cache-reuse` was
+// byte-identical). `REIKA_PREFIX_STABLE=0` restores the per-round aging as the A/B baseline;
+// strict no-op when off.
+const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE !== '0';
 // EXPERIMENT (dropped-payload notice, #227): tell the model, once per request, that some tool
 // results above show only a summary because their output was dropped. Flagged rather than shipped
 // on, because it is a *prompt-level* bet and this repo's history says those often bench null (the
-// preventive-alignment layer; REIKA_DEDUP_PAYLOADS). It also has a real downside to measure, not
+// preventive-alignment layer; REIKA_DEDUP_PAYLOADS, since defaulted on as a riskless no-op). It also
+// has a real downside to measure, not
 // just an absent upside: "re-run that call" can induce re-fetching of aged results, which costs
 // rounds and re-inflates the fresh block — the dup-aged read loop the ledger→withdrawal ladder
-// exists for. `read-trace-summary` (dup-aged / maxrepeat / looped, emitted per turn) is the metric;
-// run it against the same task with the flag on and off. Strict no-op when off.
-const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER === '1';
+// exists for. ON by default since 2026-09-18: a single-variable A/B on `/review 225` (n=3 off, 2 on)
+// split exactly as predicted — the baseline reconstructed a dropped diff from memory and only then
+// doubted itself, the ledger arm said "the output got dropped, let me re-run it" and re-fetched —
+// and the feared re-fetch loop never showed, with the withdrawal ladder bounding it if it does.
+// `=0` is the baseline arm. `read-trace-summary` is blind to it on a bash-fetching task (it records
+// `read` only); transcripts are the instrument. Strict no-op when off.
+const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
 // EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
 // blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
 // a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
@@ -417,11 +529,11 @@ export function buildPlanTransformInput(
 function buildPlanLedger(history: Message[], round: number): string {
   const files = new Set<string>();
   const searches = new Set<string>();
-  // Under REIKA_PLAN_BASH the model can explore through `bash`, whose call carries `command` and
-  // neither `path` nor `pattern`. Without this the ledger goes blind exactly when that tool is used:
-  // it would report "Nothing examined yet" every round to a model that had just read half the repo,
-  // and the round-1/2 "you can probably stop" nudge (which keys on having examined something) would
-  // never fire. The convergence pressure is the whole point of the ledger, so it has to see them.
+  // Plan mode's read-only `bash` (#109) explores through a call that carries `command` and neither
+  // `path` nor `pattern`. Without this the ledger goes blind exactly when that tool is used: it would
+  // report "Nothing examined yet" every round to a model that had just read half the repo, and the
+  // round-1/2 "you can probably stop" nudge (which keys on having examined something) would never
+  // fire. The convergence pressure is the whole point of the ledger, so it has to see them.
   const commands = new Set<string>();
   for (const m of history) {
     if (m.role !== 'assistant') continue;
@@ -509,7 +621,11 @@ export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
-  // Needed only for the ask_user gate in the agent prompt, but it has to be the SAME list runTurn
+  // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
+  // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
+  // full-context prefix for a turn that will send the bare one.
+  minimalPrompt?: boolean;
+  // Needed only for the ask_user/subagent gates in the agent prompt, but it has to be the SAME list runTurn
   // will send: the warm prefix is worthless if it diverges from round 0 by a line.
   tools: Tool[];
   contextWindow?: number;
@@ -522,7 +638,9 @@ export function buildRoundZeroPrefix(opts: {
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
+    canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
@@ -587,14 +705,80 @@ const MAX_TYPECHECK_GATE_ROUNDS = 2;
 // sooner so the cap has to truncate less often. Deliberately not the cap's 2.5 floor: that would
 // compact at ~40% of a normal prose window and waste most of the context.
 const COMPACTION_CALIBRATION_FLOOR = 1;
+// How to name what was just paused, from this turn's actual tool list. The withdrawal ladder pauses
+// two things — the INSPECTION_TOOLS set, refused at dispatch, and the read-only shell commands
+// `isInspectionEscape` catches — and a mode that has only one of the two must not be told about the
+// other. Falls back to the bare noun rather than an empty string: withdrawal can only fire on a turn
+// that looped, which needs some inspection surface, so the fallback is unreachable in practice and
+// exists so the sentence is never malformed.
+export function withdrawnToolsPhrase(toolNames: ReadonlySet<string>): string {
+  const named = [...INSPECTION_TOOLS].filter(n => toolNames.has(n));
+  const shell = toolNames.has('bash');
+  // The full-list branch is spelled out rather than assembled so agent mode's text stays
+  // byte-identical to what it was before this became list-aware.
+  if (named.length > 0 && shell) {
+    return `inspection tools (${named.join('/')}, and read-only shell commands like grep/cat/tail)`;
+  }
+  if (named.length > 0) return `inspection tools (${named.join('/')})`;
+  if (shell) return 'read-only shell commands (grep/cat/tail and similar inspection)';
+  return 'inspection tools';
+}
+
+// What a withdrawn model still has to ACT with, named from the same list (#377: a tool result must
+// never point the model at a tool it does not have — and a model told to reach for a tool it cannot
+// see does not reach for anything). Agent mode has edit/write. Minimal mode (#391) has only bash,
+// where the remedy is a writing command and still available: withdrawal pauses the INSPECTION half
+// of bash, never the mutating half, precisely so real work survives the pause. Chat mode has
+// neither, so the only remedies left are the two that need no tool at all — which is why this is a
+// remedy CLAUSE rather than a tool name spliced into a fixed sentence.
+export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return 'Make the edit the task requires with the edit/write tools';
+  }
+  if (toolNames.has('bash')) {
+    return 'Make the change the task requires by running the command that applies it';
+  }
+  return 'Answer from what you already have';
+}
+
+// The hard tier of the loop ledger, hand-wrapped per mode. The remedy differs (see
+// withdrawalRemedy) but the two escapes that need no tool at all — name the blocker, or stop if the
+// change is done — survive in every mode: they are what keeps a cornered model from being forced
+// into a wrong change. The edit/write branch is spelled out with its original line breaks so agent
+// mode's suffix stays byte-identical.
+function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return [
+      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
+      'tools, state specifically what is still blocking you, or — if the change is already complete —',
+      'say so and stop.',
+    ];
+  }
+  if (toolNames.has('bash')) {
+    return [
+      'Reading and searching are now PAUSED. Make the change the task requires by running the',
+      'command that applies it, state specifically what is still blocking you, or — if the change',
+      'is already complete — say so and stop.',
+    ];
+  }
+  return [
+    'Reading and searching are now PAUSED. Answer from what you already have, state specifically',
+    'what is still blocking you, or — if the change is already complete — say so and stop.',
+  ];
+}
+
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
-// inflate context; it just states the rule and the way out.
-const WITHDRAWAL_DIRECTIVE =
-  '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
-  'are paused because you have repeated the same reads or searches without making progress. You ' +
-  'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
-  'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
-  'Reading and searching are unavailable until you make progress.)';
+// inflate context; it just states the rule and the way out. Built per turn rather than held as a
+// const because both halves — what is paused, and what to do instead — depend on the tool list.
+export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string {
+  return (
+    `(reika: ${withdrawnToolsPhrase(toolNames)} are paused because you have repeated the same ` +
+    'reads or searches without making progress. You already have what you need. ' +
+    `${withdrawalRemedy(toolNames)}, state what is specifically blocking you, or — if the change ` +
+    'is already complete — say so and stop. Reading and searching are unavailable until you make ' +
+    'progress.)'
+  );
+}
 
 // Whether to escalate from the loop ledger to withdrawing the inspection tools. Fires once a loop has
 // stayed active LOOP_WITHDRAW_AFTER rounds (the ledger got its shot first), with exactly one
@@ -634,7 +818,11 @@ export function shouldWithdrawInspection(opts: {
 // it gives a cornered model an out that isn't a premature wrong edit (e.g. naming a symbol its
 // searches can't find — exactly the observed 0-match grep loop). `withdrawn` adds the harder line
 // once we've escalated to pulling the inspection tools.
-export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false): string {
+export function buildAgentLoopLedger(
+  looping: LoopingRead[],
+  withdrawn: boolean,
+  toolNames: ReadonlySet<string>,
+): string {
   const files = looping
     .slice(0, 8)
     .map(l => (l.offset > 1 ? `${l.path}:L${l.offset}` : l.path))
@@ -649,11 +837,7 @@ export function buildAgentLoopLedger(looping: LoopingRead[], withdrawn = false):
       : 'You have repeated the same reasoning and searches several times this turn without converging on the task.',
   );
   if (withdrawn) {
-    lines.push(
-      'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
-      'tools, state specifically what is still blocking you, or — if the change is already complete —',
-      'say so and stop.',
-    );
+    lines.push(...withdrawnLedgerLines(toolNames));
   } else if (files) {
     lines.push(
       'Re-reading them returns identical bytes — it will not surface anything new. Stop gathering and',
@@ -714,10 +898,11 @@ export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
 export function buildDroppedPayloadLedger(): string {
   return [
     '--- reika status (auto-generated — not user input) ---',
-    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`).',
-    `${DROPPED_LEDGER_MARKER}; it is not in your context any more. That is a context`,
-    'limit, not a failed command, and it does not mean you already handled the result. If you need',
-    'what one of them returned, re-run that call — do not answer from memory of it.',
+    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`)',
+    `or a short outline of the output. ${DROPPED_LEDGER_MARKER}; it is not in your context`,
+    'any more. That is a context limit, not a failed command, and it does not mean you already',
+    'handled the result. If you need what one of them returned, re-run that call — do not answer',
+    'from memory of it.',
   ].join('\n');
 }
 
@@ -821,6 +1006,15 @@ export async function runTurn(opts: {
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
+  // A subagent is running under one of this turn's tool calls (#342): true when it starts, false
+  // when it returns. The parent is blocked inside the call with its own assistant message already
+  // committed, so its live region is empty for the duration — the subagent's streaming callbacks
+  // are forwarded into it, and this tells the UI to draw them at the nested indent.
+  onSubagent?: (active: boolean) => void;
+  // A compaction report round (#280) is running: the model is writing its note into the live
+  // region. Same shape as onSubagent — the UI nests the stream and relabels the spinner — because
+  // the note is a side conversation the same way a subagent is: its reasoning never enters history.
+  onCompactionNote?: (active: boolean) => void;
   // Ephemeral, human-only pulse for the post-edit typecheck: true while a check runs, false when it
   // settles. Drives the busy indicator's label so the user can see the harness verifying in the
   // dispatch gap. Never touches model-facing history — purely a UI signal.
@@ -840,11 +1034,18 @@ export async function runTurn(opts: {
   // (rather than leaving the long looped block sitting below the recovery notice, where it buries the
   // notice and the next round's reasoning appends onto it) makes the notice visible and lets the
   // recovery round stream into a fresh block. UI-only; never touches model-facing history. See #55.
+  // Also fired after a compaction report round (#280), whose note streamed as content and committed
+  // as a notice: the UI drops both previews so the round's real reply starts clean.
   onReasoningReset?: () => void;
   onUsage?: (usage: Usage) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
   onContextEstimate?: (tokens: number) => void;
+  // Subagent bounded return (#340): on the LAST round of the budget, withdraw every tool and
+  // demand the report (SUBAGENT_REPORT_DIRECTIVE), so the turn's final assistant message — which
+  // is what the parent receives as the digest — is a report and never `(reached max turns…)`.
+  // Set by makeSpawnSubagent; the parent turn's cap keeps its honest-exhaustion message.
+  reportAtCap?: boolean;
   // Every shrink event the turn performs — a batch-age shed or a compaction fold — with the
   // session-cumulative counts after it. The UI shows the counts as ambient status chips (the
   // gauge sawtooth already shows the events; a counter says how many teeth) and the transcript
@@ -863,6 +1064,11 @@ export async function runTurn(opts: {
   // rate to price themselves with — and those are the expensive ones.
   priorPrefillRate?: number;
   onPrefillRate?: (rate: number) => void;
+  // Session-long prefix-divergence trace (#426). The engine's cache still holds the previous turn's
+  // last request when a new turn starts, so the comparison is only meaningful across the boundary
+  // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
+  // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
+  prefixTrace?: PrefixTrace;
   onToolProgress?: (chunk: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
@@ -873,6 +1079,9 @@ export async function runTurn(opts: {
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   signal?: AbortSignal;
   promptMode?: PromptMode;
+  // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
+  // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
+  minimalPrompt?: boolean;
 }): Promise<void> {
   const userMsg: Message = {
     role: 'user',
@@ -883,26 +1092,37 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  // canAsk must match what buildRoundZeroPrefix passes, or the warm prefix diverges from round 0.
+  // canAsk/canSubagent/minimal must match what buildRoundZeroPrefix passes, or the warm prefix
+  // diverges from round 0.
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
+    minimal: opts.minimalPrompt,
     canAsk: opts.tools.some(t => t.name === 'ask_user'),
+    canSubagent: opts.tools.some(t => t.name === 'subagent'),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
   const turnStart = Date.now();
+  // What the model can be pointed at this turn — see ToolContext.toolNames.
+  const toolNames: ReadonlySet<string> = new Set(opts.tools.map(t => t.name));
   // One budget per user turn — caps total search + fetch calls across all
   // internal model→tool rounds. Subagent calls get their own budget.
   const webBudget: WebBudget = {
     searches: { used: 0, max: opts.config.maxSearchesPerTurn },
     fetches: { used: 0, max: opts.config.maxFetchesPerTurn },
   };
+  // Subagent budget this turn — the ToolContext is rebuilt per call, so it lives here. `rounds` is
+  // the decision count (rounds that dispatched a subagent), `inRound` the width of the current one.
+  const subagentCalls: SubagentBudget = { rounds: 0, inRound: 0 };
+  // Pressure affordance (#343) offered this turn — once is the signal; repeating it is noise.
+  let subagentAffordanceOffered = false;
   // Latched when a search fails for a reason that is a property of the provider rather than the
-  // query (no browser, bot check, every engine refused). Per-turn like webBudget: the next turn may
-  // well find the block cleared, so it is never carried across one.
-  const searchHealth: SearchHealth = {};
+  // query (no browser, bot check, every engine refused), or when a fetch finds the network down
+  // (#392). Per-turn like webBudget: the next turn may well find the block cleared or the wifi
+  // back, so it is never carried across one.
+  const webHealth: WebHealth = {};
   // Track URLs successfully fetched this turn. Stamped onto the final assistant
   // message as `sources` for deterministic citation rendering (no model recall).
   const fetchedUrls = new Set<string>();
@@ -959,7 +1179,7 @@ export async function runTurn(opts: {
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
-  // that reaches the model, since messagesToOpenAI drops system messages. Reasoning is deliberately
+  // that reaches the model, since messagesToChatParams drops system messages. Reasoning is deliberately
   // NOT set alongside the tail: sending both channels would pay for the same text twice and make the
   // retention bound fiction. Shared by both cut paths so they cannot drift apart. Returns the chars
   // trimmed, for the user-facing notice.
@@ -1059,7 +1279,7 @@ export async function runTurn(opts: {
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
-  const seenReadOnly = new Map<string, number>();
+  const seenReadOnly = new Map<string, RepeatEntry>();
   // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
@@ -1091,8 +1311,9 @@ export async function runTurn(opts: {
   let roundSuffix: string | undefined;
   // Prefix-divergence instrumentation (REIKA_DEBUG-only): measures, per request, how much of the
   // prompt an LCP prompt cache could reuse vs the previous request, and which mechanism broke it.
-  // Turn-scoped so concurrent subagent turns don't cross-contaminate the comparison.
-  const prefixTrace = new PrefixTrace();
+  // The caller's session-long trace when it has one (App/headless), so the turn boundary is
+  // measured too; a subagent gets its own, so concurrent turns don't cross-contaminate.
+  const prefixTrace = opts.prefixTrace ?? new PrefixTrace();
   // What that divergence costs (issue #195). Prefill is ~80% of wall clock on a slow local endpoint,
   // so the cache line is only actionable annotated with the tokens it reprocessed and the seconds
   // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
@@ -1192,6 +1413,14 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
+    // plan force-write (no tools offered, in-band calls dropped) without the transform — the model
+    // reports from its own history, aged payloads and all, because partial and grounded is the
+    // point. Never in the parent turn (reportAtCap is only set by makeSpawnSubagent).
+    const subagentForceReport = !!opts.reportAtCap && i === opts.config.maxTurns - 1;
+    if (subagentForceReport) {
+      debugLog(`[reika:debug] round=${i} subagent-force-report cap=${opts.config.maxTurns}\n`);
+    }
     // Was the force-write triggered by a LOOP (reasoning-loop or verbatim abort) rather than normal
     // convergence (novelty stall / ceiling)? If so the accumulated analysis IS the spiral, so the
     // transform drops it and rebuilds from findings instead of feeding the loop back to itself.
@@ -1442,12 +1671,15 @@ export async function runTurn(opts: {
       if (editRecoveryGrounding) {
         suffixParts.push(buildEditRecoveryLedger(editRecoveryGrounding));
       } else if (loopDetected) {
-        suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection));
+        suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection, toolNames));
       }
       // Last, so the strongest directive sits closest to generation. (Composed here rather than
       // `system +=` in the terminal branch above, which this composition used to overwrite — the
       // steer previously never reached a request; #83.)
       if (convergeSteerNow) suffixParts.push(buildConvergeSteer());
+      // Last of all on a subagent's report round: it must win over every ledger above it, all of
+      // which say some form of "keep working" — the one round the model must not.
+      if (subagentForceReport) suffixParts.push(SUBAGENT_REPORT_DIRECTIVE);
       const suffix = suffixParts.map(p => '\n\n' + p).join('');
       if (prefixStable) {
         // Tail note instead of system suffix: a ledger appearing/changing/clearing in the system
@@ -1470,6 +1702,9 @@ export async function runTurn(opts: {
     // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
     // break, drop the inspection tools so the offered set steers a tool-list-respecting model
     // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
+    // The subagent's report round keeps the list and forbids calls with `tool_choice` instead
+    // (#426): the template renders the tool list into the system turn, so withholding it would
+    // re-prefill the subagent's whole context on its last round.
     const callTools = planForceWrite
       ? []
       : withdrawInspection
@@ -1555,6 +1790,167 @@ export async function runTurn(opts: {
           `via=${system.includes(DROPPED_LEDGER_MARKER) ? 'system' : ledgerActive ? 'tail' : 'none'}\n`,
       );
     }
+    // EXPERIMENT (#280): the report round. One extra model call, calls forbidden, asking for a
+    // compaction note; the fold below then carries the note as the recap's body instead of the
+    // read ledger (see compactionreport.ts for the measurement behind it). Its own request, not
+    // this round's — the note is captured and the round's real call proceeds after the fold, so
+    // the note-writing reasoning never enters history. Agent mode only for now (plan mode has its
+    // own force-write and transform; keep the blast radius to one path). Streams into the live
+    // region like any reply so the user sees the note being written; committed as an info notice
+    // so it reads as a harness event, not an answer. Fail-open: an empty or aborted reply folds
+    // exactly as before.
+    //
+    // Written BEFORE the batch-age shed below (#426): the shed rewrites mid-history, and when the
+    // note request came after it, that request paid the shed's invalidation and the real request
+    // paid the fold's — two full re-prefills in one event (measured: 9k + 9.3k tokens, 416s + 431s
+    // on a 24k window). Here the note request is a pure append on the previous round, and the
+    // shed and fold land together on the real request. It is also written from the live bytes the
+    // shed is about to collapse, which is what a findings note is for.
+    //
+    // Gated on the fold actually removing something: under PREFIX_STABLE the shed often gets the
+    // request under the threshold on its own and the fold then keeps everything — a note written
+    // there has no recap to live in and is thrown away (observed twice in one run). Pre-shed that
+    // is `foldAfterShed`, the same decision replayed on a copy; off prefix-stable there is no shed
+    // and `wouldFold` on the history is the decision itself.
+    let note: CompactionNote | undefined;
+    if (
+      compactionReportEnabled() &&
+      window &&
+      !planForceWrite &&
+      opts.promptMode !== 'plan' &&
+      !opts.signal?.aborted &&
+      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) &&
+      (prefixStable
+        ? foldAfterShed(
+            opts.history,
+            h => rawEstimate(h) * compactCalibration,
+            window,
+            compactCalibration,
+            opts.config.minGenTokens,
+          )
+        : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
+    ) {
+      const n = shrink.folds + 1;
+      const directive = buildCompactionReportDirective(n);
+      // Top-level notice first, so the nested block that follows reads as a deliberate side
+      // conversation and not as a stray indent; the fold notice below closes it.
+      opts.onMessage({
+        role: 'system',
+        tone: 'info',
+        content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
+      });
+      opts.onPhase?.('thinking');
+      opts.onCompactionNote?.(true);
+      try {
+        const report = (suffix: string) =>
+          callModel({
+            system: prefixStable ? baseSystem : system + '\n\n' + suffix,
+            history: opts.history,
+            // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
+            // Sending none rendered a different system turn: on the measured 24k runs the note
+            // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
+            // re-prefilled it again — two full prefills per fold, one of them for nothing.
+            tools: callTools,
+            toolChoice: 'none',
+            config: opts.config,
+            onContentDelta: opts.onContentDelta,
+            onReasoningDelta: opts.onReasoningDelta,
+            signal: opts.signal,
+            calibration,
+            maxTokens: computeMaxTokens({
+              contextWindow: window,
+              promptTokens: Math.round(rawEstimate() * calibration),
+              userMaxTokens: opts.config.maxTokens,
+            }),
+            prefixStable,
+            // Do not freeze this round's fresh payloads at the note request's render. Pre-shed the
+            // fit-to-window cap has the least room it will have all event, so the bytes stamped
+            // here would be the most truncated ones — and the real request after the fold would
+            // reuse them. Left unstamped, the real request renders them with the post-fold room
+            // and stamps those. Free for the cache: the fold (or the shed, if no fold) already
+            // diverges the real request before the fresh block, so the differing bytes cost nothing
+            // they were not paying.
+            stampRenders: false,
+            trailingNote: prefixStable
+              ? roundSuffix
+                ? `${roundSuffix}\n\n${suffix}`
+                : suffix
+              : undefined,
+            // The note round is a request like any other, so it gets its own prefix-cache line:
+            // before #426 it was the one request the trace never saw, and the fold's line that
+            // followed compared against the round before it.
+            onRequest: debugEnabled()
+              ? msgs => {
+                  const d = prefixTrace.record(msgs, {
+                    trailingNote: prefixStable,
+                    tools: toolsToChatTools(callTools),
+                  });
+                  const pct =
+                    d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+                  const tok = reprocessedTokens(
+                    d,
+                    Math.round(rawEstimate(opts.history, callTools) * calibration),
+                  );
+                  debugLog(
+                    `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
+                      `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
+                      `msgs=${d.stableMessages}/${d.totalMessages}` +
+                      (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                      ` ${formatPrefillCost(tok, prefillRate.get(), false)}\n`,
+                  );
+                }
+              : undefined,
+          });
+        let rep = await report(directive);
+        if (rep.usage) opts.onUsage?.(rep.usage);
+        // Diagnosable from the log: an empty content channel with a recovered in-band call is the
+        // model trying to read instead of writing; a `length` stop is the budget.
+        const describe = (r: typeof rep): string =>
+          `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
+          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
+        let retried = false;
+        if (!rep.content?.trim() && !opts.signal?.aborted) {
+          debugLog(
+            `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
+          );
+          opts.onReasoningReset?.();
+          retried = true;
+          const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
+          if (again.usage) opts.onUsage?.(again.usage);
+          // Keep whichever reply has a note in the content channel; failing both, the first
+          // reasoning is the better fallback (it is the longer, less nagged thinking).
+          if (again.content?.trim()) rep = again;
+        }
+        const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
+        if (text) {
+          note = { n, text };
+          // UI only, never history: the note as a nested assistant message so it renders as
+          // markdown and sits indented like a subagent's output, WITH its reasoning — the trace of
+          // how the note was derived stays in the scrollback for the user, while the model's
+          // history gets only the note (via the recap). compactionNote colors its bar.
+          opts.onMessage({
+            role: 'assistant',
+            content: text,
+            reasoning: rep.reasoning?.trim() || undefined,
+            nested: true,
+            compactionNote: true,
+          } as Message);
+        }
+        debugLog(
+          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
+            `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
+            `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
+        );
+      } catch (err) {
+        if (opts.signal?.aborted) return;
+        debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
+      } finally {
+        opts.onCompactionNote?.(false);
+        // The live region held the note; if the reply was empty no assistant commit cleared it,
+        // so the UI is told explicitly before the round's real reply streams.
+        opts.onReasoningReset?.();
+      }
+    }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in
     // one oldest-first batch when the estimate crosses the same threshold compaction uses — and do
     // it immediately before the compaction check so the two rewrites land in the SAME request (one
@@ -1611,6 +2007,7 @@ export async function runTurn(opts: {
         window,
         compactCalibration,
         opts.config.minGenTokens,
+        note,
       );
       // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
       // it is spliced into the model history per turn, while the saved transcript is written from
@@ -1742,6 +2139,7 @@ export async function runTurn(opts: {
       logitBias,
       prefixStable,
       trailingNote: roundSuffix,
+      toolChoice: subagentForceReport ? 'none' : undefined,
       // Measurement only (issue #134), and only when something will read it: the debug log is the
       // sole consumer, so an un-logged run never pays the larger streaming payload.
       logprobs: ENTROPY_LOGPROBS && debugEnabled() ? ENTROPY_TOP_K : undefined,
@@ -1765,11 +2163,11 @@ export async function runTurn(opts: {
       // Silent when nothing is aged yet, so early rounds add no noise.
       onAgedStats: debugEnabled()
         ? a => {
-            const total = a.summary + a.diff + a.outline + a.whole;
+            const total = a.summary + a.diff + a.outline + a.whole + a.report;
             if (total === 0) return;
             debugLog(
               `[reika:debug] aged-payload round=${i} aged=${total} summary=${a.summary} ` +
-                `diff=${a.diff} outline=${a.outline} whole=${a.whole}\n`,
+                `diff=${a.diff} outline=${a.outline} whole=${a.whole} report=${a.report}\n`,
             );
           }
         : undefined,
@@ -1779,7 +2177,10 @@ export async function runTurn(opts: {
         ? msgs => {
             // `trailingNote` lets the trace tell the note's own slot apart from real history
             // churn — without it every append reads as `mid-history firstChanged=assistant` (#253).
-            const d = prefixTrace.record(msgs, { trailingNote: !!roundSuffix });
+            const d = prefixTrace.record(msgs, {
+              trailingNote: !!roundSuffix,
+              tools: toolsToChatTools(callTools),
+            });
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
             roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
             roundReprocessBounded = d.cause === 'first-request';
@@ -1991,7 +2392,7 @@ export async function runTurn(opts: {
     // in-band `<tool_call>` text that the parser recovers (client.ts strips it from content first).
     // Drop those recovered calls so the turn commits the plan instead of looping on a tool we
     // already withdrew — withdrawing tools from the *request* alone doesn't stop an in-band caller.
-    const toolCalls = planForceWrite ? [] : (response.toolCalls ?? []);
+    const toolCalls = planForceWrite || subagentForceReport ? [] : (response.toolCalls ?? []);
     const isFinal = toolCalls.length === 0;
 
     // Record this round's reasoning for the Layer-2 loop detector and refresh the active flag (read
@@ -2133,7 +2534,7 @@ export async function runTurn(opts: {
         opts.history.push(partial);
         opts.onMessage(partial);
       }
-      // The nudge must be role 'user' to reach the model (messagesToOpenAI drops system
+      // The nudge must be role 'user' to reach the model (messagesToChatParams drops system
       // messages). Push it to history but don't surface it as a user bubble — it isn't the
       // user's input. The UI sees a separate 'warn' system notice instead (same split
       // compaction uses: model-facing message in history, UI-only notice via onMessage).
@@ -2164,6 +2565,11 @@ export async function runTurn(opts: {
     let assistantContent = response.content;
     if (planForceWrite && !response.content?.trim()) {
       assistantContent = response.reasoning?.trim() || gatherPlanAnalysis(opts.history);
+    }
+    // A report round that put everything in the reasoning channel still has a report: the
+    // reasoning IS the model's reading of what it found, and it beats `(no output)` to the parent.
+    if (subagentForceReport && !response.content?.trim() && response.reasoning?.trim()) {
+      assistantContent = response.reasoning.trim();
     }
 
     // Plan→agent grounding: when a plan is finalized, verify the symbols/paths it names exist in the
@@ -2231,7 +2637,7 @@ export async function runTurn(opts: {
       // the edits introduced new type errors, send the model back to fix them instead of letting it
       // finish on broken code — the harness verifies so the weak model doesn't have to. The model's
       // premature answer stays in the scrollback (same as the length-retry path); a 'user' message
-      // carries the errors to the model (system messages get dropped by messagesToOpenAI), and a
+      // carries the errors to the model (system messages get dropped by messagesToChatParams), and a
       // 'warn' notice tells the human. Bounded by MAX_TYPECHECK_GATE_ROUNDS: past the cap it commits
       // dirty with a notice rather than looping. Fail-open: no baseline or an unrunnable final check
       // just lets the turn end.
@@ -2326,6 +2732,17 @@ export async function runTurn(opts: {
     // Novelty watermark for the adaptive cap: seenReadOnly only gains a key on a first-time
     // (path, offset) / search, so growth across this round means the model learned something new.
     const seenBeforeRound = seenReadOnly.size;
+    // A subagent call is exclusive in its round (#346): sibling inspection calls are held, so the
+    // report is the only fresh payload the next round has to fit. Decided over the whole round up
+    // front — the siblings are held whichever side of the subagent call they were listed on. Not
+    // when the spawn itself would be refused (per-turn cap), which would leave the model with
+    // nothing this round.
+    const roundHasSubagent = toolCalls.some(c => c.name === 'subagent');
+    if (roundHasSubagent) {
+      subagentCalls.rounds += 1;
+      subagentCalls.inRound = 0;
+    }
+    const subagentInRound = roundHasSubagent && subagentCalls.rounds <= MAX_SUBAGENTS_PER_TURN;
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
@@ -2339,6 +2756,14 @@ export async function runTurn(opts: {
       const refusedBashGrep =
         call.name === 'bash' && isInspectionEscape(String(call.args.command ?? ''));
       const refused = withdrawInspection && (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
+      // Held for the subagent (#346): the same inspection set the withdrawal ladder pauses, for the
+      // one round a subagent is dispatched in. Mutating siblings are out of scope — a subagent round
+      // is an exploration round by construction, and an edit alongside one is a different problem.
+      const heldForSubagent =
+        subagentInRound &&
+        !refused &&
+        call.name !== 'subagent' &&
+        (INSPECTION_TOOLS.has(call.name) || refusedBashGrep);
       // Read-first gate (#72): withhold a blind edit once, redirecting the model to read the file.
       // Never while inspection is withdrawn (the directed read would itself be refused), and only
       // when the edit could actually run (tool resolved). shouldBounce records the bounce, so a
@@ -2379,22 +2804,26 @@ export async function runTurn(opts: {
       // Runs in the post-generation dispatch gap (machine idle, not inferring — important when a
       // local model is saturating the box) and only on turns that actually edit. Fail-open: a
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
+      // `willMutate`, not MUTATING_TOOLS: a shell edit is an edit, and a turn that does its writing
+      // through bash used to finish unverified.
       if (
         !typecheckBaselineAttempted &&
         tool &&
         !refused &&
         !bouncedBlindEdit &&
-        MUTATING_TOOLS.has(call.name)
+        willMutate(call.name, call.args, opts.bundle.cwd)
       ) {
         typecheckBaselineAttempted = true;
         // Resolve the governing tsconfig from the file being edited (walk-up, bounded at cwd) so a
         // monorepo subpackage edit is checked against that package's config, not just a root one —
         // and so the baseline and the final check pin the same config. null → undefined leaves the
         // closure on its detection fallback (which agrees: no config found = gate stays off).
+        // For bash the anchor is the first file the command names — writeTargets returns them
+        // resolved against cwd, which detectTsProject's own resolve() accepts unchanged.
         typecheckTsconfig =
           (await detectTsProject(
             opts.bundle.cwd,
-            typeof call.args.path === 'string' ? call.args.path : undefined,
+            typecheckAnchor(call.name, call.args, opts.bundle.cwd),
           )) ?? undefined;
         const base = await typecheck();
         typecheckBaseline = base.ran ? base.diagnostics : null;
@@ -2409,7 +2838,7 @@ export async function runTurn(opts: {
         // read-only bash is paused; a build/git bash would have run).
         const label = refusedBashGrep ? 'shell inspection' : call.name;
         summary = `${label} paused — make the edit or say what's blocking you`;
-        payload = WITHDRAWAL_DIRECTIVE;
+        payload = buildWithdrawalDirective(toolNames);
         debugLog(
           `[reika:debug] round=${i} refused ${call.name}${
             refusedBashGrep ? ' (bash-grep)' : ''
@@ -2420,6 +2849,11 @@ export async function runTurn(opts: {
         summary = `edit paused — read ${blindPath} first, then re-issue the edit`;
         payload = buildReadFirstDirective(blindPath);
         debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath}\n`);
+      } else if (heldForSubagent) {
+        const label = refusedBashGrep ? 'shell inspection' : call.name;
+        summary = `${label} held — the subagent dispatched this round covers it`;
+        payload = SUBAGENT_HOLD_NOTE;
+        debugLog(`[reika:debug] round=${i} held ${call.name} (subagent in round)\n`);
       } else if (!tool) {
         summary = `Unknown tool: ${call.name}`;
       } else {
@@ -2438,16 +2872,19 @@ export async function runTurn(opts: {
             cwd: opts.bundle.cwd,
             ignore: opts.bundle.ignore,
             webBudget,
-            searchHealth,
+            webHealth,
             fetchedUrls,
+            toolNames,
             resolvedDeps,
             groundedUrls,
             askedQuestions,
             requestApproval: opts.requestApproval,
             requestQuestion,
             onProgress: opts.onToolProgress,
-            spawnSubagent: makeSpawnSubagent(opts),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
+            bashIdleMs: opts.config.bashIdleMs,
+            signal: opts.signal,
           });
           summary = result.summary;
           payload = result.payload;
@@ -2458,6 +2895,31 @@ export async function runTurn(opts: {
           contentHash = result.contentHash;
           toolNotice = result.notice;
           editFailure = result.editFailure;
+          // The mid-session subagent trigger (#343). A grep/glob that spans enough
+          // files that reading them would cross the compaction threshold gets a footer pointing at
+          // subagent. Observation-keyed (the files are in the result) and pressure-gated (the
+          // estimate is this round's, the threshold the window's) — see subagentpressure.ts. The
+          // subagent tool being in the list is what keeps this out of subagents and plan mode.
+          if (
+            subagentPressureEnabled() &&
+            !subagentAffordanceOffered &&
+            window &&
+            payload &&
+            (call.name === 'grep' || call.name === 'glob') &&
+            opts.tools.some(t => t.name === 'subagent')
+          ) {
+            const files = filesInResult(call.name, payload);
+            const estimateTokens = Math.round(rawEstimate() * compactCalibration);
+            const thresholdTokens = compactThreshold(window, opts.config.minGenTokens);
+            if (underPressure({ files, estimateTokens, thresholdTokens })) {
+              payload = `${payload}\n\n${buildSubagentAffordance(files)}`;
+              subagentAffordanceOffered = true;
+              debugLog(
+                `[reika:debug] round=${i} subagent-affordance files=${files} ` +
+                  `estimate=${estimateTokens} threshold=${Math.round(thresholdTokens)}\n`,
+              );
+            }
+          }
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
@@ -2513,16 +2975,22 @@ export async function runTurn(opts: {
       }
       // Loop-breaker: weak models re-issue the same read/grep/bash and stall on the identical
       // output. flagRepeatedCall appends an escalating redirect on the 2nd+ repeat (read keyed
-      // on path+offset so window-varying re-reads still count); mutating tools reset the memory
-      // so a read-after-edit isn't flagged. Skipped for unknown tools (nothing produced).
-      if (tool && !refused && !bouncedBlindEdit)
+      // on path+offset so a same-or-wider re-read still counts; a narrowing one is exempt, being
+      // the omission marker's own remedy); mutating tools reset the memory so a read-after-edit
+      // isn't flagged. Skipped for unknown tools (nothing produced).
+      if (tool && !refused && !bouncedBlindEdit && !heldForSubagent)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
       // A BOUNCED edit doesn't: the harness withheld it, nothing ran, and the directed read that
       // follows must stay eligible for the normal read-loop ladder if the model spins instead.
+      // `didMutate`, not MUTATING_TOOLS: a bash command that actually changed the tree has edited,
+      // and the plan done-gate keys off this. Split from the edit-recovery block below, which stays
+      // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
+      // fields (old_string failures, args.path, a rendered diff) that a shell command has no
+      // analogue for.
+      if (!bouncedBlindEdit && didMutate(call.name, changes)) editingStarted = true;
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
-        editingStarted = true;
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
         // stop. `Edited …` is the success prefix from tools/edit.ts; anything else is a non-apply.
@@ -2564,6 +3032,33 @@ export async function runTurn(opts: {
           // editFailure is set only for the not-found case; other failures (multiple/mixed) leave it
           // undefined, which the dead-end treats as "not groundable" and stops as before.
           lastEditFailure = editFailure;
+        }
+      }
+      // File steps implemented through the shell: the same path/content check-off an edit gets,
+      // keyed on the files the tree diff says the command actually changed (#278) rather than on
+      // the command text. Load-bearing now that a shell edit counts as editing (`didMutate`) — the
+      // done-gate below bounces an implementing turn that leaves file-bearing steps unchecked, so
+      // without this a bash-only turn would bounce every round until its budget ran out, with no
+      // way to ever check a step off. Deliberately not gated on the exit status, unlike the command
+      // check-off: a command that wrote the file and then exited non-zero still wrote it, and the
+      // diff is the observation. One command can land several files, so each is applied. Keyed on
+      // `bash` rather than on `changes` alone, though only bash sets it today: a tool that both
+      // reported changes AND ran the edit block above would check two steps off for one edit.
+      if (planSteps && call.name === 'bash' && changes) {
+        let match: StepMatch | null = null;
+        for (const f of changes.files) {
+          const hit = applyPlanEdit(planSteps, f.path, f.hunks.map(hk => hk.text).join('\n'));
+          if (hit) match = hit;
+        }
+        if (match) {
+          opts.onPlanProgress?.(planSteps);
+          const done = planSteps.filter(s => s.done).length;
+          const via =
+            match.by === 'content' ? ' — matched by edit content; the plan names another file' : '';
+          planCheckoff =
+            done === planSteps.length
+              ? `Plan complete — all ${planSteps.length} steps checked off.`
+              : `Plan step ${planSteps[match.index].n} checked off (${done}/${planSteps.length})${via}.`;
         }
       }
       // Command steps ("run typecheck/tests"): a successful bash run whose command contains the
@@ -2722,6 +3217,14 @@ function commitAgentLoopStop(
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
+    // A shell edit names its files in the tool message's git-backed `changes`, not in the call's
+    // args — the command text is `sed -i …`, and parsing it here would be a worse answer than the
+    // one the detector already computed (#278). Since bash now counts as editing (`didMutate`),
+    // without this a bash-only turn stopped on "I made changes" with nothing after it.
+    if (m.role === 'tool') {
+      for (const f of m.changes?.files ?? []) files.add(f.path);
+      continue;
+    }
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
       if ((tc.name === 'edit' || tc.name === 'write') && typeof tc.args.path === 'string') {
@@ -2748,8 +3251,28 @@ function commitAgentLoopStop(
 
 type RunTurnOpts = Parameters<typeof runTurn>[0];
 
-function makeSpawnSubagent(parent: RunTurnOpts) {
+function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
   return async (sub: { task: string }): Promise<ToolResult> => {
+    // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
+    // allowed", and the width check is against the calls already honoured in this round.
+    if (budget.rounds > MAX_SUBAGENTS_PER_TURN) {
+      return {
+        summary: `Subagent budget for this turn exhausted (${MAX_SUBAGENTS_PER_TURN} rounds)`,
+        payload:
+          `(reika: subagents have been dispatched in ${MAX_SUBAGENTS_PER_TURN} rounds this turn ` +
+          'already. Answer from their reports and your own reads; if something is still missing, ' +
+          'say what.)',
+      };
+    }
+    if (budget.inRound >= MAX_SUBAGENTS_PER_ROUND) {
+      return {
+        summary: `Subagent width for this round exhausted (${MAX_SUBAGENTS_PER_ROUND})`,
+        payload:
+          `(reika: ${MAX_SUBAGENTS_PER_ROUND} subagents already run in this round, one after ` +
+          'another. Fold this task into a later round once their reports are in.)',
+      };
+    }
+    budget.inRound += 1;
     const subConfig: Config = {
       ...parent.config,
       model: parent.config.subagentModel ?? parent.config.model,
@@ -2763,31 +3286,53 @@ function makeSpawnSubagent(parent: RunTurnOpts) {
     const subTools = parent.tools.filter(t => t.name !== 'subagent' && t.name !== 'ask_user');
     const subHistory: Message[] = [];
 
-    await runTurn({
-      userInput: sub.task,
-      history: subHistory,
-      bundle: parent.bundle,
-      config: subConfig,
-      tools: subTools,
-      payloads: parent.payloads,
-      signal: parent.signal,
-      requestApproval: parent.requestApproval,
-      onUsage: parent.onUsage,
-      onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
-      // streaming + phase callbacks are intentionally not forwarded so the parent's
-      // live region stays clean; subagent activity is visible via nested committed messages
-    });
+    parent.onSubagent?.(true);
+    try {
+      await runTurn({
+        userInput: sub.task,
+        history: subHistory,
+        bundle: parent.bundle,
+        config: subConfig,
+        tools: subTools,
+        payloads: parent.payloads,
+        signal: parent.signal,
+        requestApproval: parent.requestApproval,
+        onUsage: parent.onUsage,
+        onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
+        // Streaming + phase callbacks forward into the parent's live region (#342). They used to be
+        // withheld "so the parent's live region stays clean", but the parent is blocked inside this
+        // tool call with its assistant message already committed — the region is empty for the whole
+        // run, and withholding them made a subagent a silent block that rendered each round as a
+        // batch on commit (a 90-minute spiral was invisible until the log was read). The UI draws
+        // them nested via onSubagent.
+        onContentDelta: parent.onContentDelta,
+        onReasoningDelta: parent.onReasoningDelta,
+        onToolProgress: parent.onToolProgress,
+        onPhase: parent.onPhase,
+        onReasoningStatus: parent.onReasoningStatus,
+        onReasoningReset: parent.onReasoningReset,
+        reportAtCap: true,
+      });
+    } finally {
+      parent.onSubagent?.(false);
+      // The subagent's last phase was its report round ('thinking'); the parent is still
+      // dispatching this round's tools.
+      parent.onPhase?.('tool');
+    }
 
     const finalAssistant = [...subHistory].reverse().find(m => m.role === 'assistant') as
       | (Message & { role: 'assistant' })
       | undefined;
     const result = finalAssistant?.content ?? '';
     const usedDifferentModel = subConfig.model !== parent.config.model;
+    // What the task named that the subagent never opened — the parent's cue to re-spawn for the
+    // remainder instead of reading it into its own context. See subagentreport.ts.
+    const coverage = buildCoverageNote(sub.task, subHistory);
     return {
       summary: usedDifferentModel
         ? `Subagent (${subConfig.model}) completed (${result.length} chars)`
         : `Subagent completed (${result.length} chars)`,
-      payload: result || '(no output)',
+      payload: (result || '(no output)') + (coverage ? `\n\n${coverage}` : ''),
     };
   };
 }

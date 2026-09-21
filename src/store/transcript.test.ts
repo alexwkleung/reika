@@ -29,7 +29,6 @@ const META: TranscriptMeta = {
 
 // One of every variant, so a renderer change that forgets a role is caught.
 const ALL_ROLES: Message[] = [
-  { role: 'header', model: 'qwen', cwd: '/repo' },
   { role: 'user', content: 'hi', display: 'hi' },
   {
     role: 'assistant',
@@ -69,7 +68,7 @@ describe('serializeJsonl', () => {
   });
 
   it('keeps full tool payloads (losslessness vs the TUI summary)', () => {
-    const tool = serializeJsonl([ALL_ROLES[3]], META).trimEnd().split('\n')[1];
+    const tool = serializeJsonl([ALL_ROLES[2]], META).trimEnd().split('\n')[1];
     expect(JSON.parse(tool).payload).toBe('the full file contents');
   });
 
@@ -127,13 +126,6 @@ describe('transcript path scrubbing', () => {
     };
     expect(serializeJsonl([msg], META)).toContain('src/deep.ts');
     expect(serializeJsonl([msg], META)).not.toContain('/repo/src/deep.ts');
-  });
-
-  it('collapses the header cwd to a home-relative form', () => {
-    const msg: Message = { role: 'header', model: 'qwen', cwd: `${HOME}/Git/proj` };
-    const out = serializeJsonl([msg], META);
-    expect(out).not.toContain(HOME);
-    expect(out).toContain('~/Git/proj');
   });
 
   it('collapses the meta cwd in both formats without emptying it', () => {
@@ -307,7 +299,7 @@ describe('title in the saved record', () => {
   it('skips command echoes and harness nudges, which are not turns', () => {
     expect(
       deriveTitle([
-        { role: 'header', model: 'qwen', cwd: '/repo' },
+        { role: 'system', content: 'cwd is now /repo' },
         { role: 'user', content: '/plan', meta: true },
         { role: 'user', content: 'nudge', harness: true },
         { role: 'user', content: 'plan the rewrite', mode: 'plan' },
@@ -332,7 +324,7 @@ describe('title in the saved record', () => {
   });
 
   it('is absent, not empty, when nothing was typed', () => {
-    const msgs: Message[] = [{ role: 'header', model: 'qwen', cwd: '/repo' }];
+    const msgs: Message[] = [{ role: 'system', content: 'cwd is now /repo' }];
     expect(deriveTitle(msgs)).toBeUndefined();
     expect('title' in JSON.parse(serializeJsonl(msgs, META).split('\n')[0])).toBe(false);
     expect(renderTxt(msgs, META)).not.toContain('# title:');

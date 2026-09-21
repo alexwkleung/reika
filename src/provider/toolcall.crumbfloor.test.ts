@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agedContentChars, messagesToOpenAI, type AgedStats } from './toolcall.js';
+import { agedContentChars, messagesToChatParams, type AgedStats } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #257: aging is size-blind once the bulk/crumbs sweep split has had its say — the second sweep
@@ -54,7 +54,7 @@ function serialize(h: Message[]): {
   stats: AgedStats;
 } {
   let stats: AgedStats | undefined;
-  const out = messagesToOpenAI('sys', h, {
+  const out = messagesToChatParams('sys', h, {
     contextWindow: 8192,
     onAgedStats: s => {
       stats = s;
@@ -102,7 +102,7 @@ describe('an aged crumb keeps its bytes (#257)', () => {
       ...round('fresh', 'Read fresh', 'FRESH PAYLOAD'),
     ];
     (h[2] as Message & { role: 'tool' }).aged = true;
-    const out = messagesToOpenAI('sys', h, {
+    const out = messagesToChatParams('sys', h, {
       contextWindow: 8192,
       prefixStable: true,
     }) as Array<{ tool_call_id?: string; content: string }>;

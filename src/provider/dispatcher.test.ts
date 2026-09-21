@@ -19,11 +19,14 @@ function setTimeoutEnv(v: string | undefined): void {
 afterEach(() => setTimeoutEnv(PRIOR));
 
 describe('requestTimeoutMs', () => {
-  it('defaults when unset or blank', () => {
+  // Issue #382: a model streamed off SSD can sit silent for longer than any cap we'd pick, and
+  // Esc already covers a server that really is hung — so the default is no stream timeout at all.
+  it('defaults to no timeout when unset or blank', () => {
+    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(0);
     setTimeoutEnv(undefined);
-    expect(requestTimeoutMs()).toBe(DEFAULT_REQUEST_TIMEOUT_MS);
+    expect(requestTimeoutMs()).toBe(0);
     setTimeoutEnv('   ');
-    expect(requestTimeoutMs()).toBe(DEFAULT_REQUEST_TIMEOUT_MS);
+    expect(requestTimeoutMs()).toBe(0);
   });
 
   it('honors an explicit value, including 0 (wait indefinitely)', () => {

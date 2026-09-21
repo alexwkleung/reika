@@ -64,9 +64,14 @@ export function createSearchTool(provider: SearchProvider): Tool {
       // refused. Re-attempting cannot succeed, so say so without spending a call or the budget —
       // the model was going to reword and try again otherwise, which is what burns a 3-search turn
       // on one condition. Worded as still-blocked rather than a fresh problem for the same reason.
-      const latched = ctx.searchHealth?.unavailable;
+      const latched = ctx.webHealth?.unavailable;
       if (latched) {
         return { summary: `Search still unavailable this turn: ${latched}` };
+      }
+      // The network is down (a fetch found out earlier this turn, #392): same treatment.
+      const offline = ctx.webHealth?.offline;
+      if (offline) {
+        return { summary: `Search skipped: still offline this turn (${offline})` };
       }
 
       const budget = ctx.webBudget?.searches;
@@ -121,7 +126,7 @@ export function createSearchTool(provider: SearchProvider): Tool {
           // Latch for the rest of the turn, and refund the call. The cap exists to stop runaway
           // loops hammering upstream engines (AGENTS.md); a search that never got an answer — a
           // missing browser reaches nothing at all — is not the egress it was built to limit.
-          if (ctx.searchHealth) ctx.searchHealth.unavailable = e.message;
+          if (ctx.webHealth) ctx.webHealth.unavailable = e.message;
           if (budget) budget.used--;
           return {
             summary: `Search failed: ${e.message}`,

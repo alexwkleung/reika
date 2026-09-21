@@ -2,7 +2,7 @@ import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
-import { messagesToOpenAI, toolsToOpenAI } from './toolcall.js';
+import { messagesToChatParams, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
@@ -29,9 +29,14 @@ export type ModelResponse = {
 // degrade below retries that first request without them, so the turn survives; this keeps every
 // later round from paying the same failed round-trip. Exported reset is for tests only.
 let logprobsUnsupported = false;
+// Same latch for `tool_choice: 'none'`. The degrade retries with the tools dropped — the shape the
+// report rounds sent before the field existed — so a backend that rejects it costs one round-trip
+// once and then gets the old (full re-prefill) request every time.
+let toolChoiceUnsupported = false;
 
 export function resetLogprobSupport(): void {
   logprobsUnsupported = false;
+  toolChoiceUnsupported = false;
 }
 
 export async function callModel(opts: {
@@ -70,11 +75,15 @@ export async function callModel(opts: {
   // Set only by the debug drift instrumentation; undefined leaves the request byte-identical
   // to a normal turn.
   logprobs?: number;
+  // Forbid a tool call without dropping the tool list from the request (#426). A request with no
+  // `tools` renders a different system turn, which is a re-prefill of the whole prompt on the one
+  // round that sits right before a fold. Ignored when `tools` is empty.
+  toolChoice?: 'none';
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
   }
-  const messages = messagesToOpenAI(opts.system, opts.history, {
+  const messages = messagesToChatParams(opts.system, opts.history, {
     contextWindow: opts.config.contextWindow,
     calibration: opts.calibration,
     reasoningRounds: opts.config.reasoningRounds,
@@ -103,10 +112,15 @@ export async function callModel(opts: {
     ttftMs == null ? undefined : { ttftMs, totalMs: Date.now() - startedAt };
 
   const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !logprobsUnsupported;
+  const wantToolChoice = !!opts.toolChoice && opts.tools.length > 0 && !toolChoiceUnsupported;
+  // A latched-off tool_choice means the tools go too: the caller asked for a round with no calls,
+  // and without the field the only way to guarantee that is the old no-tools request.
+  const sendTools = opts.tools.length > 0 && !(opts.toolChoice && toolChoiceUnsupported);
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
-    ...(opts.tools.length > 0 ? { tools: toolsToOpenAI(opts.tools) } : {}),
+    ...(sendTools ? { tools: toolsToChatTools(opts.tools) } : {}),
+    ...(wantToolChoice ? { tool_choice: opts.toolChoice } : {}),
     stream: true,
     stream_options: { include_usage: true },
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
@@ -196,21 +210,38 @@ export async function callModel(opts: {
   };
 
   try {
-    try {
-      await consume(body);
-    } catch (e) {
-      // The logprobs fields are the ONLY difference from a normal request, so a failure before a
-      // single chunk arrived is the engine rejecting them (some OpenAI-compatible shims 400 on
-      // top_logprobs, or on logprobs alongside tools). Instrumentation must never cost a turn:
-      // latch the fields off for the session and retry the same request without them.
-      if (!wantLogprobs || received || opts.signal?.aborted) throw e;
-      logprobsUnsupported = true;
-      debugLog(
-        `[reika:debug] logprobs unsupported by backend — retrying without ` +
-          `(${e instanceof Error ? e.message : String(e)})\n`,
-      );
-      const { logprobs: _logprobs, top_logprobs: _topLogprobs, ...plain } = body;
-      await consume(plain);
+    // Degrade ladder for the optional fields, outermost first. Each is the ONLY difference from a
+    // plain request, so a failure before a single chunk arrived is the engine rejecting it (some
+    // OpenAI-compatible shims 400 on top_logprobs, or on logprobs alongside tools). Neither may
+    // cost a turn: latch the field off for the session and retry the same request without it.
+    let req = body;
+    for (;;) {
+      try {
+        await consume(req);
+        break;
+      } catch (e) {
+        if (received || opts.signal?.aborted) throw e;
+        const reason = e instanceof Error ? e.message : String(e);
+        if (req.logprobs !== undefined) {
+          logprobsUnsupported = true;
+          debugLog(
+            `[reika:debug] logprobs unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { logprobs: _logprobs, top_logprobs: _topLogprobs, ...plain } = req;
+          req = plain;
+          continue;
+        }
+        if (req.tool_choice !== undefined) {
+          toolChoiceUnsupported = true;
+          debugLog(
+            `[reika:debug] tool_choice unsupported by backend — retrying without tools (${reason})\n`,
+          );
+          const { tool_choice: _toolChoice, tools: _tools, ...plain } = req;
+          req = plain;
+          continue;
+        }
+        throw e;
+      }
     }
   } catch (e) {
     if (opts.signal?.aborted) {

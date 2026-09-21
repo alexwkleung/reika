@@ -8,6 +8,9 @@ import type { ImageAttachment } from '../agent/attachments.js';
 export type QueuedMessage = {
   content: string;
   images?: ImageAttachment[];
+  // The skill confirm's answer, taken at keypress while the user was present (#425): the skill
+  // to apply when this replays, or null for "send as typed". Absent when no dialog fired.
+  skill?: string | null;
 };
 
 /**

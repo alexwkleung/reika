@@ -3,6 +3,7 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import type { Config, ContextBundle } from '../types.js';
 import type * as ConfigModule from '../config.js';
+import type * as LastStateModule from '../laststate.js';
 
 // App owns the whole frame layout and has historically regressed there (#112: the busy
 // spinner rendered between the completion list and the input, landing inside the merged
@@ -26,8 +27,9 @@ const CONFIG: Config = {
   maxSearchesPerTurn: 3,
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
+  bashIdleMs: 1000,
   pasteFetch: false,
-  skillAuto: false,
+  skillAuto: 'off',
   anon: false,
 };
 
@@ -48,6 +50,19 @@ vi.mock('../config.js', async () => {
 });
 
 vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+
+// The real module reads and writes ~/.config/reika/state.json (#365); the test must neither start
+// in whoever ran it last's mode nor leave its own behind.
+const lastState: { value: LastStateModule.LastState } = { value: {} };
+const savedState = vi.fn();
+vi.mock('../laststate.js', async () => {
+  const actual = await vi.importActual<typeof LastStateModule>('../laststate.js');
+  return {
+    ...actual,
+    loadLastState: () => lastState.value,
+    saveLastState: (patch: unknown) => savedState(patch),
+  };
+});
 
 // Shells out to git/gh — stubbed so the footer is deterministic and the test stays hermetic.
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
@@ -229,6 +244,44 @@ describe('App layout', () => {
     for (const row of rows.slice(frameTop, frameBottom + 1)) {
       expect(row).toMatch(BORDER);
     }
+    app.unmount();
+  });
+});
+
+describe('last session state (#365)', () => {
+  beforeEach(() => {
+    lastState.value = {};
+    savedState.mockClear();
+  });
+
+  it('opens in the last mode and says so in the scrollback', async () => {
+    lastState.value = { mode: 'plan' };
+    const app = await mountApp();
+    const frame = plain(app.lastFrame());
+    expect(frame).toContain('Resumed plan mode from the last session.');
+    expect(frame).toContain('plan');
+    app.unmount();
+  });
+
+  it('records the mode and profile once loaded, and nothing for a saved profile the config lacks', async () => {
+    lastState.value = { profile: 'gone' };
+    const app = await mountApp();
+    expect(plain(app.lastFrame())).not.toContain('Resumed');
+    expect(savedState).toHaveBeenCalledWith({ mode: 'agent' });
+    expect(savedState).toHaveBeenCalledWith({ profile: 'default' });
+    app.unmount();
+  });
+
+  it('saves a switch to plan mode but not one to chat', async () => {
+    const app = await mountApp();
+    savedState.mockClear();
+    await submit(app, '/plan');
+    expect(savedState).toHaveBeenCalledWith({ mode: 'plan' });
+    savedState.mockClear();
+    // Chat's prompt is '? ', so the row-scoped echo check can't drive a command after this one.
+    await submit(app, '/chat');
+    expect(plain(app.lastFrame())).toContain('? ');
+    expect(savedState).not.toHaveBeenCalled();
     app.unmount();
   });
 });

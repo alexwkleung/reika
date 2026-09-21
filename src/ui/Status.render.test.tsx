@@ -43,6 +43,19 @@ describe('Status', () => {
     expect(lastFrame()).not.toContain('shed');
     expect(lastFrame()).not.toContain('fold');
   });
+
+  // The approval chip describes a gate; chat mode's tools never ask and shell mode never runs
+  // the model, so there the chip would be a standing claim about nothing (#373).
+  it.each(['chat', 'shell'])('hides the approval chip in %s mode', modeTag => {
+    const { lastFrame } = render(<Status {...BASE} modeTag={modeTag} autoApprove="bypass" />);
+    expect(lastFrame()).toContain(modeTag);
+    expect(lastFrame()).not.toContain('bypass approvals');
+  });
+
+  it.each(['agent', 'plan', 'vibe'])('keeps the approval chip in %s mode', modeTag => {
+    const { lastFrame } = render(<Status {...BASE} modeTag={modeTag} autoApprove="safe" />);
+    expect(lastFrame()).toContain('auto approve');
+  });
 });
 
 // A full status at 40 columns. Before #295 the row Box handed each sibling <Text> its own
@@ -85,8 +98,8 @@ describe('Status wrap', () => {
       'qwen3-coder-30b-a3b-instruct · turn 12',
       'idle · 123k↑ 4.6k↓',
       'ctx 11k/24k (70% of 16k)',
-      '3 sheds · 1 fold · cache 80% · PR: #99',
-      'ctrl-c to exit',
+      '3 sheds · 1 fold · 80% cached (9.0k)',
+      'PR: #99 · ctrl-c to exit',
     ]);
     // The App's paddingX={1} takes two columns off the terminal's 40.
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(38);

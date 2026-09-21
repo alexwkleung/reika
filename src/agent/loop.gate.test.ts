@@ -5,9 +5,10 @@ import ignore from 'ignore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import { editTool } from '../tools/edit.js';
 import { writeTool } from '../tools/write.js';
+import { bashTool } from '../tools/bash.js';
 
 // Drive the real runTurn loop with a scripted model and a fake `tsc` so the post-edit typecheck
 // gate's control flow (capture baseline → check at done → send back → re-check → finish / commit
@@ -29,6 +30,10 @@ const writeResponse = (path: string, content: string): ModelResponse => ({
 const editResponse = (path: string, oldStr: string, newStr: string): ModelResponse => ({
   content: '',
   toolCalls: [{ id: 'e1', name: 'edit', args: { path, old_string: oldStr, new_string: newStr } }],
+});
+const bashResponse = (command: string): ModelResponse => ({
+  content: '',
+  toolCalls: [{ id: 'b1', name: 'bash', args: { command } }],
 });
 
 // A fake tsc: emits a parseable diagnostic iff any file under src/ still contains the BREAKME
@@ -70,13 +75,17 @@ function makeConfig(): Config {
     maxSearchesPerTurn: 0,
     maxFetchesPerTurn: 0,
     bashTimeoutMs: 5000,
+    bashIdleMs: 5000,
     pasteFetch: false,
-    skillAuto: false,
+    skillAuto: 'off',
     anon: false,
   };
 }
 
-async function run(cwd: string): Promise<{ history: Message[]; messages: Message[] }> {
+async function run(
+  cwd: string,
+  tools: Tool[] = [editTool, writeTool],
+): Promise<{ history: Message[]; messages: Message[] }> {
   const messages: Message[] = [];
   const history: Message[] = [];
   await runTurn({
@@ -84,7 +93,7 @@ async function run(cwd: string): Promise<{ history: Message[]; messages: Message
     history,
     bundle: makeBundle(cwd),
     config: makeConfig(),
-    tools: [editTool, writeTool],
+    tools,
     payloads: new PayloadStore(),
     onMessage: m => messages.push(m),
   });
@@ -164,6 +173,47 @@ describe('post-edit typecheck gate (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck passed'))).toBe(
       true,
     );
+  });
+
+  it('gates an edit made through the shell, not just through the edit tools', async () => {
+    // A heredoc is how a model with only bash writes a file. Before the gate keyed on `willMutate`
+    // no baseline was captured for it, so the turn finished on code that no longer compiled.
+    await installTsc();
+    h.scripted.push(
+      bashResponse('mkdir -p src && cat > src/app.ts <<\'EOF\'\nexport const n = "BREAKME";\nEOF'),
+      finalResponse('all done'),
+      bashResponse("sed -i '' 's/\"BREAKME\"/0/' src/app.ts"),
+      finalResponse('fixed and done'),
+    );
+
+    const { history, messages } = await run(cwd, [bashTool]);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(4);
+    const sentBack = history.filter(
+      (m): m is Extract<Message, { role: 'user' }> =>
+        m.role === 'user' && m.content.includes('BREAKME sentinel present'),
+    );
+    expect(sentBack).toHaveLength(1);
+    expect(sentBack[0].harness).toBe(true);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck passed'))).toBe(
+      true,
+    );
+    const onDisk = await readFile(join(cwd, 'src', 'app.ts'), 'utf8');
+    expect(onDisk).not.toContain('BREAKME');
+  });
+
+  it('leaves a read-only shell command alone', async () => {
+    // The other half of the split: bash is inspection far more often than it is mutation, and a
+    // `grep` must not put a tsc run in front of itself. Nothing ran, so nothing is reported.
+    await installTsc();
+    await mkdir(join(cwd, 'src'), { recursive: true });
+    await writeFile(join(cwd, 'src', 'app.ts'), 'export const n = "BREAKME";\n', 'utf8');
+    h.scripted.push(bashResponse('grep -rn BREAKME src'), finalResponse('found it'));
+
+    const { messages } = await run(cwd, [bashTool]);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(false);
   });
 
   it('fails open and finishes when no checker is available', async () => {

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadConfig, resolveDefaultMode, resolveProfile } from './config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  resolveDefaultMode,
+  resolveProfile,
+  withProbedWindow,
+} from './config.js';
 
 const ENV_KEYS = [
   'REIKA_MODEL',
@@ -29,6 +35,8 @@ const ENV_KEYS = [
   'REIKA_MINIMAL_MIN_GEN_TOKENS',
   'REIKA_DEFAULT_MODE',
   'REIKA_PLAN_EXPERIMENT',
+  'REIKA_AUTO_APPROVE',
+  'REIKA_SKILL_AUTO',
   'REIKA_VISION_MODEL',
   'REIKA_VISION_BASE_URL',
   'REIKA_VISION_API_KEY',
@@ -230,6 +238,36 @@ describe('loadConfig — multi-model REIKA_MODEL', () => {
   });
 });
 
+describe('loadConfig — multi-model named profile', () => {
+  it('takes the first model and registers each extra on the profile connection', () => {
+    process.env.REIKA_MODEL = 'local';
+    process.env.REIKA_PROFILES = 'go';
+    process.env.REIKA_GO_MODEL = 'flash, Muse-Spark ,';
+    process.env.REIKA_GO_BASE_URL = 'https://router.example/v1';
+    process.env.REIKA_GO_API_KEY = 'k';
+    process.env.REIKA_GO_CONTEXT_WINDOW = '128000';
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.profiles).sort()).toEqual(['default', 'go', 'muse-spark']);
+    expect(cfg.profiles.go.model).toBe('flash');
+    expect(cfg.profiles['muse-spark']).toEqual({
+      ...cfg.profiles.go,
+      model: 'Muse-Spark',
+      group: 'go',
+    });
+    expect(cfg.models).toEqual(['local']);
+  });
+
+  it('an extra never displaces an existing profile of the same name', () => {
+    process.env.REIKA_MODEL = 'a,shared';
+    process.env.REIKA_PROFILES = 'go';
+    process.env.REIKA_GO_MODEL = 'flash,shared,default';
+    process.env.REIKA_GO_BASE_URL = 'https://router.example/v1';
+    const cfg = loadConfig();
+    expect(cfg.profiles.shared.baseURL).toBe(cfg.baseURL);
+    expect(cfg.profiles.default.model).toBe('a');
+  });
+});
+
 describe('resolveProfile', () => {
   it('returns the config unchanged when the named profile is missing', () => {
     process.env.REIKA_MODEL = 'm';
@@ -392,6 +430,49 @@ describe('contextWindow', () => {
   });
 });
 
+describe('withProbedWindow (#417)', () => {
+  it('sets the window on that profile only, marked as probed, and resolves through', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    const cfg = withProbedWindow(loadConfig(), 'default', 24000);
+    expect(cfg.profiles.default.contextWindow).toBe(24000);
+    expect(cfg.profiles.default.contextWindowProbed).toBe(true);
+    expect(resolveProfile(cfg, 'default').contextWindow).toBe(24000);
+    // The top-level fallback stays unset: kimi's model was never measured.
+    expect(cfg.contextWindow).toBeUndefined();
+    expect(cfg.profiles.kimi.contextWindow).toBeUndefined();
+    expect(resolveProfile(cfg, 'kimi').contextWindow).toBeUndefined();
+  });
+
+  it('is a no-op for an unknown profile', () => {
+    process.env.REIKA_MODEL = 'm';
+    const cfg = loadConfig();
+    expect(withProbedWindow(cfg, 'nope', 24000)).toBe(cfg);
+  });
+});
+
+describe('inheritProfile (#417)', () => {
+  it('keeps a configured window and connection settings', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '16384';
+    process.env.REIKA_API_KEY = 'k';
+    const from = loadConfig().profiles.default;
+    const p = inheritProfile(from, 'other');
+    expect(p).toMatchObject({ model: 'other', apiKey: 'k', contextWindow: 16384, adhoc: true });
+    expect(p.contextWindowProbed).toBeUndefined();
+  });
+
+  it('drops a probed window — it was measured for the other model', () => {
+    process.env.REIKA_MODEL = 'm';
+    const from = withProbedWindow(loadConfig(), 'default', 24000).profiles.default;
+    const p = inheritProfile(from, 'other');
+    expect(p.contextWindow).toBeUndefined();
+    expect(p.contextWindowProbed).toBeUndefined();
+    expect(p.model).toBe('other');
+  });
+});
+
 describe('minGenTokens', () => {
   it('defaults to 2048 when unset', () => {
     process.env.REIKA_MODEL = 'm';
@@ -488,5 +569,80 @@ describe('resolveDefaultMode', () => {
     expect(resolveDefaultMode()).toBe('vibe');
     process.env.REIKA_DEFAULT_MODE = 'agent';
     expect(resolveDefaultMode()).toBe('agent');
+  });
+});
+
+describe('loadConfig — auto-approve', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is safe, and not explicit — so the session toggle can still turn it off', () => {
+    const c = loadConfig();
+    expect(c.autoApprove).toBe('safe');
+    expect(c.autoApproveExplicit).toBe(false);
+  });
+
+  it('an explicit safe/true/1 is safe and explicit', () => {
+    for (const v of ['safe', 'true', '1', ' TRUE ']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      const c = loadConfig();
+      expect(c.autoApprove, v).toBe('safe');
+      expect(c.autoApproveExplicit, v).toBe(true);
+    }
+  });
+
+  it('bypass/yolo is bypass', () => {
+    for (const v of ['bypass', 'yolo']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      expect(loadConfig().autoApprove, v).toBe('bypass');
+    }
+  });
+
+  it('an explicit off/false/0 turns the default off', () => {
+    for (const v of ['off', 'false', '0']) {
+      process.env.REIKA_AUTO_APPROVE = v;
+      const c = loadConfig();
+      expect(c.autoApprove, v).toBe('off');
+      expect(c.autoApproveExplicit, v).toBe(true);
+    }
+  });
+
+  it('an unrecognized value is off, not the default — a typo costs prompts, not safety', () => {
+    process.env.REIKA_AUTO_APPROVE = 'sfae';
+    expect(loadConfig().autoApprove).toBe('off');
+  });
+
+  it('a blank value reads as unset', () => {
+    process.env.REIKA_AUTO_APPROVE = '  ';
+    const c = loadConfig();
+    expect(c.autoApprove).toBe('safe');
+    expect(c.autoApproveExplicit).toBe(false);
+  });
+});
+
+describe('REIKA_SKILL_AUTO (#425)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is ask — the confirm dialog made a wrong pick a keystroke, not a turn', () => {
+    expect(loadConfig().skillAuto).toBe('ask');
+    process.env.REIKA_SKILL_AUTO = 'ASK ';
+    expect(loadConfig().skillAuto).toBe('ask');
+  });
+
+  it("apply, and the pre-#425 spelling '1', are apply — the only value that changes headless", () => {
+    for (const v of ['apply', '1', 'true']) {
+      process.env.REIKA_SKILL_AUTO = v;
+      expect(loadConfig().skillAuto, v).toBe('apply');
+    }
+  });
+
+  it('off/0 and any typo are off — a typo costs a hint line, not a rewritten prompt', () => {
+    for (const v of ['off', '0', 'false', 'aks']) {
+      process.env.REIKA_SKILL_AUTO = v;
+      expect(loadConfig().skillAuto, v).toBe('off');
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { createServer } from 'node:http';
 import type { Server, ServerResponse } from 'node:http';
-import { createSSEDecoder, streamChatCompletion, tokenize } from './transport.js';
+import { SESSION_ID, createSSEDecoder, streamChatCompletion, tokenize } from './transport.js';
 import type { ChatCompletionChunk, ChatCompletionRequest, SSEEvent } from './transport.js';
 import { resetStreamDispatcher } from './dispatcher.js';
 
@@ -172,13 +172,42 @@ async function withServer(
 
 const BODY: ChatCompletionRequest = { model: 'm', messages: [], stream: true };
 
-async function drain(baseURL: string): Promise<string> {
+async function drain(baseURL: string, apiKey = ''): Promise<string> {
   let text = '';
-  for await (const chunk of streamChatCompletion({ baseURL, apiKey: '', body: BODY })) {
+  for await (const chunk of streamChatCompletion({ baseURL, apiKey, body: BODY })) {
     text += chunk.choices?.[0]?.delta?.content ?? '';
   }
   return text;
 }
+
+describe('session header', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function sentHeaders(fetchMock: ReturnType<typeof vi.fn>): Record<string, string>[] {
+    return fetchMock.mock.calls.map(
+      call => (call as unknown as [string, RequestInit])[1].headers as Record<string, string>,
+    );
+  }
+
+  it('sends one stable x-session-id on every keyed chat request', async () => {
+    const fetchMock = vi.fn(async () => new Response('data: [DONE]\n\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await drain('http://x/v1', 'sk-test');
+    await drain('http://x/v1', 'sk-test');
+    const [first, second] = sentHeaders(fetchMock);
+    expect(SESSION_ID).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first['x-session-id']).toBe(SESSION_ID);
+    expect(second['x-session-id']).toBe(SESSION_ID);
+  });
+
+  it('leaves an unkeyed (local) request without the header', async () => {
+    const fetchMock = vi.fn(async () => new Response('data: [DONE]\n\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await drain('http://x/v1');
+    const [headers] = sentHeaders(fetchMock);
+    expect(headers).toEqual({ 'Content-Type': 'application/json' });
+  });
+});
 
 describe('silent-stream timeout', () => {
   const PRIOR = process.env.REIKA_REQUEST_TIMEOUT_MS;

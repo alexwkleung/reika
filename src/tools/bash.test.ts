@@ -9,15 +9,88 @@ import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
 
 describe('execStream — timeout', () => {
+  const cwd = process.cwd();
+
   it('honors a custom timeout and reports the duration that fired', async () => {
-    const result = await execStream('sleep 5', { cwd: process.cwd() }, 50);
+    const result = await execStream('sleep 5', { cwd, bashTimeoutMs: 50 });
     expect(result.summary).toMatch(/Bash timeout: sleep 5 \(killed after 0\.05s\)/);
+    expect(result.payload).toContain('killed: hit the 0.05s ceiling');
   });
 
   it('runs normally when the command finishes within the timeout', async () => {
-    const result = await execStream('echo hi', { cwd: process.cwd() }, 5000);
+    const result = await execStream('echo hi', { cwd, bashTimeoutMs: 5000 });
     expect(result.summary).toMatch(/^Ran: echo hi/);
     expect(result.payload).toContain('hi');
+  });
+
+  // The ceiling has to bound the whole pipeline, not just `sh` (#408). Killing only the shell
+  // orphaned the rest of a compound command holding our stdout pipe, so 'close' waited on it and
+  // `sleep 5; echo` ran its full five seconds after a 50ms "kill".
+  it('bounds a compound command, not just the shell in front of it', async () => {
+    const t0 = Date.now();
+    const result = await execStream('sleep 5; echo done', { cwd, bashTimeoutMs: 50 });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(result.summary).toMatch(/^Bash timeout: /);
+    expect(result.payload).not.toContain('done');
+  });
+
+  it('kills a command that goes silent, and says that is why', async () => {
+    const result = await execStream('echo start; sleep 5', {
+      cwd,
+      bashTimeoutMs: 10_000,
+      bashIdleMs: 100,
+    });
+    expect(result.summary).toBe('Bash timeout: echo start; sleep 5 (no output for 0.1s, killed)');
+    expect(result.payload).toContain('start');
+    expect(result.payload).toContain('Do not re-run it as is');
+  });
+
+  it('lets a command that keeps writing run past the idle bound', async () => {
+    const result = await execStream('for i in 1 2 3 4 5; do echo $i; sleep 0.05; done', {
+      cwd,
+      bashTimeoutMs: 10_000,
+      bashIdleMs: 150,
+    });
+    expect(result.summary).toMatch(/^Ran: /);
+    expect(result.payload).toContain('5');
+  });
+
+  it('disables a bound set to zero', async () => {
+    const result = await execStream('sleep 0.2; echo ok', {
+      cwd,
+      bashTimeoutMs: 0,
+      bashIdleMs: 0,
+    });
+    expect(result.summary).toMatch(/^Ran: /);
+    expect(result.payload).toContain('ok');
+  });
+
+  it('kills the command on the abort signal instead of waiting out a bound', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+    const t0 = Date.now();
+    const result = await execStream('sleep 5; echo done', {
+      cwd,
+      bashTimeoutMs: 10_000,
+      signal: controller.signal,
+    });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(result.summary).toBe('Bash aborted: sleep 5; echo done (killed by user)');
+  });
+
+  it('does not run at all on a signal already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await execStream('echo ran', { cwd, signal: controller.signal });
+    expect(result.summary).toBe('Bash aborted: echo ran (not run)');
+    expect(result.payload).toBeUndefined();
+  });
+
+  // stdin is /dev/null: a command that reads it gets EOF, where a pipe nobody writes to would
+  // have held it until the idle bound.
+  it('gives a stdin reader EOF rather than a hang', async () => {
+    const result = await execStream('cat', { cwd, bashIdleMs: 2000 });
+    expect(result.summary).toBe('Ran: cat (0 bytes output)');
   });
 });
 
@@ -58,7 +131,7 @@ describe('execStream — exit status', () => {
   });
 
   it('still calls a timeout a timeout, not a plain run', async () => {
-    const result = await execStream('sleep 5', { cwd }, 50);
+    const result = await execStream('sleep 5', { cwd, bashTimeoutMs: 50 });
     expect(result.summary).toMatch(/^Bash timeout: /);
     expect(result.summary).not.toContain('Ran: ');
   });
@@ -378,19 +451,19 @@ describe('planTools — REIKA_PLAN_BASH gate', () => {
     delete process.env.REIKA_PLAN_BASH;
   });
 
-  it('omits bash by default', () => {
+  it('adds the read-only bash by default', () => {
     delete process.env.REIKA_PLAN_BASH;
-    expect(planTools().map(t => t.name)).not.toContain('bash');
-  });
-
-  it('adds the read-only bash under the flag', () => {
-    process.env.REIKA_PLAN_BASH = '1';
     const bash = planTools().find(t => t.name === 'bash');
     expect(bash).toBe(readOnlyBashTool);
   });
 
+  it('omits bash under =0', () => {
+    process.env.REIKA_PLAN_BASH = '0';
+    expect(planTools().map(t => t.name)).not.toContain('bash');
+  });
+
   it('never adds the unrestricted bash', () => {
-    process.env.REIKA_PLAN_BASH = '1';
+    delete process.env.REIKA_PLAN_BASH;
     expect(planTools()).not.toContain(bashTool);
   });
 });

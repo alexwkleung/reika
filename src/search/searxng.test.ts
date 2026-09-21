@@ -159,6 +159,37 @@ describe('SearxngProvider — blocked engines are a failure, not an empty result
     expect((err as SearchUnavailableError).remedy).toMatch(/REIKA_CDP_SEARCH=1/);
   });
 
+  // #392: the instance itself unreachable is a provider condition — one host, and rewording the
+  // query does not bring it up — so it takes the same typed failure and latches the turn.
+  it('raises the typed failure when the instance cannot be reached, naming the cause', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockRejectedValue(
+      new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8888'), {
+          code: 'ECONNREFUSED',
+        }),
+      }),
+    );
+    const provider = new SearxngProvider('http://localhost:8888');
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SearchUnavailableError);
+    expect((err as Error).message).toBe(
+      'SearXNG at http://localhost:8888 could not be reached (connect ECONNREFUSED 127.0.0.1:8888)',
+    );
+    expect((err as SearchUnavailableError).remedy).toMatch(
+      /running and reachable.*REIKA_CDP_SEARCH=1/,
+    );
+  });
+
+  it('keeps an error response from the instance query-level', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockResponse({}, false, 500));
+    const provider = new SearxngProvider('http://localhost:8888');
+    const err = await provider.search('q').catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(SearchUnavailableError);
+    expect((err as Error).message).toMatch(/SearXNG 500/);
+  });
+
   it('still reports a genuine zero-result search as empty, not as a failure', async () => {
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue(mockResponse({ results: [], unresponsive_engines: [] }));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messagesToOpenAI } from './toolcall.js';
+import { messagesToChatParams } from './toolcall.js';
 import type { Message } from '../types.js';
 
 // #269: the single declaration-keyword rule scored 96% on plain source and 29% / 0% / 0% on test
@@ -21,7 +21,7 @@ const history = (summary: string, payload: string): Message[] => [
 ];
 
 const agedContent = (summary: string, payload: string): string => {
-  const out = messagesToOpenAI('sys', history(summary, payload), {
+  const out = messagesToChatParams('sys', history(summary, payload), {
     contextWindow: 8192,
   }) as Array<{ tool_call_id?: string; content: string }>;
   return out.find(m => m.tool_call_id === 'r')!.content;

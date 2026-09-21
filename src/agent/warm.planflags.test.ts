@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os';
 import ignore from 'ignore';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
-import { messagesToOpenAI } from '../provider/toolcall.js';
+import { messagesToChatParams } from '../provider/toolcall.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 
@@ -11,15 +11,22 @@ import type { Config, ContextBundle, Message } from '../types.js';
 // under BOTH flags: the PLAN_ALIGN progress ledger must ride the warm system identically, and
 // the plan→agent handoff distillation must fold the warm's history copy exactly as the real
 // turn folds its own — while the caller's array stays untouched.
+// Pinned to the flag-off serialization, where the ledger rides the system block; under
+// REIKA_PREFIX_STABLE (on by default since #181) it rides the trailing note the warm never sends,
+// and warm.prefixstable.test.ts locks that arm.
 const PRIOR_ALIGN = process.env.REIKA_PLAN_ALIGN;
 const PRIOR_HANDOFF = process.env.REIKA_PLAN_HANDOFF;
+const PRIOR_STABLE = process.env.REIKA_PREFIX_STABLE;
 process.env.REIKA_PLAN_ALIGN = '1';
 process.env.REIKA_PLAN_HANDOFF = '1';
+process.env.REIKA_PREFIX_STABLE = '0';
 afterAll(() => {
   if (PRIOR_ALIGN === undefined) delete process.env.REIKA_PLAN_ALIGN;
   else process.env.REIKA_PLAN_ALIGN = PRIOR_ALIGN;
   if (PRIOR_HANDOFF === undefined) delete process.env.REIKA_PLAN_HANDOFF;
   else process.env.REIKA_PLAN_HANDOFF = PRIOR_HANDOFF;
+  if (PRIOR_STABLE === undefined) delete process.env.REIKA_PREFIX_STABLE;
+  else process.env.REIKA_PREFIX_STABLE = PRIOR_STABLE;
 });
 
 // History snapshotted at call time — runTurn mutates the same array after the call (it pushes
@@ -69,8 +76,9 @@ function makeConfig(): Config {
     maxSearchesPerTurn: 0,
     maxFetchesPerTurn: 0,
     bashTimeoutMs: 5000,
+    bashIdleMs: 5000,
     pasteFetch: false,
-    skillAuto: false,
+    skillAuto: 'off',
     anon: false,
   };
 }
@@ -138,8 +146,8 @@ describe('warm prefix under REIKA_PLAN_ALIGN + REIKA_PLAN_HANDOFF', () => {
       reasoningRounds: config.reasoningRounds,
       minGenTokens: config.minGenTokens,
     };
-    const warmMsgs = messagesToOpenAI(warm.system, warm.history, opts);
-    const realMsgs = messagesToOpenAI(real.system, real.history, opts);
+    const warmMsgs = messagesToChatParams(warm.system, warm.history, opts);
+    const realMsgs = messagesToChatParams(real.system, real.history, opts);
     expect(realMsgs.length).toBe(warmMsgs.length + 1);
     expect(realMsgs.slice(0, warmMsgs.length)).toEqual(warmMsgs);
   });

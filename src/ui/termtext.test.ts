@@ -51,6 +51,17 @@ describe('sanitizeTerminalText', () => {
     expect(sanitizeTerminalText(`x${ESC}[Ky`)).toBe('xy');
   });
 
+  it("strips the sequences node's util.stripVTControlCharacters leaks (#363)", () => {
+    // Why strip-ansi stays a dependency: node's built-in carries an older regex on 18/20/22/23
+    // (synced to strip-ansi's only in the 24.x and 26.x lines). Its OSC branch rejects payloads
+    // with spaces and its SGR branch only knows `;`, so both fall through to the CSI branch,
+    // which eats `ESC ] 0 ; m` and leaks the rest as text. Both are everyday bash-tool output:
+    // a shell precmd title and `ls`/eza colors.
+    expect(sanitizeTerminalText(`${ESC}]0;user@host: ~/Git/reika${BEL}$ ls`)).toBe('$ ls');
+    expect(sanitizeTerminalText(`${ESC}[38:5:33msrc${ESC}[0m/`)).toBe('src/');
+    expect(sanitizeTerminalText(`${ESC}[4:3m${ESC}[58:5:1mspell${ESC}[0m`)).toBe('spell');
+  });
+
   it('drops stray control characters a row cannot show', () => {
     expect(sanitizeTerminalText(`ding${BEL} done`)).toBe('ding done');
   });

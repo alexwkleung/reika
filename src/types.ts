@@ -47,6 +47,10 @@ export type Message =
       durationMs?: number;
       sources?: string[];
       nested?: boolean;
+      // UI-only (#280): this message is a compaction note — the reply to the report round before a
+      // fold, shown nested with its reasoning kept as a trace, with the info accent on its bar so it
+      // reads as compaction work rather than the answer. Never enters model history.
+      compactionNote?: boolean;
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
@@ -104,9 +108,8 @@ export type Message =
     }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
-  // messagesToOpenAI); the UI keeps the full scrollback separately.
+  // messagesToChatParams); the UI keeps the full scrollback separately.
   | { role: 'compaction'; content: string; nested?: boolean }
-  | { role: 'header'; model: string; cwd: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
 export type Usage = {
@@ -257,21 +260,33 @@ export type WebBudget = {
   fetches: { used: number; max: number };
 };
 
-// Set once per turn when a search fails for a provider-level reason (see SearchUnavailableError).
-// Shared by reference like webBudget: the object is what carries the latch between calls, since a
-// fresh ToolContext is built per tool call.
-export type SearchHealth = { unavailable?: string };
+// Per-turn latches for the web tools. Shared by reference like webBudget: the object is what
+// carries the latch between calls, since a fresh ToolContext is built per tool call.
+export type WebHealth = {
+  // Set when a search fails for a provider-level reason (see SearchUnavailableError): further
+  // searches this turn report it without re-attempting.
+  unavailable?: string;
+  // Set when a fetch fails with a network-down code (see tools/_net.ts OFFLINE_CODES): the machine
+  // has no route out, so every further search and fetch this turn is skipped without a request
+  // or a budget slot (#392). Holds the code, for the message.
+  offline?: string;
+};
 
 export type ToolContext = {
   cwd: string;
   ignore?: Ignore;
   webBudget?: WebBudget;
-  // Per-turn latch for a provider-level search failure. Once set, further searches in the turn
-  // report the same reason without re-attempting or spending budget.
-  searchHealth?: SearchHealth;
+  // Per-turn latches for the web tools (a provider that refused, a network that is down). Once
+  // set, further calls in the turn report the same reason without re-attempting or spending budget.
+  webHealth?: WebHealth;
   // Tools push successfully-fetched URLs here; the loop stamps them onto the
   // final assistant message as `sources`, rendered deterministically in scrollback.
   fetchedUrls?: Set<string>;
+  // Names of every tool in this turn's list. A tool result must not point the model at a tool it
+  // does not have (the coupling the prompts keep through `canAsk`/`canSubagent`): fetch_url's
+  // spill locator says "read that path", which in chat mode — fetch_url and search only — is a
+  // dead end (#377). Undefined means unknown, and a tool treats unknown as the full agent set.
+  toolNames?: ReadonlySet<string>;
   // Dependency package names whose installed type surface has already been injected into a
   // tool result this turn (see tools/_deps.ts). edit/write consult and extend it so each
   // imported dep is grounded at most once per turn — bounded bloat, no re-injection.
@@ -292,9 +307,13 @@ export type ToolContext = {
   askedQuestions?: string[];
   onProgress?: (chunk: string) => void;
   spawnSubagent?: (opts: { task: string }) => Promise<ToolResult>;
-  // Wall-clock timeout for a bash command, ms. Threaded from Config so a long build/test/
-  // install isn't killed prematurely. Undefined falls back to the bash tool's own default.
+  // Bash bounds, ms, threaded from Config; undefined falls back to the bash tool's own defaults.
+  // The ceiling is wall-clock; idle is time without output — the one that catches a hung command.
   bashTimeoutMs?: number;
+  bashIdleMs?: number;
+  // The turn's abort signal. A running command is killed on it, so ctrl-c reaches the child
+  // instead of waiting out whatever bound would have ended it.
+  signal?: AbortSignal;
 };
 
 export type ToolParameters = {
@@ -329,6 +348,9 @@ export type Profile = {
   // Total context window of the model, used as the denominator for the context-fill
   // gauge. Undefined when unknown (the gauge then shows absolute tokens, no percentage).
   contextWindow?: number;
+  // The window above came from the endpoint's model listing (#417), not the env. It belongs to
+  // this profile's model: a profile inheriting from this one must not carry it over.
+  contextWindowProbed?: boolean;
   // Generation room reserved from the window, in tokens. Drives the per-turn max_tokens
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
@@ -337,6 +359,10 @@ export type Profile = {
   // connection settings are inherited from the profile active at switch time. The flag
   // keeps the UI honest about the model being off-config (switch message, picker marker).
   adhoc?: boolean;
+  // The named profile whose extra model this is (REIKA_<NAME>_MODEL=a,b — `b` is keyed by its
+  // own name but belongs to that profile's connection). The picker shows the name so a router's
+  // models read as one group; the key stays the model so `/model b` works.
+  group?: string;
 };
 
 // How much runs without a confirmation prompt.
@@ -345,16 +371,23 @@ export type Profile = {
 //              patterns) still prompt. The warnings break-glass.
 //   'bypass' — approve everything, including dangerous commands. True yolo, no prompts at all.
 export type AutoApproveMode = 'off' | 'safe' | 'bypass';
+// 'off' — a match only earns the one-line hint. 'ask' (default) — the TUI opens the confirm dialog
+// (#425); headless, with nobody to ask, sends the prompt as typed. 'apply' — the TUI still asks
+// (a human present is never a reason to inject silently), and headless applies a strong match
+// without asking, under the tighter 12-word gate.
+export type SkillAutoMode = 'off' | 'ask' | 'apply';
 
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
 // messages carry it (see Message['user'].mode); ui/commands.ts re-exports it.
-export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe';
+export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal';
 
 // Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
 // eligible — chat isolates history and shell bypasses the model entirely, so neither makes
-// sense as a launch default.
-export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe'>;
+// sense as a launch default. `minimal` is eligible and is the one people are most likely to
+// LAUNCH in rather than switch to: its whole point is skipping the upfront context load, and a
+// session that starts in agent mode has already paid for it (#391).
+export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal'>;
 
 export type Config = {
   baseURL: string;
@@ -367,6 +400,9 @@ export type Config = {
   maxTurns: number;
   repoMapBudget: number;
   autoApprove: AutoApproveMode;
+  // True when REIKA_AUTO_APPROVE was set: `safe` is the default when it isn't, and the session
+  // toggle (/approvals) has to know whether a `safe` came from the env or from that default.
+  autoApproveExplicit?: boolean;
   subagentModel?: string;
   subagentBaseURL?: string;
   subagentApiKey?: string;
@@ -399,10 +435,13 @@ export type Config = {
   reasoningRounds: number;
   maxSearchesPerTurn: number;
   maxFetchesPerTurn: number;
-  // Wall-clock timeout for a single bash command, ms (REIKA_BASH_TIMEOUT_MS). Builds, installs
-  // and full test suites routinely exceed the old 120s; 5 min covers them without letting a
-  // hung command hold the agent loop too long.
+  // Bounds on a single bash command, ms (#408). `bashTimeoutMs` (REIKA_BASH_TIMEOUT_MS) is the
+  // wall-clock ceiling, sized for a slow build or a full test suite; `bashIdleMs`
+  // (REIKA_BASH_IDLE_MS) kills a command that has written nothing for that long, which is the
+  // shape of a hang — a server, a watcher, a prompt — and is what keeps a stuck small model from
+  // spending the whole ceiling on it. 0 disables either.
   bashTimeoutMs: number;
+  bashIdleMs: number;
   // Preferred OCR languages for pasted images (REIKA_OCR_LANGS, BCP-47, comma-separated).
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
   // first entry. Ignored when a vision model is configured.
@@ -411,9 +450,8 @@ export type Config = {
   // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
   // exists because it's an outbound request on a machine that may be offline or airgapped.
   pasteFetch: boolean;
-  // Let a confidently-matched skill rewrite the prompt instead of only being suggested
-  // (REIKA_SKILL_AUTO=1, default off, experimental). See skillmatch.ts.
-  skillAuto: boolean;
+  // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
+  skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in
   // the scrollback and saved transcripts (REIKA_ANON=1, default off). Display only — the model
   // still receives everything verbatim. See ui/identity.ts.

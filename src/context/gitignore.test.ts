@@ -63,4 +63,28 @@ describe('loadGitignore', () => {
     const ig = await loadGitignore(cwd);
     expect(ig.ignores('vendor/a.ts')).toBe(true);
   });
+
+  it('spends the directory cap breadth-first, so shallow nested files win over deep ones', async () => {
+    await mkdir(join(cwd, 'a'), { recursive: true });
+    await mkdir(join(cwd, 'b', 'deep'), { recursive: true });
+    await mkdir(join(cwd, 'c'), { recursive: true });
+    await writeFile(join(cwd, 'b', 'deep', '.gitignore'), '*.deep\n', 'utf8');
+    await writeFile(join(cwd, 'c', '.gitignore'), '*.shallow\n', 'utf8');
+    // Root, a, b, c fit in four visits; b/deep is listed after every top-level directory even
+    // though `b` sorts before `c`, so it is the one the cap cuts.
+    const ig = await loadGitignore(cwd, { depth: 8, files: 200, dirs: 4 });
+    expect(ig.ignores('c/x.shallow')).toBe(true);
+    expect(ig.ignores('b/deep/x.deep')).toBe(false);
+    const full = await loadGitignore(cwd);
+    expect(full.ignores('b/deep/x.deep')).toBe(true);
+  });
+
+  it('stops descending at the depth cap', async () => {
+    await mkdir(join(cwd, 'l1', 'l2'), { recursive: true });
+    await writeFile(join(cwd, 'l1', '.gitignore'), '*.one\n', 'utf8');
+    await writeFile(join(cwd, 'l1', 'l2', '.gitignore'), '*.two\n', 'utf8');
+    const ig = await loadGitignore(cwd, { depth: 2, files: 200, dirs: 2000 });
+    expect(ig.ignores('l1/x.one')).toBe(true);
+    expect(ig.ignores('l1/l2/x.two')).toBe(false);
+  });
 });

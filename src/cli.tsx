@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { render } from 'ink';
-import { App } from './ui/App.js';
 import { sweepStaleSpills } from './tools/_spill.js';
+import { HEADLESS_USAGE, parseHeadlessArgs } from './headlessargs.js';
 
 // Spill directories are removed on a normal exit, but SIGHUP (closing the terminal window),
 // SIGTERM, SIGKILL and hard crashes never reach that handler (#224). The sweep is the cleanup
@@ -10,4 +9,44 @@ import { sweepStaleSpills } from './tools/_spill.js';
 // that is already gone must never delay first paint, and it fails open on its own.
 void sweepStaleSpills();
 
-render(<App />, { exitOnCtrlC: false });
+// Both front-ends are imported lazily: the headless path (#52) never loads Ink, and the TUI
+// never loads the headless runner.
+let headless;
+try {
+  headless = parseHeadlessArgs(process.argv.slice(2));
+} catch (e) {
+  process.stderr.write(`reika: ${(e as Error).message}\n`);
+  process.exit(2);
+}
+
+if (headless) {
+  const { runHeadless } = await import('./headless.js');
+  const code = await runHeadless(headless, {
+    stdout: text => process.stdout.write(text),
+    stderr: text => process.stderr.write(text),
+    readStdin: async () => {
+      if (process.stdin.isTTY) {
+        process.stderr.write(`reika: -p needs a prompt or piped stdin\n${HEADLESS_USAGE}\n`);
+        return '';
+      }
+      let text = '';
+      for await (const chunk of process.stdin) text += chunk;
+      return text;
+    },
+  }).catch((e: Error) => {
+    // Anything that fails before the turn starts (config, bootstrap, an unknown /skill) — the
+    // turn's own failures are already reported inside.
+    process.stderr.write(`reika: ${e.message}\n`);
+    return 1;
+  });
+  process.exit(code);
+} else {
+  const [{ render }, { App }, { createSyncedStdout }] = await Promise.all([
+    import('ink'),
+    import('./ui/App.js'),
+    import('./ui/syncframe.js'),
+  ]);
+  // Frames go out as one synchronized write each (#345) so a swapped-out process can't leave the
+  // terminal painting a half-erased screen between Ink's writes.
+  render(<App />, { exitOnCtrlC: false, stdout: createSyncedStdout(process.stdout) });
+}

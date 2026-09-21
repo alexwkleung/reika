@@ -11,15 +11,22 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 // discarded it — so from its introduction (585a438) the steered round ran unsteered while the
 // "Still looping" receipt claimed otherwise. This drives a real runTurn into the reasoning-loop
 // terminal and asserts the steer actually reaches the dispatched request.
+// Pinned to the flag-off (per-round) serialization: the steer rides the system block there, and
+// the trailing note under REIKA_PREFIX_STABLE (on by default since #181; loop.prefixnote.test.ts
+// covers that transport).
 const PRIOR_CONVERGE = process.env.REIKA_CONVERGE_RETRY;
 const PRIOR_RLOOP = process.env.REIKA_REASONING_LOOP;
+const PRIOR_STABLE = process.env.REIKA_PREFIX_STABLE;
 process.env.REIKA_CONVERGE_RETRY = '1';
 process.env.REIKA_REASONING_LOOP = '1';
+process.env.REIKA_PREFIX_STABLE = '0';
 afterAll(() => {
   if (PRIOR_CONVERGE === undefined) delete process.env.REIKA_CONVERGE_RETRY;
   else process.env.REIKA_CONVERGE_RETRY = PRIOR_CONVERGE;
   if (PRIOR_RLOOP === undefined) delete process.env.REIKA_REASONING_LOOP;
   else process.env.REIKA_REASONING_LOOP = PRIOR_RLOOP;
+  if (PRIOR_STABLE === undefined) delete process.env.REIKA_PREFIX_STABLE;
+  else process.env.REIKA_PREFIX_STABLE = PRIOR_STABLE;
 });
 
 // System snapshotted at call time; runTurn keeps mutating shared state after each call.
@@ -66,8 +73,9 @@ function makeConfig(): Config {
     maxSearchesPerTurn: 0,
     maxFetchesPerTurn: 0,
     bashTimeoutMs: 5000,
+    bashIdleMs: 5000,
     pasteFetch: false,
-    skillAuto: false,
+    skillAuto: 'off',
     anon: false,
   };
 }

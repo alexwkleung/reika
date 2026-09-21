@@ -65,6 +65,8 @@ function parse(path: string): Run {
   const rounds: Round[] = [];
   let pendingShrink: string[] = [];
   let turn = -1;
+  let prevRound = -1;
+  let prevWasReport = false;
   let finalRate: number | undefined;
 
   for (const line of text.split('\n')) {
@@ -78,14 +80,19 @@ function parse(path: string): Run {
     const stableChars = NUM(line, /stable=(\d+)\/\d+c/);
     const totalChars = NUM(line, /stable=\d+\/(\d+)c/);
     if (stableChars == null || totalChars == null) continue;
-    // A turn's first request has no baseline: its numbers are a ceiling, not a measurement, and its
-    // "growth" against the previous turn's last request is meaningless. Start a new turn here.
-    if (cause === 'first-request') turn++;
+    const round = NUM(line, /round=(\d+)/) ?? 0;
+    // A compaction-note request (#426) logs under the round it precedes, so a turn starts at a
+    // `round=0` line that is not the real round 0 following its own report line. The trace is
+    // session-long since #426, so the boundary is a measured request, not a `first-request` reset.
+    const isReport = line.includes(' phase=report ');
+    if (round === 0 && !(prevRound === 0 && prevWasReport)) turn++;
+    prevRound = round;
+    prevWasReport = isReport;
     const rate = NUM(line, /rate=([\d.]+)t\/s/);
     if (rate != null) finalRate = rate;
     rounds.push({
       turn: Math.max(turn, 0),
-      round: NUM(line, /round=(\d+)/) ?? 0,
+      round,
       cause,
       stableChars,
       totalChars,
@@ -99,16 +106,15 @@ function parse(path: string): Run {
     pendingShrink = [];
   }
 
-  // Second pass: growth is measured against the previous request OF THE SAME TURN.
+  // Second pass: growth is measured against the previous request — across a turn boundary too,
+  // since the trace is session-long and the engine's cache holds the previous turn's last request.
   let prevTotal: number | null = null;
-  let prevTurn = -1;
   for (const r of rounds) {
-    if (r.turn !== prevTurn || r.cause === 'first-request') prevTotal = null;
-    prevTurn = r.turn;
+    if (r.cause === 'first-request') prevTotal = null;
     const diverged = r.totalChars - r.stableChars;
     r.growth = prevTotal == null ? diverged : r.totalChars - prevTotal;
-    // Everything diverged that was not new. A turn's first request has no baseline, so it is scored
-    // as all-growth (0 old) rather than credited with a re-process it cannot demonstrate.
+    // Everything diverged that was not new. The session's first request has no baseline, so it is
+    // scored as all-growth (0 old) rather than credited with a re-process it cannot demonstrate.
     r.reprocessedOld = prevTotal == null ? 0 : diverged - r.growth;
     prevTotal = r.totalChars;
   }
