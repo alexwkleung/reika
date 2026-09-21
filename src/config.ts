@@ -109,8 +109,15 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
     const lower = name.toLowerCase();
     if (lower === 'default') continue;
     const upper = name.toUpperCase();
-    const profileModel = process.env[`REIKA_${upper}_MODEL`];
-    if (!profileModel) continue;
+    // Comma-separated like REIKA_MODEL: the profile is its first model, and each extra becomes an
+    // auto-profile keyed by its own name on the same connection — a hosted router with a menu of
+    // models is one profile, not one per model.
+    const profileModels = (process.env[`REIKA_${upper}_MODEL`] ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (profileModels.length === 0) continue;
+    const profileModel = profileModels[0];
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
     const profileContextWindow = parseIntOrUndef(process.env[`REIKA_${upper}_CONTEXT_WINDOW`]);
     const profileMinGen = parseIntOrUndef(process.env[`REIKA_${upper}_MIN_GEN_TOKENS`]);
@@ -124,6 +131,11 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
       minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
     };
+    for (const m of profileModels.slice(1)) {
+      const key = m.toLowerCase();
+      if (key === 'default' || profiles[key]) continue;
+      profiles[key] = { ...profiles[lower], model: m };
+    }
   }
   return profiles;
 }

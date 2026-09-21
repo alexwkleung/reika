@@ -63,6 +63,25 @@ describe('ModelSelect', () => {
     expect(frame).toMatch(/Foo-32B\s+\(not in config\)\s+\(current\)/);
   });
 
+  it("renders a named profile's extra model as its bare name on the profile's base", () => {
+    const targets: ModelTarget[] = [
+      ...TARGETS,
+      {
+        name: 'muse-spark',
+        model: 'Muse-Spark',
+        baseURL: 'https://router.example/v1',
+        kind: 'profile',
+        active: false,
+      },
+    ];
+    const { lastFrame } = render(
+      <ModelSelect targets={targets} selectedIndex={0} currentModel="m" baseURL={BASE} />,
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('muse-spark →');
+    expect(frame).toMatch(/Muse-Spark\s+@ https:\/\/router\.example\/v1/);
+  });
+
   it('omits the subagent line when not provided', () => {
     const { lastFrame } = render(
       <ModelSelect
