@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { isStreamTimeout, streamDispatcher, streamTimeoutMessage } from './dispatcher.js';
 import type { ToolParameters } from '../types.js';
 
@@ -142,6 +143,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // default kills any turn whose prefill runs longer, which on slow local hardware is the normal
 // path once context grows (issue #186). A stream timeout is never retried: the prompt hasn't
 // changed, so a retry just buys the same silent wait again, three times over.
+// One id per reika process, sent as `x-session-id` on every chat request that carries a key. Some
+// hosted routers (OpenCode Go) refuse a request with no session id — they use it to pin a
+// conversation to one backend so its prompt cache is reused — and accept this generic name
+// alongside their own. The key is a proxy for "hosted": a keyed local server gets the header too
+// and ignores it, while an unkeyed local request stays byte-identical to what it always was. Per
+// process rather than per conversation on purpose: a /new on the same node costs nothing, and
+// the id needs no plumbing through App.
+export const SESSION_ID = randomUUID();
+
 async function postWithRetry(
   url: string,
   body: ChatCompletionRequest,
@@ -157,7 +167,7 @@ async function postWithRetry(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}`, 'x-session-id': SESSION_ID } : {}),
         },
         body: JSON.stringify(body),
         signal,
