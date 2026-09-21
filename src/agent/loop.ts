@@ -91,7 +91,7 @@ import {
   subagentPressureEnabled,
   underPressure,
 } from './subagentpressure.js';
-import { wouldFold, type CompactionNote } from './compaction.js';
+import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -1790,6 +1790,167 @@ export async function runTurn(opts: {
           `via=${system.includes(DROPPED_LEDGER_MARKER) ? 'system' : ledgerActive ? 'tail' : 'none'}\n`,
       );
     }
+    // EXPERIMENT (#280): the report round. One extra model call, calls forbidden, asking for a
+    // compaction note; the fold below then carries the note as the recap's body instead of the
+    // read ledger (see compactionreport.ts for the measurement behind it). Its own request, not
+    // this round's — the note is captured and the round's real call proceeds after the fold, so
+    // the note-writing reasoning never enters history. Agent mode only for now (plan mode has its
+    // own force-write and transform; keep the blast radius to one path). Streams into the live
+    // region like any reply so the user sees the note being written; committed as an info notice
+    // so it reads as a harness event, not an answer. Fail-open: an empty or aborted reply folds
+    // exactly as before.
+    //
+    // Written BEFORE the batch-age shed below (#426): the shed rewrites mid-history, and when the
+    // note request came after it, that request paid the shed's invalidation and the real request
+    // paid the fold's — two full re-prefills in one event (measured: 9k + 9.3k tokens, 416s + 431s
+    // on a 24k window). Here the note request is a pure append on the previous round, and the
+    // shed and fold land together on the real request. It is also written from the live bytes the
+    // shed is about to collapse, which is what a findings note is for.
+    //
+    // Gated on the fold actually removing something: under PREFIX_STABLE the shed often gets the
+    // request under the threshold on its own and the fold then keeps everything — a note written
+    // there has no recap to live in and is thrown away (observed twice in one run). Pre-shed that
+    // is `foldAfterShed`, the same decision replayed on a copy; off prefix-stable there is no shed
+    // and `wouldFold` on the history is the decision itself.
+    let note: CompactionNote | undefined;
+    if (
+      compactionReportEnabled() &&
+      window &&
+      !planForceWrite &&
+      opts.promptMode !== 'plan' &&
+      !opts.signal?.aborted &&
+      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) &&
+      (prefixStable
+        ? foldAfterShed(
+            opts.history,
+            h => rawEstimate(h) * compactCalibration,
+            window,
+            compactCalibration,
+            opts.config.minGenTokens,
+          )
+        : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
+    ) {
+      const n = shrink.folds + 1;
+      const directive = buildCompactionReportDirective(n);
+      // Top-level notice first, so the nested block that follows reads as a deliberate side
+      // conversation and not as a stray indent; the fold notice below closes it.
+      opts.onMessage({
+        role: 'system',
+        tone: 'info',
+        content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
+      });
+      opts.onPhase?.('thinking');
+      opts.onCompactionNote?.(true);
+      try {
+        const report = (suffix: string) =>
+          callModel({
+            system: prefixStable ? baseSystem : system + '\n\n' + suffix,
+            history: opts.history,
+            // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
+            // Sending none rendered a different system turn: on the measured 24k runs the note
+            // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
+            // re-prefilled it again — two full prefills per fold, one of them for nothing.
+            tools: callTools,
+            toolChoice: 'none',
+            config: opts.config,
+            onContentDelta: opts.onContentDelta,
+            onReasoningDelta: opts.onReasoningDelta,
+            signal: opts.signal,
+            calibration,
+            maxTokens: computeMaxTokens({
+              contextWindow: window,
+              promptTokens: Math.round(rawEstimate() * calibration),
+              userMaxTokens: opts.config.maxTokens,
+            }),
+            prefixStable,
+            // Do not freeze this round's fresh payloads at the note request's render. Pre-shed the
+            // fit-to-window cap has the least room it will have all event, so the bytes stamped
+            // here would be the most truncated ones — and the real request after the fold would
+            // reuse them. Left unstamped, the real request renders them with the post-fold room
+            // and stamps those. Free for the cache: the fold (or the shed, if no fold) already
+            // diverges the real request before the fresh block, so the differing bytes cost nothing
+            // they were not paying.
+            stampRenders: false,
+            trailingNote: prefixStable
+              ? roundSuffix
+                ? `${roundSuffix}\n\n${suffix}`
+                : suffix
+              : undefined,
+            // The note round is a request like any other, so it gets its own prefix-cache line:
+            // before #426 it was the one request the trace never saw, and the fold's line that
+            // followed compared against the round before it.
+            onRequest: debugEnabled()
+              ? msgs => {
+                  const d = prefixTrace.record(msgs, {
+                    trailingNote: prefixStable,
+                    tools: toolsToChatTools(callTools),
+                  });
+                  const pct =
+                    d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
+                  const tok = reprocessedTokens(
+                    d,
+                    Math.round(rawEstimate(opts.history, callTools) * calibration),
+                  );
+                  debugLog(
+                    `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
+                      `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
+                      `msgs=${d.stableMessages}/${d.totalMessages}` +
+                      (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
+                      ` ${formatPrefillCost(tok, prefillRate.get(), false)}\n`,
+                  );
+                }
+              : undefined,
+          });
+        let rep = await report(directive);
+        if (rep.usage) opts.onUsage?.(rep.usage);
+        // Diagnosable from the log: an empty content channel with a recovered in-band call is the
+        // model trying to read instead of writing; a `length` stop is the budget.
+        const describe = (r: typeof rep): string =>
+          `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
+          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
+        let retried = false;
+        if (!rep.content?.trim() && !opts.signal?.aborted) {
+          debugLog(
+            `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
+          );
+          opts.onReasoningReset?.();
+          retried = true;
+          const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
+          if (again.usage) opts.onUsage?.(again.usage);
+          // Keep whichever reply has a note in the content channel; failing both, the first
+          // reasoning is the better fallback (it is the longer, less nagged thinking).
+          if (again.content?.trim()) rep = again;
+        }
+        const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
+        if (text) {
+          note = { n, text };
+          // UI only, never history: the note as a nested assistant message so it renders as
+          // markdown and sits indented like a subagent's output, WITH its reasoning — the trace of
+          // how the note was derived stays in the scrollback for the user, while the model's
+          // history gets only the note (via the recap). compactionNote colors its bar.
+          opts.onMessage({
+            role: 'assistant',
+            content: text,
+            reasoning: rep.reasoning?.trim() || undefined,
+            nested: true,
+            compactionNote: true,
+          } as Message);
+        }
+        debugLog(
+          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
+            `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
+            `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
+        );
+      } catch (err) {
+        if (opts.signal?.aborted) return;
+        debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
+      } finally {
+        opts.onCompactionNote?.(false);
+        // The live region held the note; if the reply was empty no assistant commit cleared it,
+        // so the UI is told explicitly before the round's real reply streams.
+        opts.onReasoningReset?.();
+      }
+    }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in
     // one oldest-first batch when the estimate crosses the same threshold compaction uses — and do
     // it immediately before the compaction check so the two rewrites land in the SAME request (one
@@ -1841,142 +2002,6 @@ export async function runTurn(opts: {
       (shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
         agedButAboveWatermark)
     ) {
-      // EXPERIMENT (#280): the report round. One extra model call, tools withdrawn, asking for a
-      // compaction note; the fold below then carries the note as the recap's body instead of the
-      // read ledger (see compactionreport.ts for the measurement behind it). Its own request, not
-      // this round's — the note is captured and the round's real call proceeds after the fold, so
-      // the note-writing reasoning never enters history. Agent mode only for now (plan mode has its
-      // own force-write and transform; keep the blast radius to one path). Streams into the live
-      // region like any reply so the user sees the note being written; committed as an info notice
-      // so it reads as a harness event, not an answer. Fail-open: an empty or aborted reply folds
-      // exactly as before.
-      //
-      // Gated on the fold actually removing something (`wouldFold`, the same walk compactHistory
-      // does): under PREFIX_STABLE the batch-age shed just above often gets the request under the
-      // threshold on its own, and the fold then keeps everything — a note written there has no
-      // recap to live in and is thrown away (observed twice in one run). The note is therefore
-      // written from the post-shed history — outlines and summaries for the aged part, live bytes
-      // for the recent part — which is what the model actually still knows at that moment.
-      let note: CompactionNote | undefined;
-      if (
-        compactionReportEnabled() &&
-        opts.promptMode !== 'plan' &&
-        !opts.signal?.aborted &&
-        wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens)
-      ) {
-        const n = shrink.folds + 1;
-        const directive = buildCompactionReportDirective(n);
-        // Top-level notice first, so the nested block that follows reads as a deliberate side
-        // conversation and not as a stray indent; the fold notice below closes it.
-        opts.onMessage({
-          role: 'system',
-          tone: 'info',
-          content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
-        });
-        opts.onPhase?.('thinking');
-        opts.onCompactionNote?.(true);
-        try {
-          const report = (suffix: string) =>
-            callModel({
-              system: prefixStable ? baseSystem : system + '\n\n' + suffix,
-              history: opts.history,
-              // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
-              // Sending none rendered a different system turn: on the measured 24k runs the note
-              // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
-              // re-prefilled it again — two full prefills per fold, one of them for nothing.
-              tools: callTools,
-              toolChoice: 'none',
-              config: opts.config,
-              onContentDelta: opts.onContentDelta,
-              onReasoningDelta: opts.onReasoningDelta,
-              signal: opts.signal,
-              calibration,
-              maxTokens: computeMaxTokens({
-                contextWindow: window,
-                promptTokens: Math.round(rawEstimate() * calibration),
-                userMaxTokens: opts.config.maxTokens,
-              }),
-              prefixStable,
-              trailingNote: prefixStable
-                ? roundSuffix
-                  ? `${roundSuffix}\n\n${suffix}`
-                  : suffix
-                : undefined,
-              // The note round is a request like any other, so it gets its own prefix-cache line:
-              // before #426 it was the one request the trace never saw, and the fold's line that
-              // followed compared against the round before it.
-              onRequest: debugEnabled()
-                ? msgs => {
-                    const d = prefixTrace.record(msgs, {
-                      trailingNote: prefixStable,
-                      tools: toolsToChatTools(callTools),
-                    });
-                    const pct =
-                      d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
-                    const tok = reprocessedTokens(
-                      d,
-                      Math.round(rawEstimate(opts.history, callTools) * calibration),
-                    );
-                    debugLog(
-                      `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
-                        `stable=${d.stableChars}/${d.totalChars}c (${pct}%) ` +
-                        `msgs=${d.stableMessages}/${d.totalMessages}` +
-                        (d.changedRole ? ` firstChanged=${d.changedRole}` : '') +
-                        ` ${formatPrefillCost(tok, prefillRate.get(), false)}\n`,
-                    );
-                  }
-                : undefined,
-            });
-          let rep = await report(directive);
-          if (rep.usage) opts.onUsage?.(rep.usage);
-          // Diagnosable from the log: an empty content channel with a recovered in-band call is the
-          // model trying to read instead of writing; a `length` stop is the budget.
-          const describe = (r: typeof rep): string =>
-            `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
-            `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
-          let retried = false;
-          if (!rep.content?.trim() && !opts.signal?.aborted) {
-            debugLog(
-              `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
-            );
-            opts.onReasoningReset?.();
-            retried = true;
-            const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
-            if (again.usage) opts.onUsage?.(again.usage);
-            // Keep whichever reply has a note in the content channel; failing both, the first
-            // reasoning is the better fallback (it is the longer, less nagged thinking).
-            if (again.content?.trim()) rep = again;
-          }
-          const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
-          if (text) {
-            note = { n, text };
-            // UI only, never history: the note as a nested assistant message so it renders as
-            // markdown and sits indented like a subagent's output, WITH its reasoning — the trace of
-            // how the note was derived stays in the scrollback for the user, while the model's
-            // history gets only the note (via the recap). compactionNote colors its bar.
-            opts.onMessage({
-              role: 'assistant',
-              content: text,
-              reasoning: rep.reasoning?.trim() || undefined,
-              nested: true,
-              compactionNote: true,
-            } as Message);
-          }
-          debugLog(
-            `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
-              `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
-              `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
-          );
-        } catch (err) {
-          if (opts.signal?.aborted) return;
-          debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
-        } finally {
-          opts.onCompactionNote?.(false);
-          // The live region held the note; if the reply was empty no assistant commit cleared it,
-          // so the UI is told explicitly before the round's real reply streams.
-          opts.onReasoningReset?.();
-        }
-      }
       const removed = compactHistory(
         opts.history,
         window,

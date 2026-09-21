@@ -6,6 +6,8 @@ import {
   compactThreshold,
   distillPlanHandoff,
   batchAgePayloads,
+  foldAfterShed,
+  wouldFold,
   AGE_LOW_FRACTION,
 } from './compaction.js';
 
@@ -666,6 +668,70 @@ describe('batchAgePayloads', () => {
 // #247: what a fold leaves behind. Before this, a tool-heavy turn recapped to a bare tool count
 // with no record of what was done, a file list read off any `path` argument, and one copy of the
 // closing note per fold.
+describe('foldAfterShed (#426)', () => {
+  const round = (id: string, payload: string, reasoning?: string): Message[] => [
+    {
+      role: 'assistant',
+      content: '',
+      ...(reasoning ? { reasoning } : {}),
+      toolCalls: [{ id, name: 'read', args: {} }],
+    },
+    { role: 'tool', callId: id, summary: `${id}`, payload, rendered: `${id}\n\n${payload}` },
+  ];
+  // Same state-sensitive stand-in as the batchAgePayloads suite, over whichever array it is handed.
+  const estimate = (history: Message[]): number =>
+    history.reduce((n, m) => {
+      if (m.role === 'tool') return n + (m.aged ? m.summary.length : (m.payload?.length ?? 0));
+      if (m.role === 'assistant') return n + (m.reasoningAged ? 0 : (m.reasoning?.length ?? 0));
+      return n;
+    }, 0);
+  const snapshot = (history: Message[]): string => JSON.stringify(history);
+
+  it('predicts what running the shed and then asking would answer, without touching the history', () => {
+    // Enough shed candidates to reach the watermark: the event ends under target, so no fold.
+    const reaches: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...round('a', 'x'.repeat(400)),
+      ...round('b', 'y'.repeat(400)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    // Bulk in the protected tail the shed cannot reach: the event runs dry over target, so a fold
+    // — given earlier turns with enough verbatim content to overflow the keep budget.
+    const runsDry: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      { role: 'assistant', content: 'w'.repeat(700) },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'w'.repeat(700) },
+      ...round('a', 'x'.repeat(200)),
+      ...round('c', 'z'.repeat(2000)),
+    ];
+    for (const [history, expected] of [
+      [reaches, false],
+      [runsDry, true],
+    ] as const) {
+      const before = snapshot(history);
+      const predicted = foldAfterShed(history, estimate, 1000, 1, 0);
+      expect(snapshot(history)).toBe(before);
+      // The oracle: the loop's own sequence, on a copy so the history stays pristine here too.
+      const replay = history.map(m => ({ ...m }));
+      batchAgePayloads(replay, () => estimate(replay), 1000, 0);
+      const target = compactThreshold(1000, 0) * AGE_LOW_FRACTION;
+      const actual = estimate(replay) > target && wouldFold(replay, 1000, 1, 0);
+      expect(predicted).toBe(actual);
+      expect(predicted).toBe(expected);
+    }
+  });
+
+  it('is false when the shed leaves nothing for the fold-point walk to fold', () => {
+    // Over target after the shed, but only one turn: the task is pinned and the rest is the
+    // protected tail, so foldPoint has no span to recap — the removed=0 case the gate exists for.
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(2000))];
+    expect(foldAfterShed(history, estimate, 1000, 1, 0)).toBe(false);
+  });
+});
+
 describe('recap narrative and ranges (#247)', () => {
   // One exploration round: an assistant tool call with EMPTY content — the thinking rides in
   // `reasoning`, which the recap never reads — and its result. The reasoning is what spends the

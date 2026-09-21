@@ -36,7 +36,13 @@ afterAll(() => {
 
 const h = vi.hoisted(() => ({
   scripted: [] as ModelResponse[],
-  captured: [] as { tools: string[]; toolChoice?: 'none' }[],
+  captured: [] as {
+    tools: string[];
+    toolChoice?: 'none';
+    stampRenders?: boolean;
+    // How many tool payloads were already aged when this request was built.
+    agedAtCall: number;
+  }[],
 }));
 vi.mock('../provider/client.js', async () => {
   const { messagesToChatParams: toChatParams } = await import('../provider/toolcall.js');
@@ -50,17 +56,23 @@ vi.mock('../provider/client.js', async () => {
         toolChoice?: 'none';
         config: Config;
         prefixStable?: boolean;
+        stampRenders?: boolean;
         trailingNote?: string;
         onRequest?: (m: unknown[]) => void;
       }) => {
-        h.captured.push({ tools: opts.tools.map(t => t.name), toolChoice: opts.toolChoice });
+        h.captured.push({
+          tools: opts.tools.map(t => t.name),
+          toolChoice: opts.toolChoice,
+          stampRenders: opts.stampRenders,
+          agedAtCall: opts.history.filter(m => m.role === 'tool' && m.aged).length,
+        });
         opts.onRequest?.(
           toChatParams(opts.system, opts.history, {
             contextWindow: opts.config.contextWindow,
             reasoningRounds: opts.config.reasoningRounds,
             minGenTokens: opts.config.minGenTokens,
             prefixStable: opts.prefixStable,
-            stampRenders: opts.prefixStable,
+            stampRenders: opts.stampRenders ?? opts.prefixStable,
             trailingNote: opts.trailingNote,
           }),
         );
@@ -141,6 +153,17 @@ function bigHistory(): Message[] {
   return out;
 }
 
+// The same shape with the payloads LIVE, so the event has a real shed in it. This is the case the
+// first live fold after #428 showed: the note request paid the shed's rewrite, the real request
+// paid the fold's. Byte-frozen renders as the previous round would have left them.
+function liveHistory(): Message[] {
+  return bigHistory().map(m =>
+    m.role === 'tool'
+      ? { ...m, aged: undefined, payload: 'x'.repeat(3000), rendered: `${m.summary}\n\nlive` }
+      : m,
+  );
+}
+
 const run = (history: Message[], userInput: string, prefixTrace?: PrefixTrace) =>
   runTurn({
     userInput,
@@ -195,6 +218,41 @@ describe('prefix-cache visibility of the report round and the turn boundary (#42
     const afterFold = lines[lines.indexOf(report!) + 1];
     expect(afterFold).toContain('cause=system-changed');
     expect(afterFold).not.toContain('phase=report');
+  });
+
+  it('writes the note before the shed, so the shed and the fold land on one request', async () => {
+    const trace = new PrefixTrace();
+    h.scripted.push({ content: 'ok', toolCalls: undefined });
+    const history = liveHistory().slice(0, 8);
+    await run(history, 'warm up', trace);
+    history.push(...liveHistory().slice(8));
+    h.scripted.push({ content: 'the note', toolCalls: undefined });
+    h.scripted.push({ content: 'final', toolCalls: undefined });
+    await run(history, 'keep going', trace);
+
+    const log = await readFile(logPath, 'utf8');
+    expect(log).toContain('batch-age marked=');
+    const lines = log.split('\n').filter(l => l.includes('] prefix-cache round='));
+    const report = lines.find(l => l.includes('phase=report'))!;
+    // Nothing aged yet when the note was asked for: the request is the previous round plus its
+    // note, and the model writes from the live bytes about to be collapsed.
+    expect(h.captured[1].agedAtCall).toBe(0);
+    // append-only here (the quiet first turn carried no note to displace); trailing-note once one
+    // rides — either is the append, and neither names a rewritten role.
+    expect(report).toMatch(/cause=(append-only|trailing-note) /);
+    expect(report).not.toContain('firstChanged=');
+    // The shed then lands together with the fold on the real request, which was going to diverge
+    // from the top anyway.
+    const real = lines[lines.indexOf(report) + 1];
+    expect(real).toContain('cause=system-changed');
+    // Order in the log: note request, THEN the shed, then the fold (the fold then removes the
+    // aged messages, so the real request's history has none left to count).
+    expect(log.indexOf('batch-age marked=')).toBeGreaterThan(log.indexOf('phase=report'));
+    expect(log.indexOf('compaction removed=')).toBeGreaterThan(log.indexOf('batch-age marked='));
+    // The note request must not freeze this round's fresh payloads at the tightest cap of the
+    // event; the real request renders and stamps them with the post-fold room.
+    expect(h.captured[1].stampRenders).toBe(false);
+    expect(h.captured[2].stampRenders).toBeUndefined();
   });
 
   it('reports a tool-list change ahead of every message-level cause', async () => {
