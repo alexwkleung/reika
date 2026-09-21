@@ -396,6 +396,77 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
   });
 });
 
+// The composition half of #163: which commands run sandboxed is decided by the danger scan and the
+// approval, so the four cells are worth pinning — particularly bypass, where `detectDangerousPatterns`
+// used to never run at all because it sat inside `if (ctx.requestApproval)`.
+describe('bashTool — sandbox composition', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const ctx = { cwd: '' };
+  // The receipt is the only place the decision surfaces on every platform, so it is what these read:
+  // a sandboxed command announces itself, an unsandboxed one says nothing.
+  const receipt = (r: { notice?: { content: string } }): string => r.notice?.content ?? '';
+
+  it('sandboxes a clean command that was auto-approved (safe)', async () => {
+    const r = await bashTool.run({ command: 'echo clean' }, { ...ctx, cwd: dir });
+    expect(receipt(r)).toContain('Ran sandboxed');
+  });
+
+  it('sandboxes a clean command in bypass, where no scan used to run at all', async () => {
+    // No requestApproval at all is what bypass looks like. Before the hoist the scan was skipped
+    // here, so a sandbox keyed on it would have covered exactly nothing in autonomous runs.
+    const r = await bashTool.run({ command: 'echo clean' }, { cwd: dir });
+    expect(receipt(r)).toContain('Ran sandboxed');
+  });
+
+  it('leaves a flagged command unsandboxed once a human approved it', async () => {
+    let asked = 0;
+    const r = await bashTool.run(
+      { command: 'git push origin main' },
+      {
+        cwd: dir,
+        requestApproval: async () => {
+          asked++;
+          return true;
+        },
+      },
+    );
+    expect(asked).toBe(1);
+    expect(receipt(r)).not.toContain('Ran sandboxed');
+    // And no sandbox footer either — a sandbox line on a command that ran unsandboxed is exactly the
+    // false lead the footer exists to prevent.
+    expect(r.payload ?? '').not.toContain('local sandbox');
+  });
+
+  it('does not run a flagged command at all when the user declines', async () => {
+    const r = await bashTool.run(
+      { command: 'npm install && touch ran.txt' },
+      {
+        cwd: dir,
+        requestApproval: async () => false,
+      },
+    );
+    expect(r.summary).toContain('declined by user');
+    await expect(readFile(join(dir, 'ran.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  // The gate is on what a human cleared, not on the pattern alone: an auto-approved flagged command
+  // is not reachable, because `flagged` forces the prompt in every mode that has a prompt.
+  it('keeps a flagged command out of the sandbox only via an explicit approval', async () => {
+    const r = await bashTool.run({ command: 'mkdir -p sub && echo x > sub/f.txt' }, { cwd: dir });
+    // Clean (nothing flagged), so sandboxed — and the write lands because the cwd is the realpath'd
+    // WORKDIR (the /tmp -> /private/tmp trap that made every create fail).
+    expect(receipt(r)).toContain('Ran sandboxed');
+    expect(await readFile(join(dir, 'sub', 'f.txt'), 'utf8')).toBe('x\n');
+  });
+});
+
 // A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in
 // _treediff.test.ts; this checks bash brackets its run with it and stays silent outside a repo.
 describe('bashTool — tree changes', () => {
@@ -437,12 +508,16 @@ describe('bashTool — tree changes', () => {
     await writeFile(join(dir, 'x.txt'), 'a\n');
     const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
     expect(first.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
+    // Matched on content, not on presence: the sandbox receipt (#163) rides every sandboxed command
+    // on this platform, so "has no notice" would be a claim about the machine rather than about the
+    // once-per-cwd rule this test is about.
+    const notRepo = first.notice?.content ?? '';
+    expect(notRepo).toContain('Not a git repo');
     expect(first.notice?.tone).toBe('info');
-    expect(first.notice?.content).toContain('Not a git repo');
     expect(first.payload).not.toContain('git repo');
     const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir });
     expect(second.changes?.files[0].hunks[0].text).toBe('  a\n  b\n+ c');
-    expect(second).not.toHaveProperty('notice');
+    expect(second.notice?.content ?? '').not.toContain('Not a git repo');
   });
 });
 

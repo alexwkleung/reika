@@ -72,6 +72,7 @@ function makeConfig(): Config {
     pasteFetch: false,
     skillAuto: 'off',
     anon: false,
+    sandbox: false,
   };
 }
 
@@ -152,7 +153,11 @@ describe('prefill-cost annotation on the prefix-cache line (integration)', () =>
 
     // Round 1 re-processed its whole prompt over 10 s; round 2 must price itself at that rate.
     expect(lines[1]).toContain('cause=system-changed');
-    expect(num(lines[2]!, 'rate')).toBeCloseTo(num(lines[1]!, 'reprocess') / 10, 0);
+    // Within one printed tok/s either way, not to the digit. The rate is 12035/10 = 1203.5, which
+    // `formatRate` renders as `1204t/s` (it rounds above 10) — so parsing the two lines back gives
+    // 1204 against an expected 1203.5, and the 0.5 difference is the format's precision, not a
+    // smoothing disagreement. Asserting the digit exactly would be asserting the formatter.
+    expect(num(lines[2]!, 'rate')).toBeCloseTo(num(lines[1]!, 'reprocess') / 10, -1);
     expect(lines[2]).not.toContain('est=?');
   });
 

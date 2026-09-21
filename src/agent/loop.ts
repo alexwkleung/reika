@@ -2884,6 +2884,7 @@ export async function runTurn(opts: {
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
+            sandbox: opts.config.sandbox,
             signal: opts.signal,
           });
           summary = result.summary;

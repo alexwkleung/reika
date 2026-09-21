@@ -585,3 +585,27 @@ describe('REIKA_SKILL_AUTO (#425)', () => {
     }
   });
 });
+
+describe('REIKA_SANDBOX (#163)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+    delete process.env.REIKA_SANDBOX;
+  });
+
+  // On by default, which is the whole point: the commands it covers are the ones a human never saw,
+  // so an opt-in flag would leave the autonomous case — the one it exists for — unprotected.
+  it('unset is on', () => {
+    expect(loadConfig().sandbox).toBe(true);
+  });
+
+  it('only =0 turns it off, so a typo leaves the sandbox in place', () => {
+    for (const v of ['0']) {
+      process.env.REIKA_SANDBOX = v;
+      expect(loadConfig().sandbox, v).toBe(false);
+    }
+    for (const v of ['1', 'true', 'yes', '']) {
+      process.env.REIKA_SANDBOX = v;
+      expect(loadConfig().sandbox, v).toBe(true);
+    }
+  });
+});

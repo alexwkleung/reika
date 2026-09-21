@@ -48,6 +48,7 @@ function makeConfig(): Config {
     pasteFetch: false,
     skillAuto: 'off',
     anon: false,
+    sandbox: false,
   };
 }
 

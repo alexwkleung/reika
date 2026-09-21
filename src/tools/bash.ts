@@ -1,7 +1,18 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { loadConfig } from '../config.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
+import {
+  SANDBOX_EXEC_ERROR_PREFIX,
+  SANDBOX_PROFILE_ERROR_CODE,
+  broadWorkdirNotice,
+  isBroadWorkdir,
+  sandboxArgv,
+  sandboxFooter,
+  sandboxNotice,
+  sandboxPlan,
+} from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
 import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
 import { changesSince, snapshotTree } from './_treediff.js';
@@ -44,33 +55,60 @@ export const bashTool: Tool = {
     const command = String(args.command ?? '').trim();
     if (!command) return { summary: 'Bash failed: empty command' };
 
+    // The danger scan runs whether or not there is a modal to raise, because it decides two things
+    // now, not one: whether to *ask*, and whether the command runs sandboxed (#163). Hoisted out of
+    // the conditional it used to sit in — under `bypass` `requestApproval` is undefined, so the scan
+    // never ran, and a sandbox keyed on it would have covered nothing in exactly the autonomous
+    // configuration this exists for. The signal was always computed one line before the prompt; this
+    // is the same signal feeding both decisions, not a second classifier.
+    const warnings = detectDangerousPatterns(command);
+    const flagged = warnings.length > 0;
+    let approvedByHand = false;
     if (ctx.requestApproval) {
-      const warnings = detectDangerousPatterns(command);
       const ok = await ctx.requestApproval({
         tool: 'bash',
         subject: ctx.cwd,
         preview: command,
-        warnings: warnings.length > 0 ? warnings : undefined,
+        warnings: flagged ? warnings : undefined,
       });
       if (!ok) return { summary: `Bash declined by user: ${command}` };
+      approvedByHand = true;
     }
+
+    // One sentence: anything a human didn't look at runs sandboxed. A flagged command is the only
+    // kind that needs the network (`npm install`, `git push`, `gh pr create`, `curl | sh` — all
+    // already in the danger patterns), and it is exactly the kind a human just cleared. So the
+    // sandbox needs no proxy, no package-manager allowlist, and no HTTP layer.
+    //
+    // `ctx.sandbox === false` is REIKA_SANDBOX=0: an escape hatch for a run that is measuring
+    // something about bash behavior and needs the old world back. Undefined means on.
+    const sandboxed = ctx.sandbox !== false && !(flagged && approvedByHand);
 
     // Bracket the run with a working-tree snapshot so an edit made through the shell (`sed -i`, a
     // heredoc, a formatter) gets the same visual diff the edit tool gives (#278). Both halves run
     // in the dispatch gap, off the model's clock, and fail open.
     const snapshot = await snapshotTree(ctx.cwd, command);
-    const result = await execStream(command, ctx);
+    const result = await execStream(command, ctx, sandboxed);
     if (!snapshot) return result;
     const changes = await changesSince(snapshot);
     // Without a repo the detector is the command text, which sees far less. Said once per cwd, on
     // the first shell command there, so the narrower coverage is stated before it's discovered —
     // and never in the model's context, where it could act on none of it.
-    const notice =
-      snapshot.root === null && !noRepoNoticed.has(ctx.cwd)
-        ? { tone: 'info' as const, content: NO_REPO_NOTICE }
-        : undefined;
-    if (notice) noRepoNoticed.add(ctx.cwd);
-    return { ...result, ...(changes ? { changes } : {}), ...(notice ? { notice } : {}) };
+    //
+    // Joined to the sandbox receipt rather than replacing it: on the first command in a non-repo cwd
+    // both fire, and picking one would silently drop the other — a fresh directory is exactly where
+    // that happens, and it was dropping the sandbox line in the tests below. Only the first command
+    // carries this line, so the concatenation cannot accumulate over a session.
+    const noRepo = snapshot.root === null && !noRepoNoticed.has(ctx.cwd);
+    if (noRepo) noRepoNoticed.add(ctx.cwd);
+    const notice = noRepo
+      ? {
+          tone: result.notice?.tone ?? ('info' as const),
+          content: [result.notice?.content, NO_REPO_NOTICE].filter(Boolean).join('\n'),
+        }
+      : result.notice;
+    const { notice: _drop, ...rest } = result;
+    return { ...rest, ...(changes ? { changes } : {}), ...(notice ? { notice } : {}) };
   },
 };
 
@@ -187,9 +225,54 @@ export type ExecContext = Pick<
   'cwd' | 'onProgress' | 'bashTimeoutMs' | 'bashIdleMs' | 'signal'
 >;
 
-export function execStream(command: string, ctx: ExecContext): Promise<ToolResult> {
+// A base URL reaching a loopback model server, cached per process. `_sandbox` has no config access
+// by design — the profile generator stays pure string-in/string-out so it tests without a config —
+// so the one value it needs is read here. `loadConfig` throwing (no REIKA_MODEL) is not this
+// function's problem: it just means no local endpoint to allow, and the profile denies all network.
+let allowedNetBase: string | null | undefined;
+
+export function resetSandboxNetCache(): void {
+  allowedNetBase = undefined;
+}
+
+function sandboxBaseURL(): string {
+  if (allowedNetBase === undefined) {
+    try {
+      allowedNetBase = loadConfig().baseURL;
+    } catch {
+      allowedNetBase = null;
+    }
+  }
+  return allowedNetBase ?? '';
+}
+
+export function execStream(
+  command: string,
+  ctx: ExecContext,
+  sandboxed = false,
+): Promise<ToolResult> {
   const timeoutMs = ctx.bashTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   const idleMs = ctx.bashIdleMs ?? DEFAULT_IDLE_MS;
+  // Resolved before the promise so a profile that cannot be built degrades to today's behavior
+  // rather than to a failed command. `sandboxPlan` returns a reason instead of args on every
+  // platform that isn't macOS (bubblewrap's `--unshare-net` gives the child its own loopback, so a
+  // sandboxed command could not reach the host's model server — the issue's "Linux is a real second
+  // project"). There the reason is expected and gets no notice; on macOS it is a machine fault the
+  // user should hear about.
+  const plan = sandboxed ? sandboxPlan(ctx.cwd, sandboxBaseURL()) : undefined;
+  const argv = plan ? sandboxArgv(plan, command) : undefined;
+  // Told ONCE, up front — as a UI receipt, never in the model's context. Nothing otherwise announces
+  // the sandbox, so without this the model's only evidence is error text it misreads (curl's "could
+  // not resolve host" reads as a typo'd URL, git's as a missing key) and the user's only evidence is
+  // a command that mysteriously failed.
+  const notice: ToolResult['notice'] = argv
+    ? {
+        tone: 'info',
+        content: isBroadWorkdir(ctx.cwd) ? broadWorkdirNotice(ctx.cwd) : sandboxNotice(command),
+      }
+    : plan && !('args' in plan) && process.platform === 'darwin'
+      ? { tone: 'warn', content: `Not sandboxed: ${plan.reason}` }
+      : undefined;
   return new Promise(resolve => {
     if (ctx.signal?.aborted) {
       resolve({ summary: `Bash aborted: ${command} (not run)` });
@@ -197,11 +280,21 @@ export function execStream(command: string, ctx: ExecContext): Promise<ToolResul
     }
     // stdin is /dev/null, not a pipe we never write: a command that reads it (`cat`, a `read`, an
     // interactive installer's prompt) gets EOF at once instead of the idle bound five minutes on.
-    const proc = spawn('/bin/sh', ['-c', command], {
-      cwd: ctx.cwd,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    //
+    // Sandboxed, the argv is `sandbox-exec … /bin/sh -c command` — a different program with the same
+    // pipes one level down, so exit codes, SIGTERM to the process group, streaming and both timeout
+    // bounds behave identically (each verified, #163).
+    const proc = argv
+      ? spawn(argv.cmd, argv.args, {
+          cwd: ctx.cwd,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      : spawn('/bin/sh', ['-c', command], {
+          cwd: ctx.cwd,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
     if (proc.pid != null) liveGroups.add(proc.pid);
     const buffer: string[] = [];
     let totalBytes = 0;
@@ -283,7 +376,15 @@ export function execStream(command: string, ctx: ExecContext): Promise<ToolResul
       cleanup();
       const rawOutput = buffer.join('');
       const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
-      const base = (rawOutput + truncated || '(no output)') + searchHint(command, rawOutput);
+      // The sandbox-aware half (#163). Seatbelt's network denials never say "permission" — curl
+      // reports a DNS failure, git/npm report credentials or proxy problems — so a headerless failure
+      // reads to a model as a bug in its own command and sets up the classic spiral. Keyed on the
+      // exit status, so a flagged (`npm install`) command that deliberately ran unsandboxed gets no
+      // sandbox line to chase.
+      const base =
+        (rawOutput + truncated || '(no output)') +
+        searchHint(command, rawOutput) +
+        (argv ? sandboxFooter(command, code) : '');
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
       const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
@@ -298,7 +399,13 @@ export function execStream(command: string, ctx: ExecContext): Promise<ToolResul
           // Loud, and in the payload as well as the summary: a model that reads a killed command
           // as a slow one re-runs it as is, and the idle case is the one where that never ends.
           const [summary, note] = stoppedResult(command, stopped, timeoutMs, idleMs);
-          resolve({ summary, payload: `${payload}\n${note}`, command: display, exitCode: code });
+          resolve({
+            summary,
+            payload: `${payload}\n${note}`,
+            command: display,
+            exitCode: code,
+            ...(notice ? { notice } : {}),
+          });
         } else {
           // The status is *surfaced*, not reclassified (#200). A non-zero exit used to read
           // `Bash failed:`, which is wrong for the many commands that exit non-zero as ordinary
@@ -314,9 +421,21 @@ export function execStream(command: string, ctx: ExecContext): Promise<ToolResul
             payload,
             command: display,
             exitCode: code,
+            ...(notice ? { notice } : {}),
           });
         }
       };
+      // A bad profile exits 65 without running anything — the sandbox fails CLOSED, which is the
+      // opposite of what a fail-open feature wants: one bug in the generator would otherwise turn
+      // every command into an uninterpretable failure. Retried unsandboxed, exactly once.
+      if (
+        argv &&
+        code === SANDBOX_PROFILE_ERROR_CODE &&
+        rawOutput.includes(SANDBOX_EXEC_ERROR_PREFIX)
+      ) {
+        execStream(command, ctx, false).then(resolve);
+        return;
+      }
       // Recorded whether or not spilling is on: the question this answers is how often bash
       // output exceeds the cap at all, which is a property of the workload, not of the flag. The
       // spilling arm records below instead, after the write, so `spilled` reports whether an
