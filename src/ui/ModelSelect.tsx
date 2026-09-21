@@ -44,15 +44,16 @@ export function ModelSelect({
       <Box flexDirection="column" marginTop={1}>
         {targets.map((t, i) => {
           const selected = i === selectedIndex;
-          // Auto-registered model entries read best as the bare model name; a
-          // named profile shows its mapping. Ad-hoc entries (a /model name not
-          // in the config) are keyed by their own lowercased model, so the
-          // mapping would be noise — bare name plus the off-config marker. A
-          // profile living on another base URL says so — that's the detail that
-          // makes switching to it a different thing than switching models on
-          // the default server.
+          // A named profile shows its mapping, and its extra models show the
+          // same name in front so a router's menu reads as one group. An entry
+          // keyed by its own model name with no group — the default's
+          // auto-models, an ad-hoc /model target — reads best as the bare
+          // model, since `x → x` is noise. A profile living on another base
+          // URL says so — that's the detail that makes switching to it a
+          // different thing than switching models on the default server.
           const offBase = t.kind === 'profile' && t.baseURL !== baseURL;
-          const label = t.kind === 'profile' && !t.adhoc ? `${t.name} → ${t.model}` : t.model;
+          const head = t.group ?? (t.name === t.model.toLowerCase() ? null : t.name);
+          const label = head ? `${head} → ${t.model}` : t.model;
           // One Text with nested runs (not siblings): on wrap Ink drops the
           // char at a sibling boundary, which would clip a long label.
           return (

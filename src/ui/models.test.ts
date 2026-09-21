@@ -97,4 +97,21 @@ describe('buildModelTargets', () => {
     });
     expect(targets[0].adhoc).toBeUndefined();
   });
+
+  it("carries the group for a named profile's extra model", () => {
+    const targets = buildModelTargets(
+      {
+        models: ['local-model'],
+        profiles: {
+          default: profile('local-model'),
+          go: profile('flash'),
+          'muse-spark': { ...profile('Muse-Spark'), group: 'go' },
+        },
+      },
+      'default',
+    );
+    expect(targets.map(t => t.name)).toEqual(['default', 'go', 'muse-spark']);
+    expect(targets[2].group).toBe('go');
+    expect(targets[1].group).toBeUndefined();
+  });
 });
