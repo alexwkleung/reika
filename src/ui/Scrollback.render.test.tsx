@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback } from './Scrollback.js';
+import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
 
@@ -208,6 +209,33 @@ describe('Scrollback nested (subagent) messages', () => {
       expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
       expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
     }
+  });
+
+  // #431: markdown wrapped to the top-level width and then landed in a box four columns
+  // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
+  // bullet, on a row of its own and flush left, under no hanging indent. The compaction note
+  // is where it showed (a nested assistant reply with prose and a constants list).
+  it('wraps a nested reply’s prose and bullets inside the nested box', () => {
+    const sentence = 'Tuned constants drift from their documented values, unchecked and unnoticed';
+    const content = `Task: ${sentence} (state OPEN).\n\nConstants:\n\n- \`src/agent/loop.ts\`: ${sentence}\n- \`src/agent/compaction.ts\`: ${sentence}`;
+    const frame = framePlusApp([
+      { role: 'assistant', content, nested: true, compactionNote: true },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(4);
+    for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    // Ink's own wrap was a no-op: the rows are the markdown's, wrapped to the nested width,
+    // each sitting at the nested indent.
+    const expected = stripAnsi(renderMarkdown(content, COLS - 2 - INDENT))
+      .split('\n')
+      .filter(l => l.trim())
+      .map(l => ' '.repeat(1 + INDENT) + l);
+    expect(rows.map(r => r.trimEnd())).toEqual(expected);
+    // A bullet's continuation row hangs under its text, not under the marker.
+    const bullets = rows.filter(r => r.trimStart().startsWith('•'));
+    expect(bullets.length).toBe(2);
+    const after = rows[rows.indexOf(bullets[0]) + 1];
+    expect(after).toMatch(new RegExp(`^ {${1 + INDENT + 4}}\\S`));
   });
 
   // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must

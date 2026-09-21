@@ -186,7 +186,7 @@ function StreamingContent({
   // measures the *rendered* output (markdown can expand lines, e.g. code fences) in
   // wrapped display rows, which is what Ink counts against the viewport.
   const pre = tailText(text, maxLines * 4);
-  const tail = tailDisplay(renderMarkdown(pre.text), maxLines, width);
+  const tail = tailDisplay(renderMarkdown(pre.text, width), maxLines, width);
   const truncated = pre.truncated || tail.truncated;
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -314,7 +314,7 @@ function renderMessage(
         ) : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
-            <Text>{renderMarkdown(msg.content!)}</Text>
+            <Text>{renderMarkdown(msg.content!, contentWidth(indent))}</Text>
           </Box>
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
