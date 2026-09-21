@@ -361,4 +361,23 @@ describe('renderMarkdown wraps to the content width', () => {
     expect(narrow).toBeLessThanOrEqual(CONTENT);
     expect(wide).toBe(LONG.length);
   });
+
+  // #431: a nested row (subagent reply, compaction note) is narrower than the terminal-derived
+  // default, and a caller that knows its block's width passes it. Paragraphs and list bodies
+  // both wrap to it; the list's own tab and marker still come out of the same columns.
+  it('wraps to an explicit width instead of the terminal’s', () => {
+    setColumns(120);
+    const NESTED = CONTENT - 4;
+    const prose = renderMarkdown(`${LONG} ${LONG}`, NESTED);
+    expect(Math.max(...widths(prose))).toBeLessThanOrEqual(NESTED);
+    expect(Math.max(...widths(prose))).toBeGreaterThan(NESTED - 12); // wrapped there, not narrower
+    const list = renderMarkdown(`- ${LONG} ${LONG}\n- ${LONG}`, NESTED);
+    expect(Math.max(...widths(list))).toBeLessThanOrEqual(NESTED);
+    expect(list.split('\n')[1].startsWith('    ')).toBe(true);
+  });
+
+  it('falls back to the terminal width when no width is given', () => {
+    setColumns(COLS);
+    expect(renderMarkdown(LONG)).toBe(renderMarkdown(LONG, CONTENT));
+  });
 });

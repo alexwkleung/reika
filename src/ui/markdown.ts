@@ -6,6 +6,7 @@ import wrapAnsi from 'wrap-ansi';
 import { theme } from './theme.js';
 import { codeTheme, resolveLanguage } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
+import { contentWidth } from './layout.js';
 
 // marked-terminal swaps `:` for this sentinel inside codespans (COLON_REPLACER
 // in its source) and restores it in a final pass. See renderInlineMarkdown.
@@ -24,10 +25,15 @@ const TAB_WIDTH = 2;
 // and Ink hard-wrapped the last word onto a line of its own.
 let blockIndent = 0;
 
-// Read per render, not at import: a pane resized after launch keeps wrapping to its real
-// width. Minus the App's paddingX={1} gutter on both sides.
+// The width of the block the render lands in, set per call by renderMarkdown. Read per render,
+// not at import, so a pane resized after launch keeps wrapping to its real width. The default is
+// the top-level scrollback width; a nested row (a subagent's reply, a compaction note) is four
+// columns narrower, and wrapping to the top-level width there left every full line four columns
+// over for Ink to re-wrap — the last word of each line on a row of its own, flush left (#431).
+let renderWidth = contentWidth();
+
 function proseWidth(): number {
-  return Math.max(20, (process.stdout.columns || 80) - 2 - blockIndent);
+  return Math.max(20, renderWidth - blockIndent);
 }
 
 // marked-terminal's `width` option. Set far past any terminal so its own reflow never
@@ -223,7 +229,9 @@ terminalExtension.renderer.blockquote = function (
 
 marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
 
-export function renderMarkdown(content: string): string {
+// `width` is the columns the rendered block has — `contentWidth(indent)` for a scrollback row.
+export function renderMarkdown(content: string, width = contentWidth()): string {
+  renderWidth = width;
   try {
     // Sanitize the SOURCE, never the output (which carries the highlighter's own escape codes).
     // A model answering about Go or a Makefile emits tab-indented code fences, and marked-terminal
