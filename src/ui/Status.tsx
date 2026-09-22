@@ -3,7 +3,13 @@ import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import type { Usage } from '../types.js';
 import { theme } from './theme.js';
-import { contextFill, formatElapsed, formatShrink, kFormat } from './format.js';
+import {
+  contextFill,
+  formatElapsed,
+  formatShrink,
+  formatTokensPerSecond,
+  kFormat,
+} from './format.js';
 import { useContentWidth } from './layout.js';
 
 export function Status({
@@ -18,6 +24,7 @@ export function Status({
   sheds,
   folds,
   cachedTokens,
+  decodeRate,
   pr,
   autoApprove,
   modeTag,
@@ -38,6 +45,9 @@ export function Status({
   sheds?: number;
   folds?: number;
   cachedTokens?: number;
+  // Decode throughput of the last measurable round (#204), from agent/decoderate.ts. Absent until a
+  // round generated enough tokens to measure one, and whenever the provider reported no usage.
+  decodeRate?: number;
   pr?: number | null;
   autoApprove?: 'safe' | 'bypass';
   modeTag?: string;
@@ -60,6 +70,9 @@ export function Status({
   // Share of the prompt the provider served from cache last call. Absent when the
   // provider doesn't report it.
   const cache = formatCache(cachedTokens, contextTokens);
+  // How fast the last measurable round decoded (#204). No color of its own: it is a fact about the
+  // engine, not a warning about anything the user should act on.
+  const rate = formatTokensPerSecond(decodeRate);
   const shrink = formatShrink(sheds ?? 0, folds ?? 0);
   // Which PR the checked-out branch is attached to, when one exists.
   const prBadge = formatPr(pr);
@@ -86,6 +99,7 @@ export function Status({
   }
   chips.push(muted(model), muted(`turn ${turns}`), muted(`${status}${timer}`));
   if (tokens) chips.push(muted(tokens));
+  if (rate) chips.push(muted(rate));
   if (ctx) chips.push([{ text: ctx, color: ctxColor }]);
   if (shrink) chips.push(muted(shrink));
   if (cache) chips.push(muted(cache));
