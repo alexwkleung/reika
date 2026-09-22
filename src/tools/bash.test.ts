@@ -9,6 +9,7 @@ import {
   decideSandbox,
   execStream,
   heredocSubstitutionHint,
+  missingRgHint,
   readOnlyBashTool,
   sandboxNoticed,
   TailWindow,
@@ -237,6 +238,66 @@ describe('heredocSubstitutionHint (#446)', () => {
     );
     expect(result.exitCode).toBe(2);
     expect(result.payload).toContain('bash 3.2');
+  });
+});
+
+// A host without ripgrep (#323). Pinned on the pure function with the status and the message passed
+// explicitly, because `rg` IS installed on some machines and not others: a test that drove a real
+// 127 by running `rg` would pass or fail on what happens to be on PATH, which is the one thing this
+// hint exists to stop mattering.
+describe('missingRgHint (#323)', () => {
+  // bash 3.2's spelling, which is what /bin/sh prints on darwin; dash's and xargs's follow below.
+  const missing = 'sh: rg: command not found';
+  const hint = (command: string, code: number | null, output: string, tools?: string[]) =>
+    missingRgHint(command, code, output, tools ? new Set(tools) : undefined);
+
+  it('names the grep tool, and why it beats the shell, at the moment of failure', () => {
+    const out = hint('rg -n "ripgrep" src', 127, missing);
+    expect(out).toContain('grep tool');
+    expect(out).toContain('context');
+    // The second route stays offered: the tool may be narrowed or withdrawn by then.
+    expect(out).toContain('grep -rn');
+  });
+
+  it('covers the same absence in dash, ash and xargs spellings', () => {
+    expect(hint('rg foo .', 127, 'sh: 1: rg: not found')).not.toBe('');
+    expect(
+      hint('git ls-files | xargs rg foo', 127, 'xargs: rg: No such file or directory'),
+    ).not.toBe('');
+  });
+
+  it('points at `grep -rn` alone when this turn has no grep tool (minimal mode)', () => {
+    const out = hint('rg foo .', 127, missing, ['bash', 'ask_user']);
+    expect(out).toContain('grep -rn');
+    expect(out).not.toContain('grep tool');
+  });
+
+  it('says nothing on a clean exit, a signal death, or an unrelated status', () => {
+    expect(hint('rg foo .', 0, missing)).toBe('');
+    // null is a signal death, not a status this message can arrive with (cf. sandboxFooter).
+    expect(hint('rg foo .', null, missing)).toBe('');
+    expect(hint('rg foo .', 1, missing)).toBe('');
+  });
+
+  it('says nothing when the word that was missing is not rg', () => {
+    // The sighting that did show up on darwin: /bin/sh has no `mapfile` either.
+    expect(hint('mapfile -t lines < f', 127, 'sh: mapfile: command not found')).toBe('');
+    expect(hint('grep -rn rg src', 127, 'sh: grep: command not found')).toBe('');
+  });
+
+  it('does not blame rg when the 127 came from a sibling in the same command', () => {
+    // `rg` ran — the exit is its neighbour's. The gate is on the message naming the missing word,
+    // not on the status plus the command text, which would tell a model holding ripgrep it is gone.
+    expect(hint('rg -n x . && nosuchcmd', 127, 'sh: nosuchcmd: command not found')).toBe('');
+  });
+
+  it('reaches the payload of a failing run through execStream', async () => {
+    const result = await execStream(
+      'printf \'%s\\n\' "sh: rg: command not found" >&2\nexit 127\n',
+      { cwd: process.cwd(), toolNames: new Set(['bash', 'grep']) },
+    );
+    expect(result.exitCode).toBe(127);
+    expect(result.payload).toContain('grep tool');
   });
 });
 

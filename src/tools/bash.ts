@@ -404,6 +404,7 @@ export function execStream(
       const base =
         (rawOutput + truncated || '(no output)') +
         searchHint(command, rawOutput) +
+        missingRgHint(command, code, rawOutput, ctx.toolNames) +
         heredocSubstitutionHint(command, code, rawOutput) +
         (argv && sandbox
           ? sandboxFooter(command, code, rawOutput, { ...sandbox, toolNames: ctx.toolNames })
@@ -580,6 +581,44 @@ function searchHint(command: string, output: string): string {
   return (
     '\n\n(reika: these are matching lines only, not the full file. Use the read tool at the ' +
     'listed line numbers to see the surrounding code instead of re-running the search.)'
+  );
+}
+
+// A host without ripgrep (#323): `rg` is the search instinct a Claude-Code-trained model carries,
+// and on a machine that has none it gets the shell's own `rg: command not found` (exit 127) and
+// spends a round finding that out. Naming the alternative at the failure is the #102 move — and
+// deliberately *not* a bundled binary: 3-4MB per platform to save one round in the intersection of
+// (the model chose rg) × (the host lacks it), and `@vscode/ripgrep` downloads at postinstall, which
+// breaks the offline installs a local-model CLI is built for.
+//
+// Gated on the message rather than on the status alone. 127 only says *some* word was missing, so
+// `rg -n x; typo` — which found nothing wrong with `rg` — would otherwise be told a tool it is
+// holding is absent, the same misattribution `sandboxFooter` refuses to make from a command's name.
+// The remedy follows `ctx.toolNames` the way fetch_url's spill locator does (#377): minimal mode's
+// list is bash alone, where "use the grep tool" points at a tool that turn does not offer.
+const RG_WORD_RE = /\brg\b/;
+// The not-found line, in every spelling /bin/sh produces: bash's `sh: rg: command not found`,
+// dash/ash's `sh: 1: rg: not found`, and `xargs`'s `xargs: rg: No such file or directory`. All of
+// them name the missing word on the same line, which is what keeps a match to the failing command.
+const RG_MISSING_RE = /(?:^|\n)[^\n]*\brg\b[^\n]*(?:not found|No such file or directory)/;
+
+export function missingRgHint(
+  command: string,
+  code: number | null,
+  output: string,
+  toolNames?: ReadonlySet<string>,
+): string {
+  if (code !== 127 || !RG_WORD_RE.test(command) || !RG_MISSING_RE.test(output)) return '';
+  // Undefined means unknown, which every other consumer of toolNames reads as the full agent set.
+  if (!(toolNames?.has('grep') ?? true)) {
+    return '\n\n(reika: rg is not installed on this host. Use `grep -rn` through bash instead.)';
+  }
+  // The context-line half is the reason to prefer the tool over the shell's `grep -rn`, which
+  // returns bare matches and is what searchHint above then has to warn about.
+  return (
+    '\n\n(reika: rg is not installed on this host. Use the grep tool instead — regex, ' +
+    'gitignore-aware, and it returns a few lines of context around each match rather than bare ' +
+    'matches — or `grep -rn` through bash.)'
   );
 }
 
