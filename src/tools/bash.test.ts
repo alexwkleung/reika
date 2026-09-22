@@ -8,6 +8,7 @@ import {
   bashTool,
   decideSandbox,
   execStream,
+  heredocSubstitutionHint,
   readOnlyBashTool,
   sandboxNoticed,
   TailWindow,
@@ -152,6 +153,90 @@ describe('execStream — exit status', () => {
     const result = await execStream('echo hi', { cwd: '/nonexistent-reika-dir' });
     expect(result.summary).toMatch(/^Bash failed: /);
     expect(result.exitCode).toBeUndefined();
+  });
+});
+
+// The macOS /bin/sh parser bug (#446). `/bin/sh` there is bash 3.2.57, whose pre-scan for the
+// closing paren of a `$(…)` tokenizes the interior as ordinary shell text instead of treating a
+// `<<'EOF'` body as opaque — so a single apostrophe in a PR body opens a string that never closes,
+// the *substitution* fails to parse, and the model gets a syntax error from a command it can see is
+// correct. The detector is pinned on the pure function with the platform passed explicitly, so the
+// same cells run everywhere, and the failure is reproduced for real on darwin, where /bin/sh is
+// that bash.
+describe('heredocSubstitutionHint (#446)', () => {
+  const hint = (command: string, code: number | null, output: string) =>
+    heredocSubstitutionHint(command, code, output, 'darwin');
+  const message =
+    "/bin/sh: -c: line 30: unexpected EOF while looking for matching `''\n" +
+    '/bin/sh: -c: line 35: syntax error: unexpected end of file';
+  const idiom =
+    'gh pr create --title "Fix the ledger" --body "$(cat <<\'EOF\'\n' +
+    'The issue\'s comment asked for "all cases" first, so:\n' +
+    'EOF\n)"';
+
+  it('names the cause and the way out when a body apostrophe breaks the substitution', () => {
+    const out = hint(idiom, 2, message);
+    expect(out).toContain('bash 3.2');
+    expect(out).toContain('--body-file');
+    expect(out).toContain('git commit -F');
+  });
+
+  it('covers the same pre-scan one edit away, not only the observed spelling', () => {
+    expect(hint('gh pr create --body "$( cat <<EOF\nit\'s\nEOF\n)"', 2, message)).not.toBe('');
+    expect(hint('gh issue comment 1 --body "$(cat <<-EOF\nit\'s\nEOF\n)"', 2, message)).not.toBe(
+      '',
+    );
+    // POSIX's own way to quote the delimiter; verified to fail identically on bash 3.2.
+    expect(hint('x="$(cat <<\\EOF\nit\'s\nEOF\n)"', 2, message)).not.toBe('');
+    // A reader that carries a `)` of its own before the `<<`.
+    expect(hint("x=\"$(sed 's/(x)/y/' <<'EOF'\nit's\nEOF\n)\"", 2, message)).not.toBe('');
+  });
+
+  it('says nothing on a clean exit, a signal death, or different output', () => {
+    expect(hint(idiom, 0, message)).toBe('');
+    // null is a signal death, not a status this message can arrive with (cf. sandboxFooter).
+    expect(hint(idiom, null, message)).toBe('');
+    expect(hint(idiom, 1, 'gh: not logged in')).toBe('');
+  });
+
+  it('says nothing for an unpaired quote that is not a heredoc inside a $(…)', () => {
+    expect(hint('echo "it\'s', 2, message)).toBe('');
+    // The same body OUTSIDE a substitution is a real heredoc, and parses on every shell.
+    expect(hint("git commit -F - <<'EOF'\nit's\nEOF", 2, message)).toBe('');
+    // A here-string is not a heredoc: the `<` after `<<` is the third one, not a marker.
+    expect(hint('x=$(cat <<< "it\'s")', 2, message)).toBe('');
+  });
+
+  it('says nothing off darwin, where /bin/sh parses the command and the message is a real error', () => {
+    expect(heredocSubstitutionHint(idiom, 2, message, 'linux')).toBe('');
+    expect(heredocSubstitutionHint(idiom, 2, message, 'win32')).toBe('');
+  });
+
+  it('reaches the payload of a failing run on darwin, and stays out of it elsewhere', async () => {
+    // The command text is what the detector reads, and the status and the message are real; the
+    // message is echoed rather than produced because only macOS's bash 3.2 produces it, and the
+    // wiring should be pinned where the rest of the suite also runs — including that the platform
+    // gate reads the real platform at the call site.
+    const result = await execStream(
+      'printf \'%s\\n\' "sh: -c: line 3: unexpected EOF while looking for matching" >&2\n' +
+        'exit 2\n' +
+        "# $(cat <<'EOF'",
+      { cwd: process.cwd() },
+    );
+    expect(result.exitCode).toBe(2);
+    if (process.platform === 'darwin') expect(result.payload).toContain('bash 3.2');
+    else expect(result.payload).not.toContain('bash 3.2');
+  });
+
+  it.skipIf(process.platform !== 'darwin')('fires on the real parser failure', async () => {
+    // The issue's probe, verbatim. Skipped rather than asserted either way off darwin: dash and
+    // bash 5 parse the same command, print the body and exit 0.
+    const result = await execStream(
+      "printf '%s\\n' \"$(cat <<'EOF'\nThe issue's comment asked for \"all cases\" first.\nEOF\n)\"",
+      { cwd: process.cwd() },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.payload).toContain('bash 3.2');
   });
 });
 
