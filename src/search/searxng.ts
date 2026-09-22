@@ -1,6 +1,7 @@
 import { debugLog } from '../debug.js';
 import { rootMessage } from '../tools/_net.js';
 import { SearchUnavailableError } from './types.js';
+import { WEB_USER_AGENT } from '../version.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -34,7 +35,7 @@ export class SearxngProvider implements SearchProvider {
       let res: Response;
       try {
         res = await fetch(url.toString(), {
-          headers: { Accept: 'application/json' },
+          headers: { Accept: 'application/json', 'User-Agent': WEB_USER_AGENT },
           signal: controller.signal,
         });
       } catch (e) {
