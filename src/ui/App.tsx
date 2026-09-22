@@ -69,7 +69,7 @@ import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
-import { Suggestions } from './Suggestions.js';
+import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
@@ -2118,9 +2118,10 @@ export function App() {
             streamingCommand={streamingToolName === 'bash'}
             streamingBar={noteLive ? theme.info : undefined}
             showHeldWorked={status !== 'busy'}
-            chromeRows={
-              planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
-            }
+            // Everything the live frame draws besides the stream and the baseline chrome — the
+            // suggestion list and queue grow it mid-turn, and unbudgeted they push it to viewport
+            // height, where Ink repaints with a scrollback clear on every chunk (#470).
+            chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
           />
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
             <PlanProgress steps={planSteps} />
