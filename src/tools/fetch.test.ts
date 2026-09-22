@@ -5,6 +5,7 @@ import { extractUrl, fetchUrlTool } from './fetch.js';
 import { resetSpillDir } from './_spill.js';
 import { parseSavedPage, resetSavedPages } from './fetch.js';
 import type { WebBudget } from '../types.js';
+import { WEB_USER_AGENT } from '../version.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -41,6 +42,19 @@ describe('fetch_url tool — budget enforcement', () => {
     const budget = makeBudget();
     await fetchUrlTool.run({ url: 'https://example.com' }, { cwd: '/tmp', webBudget: budget });
     expect(budget.fetches.used).toBe(1);
+  });
+
+  // The crawler convention, not a browser string: an honest bot that renders modern HTML, in place
+  // of undici's `node`, which bot filters deny on sight.
+  it('identifies as a reika crawler on the page request', async () => {
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockOk('<html><body>hi</body></html>'));
+    await fetchUrlTool.run(
+      { url: 'https://example.com' },
+      { cwd: '/tmp', webBudget: makeBudget() },
+    );
+    expect(WEB_USER_AGENT).toMatch(/^Mozilla\/5\.0 \(compatible; reika\/\d+\.\d+\.\d+\)$/);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ headers: { 'User-Agent': WEB_USER_AGENT } });
   });
 
   it('blocks fetch when budget is exhausted', async () => {

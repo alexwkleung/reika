@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isStreamTimeout, streamDispatcher, streamTimeoutMessage } from './dispatcher.js';
 import type { ToolParameters } from '../types.js';
+import { API_USER_AGENT } from '../version.js';
 
 // Minimal client for the OpenAI-compatible `/v1/chat/completions` streaming API.
 //
@@ -167,6 +168,7 @@ async function postWithRetry(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'User-Agent': API_USER_AGENT,
           ...(apiKey ? { Authorization: `Bearer ${apiKey}`, 'x-session-id': SESSION_ID } : {}),
         },
         body: JSON.stringify(body),
@@ -323,6 +325,7 @@ export async function tokenize(opts: {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'User-Agent': API_USER_AGENT,
         ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
       },
       // add_special:false so no BOS/special token is prepended — the first returned id is the actual
