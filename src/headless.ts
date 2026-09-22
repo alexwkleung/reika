@@ -66,7 +66,9 @@ export async function buildHeadlessInput(
   }
   const expansion = await expandMentions(prompt, bundle.cwd, { ocr: systemOcr(config.ocrLangs) });
   notices.push(...expansion.notices);
-  const urls = await expandPastedUrls(prompt, { enabled: config.pasteFetch });
+  // No `incidental`: there is nobody to ask, so a link the prompt is not about is left alone
+  // under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.
+  const urls = await expandPastedUrls(prompt, { mode: config.pasteFetch });
   notices.push(...urls.notices.map(n => n.text));
   let modelText = expansion.augmented;
   if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;

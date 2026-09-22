@@ -11,6 +11,9 @@ export type QueuedMessage = {
   // The skill confirm's answer, taken at keypress while the user was present (#425): the skill
   // to apply when this replays, or null for "send as typed". Absent when no dialog fired.
   skill?: string | null;
+  // The pasted-link confirm's answer (#448), taken the same way: fetch the links this prompt
+  // carries, or leave them. Absent when the prompt's links needed no asking.
+  fetchUrls?: boolean;
 };
 
 /**

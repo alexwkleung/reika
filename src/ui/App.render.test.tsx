@@ -28,7 +28,7 @@ const CONFIG: Config = {
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
   bashIdleMs: 1000,
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'off',
   anon: false,
   sandbox: false,
