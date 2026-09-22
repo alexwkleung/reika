@@ -18,6 +18,7 @@ export function Scrollback({
   streamingTool,
   streamingNested = false,
   streamingBar,
+  streamingShell = false,
   chromeRows = 0,
 }: {
   messages: Message[];
@@ -32,6 +33,12 @@ export function Scrollback({
   // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
   // on screen reads as compaction work. Undefined keeps the normal reasoning color.
   streamingBar?: string;
+  // Shell mode's live tail is the one that does NOT commit under a command chip. Everywhere else the
+  // tail streaming here is `bash`'s output, which commits inside the `$ command` block MessageView
+  // draws at COMMAND_MARGIN (under the `↳ Ran: …` row); a `shell` message draws that same `$ command`
+  // line and then its output flush left. The live tail therefore has to know which of the two it is,
+  // or it sits 4 columns left of where it lands a moment later (#461).
+  streamingShell?: boolean;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -61,7 +68,14 @@ export function Scrollback({
         <StreamingContent text={streaming} maxLines={budget} indent={indent} />
       ) : null}
       {streamingTool ? (
-        <StreamingTool text={streamingTool} maxLines={budget} indent={indent} />
+        <StreamingTool
+          text={streamingTool}
+          maxLines={budget}
+          indent={indent}
+          // Relative to the live wrapper above (which already pays `indent`), so the row lands where
+          // the committed one will: inside the command chip's margin, or flush left for shell mode.
+          offset={streamingShell ? 0 : COMMAND_MARGIN}
+        />
       ) : null}
     </>
   );
@@ -196,20 +210,38 @@ function StreamingContent({
   );
 }
 
+// The live tail of a running command. `indent` is where the live wrapper puts this block; `offset`
+// is how far inside that the committed row will sit (the command chip's margin), so both the width
+// and the margin are measured from the block's true left edge and the tail doesn't jump sideways
+// when it commits (#461).
 function StreamingTool({
   text,
   maxLines,
   indent = 0,
+  offset = 0,
 }: {
   text: string;
   maxLines: number;
   indent?: number;
+  offset?: number;
 }) {
-  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth(indent));
+  const width = liveContentWidth(indent + offset);
+  // Cheap logical-line pre-trim for the same reason StreamingContent does it: the App accumulates
+  // the run's whole output, and scrubbing plus wrapping all of it on every 50ms flush is the cost
+  // the tail bound exists to avoid.
+  const pre = tailText(text, maxLines * 4);
+  // Scrub first, as the committed chip does: `sanitizeTerminalText` resolves carriage returns and
+  // flattens control codes, so wrapping the raw stream would break its rows somewhere else.
+  // `hangingWrap(…, 0)` is the committed chip's own wrap of raw output — the same wrap-ansi options,
+  // so the row count (which the frame budget is measured from) is unchanged — and it drops the
+  // whitespace a break happened on, putting a continuation row at the block's left edge instead of
+  // staggered right of it (#461).
+  const tail = tailDisplay(hangingWrap(scrubOutput(pre.text), width, 0), maxLines, width);
+  const truncated = pre.truncated || tail.truncated;
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} marginLeft={offset}>
       {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text color={theme.muted}>{scrubOutput(shown)}</Text>
+      <Text color={theme.muted}>{tail.text}</Text>
     </Box>
   );
 }

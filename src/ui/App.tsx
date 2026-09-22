@@ -2110,6 +2110,7 @@ export function App() {
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
             streamingNested={subagentLive || noteLive}
+            streamingShell={mode === 'shell'}
             streamingBar={noteLive ? theme.info : undefined}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
