@@ -65,6 +65,12 @@ export class DecodeRate {
   get(): number | undefined {
     return this.rate;
   }
+
+  // Takes over a rate another learner smoothed on the same engine (a subagent's), so the next
+  // observation continues from what the chip is showing instead of from before it.
+  adopt(rate: number): void {
+    this.rate = rate;
+  }
 }
 
 // `<rate>t/s`, or `?` when there is no number to print — the debug line's field shape. The chip's

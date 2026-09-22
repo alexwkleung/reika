@@ -52,6 +52,13 @@ describe('formatTokensPerSecond', () => {
     expect(formatTokensPerSecond(999.4)).toBe('999 t/s');
   });
 
+  // Rounded before the four-digit branch is chosen, or 999.6 prints `1000 t/s` — a width no other
+  // rate shows — on its way from `999 t/s` to `1.0k t/s`.
+  it('rounds before choosing the compact form', () => {
+    expect(formatTokensPerSecond(999.6)).toBe('1.0k t/s');
+    expect(formatTokensPerSecond(999.99)).toBe('1.0k t/s');
+  });
+
   it('compacts a four-digit rate like a token count', () => {
     expect(formatTokensPerSecond(1234)).toBe('1.2k t/s');
     expect(formatTokensPerSecond(20_000)).toBe('20k t/s');

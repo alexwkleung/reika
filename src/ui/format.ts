@@ -35,8 +35,11 @@ export function kFormat(n: number): string {
 // compacted like token counts. Empty when no round has been measurable yet.
 export function formatTokensPerSecond(rate?: number): string {
   if (rate == null || !Number.isFinite(rate) || rate <= 0) return '';
-  if (rate >= 1000) return `${kFormat(rate)} t/s`;
-  return `${rate < 10 ? Number(rate.toFixed(1)) : Math.round(rate)} t/s`;
+  // Rounded before the branch: 999.6 would otherwise print `1000 t/s`, a width the chip never
+  // shows for any other rate, one tick before `1.0k t/s`.
+  const whole = Math.round(rate);
+  if (whole >= 1000) return `${kFormat(whole)} t/s`;
+  return `${rate < 10 ? Number(rate.toFixed(1)) : whole} t/s`;
 }
 
 // Fraction of a context ceiling currently used, or null when either operand is unknown. The
