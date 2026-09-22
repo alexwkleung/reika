@@ -20,6 +20,32 @@ describe('computeMaxTokens', () => {
     );
   });
 
+  it("never asks for more than the model's output cap", () => {
+    // A 300k hosted window leaves ~295k of room; a 131k-output model rejects that outright.
+    expect(
+      computeMaxTokens({ contextWindow: 300000, promptTokens: 4000, modelMaxOutput: 131072 }),
+    ).toBe(131072);
+    // Room under the cap is still the room.
+    expect(
+      computeMaxTokens({ contextWindow: 16384, promptTokens: 10000, modelMaxOutput: 131072 }),
+    ).toBe(16384 - 10000 - BUDGET_MARGIN_TOKENS);
+    expect(
+      computeMaxTokens({
+        contextWindow: 300000,
+        promptTokens: 4000,
+        userMaxTokens: 200000,
+        modelMaxOutput: 131072,
+      }),
+    ).toBe(131072);
+  });
+
+  it('applies the output cap to a user cap without a window, and adds none of its own', () => {
+    expect(
+      computeMaxTokens({ promptTokens: 0, userMaxTokens: 200000, modelMaxOutput: 131072 }),
+    ).toBe(131072);
+    expect(computeMaxTokens({ promptTokens: 0, modelMaxOutput: 131072 })).toBeUndefined();
+  });
+
   it('shrinks as the prompt grows (dynamic per-turn budget)', () => {
     const window = 16384;
     const small = computeMaxTokens({ contextWindow: window, promptTokens: 4000 })!;

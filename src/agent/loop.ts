@@ -1892,6 +1892,7 @@ export async function runTurn(opts: {
               contextWindow: window,
               promptTokens: Math.round(rawEstimate() * calibration),
               userMaxTokens: opts.config.maxTokens,
+              modelMaxOutput: opts.config.maxOutputTokens,
             }),
             prefixStable,
             // Do not freeze this round's fresh payloads at the note request's render. Pre-shed the
@@ -2165,6 +2166,7 @@ export async function runTurn(opts: {
         contextWindow: window,
         promptTokens: Math.round(sentEstimate * calibration),
         userMaxTokens: opts.config.maxTokens,
+        modelMaxOutput: opts.config.maxOutputTokens,
       }),
       // Set only on the one-shot Tier 2 logit-recovery round (see the rumination dead-end above);
       // undefined otherwise, so a normal turn's request is byte-identical to before.
@@ -3312,6 +3314,11 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
       baseURL: parent.config.subagentBaseURL ?? parent.config.baseURL,
       apiKey: parent.config.subagentApiKey ?? parent.config.apiKey,
       maxTurns: parent.config.subagentMaxTurns,
+      // The catalog's output cap is the parent model's; a different subagent model has its own.
+      maxOutputTokens:
+        parent.config.subagentModel && parent.config.subagentModel !== parent.config.model
+          ? undefined
+          : parent.config.maxOutputTokens,
     };
     // No `subagent` (no recursion) and no `ask_user`: a subagent runs underneath a tool call the
     // parent is already blocked on, so a question from down here would stack a second prompt on the
