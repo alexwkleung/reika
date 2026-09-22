@@ -2040,6 +2040,11 @@ export function App() {
         )
       : undefined;
 
+  // Live rows above a dialog (plan checklist, queued messages) it has to leave viewport room for.
+  const dialogReservedRows =
+    (planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0) +
+    (queue.length > 0 ? queue.length + 1 : 0);
+
   if (status === 'error') {
     return (
       <Box flexDirection="column">
@@ -2115,17 +2120,14 @@ export function App() {
             <Approval
               request={pending.request}
               selectedIndex={approvalSelected}
-              reservedRows={
-                (planSteps && (mode === 'agent' || mode === 'vibe')
-                  ? planProgressRows(planSteps)
-                  : 0) + (queue.length > 0 ? queue.length + 1 : 0)
-              }
+              reservedRows={dialogReservedRows}
             />
           ) : question ? (
             <Question
               request={question.request}
               selectedIndex={questionSelected}
               typing={questionTyping}
+              reservedRows={dialogReservedRows}
             />
           ) : modelSelect ? (
             <ModelSelect

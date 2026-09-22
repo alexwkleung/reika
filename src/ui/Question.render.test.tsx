@@ -3,7 +3,7 @@ import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
-import { Question, OWN_ANSWER_LABEL } from './Question.js';
+import { Question, OWN_ANSWER_LABEL, fitQuestionToHeight } from './Question.js';
 import type { QuestionRequest } from '../types.js';
 
 const frame = (
@@ -131,5 +131,66 @@ describe('Question dialog', () => {
     expect(out).toContain('tab add a note');
     expect(out).not.toContain('esc');
     expect(out).toContain('ctrl-c abort');
+  });
+});
+
+// A frame as tall as the viewport makes Ink repaint with `\x1b[3J` and strands the dialog in the
+// scrollback (#456). What the user acts on — every option and the own-answer row — always shows.
+describe('Question dialog height (#456)', () => {
+  const sized = (request: QuestionRequest, rows: number, typing?: { forIndex?: number }) => {
+    const { lastFrame } = render(
+      <Box flexDirection="column" paddingX={1}>
+        <Question request={request} selectedIndex={0} typing={typing} width={60} rows={rows} />
+      </Box>,
+    );
+    return stripAnsi(lastFrame() ?? '').split('\n');
+  };
+  const sentence = 'Keep the existing behaviour for scripts but flag inline interpreter bodies';
+  const tall: QuestionRequest = {
+    question: Array.from({ length: 12 }, (_, i) => `Context line ${i + 1}.`).join('\n'),
+    options: [1, 2, 3, 4].map(n => ({
+      label: `${n}: ${sentence}`,
+      description: `Description ${n}: ${sentence}`,
+    })),
+  };
+
+  it('drops descriptions before anything else', () => {
+    const request = { ...tall, question: 'Which one?' };
+    const rows = sized(request, 30);
+    expect(rows.length).toBeLessThanOrEqual(30 - 6);
+    expect(rows.join('\n')).not.toContain('Description 1');
+    for (const n of [1, 2, 3, 4]) expect(rows.join('\n')).toContain(`${n}: Keep`);
+    expect(rows.join('\n')).toContain('Something else');
+  });
+
+  it('then cuts the question tail, keeping every option', () => {
+    const rows = sized(tall, 30);
+    const out = rows.join('\n');
+    expect(rows.length).toBeLessThanOrEqual(30 - 6);
+    expect(out).toContain('Context line 1.');
+    expect(out).not.toContain('Context line 12.');
+    expect(out).toMatch(/… \d+ more lines/);
+    for (const n of [1, 2, 3, 4]) expect(out).toContain(`${n}: Keep`);
+    expect(out).toContain('Something else');
+  });
+
+  it('bounds the question while typing an answer too', () => {
+    const rows = sized(tall, 20, {});
+    expect(rows.length).toBeLessThanOrEqual(20 - 6);
+    expect(rows.join('\n')).toContain('Type your answer below.');
+  });
+
+  it('leaves a question that fits untouched', () => {
+    const out = sized(tall, 80).join('\n');
+    expect(out).toContain('Context line 12.');
+    expect(out).toContain('Description 4');
+    expect(out).not.toContain('more lines');
+  });
+
+  it('gives things up in order', () => {
+    expect(fitQuestionToHeight(2, 6, 4, 12)).toEqual({ showDescriptions: true, questionRows: 2 });
+    expect(fitQuestionToHeight(2, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 2 });
+    expect(fitQuestionToHeight(8, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 3 });
+    expect(fitQuestionToHeight(8, 12, 4, 10)).toEqual({ showDescriptions: false, questionRows: 1 });
   });
 });
