@@ -12,6 +12,7 @@ import {
   sandboxFooter,
   sandboxNotice,
   sandboxPlan,
+  sandboxRefusedWrite,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
 import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
@@ -251,6 +252,13 @@ export type ExecContext = Pick<
 // it is said once per cwd (the `/cd` boundary), the way the no-repo notice is — a line under every
 // chip repeating the command the chip already shows doubled the scrollback. Exported for tests.
 export const sandboxNoticed = new Set<string>();
+// The cwds where a refused write has been reported to the user. The model's footer says "don't
+// fight it"; this line is where the user learns the flag exists — once, since a Go or Gradle build
+// that needs a home-dir path will refuse on every command until they act on it.
+const sandboxDenialNoticed = new Set<string>();
+const SANDBOX_DENIAL_NOTICE =
+  'The sandbox refused a write outside the working directory, temp and cache dirs (see the ' +
+  'command output). If this project needs it, REIKA_SANDBOX=0 turns the sandbox off.';
 
 export function execStream(
   command: string,
@@ -399,6 +407,18 @@ export function execStream(
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
       const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
+      if (
+        argv &&
+        code !== 0 &&
+        sandboxRefusedWrite(rawOutput) &&
+        !sandboxDenialNoticed.has(ctx.cwd)
+      ) {
+        sandboxDenialNoticed.add(ctx.cwd);
+        notice = {
+          tone: 'warn',
+          content: [notice?.content, SANDBOX_DENIAL_NOTICE].filter(Boolean).join('\n'),
+        };
+      }
       // The real size, unconditionally. `totalBytes` stops counting at the payload cap, so with
       // spill off the summary told the model a 234KB run "produced 65536 bytes" — a claim about
       // the command's output, not about how much of it we kept, and false either way. This was

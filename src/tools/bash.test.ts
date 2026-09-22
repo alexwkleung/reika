@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -12,6 +13,7 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
+import { sandboxPlan } from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -509,6 +511,60 @@ describe('bashTool — sandbox composition', () => {
       }
     },
   );
+
+  // The hole the per-operation rules close: with `(allow network* (local ip …))` an unconnected
+  // socket matched the local filter and every outbound connection went through. A raw non-loopback
+  // IP needs no DNS and no route — the kernel refuses connect() before a packet exists — so this is
+  // deterministic offline. UDP too, since that is the other half of `network*`.
+  it.skipIf(process.platform !== 'darwin')(
+    'refuses outbound TCP and UDP to a non-loopback address',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const tcp =
+          'require("net").connect(80,"192.0.2.1").on("connect",()=>{console.log("tcp OPEN");process.exit(0)}).on("error",e=>{console.log("tcp",e.code);process.exit(1)})';
+        const r = await bashTool.run({ command: `node -e '${tcp}'` }, { cwd: dir });
+        expect(r.payload).toContain('tcp EPERM');
+        const udp =
+          'const d=require("dgram").createSocket("udp4");d.send("x",53,"192.0.2.1",e=>{console.log(e?"udp "+e.code:"udp OPEN");d.close();process.exit(e?1:0)})';
+        const u = await bashTool.run({ command: `node -e '${udp}'` }, { cwd: dir });
+        expect(u.payload).toContain('udp EPERM');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Unix-domain sockets are local IPC (docker, a local DB, the DNS resolver), allowed on the same
+  // reasoning as loopback.
+  it.skipIf(process.platform !== 'darwin')(
+    'lets a sandboxed command use a unix socket',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const script =
+          'const net=require("net"),p=process.cwd()+"/s.sock";const s=net.createServer(c=>c.end("hi")).listen(p,()=>{' +
+          'net.connect(p).on("data",d=>{console.log("unix",String(d));s.close()}).on("error",e=>{console.log("unix err",e.code);s.close()})})' +
+          '.on("error",e=>console.log("listen err",e.code))';
+        const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
+        expect(r.payload).toContain('unix hi');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // A cwd below the repo root (monorepo package, worktree, submodule) keeps its git dir writable:
+  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param
+  // is what the profile's `(subpath (param "GITDIR"))` line binds, and it is the repo's `.git` only
+  // when that lies outside cwd — at the root it is WORKDIR itself, so nothing extra is allowed.
+  it.skipIf(process.platform !== 'darwin')('binds GITDIR to the repo when cwd is below it', () => {
+    const repo = realpathSync(process.cwd());
+    const below = sandboxPlan(join(repo, 'src'), { network: false });
+    expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
+    const root = sandboxPlan(repo, { network: false });
+    expect('args' in root && root.args).toContain(`GITDIR=${repo}`);
+  });
 
   // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
   // local server (this repo's transport.test.ts does) used to go red with EPERM on `listen(0)` and

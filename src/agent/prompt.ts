@@ -19,6 +19,14 @@ export function buildSystemPrompt(opts: {
   // Whether `subagent` is in this turn's tool list. Same coupling: subagents run without it (no
   // recursion) and plan mode never has it, so neither may be pointed at it.
   canSubagent?: boolean;
+  // Whether this turn's bash actually runs sandboxed (#163): the flag AND a working sandbox-exec AND
+  // bash in the list. On Linux or under REIKA_SANDBOX=0 the sentence would tell the model a genuine
+  // DNS failure "may be the sandbox" — the misattribution the footer is gated on output to avoid.
+  sandbox?: boolean;
+  // Which web tools the sandbox sentence may route to. Minimal mode and an offline session have
+  // neither, and naming one there is the #377 phantom pointer.
+  canFetch?: boolean;
+  canSearch?: boolean;
 }): string {
   const mode = opts.mode ?? 'agent';
   if (mode === 'chat') {
@@ -133,11 +141,28 @@ function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean): string {
   return parts.join('\n\n');
 }
 
+function sandboxSentence(canFetch: boolean, canSearch: boolean): string {
+  const route = [
+    canFetch ? 'use fetch_url for a web page' : '',
+    canSearch ? 'search for a query' : '',
+  ].filter(Boolean);
+  return (
+    'Some shell commands run in a local sandbox: writes are confined to the working directory, temp ' +
+    'and cache dirs, and network access is denied except for git and gh. If a command fails with a ' +
+    'connection or permission error it may be the sandbox rather than your command — ' +
+    (route.length > 0 ? `${route.join(' and ')}, and ` : '') +
+    'tell the user when a command genuinely needs the network.'
+  );
+}
+
 function buildAgentPrompt(opts: {
   bundle: ContextBundle;
   planMode?: boolean;
   canAsk?: boolean;
   canSubagent?: boolean;
+  sandbox?: boolean;
+  canFetch?: boolean;
+  canSearch?: boolean;
 }): string {
   // EXPERIMENT (#273): the subagent tool has carried its own trigger (">3 files, long reference
   // chains") since it was added, and the debug logs show it never gets called. The tool's real
@@ -190,12 +215,12 @@ function buildAgentPrompt(opts: {
       'You are a coding assistant operating in a terminal. Be concise.',
       // Stated once, in the fixed part, because nothing else announces the sandbox (#163). Without
       // it the model's only evidence is error text, and Seatbelt's network denials are exactly the
-      // text that gets misread: `Could not resolve host` reads as a typo'd URL, git's "check your
+      // text that gets misread: "Couldn't connect to server" reads as a dead host, git's "check your
       // access rights" as a missing key, npm's "check your proxy config" as a config problem. A
       // sentence here is what turns those into "this is the sandbox" — the footer in bash.ts is the
       // same fact arriving at the moment of failure. Says what it CANNOT do, not that it is watched:
-      // the point is routing to fetch_url/search, not deterrence.
-      'Some shell commands run in a local sandbox: writes are confined to the working directory and temp dirs, and network access is denied except for git and gh. If a command fails with a DNS, host, or permission error it may be the sandbox rather than your command — use fetch_url for a web page and search for a query, and tell the user when a command genuinely needs the network.',
+      // the point is routing to fetch_url/search, not deterrence. Absent when nothing is sandboxed.
+      ...(opts.sandbox ? [sandboxSentence(opts.canFetch ?? true, opts.canSearch ?? true)] : []),
       'Rules:',
       // Numbered at join time so an optional rule shifts the ones after it — no gaps, no duplicates.
       ...rules.map((r, i) => `${i + 1}. ${r}`),

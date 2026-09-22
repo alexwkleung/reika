@@ -6,6 +6,7 @@ import {
   isBroadWorkdir,
   broadWorkdirNotice,
   networkAllowedFor,
+  sandboxRefusedWrite,
 } from './_sandbox.js';
 
 // The generator's string output, not the syscall — per AGENTS.md's "unit-test the logic the wrapper
@@ -22,14 +23,20 @@ describe('sandboxProfile', () => {
     expect(lines[1]).toBe('(allow default)');
     expect(lines[2]).toBe('(deny file-write*)');
     expect(lines[3]).toBe('(allow file-write* (subpath (param "WORKDIR")))');
+    // The git dir above cwd (monorepo package, worktree, submodule) — without it `git add` fails on
+    // `.git/index.lock: Operation not permitted`, which reads as a stale lock.
+    expect(lines[4]).toBe('(allow file-write* (subpath (param "GITDIR")))');
     // Temp by its REAL paths: `/tmp` is a symlink to `/private/tmp` and the kernel matches the
     // target, so `(subpath "/tmp")` would allow nothing. Denying temp made python's mkdtemp fall
     // through to cwd and write scratch into the project.
-    expect(lines[4]).toBe('(allow file-write* (subpath "/private/tmp"))');
-    expect(lines[5]).toBe('(allow file-write* (subpath "/private/var/tmp"))');
-    expect(lines[6]).toBe('(allow file-write* (subpath (param "TMPDIR")))');
-    expect(lines[7]).toBe('(allow file-write* (subpath "/dev"))');
-    expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(5);
+    expect(lines[5]).toBe('(allow file-write* (subpath "/private/tmp"))');
+    expect(lines[6]).toBe('(allow file-write* (subpath "/private/var/tmp"))');
+    expect(lines[7]).toBe('(allow file-write* (subpath (param "TMPDIR")))');
+    // Caches: `go build` refuses to run at all without a writable ~/Library/Caches/go-build.
+    expect(lines[8]).toBe('(allow file-write* (subpath (param "USERCACHE")))');
+    expect(lines[9]).toBe('(allow file-write* (subpath (param "XDGCACHE")))');
+    expect(lines[10]).toBe('(allow file-write* (subpath "/dev"))');
+    expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(8);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode
@@ -49,23 +56,39 @@ describe('sandboxProfile', () => {
   });
 
   // Both directions and every port: `(remote ip)` alone refused `network-bind`, so a test suite
-  // starting a local server went red under the sandbox. Measured under this exact profile:
-  // `listen(0)` + a loopback GET succeed on 127.0.0.1 and ::1, `curl https://…` exits 6.
-  it('denies network, then re-allows loopback in both directions', () => {
+  // starting a local server went red under the sandbox. Unix sockets are local IPC (docker, a local
+  // DB, and macOS's DNS resolver), not the network.
+  it('denies network, then re-allows loopback and unix sockets per operation', () => {
     const lines = profile.split('\n');
     const deny = lines.indexOf('(deny network*)');
     expect(deny).toBeGreaterThanOrEqual(0);
     expect(lines.slice(deny + 1)).toEqual([
-      '(allow network* (local ip "localhost:*"))',
-      '(allow network* (remote ip "localhost:*"))',
+      '(allow network-outbound (remote ip "localhost:*"))',
+      '(allow network-bind (local ip "localhost:*"))',
+      '(allow network-inbound (local ip "localhost:*"))',
+      '(allow network-outbound (remote unix))',
+      '(allow network-bind (local unix))',
+      '(allow network-inbound (local unix))',
     ]);
     expect(profile).not.toContain('ALLOW_NET');
+  });
+
+  // The rule that has a measured hole behind it: `(allow network* (local ip "localhost:*"))` matched
+  // every outbound connection — an unconnected socket has no local address yet — and `curl
+  // http://1.1.1.1/` returned 301 through a profile whose comment said network was denied. A
+  // `local` filter may only ever gate bind and inbound.
+  it('never pairs a local filter with network* or network-outbound', () => {
+    for (const line of profile.split('\n')) {
+      if (/\(local /.test(line)) {
+        expect(line, line).toMatch(/^\(allow network-(?:bind|inbound) \(local /);
+      }
+    }
   });
 
   it('drops the network rules entirely for a network-allowed command, keeping the write rules', () => {
     const net = sandboxProfile({ network: true });
     expect(net).not.toContain('network');
-    expect(net.split('\n').slice(0, 8)).toEqual(profile.split('\n').slice(0, 8));
+    expect(net.split('\n').slice(0, 11)).toEqual(profile.split('\n').slice(0, 11));
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,
@@ -148,6 +171,26 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('cd sub')).toBe(false);
   });
 
+  // `2>&1` contains `&`, which the segment splitter reads as a separator: the pipeline became a
+  // segment whose verb was `1`, denied, and the footer sent the model to fetch_url for a PR.
+  it('is not split by a stderr redirection', () => {
+    expect(networkAllowedFor('gh pr view 436 2>&1 | head -50')).toBe(true);
+    expect(networkAllowedFor('git fetch --all 2>&1')).toBe(true);
+    expect(networkAllowedFor('gh pr diff 1 &> out.txt')).toBe(true);
+    expect(networkAllowedFor('gh pr view 1 2>&1 | python3 -c "x"')).toBe(false);
+  });
+
+  // The inspection set minus what can run a command of its own: awk's program, find's exec family,
+  // a git alias defined on the command line.
+  it('denies the inspection commands that can shell out', () => {
+    expect(networkAllowedFor('gh pr view 1 | awk \'{system("curl http://x")}\'')).toBe(false);
+    expect(networkAllowedFor("git fetch; find . -name '*.sh' -exec sh {} \\;")).toBe(false);
+    expect(networkAllowedFor("git fetch; find . -name '*.sh' -execdir sh {} \\;")).toBe(false);
+    expect(networkAllowedFor("git -c alias.x='!curl http://x' x")).toBe(false);
+    expect(networkAllowedFor("git fetch && find . -name '*.ts' | head")).toBe(true);
+    expect(networkAllowedFor('git -c core.pager=cat log -1')).toBe(true);
+  });
+
   it('sees through env assignments and wrappers to the verb', () => {
     expect(networkAllowedFor('GH_PAGER= gh pr view 1')).toBe(true);
     expect(networkAllowedFor('GIT_TERMINAL_PROMPT=0 git fetch --all')).toBe(true);
@@ -158,15 +201,19 @@ describe('networkAllowedFor', () => {
 describe('isBroadWorkdir', () => {
   // The two halves of the profile degrade independently, so a broad cwd is sandboxed and *said* —
   // the case that is genuinely void is the filesystem root, which is a different check entirely.
-  it('flags home and the filesystem root and volumes', () => {
+  it('flags home, the filesystem root and the root of a volume', () => {
     expect(isBroadWorkdir('/Users/someone', '/Users/someone')).toBe(true);
     expect(isBroadWorkdir('/', '/Users/someone')).toBe(true);
     expect(isBroadWorkdir('/Volumes/Backup', '/Users/someone')).toBe(true);
+    expect(isBroadWorkdir('/Volumes/Backup/', '/Users/someone')).toBe(true);
   });
 
-  it('does not flag an ordinary project', () => {
+  // A project that happens to live on a second drive is an ordinary cwd; telling its owner "most of
+  // your files" are exposed would be false.
+  it('does not flag an ordinary project, on the boot volume or another', () => {
     expect(isBroadWorkdir('/Users/someone/Git/repo', '/Users/someone')).toBe(false);
     expect(isBroadWorkdir('/tmp/x', '/Users/someone')).toBe(false);
+    expect(isBroadWorkdir('/Volumes/SSD/code/proj', '/Users/someone')).toBe(false);
   });
 
   it('names what is and is not covered, with the home path abbreviated', () => {
@@ -180,6 +227,8 @@ describe('isBroadWorkdir', () => {
 describe('sandboxFooter', () => {
   const denied = { network: false };
   const curlDns = 'curl: (6) Could not resolve host: example.com\n';
+  const curlConnect =
+    "curl: (7) Failed to connect to example.com port 443 after 5 ms: Couldn't connect to server\n";
 
   it('stays silent on success and on a signal death', () => {
     expect(sandboxFooter('curl https://x.example', 0, curlDns, denied)).toBe('');
@@ -199,10 +248,12 @@ describe('sandboxFooter', () => {
   });
 
   it('explains the network misattribution when the output carries a denial', () => {
-    const footer = sandboxFooter('curl https://example.com', 6, curlDns, denied);
-    expect(footer).toContain('sandbox');
-    expect(footer).toContain('Network access is denied');
-    expect(footer).toContain('fetch_url');
+    for (const out of [curlDns, curlConnect]) {
+      const footer = sandboxFooter('curl https://example.com', 7, out, denied);
+      expect(footer).toContain('sandbox');
+      expect(footer).toContain('Network access is denied');
+      expect(footer).toContain('fetch_url');
+    }
   });
 
   // `curl -s` prints nothing and exits 6: the exit status is the only signal, so it carries it.
@@ -217,10 +268,17 @@ describe('sandboxFooter', () => {
     expect(sandboxFooter('curl -f https://example.com/404', 22, '', denied)).toBe('');
   });
 
-  // Measured under the profile: the denial texts each client actually prints. git and npm report a
-  // credentials problem and a proxy problem respectively, so the footer pre-empts both.
+  // Measured under the profile: the denial texts each client actually prints. DNS answers (a unix
+  // socket), so the denial lands on connect(); the resolver shapes stay for a machine whose DNS goes
+  // another way. git and npm report a credentials problem and a proxy problem respectively, so the
+  // footer pre-empts both.
   it('recognises each client’s denial text', () => {
     const cases: Array<[string, number, string]> = [
+      [
+        'git push origin main',
+        128,
+        "fatal: unable to access 'https://…': Failed to connect to github.com port 443 after 20 ms: Couldn't connect to server\n",
+      ],
       [
         'git push origin main',
         128,
@@ -231,7 +289,14 @@ describe('sandboxFooter', () => {
         128,
         'ssh: connect to host github.com port 22: Operation not permitted\n',
       ],
+      ['npm install', 1, 'npm error code EPERM\nnpm error syscall connect\n'],
       ['npm install', 1, 'npm error code ENOTFOUND\nnpm error syscall getaddrinfo\n'],
+      ['node fetch.js', 1, 'Error: connect EPERM 93.184.216.34:443\n'],
+      [
+        'python3 fetch.py',
+        1,
+        'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',
+      ],
       [
         'python3 fetch.py',
         1,
@@ -292,6 +357,26 @@ describe('sandboxFooter', () => {
     expect(
       sandboxFooter('top -l 1', 126, '/bin/sh: /usr/bin/top: Operation not permitted\n', denied),
     ).toContain('cannot be run under the local sandbox');
+  });
+
+  // Filesystem denials name the path, so they get one line: it is the sandbox, not something sudo
+  // fixes. Keyed on a PATH before the colon, which is what tells the shape from the network ones.
+  it('names a refused write for what it is, without the network advice', () => {
+    for (const out of [
+      '/bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      'mkdir: /Users/someone/x: Operation not permitted\n',
+      "Error: EPERM: operation not permitted, mkdir '/Users/someone/x'\n",
+      'go: failed to initialize build cache at /Users/someone/.cargo/x: mkdir /Users/someone/.cargo/x: operation not permitted\n',
+    ]) {
+      const footer = sandboxFooter('go build ./...', 1, out, denied);
+      expect(footer, out).toContain('refused by the sandbox');
+      expect(footer, out).not.toContain('Network access is denied');
+      expect(sandboxRefusedWrite(out), out).toBe(true);
+    }
+    expect(sandboxRefusedWrite('/bin/sh: /bin/ps: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('ssh: connect to host x port 22: Operation not permitted\n')).toBe(
+      false,
+    );
   });
 
   it('does not mistake ps in an argument for the ps command', () => {

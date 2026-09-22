@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
@@ -56,6 +56,13 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // typecheck`). That is a very common shape, and losing to it makes the sandbox unusable.
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
+    // The repo's git dir, when it sits ABOVE cwd: a monorepo package (`packages/web/`), a worktree
+    // (`.git` is a file pointing into `main/.git/worktrees/x`) or a submodule. Without it every git
+    // write there — `add`, `stash`, `checkout`, even `fetch` (writes FETCH_HEAD) — fails on
+    // `.git/index.lock: Operation not permitted`, which reads as a stale lock and whose natural next
+    // move is `rm -f .git/index.lock` (measured). Bound to WORKDIR when the git dir is inside it or
+    // there is no repo, since an unbound param exits 65.
+    '(allow file-write* (subpath (param "GITDIR")))',
     // Temp is writable: `mktemp -d`, `cd /tmp && …` and `tempfile` are how a model scratches, and
     // denying them did worse than fail — python's `tempfile.mkdtemp()` fell through TMPDIR and /tmp
     // to its last resort, the cwd, and silently wrote `tmpXXXX` into the project (measured). The
@@ -65,21 +72,45 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath "/private/tmp"))',
     '(allow file-write* (subpath "/private/var/tmp"))',
     '(allow file-write* (subpath (param "TMPDIR")))',
+    // Caches too, on the same disposability argument. Some toolchains refuse to run without one: `go
+    // build` exits 1 on `failed to initialize build cache at ~/Library/Caches/go-build … operation
+    // not permitted` (measured), and Gradle/Maven/Xcode have the same shape. `~/.cargo`, `~/go` and
+    // `~/.m2` are still denied — those are registries and artifacts, not caches, and a build that
+    // needs them fails loudly with the path named rather than being guessed at here.
+    '(allow file-write* (subpath (param "USERCACHE")))',
+    '(allow file-write* (subpath (param "XDGCACHE")))',
     '(allow file-write* (subpath "/dev"))',
   ];
   if (!opts.network) {
     lines.push(
       '(deny network*)',
-      // Loopback stays open in BOTH directions, every port. `(remote ip)` alone — one allowed port
+      // Loopback stays open in both directions, every port. `(remote ip)` alone — one allowed port
       // for the model server — refused `network-bind`, so any test suite that starts a local server
       // (`listen(0)` → EPERM; this repo's own transport.test.ts does) went red under the sandbox,
       // with the network footer then blaming the sandbox for the whole run. The confused-model
       // threat is what a command does to the machine and the network, and a loopback listener is
-      // neither; opening it wholesale is also what lets the profile need no config at all. Two
-      // rules because bind/accept match on `local ip` and connect on `remote ip`. Must come after
-      // the deny (last-match-wins).
-      '(allow network* (local ip "localhost:*"))',
-      '(allow network* (remote ip "localhost:*"))',
+      // neither; opening it wholesale is also what lets the profile need no config at all.
+      //
+      // THE LOCAL-IP RULES ARE PER OPERATION, NEVER `network*`. `(allow network* (local ip
+      // "localhost:*"))` admitted EVERY outbound connection: an unconnected socket has no local
+      // address yet and the filter matched it, so `curl http://1.1.1.1/` returned 301 through a
+      // profile whose comment said the network was denied — and the only reason `curl example.com`
+      // still failed was that DNS runs over a unix socket, which was also denied. Measured, and the
+      // reason `_sandbox.test.ts` pins the operation names and `bash.test.ts` connects to a raw
+      // non-loopback IP. `local ip` is bind and accept; `remote ip` is connect. Last-match-wins, so
+      // all of these come after the deny.
+      '(allow network-outbound (remote ip "localhost:*"))',
+      '(allow network-bind (local ip "localhost:*"))',
+      '(allow network-inbound (local ip "localhost:*"))',
+      // Unix-domain sockets are local IPC, not the network — the docker daemon, a local database, and
+      // macOS's own DNS resolver (mDNSResponder) all live there. Denied, `docker ps` failed with
+      // "permission denied while trying to connect to the Docker daemon socket … connect: operation
+      // not permitted", which reads as "use sudo / join the docker group". With DNS answering, an
+      // internet denial now surfaces as connect() failing (`Couldn't connect to server`, EPERM)
+      // rather than as an unresolved host — which is the more honest shape anyway.
+      '(allow network-outbound (remote unix))',
+      '(allow network-bind (local unix))',
+      '(allow network-inbound (local unix))',
     );
   }
   return lines.join('\n');
@@ -93,6 +124,19 @@ export function sandboxProfile(opts: { network: boolean }): string {
 // Nothing else is here on purpose: `curl`/`wget`/`ssh`/`nc` are flagged, and an interpreter
 // (`python -c 'urlopen…'`, `node -e 'fetch…'`) is exactly the unbounded shape the deny is for.
 const NET_VERBS = new Set(['gh', 'git', 'glab']);
+
+// Inspection commands that may sit in a network-allowed pipeline. `awk` is out: its program argument
+// can `system("curl …")`, which is the shape the deny exists for. `sed`/`tree` stay — BSD sed has no
+// shell-out, and a `w file` lands inside the write confinement either way.
+const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS].filter(c => c !== 'awk'));
+// `find`'s exec family runs an arbitrary command per match; `git -c alias.x='!cmd'` runs one by
+// verb `git`. Both would keep the network through the verb check alone.
+const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/;
+const GIT_ALIAS_RE = /^alias\./;
+// Stderr/stdout redirection contains `&`, which `splitSegments` reads as a separator: `gh pr view 1
+// 2>&1 | head` split into a segment whose verb was `1` and denied the network to the whole pipeline.
+// Blanked on the masked view, length-preserving, so the raw slices still line up.
+const REDIRECT_AMP_RE = /\d*>&\d*|&>>?/g;
 
 // Wrappers that don't change what a segment runs (the same set `_danger.ts` strips), plus the
 // keywords a compound can open with. Stripped before the verb is read.
@@ -131,7 +175,8 @@ function effectiveVerb(segment: string): string | undefined {
 export function networkAllowedFor(command: string): boolean {
   const c = command.trim();
   if (!c || SUBSTITUTION_RE.test(c)) return false;
-  const segments = splitSegments(c, maskQuoted(c))
+  const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
+  const segments = splitSegments(c, masked)
     .map(s => s.trim())
     .filter(s => s && !/^cd(?:\s|$)/.test(s));
   if (segments.length === 0) return false;
@@ -139,8 +184,15 @@ export function networkAllowedFor(command: string): boolean {
   for (const seg of segments) {
     const verb = effectiveVerb(seg);
     if (!verb) return false;
-    if (NET_VERBS.has(verb)) net = true;
-    else if (!INSPECTION_COMMANDS.has(verb)) return false;
+    const args = words(seg);
+    if (NET_VERBS.has(verb)) {
+      if (verb === 'git' && args.some(a => GIT_ALIAS_RE.test(a))) return false;
+      net = true;
+    } else if (!NET_PIPE_COMMANDS.has(verb)) {
+      return false;
+    } else if (verb === 'find' && args.some(a => FIND_EXEC_RE.test(a))) {
+      return false;
+    }
   }
   return net;
 }
@@ -176,6 +228,7 @@ function hasSandboxExec(): boolean {
 // Exported for tests, which need each case to start from a clean probe.
 export function resetSandboxCache(): void {
   execAvailable = undefined;
+  gitDirs.clear();
 }
 
 /**
@@ -211,18 +264,52 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   } catch {
     return { reason: `cwd does not resolve (${cwd})` };
   }
-  // Same realpath rule for the temp dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink hop away
-  // from the `/private/var/…` the kernel matches. Falls back to `/private/tmp`, which the profile
-  // already allows, so an unresolvable TMPDIR costs nothing rather than an unbound param (exit 65).
-  let tmp = '/private/tmp';
-  try {
-    tmp = realpathSync.native(tmpdir());
-  } catch {
-    // keep the fallback
-  }
-  return {
-    args: ['-p', sandboxProfile(opts), '-D', `WORKDIR=${resolved}`, '-D', `TMPDIR=${tmp}`],
+  // Same realpath rule for every other allowed dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink
+  // hop away from the `/private/var/…` the kernel matches. Each falls back to a path the profile
+  // already covers, so an unresolvable dir costs nothing rather than an unbound param (exit 65).
+  const home = homedir();
+  const params = {
+    WORKDIR: resolved,
+    GITDIR: gitDirOutside(cwd, resolved) ?? resolved,
+    TMPDIR: realOr(tmpdir(), '/private/tmp'),
+    USERCACHE: realOr(join(home, 'Library', 'Caches'), resolved),
+    XDGCACHE: realOr(process.env.XDG_CACHE_HOME || join(home, '.cache'), resolved),
   };
+  const args = ['-p', sandboxProfile(opts)];
+  for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
+  return { args };
+}
+
+function realOr(path: string, fallback: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return fallback;
+  }
+}
+
+const gitDirs = new Map<string, string | null>();
+
+/** The repo's common git dir when it lies outside cwd, resolved; null inside cwd or without a repo.
+ *  Cached per cwd — a property of the checkout, and `git rev-parse` per command is a process. */
+function gitDirOutside(cwd: string, resolvedCwd: string): string | null {
+  const cached = gitDirs.get(cwd);
+  if (cached !== undefined) return cached;
+  let dir: string | null = null;
+  try {
+    const out = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5_000,
+    }).trim();
+    const abs = realOr(isAbsolute(out) ? out : resolve(cwd, out), '');
+    if (abs && abs !== resolvedCwd && !abs.startsWith(resolvedCwd + sep)) dir = abs;
+  } catch {
+    // not a repo, or no git — nothing to allow
+  }
+  gitDirs.set(cwd, dir);
+  return dir;
 }
 
 /** The `spawn` argv for a sandboxed command. `-D` params, never interpolated — a cwd containing `"`
@@ -237,7 +324,9 @@ export function sandboxArgv(
 
 /** Whether this cwd is broad enough that the filesystem guarantee is visibly weaker. */
 export function isBroadWorkdir(cwd: string, home = homedir()): boolean {
-  return cwd === home || cwd === '/' || cwd.startsWith('/Volumes/');
+  // The ROOT of an external volume, not every project on one: `/Volumes/SSD/code/proj` is an
+  // ordinary cwd, and telling its owner "most of your files" are exposed would be false.
+  return cwd === home || cwd === '/' || /^\/Volumes\/[^/]+\/?$/.test(cwd);
 }
 
 /** Said in the receipt rather than the summary: the model reads the summary, the user reads this. */
@@ -255,17 +344,25 @@ export function broadWorkdirNotice(cwd: string, home = homedir()): string {
  *  repeating the command the chip already shows doubled the scrollback. Not sent to the model. */
 export function sandboxNotice(cwd: string, home = homedir()): string {
   return (
-    `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')} and temp dirs, ` +
-    'network denied except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
+    `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')}, temp and cache ` +
+    'dirs; network denied except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
   );
 }
 
-// What a Seatbelt network denial looks like from inside the client, measured under the profile:
-// curl "Could not resolve host", git the same, node/npm `getaddrinfo ENOTFOUND`, python "nodename
-// nor servname provided", ssh "connect to host … port 22: Operation not permitted", Go "no such
-// host", wget "unable to resolve host address", pip "Temporary failure in name resolution".
+// What a Seatbelt network denial looks like from inside the client, measured under the profile. DNS
+// answers (it runs over a unix socket, which is allowed), so the denial lands on connect(): curl and
+// git "Couldn't connect to server" (rc 7), node `connect EPERM`, npm `code EPERM`, python "[Errno 1]
+// Operation not permitted", ssh "connect to host … port 22: Operation not permitted", docker
+// "connect: operation not permitted". The resolver shapes stay for a machine whose DNS goes another
+// way: "Could not resolve host", `getaddrinfo ENOTFOUND`, "nodename nor servname", "no such host".
 const NET_DENIAL_RE =
-  /could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable|connect to host \S+ port \d+: Operation not permitted/i;
+  /couldn.t connect to server|connect EPERM|code EPERM|\[Errno 1\] Operation not permitted|connect(?: to host \S+ port \d+)?: operation not permitted|could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable/i;
+
+// A write outside the allowed dirs, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
+// mkdir/cp/… (`mkdir: /Users/x/d: Operation not permitted`) and node (`EPERM: operation not
+// permitted, mkdir '/Users/x/d'`) each print it — a PATH before the colon is what tells it apart from
+// the network and exec shapes above.
+const FS_DENIAL_RE = /\/[^\s:'"]+: operation not permitted|EPERM: operation not permitted, \w+ '/i;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -290,12 +387,18 @@ const PS_DENIAL_RE = /\b(?:ps|top): Operation not permitted/;
 // the one shape the output gate cannot see, so the exit status has to carry it.
 const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
 
+/** True when a sandboxed command's output shows a write the profile refused. The user-facing half:
+ *  the footer tells the model not to fight it, this tells the user the flag exists (`bash.ts`). */
+export function sandboxRefusedWrite(output: string): boolean {
+  return FS_DENIAL_RE.test(output) && !PS_DENIAL_RE.test(output);
+}
+
 /**
  * What the model is told when a sandboxed command exits non-zero.
  *
- * Two things it has to stop, both of which are failure text a model repairs in the wrong direction.
- * Filesystem denials already name the path and the permission, so they need nothing. The other two
- * kinds do:
+ * Three things it has to stop, all failure text a model repairs in the wrong direction. Filesystem
+ * denials name the path, so they get one line only — that it is the sandbox, not something sudo
+ * fixes. The other two kinds do more:
  *
  * - Network. A Seatbelt denial there never says "permission": `curl` reports `Could not resolve
  *   host` (rc 6, and nothing at all under `-s`), `git push` says "make sure you have the correct
@@ -319,7 +422,8 @@ export function sandboxFooter(
 ): string {
   if (code === 0 || code === null) return '';
   const lines: string[] = [];
-  if (PS_DENIAL_RE.test(output)) {
+  const ps = PS_DENIAL_RE.test(output);
+  if (ps) {
     lines.push(
       '`ps`/`top` cannot be run under the local sandbox at all — that "Operation not permitted" is ' +
         'the sandbox, not process state. Read /proc-style equivalents a plain file read can answer ' +
@@ -336,6 +440,14 @@ export function sandboxFooter(
         ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
+  // `/bin/ps: Operation not permitted` is a path too, and already explained above.
+  if (!ps && FS_DENIAL_RE.test(output)) {
+    lines.push(
+      'A write outside the working directory, temp and cache dirs was refused by the sandbox — not ' +
+        'a permissions problem, so do not reach for sudo or chmod. If the command must write there, ' +
+        'say so and ask the user to run it.',
+    );
+  }
   if (lines.length === 0) return '';
-  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory and temp dirs.)`;
+  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory, temp and cache dirs.)`;
 }
