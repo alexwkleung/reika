@@ -380,6 +380,14 @@ export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 // (a human present is never a reason to inject silently), and headless applies a strong match
 // without asking, under the tighter 12-word gate.
 export type SkillAutoMode = 'off' | 'ask' | 'apply';
+// Pasted-URL fetching (#448), the same three values with the same split. A URL that IS the
+// request (short prompt, link at the start or end or after a read verb) is fetched under 'ask' and
+// 'apply' alike; one that merely appears in the prompt — inside a pasted error, a log line — is
+// what the mode decides. 'off' fetches nothing (an airgapped machine). 'ask' (default) — the TUI
+// opens the confirm dialog; headless, with nobody to ask, leaves it and says so. 'apply' — the TUI
+// still asks, and headless fetches it too, with the private-host policy kept since nobody vouched
+// for the address.
+export type PasteFetchMode = 'off' | 'ask' | 'apply';
 
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
@@ -443,10 +451,9 @@ export type Config = {
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
   // first entry.
   ocrLangs?: string[];
-  // Fetch http(s) URLs the user pastes into a prompt before the turn runs (REIKA_PASTE_FETCH=0
-  // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
-  // exists because it's an outbound request on a machine that may be offline or airgapped.
-  pasteFetch: boolean;
+  // What to do with http(s) URLs in a prompt before the turn runs (REIKA_PASTE_FETCH). See
+  // PasteFetchMode and agent/pastedurls.ts.
+  pasteFetch: PasteFetchMode;
   // Whether model-chosen shell commands run under the local sandbox (`REIKA_SANDBOX`, #163).
   // Default on, macOS only; see tools/bash.ts's composition and tools/_sandbox.ts for the profile.
   sandbox: boolean;

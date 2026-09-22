@@ -49,7 +49,7 @@ const config = (): Config => ({
   maxFetchesPerTurn: 0,
   bashTimeoutMs: 5000,
   bashIdleMs: 5000,
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'off',
   anon: false,
   sandbox: false,

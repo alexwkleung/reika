@@ -4,13 +4,13 @@ import { render } from 'ink-testing-library';
 import type { Config, ContextBundle } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
+import type * as FetchModule from '../tools/fetch.js';
+import type { ExtractOptions, UrlExtraction } from '../tools/fetch.js';
 
-// The skill confirm (#425): under REIKA_SKILL_AUTO a command-shaped match asks before submit
-// instead of injecting. Driven through the real App because the whole feature is submit-path
-// plumbing — where the dialog opens relative to the busy queue and the expansions, what the
-// replay carries — and a unit test on the dialog component sees none of it.
-
-const REVIEW_BODY = 'run `gh pr view` and read the diff';
+// The pasted-link confirm (#448): a URL the prompt is not about is asked about before submit
+// instead of fetched. Driven through the real App like the skill confirm's tests, since what
+// matters is where the dialog sits in the submit path — before the fetch, before the queue —
+// and what the answer does to the turn's input.
 
 const CONFIG: Config = {
   baseURL: 'http://127.0.0.1:1/v1',
@@ -30,8 +30,8 @@ const CONFIG: Config = {
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
   bashIdleMs: 1000,
-  pasteFetch: 'off',
-  skillAuto: 'ask',
+  pasteFetch: 'ask',
+  skillAuto: 'off',
   anon: false,
   sandbox: false,
 };
@@ -40,20 +40,11 @@ const BUNDLE: ContextBundle = {
   projectSummary: '',
   repoMap: '',
   instructions: '',
-  cwd: '/tmp/app-skillconfirm-test',
+  cwd: '/tmp/app-urlconfirm-test',
   hash: 'deadbeef',
   fileIndex: [],
   ignore: { ignores: () => false } as unknown as ContextBundle['ignore'],
-  skills: [
-    {
-      name: 'review',
-      description: 'read a GitHub pull request with gh, then review the diff',
-      body: REVIEW_BODY,
-      source: 'project',
-      path: '/repo/.reika/skills/review.md',
-      triggers: ['review pr', 'pull request'],
-    },
-  ],
+  skills: [],
 };
 
 vi.mock('../config.js', async () => {
@@ -67,7 +58,15 @@ vi.mock('../laststate.js', async () => {
 });
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 
-// Each turn hangs until the test settles it, so the busy queue can be exercised.
+const extractUrl = vi.hoisted(() =>
+  vi.fn<(url: string, opts?: ExtractOptions) => Promise<UrlExtraction>>(),
+);
+// Only the fetch is stubbed; the tool and the recap's page parser stay real (App imports both).
+vi.mock('../tools/fetch.js', async () => {
+  const actual = await vi.importActual<typeof FetchModule>('../tools/fetch.js');
+  return { ...actual, extractUrl };
+});
+
 const settlers: Array<() => void> = [];
 const runTurn = vi.fn(
   (opts: { onMessage: (m: unknown) => void; userInput: string }) =>
@@ -120,103 +119,114 @@ async function waitFor(app: Harness, re: RegExp, ms = 3000) {
   expect(plain(app.lastFrame())).toMatch(re);
 }
 
-const DIALOG = /⏺︎ Skill\s+\/review/;
+const DIALOG = /⏺︎ Pasted link/;
+const INCIDENTAL = 'TypeError: fetch failed at https://api.example.com/v1/users why';
 const turnInput = (n: number) => (runTurn.mock.calls[n][0] as { userInput: string }).userInput;
-const turnSkill = (n: number) => (runTurn.mock.calls[n][0] as { userSkill?: string }).userSkill;
 
-describe('skill confirm (#425)', () => {
+describe('pasted-link confirm (#448)', () => {
   beforeEach(() => {
     runTurn.mockClear();
     settlers.length = 0;
-    CONFIG.skillAuto = 'ask';
+    extractUrl.mockReset();
+    extractUrl.mockImplementation(async (url: string) => ({
+      ok: true,
+      content: `page at ${url}`,
+      extractedChars: 12,
+    }));
+    CONFIG.pasteFetch = 'ask';
   });
 
-  it("still asks under 'apply' — a human present is never a reason to inject silently", async () => {
-    CONFIG.skillAuto = 'apply';
+  it('fetches a link the prompt is about without asking', async () => {
     const app = await mountApp();
-    await submit(app, 'review pr 420');
-    await waitFor(app, DIALOG);
-    expect(runTurn).not.toHaveBeenCalled();
-    app.unmount();
-  });
-
-  it("only hints under 'off'", async () => {
-    CONFIG.skillAuto = 'off';
-    const app = await mountApp();
-    await submit(app, 'review pr 420');
-    await waitFor(app, /Skill hint: \/review/);
+    await submit(app, 'read https://example.com/docs');
+    await waitFor(app, /Fetched https:\/\/example\.com\/docs/);
     expect(plain(app.lastFrame())).not.toMatch(DIALOG);
-    expect(turnInput(0)).toBe('review pr 420');
+    expect(extractUrl).toHaveBeenCalledWith('https://example.com/docs', { allowPrivate: true });
+    expect(turnInput(0)).toContain('<url href="https://example.com/docs">');
     app.unmount();
   });
 
-  it('asks on a command-shaped match and sends the prompt as typed on Enter', async () => {
+  it('asks about a link inside an error and sends the prompt as typed on Enter', async () => {
     const app = await mountApp();
-    await submit(app, 'review pr 420');
+    await submit(app, INCIDENTAL);
     await waitFor(app, DIALOG);
     const frame = plain(app.lastFrame());
+    expect(frame).toContain('https://api.example.com/v1/users');
     expect(frame).toMatch(/› 1\. Send as typed/);
-    expect(frame).toContain('2. Apply /review');
-    // The prompt is still in the box underneath while the dialog is up (the disabled input shows
-    // `…` for its prompt, so look at the row after the dialog's footer rather than at `> `).
-    const rows = frame.split('\n');
-    const footer = rows.findIndex(r => r.includes('ctrl-c abort'));
-    expect(rows.slice(footer).some(r => r.includes('…') && r.includes('review pr 420'))).toBe(true);
+    expect(frame).toContain('2. Fetch the link');
+    expect(extractUrl).not.toHaveBeenCalled();
     expect(runTurn).not.toHaveBeenCalled();
 
     app.stdin.write('\r');
-    await waitFor(app, /▎ review pr 420/);
-    expect(runTurn).toHaveBeenCalledTimes(1);
-    expect(turnInput(0)).toBe('review pr 420');
-    expect(turnSkill(0)).toBeUndefined();
-    // The dialog replaced the hint: no "start with /review" line after an explicit decline.
-    expect(plain(app.lastFrame())).not.toContain('Skill hint');
+    await waitFor(app, /▎ TypeError: fetch failed/);
+    expect(extractUrl).not.toHaveBeenCalled();
+    expect(turnInput(0)).toBe(INCIDENTAL);
+    // A decline needs no receipt: the dialog was the line.
+    expect(plain(app.lastFrame())).not.toContain('not fetched');
     app.unmount();
   });
 
-  it('applies the skill on y + Enter, with the receipt', async () => {
+  it('fetches on y + Enter, with the host policy opened by the confirmation', async () => {
     const app = await mountApp();
-    await submit(app, 'review pr 420');
+    await submit(app, INCIDENTAL);
     await waitFor(app, DIALOG);
     app.stdin.write('y');
-    await waitFor(app, /› 2\. Apply \/review/);
-    // y only moved the cursor; nothing ran yet.
-    expect(runTurn).not.toHaveBeenCalled();
+    await waitFor(app, /› 2\. Fetch the link/);
+    expect(extractUrl).not.toHaveBeenCalled();
     app.stdin.write('\r');
-    await waitFor(app, /Skill \/review applied/);
-    expect(turnInput(0)).toBe(`${REVIEW_BODY}\n\nreview pr 420`);
-    expect(turnSkill(0)).toBe('review');
+    await waitFor(app, /Fetched https:\/\/api\.example\.com\/v1\/users/);
+    expect(extractUrl).toHaveBeenCalledWith('https://api.example.com/v1/users', {
+      allowPrivate: true,
+    });
+    expect(turnInput(0)).toContain('<url href="https://api.example.com/v1/users">');
+    expect(turnInput(0)).toContain(INCIDENTAL);
     app.unmount();
   });
 
-  it('asks about a long-tail command the silent gate would only suggest', async () => {
+  it("still asks under 'apply' — a human present is never a reason to fetch silently", async () => {
+    CONFIG.pasteFetch = 'apply';
     const app = await mountApp();
-    await submit(
-      app,
-      'review pr 420 but first explain how the compaction note is fitted into the recap and why',
-    );
+    await submit(app, INCIDENTAL);
     await waitFor(app, DIALOG);
+    expect(extractUrl).not.toHaveBeenCalled();
     app.unmount();
   });
 
-  it('does not ask about a prompt that merely mentions the nouns — the hint fires instead', async () => {
+  it("neither asks nor fetches under 'off'", async () => {
+    CONFIG.pasteFetch = 'off';
     const app = await mountApp();
-    await submit(app, 'add a pull request template to the repo');
-    await waitFor(app, /Skill hint: \/review/);
+    await submit(app, 'read https://example.com/docs');
+    await waitFor(app, /▎ read https:\/\/example\.com\/docs/);
     expect(plain(app.lastFrame())).not.toMatch(DIALOG);
-    expect(turnInput(0)).toBe('add a pull request template to the repo');
+    expect(extractUrl).not.toHaveBeenCalled();
+    expect(turnInput(0)).toBe('read https://example.com/docs');
+    app.unmount();
+  });
+
+  it('refuses a credentialed link outright, and the receipt keeps the secret out', async () => {
+    const app = await mountApp();
+    await submit(app, 'read https://user:hunter2@example.com/private');
+    await waitFor(app, /credentials in it \(example\.com\)/);
+    expect(plain(app.lastFrame())).not.toMatch(DIALOG);
+    expect(extractUrl).not.toHaveBeenCalled();
+    // The prompt itself echoes what the user typed; the receipt must not add a second copy.
+    const receipts = plain(app.lastFrame())
+      .split('\n')
+      .filter(l => l.includes('credentials'));
+    expect(receipts.every(l => !l.includes('hunter2'))).toBe(true);
     app.unmount();
   });
 
   it('ctrl-c drops the submit and leaves the prompt in the box', async () => {
     const app = await mountApp();
-    await submit(app, 'review pr 420');
+    await submit(app, INCIDENTAL);
     await waitFor(app, DIALOG);
     app.stdin.write('\x03');
     await tick(120);
     expect(plain(app.lastFrame())).not.toMatch(DIALOG);
-    expect(inputLine(app)).toContain('review pr 420');
+    expect(inputLine(app)).toContain('TypeError');
     expect(runTurn).not.toHaveBeenCalled();
+    expect(extractUrl).not.toHaveBeenCalled();
     app.unmount();
   });
 
@@ -224,19 +234,19 @@ describe('skill confirm (#425)', () => {
     const app = await mountApp();
     await submit(app, 'hi');
     expect(runTurn).toHaveBeenCalledTimes(1);
-    await submit(app, 'review pr 420');
+    await submit(app, INCIDENTAL);
     await waitFor(app, DIALOG);
     app.stdin.write('y');
-    await waitFor(app, /› 2\. Apply \/review/);
+    await waitFor(app, /› 2\. Fetch the link/);
     app.stdin.write('\r');
-    await waitFor(app, /next › review pr 420/);
+    await waitFor(app, /next › TypeError/);
     expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(extractUrl).not.toHaveBeenCalled();
 
     settlers[0]();
-    await waitFor(app, /Skill \/review applied/);
+    await waitFor(app, /Fetched https:\/\/api\.example\.com\/v1\/users/);
     expect(runTurn).toHaveBeenCalledTimes(2);
-    expect(turnInput(1)).toBe(`${REVIEW_BODY}\n\nreview pr 420`);
-    expect(turnSkill(1)).toBe('review');
+    expect(turnInput(1)).toContain('<url href="https://api.example.com/v1/users">');
     app.unmount();
   });
 });

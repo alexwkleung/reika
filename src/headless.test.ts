@@ -69,7 +69,7 @@ describe('finalReply', () => {
 });
 
 const config = {
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'apply',
   contextWindow: 24000,
 } as unknown as Config;

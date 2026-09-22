@@ -1,7 +1,14 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AutoApproveMode, Config, DefaultMode, Profile, SkillAutoMode } from './types.js';
+import type {
+  AutoApproveMode,
+  Config,
+  DefaultMode,
+  PasteFetchMode,
+  Profile,
+  SkillAutoMode,
+} from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
@@ -83,7 +90,7 @@ export function loadConfig(): Config {
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
-    pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
+    pasteFetch: parsePasteFetch(process.env.REIKA_PASTE_FETCH),
     // On by default, and only macOS has an implementation (#163) — see tools/_sandbox.ts. A flag
     // rather than a hardcoded path because the sandbox changes what a command may do, so a run that
     // is measuring anything about bash behavior needs a way to get the old world back.
@@ -185,6 +192,23 @@ function parseAutoApprove(raw: string | undefined): AutoApproveMode {
 // start receiving skill bodies because the interactive default moved. Anything unrecognized is
 // 'off': a typo should cost a hint line, not a rewritten prompt.
 function parseSkillAuto(raw: string | undefined): SkillAutoMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'ask':
+      return 'ask';
+    case 'apply':
+    case '1':
+    case 'true':
+      return 'apply';
+    default:
+      return 'off';
+  }
+}
+
+// REIKA_PASTE_FETCH, the same shape as REIKA_SKILL_AUTO (#448). '1'/'true' map to 'apply' because
+// before the shape gate they meant "fetch every pasted URL", which is what 'apply' still does
+// headless. Anything unrecognized is 'off': a typo should cost a fetch, not cause one.
+function parsePasteFetch(raw: string | undefined): PasteFetchMode {
   switch ((raw ?? '').trim().toLowerCase()) {
     case '':
     case 'ask':
