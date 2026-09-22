@@ -14,7 +14,7 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
-import { sandboxPlan } from './_sandbox.js';
+import { sandboxExecAvailable, sandboxPlan } from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -500,6 +500,10 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
   });
 });
 
+// Inside another Seatbelt sandbox (an agent running this suite) sandbox-exec cannot apply a
+// profile at all, so the enforcement cases can only be measured where the probe says it works.
+const sandboxWorks = sandboxExecAvailable();
+
 // The composition half of #163: which commands run sandboxed is decided by the danger scan and the
 // presence of an approval gate, so the cells are pinned on the pure decision — deterministic on every
 // platform — and one darwin-only run pins that the decision reaches a real process.
@@ -553,7 +557,7 @@ describe('bashTool — sandbox composition', () => {
   // The receipt is once per cwd (the confinement is a session property, and a line under every chip
   // doubled the scrollback), and the write lands because WORKDIR is the realpath'd cwd — the
   // /tmp -> /private/tmp trap that made every create fail.
-  it.skipIf(process.platform !== 'darwin')(
+  it.skipIf(!sandboxWorks)(
     'runs a clean command sandboxed, says so once per cwd, and can still write inside it',
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
@@ -581,7 +585,7 @@ describe('bashTool — sandbox composition', () => {
   // The scratchpad workflow — `mktemp -d`, write, `rm -rf` — is the commonest thing a model does
   // outside cwd, and denying temp made python's mkdtemp fall through to cwd and write scratch into
   // the project. Real paths matter here: `/tmp` → `/private/tmp`, `$TMPDIR` → `/private/var/…`.
-  it.skipIf(process.platform !== 'darwin')(
+  it.skipIf(!sandboxWorks)(
     'lets a sandboxed command scratch in temp dirs, still not elsewhere in $HOME',
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
@@ -610,49 +614,43 @@ describe('bashTool — sandbox composition', () => {
   // socket matched the local filter and every outbound connection went through. A raw non-loopback
   // IP needs no DNS and no route — the kernel refuses connect() before a packet exists — so this is
   // deterministic offline. UDP too, since that is the other half of `network*`.
-  it.skipIf(process.platform !== 'darwin')(
-    'refuses outbound TCP and UDP to a non-loopback address',
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
-      try {
-        const tcp =
-          'require("net").connect(80,"192.0.2.1").on("connect",()=>{console.log("tcp OPEN");process.exit(0)}).on("error",e=>{console.log("tcp",e.code);process.exit(1)})';
-        const r = await bashTool.run({ command: `node -e '${tcp}'` }, { cwd: dir });
-        expect(r.payload).toContain('tcp EPERM');
-        const udp =
-          'const d=require("dgram").createSocket("udp4");d.send("x",53,"192.0.2.1",e=>{console.log(e?"udp "+e.code:"udp OPEN");d.close();process.exit(e?1:0)})';
-        const u = await bashTool.run({ command: `node -e '${udp}'` }, { cwd: dir });
-        expect(u.payload).toContain('udp EPERM');
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
+  it.skipIf(!sandboxWorks)('refuses outbound TCP and UDP to a non-loopback address', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const tcp =
+        'require("net").connect(80,"192.0.2.1").on("connect",()=>{console.log("tcp OPEN");process.exit(0)}).on("error",e=>{console.log("tcp",e.code);process.exit(1)})';
+      const r = await bashTool.run({ command: `node -e '${tcp}'` }, { cwd: dir });
+      expect(r.payload).toContain('tcp EPERM');
+      const udp =
+        'const d=require("dgram").createSocket("udp4");d.send("x",53,"192.0.2.1",e=>{console.log(e?"udp "+e.code:"udp OPEN");d.close();process.exit(e?1:0)})';
+      const u = await bashTool.run({ command: `node -e '${udp}'` }, { cwd: dir });
+      expect(u.payload).toContain('udp EPERM');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   // Unix-domain sockets are local IPC (docker, a local DB, the DNS resolver), allowed on the same
   // reasoning as loopback.
-  it.skipIf(process.platform !== 'darwin')(
-    'lets a sandboxed command use a unix socket',
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
-      try {
-        const script =
-          'const net=require("net"),p=process.cwd()+"/s.sock";const s=net.createServer(c=>c.end("hi")).listen(p,()=>{' +
-          'net.connect(p).on("data",d=>{console.log("unix",String(d));s.close()}).on("error",e=>{console.log("unix err",e.code);s.close()})})' +
-          '.on("error",e=>console.log("listen err",e.code))';
-        const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
-        expect(r.payload).toContain('unix hi');
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
+  it.skipIf(!sandboxWorks)('lets a sandboxed command use a unix socket', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const script =
+        'const net=require("net"),p=process.cwd()+"/s.sock";const s=net.createServer(c=>c.end("hi")).listen(p,()=>{' +
+        'net.connect(p).on("data",d=>{console.log("unix",String(d));s.close()}).on("error",e=>{console.log("unix err",e.code);s.close()})})' +
+        '.on("error",e=>console.log("listen err",e.code))';
+      const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
+      expect(r.payload).toContain('unix hi');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   // A cwd below the repo root (monorepo package, worktree, submodule) keeps its git dir writable:
   // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param
   // is what the profile's `(subpath (param "GITDIR"))` line binds, and it is the repo's `.git` only
   // when that lies outside cwd — at the root it is WORKDIR itself, so nothing extra is allowed.
-  it.skipIf(process.platform !== 'darwin')('binds GITDIR to the repo when cwd is below it', () => {
+  it.skipIf(!sandboxWorks)('binds GITDIR to the repo when cwd is below it', () => {
     const repo = realpathSync(process.cwd());
     const below = sandboxPlan(join(repo, 'src'), { network: false });
     expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
@@ -663,23 +661,20 @@ describe('bashTool — sandbox composition', () => {
   // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
   // local server (this repo's transport.test.ts does) used to go red with EPERM on `listen(0)` and
   // then collect the network footer blaming the sandbox for the whole run.
-  it.skipIf(process.platform !== 'darwin')(
-    'lets a sandboxed command bind and reach a loopback port',
-    async () => {
-      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
-      try {
-        const script =
-          'const http=require("http");const s=http.createServer((q,r)=>r.end("pong")).listen(0,"127.0.0.1",()=>{' +
-          'http.get({host:"127.0.0.1",port:s.address().port},res=>{let b="";res.on("data",d=>b+=d);' +
-          'res.on("end",()=>{console.log("got",b);s.close()})}).on("error",e=>{console.log("err",e.code);s.close()})})';
-        const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
-        expect(r.exitCode).toBe(0);
-        expect(r.payload).toContain('got pong');
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
-    },
-  );
+  it.skipIf(!sandboxWorks)('lets a sandboxed command bind and reach a loopback port', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const script =
+        'const http=require("http");const s=http.createServer((q,r)=>r.end("pong")).listen(0,"127.0.0.1",()=>{' +
+        'http.get({host:"127.0.0.1",port:s.address().port},res=>{let b="";res.on("data",d=>b+=d);' +
+        'res.on("end",()=>{console.log("got",b);s.close()})}).on("error",e=>{console.log("err",e.code);s.close()})})';
+      const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
+      expect(r.exitCode).toBe(0);
+      expect(r.payload).toContain('got pong');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in
@@ -721,16 +716,15 @@ describe('bashTool — tree changes', () => {
   // once per cwd, as a user-facing notice, never in the model's context.
   it('without a repo, diffs the named file and says once that coverage is narrower', async () => {
     await writeFile(join(dir, 'x.txt'), 'a\n');
-    const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
+    // Sandbox off: its once-per-cwd receipt (#163) shares the notice, and is `warn` wherever the
+    // sandbox can't load, which would make the tone a claim about the machine.
+    const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir, sandbox: false });
     expect(first.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
-    // Matched on content, not on presence: the first sandboxed command in a cwd carries the sandbox
-    // receipt (#163) on this platform, so "has no notice" would be a claim about the machine rather
-    // than about the once-per-cwd rule this test is about.
     const notRepo = first.notice?.content ?? '';
     expect(notRepo).toContain('Not a git repo');
     expect(first.notice?.tone).toBe('info');
     expect(first.payload).not.toContain('git repo');
-    const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir });
+    const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir, sandbox: false });
     expect(second.changes?.files[0].hunks[0].text).toBe('  a\n  b\n+ c');
     expect(second.notice?.content ?? '').not.toContain('Not a git repo');
   });
