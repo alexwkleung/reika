@@ -6,7 +6,7 @@ import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
-import { Working } from './Working.js';
+import { Working, WORKING_ROWS } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
@@ -2159,6 +2159,11 @@ export function App() {
             // harness action with a visible wait — it should read like the typecheck gate rather
             // than like the app having stalled.
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
+          ) : !pending && !question && !modelSelect && !confirm ? (
+            // Holds the spinner's rows at idle: the frame shrinking would leave the input above
+            // the bottom row until new output refilled the gap. Not under a dialog, whose height
+            // budget (`reservedRows`) doesn't count it.
+            <Box height={WORKING_ROWS} />
           ) : null}
           <QueuedList queue={queue} />
           {pending ? (

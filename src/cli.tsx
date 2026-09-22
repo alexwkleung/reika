@@ -46,6 +46,11 @@ if (headless) {
     import('./ui/App.js'),
     import('./ui/syncframe.js'),
   ]);
+  // Inline rendering draws the input right below the last output, so a short session would start
+  // near the top and creep down as it grows. Starting the cursor on the bottom row makes every
+  // commit push older rows up instead, which keeps the input at the bottom from the first frame.
+  const rows = process.stdout.rows;
+  if (process.stdout.isTTY && rows > 1) process.stdout.write('\n'.repeat(rows - 1));
   // Frames go out as one synchronized write each (#345) so a swapped-out process can't leave the
   // terminal painting a half-erased screen between Ink's writes.
   render(<App />, { exitOnCtrlC: false, stdout: createSyncedStdout(process.stdout) });

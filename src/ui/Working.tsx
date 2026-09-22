@@ -133,6 +133,10 @@ const TICK_MS = 80;
 const SHIMMER_STEP = 2; // ticks per shimmer step (~160ms) — gentle, not strobey.
 const SHIMMER_PAUSE = 6; // dark frames after each sweep so it breathes.
 
+// The spinner's height (margin + one line). Idle holds this many blank rows in its place so the
+// input doesn't jump up at the end of every turn.
+export const WORKING_ROWS = 2;
+
 // `accent` colors the spinner glyph (default = brand magenta). A distinct accent — e.g. cyan while
 // the harness is typechecking — makes a transient state read at a glance rather than as a mere
 // word-swap on an already-spinning indicator.
