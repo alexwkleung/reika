@@ -6,6 +6,7 @@ import {
   isBroadWorkdir,
   broadWorkdirNotice,
   networkAllowedFor,
+  networkDecision,
   sandboxRefusedWrite,
 } from './_sandbox.js';
 
@@ -188,13 +189,56 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor("git fetch; find . -name '*.sh' -execdir sh {} \\;")).toBe(false);
     expect(networkAllowedFor("git -c alias.x='!curl http://x' x")).toBe(false);
     expect(networkAllowedFor("git fetch && find . -name '*.ts' | head")).toBe(true);
-    expect(networkAllowedFor('git -c core.pager=cat log -1')).toBe(true);
+  });
+
+  // `-c <key>=<value>` can name a program through more keys than are worth enumerating (sshCommand,
+  // pager, credential.helper, hooksPath…), so it is refused wholesale; only fetch-shaped commands
+  // need the allow, and none of them need `-c`. Same class through the environment.
+  it('refuses git -c and program-naming env prefixes the allow', () => {
+    expect(networkAllowedFor('git -c core.sshCommand=./x.sh fetch origin')).toBe(false);
+    expect(networkAllowedFor('git -c core.pager=./x.sh log')).toBe(false);
+    expect(networkAllowedFor('git -c core.pager=cat log -1')).toBe(false);
+    expect(networkAllowedFor('git --config-env=core.sshCommand=X fetch')).toBe(false);
+    expect(networkAllowedFor('GIT_SSH_COMMAND=./x.sh git fetch origin')).toBe(false);
+    expect(networkAllowedFor('PAGER=./x.sh gh pr view 1')).toBe(false);
+    expect(networkAllowedFor('GIT_PAGER=less git log')).toBe(false);
+    expect(networkAllowedFor('GIT_EXEC_PATH=/tmp/x git fetch')).toBe(false);
+    // The settings a model actually sets, none of which can name a program.
+    expect(networkAllowedFor('GIT_TERMINAL_PROMPT=0 GH_PAGER= gh pr view 1')).toBe(true);
+    expect(networkAllowedFor('PAGER=cat git log -1')).toBe(true);
+    expect(networkAllowedFor('NO_COLOR=1 GH_NO_UPDATE_NOTIFIER=1 gh issue list')).toBe(true);
+  });
+
+  // A heredoc body is data. Its lines split into segments whose "verb" was prose, and the standard
+  // way a model writes a multi-line comment was denied every time.
+  it('ignores heredoc bodies when reading verbs', () => {
+    expect(
+      networkAllowedFor(
+        "gh issue comment 1 --body-file - <<'EOF'\nLooks good.\n\nOne question about the loop.\nEOF",
+      ),
+    ).toBe(true);
+    expect(networkAllowedFor('gh pr comment 5 -F - <<EOF\nrm -rf everything\nEOF')).toBe(true);
+    expect(networkAllowedFor('gh pr comment 5 -F - <<EOF\nbody\nEOF\ncurl http://x')).toBe(false);
+  });
+
+  // When a gh/git pipeline is denied because of a sibling, the verdict names it: the model's own
+  // remedy is to run the git half by itself, and the footer says so instead of "ask the user".
+  it('names the sibling command that cost a gh/git pipeline its allow', () => {
+    expect(networkDecision('git fetch && npm test')).toEqual({ allowed: false, blockedBy: 'npm' });
+    expect(networkDecision('gh pr diff 1 | python3 -c "x"')).toEqual({
+      allowed: false,
+      blockedBy: 'python3',
+    });
+    expect(networkDecision('gh pr view 1')).toEqual({ allowed: true });
+    // No gh/git at all: nothing to name, and no remedy of that shape.
+    expect(networkDecision('npm test')).toEqual({ allowed: false });
   });
 
   it('sees through env assignments and wrappers to the verb', () => {
     expect(networkAllowedFor('GH_PAGER= gh pr view 1')).toBe(true);
     expect(networkAllowedFor('GIT_TERMINAL_PROMPT=0 git fetch --all')).toBe(true);
     expect(networkAllowedFor('time git clone https://example.com/r.git')).toBe(true);
+    expect(networkAllowedFor('sudo git fetch')).toBe(true);
   });
 });
 
@@ -367,6 +411,9 @@ describe('sandboxFooter', () => {
       'mkdir: /Users/someone/x: Operation not permitted\n',
       "Error: EPERM: operation not permitted, mkdir '/Users/someone/x'\n",
       'go: failed to initialize build cache at /Users/someone/.cargo/x: mkdir /Users/someone/.cargo/x: operation not permitted\n',
+      // Python's write denial carries the same Errno 1 the network one does; the quoted path is
+      // what tells them apart, and it must not collect the fetch_url advice.
+      "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
       expect(footer, out).toContain('refused by the sandbox');
@@ -377,6 +424,26 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('ssh: connect to host x port 22: Operation not permitted\n')).toBe(
       false,
     );
+    expect(
+      sandboxRefusedWrite(
+        'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',
+      ),
+    ).toBe(false);
+  });
+
+  // `mkdir ~/x; echo ok` exits 0 with the denial in its output. The write note is on the shape
+  // alone; the ps and network notes keep the exit gate, since a red run is when they are read.
+  it('reports a refused write even when the command exited 0', () => {
+    const out = 'mkdir: /Users/someone/x: Operation not permitted\nok\n';
+    expect(sandboxFooter('mkdir ~/x; echo ok', 0, out, denied)).toContain('refused by the sandbox');
+    expect(sandboxFooter('curl -s x; echo done', 0, curlConnect, denied)).toBe('');
+  });
+
+  it('names the sibling that cost a gh/git pipeline its network, with the remedy', () => {
+    const footer = sandboxFooter('git fetch && npm test', 1, curlConnect, denied);
+    expect(footer).toContain('`npm`');
+    expect(footer).toContain('own bash call');
+    expect(footer).not.toContain('ask the user');
   });
 
   it('does not mistake ps in an argument for the ps command', () => {

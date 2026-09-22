@@ -194,8 +194,10 @@ export const readOnlyBashTool: Tool = {
     // Prompting only for bash would gate a capability `read` already has, and would train the user
     // to approve bash modals reflexively, weakening the prompt in agent mode where it carries the
     // real decision. The command still renders its chip in scrollback, so nothing runs unseen.
-    // Straight to execStream: a command just proved read-only has no tree diff to take.
-    return execStream(command, ctx);
+    // Straight to execStream: a command just proved read-only has no tree diff to take. Sandboxed
+    // like any other unprompted command (#163) — the classifier is the guarantee plan mode makes,
+    // and the kernel backing it costs nothing.
+    return execStream(command, ctx, decideSandbox(command, [], ctx));
   },
 };
 
@@ -278,9 +280,10 @@ export function execStream(
   // A UI receipt, never in the model's context (the agent prompt carries the model's copy). Nothing
   // otherwise announces the sandbox, so without this the user's only evidence would be a command
   // that mysteriously failed. Once per cwd, both for the receipt and for the machine-fault warning.
+  // Marked shown only when a run completes with it attached (below): an aborted first command or
+  // an exit-65 retry must not consume the one receipt this cwd gets.
   let notice: ToolResult['notice'];
   if (plan && !sandboxNoticed.has(ctx.cwd)) {
-    sandboxNoticed.add(ctx.cwd);
     notice = argv
       ? {
           tone: 'info',
@@ -407,12 +410,10 @@ export function execStream(
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
       const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
-      if (
-        argv &&
-        code !== 0 &&
-        sandboxRefusedWrite(rawOutput) &&
-        !sandboxDenialNoticed.has(ctx.cwd)
-      ) {
+      if (notice && plan) sandboxNoticed.add(ctx.cwd);
+      // On the output's shape, not the exit status: `mkdir ~/x; echo ok` exits 0 with the denial in
+      // its output, and the user would otherwise never learn the flag exists.
+      if (argv && sandboxRefusedWrite(rawOutput) && !sandboxDenialNoticed.has(ctx.cwd)) {
         sandboxDenialNoticed.add(ctx.cwd);
         notice = {
           tone: 'warn',
@@ -471,7 +472,12 @@ export function execStream(
             ...r,
             notice: {
               tone: 'warn',
-              content: `Not sandboxed: the sandbox profile failed to load (sandbox-exec exit ${code}); re-ran unsandboxed: ${command}`,
+              content: [
+                r.notice?.content,
+                `Not sandboxed: the sandbox profile failed to load (sandbox-exec exit ${code}); re-ran unsandboxed: ${command}`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
             },
           }),
         );

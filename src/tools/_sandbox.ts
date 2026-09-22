@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
+import { stripHeredocs } from './_writetargets.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
 // only: bubblewrap has no port-level network filtering, so a sandboxed process gets its own
@@ -129,10 +130,52 @@ const NET_VERBS = new Set(['gh', 'git', 'glab']);
 // can `system("curl …")`, which is the shape the deny exists for. `sed`/`tree` stay — BSD sed has no
 // shell-out, and a `w file` lands inside the write confinement either way.
 const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS].filter(c => c !== 'awk'));
-// `find`'s exec family runs an arbitrary command per match; `git -c alias.x='!cmd'` runs one by
-// verb `git`. Both would keep the network through the verb check alone.
+// `find`'s exec family runs an arbitrary command per match. `git -c <key>=<value>` can name one
+// through more keys than are worth enumerating — `alias.x='!cmd'`, `core.sshCommand`, `core.pager`,
+// `credential.helper`, `diff.external`, `core.hooksPath` — so `-c` (and `--config-env`) is refused
+// the allow outright: a `git log -c core.pager=cat` loses nothing, since only fetch/pull/clone/
+// ls-remote need the network. Same class through the environment (`GIT_SSH_COMMAND=./x.sh git
+// fetch`, `PAGER=./x.sh gh pr view`), so an env-assignment prefix keeps the allow only when its name
+// is on a short list of settings that cannot name a program.
 const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/;
-const GIT_ALIAS_RE = /^alias\./;
+const GIT_CONFIG_FLAG_RE = /^(?:-c|--config-env(?:=.*)?)$/;
+const HARMLESS_ENV = new Set([
+  'GIT_TERMINAL_PROMPT',
+  'GIT_OPTIONAL_LOCKS',
+  'GIT_ADVICE',
+  'GH_NO_UPDATE_NOTIFIER',
+  'GH_PROMPT_DISABLED',
+  'GH_FORCE_TTY',
+  'GH_REPO',
+  'GH_HOST',
+  'NO_COLOR',
+  'CLICOLOR',
+  'CLICOLOR_FORCE',
+  'FORCE_COLOR',
+  'TERM',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+]);
+// The pager variables are allowed only when they DISABLE the pager, which is what a model sets them
+// for; a value naming a program is a program the output gets piped into.
+const PAGER_ENV = new Set(['PAGER', 'GIT_PAGER', 'GH_PAGER']);
+const ENV_ASSIGN_RE = /^([A-Za-z_]\w*)=(.*)$/;
+
+// Whether a segment's leading env assignments can all be trusted not to redirect what runs.
+function envPrefixHarmless(segment: string): boolean {
+  for (const w of words(segment.trim())) {
+    const m = ENV_ASSIGN_RE.exec(w);
+    if (!m) return true; // past the assignments
+    const [, name, value] = m;
+    if (PAGER_ENV.has(name)) {
+      if (value !== '' && value !== 'cat') return false;
+    } else if (!HARMLESS_ENV.has(name)) {
+      return false;
+    }
+  }
+  return true;
+}
 // Stderr/stdout redirection contains `&`, which `splitSegments` reads as a separator: `gh pr view 1
 // 2>&1 | head` split into a segment whose verb was `1` and denied the network to the whole pipeline.
 // Blanked on the masked view, length-preserving, so the raw slices still line up.
@@ -173,28 +216,43 @@ function effectiveVerb(segment: string): string | undefined {
  * `true` is the guarantee.
  */
 export function networkAllowedFor(command: string): boolean {
-  const c = command.trim();
-  if (!c || SUBSTITUTION_RE.test(c)) return false;
+  return networkDecision(command).allowed;
+}
+
+/**
+ * The classifier's verdict with, when denied, the segment that cost a `gh`/`git` pipeline its
+ * allow — `git fetch && npm test` is denied because of `npm`, and the footer can say so instead of
+ * "ask the user", since the model's own remedy is to run the git half by itself.
+ */
+export function networkDecision(command: string): { allowed: boolean; blockedBy?: string } {
+  // A heredoc body is data: its lines would otherwise split into segments whose "verb" is prose,
+  // and `gh issue comment 1 --body-file - <<'EOF' …` — the standard way a model writes a multi-line
+  // comment — would be denied every time.
+  const c = stripHeredocs(command).trim();
+  if (!c || SUBSTITUTION_RE.test(c)) return { allowed: false };
   const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
   const segments = splitSegments(c, masked)
     .map(s => s.trim())
     .filter(s => s && !/^cd(?:\s|$)/.test(s));
-  if (segments.length === 0) return false;
+  if (segments.length === 0) return { allowed: false };
   let net = false;
+  let blockedBy: string | undefined;
   for (const seg of segments) {
     const verb = effectiveVerb(seg);
-    if (!verb) return false;
+    if (!verb) return { allowed: false };
     const args = words(seg);
     if (NET_VERBS.has(verb)) {
-      if (verb === 'git' && args.some(a => GIT_ALIAS_RE.test(a))) return false;
+      if (!envPrefixHarmless(seg)) return { allowed: false };
+      if (verb === 'git' && args.some(a => GIT_CONFIG_FLAG_RE.test(a))) return { allowed: false };
       net = true;
     } else if (!NET_PIPE_COMMANDS.has(verb)) {
-      return false;
+      blockedBy ??= verb;
     } else if (verb === 'find' && args.some(a => FIND_EXEC_RE.test(a))) {
-      return false;
+      return { allowed: false };
     }
   }
-  return net;
+  if (!net) return { allowed: false };
+  return blockedBy ? { allowed: false, blockedBy } : { allowed: true };
 }
 
 export type SandboxPlan = { args: string[] } | { reason: string };
@@ -264,6 +322,9 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   } catch {
     return { reason: `cwd does not resolve (${cwd})` };
   }
+  // A symlink to `/` is the root too, and would otherwise get `(subpath "/")` under a receipt
+  // claiming confinement.
+  if (dirname(resolved) === resolved) return { reason: `cwd resolves to the filesystem root` };
   // Same realpath rule for every other allowed dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink
   // hop away from the `/private/var/…` the kernel matches. Each falls back to a path the profile
   // already covers, so an unresolvable dir costs nothing rather than an unbound param (exit 65).
@@ -355,14 +416,17 @@ export function sandboxNotice(cwd: string, home = homedir()): string {
 // Operation not permitted", ssh "connect to host … port 22: Operation not permitted", docker
 // "connect: operation not permitted". The resolver shapes stay for a machine whose DNS goes another
 // way: "Could not resolve host", `getaddrinfo ENOTFOUND`, "nodename nor servname", "no such host".
+// Python's `[Errno 1] Operation not permitted` is a network denial only WITHOUT a trailing quoted
+// path — with one (`PermissionError: [Errno 1] Operation not permitted: '/Users/x/f'`) it is a write.
 const NET_DENIAL_RE =
-  /couldn.t connect to server|connect EPERM|code EPERM|\[Errno 1\] Operation not permitted|connect(?: to host \S+ port \d+)?: operation not permitted|could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable/i;
+  /couldn.t connect to server|connect EPERM|code EPERM|\[Errno 1\] Operation not permitted(?!: ')|connect(?: to host \S+ port \d+)?: operation not permitted|could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable/i;
 
 // A write outside the allowed dirs, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
-// mkdir/cp/… (`mkdir: /Users/x/d: Operation not permitted`) and node (`EPERM: operation not
-// permitted, mkdir '/Users/x/d'`) each print it — a PATH before the colon is what tells it apart from
-// the network and exec shapes above.
-const FS_DENIAL_RE = /\/[^\s:'"]+: operation not permitted|EPERM: operation not permitted, \w+ '/i;
+// mkdir/cp/… (`mkdir: /Users/x/d: Operation not permitted`), node (`EPERM: operation not permitted,
+// mkdir '/Users/x/d'`) and python (`Operation not permitted: '/Users/x/f'`) each print it — a PATH
+// next to the message is what tells it apart from the network and exec shapes above.
+const FS_DENIAL_RE =
+  /\/[^\s:'"]+: operation not permitted|EPERM: operation not permitted, \w+ '|operation not permitted: '\//i;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -420,10 +484,15 @@ export function sandboxFooter(
   output: string,
   opts: { network: boolean; toolNames?: ReadonlySet<string> },
 ): string {
-  if (code === 0 || code === null) return '';
+  if (code === null) return '';
   const lines: string[] = [];
   const ps = PS_DENIAL_RE.test(output);
-  if (ps) {
+  // The ps and network notes are gated on a non-zero exit as well as the text: a red run is when
+  // they are read, and `curl …; echo rc=$?` exiting 0 is the model already handling it. A refused
+  // write is gated on its shape alone — `mkdir ~/x; echo ok` exits 0 with the denial in its output,
+  // and nothing else would attribute it.
+  const failed = code !== 0;
+  if (ps && failed) {
     lines.push(
       '`ps`/`top` cannot be run under the local sandbox at all — that "Operation not permitted" is ' +
         'the sandbox, not process state. Read /proc-style equivalents a plain file read can answer ' +
@@ -431,13 +500,18 @@ export function sandboxFooter(
     );
   }
   const curlDenied = CURL_RE.test(command) && (code === 6 || code === 7);
-  if (!opts.network && (NET_DENIAL_RE.test(output) || curlDenied)) {
+  if (failed && !opts.network && (NET_DENIAL_RE.test(output) || curlDenied)) {
+    // A gh/git pipeline denied because of a sibling command has a remedy the model can apply
+    // itself, and "ask the user" would be the wrong one.
+    const { blockedBy } = networkDecision(command);
     lines.push(
-      'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
-        'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
-        'credential. ' +
-        webRoute(opts.toolNames) +
-        ' If the command genuinely needs the network, say so and ask the user to run it.',
+      blockedBy
+        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git and gh keep the network only when run on their own (pipes into grep/head/sed/wc are fine). Run the git/gh command as its own bash call.`
+        : 'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
+            'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
+            'credential. ' +
+            webRoute(opts.toolNames) +
+            ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
   // `/bin/ps: Operation not permitted` is a path too, and already explained above.

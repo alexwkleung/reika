@@ -96,7 +96,9 @@ function commandTargets(name: string, args: string[]): string[] {
   }
 }
 
-function stripHeredocs(command: string): string {
+// Also read by the sandbox's network classifier (#163): a heredoc body's lines would otherwise
+// split into segments whose "verb" is prose, denying `gh issue comment --body-file - <<EOF …`.
+export function stripHeredocs(command: string): string {
   let s = command;
   for (let m = HEREDOC_RE.exec(s); m; m = HEREDOC_RE.exec(s)) {
     const bodyStart = s.indexOf('\n', m.index);
