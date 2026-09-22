@@ -596,17 +596,26 @@ function searchHint(command: string, output: string): string {
 // Held to the failing signal — non-zero exit, that message, and a heredoc inside a `$(…)` — so it
 // costs nothing on every other command and nothing in the prompt. The issue names the observed
 // command as `$(cat <<`; the regex is the shape of the CAUSE instead (any reader, any whitespace,
-// `<<-`, a quoted or bare marker), because they are the same pre-scan and a literal match would
-// leave the neighbour of every one of those unhandled. The flanking `<` guards skip a `<<<`
-// here-string, which needs no extra line and would otherwise read as a marker plus a quoted word.
+// `<<-`, a quoted, backslash-quoted or bare marker — `<<\EOF` is POSIX's own spelling and fails
+// the same way), because they are the same pre-scan and a literal match would leave the neighbour
+// of every one of those unhandled. The flanking `<` guards skip a `<<<` here-string, which needs no
+// extra line and would otherwise read as a marker plus a quoted word. The span between `$(` and
+// `<<` is unanchored on purpose: stopping at the first `)` missed a reader that carries one
+// (`sed 's/(x)/y/' <<'EOF'`), and the message gate is what carries the discrimination.
+//
+// Darwin only: `execStream` hardcodes `/bin/sh`, and on a Linux where that is bash 5 the same
+// command parses — but bash 5 prints the same message for a genuinely unbalanced command, and the
+// hint would then tell the model its broken command is correct and blame a platform it is not on.
 const UNPAIRED_QUOTE_RE = /unexpected EOF while looking for matching/;
-const HEREDOC_IN_SUBSTITUTION_RE = /\$\([^)]*(?:^|[^<])<<(?!<)-?\s*['"]?\w/;
+const HEREDOC_IN_SUBSTITUTION_RE = /\$\([\s\S]*?(?:^|[^<])<<(?!<)-?\s*['"\\]?\w/;
 
 export function heredocSubstitutionHint(
   command: string,
   code: number | null,
   output: string,
+  platform: NodeJS.Platform = process.platform,
 ): string {
+  if (platform !== 'darwin') return '';
   // Same guard as sandboxFooter's: a signal death is not a status this message can arrive with.
   if (code === null || code === 0) return '';
   if (!UNPAIRED_QUOTE_RE.test(output) || !HEREDOC_IN_SUBSTITUTION_RE.test(command)) return '';
