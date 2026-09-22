@@ -2112,7 +2112,15 @@ export function App() {
           ) : null}
           <QueuedList queue={queue} />
           {pending ? (
-            <Approval request={pending.request} selectedIndex={approvalSelected} />
+            <Approval
+              request={pending.request}
+              selectedIndex={approvalSelected}
+              reservedRows={
+                (planSteps && (mode === 'agent' || mode === 'vibe')
+                  ? planProgressRows(planSteps)
+                  : 0) + (queue.length > 0 ? queue.length + 1 : 0)
+              }
+            />
           ) : question ? (
             <Question
               request={question.request}
