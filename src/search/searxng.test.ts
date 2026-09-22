@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SearxngProvider } from './searxng.js';
 import { SearchUnavailableError } from './types.js';
+import { WEB_USER_AGENT } from '../version.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -120,7 +121,7 @@ describe('SearxngProvider — outside the extractUrl host policy', () => {
     fetchMock.mockResolvedValue(mockResponse({ results: [] }));
     await new SearxngProvider('http://127.0.0.1:8888').search('q');
     expect(fetchMock.mock.calls[0][1]).toMatchObject({
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', 'User-Agent': WEB_USER_AGENT },
     });
   });
 });

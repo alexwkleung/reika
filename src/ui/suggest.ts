@@ -19,7 +19,7 @@ export type SkillEntry = { name: string; description: string };
 // model it resolves to (shown when the key alone doesn't say — named profiles,
 // 'default'). Structurally a subset of models.ts's ModelTarget so App can pass
 // those straight through.
-export type ModelSuggestTarget = { name: string; model: string };
+export type ModelSuggestTarget = { name: string; model: string; group?: string };
 
 export function computeSuggestions(
   value: string,
@@ -51,15 +51,26 @@ export function computeSuggestions(
   const modelArg = /^\/model +(\S*)$/i.exec(value);
   if (modelArg) {
     const partial = modelArg[1].toLowerCase();
+    // A named profile's extra models also match on the profile name, so `/model go`
+    // lists the router's whole menu, not just its first model.
     const items = modelTargets
-      .filter(t => t.name.startsWith(partial) || t.model.toLowerCase().startsWith(partial))
+      .filter(
+        t =>
+          t.name.startsWith(partial) ||
+          t.model.toLowerCase().startsWith(partial) ||
+          (t.group?.startsWith(partial) ?? false),
+      )
       .map(t => ({
         value: `/model ${t.name}`,
         // Auto-registered model entries have name === lowercased model — the
         // mapping suffix would just repeat the key, so it's only shown when
-        // the name doesn't already say which model you'd get.
-        display:
-          t.name === t.model.toLowerCase() ? `/model ${t.name}` : `/model ${t.name}  —  ${t.model}`,
+        // the name doesn't already say which model you'd get. An extra says
+        // which profile it belongs to instead — the picker's `go → b`.
+        display: t.group
+          ? `/model ${t.name}  (${t.group})`
+          : t.name === t.model.toLowerCase()
+            ? `/model ${t.name}`
+            : `/model ${t.name}  —  ${t.model}`,
       }));
     if (items.length === 0) return null;
     // partial = the whole value: acceptSuggestion replaces the full line with

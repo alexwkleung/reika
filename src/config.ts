@@ -59,14 +59,18 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '12', 10),
+    // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
+    // cached round is nearly free on both local and API, so it is sized where a healthy complex
+    // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
-    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '6', 10),
+    // Not a backstop: the last round IS the report round (#340), so this stays tight.
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '8', 10),
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
@@ -113,8 +117,15 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
     const lower = name.toLowerCase();
     if (lower === 'default') continue;
     const upper = name.toUpperCase();
-    const profileModel = process.env[`REIKA_${upper}_MODEL`];
-    if (!profileModel) continue;
+    // Comma-separated like REIKA_MODEL: the profile is its first model, and each extra becomes an
+    // auto-profile keyed by its own name on the same connection — a hosted router with a menu of
+    // models is one profile, not one per model.
+    const profileModels = (process.env[`REIKA_${upper}_MODEL`] ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (profileModels.length === 0) continue;
+    const profileModel = profileModels[0];
     const profileMaxTokens = parseIntOrUndef(process.env[`REIKA_${upper}_MAX_TOKENS`]);
     const profileContextWindow = parseIntOrUndef(process.env[`REIKA_${upper}_CONTEXT_WINDOW`]);
     const profileMinGen = parseIntOrUndef(process.env[`REIKA_${upper}_MIN_GEN_TOKENS`]);
@@ -128,6 +139,11 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
       minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
     };
+    for (const m of profileModels.slice(1)) {
+      const key = m.toLowerCase();
+      if (key === 'default' || profiles[key]) continue;
+      profiles[key] = { ...profiles[lower], model: m, group: lower };
+    }
   }
   return profiles;
 }

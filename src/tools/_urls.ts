@@ -39,6 +39,31 @@ export function extractUrls(source: string): string[] {
   return [...urls];
 }
 
+// A host with no dot cannot be a public address: it is a hosts-file or mDNS name, or a fixture
+// (`http://vision:8081/v1` in a config test). Fetching it fails DNS every time, and with nothing else
+// in the batch to prove connectivity the note then tells the model "the network may be down" — false
+// on a machine that is online, and a reason for it to skip fetch_url/search. Observed three times in
+// one session, one per turn, on the same fixture host. Silence is the honest report, as for a
+// private address. `localhost` is already caught by classifyPrivateUrl; this is its bare cousins.
+export function isDotlessHost(url: string): boolean {
+  try {
+    return !new URL(url).hostname.includes('.');
+  } catch {
+    return false;
+  }
+}
+
+// A URL introduced into a test or fixture file is a fixture by construction — every one of the
+// dotless hosts above arrived this way — so the edit path skips grounding for those files entirely.
+// groundcheck's TEST_FILE with the directories anchored at a segment start, since the edit tools
+// pass a project-relative path (`tests/setup.ts` has no leading slash). Plan text has no path and is
+// unaffected.
+const TEST_FILE = /(\.test\.|\.spec\.|(^|\/)(__tests__|tests?|fixtures?)\/)/;
+
+export function isFixturePath(path: string): boolean {
+  return TEST_FILE.test(path);
+}
+
 export type UrlGroundingResult = { url: string; res: UrlExtraction };
 
 // Per-URL verdict, accounting for whether the machine is even online:
@@ -169,7 +194,8 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
     // resolve — likely wrong or invented", and a localhost URL in a config file is usually neither:
     // this project's own model server is one. Silence is the honest report for an address we chose
     // not to check, and filtering first also stops two such URLs from eating the whole per-call cap.
-    .filter(u => !classifyPrivateUrl(u));
+    .filter(u => !classifyPrivateUrl(u))
+    .filter(u => !isDotlessHost(u));
 
   // Grounding is harness-driven — the model never asked for these fetches — so it must answer to
   // the same per-turn cap as the ones it does ask for (fetch.ts). Without this, N edits in a turn
@@ -189,8 +215,14 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
 
 // Ground the http(s) URLs a write/edit introduces. The note carries a snippet of each real page (for
 // the model); the notice is the user's receipt. The tool puts the note on its payload and the notice
-// on its ToolResult, so the loop renders the receipt after the edit chip.
-export async function groundUrls(ctx: ToolContext, newText: string): Promise<UrlGroundingOutcome> {
+// on its ToolResult, so the loop renders the receipt after the edit chip. `path` is the edited file:
+// a test or fixture file is skipped whole (see isFixturePath).
+export async function groundUrls(
+  ctx: ToolContext,
+  newText: string,
+  path?: string,
+): Promise<UrlGroundingOutcome> {
+  if (path && isFixturePath(path)) return {};
   const results = await groundCandidates(ctx, newText);
   return {
     note: buildUrlGroundingNote(results) || undefined,

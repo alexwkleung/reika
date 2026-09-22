@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
+import stripAnsi from 'strip-ansi';
 import { supportsHyperlink } from 'supports-hyperlinks';
 import wrapAnsi from 'wrap-ansi';
 import { theme } from './theme.js';
@@ -45,6 +46,17 @@ const NEVER_REFLOW = 1 << 20;
 // marked-terminal calls renderer callbacks with multiple args (text, ordered, etc.).
 // Passing chalk methods directly causes the extra args to be string-joined onto
 // the output (e.g., "item false"). Always wrap callbacks so only `text` is used.
+//
+// cli-table3 defaults its header cells to red, which is hard to read and reads like an
+// error. Bold white keeps the table itself monochrome so the only color inside it comes
+// from inline code (pastel pink); grey border. `colWidths`/`wordWrap` are filled in per
+// render by the table override below — cli-table3 mutates the array it is handed, so it is
+// replaced (never edited in place) and removed again once the table is drawn.
+const tableOptions: {
+  style: { head: string[]; border: string[] };
+  colWidths?: number[];
+  wordWrap?: boolean;
+} = { style: { head: ['white', 'bold'], border: ['grey'] } };
 const terminalExtension = markedTerminal(
   {
     codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
@@ -72,10 +84,7 @@ const terminalExtension = markedTerminal(
     reflowText: true,
     showSectionPrefix: false,
     tab: TAB_WIDTH,
-    // cli-table3 defaults its header cells to red, which is hard to read and
-    // reads like an error. Bold white keeps the table itself monochrome so the
-    // only color inside it comes from inline code (pastel pink); grey border.
-    tableOptions: { style: { head: ['white', 'bold'], border: ['grey'] } },
+    tableOptions,
     // See NEVER_REFLOW: line breaking happens in the paragraph override at proseWidth().
     width: NEVER_REFLOW,
     // marked-terminal does its own fenced-code highlighting via cli-highlight and
@@ -226,6 +235,62 @@ terminalExtension.renderer.blockquote = function (
     lines.map(line => (line.length > 0 ? `${bar} ${chalk.dim(line)}` : bar)).join('\n') + '\n\n'
   );
 };
+
+// marked-terminal hands cli-table3 no width, so a table lays itself out at its natural
+// content width and any line past the pane is left for Ink to wrap — which tears the
+// borders mid-glyph and leaves the rows ragged (#439). Draw it at the width the block
+// actually has instead, wrapping the long prose column inside its own cell.
+const renderTable = terminalExtension.renderer.table;
+terminalExtension.renderer.table = function (this: unknown, ...args: unknown[]): string {
+  const natural = renderTable.apply(this, args);
+  const widths = tableColumnWidths(natural);
+  const fitted = widths ? fitTableWidths(widths, proseWidth()) : null;
+  if (!fitted) return natural;
+  tableOptions.colWidths = fitted;
+  tableOptions.wordWrap = true;
+  try {
+    return renderTable.apply(this, args);
+  } finally {
+    delete tableOptions.colWidths;
+    delete tableOptions.wordWrap;
+  }
+};
+
+// The top border of a drawn table (`┌───┬───┐`) carries cli-table3's resolved column
+// widths — one run of `─` per column, each as wide as the column itself — so measuring
+// the segments is how the override learns the natural layout without measuring the cells.
+function tableColumnWidths(rendered: string): number[] | null {
+  const nl = rendered.indexOf('\n');
+  const top = stripAnsi(nl === -1 ? rendered : rendered.slice(0, nl));
+  if (!top.startsWith('┌') || !top.endsWith('┐')) return null;
+  return top
+    .slice(1, -1)
+    .split('┬')
+    .map(segment => segment.length);
+}
+
+// Shrink `widths` until the whole table — the cells plus the `n + 1` border columns —
+// fits in `avail`, or null when it already does. Water-filling: shave the widest column,
+// so a long prose column absorbs the wrap while a narrow key column keeps its natural
+// width. cli-table3 wraps on word boundaries and ellipsizes a word longer than its cell.
+function fitTableWidths(widths: number[], avail: number): number[] | null {
+  const n = widths.length;
+  if (widths.reduce((a, b) => a + b, 0) + n + 1 <= avail) return null;
+  const budget = avail - (n + 1);
+  // A column needs its two padding columns plus one content column; below that, take the
+  // widest floor the budget still allows so a pathologically wide table still fits.
+  const floor = Math.max(1, Math.min(3, Math.floor(budget / n)));
+  const fitted = widths.slice();
+  let sum = fitted.reduce((a, b) => a + b, 0);
+  while (sum > budget) {
+    let widest = 0;
+    for (let i = 1; i < n; i++) if (fitted[i] > fitted[widest]) widest = i;
+    if (fitted[widest] <= floor) break;
+    fitted[widest] -= 1;
+    sum -= 1;
+  }
+  return fitted;
+}
 
 marked.use(terminalExtension as unknown as Parameters<typeof marked.use>[0]);
 

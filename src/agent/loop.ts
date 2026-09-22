@@ -930,6 +930,11 @@ export function buildDroppedPayloadLedger(): string {
   ].join('\n');
 }
 
+// The answer settles the one point that was asked, not the turn: ask_user fires mid-discussion as
+// readily as mid-edit (its trigger is "two readings would produce different code"), and the earlier
+// "Build exactly what that answer says" read as a go-ahead to implement whatever was being discussed
+// — observed on an API model that reasoned "the system says build it" into an unrequested refactor.
+// The prohibition half is the anti-relitigation force weak models need and is unchanged.
 export function buildQuestionLedger(answers: { question: string; answer: string }[]): string {
   if (answers.length === 0) return '';
   const lines = ['', '--- reika status (auto-generated — not user input) ---'];
@@ -938,8 +943,8 @@ export function buildQuestionLedger(answers: { question: string; answer: string 
     lines.push(`  Q: ${a.question}`, `  A: ${a.answer}`);
   }
   lines.push(
-    'Build exactly what that answer says. Do not re-open it, do not weigh the alternatives again,',
-    'and do not ask about it a second time.',
+    'That settles this one point — continue what you were doing on that basis. Do not re-open it,',
+    'do not weigh the alternatives again, and do not ask about it a second time.',
   );
   return lines.join('\n');
 }

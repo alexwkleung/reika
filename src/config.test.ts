@@ -207,6 +207,36 @@ describe('loadConfig — multi-model REIKA_MODEL', () => {
   });
 });
 
+describe('loadConfig — multi-model named profile', () => {
+  it('takes the first model and registers each extra on the profile connection', () => {
+    process.env.REIKA_MODEL = 'local';
+    process.env.REIKA_PROFILES = 'go';
+    process.env.REIKA_GO_MODEL = 'flash, Muse-Spark ,';
+    process.env.REIKA_GO_BASE_URL = 'https://router.example/v1';
+    process.env.REIKA_GO_API_KEY = 'k';
+    process.env.REIKA_GO_CONTEXT_WINDOW = '128000';
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.profiles).sort()).toEqual(['default', 'go', 'muse-spark']);
+    expect(cfg.profiles.go.model).toBe('flash');
+    expect(cfg.profiles['muse-spark']).toEqual({
+      ...cfg.profiles.go,
+      model: 'Muse-Spark',
+      group: 'go',
+    });
+    expect(cfg.models).toEqual(['local']);
+  });
+
+  it('an extra never displaces an existing profile of the same name', () => {
+    process.env.REIKA_MODEL = 'a,shared';
+    process.env.REIKA_PROFILES = 'go';
+    process.env.REIKA_GO_MODEL = 'flash,shared,default';
+    process.env.REIKA_GO_BASE_URL = 'https://router.example/v1';
+    const cfg = loadConfig();
+    expect(cfg.profiles.shared.baseURL).toBe(cfg.baseURL);
+    expect(cfg.profiles.default.model).toBe('a');
+  });
+});
+
 describe('resolveProfile', () => {
   it('returns the config unchanged when the named profile is missing', () => {
     process.env.REIKA_MODEL = 'm';
