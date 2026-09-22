@@ -2,7 +2,13 @@ import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
-import { messagesToChatParams, toolsToChatTools } from './toolcall.js';
+import {
+  latchShapeRejection,
+  messagesToChatParams,
+  resetShapeLatches,
+  shapeRejection,
+  toolsToChatTools,
+} from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
@@ -37,6 +43,9 @@ let toolChoiceUnsupported = false;
 export function resetLogprobSupport(): void {
   logprobsUnsupported = false;
   toolChoiceUnsupported = false;
+  // The shape latches (toolcall.ts) belong to the same session-latch family, so the one reset
+  // client tests call clears them too.
+  resetShapeLatches();
 }
 
 export async function callModel(opts: {
@@ -83,18 +92,22 @@ export async function callModel(opts: {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
   }
-  const messages = messagesToChatParams(opts.system, opts.history, {
-    contextWindow: opts.config.contextWindow,
-    calibration: opts.calibration,
-    reasoningRounds: opts.config.reasoningRounds,
-    minGenTokens: opts.config.minGenTokens,
-    prefixStable: opts.prefixStable,
-    // The real call is the one that freezes live-payload bytes (estimates and warms never do).
-    stampRenders: opts.stampRenders ?? opts.prefixStable,
-    trailingNote: opts.trailingNote,
-    onCapStats: opts.onCapStats,
-    onAgedStats: opts.onAgedStats,
-  });
+  // One closure so the shape-rejection retry below can rebuild this request with a just-latched
+  // shape applied — both shapes are produced at serialization time, not editable on the body.
+  const serialize = (): ChatMessageParam[] =>
+    messagesToChatParams(opts.system, opts.history, {
+      contextWindow: opts.config.contextWindow,
+      calibration: opts.calibration,
+      reasoningRounds: opts.config.reasoningRounds,
+      minGenTokens: opts.config.minGenTokens,
+      prefixStable: opts.prefixStable,
+      // The real call is the one that freezes live-payload bytes (estimates and warms never do).
+      stampRenders: opts.stampRenders ?? opts.prefixStable,
+      trailingNote: opts.trailingNote,
+      onCapStats: opts.onCapStats,
+      onAgedStats: opts.onAgedStats,
+    });
+  const messages = serialize();
   opts.onRequest?.(messages);
   const maxTokens = opts.maxTokens ?? opts.config.maxTokens;
 
@@ -222,6 +235,24 @@ export async function callModel(opts: {
       } catch (e) {
         if (received || opts.signal?.aborted) throw e;
         const reason = e instanceof Error ? e.message : String(e);
+        // Shape rejection, matched on the backend's own words: a pruned old `reasoning_content`
+        // ("must be passed back to the API") or the `name` on tool messages (`"name"` is not
+        // supported). Latch the shape, re-serialize, resend — the retried bytes, and every later
+        // request this session, carry the shape the endpoint accepts. The byte compare is the
+        // loop guard: once the latch is spent the rebuild matches and the error falls through,
+        // instead of retrying a request that cannot change.
+        const shape = shapeRejection(reason);
+        if (shape) {
+          latchShapeRejection(shape);
+          const rebuilt = serialize();
+          if (JSON.stringify(rebuilt) === JSON.stringify(req.messages)) throw e;
+          debugLog(
+            `[reika:debug] ${shape} rejected by backend — retrying reshaped request (${reason})\n`,
+          );
+          opts.onRequest?.(rebuilt);
+          req = { ...req, messages: rebuilt };
+          continue;
+        }
         if (req.logprobs !== undefined) {
           logprobsUnsupported = true;
           debugLog(

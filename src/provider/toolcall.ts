@@ -252,6 +252,45 @@ type AgedContent = { content: string; kind: AgedKind };
 // records, so a verification run could not tell an outline that fired from one that never did.
 export type AgedStats = Record<AgedKind, number>;
 
+// Endpoint-shape latches (session-scoped, the same family as client.ts's logprobs/tool_choice
+// latches). Strict upstreams — the validators behind hosted routers like OpenCode Go — 400 on two
+// shapes reika emits by default:
+//   - a pruned old `reasoning_content` ("The reasoning_content in the thinking mode must be
+//     passed back to the API"): the REIKA_REASONING_ROUNDS window and the prefix-stable aging
+//     sweep both drop older reasoning, and this endpoint wants every bit it returned passed back;
+//   - the `name` this file adds to tool messages (`"name" is not supported by this endpoint):
+//     OpenAI's wire shape accepts role/tool_call_id/content on tool messages only.
+// client.ts's degrade ladder classifies the rejection text (shapeRejection), latches it here, and
+// re-serializes — the retried request, and every request for the rest of the session, carry the
+// shape the endpoint accepts. Cost when the reasoning latch fires: the round-window saving is
+// surrendered for the session — a 400 costs the turn outright, so keeping is the only side that
+// can lose. resetShapeLatches is for tests only (wired into client.ts's resetLogprobSupport).
+let toolMessageNameUnsupported = false;
+let reasoningRoundtripRequired = false;
+
+export type ShapeRejection = 'reasoning-roundtrip' | 'tool-message-name';
+
+// Classify a transport error by the backend's own words; null for anything else — only a
+// rejection naming its cause may spend a retry. Matched against the whole error string
+// (`chat/completions failed: 400 … — {raw JSON body}`), whose quotes arrive JSON-escaped, so
+// each pattern tolerates a backslash before them.
+export function shapeRejection(reason: string): ShapeRejection | null {
+  if (/`?reasoning_content`?[\s\S]{0,80}must be passed back/.test(reason))
+    return 'reasoning-roundtrip';
+  if (/(\\?")name(\\?") is not supported/.test(reason)) return 'tool-message-name';
+  return null;
+}
+
+export function latchShapeRejection(kind: ShapeRejection): void {
+  if (kind === 'reasoning-roundtrip') reasoningRoundtripRequired = true;
+  else toolMessageNameUnsupported = true;
+}
+
+export function resetShapeLatches(): void {
+  toolMessageNameUnsupported = false;
+  reasoningRoundtripRequired = false;
+}
+
 // The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
 // transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
 export function messagesToChatParams(
@@ -306,7 +345,10 @@ export function messagesToChatParams(
   // break, see the cloud-thinking-models note) and drop older reasoning.
   const reasoningRounds =
     opts?.reasoningRounds && opts.reasoningRounds > 0 ? opts.reasoningRounds : 1;
-  const keepReasoningFrom = reasoningKeepFromIndex(history, reasoningRounds);
+  // Latched roundtrip (shape rejection above): keep every round's reasoning, not just the last N.
+  const keepReasoningFrom = reasoningRoundtripRequired
+    ? 0
+    : reasoningKeepFromIndex(history, reasoningRounds);
   // Compaction recaps fold into the single leading system block (rather than a second
   // system message mid-array) for the widest chat-template compatibility.
   const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
@@ -399,7 +441,9 @@ export function messagesToChatParams(
           },
         }));
       }
-      if (msg.reasoning && (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom)) {
+      const keepReasoning =
+        reasoningRoundtripRequired || (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom);
+      if (msg.reasoning && keepReasoning) {
         param.reasoning_content = msg.reasoning;
       }
       out.push(param as unknown as ChatMessageParam);
@@ -445,7 +489,7 @@ export function messagesToChatParams(
         tool_call_id: msg.callId,
         content,
       };
-      if (toolName) param.name = toolName;
+      if (toolName && !toolMessageNameUnsupported) param.name = toolName;
       out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
@@ -701,9 +745,9 @@ function freshPayloadCharCap(
       }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
-      const includeReasoning = prefixStable
-        ? !(m.role === 'assistant' && m.reasoningAged)
-        : i >= keepReasoningFrom;
+      const includeReasoning =
+        reasoningRoundtripRequired ||
+        (prefixStable ? !(m.role === 'assistant' && m.reasoningAged) : i >= keepReasoningFrom);
       addNonFresh(i, nonFreshChars0(m, includeReasoning));
     }
   }
