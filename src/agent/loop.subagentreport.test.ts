@@ -109,6 +109,7 @@ function makeConfig(over: Partial<Config> = {}): Config {
     pasteFetch: false,
     skillAuto: 'off',
     anon: false,
+    sandbox: false,
     ...over,
   };
 }

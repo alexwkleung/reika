@@ -84,6 +84,10 @@ export function loadConfig(): Config {
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
     pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
+    // On by default, and only macOS has an implementation (#163) — see tools/_sandbox.ts. A flag
+    // rather than a hardcoded path because the sandbox changes what a command may do, so a run that
+    // is measuring anything about bash behavior needs a way to get the old world back.
+    sandbox: process.env.REIKA_SANDBOX !== '0',
     skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,

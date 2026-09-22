@@ -1,9 +1,19 @@
+import { realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { bashTool, execStream, readOnlyBashTool, TailWindow } from './bash.js';
+import {
+  bashTool,
+  decideSandbox,
+  execStream,
+  readOnlyBashTool,
+  sandboxNoticed,
+  TailWindow,
+} from './bash.js';
+import { detectDangerousPatterns } from './_danger.js';
+import { sandboxPlan } from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -396,6 +406,188 @@ describe('readOnlyBashTool — plan mode (#109)', () => {
   });
 });
 
+// The composition half of #163: which commands run sandboxed is decided by the danger scan and the
+// presence of an approval gate, so the cells are pinned on the pure decision — deterministic on every
+// platform — and one darwin-only run pins that the decision reaches a real process.
+describe('bashTool — sandbox composition', () => {
+  const approve = async (): Promise<boolean> => true;
+
+  it('sandboxes a clean command, auto-approved (safe) or with no gate at all (bypass)', () => {
+    // No requestApproval is what bypass looks like. Before the scan was hoisted out of
+    // `if (ctx.requestApproval)` it never ran here, so a sandbox keyed on it covered nothing in
+    // exactly the autonomous configuration the issue is about.
+    expect(decideSandbox('echo clean', [], { requestApproval: approve })).toEqual({
+      network: false,
+    });
+    expect(decideSandbox('echo clean', [], {})).toEqual({ network: false });
+  });
+
+  it('leaves a flagged command unsandboxed only when a gate stood in front of it', () => {
+    const warnings = detectDangerousPatterns('git push origin main');
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(
+      decideSandbox('git push origin main', warnings, { requestApproval: approve }),
+    ).toBeUndefined();
+    // Bypass: flagged, but nobody looked — sandboxed like everything else.
+    expect(decideSandbox('git push origin main', warnings, {})).toEqual({ network: false });
+  });
+
+  it('keeps network for an unflagged gh/git read, denies it otherwise', () => {
+    expect(decideSandbox('gh pr view 436', [], {})).toEqual({ network: true });
+    expect(decideSandbox("gh pr diff 436 | sed -n '1,300p'", [], {})).toEqual({ network: true });
+    expect(decideSandbox('npm test', [], {})).toEqual({ network: false });
+  });
+
+  it('is a no-op under REIKA_SANDBOX=0', () => {
+    expect(decideSandbox('echo clean', [], { sandbox: false })).toBeUndefined();
+  });
+
+  it('does not run a flagged command at all when the user declines', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const r = await bashTool.run(
+        { command: 'npm install && touch ran.txt' },
+        { cwd: dir, requestApproval: async () => false },
+      );
+      expect(r.summary).toContain('declined by user');
+      await expect(readFile(join(dir, 'ran.txt'), 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The receipt is once per cwd (the confinement is a session property, and a line under every chip
+  // doubled the scrollback), and the write lands because WORKDIR is the realpath'd cwd — the
+  // /tmp -> /private/tmp trap that made every create fail.
+  it.skipIf(process.platform !== 'darwin')(
+    'runs a clean command sandboxed, says so once per cwd, and can still write inside it',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        sandboxNoticed.delete(dir);
+        const first = await bashTool.run(
+          { command: 'mkdir -p sub && echo x > sub/f.txt' },
+          { cwd: dir },
+        );
+        expect(first.notice?.content).toContain('Shell commands run sandboxed');
+        expect(await readFile(join(dir, 'sub', 'f.txt'), 'utf8')).toBe('x\n');
+        const second = await bashTool.run({ command: 'echo y > sub/g.txt' }, { cwd: dir });
+        expect(second.notice?.content ?? '').not.toContain('sandboxed');
+        // Temp is writable now, so "outside" has to be somewhere else — home.
+        const outside = join(homedir(), 'reika-bash-test-should-not-exist.txt');
+        const third = await bashTool.run({ command: `echo x > ${outside}` }, { cwd: dir });
+        expect(third.payload).toContain('Operation not permitted');
+        await expect(readFile(outside, 'utf8')).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The scratchpad workflow — `mktemp -d`, write, `rm -rf` — is the commonest thing a model does
+  // outside cwd, and denying temp made python's mkdtemp fall through to cwd and write scratch into
+  // the project. Real paths matter here: `/tmp` → `/private/tmp`, `$TMPDIR` → `/private/var/…`.
+  it.skipIf(process.platform !== 'darwin')(
+    'lets a sandboxed command scratch in temp dirs, still not elsewhere in $HOME',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const r = await bashTool.run(
+          {
+            command:
+              'd=$(mktemp -d) && echo hi > "$d/f" && cat "$d/f" && rm -rf "$d" && ' +
+              'echo x > /tmp/reika-sandbox-test-$$ && rm /tmp/reika-sandbox-test-$$ && echo tmp-ok',
+          },
+          { cwd: dir },
+        );
+        expect(r.exitCode).toBe(0);
+        expect(r.payload).toContain('tmp-ok');
+        const home = join(homedir(), 'reika-sandbox-test-should-not-exist');
+        const denied = await bashTool.run({ command: `echo x > ${home}` }, { cwd: dir });
+        expect(denied.payload).toContain('Operation not permitted');
+        await expect(readFile(home, 'utf8')).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The hole the per-operation rules close: with `(allow network* (local ip …))` an unconnected
+  // socket matched the local filter and every outbound connection went through. A raw non-loopback
+  // IP needs no DNS and no route — the kernel refuses connect() before a packet exists — so this is
+  // deterministic offline. UDP too, since that is the other half of `network*`.
+  it.skipIf(process.platform !== 'darwin')(
+    'refuses outbound TCP and UDP to a non-loopback address',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const tcp =
+          'require("net").connect(80,"192.0.2.1").on("connect",()=>{console.log("tcp OPEN");process.exit(0)}).on("error",e=>{console.log("tcp",e.code);process.exit(1)})';
+        const r = await bashTool.run({ command: `node -e '${tcp}'` }, { cwd: dir });
+        expect(r.payload).toContain('tcp EPERM');
+        const udp =
+          'const d=require("dgram").createSocket("udp4");d.send("x",53,"192.0.2.1",e=>{console.log(e?"udp "+e.code:"udp OPEN");d.close();process.exit(e?1:0)})';
+        const u = await bashTool.run({ command: `node -e '${udp}'` }, { cwd: dir });
+        expect(u.payload).toContain('udp EPERM');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Unix-domain sockets are local IPC (docker, a local DB, the DNS resolver), allowed on the same
+  // reasoning as loopback.
+  it.skipIf(process.platform !== 'darwin')(
+    'lets a sandboxed command use a unix socket',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const script =
+          'const net=require("net"),p=process.cwd()+"/s.sock";const s=net.createServer(c=>c.end("hi")).listen(p,()=>{' +
+          'net.connect(p).on("data",d=>{console.log("unix",String(d));s.close()}).on("error",e=>{console.log("unix err",e.code);s.close()})})' +
+          '.on("error",e=>console.log("listen err",e.code))';
+        const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
+        expect(r.payload).toContain('unix hi');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // A cwd below the repo root (monorepo package, worktree, submodule) keeps its git dir writable:
+  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param
+  // is what the profile's `(subpath (param "GITDIR"))` line binds, and it is the repo's `.git` only
+  // when that lies outside cwd — at the root it is WORKDIR itself, so nothing extra is allowed.
+  it.skipIf(process.platform !== 'darwin')('binds GITDIR to the repo when cwd is below it', () => {
+    const repo = realpathSync(process.cwd());
+    const below = sandboxPlan(join(repo, 'src'), { network: false });
+    expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
+    const root = sandboxPlan(repo, { network: false });
+    expect('args' in root && root.args).toContain(`GITDIR=${repo}`);
+  });
+
+  // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
+  // local server (this repo's transport.test.ts does) used to go red with EPERM on `listen(0)` and
+  // then collect the network footer blaming the sandbox for the whole run.
+  it.skipIf(process.platform !== 'darwin')(
+    'lets a sandboxed command bind and reach a loopback port',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const script =
+          'const http=require("http");const s=http.createServer((q,r)=>r.end("pong")).listen(0,"127.0.0.1",()=>{' +
+          'http.get({host:"127.0.0.1",port:s.address().port},res=>{let b="";res.on("data",d=>b+=d);' +
+          'res.on("end",()=>{console.log("got",b);s.close()})}).on("error",e=>{console.log("err",e.code);s.close()})})';
+        const r = await bashTool.run({ command: `node -e '${script}'` }, { cwd: dir });
+        expect(r.exitCode).toBe(0);
+        expect(r.payload).toContain('got pong');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 // A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in
 // _treediff.test.ts; this checks bash brackets its run with it and stays silent outside a repo.
 describe('bashTool — tree changes', () => {
@@ -437,12 +629,16 @@ describe('bashTool — tree changes', () => {
     await writeFile(join(dir, 'x.txt'), 'a\n');
     const first = await bashTool.run({ command: 'echo b >> x.txt' }, { cwd: dir });
     expect(first.changes?.files[0].hunks[0].text).toBe('  a\n+ b');
+    // Matched on content, not on presence: the first sandboxed command in a cwd carries the sandbox
+    // receipt (#163) on this platform, so "has no notice" would be a claim about the machine rather
+    // than about the once-per-cwd rule this test is about.
+    const notRepo = first.notice?.content ?? '';
+    expect(notRepo).toContain('Not a git repo');
     expect(first.notice?.tone).toBe('info');
-    expect(first.notice?.content).toContain('Not a git repo');
     expect(first.payload).not.toContain('git repo');
     const second = await bashTool.run({ command: 'echo c >> x.txt' }, { cwd: dir });
     expect(second.changes?.files[0].hunks[0].text).toBe('  a\n  b\n+ c');
-    expect(second).not.toHaveProperty('notice');
+    expect(second.notice?.content ?? '').not.toContain('Not a git repo');
   });
 });
 

@@ -55,6 +55,7 @@ import {
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
+import { sandboxExecAvailable } from '../tools/_sandbox.js';
 import { writeTargets } from '../tools/_writetargets.js';
 import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
@@ -617,10 +618,34 @@ export function prefixStableActive(contextWindow?: number): boolean {
 // after pushing one. Under REIKA_PREFIX_STABLE the ledgers ride the transient trailing note
 // instead of the system block (which the warm never sends — the note lands after the warm's
 // whole prefix), so the round-0 system is the bare base prompt.
+/**
+ * The tool-list-derived gates the agent prompt is built with. One function for both call sites
+ * (`buildRoundZeroPrefix` and `runTurn`), because the warm prefix is worthless if it diverges from
+ * round 0 by a line — see the canAsk note on buildSystemPrompt.
+ */
+export function promptGates(
+  tools: Tool[],
+  sandbox: boolean,
+): Pick<
+  Parameters<typeof buildSystemPrompt>[0],
+  'canAsk' | 'canSubagent' | 'sandbox' | 'canFetch' | 'canSearch'
+> {
+  const has = (name: string): boolean => tools.some(t => t.name === name);
+  return {
+    canAsk: has('ask_user'),
+    canSubagent: has('subagent'),
+    sandbox: sandbox && has('bash') && sandboxExecAvailable(),
+    canFetch: has('fetch_url'),
+    canSearch: has('search'),
+  };
+}
+
 export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // `config.sandbox`, for the agent prompt's sandbox sentence — same gate as runTurn's.
+  sandbox: boolean;
   // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
@@ -639,8 +664,7 @@ export function buildRoundZeroPrefix(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    canAsk: opts.tools.some(t => t.name === 'ask_user'),
-    canSubagent: opts.tools.some(t => t.name === 'subagent'),
+    ...promptGates(opts.tools, opts.sandbox),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
@@ -1097,14 +1121,13 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  // canAsk/canSubagent/minimal must match what buildRoundZeroPrefix passes, or the warm prefix
+  // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
   // diverges from round 0.
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    canAsk: opts.tools.some(t => t.name === 'ask_user'),
-    canSubagent: opts.tools.some(t => t.name === 'subagent'),
+    ...promptGates(opts.tools, opts.config.sandbox),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
@@ -2889,6 +2912,7 @@ export async function runTurn(opts: {
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
+            sandbox: opts.config.sandbox,
             signal: opts.signal,
           });
           summary = result.summary;

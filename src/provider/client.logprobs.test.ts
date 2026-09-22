@@ -47,6 +47,7 @@ const config = (): Config => ({
   pasteFetch: false,
   skillAuto: 'off',
   anon: false,
+  sandbox: false,
 });
 
 const textChunk = (content: string): ChatCompletionChunk => ({ choices: [{ delta: { content } }] });

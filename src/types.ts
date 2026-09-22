@@ -314,6 +314,10 @@ export type ToolContext = {
   // The turn's abort signal. A running command is killed on it, so ctrl-c reaches the child
   // instead of waiting out whatever bound would have ended it.
   signal?: AbortSignal;
+  // Whether bash may sandbox a command (#163), threaded from Config. Undefined means yes — the
+  // sandbox is on by default and only `REIKA_SANDBOX=0` turns it off — so a caller that predates the
+  // flag (a test, a subagent) gets the default rather than silently opting out.
+  sandbox?: boolean;
 };
 
 export type ToolParameters = {
@@ -443,6 +447,9 @@ export type Config = {
   // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
   // exists because it's an outbound request on a machine that may be offline or airgapped.
   pasteFetch: boolean;
+  // Whether model-chosen shell commands run under the local sandbox (`REIKA_SANDBOX`, #163).
+  // Default on, macOS only; see tools/bash.ts's composition and tools/_sandbox.ts for the profile.
+  sandbox: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in

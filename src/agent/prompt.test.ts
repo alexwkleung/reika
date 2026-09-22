@@ -199,3 +199,34 @@ describe('plan prompt tracks the ask_user tool (#272)', () => {
     expect(planPromptWith(false)).not.toContain('ask_user');
   });
 });
+
+// The sandbox sentence (#163) is a claim about this turn's bash, so it tracks the gate rather than
+// the flag: on Linux or under REIKA_SANDBOX=0 it would tell the model a genuine DNS failure "may be
+// the sandbox" — the misattribution the footer is gated on output to avoid — and in minimal mode or
+// offline it would route to a fetch_url/search the model does not have (#377).
+describe('agent prompt sandbox sentence (#163)', () => {
+  const agent = (o: { sandbox?: boolean; canFetch?: boolean; canSearch?: boolean }): string =>
+    buildSystemPrompt({ bundle, mode: 'agent', ...o });
+
+  it('is absent when nothing is sandboxed', () => {
+    expect(agent({ sandbox: false })).not.toContain('sandbox');
+    expect(agent({})).not.toContain('sandbox');
+  });
+
+  it('routes to the web tools the turn actually offers', () => {
+    const both = agent({ sandbox: true, canFetch: true, canSearch: true });
+    expect(both).toContain('local sandbox');
+    expect(both).toContain('fetch_url');
+    expect(both).toContain('search for a query');
+
+    const fetchOnly = agent({ sandbox: true, canFetch: true, canSearch: false });
+    expect(fetchOnly).toContain('fetch_url');
+    expect(fetchOnly).not.toContain('search for a query');
+
+    const neither = agent({ sandbox: true, canFetch: false, canSearch: false });
+    expect(neither).toContain('local sandbox');
+    expect(neither).not.toContain('fetch_url');
+    expect(neither).not.toContain('search for a query');
+    expect(neither).toContain('tell the user');
+  });
+});

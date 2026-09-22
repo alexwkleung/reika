@@ -52,6 +52,7 @@ const config = (): Config => ({
   pasteFetch: false,
   skillAuto: 'off',
   anon: false,
+  sandbox: false,
 });
 
 const call = (logprobs?: number) =>

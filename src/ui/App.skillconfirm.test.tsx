@@ -33,6 +33,7 @@ const CONFIG: Config = {
   pasteFetch: false,
   skillAuto: 'ask',
   anon: false,
+  sandbox: false,
 };
 
 const BUNDLE: ContextBundle = {
