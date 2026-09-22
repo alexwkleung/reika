@@ -2166,9 +2166,9 @@ export function App() {
             // than like the app having stalled.
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
           ) : spinnerShown && !pending && !question && !modelSelect && !confirm ? (
-            // Holds the spinner's rows at idle: the frame shrinking would leave the input above
-            // the bottom row until new output refilled the gap. Not under a dialog, whose height
-            // budget (`reservedRows`) doesn't count it.
+            // Holds the spinner's rows at idle: the frame shrinking would move the input up at the
+            // end of every turn, off the bottom row once the screen is full. Not under a dialog,
+            // whose height budget (`reservedRows`) doesn't count it.
             <Box height={WORKING_ROWS} />
           ) : null}
           <QueuedList queue={queue} />
