@@ -206,6 +206,11 @@ export function App() {
   // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
   // enough to measure one. See agent/prefillcost.ts.
   const prefillRateRef = useRef<number | undefined>(undefined);
+  // Decode throughput (tokens/second) for the status bar's tok/s chip (#204) — the smoothed value
+  // in state for display, mirrored into a ref for the same reason as the two learners above: a new
+  // turn seeds from it, and a handler that hasn't re-rendered still has to read the latest.
+  const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
+  const decodeRateRef = useRef<number | undefined>(undefined);
   // Session-long so the prefix-cache line prices the turn boundary too (#426); see runTurn's opt.
   const prefixTraceRef = useRef(new PrefixTrace());
   const [pending, setPending] = useState<{
@@ -595,6 +600,11 @@ export function App() {
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
+    // The tok/s chip describes the model that produced it (#204) — left standing, the previous
+    // model's rate reads as the new one's until a round here measures one, which on a slow local
+    // endpoint is minutes of a number about the wrong engine.
+    decodeRateRef.current = undefined;
+    setDecodeRate(undefined);
     // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
     // is instant, and a turn submitted before the answer lands runs without a window, as it
     // would have anyway.
@@ -995,6 +1005,11 @@ export function App() {
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
       prefillRateRef.current = undefined;
+      // Same for decode throughput (#204): the chip describes the model that produced it, and
+      // /clear drops back to the default profile, which may be a different one on different
+      // hardware. The chip itself goes with the token counts it sits next to.
+      decodeRateRef.current = undefined;
+      setDecodeRate(undefined);
       prefixTraceRef.current = new PrefixTrace();
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
@@ -1991,6 +2006,11 @@ export function App() {
         onPrefillRate: r => {
           prefillRateRef.current = r;
         },
+        priorDecodeRate: decodeRateRef.current,
+        onDecodeRate: r => {
+          decodeRateRef.current = r;
+          setDecodeRate(r);
+        },
         prefixTrace: prefixTraceRef.current,
       });
     } catch (e) {
@@ -2213,6 +2233,7 @@ export function App() {
             sheds={shrink.sheds}
             folds={shrink.folds}
             cachedTokens={lastUsage?.cachedTokens}
+            decodeRate={decodeRate}
             pr={pr}
             autoApprove={
               config?.autoApprove === 'bypass'

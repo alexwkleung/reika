@@ -56,6 +56,20 @@ describe('Status', () => {
     const { lastFrame } = render(<Status {...BASE} modeTag={modeTag} autoApprove="safe" />);
     expect(lastFrame()).toContain('auto approve');
   });
+
+  // Decode throughput (#204) — the last measurable round's rate, next to the token counts it is
+  // derived from. Absent until a round was big enough to measure (see agent/decoderate.ts).
+  it('shows the decode rate of the last measurable round', () => {
+    const { lastFrame } = render(
+      <Status {...BASE} usage={{ promptTokens: 5000, completionTokens: 900 }} decodeRate={21.4} />,
+    );
+    expect(lastFrame()).toContain('5.0k↑ 900↓ · 21 t/s');
+  });
+
+  it('leaves the chip off when no round has been measurable yet', () => {
+    const { lastFrame } = render(<Status {...BASE} />);
+    expect(lastFrame()).not.toContain('t/s');
+  });
 });
 
 // A full status at 40 columns. Before #295 the row Box handed each sibling <Text> its own
@@ -73,6 +87,7 @@ describe('Status wrap', () => {
     sheds: 3,
     folds: 1,
     cachedTokens: 9000,
+    decodeRate: 21.4,
     pr: 99,
     modeTag: 'agent',
     autoApprove: 'safe' as const,
@@ -96,7 +111,7 @@ describe('Status wrap', () => {
       'agent (shift+tab to cycle)',
       'auto approve',
       'qwen3-coder-30b-a3b-instruct · turn 12',
-      'idle · 123k↑ 4.6k↓',
+      'idle · 123k↑ 4.6k↓ · 21 t/s',
       'ctx 11k/24k (70% of 16k)',
       '3 sheds · 1 fold · 80% cached (9.0k)',
       'PR: #99 · ctrl-c to exit',

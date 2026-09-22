@@ -37,6 +37,7 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
+import { DecodeRate, decodeRate } from './decoderate.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -1094,6 +1095,11 @@ export async function runTurn(opts: {
   // rate to price themselves with — and those are the expensive ones.
   priorPrefillRate?: number;
   onPrefillRate?: (rate: number) => void;
+  // Learned decode throughput (tokens/second) — the status bar's `21 t/s` chip (#204). Threaded
+  // across turns for the same reason as the prefill rate, and smoothed for the same reason; decode
+  // only, since prefill's number is an estimate and stays in the debug log. See agent/decoderate.ts.
+  priorDecodeRate?: number;
+  onDecodeRate?: (rate: number) => void;
   // Session-long prefix-divergence trace (#426). The engine's cache still holds the previous turn's
   // last request when a new turn starts, so the comparison is only meaningful across the boundary
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
@@ -1348,6 +1354,10 @@ export async function runTurn(opts: {
   // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
   // provider's reported prompt tokens. See agent/prefillcost.ts.
   const prefillRate = new PrefillRate(opts.priorPrefillRate);
+  // How fast the model actually decodes, for the status bar (#204). Same learned-and-threaded shape
+  // as prefillRate, but this one is displayed rather than logged, and decode-only for that reason.
+  // See agent/decoderate.ts.
+  const decodeThroughput = new DecodeRate(opts.priorDecodeRate);
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -2265,10 +2275,18 @@ export async function runTurn(opts: {
       );
       if (learned != null) opts.onPrefillRate?.(learned);
     }
+    // What that round decoded at (#204) — the status bar's tok/s chip. Both facts come off the
+    // response the engine just sent: `timing` splits prefill from decode, `usage` counts the tokens.
+    // The debug line quotes the round's own sample; the learner smooths it, and a round too short to
+    // measure neither teaches nor republishes (see decoderate.ts).
+    const sample = decodeRate(response.usage, response.timing);
+    const smoothed = decodeThroughput.observe(response.usage, response.timing);
+    if (smoothed != null) opts.onDecodeRate?.(smoothed);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
-        `finishReason=${response.finishReason ?? '?'}\n`,
+        `finishReason=${response.finishReason ?? '?'} ` +
+        `decode=${sample == null ? '?' : `${sample.toFixed(1)}t/s`}\n`,
     );
 
     if (opts.signal?.aborted) {

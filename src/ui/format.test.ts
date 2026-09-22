@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { changeLabel, formatElapsed, formatDurationMs, toolLabel } from './format.js';
+import {
+  changeLabel,
+  formatElapsed,
+  formatDurationMs,
+  formatTokensPerSecond,
+  toolLabel,
+} from './format.js';
 
 describe('formatElapsed', () => {
   it('renders bare seconds under a minute', () => {
@@ -29,6 +35,32 @@ describe('formatDurationMs', () => {
 
   it('matches the status-bar format above an hour', () => {
     expect(formatDurationMs(4_212_000)).toBe('1h 10m 12s');
+  });
+});
+
+describe('formatTokensPerSecond', () => {
+  it('keeps one decimal under 10, where the difference is what the reader is looking at', () => {
+    expect(formatTokensPerSecond(8.44)).toBe('8.4 t/s');
+    expect(formatTokensPerSecond(3.16)).toBe('3.2 t/s');
+  });
+
+  // 9.96 rounds to 10, and `10.0 t/s` next to `10 t/s` on the next round is the kind of jitter a
+  // status bar must not show.
+  it('crosses to whole numbers without a trailing .0', () => {
+    expect(formatTokensPerSecond(9.96)).toBe('10 t/s');
+    expect(formatTokensPerSecond(20.4)).toBe('20 t/s');
+    expect(formatTokensPerSecond(999.4)).toBe('999 t/s');
+  });
+
+  it('compacts a four-digit rate like a token count', () => {
+    expect(formatTokensPerSecond(1234)).toBe('1.2k t/s');
+    expect(formatTokensPerSecond(20_000)).toBe('20k t/s');
+  });
+
+  it('renders nothing when there is no rate', () => {
+    expect(formatTokensPerSecond(undefined)).toBe('');
+    expect(formatTokensPerSecond(0)).toBe('');
+    expect(formatTokensPerSecond(Number.NaN)).toBe('');
   });
 });
 

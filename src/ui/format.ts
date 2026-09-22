@@ -29,6 +29,16 @@ export function kFormat(n: number): string {
   return Math.round(n / 1_000_000_000) + 'B';
 }
 
+// `21 t/s`, `8.4 t/s`, `1.2k t/s` — the decode throughput of the last measurable round, as the
+// status bar shows it (#204). One decimal below 10, where the difference between 3.1 and 3.4 is
+// what the reader is looking at, and whole numbers above it, where it isn't; four digits and up are
+// compacted like token counts. Empty when no round has been measurable yet.
+export function formatTokensPerSecond(rate?: number): string {
+  if (rate == null || !Number.isFinite(rate) || rate <= 0) return '';
+  if (rate >= 1000) return `${kFormat(rate)} t/s`;
+  return `${rate < 10 ? Number(rate.toFixed(1)) : Math.round(rate)} t/s`;
+}
+
 // Fraction of a context ceiling currently used, or null when either operand is unknown. The
 // ceiling callers pass is the USABLE window (compactThreshold: window minus the generation reserve,
 // under the safety factor) when they know it, not the raw window: history is shed at the usable
