@@ -643,14 +643,19 @@ function buildCommandDisplay(
   retained: string,
   omittedEarlier: boolean,
 ): { text: string; outputTail: string; outputTruncated: boolean } {
-  if (!retained) return { text: command, outputTail: '', outputTruncated: false };
+  // Blank edges are dropped: nearly every command ends in a newline (vitest and `git log` in two),
+  // and each drew as an empty row stacked on the next block's own margin, while also taking one of
+  // the ten line slots from real output.
+  const trimmed = retained.replace(/\s+$/, '');
+  if (!trimmed) return { text: command, outputTail: '', outputTruncated: false };
   const byteTail =
-    retained.length > OUTPUT_TAIL_BYTES
-      ? retained.slice(retained.length - OUTPUT_TAIL_BYTES)
-      : retained;
+    trimmed.length > OUTPUT_TAIL_BYTES
+      ? trimmed.slice(trimmed.length - OUTPUT_TAIL_BYTES)
+      : trimmed;
   const lines = byteTail.split('\n');
   const lineTail = lines.slice(-OUTPUT_TAIL_LINES);
   const outputTruncated =
-    omittedEarlier || retained.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
-  return { text: command, outputTail: lineTail.join('\n'), outputTruncated };
+    omittedEarlier || trimmed.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
+  const outputTail = lineTail.join('\n').replace(/^(?:[ \t\r]*\n)+/, '');
+  return { text: command, outputTail, outputTruncated };
 }
