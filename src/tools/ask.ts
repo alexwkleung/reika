@@ -200,9 +200,11 @@ export const askUserTool: Tool = {
 
     const parts = [`You asked: ${question}`, `The user answered: ${answer.text}`];
     if (answer.notes) parts.push(`The user added: ${answer.notes}`);
+    // Settles the one point asked, not the turn — see buildQuestionLedger for why "act on it now"
+    // was the wrong verb.
     parts.push(
-      'This is settled. Act on it now — do not re-derive it, re-read the code to second-guess it, ' +
-        'or ask again.',
+      'This is settled. Continue what you were doing on that basis — do not re-derive it, re-read ' +
+        'the code to second-guess it, or ask again.',
     );
     const shown = answer.notes ? `${answer.text} (+ note)` : answer.text;
     return {
