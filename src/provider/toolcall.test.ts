@@ -16,9 +16,7 @@ const {
   droppedPayloadCount,
   hasDroppedPayloads,
   lastUserMessageIndex,
-  latchShapeRejection,
   messagesToChatParams,
-  resetShapeLatches,
   taskSpecIndex,
 } = await import('./toolcall.js');
 
@@ -1603,17 +1601,17 @@ describe('messagesToChatParams prefix-stable', () => {
     // The aging sweep must not outvote the latch either — the endpoint wants the byte back even
     // though prefix-stable eviction already marked it spent.
     (history[1] as Message & { role: 'assistant' }).reasoningAged = true;
-    latchShapeRejection('reasoning-roundtrip');
-    try {
-      for (const prefixStable of [true, false]) {
-        const out = messagesToChatParams('sys', history, { prefixStable, reasoningRounds: 1 });
-        const reasonings = out
-          .filter(m => m.role === 'assistant')
-          .map(m => (m as { reasoning_content?: string }).reasoning_content);
-        expect(reasonings).toEqual(['think 1', 'think 2']);
-      }
-    } finally {
-      resetShapeLatches();
+    const latches = { reasoningRoundtrip: true, toolMessageName: false };
+    for (const prefixStable of [true, false]) {
+      const out = messagesToChatParams('sys', history, {
+        prefixStable,
+        reasoningRounds: 1,
+        latches,
+      });
+      const reasonings = out
+        .filter(m => m.role === 'assistant')
+        .map(m => (m as { reasoning_content?: string }).reasoning_content);
+      expect(reasonings).toEqual(['think 1', 'think 2']);
     }
   });
 
@@ -1621,13 +1619,10 @@ describe('messagesToChatParams prefix-stable', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
     const before = messagesToChatParams('sys', history)[3] as { name?: string };
     expect(before.name).toBe('read');
-    latchShapeRejection('tool-message-name');
-    try {
-      const out = messagesToChatParams('sys', history);
-      expect(out[3]).not.toHaveProperty('name');
-    } finally {
-      resetShapeLatches();
-    }
+    const out = messagesToChatParams('sys', history, {
+      latches: { reasoningRoundtrip: false, toolMessageName: true },
+    });
+    expect(out[3]).not.toHaveProperty('name');
   });
 
   it('appends the trailing note as the final user message', () => {

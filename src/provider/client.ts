@@ -2,14 +2,8 @@ import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
-import {
-  latchShapeRejection,
-  messagesToChatParams,
-  resetShapeLatches,
-  shapeLatchActive,
-  shapeRejection,
-  toolsToChatTools,
-} from './toolcall.js';
+import { latchesFor, resetEndpointLatches } from './latches.js';
+import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
@@ -32,21 +26,9 @@ export type ModelResponse = {
   sampled?: SampledToken[];
 };
 
-// Session latch: once an engine rejects a request carrying the logprobs fields, stop asking. The
-// degrade below retries that first request without them, so the turn survives; this keeps every
-// later round from paying the same failed round-trip. Exported reset is for tests only.
-let logprobsUnsupported = false;
-// Same latch for `tool_choice: 'none'`. The degrade retries with the tools dropped — the shape the
-// report rounds sent before the field existed — so a backend that rejects it costs one round-trip
-// once and then gets the old (full re-prefill) request every time.
-let toolChoiceUnsupported = false;
-
+// Tests only. The degrade latches live per endpoint in latches.ts; this name predates them.
 export function resetLogprobSupport(): void {
-  logprobsUnsupported = false;
-  toolChoiceUnsupported = false;
-  // The shape latches (toolcall.ts) belong to the same session-latch family, so the one reset
-  // client tests call clears them too.
-  resetShapeLatches();
+  resetEndpointLatches();
 }
 
 export async function callModel(opts: {
@@ -93,6 +75,7 @@ export async function callModel(opts: {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
   }
+  const latches = latchesFor(opts.config);
   // One closure so the shape-rejection retry below can rebuild this request with a just-latched
   // shape applied — both shapes are produced at serialization time, not editable on the body.
   // `rerender` is set only by that retry: it drops the frozen payload stamps so the rebuilt
@@ -108,6 +91,7 @@ export async function callModel(opts: {
       // The real call is the one that freezes live-payload bytes (estimates and warms never do).
       stampRenders: opts.stampRenders ?? opts.prefixStable,
       rerender,
+      latches,
       trailingNote: opts.trailingNote,
       onCapStats: opts.onCapStats,
       onAgedStats: opts.onAgedStats,
@@ -129,11 +113,11 @@ export async function callModel(opts: {
   const timing = (): ModelResponse['timing'] =>
     ttftMs == null ? undefined : { ttftMs, totalMs: Date.now() - startedAt };
 
-  const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !logprobsUnsupported;
-  const wantToolChoice = !!opts.toolChoice && opts.tools.length > 0 && !toolChoiceUnsupported;
+  const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !latches.logprobs;
+  const wantToolChoice = !!opts.toolChoice && opts.tools.length > 0 && !latches.toolChoice;
   // A latched-off tool_choice means the tools go too: the caller asked for a round with no calls,
   // and without the field the only way to guarantee that is the old no-tools request.
-  const sendTools = opts.tools.length > 0 && !(opts.toolChoice && toolChoiceUnsupported);
+  const sendTools = opts.tools.length > 0 && !(opts.toolChoice && latches.toolChoice);
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -243,15 +227,16 @@ export async function callModel(opts: {
         // Shape rejection, matched on the backend's own words: a pruned old `reasoning_content`
         // ("must be passed back to the API") or the `name` on tool messages (`"name"` is not
         // supported). Latch the shape, re-serialize, resend — the retried bytes, and every later
-        // request this session, carry the shape the endpoint accepts. The byte compare is the
+        // request to this endpoint, carry the shape it accepts. The byte compare is the
         // loop guard: once the latch is spent the rebuild matches and the error falls through,
         // instead of retrying a request that cannot change.
         const shape = shapeRejection(reason);
         if (shape) {
           // Asked before latching: the byte compare alone cannot see a spent latch once the rebuild
           // re-renders, since re-capped payloads differ from the request that was just refused.
-          const alreadyLatched = shapeLatchActive(shape);
-          latchShapeRejection(shape);
+          const field = shape === 'reasoning-roundtrip' ? 'reasoningRoundtrip' : 'toolMessageName';
+          const alreadyLatched = latches[field];
+          latches[field] = true;
           // Only the reasoning shape adds bytes the frozen payloads were not capped against; the
           // name shape only shrinks the request, so re-rendering it would re-cap payloads the model
           // already saw whole and freeze the cut copies for the rest of the session.
@@ -273,7 +258,7 @@ export async function callModel(opts: {
           continue;
         }
         if (req.logprobs !== undefined) {
-          logprobsUnsupported = true;
+          latches.logprobs = true;
           debugLog(
             `[reika:debug] logprobs unsupported by backend — retrying without (${reason})\n`,
           );
@@ -282,7 +267,7 @@ export async function callModel(opts: {
           continue;
         }
         if (req.tool_choice !== undefined) {
-          toolChoiceUnsupported = true;
+          latches.toolChoice = true;
           debugLog(
             `[reika:debug] tool_choice unsupported by backend — retrying without tools (${reason})\n`,
           );

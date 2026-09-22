@@ -1,6 +1,9 @@
 import type { Message, Tool } from '../types.js';
 import type { ChatMessageParam, ChatTool } from './transport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
+import type { EndpointLatches } from './latches.js';
+
+type ShapeLatches = Pick<EndpointLatches, 'reasoningRoundtrip' | 'toolMessageName'>;
 
 // Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
 // token-denominated window to the char-denominated payload length.
@@ -252,21 +255,19 @@ type AgedContent = { content: string; kind: AgedKind };
 // records, so a verification run could not tell an outline that fired from one that never did.
 export type AgedStats = Record<AgedKind, number>;
 
-// Endpoint-shape latches (session-scoped, the same family as client.ts's logprobs/tool_choice
-// latches). Strict upstreams — the validators behind hosted routers like OpenCode Go — 400 on two
+// Endpoint-shape rejections (latched per endpoint in latches.ts, the same family as the
+// logprobs/tool_choice latches). Strict upstreams — the validators behind hosted routers like OpenCode Go — 400 on two
 // shapes reika emits by default:
 //   - a pruned old `reasoning_content` ("The reasoning_content in the thinking mode must be
 //     passed back to the API"): the REIKA_REASONING_ROUNDS window and the prefix-stable aging
 //     sweep both drop older reasoning, and this endpoint wants every bit it returned passed back;
 //   - the `name` this file adds to tool messages (`"name" is not supported by this endpoint):
 //     OpenAI's wire shape accepts role/tool_call_id/content on tool messages only.
-// client.ts's degrade ladder classifies the rejection text (shapeRejection), latches it here, and
-// re-serializes — the retried request, and every request for the rest of the session, carry the
-// shape the endpoint accepts. Cost when the reasoning latch fires: the round-window saving is
-// surrendered for the session — a 400 costs the turn outright, so keeping is the only side that
-// can lose. resetShapeLatches is for tests only (wired into client.ts's resetLogprobSupport).
-let toolMessageNameUnsupported = false;
-let reasoningRoundtripRequired = false;
+// client.ts's degrade ladder classifies the rejection text (shapeRejection), latches it for that
+// endpoint, and re-serializes — the retried request, and every later request to that endpoint,
+// carry the shape it accepts (the caller passes the latches in as `opts.latches`). Cost when the
+// reasoning latch fires: that endpoint gives up the round-window saving for the session — a 400
+// costs the turn outright, so keeping is the only side that can lose.
 
 export type ShapeRejection = 'reasoning-roundtrip' | 'tool-message-name';
 
@@ -279,24 +280,6 @@ export function shapeRejection(reason: string): ShapeRejection | null {
     return 'reasoning-roundtrip';
   if (/(\\?")name(\\?") is not supported/.test(reason)) return 'tool-message-name';
   return null;
-}
-
-export function latchShapeRejection(kind: ShapeRejection): void {
-  if (kind === 'reasoning-roundtrip') reasoningRoundtripRequired = true;
-  else toolMessageNameUnsupported = true;
-}
-
-export function resetShapeLatches(): void {
-  toolMessageNameUnsupported = false;
-  reasoningRoundtripRequired = false;
-}
-
-// Read side of the latches, for machinery whose own decision depends on a shape already spent.
-// compaction.ts's aging sweep is the one caller: it sheds reasoning by marking `reasoningAged`,
-// which this module now ignores while the roundtrip latch is on — so without asking first, the
-// sweep would spend its budget on marks that cannot move the estimate (see batchAgePayloads).
-export function shapeLatchActive(kind: ShapeRejection): boolean {
-  return kind === 'reasoning-roundtrip' ? reasoningRoundtripRequired : toolMessageNameUnsupported;
 }
 
 // The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
@@ -327,6 +310,9 @@ export function messagesToChatParams(
     // cap, so without this the retry would carry the payloads AND the reasoning it just re-added —
     // over the budget the cap exists to enforce, on the one request that must not 400 again.
     rerender?: boolean;
+    // The target endpoint's shape latches (latches.ts). Estimates pass them too, so a latched
+    // endpoint's larger request is what the compaction trigger and the cap measure.
+    latches?: ShapeLatches;
     // Transient per-round harness note (loop ledgers / nudges) appended as the FINAL user message
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
@@ -361,9 +347,8 @@ export function messagesToChatParams(
   const reasoningRounds =
     opts?.reasoningRounds && opts.reasoningRounds > 0 ? opts.reasoningRounds : 1;
   // Latched roundtrip (shape rejection above): keep every round's reasoning, not just the last N.
-  const keepReasoningFrom = reasoningRoundtripRequired
-    ? 0
-    : reasoningKeepFromIndex(history, reasoningRounds);
+  const keepAllReasoning = !!opts?.latches?.reasoningRoundtrip;
+  const keepReasoningFrom = keepAllReasoning ? 0 : reasoningKeepFromIndex(history, reasoningRounds);
   // Compaction recaps fold into the single leading system block (rather than a second
   // system message mid-array) for the widest chat-template compatibility.
   const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
@@ -463,7 +448,7 @@ export function messagesToChatParams(
         }));
       }
       const keepReasoning =
-        reasoningRoundtripRequired || (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom);
+        keepAllReasoning || (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom);
       if (msg.reasoning && keepReasoning) {
         param.reasoning_content = msg.reasoning;
       }
@@ -512,7 +497,7 @@ export function messagesToChatParams(
         tool_call_id: msg.callId,
         content,
       };
-      if (toolName && !toolMessageNameUnsupported) param.name = toolName;
+      if (toolName && !opts?.latches?.toolMessageName) param.name = toolName;
       out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
@@ -692,6 +677,7 @@ function freshPayloadCharCap(
     minGenTokens?: number;
     prefixStable?: boolean;
     rerender?: boolean;
+    latches?: ShapeLatches;
   },
 ): { cap: number | undefined; verbatim: ReadonlySet<number> } {
   const cw = opts?.contextWindow;
@@ -776,7 +762,7 @@ function freshPayloadCharCap(
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
       const includeReasoning =
-        reasoningRoundtripRequired ||
+        !!opts?.latches?.reasoningRoundtrip ||
         (prefixStable ? !(m.role === 'assistant' && m.reasoningAged) : i >= keepReasoningFrom);
       addNonFresh(i, nonFreshChars0(m, includeReasoning));
     }

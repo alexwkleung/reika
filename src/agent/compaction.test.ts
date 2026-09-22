@@ -11,7 +11,6 @@ import {
   AGE_LOW_FRACTION,
 } from './compaction.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
-import { latchShapeRejection, resetShapeLatches } from '../provider/toolcall.js';
 
 describe('shouldCompact', () => {
   it('is false without a context window', () => {
@@ -666,29 +665,32 @@ describe('batchAgePayloads', () => {
       ...round('c', 'z'.repeat(8000)),
       ...round('d', 'w'.repeat(8000)),
     ];
-    const estOf = (h: Message[]) => () =>
-      estimateRequestTokens('sys', h, [], {
-        contextWindow: 8192,
-        minGenTokens: 1024,
-        prefixStable: true,
-      });
+    const estOf =
+      (h: Message[], reasoningRoundtrip = false) =>
+      () =>
+        estimateRequestTokens('sys', h, [], {
+          contextWindow: 8192,
+          minGenTokens: 1024,
+          prefixStable: true,
+          latches: {
+            logprobs: false,
+            toolChoice: false,
+            reasoningRoundtrip,
+            toolMessageName: false,
+          },
+        });
 
     // Control: unlatched, the sweep does mark reasoning — the assertion below is not vacuous.
     const control = build();
     batchAgePayloads(control, estOf(control), 8192, 1024);
     expect((control[1] as Message & { role: 'assistant' }).reasoningAged).toBe(true);
 
-    latchShapeRejection('reasoning-roundtrip');
-    try {
-      const latched = build();
-      const aged = batchAgePayloads(latched, estOf(latched), 8192, 1024);
-      expect((latched[1] as Message & { role: 'assistant' }).reasoningAged).toBeUndefined();
-      // Every mark it does report is a payload it actually aged, so `marked` still means "shed".
-      expect(aged.marked).toBe(aged.bulk + aged.crumbs);
-      expect(aged.marked).toBeGreaterThan(0);
-    } finally {
-      resetShapeLatches();
-    }
+    const latched = build();
+    const aged = batchAgePayloads(latched, estOf(latched, true), 8192, 1024, false);
+    expect((latched[1] as Message & { role: 'assistant' }).reasoningAged).toBeUndefined();
+    // Every mark it does report is a payload it actually aged, so `marked` still means "shed".
+    expect(aged.marked).toBe(aged.bulk + aged.crumbs);
+    expect(aged.marked).toBeGreaterThan(0);
   });
 });
 
