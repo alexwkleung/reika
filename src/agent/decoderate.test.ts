@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DecodeRate, decodeRate } from './decoderate.js';
+import { DecodeRate, decodeRate, formatRate } from './decoderate.js';
 
 // A call that spent `ttft` ms on prefill and then streamed for `decode` ms.
 const timing = (ttftMs: number, decodeMs: number) => ({ ttftMs, totalMs: ttftMs + decodeMs });
@@ -63,5 +63,20 @@ describe('DecodeRate', () => {
     expect(new DecodeRate(1).get()).toBe(1);
     expect(new DecodeRate(0).get()).toBeUndefined();
     expect(new DecodeRate(Number.NaN).get()).toBeUndefined();
+  });
+});
+
+describe('formatRate', () => {
+  it('prints whole numbers from 10 up and one decimal below', () => {
+    expect(formatRate(19.77)).toBe('20t/s');
+    expect(formatRate(8.44)).toBe('8.4t/s');
+    expect(formatRate(1204.3)).toBe('1204t/s');
+  });
+
+  // The log's field shape, not an omitted one: a round that measured nothing has to say so, and `?`
+  // is what makes `decode=? smoothed=20t/s` readable as "this round measured nothing, the chip is
+  // still showing the last rate" rather than as a value that went missing.
+  it('states a missing value rather than dropping the field', () => {
+    expect(formatRate(undefined)).toBe('?');
   });
 });

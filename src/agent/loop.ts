@@ -37,7 +37,7 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
-import { DecodeRate, decodeRate } from './decoderate.js';
+import { DecodeRate, decodeRate, formatRate } from './decoderate.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -2277,16 +2277,19 @@ export async function runTurn(opts: {
     }
     // What that round decoded at (#204) — the status bar's tok/s chip. Both facts come off the
     // response the engine just sent: `timing` splits prefill from decode, `usage` counts the tokens.
-    // The debug line quotes the round's own sample; the learner smooths it, and a round too short to
-    // measure neither teaches nor republishes (see decoderate.ts).
+    // The debug line quotes both the round's own sample and the value the chip actually shows, so
+    // the displayed number is checkable from the log alone — the smoothed one is a fold over the
+    // session's accepted samples, which nothing else records. `get()` rather than the observe
+    // result on purpose: a round too small to measure leaves the chip showing the last rate, and the
+    // log has to say the same thing the chip does.
     const sample = decodeRate(response.usage, response.timing);
-    const smoothed = decodeThroughput.observe(response.usage, response.timing);
-    if (smoothed != null) opts.onDecodeRate?.(smoothed);
+    const learned = decodeThroughput.observe(response.usage, response.timing);
+    if (learned != null) opts.onDecodeRate?.(learned);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
         `finishReason=${response.finishReason ?? '?'} ` +
-        `decode=${sample == null ? '?' : `${sample.toFixed(1)}t/s`}\n`,
+        `decode=${formatRate(sample)} smoothed=${formatRate(decodeThroughput.get())}\n`,
     );
 
     if (opts.signal?.aborted) {

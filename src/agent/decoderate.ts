@@ -66,3 +66,12 @@ export class DecodeRate {
     return this.rate;
   }
 }
+
+// `<rate>t/s`, or `?` when there is no number to print — the debug line's field shape. The chip's
+// is `ui/format.ts`'s formatTokensPerSecond (a space, no `?`); this one is for the log, where an
+// absent value is stated rather than omitted (a missing field reads as a cheap round), and where
+// four digits want no decimal. Same shape `prefillcost.ts` gives the rate it logs.
+export function formatRate(rate?: number): string {
+  if (rate == null) return '?';
+  return `${rate >= 10 ? Math.round(rate) : rate.toFixed(1)}t/s`;
+}

@@ -145,12 +145,39 @@ describe('decode rate reporting (integration)', () => {
     expect(await run(10)).toEqual([13]);
   });
 
-  // The debug line quotes the round's raw sample, which is the only place the displayed number can
-  // be checked against a run — a rejected round says so with `?` rather than going silent.
-  it('quotes the raw round rate on the debug line', async () => {
+  // The debug line carries BOTH numbers: the round's own sample, which is the measurement, and the
+  // smoothed value the chip shows, which is a fold over the session's accepted samples that nothing
+  // else records. Without the pair, the displayed rate is the one number in the UI that cannot be
+  // checked against a run.
+  it('quotes the round sample and the value the chip shows', async () => {
     h.scripted.push(fullRound);
     await run();
     const log = await readFile(join(dir, 'debug.log'), 'utf8');
-    expect(log).toContain('decode=20.0t/s');
+    expect(log).toContain('decode=20t/s smoothed=20t/s');
+  });
+
+  it('quotes both when they differ, so the chip cannot read as this round', async () => {
+    h.scripted.push(fullRound);
+    await run(10);
+    const log = await readFile(join(dir, 'debug.log'), 'utf8');
+    expect(log).toContain('decode=20t/s smoothed=13t/s');
+  });
+
+  // A round too small to measure leaves the chip on the last rate, and the log has to say the same:
+  // `decode=?` is this round's answer, `smoothed=` is what the user is looking at.
+  it('says which of the two is missing on an unmeasurable round', async () => {
+    h.scripted.push(
+      { ...fullRound, content: '', toolCalls: [callNoop] },
+      {
+        content: 'done',
+        toolCalls: undefined,
+        usage: { promptTokens: 5000, completionTokens: 8 },
+        timing: { ttftMs: 5_000, totalMs: 5_050 },
+      },
+    );
+    await run();
+    const log = await readFile(join(dir, 'debug.log'), 'utf8');
+    expect(log).toContain('decode=20t/s smoothed=20t/s');
+    expect(log).toContain('decode=? smoothed=20t/s');
   });
 });
