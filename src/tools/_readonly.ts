@@ -175,7 +175,9 @@ export function isProvablyReadOnly(command: string): boolean {
   return classify(command, READ_ONLY_COMMANDS);
 }
 
-const INSPECTION_COMMANDS = new Set([...READ_ONLY_COMMANDS, ...INSPECTION_ALSO]);
+// Also read by the sandbox (#163): a pipeline of `gh`/`git` plus these keeps its network allow, since
+// these are what a model pages remote output through (`gh pr diff | sed -n '1,300p'`).
+export const INSPECTION_COMMANDS = new Set([...READ_ONLY_COMMANDS, ...INSPECTION_ALSO]);
 
 // The LADDER's question: is this the model inspecting rather than working? A superset of the above —
 // same write/substitution/separator rules, wider set of command names.

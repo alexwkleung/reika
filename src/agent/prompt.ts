@@ -195,7 +195,7 @@ function buildAgentPrompt(opts: {
       // sentence here is what turns those into "this is the sandbox" — the footer in bash.ts is the
       // same fact arriving at the moment of failure. Says what it CANNOT do, not that it is watched:
       // the point is routing to fetch_url/search, not deterrence.
-      'Some shell commands run in a local sandbox: writes are confined to the working directory and network access is denied. If a command fails with a DNS, host, or permission error it may be the sandbox rather than your command — use fetch_url for a web page and search for a query, and tell the user when a command genuinely needs the network.',
+      'Some shell commands run in a local sandbox: writes are confined to the working directory and network access is denied, except for git and gh. If a command fails with a DNS, host, or permission error it may be the sandbox rather than your command — use fetch_url for a web page and search for a query, and tell the user when a command genuinely needs the network.',
       'Rules:',
       // Numbered at join time so an optional rule shifts the ones after it — no gaps, no duplicates.
       ...rules.map((r, i) => `${i + 1}. ${r}`),

@@ -1,7 +1,8 @@
-import { existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
 // only: bubblewrap has no port-level network filtering, so a sandboxed process gets its own
@@ -10,7 +11,9 @@ import { spawnSync } from 'node:child_process';
 // elsewhere, degrade to today's behavior.
 //
 // Nothing here bundles `sandbox-runtime` or anything else (AGENTS.md's minimal-dependency rule,
-// and the issue's own "a dependency that can change any time"). The profile is ours, ~15 lines.
+// and the issue's own "a dependency that can change any time"). The profile is ours, ~10 lines,
+// and is passed inline (`-p`) — no file to write, so a fresh machine with no `~/.config/reika` yet
+// is sandboxed exactly like one that has it.
 
 // The threat model is a confused model, not a determined adversary — the same line `_paths.ts`
 // draws. A blocklist of secret paths is deliberately NOT built here (#163 phase 5): `(allow
@@ -19,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 // reads are open everywhere, cwd included — so a broad cwd (`$HOME`) leaves `~/.ssh` *readable* and
 // `~/.zshrc` writable. Containment, stated plainly in the receipt, rather than a guarantee it
 // doesn't have. What this does enforce: a command the *harness* auto-approved cannot write outside
-// cwd and cannot reach the network — both of those genuinely.
+// cwd and cannot reach past loopback — both of those genuinely.
 
 // `ps`/`top` are setuid and CANNOT be exec'd under seatbelt at all — measured as an unconditional
 // failure, including under a bare `(version 1)(allow default)` profile with no denies in it:
@@ -38,8 +41,8 @@ export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 
 /** Seatbelt profile for one cwd. Pure string in, string out — the unit under test. */
-export function sandboxProfile(): string {
-  return [
+export function sandboxProfile(opts: { network: boolean }): string {
+  const lines = [
     '(version 1)',
     '(allow default)',
     // Writes: deny everything, then two narrow allows. Seatbelt is LAST-MATCH-WINS, so the order of
@@ -54,64 +57,86 @@ export function sandboxProfile(): string {
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
     '(allow file-write* (subpath "/dev"))',
-    // Writes/clones outside cwd stay denied (that is the point), reads stay open — see the note at
-    // the top of the file. Note that reads being open is what makes a broad cwd a stated weakening
-    // rather than a hole: `~/.ssh` stays readable there, and says so in the receipt.
-    '(deny network*)',
-    // `(remote ip "localhost:11434")` matches that host and port only — verified: another port on the
-    // same host is refused (curl rc 7). This has to come *after* the deny to win, which is why the
-    // deny is not `(deny default)`: with `(allow default)` reads work for the whole filesystem and
-    // the two denials here are the entire policy. Per-port allowlisting is what makes "deny all
-    // network" compatible with a local model server, and why this needs no proxy.
-    '(allow network* (remote ip (param "ALLOW_NET")))',
-  ].join('\n');
-}
-
-// `(remote ip "localhost:11434")` matches that host and port only — verified: another port on the
-// same host is refused (curl rc 7). The block has to be an explicit allow *after* `(deny network*)`
-// because a remote this specific loses to the broad deny... no: it wins, which is the whole reason
-// per-port allowlisting is worth having. Without it a local-model owner cannot use this at all.
-function allowNetSpec(baseURL: string): string | undefined {
-  let port: string;
-  try {
-    const u = new URL(baseURL);
-    if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost' && u.hostname !== '::1') {
-      return undefined;
-    }
-    port = u.port || (u.protocol === 'https:' ? '443' : '80');
-  } catch {
-    return undefined;
+  ];
+  if (!opts.network) {
+    lines.push(
+      '(deny network*)',
+      // Loopback stays open in BOTH directions, every port. `(remote ip)` alone — one allowed port
+      // for the model server — refused `network-bind`, so any test suite that starts a local server
+      // (`listen(0)` → EPERM; this repo's own transport.test.ts does) went red under the sandbox,
+      // with the network footer then blaming the sandbox for the whole run. The confused-model
+      // threat is what a command does to the machine and the network, and a loopback listener is
+      // neither; opening it wholesale is also what lets the profile need no config at all. Two
+      // rules because bind/accept match on `local ip` and connect on `remote ip`. Must come after
+      // the deny (last-match-wins).
+      '(allow network* (local ip "localhost:*"))',
+      '(allow network* (remote ip "localhost:*"))',
+    );
   }
-  return `localhost:${port}`;
+  return lines.join('\n');
 }
 
-export type SandboxPlan = { file: string; args: string[] } | { reason: string };
+// Commands whose UNFLAGGED forms are network reads a session cannot do without — the shipped
+// `/issue` and `/review` skills open with `gh issue view` / `gh pr view` / `gh pr diff`, and a
+// `git fetch` is how a model finds out what the remote has. Their outward-facing forms (`git push`,
+// `gh pr create|merge`, `gh release create`) are already in `_danger.ts`'s patterns, so they prompt
+// and run unsandboxed; what is left when one of these arrives unflagged is a read plus a fetch.
+// Nothing else is here on purpose: `curl`/`wget`/`ssh`/`nc` are flagged, and an interpreter
+// (`python -c 'urlopen…'`, `node -e 'fetch…'`) is exactly the unbounded shape the deny is for.
+const NET_VERBS = new Set(['gh', 'git', 'glab']);
 
-let profilePath: string | undefined;
+// Wrappers that don't change what a segment runs (the same set `_danger.ts` strips), plus the
+// keywords a compound can open with. Stripped before the verb is read.
+const VERB_PREFIX_RE =
+  /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
 
-/** Written once per process, outside cwd so the model's own `ls` doesn't trip over it. */
-function profileFile(): string | undefined {
-  if (profilePath) return profilePath;
-  const dir = join(homedir(), '.config', 'reika');
-  try {
-    writeFileSync(join(dir, 'sandbox.sb'), sandboxProfile(), 'utf8');
-  } catch {
-    try {
-      // First run: ~/.config/reika may not exist yet.
-      writeFileSync(join(mkdirp(dir), 'sandbox.sb'), sandboxProfile(), 'utf8');
-    } catch {
-      return undefined;
+// Substitution runs a nested command the verb check never sees — tested on the RAW string, since
+// `$(…)` executes inside double quotes. Same rule and same trade as `_readonly.ts`.
+const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
+
+// `xargs` flags that take the next word as their value, so `xargs -I {} gh issue view {}` reads its
+// verb as `gh`, not `{}`. `-I{}` attached is one word and drops with the flag.
+const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J', '-R', '-S']);
+
+function effectiveVerb(segment: string): string | undefined {
+  const ws = words(segment.trim().replace(VERB_PREFIX_RE, ''));
+  let i = 0;
+  if (ws[i] === 'xargs') {
+    i++;
+    while (i < ws.length && ws[i].startsWith('-')) {
+      if (XARGS_VALUE_FLAGS.has(ws[i])) i++;
+      i++;
     }
   }
-  profilePath = join(dir, 'sandbox.sb');
-  return profilePath;
+  return ws[i];
 }
 
-function mkdirp(dir: string): string {
-  const parent = dirname(dir);
-  if (!existsSync(dir) && parent !== dir) mkdirp(parent);
-  return dir;
+/**
+ * Whether `command` may run sandboxed WITH network: every segment is a `NET_VERBS` command or one
+ * of the read-only inspection commands a model pages their output through (`| sed -n '1,300p'`,
+ * `| wc -l`, `| xargs gh …`). The writes half of the profile is unchanged either way — this only
+ * decides whether `(deny network*)` is in it. An allowlist, so an unrecognized verb means denied:
+ * the cost of a wrong `false` is one footer telling the model what happened, the cost of a wrong
+ * `true` is the guarantee.
+ */
+export function networkAllowedFor(command: string): boolean {
+  const c = command.trim();
+  if (!c || SUBSTITUTION_RE.test(c)) return false;
+  const segments = splitSegments(c, maskQuoted(c))
+    .map(s => s.trim())
+    .filter(s => s && !/^cd(?:\s|$)/.test(s));
+  if (segments.length === 0) return false;
+  let net = false;
+  for (const seg of segments) {
+    const verb = effectiveVerb(seg);
+    if (!verb) return false;
+    if (NET_VERBS.has(verb)) net = true;
+    else if (!INSPECTION_COMMANDS.has(verb)) return false;
+  }
+  return net;
 }
+
+export type SandboxPlan = { args: string[] } | { reason: string };
 
 let execAvailable: boolean | undefined;
 
@@ -142,18 +167,17 @@ function hasSandboxExec(): boolean {
 // Exported for tests, which need each case to start from a clean probe.
 export function resetSandboxCache(): void {
   execAvailable = undefined;
-  profilePath = undefined;
 }
 
 /**
- * How to run `command` under the sandbox, or why it can't be sandboxed.
+ * How to run a command under the sandbox, or why it can't be sandboxed.
  *
  * The only case that is genuinely void is a cwd whose `(subpath …)` covers the whole filesystem —
  * then the filesystem half of the profile asserts a protection that doesn't exist and claiming it
  * would be worse than not starting. A *broad* cwd (`$HOME`) keeps the network half plus everything
- * outside it; the two halves degrade independently, so it is sandboxed and the footer says so.
+ * outside it; the two halves degrade independently, so it is sandboxed and the receipt says so.
  */
-export function sandboxPlan(cwd: string, baseURL: string): SandboxPlan {
+export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPlan {
   if (!sandboxExecAvailable()) {
     return { reason: process.platform === 'darwin' ? 'sandbox-exec unavailable' : 'macOS only' };
   }
@@ -172,18 +196,13 @@ export function sandboxPlan(cwd: string, baseURL: string): SandboxPlan {
   // gets the path the kernel will actually see.
   const root = dirname(cwd) === cwd;
   if (root) return { reason: `cwd is the filesystem root (${cwd})` };
-  const resolved = realpathSync.native(cwd);
-  const file = profileFile();
-  if (!file) return { reason: 'could not write the sandbox profile' };
-  const args = ['-f', file, '-D', `WORKDIR=${resolved}`];
-  const allow = allowNetSpec(baseURL);
-  if (allow) args.push('-D', `ALLOW_NET=${allow}`);
-  else {
-    // No local endpoint to allow through, so the param can't be left unbound (Seatbelt would
-    // reject the reference at load and exit 65). Point it at a host that isn't there.
-    args.push('-D', 'ALLOW_NET=localhost:1');
+  let resolved: string;
+  try {
+    resolved = realpathSync.native(cwd);
+  } catch {
+    return { reason: `cwd does not resolve (${cwd})` };
   }
-  return { file, args };
+  return { args: ['-p', sandboxProfile(opts), '-D', `WORKDIR=${resolved}`] };
 }
 
 /** The `spawn` argv for a sandboxed command. `-D` params, never interpolated — a cwd containing `"`
@@ -201,24 +220,55 @@ export function isBroadWorkdir(cwd: string, home = homedir()): boolean {
   return cwd === home || cwd === '/' || cwd.startsWith('/Volumes/');
 }
 
-/** Said in the footer rather than the summary: the model reads the summary, the user reads this. */
+/** Said in the receipt rather than the summary: the model reads the summary, the user reads this. */
 export function broadWorkdirNotice(cwd: string, home = homedir()): string {
   return (
-    `Sandboxed with a broad working directory (${cwd.replace(home, '~')}): writes are confined to ` +
-    'it, which for this directory is most of your files. Denied outside it: /etc, /usr, /Library, ' +
-    '/Applications, other volumes and other users. Read the shell command’s output for what a ' +
-    'denial actually blocked.'
+    `Shell commands run sandboxed with a broad working directory (${cwd.replace(home, '~')}): ` +
+    'writes are confined to it, which for this directory is most of your files. Denied outside it: ' +
+    '/etc, /usr, /Library, /Applications, other volumes and other users. Read the shell command’s ' +
+    'output for what a denial actually blocked.'
   );
 }
 
-/** The one-line, user-facing receipt that a command ran sandboxed. Not sent to the model. */
-export function sandboxNotice(command: string): string {
-  return `Ran sandboxed (writes confined to cwd, network denied): ${command}`;
+/** The user-facing receipt that this cwd's auto-approved commands run sandboxed. Once per cwd, not
+ *  per command: the confinement is a property of the session, and a line under every chip
+ *  repeating the command the chip already shows doubled the scrollback. Not sent to the model. */
+export function sandboxNotice(cwd: string, home = homedir()): string {
+  return (
+    `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')}, network denied ` +
+    'except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
+  );
 }
 
-// The commands whose failures a model misreads as something other than a sandbox denial.
-const NET_CMD_RE =
-  /\b(?:curl|wget|git|gh|glab|hf|ssh|scp|rsync|ping|dig|nslookup|nc|telnet|ftp|pip|pip3|uv|npm|pnpm|yarn|bun|cargo|go|gem|brew|apt|apt-get|dnf|yum|apk|docker|kubectl|helm|terraform|aws|gcloud)\b/;
+// What a Seatbelt network denial looks like from inside the client, measured under the profile:
+// curl "Could not resolve host", git the same, node/npm `getaddrinfo ENOTFOUND`, python "nodename
+// nor servname provided", ssh "connect to host … port 22: Operation not permitted", Go "no such
+// host", wget "unable to resolve host address", pip "Temporary failure in name resolution".
+const NET_DENIAL_RE =
+  /could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable|connect to host \S+ port \d+: Operation not permitted/i;
+
+// Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
+// result must not point at a tool the model does not have): minimal mode is bash alone, and an
+// offline session registers neither web tool, so "use fetch_url" there is a phantom pointer the
+// model will spend a round discovering. Unknown reads as the full agent set.
+function webRoute(toolNames?: ReadonlySet<string>): string {
+  const fetch = toolNames?.has('fetch_url') ?? true;
+  const search = toolNames?.has('search') ?? true;
+  if (!fetch && !search) {
+    return 'There is no route to the web from here: ask the user for the page or the output.';
+  }
+  const parts: string[] = [];
+  if (fetch) parts.push('use the fetch_url tool instead of curl');
+  if (search) parts.push('the search tool instead of scraping');
+  return `For a web page, ${parts.join(', and ')}.`;
+}
+
+// The exec refusal the setuid note at the top of the file is about, as the shell prints it.
+const PS_DENIAL_RE = /\b(?:ps|top): Operation not permitted/;
+
+// `curl -s` prints nothing on a denial and exits 6 (could not resolve) or 7 (could not connect) —
+// the one shape the output gate cannot see, so the exit status has to carry it.
+const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
 
 /**
  * What the model is told when a sandboxed command exits non-zero.
@@ -235,32 +285,35 @@ const NET_CMD_RE =
  *   file). `ps aux | grep …` is an ordinary thing to reach for — "is the server up?" — and the
  *   denial reads exactly like a broken pipeline.
  *
- * Gated on the command actually looking like one of those. Without the gate this fired on every
- * non-zero exit — `grep` with no match, a red test run — and appended a paragraph of irrelevant
- * advice to a failure the sandbox had nothing to do with.
- *
- * The `ps` note wins over the network half when a command is both (`ssh host 'ps aux'` has already
- * failed locally, as `ssh` itself, before the remote command matters).
+ * Gated on the OUTPUT carrying a denial's signature, not on the command's name. A name gate
+ * (`git`, `npm`, `go`, `cargo`) fired on every red `npm test`, every `cargo test` failure and
+ * `git diff --exit-code`'s exit 1 — the exact misattribution the footer exists to prevent, and one
+ * that trains the model to blame the sandbox for a genuine failure. `ps` in an argument (`docker
+ * ps`, `grep ps`) is the same mistake on the other note.
  */
-const PS_CMD_RE = /(?:^|[|;&(]\s*|\b)(?:ps|top)(?![\w./-])/;
-
-export function sandboxFooter(command: string, code: number | null): string {
+export function sandboxFooter(
+  command: string,
+  code: number | null,
+  output: string,
+  opts: { network: boolean; toolNames?: ReadonlySet<string> },
+): string {
   if (code === 0 || code === null) return '';
   const lines: string[] = [];
-  if (PS_CMD_RE.test(command)) {
+  if (PS_DENIAL_RE.test(output)) {
     lines.push(
       '`ps`/`top` cannot be run under the local sandbox at all — that "Operation not permitted" is ' +
         'the sandbox, not process state. Read /proc-style equivalents a plain file read can answer ' +
         '(a pid file, `lsof`, the output of the command you started) instead of retrying it.',
     );
   }
-  if (NET_CMD_RE.test(command)) {
+  const curlDenied = CURL_RE.test(command) && (code === 6 || code === 7);
+  if (!opts.network && (NET_DENIAL_RE.test(output) || curlDenied)) {
     lines.push(
       'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
         'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
-        'credential. For a web page, use the fetch_url tool instead of curl, and the search tool ' +
-        'instead of scraping. If the command genuinely needs the network, say so and ask the user ' +
-        'to run it.',
+        'credential. ' +
+        webRoute(opts.toolNames) +
+        ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
   if (lines.length === 0) return '';

@@ -86,10 +86,12 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
       const tool = toolMsg(messages);
       expect(tool?.payload).toContain('Operation not permitted');
       await expect(readFile(outside, 'utf8')).rejects.toThrow();
-      // The user-facing receipt, which is the only signal on a platform without enforcement.
-      expect(messages.some(m => m.role === 'system' && m.content.includes('Ran sandboxed'))).toBe(
-        true,
-      );
+      // The user-facing receipt, once per cwd — a fresh tmpdir here, so this run carries it.
+      expect(
+        messages.some(
+          m => m.role === 'system' && m.content.includes('Shell commands run sandboxed'),
+        ),
+      ).toBe(true);
     },
   );
 
@@ -97,9 +99,7 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
     const target = join(cwd, 'plain.txt');
     const messages = await run(cwd, false, `echo x > ${target}; echo wrote`);
     expect(await readFile(target, 'utf8')).toBe('x\n');
-    expect(messages.some(m => m.role === 'system' && m.content.includes('Ran sandboxed'))).toBe(
-      false,
-    );
+    expect(messages.some(m => m.role === 'system' && m.content.includes('sandboxed'))).toBe(false);
   });
 
   // The two halves are independent, and this is the half a broad cwd keeps. Network denial has
@@ -112,11 +112,14 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
     // exit status (rc 6 = could not resolve host) says anything at all.
     expect(tool?.payload).toContain('local sandbox');
     expect(tool?.payload).toContain('Network access is denied');
-    expect(tool?.payload).toContain('fetch_url');
+    // This turn offers bash alone (minimal mode's shape), so the footer must not route to a tool
+    // the model does not have — the loop's `toolNames` is what tells it so (#377).
+    expect(tool?.payload).not.toContain('fetch_url');
+    expect(tool?.payload).toContain('ask the user');
   });
 
-  // The footer is gated on the command LOOKING network-bound and on the failure being the command's
-  // own — a red test run under the sandbox must not collect network advice. Same reason
+  // The footer is gated on the output carrying a denial's signature and on the exit being non-zero
+  // — a red test run under the sandbox must not collect network advice. Same reason
   // `curl …; echo "rc=$?"` gets none: that pipeline exits 0, because the last command succeeded.
   it.skipIf(process.platform !== 'darwin')('leaves a non-network failure alone', async () => {
     const messages = await run(cwd, true, 'node -e "process.exit(1)"');
