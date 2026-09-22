@@ -532,18 +532,18 @@ export function App() {
     [],
   );
 
-  // Every route to a new mode or profile (slash command, Shift+Tab, /implement, /clear, the
-  // picker) lands here, so the saved state can't miss one. The profile waits for the config, since
-  // until then 'default' is only the initial state and would overwrite the value about to be
-  // restored.
+  // Every route to a new mode (slash command, Shift+Tab, /implement, /clear) lands here, so the
+  // saved state can't miss one. The mount run is skipped: the start mode is already on disk, or is
+  // a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it pinned.
+  const modeMountedRef = useRef(false);
   useEffect(() => {
+    if (!modeMountedRef.current) {
+      modeMountedRef.current = true;
+      return;
+    }
     const persisted = persistableMode(mode);
     if (persisted) saveLastState({ mode: persisted });
   }, [mode]);
-  const configLoaded = config !== null;
-  useEffect(() => {
-    if (configLoaded) saveLastState({ profile: activeProfile });
-  }, [configLoaded, activeProfile]);
 
   useEffect(() => {
     if (!exitRequested) return;
@@ -603,6 +603,9 @@ export function App() {
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
+    // Saved here rather than on every activeProfile change: /clear's reset to default and a launch
+    // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
+    saveLastState({ profile: target });
     // The tok/s chip describes the model that produced it (#204) — left standing, the previous
     // model's rate reads as the new one's until a round here measures one, which on a slow local
     // endpoint is minutes of a number about the wrong engine.
