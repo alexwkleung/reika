@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import stripAnsi from 'strip-ansi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
 import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
@@ -225,6 +226,46 @@ describe('renderMarkdown tables', () => {
     expect(out).toContain('Flag');
     expect(out).toContain('Default');
     expect(out).toContain('REIKA_WARM');
+  });
+
+  // #439: cli-table3 lays a table out at its natural content width, and any line past the
+  // pane used to be left for Ink to wrap — which tore the borders mid-glyph.
+  const wide = [
+    '| File | Resolution |',
+    '| --- | --- |',
+    "| src/config.ts | Kept main's '8' + the \"last round IS the report round (#340)\" comment; re-added visionModel / visionBaseURL / visionApiKey below it |",
+    '| .env.example | Same — main also lowered the shipped example 500→8; kept 8, vision block below it |',
+  ].join('\n');
+
+  it('fits a wide table inside the block width', () => {
+    for (const line of stripAnsi(renderMarkdown(wide, 60)).split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it('keeps every row the same width so the borders line up', () => {
+    const rows = stripAnsi(renderMarkdown(wide, 60))
+      .split('\n')
+      .filter(line => line.length > 0);
+    expect(new Set(rows.map(line => line.length)).size).toBe(1);
+  });
+
+  it('wraps the long column rather than overflowing it', () => {
+    const out = stripAnsi(renderMarkdown(wide, 60));
+    // The prose column continues onto further `│ … │` rows instead of running off the edge.
+    expect(out.split('\n').filter(line => line.startsWith('│')).length).toBeGreaterThan(4);
+    expect(out).toContain('│ Kept main');
+  });
+
+  it('leaves a table that already fits untouched', () => {
+    expect(stripAnsi(renderMarkdown(table, 80))).toBe(stripAnsi(renderMarkdown(table, 120)));
+  });
+
+  it('fits a table nested in a list within the block width', () => {
+    const nested = `- item:\n\n  ${wide.split('\n').join('\n  ')}\n`;
+    for (const line of stripAnsi(renderMarkdown(nested, 60)).split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(60);
+    }
   });
 });
 
