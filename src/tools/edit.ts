@@ -155,7 +155,7 @@ export const editTool: Tool = {
     // than an assumed shape. Independent, so fetch them concurrently.
     const [depPayload, url] = await Promise.all([
       surfaceImportedDeps(ctx, effectiveNew),
-      groundUrls(ctx, effectiveNew),
+      groundUrls(ctx, effectiveNew, rel),
     ]);
     // Hand back the post-edit file (small files only) so a follow-up edit to the same file is built
     // from current bytes instead of a now-stale read — collapsing the re-read-after-edit loop. The

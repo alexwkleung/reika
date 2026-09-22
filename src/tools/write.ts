@@ -86,7 +86,7 @@ export const writeTool: Tool = {
     // instead of building on a hallucinated one. Independent, so run concurrently.
     const [depPayload, url] = await Promise.all([
       surfaceImportedDeps(ctx, content),
-      groundUrls(ctx, content),
+      groundUrls(ctx, content, rel),
     ]);
     const payload = [depPayload, url.note].filter(Boolean).join('\n\n') || undefined;
     return {
