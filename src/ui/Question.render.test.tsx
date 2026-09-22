@@ -3,7 +3,8 @@ import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
-import { Question, OWN_ANSWER_LABEL, fitQuestionToHeight } from './Question.js';
+import { Question, OWN_ANSWER_LABEL, fitQuestionToHeight, layoutQuestion } from './Question.js';
+import { clampToViewport } from './Input.js';
 import type { QuestionRequest } from '../types.js';
 
 const frame = (
@@ -185,6 +186,35 @@ describe('Question dialog height (#456)', () => {
     expect(out).toContain('Context line 12.');
     expect(out).toContain('Description 4');
     expect(out).not.toContain('more lines');
+  });
+
+  // App sizes the input's window off this number, so it has to be what the dialog draws.
+  it('reports the height it renders', () => {
+    const cases: [QuestionRequest, number, { forIndex?: number } | undefined][] = [
+      [tall, 80, undefined],
+      [tall, 30, undefined],
+      [{ ...tall, question: 'Which one?' }, 30, undefined],
+      [tall, 20, {}],
+      [tall, 40, { forIndex: 2 }],
+      [req, 30, undefined],
+    ];
+    for (const [request, rows, typing] of cases) {
+      const drawn = sized(request, rows, typing).length;
+      expect(layoutQuestion(request, typing ?? null, 60, rows, 0).height).toBe(drawn);
+    }
+  });
+
+  // The input under a typing-mode question scrolls its window instead of growing past the frame:
+  // with a question at its full budget and a 40-line answer, dialog + input + status still fit.
+  it('leaves the answer box room to scroll instead of overflowing', () => {
+    const answer = Array.from({ length: 40 }, (_, i) => `answer line ${i + 1}`).join('\n');
+    for (const rows of [20, 30, 50]) {
+      const dialog = layoutQuestion(tall, {}, 60, rows, 0).height;
+      const view = clampToViewport(answer, answer.length, rows - dialog);
+      const inputRows = view.text.split('\n').length + 1; // + bottom border
+      const status = 2;
+      expect(dialog + inputRows + status).toBeLessThan(rows);
+    }
   });
 
   it('gives things up in order', () => {

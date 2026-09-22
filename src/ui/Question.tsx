@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import type { QuestionRequest } from '../types.js';
-import { hangingWrap, useContentWidth } from './layout.js';
+import { contentWidth, hangingWrap, useContentWidth } from './layout.js';
 import { theme } from './theme.js';
 
 // The dialog's own border plus its paddingX={1}, on top of the App padding contentWidth already
@@ -20,6 +20,11 @@ export const OWN_ANSWER_LABEL = 'Something else — type your own answer';
 // underneath, plus slack.
 const DIALOG_FIXED_ROWS = 9;
 const BELOW_DIALOG_ROWS = 6;
+// While the user types, the input under the dialog is live and scrolls its own window once the
+// answer outgrows the room the dialog leaves it (App passes `questionDialogHeight` to Input). That
+// window never goes below three lines plus its two "… lines above/below" markers, so the question
+// holds those rows back — the input can't be squeezed into overflowing the frame.
+const TYPING_INPUT_ROWS = 4;
 
 // What fits, in the order things are given up: the options are what the user acts on, so every
 // option row and the own-answer row always show; descriptions go first, then the question's tail.
@@ -64,36 +69,9 @@ export function Question({
   reservedRows?: number;
 }) {
   const liveWidth = useContentWidth(DIALOG_CHROME);
-  const cols = width ?? liveWidth;
-  const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
-  // Labels are full sentences and wrap on any ordinary terminal. Ink has no hanging indent, so a
-  // continuation row would land flush left under the marker, detached from its number
-  // (issue #167's shape). Pre-wrapping each row keeps every continuation under the label text.
-  const hang = '› 1. '.length;
-  const labels = request.options.map(o => {
-    const tag = o.recommended ? '  (recommended)' : '';
-    return { tag, wrapped: hangingWrap(o.label + tag, cols, hang) };
-  });
-  const descriptions = request.options.map(o =>
-    o.description ? hangingWrap(o.description, cols, hang) : null,
-  );
-  const ownAnswer = hangingWrap(OWN_ANSWER_LABEL, cols, hang);
-  const rowsOf = (text: string): number => text.split('\n').length;
-  const wrapRows = (text: string): string[] =>
-    wrapAnsi(text, Math.max(1, cols), { trim: false, hard: true }).split('\n');
-  const questionLines = wrapRows(request.question);
-  const typingLine = noting ? `Adding a note to: ${noting.label}` : 'Type your answer below.';
-  const labelRows = typing
-    ? wrapRows(typingLine).length
-    : labels.reduce((n, l) => n + rowsOf(l.wrapped), 0) + rowsOf(ownAnswer);
-  const descriptionRows = typing ? 0 : descriptions.reduce((n, d) => n + (d ? rowsOf(d) : 0), 0);
-  const fit = fitQuestionToHeight(
-    questionLines.length,
-    labelRows,
-    descriptionRows,
-    rows - DIALOG_FIXED_ROWS - BELOW_DIALOG_ROWS - reservedRows,
-  );
-  const hiddenQuestionRows = questionLines.length - fit.questionRows;
+  const { labels, descriptions, ownAnswer, questionLines, typingLine, fit, hiddenQuestionRows } =
+    layoutQuestion(request, typing ?? null, width ?? liveWidth, rows, reservedRows);
+  const hang = HANG;
   return (
     <Box
       borderStyle="round"
@@ -177,4 +155,80 @@ export function Question({
       </Box>
     </Box>
   );
+}
+
+// Labels are full sentences and wrap on any ordinary terminal. Ink has no hanging indent, so a
+// continuation row would land flush left under the marker, detached from its number
+// (issue #167's shape). Pre-wrapping each row keeps every continuation under the label text.
+const HANG = '› 1. '.length;
+
+// Everything the dialog draws, pre-wrapped and fitted to the viewport, plus the height it comes to.
+// App calls it too, so the input underneath knows how much room the dialog leaves it.
+export function layoutQuestion(
+  request: QuestionRequest,
+  typing: QuestionTyping | null,
+  cols: number,
+  rows: number,
+  reservedRows: number,
+) {
+  const hang = HANG;
+  const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
+  const labels = request.options.map(o => {
+    const tag = o.recommended ? '  (recommended)' : '';
+    return { tag, wrapped: hangingWrap(o.label + tag, cols, hang) };
+  });
+  const descriptions = request.options.map(o =>
+    o.description ? hangingWrap(o.description, cols, hang) : null,
+  );
+  const ownAnswer = hangingWrap(OWN_ANSWER_LABEL, cols, hang);
+  const rowsOf = (text: string): number => text.split('\n').length;
+  const wrapRows = (text: string): string[] =>
+    wrapAnsi(text, Math.max(1, cols), { trim: false, hard: true }).split('\n');
+  const questionLines = wrapRows(request.question);
+  const typingLine = wrapRows(
+    noting ? `Adding a note to: ${noting.label}` : 'Type your answer below.',
+  ).join('\n');
+  const labelRows = typing
+    ? rowsOf(typingLine)
+    : labels.reduce((n, l) => n + rowsOf(l.wrapped), 0) + rowsOf(ownAnswer);
+  const descriptionRows = typing ? 0 : descriptions.reduce((n, d) => n + (d ? rowsOf(d) : 0), 0);
+  const below = BELOW_DIALOG_ROWS + (typing ? TYPING_INPUT_ROWS : 0);
+  const fit = fitQuestionToHeight(
+    questionLines.length,
+    labelRows,
+    descriptionRows,
+    rows - DIALOG_FIXED_ROWS - below - reservedRows,
+  );
+  const hiddenQuestionRows = questionLines.length - fit.questionRows;
+  const height =
+    DIALOG_FIXED_ROWS +
+    fit.questionRows +
+    (hiddenQuestionRows > 0 ? 1 : 0) +
+    labelRows +
+    (fit.showDescriptions ? descriptionRows : 0);
+  return {
+    labels,
+    descriptions,
+    ownAnswer,
+    questionLines,
+    typingLine,
+    fit,
+    hiddenQuestionRows,
+    height,
+  };
+}
+
+// The dialog's height at the live terminal size, for the input underneath it.
+export function questionDialogHeight(
+  request: QuestionRequest,
+  typing: QuestionTyping | null,
+  reservedRows: number,
+): number {
+  return layoutQuestion(
+    request,
+    typing,
+    contentWidth(DIALOG_CHROME),
+    process.stdout.rows || 24,
+    reservedRows,
+  ).height;
 }

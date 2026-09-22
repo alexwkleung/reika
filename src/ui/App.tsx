@@ -23,7 +23,7 @@ import {
   pastedUrlConfirmSpec,
   skillConfirmSpec,
 } from './Confirm.js';
-import { Question, type QuestionTyping } from './Question.js';
+import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import {
   inheritProfile,
   loadConfig,
@@ -2158,6 +2158,11 @@ export function App() {
               pending !== null || question !== null || modelSelect !== null || confirm !== null
             }
             attachedBelow={suggestionState !== null}
+            reservedRows={
+              question
+                ? questionDialogHeight(question.request, questionTyping, dialogReservedRows)
+                : 0
+            }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
             mode={mode}
