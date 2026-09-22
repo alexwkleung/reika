@@ -228,8 +228,9 @@ function StreamingTool({
   const width = liveContentWidth(indent + offset);
   // Cheap logical-line pre-trim for the same reason StreamingContent does it: the App accumulates
   // the run's whole output, and scrubbing plus wrapping all of it on every 50ms flush is the cost
-  // the tail bound exists to avoid.
-  const pre = tailText(text, maxLines * 4);
+  // the tail bound exists to avoid. trimEnd matches the committed chip, which drops the trailing
+  // newline — left in, the live tail grows a blank row that vanishes on commit.
+  const pre = tailText(text.trimEnd(), maxLines * 4);
   // Scrub first, as the committed chip does: `sanitizeTerminalText` resolves carriage returns and
   // flattens control codes, so wrapping the raw stream would break its rows somewhere else.
   // `hangingWrap(…, 0)` is the committed chip's own wrap of raw output — the same wrap-ansi options,
@@ -321,9 +322,11 @@ function renderMessage(
             {hangingWrap(scrubOutput(msg.command), contentWidth(indent), SHELL_MARKER.length)}
           </Text>
         </Text>
-        {msg.output ? (
+        {/* Trimmed like the bash chip's tail: a trailing newline drew a stray blank row above
+            the next block's margin. */}
+        {msg.output.trimEnd() ? (
           <Text color={theme.muted}>
-            {hangingWrap(scrubOutput(msg.output), contentWidth(indent), 0)}
+            {hangingWrap(scrubOutput(msg.output.trimEnd()), contentWidth(indent), 0)}
           </Text>
         ) : null}
       </Box>

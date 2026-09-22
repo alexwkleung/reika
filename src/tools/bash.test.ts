@@ -372,17 +372,26 @@ describe('execStream — command chip', () => {
 
   it('shows short output whole, with no omission marker', async () => {
     const result = await execStream('printf "a\\nb\\nc\\n"', { cwd });
-    expect(result.command!.outputTail).toBe('a\nb\nc\n');
+    expect(result.command!.outputTail).toBe('a\nb\nc');
     expect(result.command!.outputTruncated).toBe(false);
+  });
+
+  it('drops blank lines at either edge, which drew as stray rows under the chip', async () => {
+    const result = await execStream('printf "\\n\\n> lint\\n\\nok\\n\\n\\n"', { cwd });
+    expect(result.command!.outputTail).toBe('> lint\n\nok');
+  });
+
+  it('shows no tail for whitespace-only output', async () => {
+    const result = await execStream('printf "\\n  \\n"', { cwd });
+    expect(result.command!.outputTail).toBe('');
   });
 
   it('marks omission when more lines ran than the chip shows, even under the byte cap', async () => {
     const result = await execStream('seq 1 50', { cwd });
     const chip = result.command!;
-    expect(chip.outputTail.trimEnd().endsWith('50')).toBe(true);
-    // 9, not 10: output ends with a newline, so the empty string after it takes one of the ten
-    // slots. Pre-existing cosmetic behavior of the line slice, pinned here rather than changed.
-    expect(chip.outputTail.split('\n').filter(Boolean)).toHaveLength(9);
+    expect(chip.outputTail.endsWith('50')).toBe(true);
+    // All ten slots are output: the trailing newline no longer takes one as an empty line.
+    expect(chip.outputTail.split('\n')).toHaveLength(10);
     expect(chip.outputTruncated).toBe(true);
   });
 });
