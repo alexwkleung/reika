@@ -277,7 +277,9 @@ function hasSandboxExec(): boolean {
         timeout: 5_000,
       },
     );
-    return r.status !== null && r.error === undefined;
+    // Exit 0, not just "it ran": nested inside another Seatbelt sandbox the binary exists but
+    // sandbox_apply fails (exit 71), and every command would then fail instead of failing open.
+    return r.status === 0 && r.error === undefined;
   } catch {
     return false;
   }

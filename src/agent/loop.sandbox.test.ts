@@ -6,6 +6,7 @@ import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 import { bashTool } from '../tools/bash.js';
+import { sandboxExecAvailable } from '../tools/_sandbox.js';
 
 // Drive the real runTurn loop, in bypass, through the real bash tool (#163). The unit tests in
 // tools/bash.test.ts pin the decision; this pins that the DECISION reaches the process — a sandbox
@@ -20,6 +21,9 @@ vi.mock('../provider/client.js', () => ({
 }));
 
 const { runTurn } = await import('./loop.js');
+
+// Nested inside another Seatbelt sandbox, sandbox-exec cannot apply a profile at all.
+const sandboxWorks = sandboxExecAvailable();
 
 const bashResponse = (command: string): ModelResponse => ({
   content: '',
@@ -78,7 +82,7 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
   const toolMsg = (messages: Message[]) =>
     messages.find(m => m.role === 'tool') as Extract<Message, { role: 'tool' }> | undefined;
 
-  it.skipIf(process.platform !== 'darwin')(
+  it.skipIf(!sandboxWorks)(
     'confines an auto-approved command to cwd in bypass, and says it did',
     async () => {
       // Temp dirs are writable by design (a model's scratchpad), so the outside target is home.
@@ -105,7 +109,7 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
 
   // The two halves are independent, and this is the half a broad cwd keeps. Network denial has
   // nothing to do with WORKDIR, so it holds even where the filesystem guarantee is weakest.
-  it.skipIf(process.platform !== 'darwin')('denies network egress in bypass', async () => {
+  it.skipIf(!sandboxWorks)('denies network egress in bypass', async () => {
     const messages = await run(cwd, true, 'curl -s -m 3 https://example.com');
     const tool = toolMsg(messages);
     // `curl -s` suppresses the diagnosis as well: the payload is literally `(no output)`, which is
@@ -122,7 +126,7 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
   // The footer is gated on the output carrying a denial's signature and on the exit being non-zero
   // — a red test run under the sandbox must not collect network advice. Same reason
   // `curl …; echo "rc=$?"` gets none: that pipeline exits 0, because the last command succeeded.
-  it.skipIf(process.platform !== 'darwin')('leaves a non-network failure alone', async () => {
+  it.skipIf(!sandboxWorks)('leaves a non-network failure alone', async () => {
     const messages = await run(cwd, true, 'node -e "process.exit(1)"');
     const tool = toolMsg(messages);
     expect(tool?.payload ?? '').not.toContain('Network access is denied');
