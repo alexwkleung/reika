@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { loadConfig, resolveDefaultMode, resolveProfile, withProbedWindow } from './config.js';
-import { probeContextWindow } from './provider/contextwindow.js';
+import { loadConfig, resolveDefaultMode, resolveProfile, withProbedLimits } from './config.js';
+import { needsLimitsProbe, probeModelLimits } from './provider/modellimits.js';
 import { bootstrap } from './context/bootstrap.js';
 import { chatTools, defaultTools, minimalTools, planTools } from './tools/index.js';
 import { isOffline } from './tools/_net.js';
@@ -104,8 +104,8 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   let cfg = loadConfig();
   const [bundle, probed] = await Promise.all([
     bootstrap(process.cwd(), cfg.repoMapBudget),
-    cfg.profiles.default.contextWindow == null
-      ? probeContextWindow(cfg.profiles.default)
+    needsLimitsProbe(cfg.profiles.default)
+      ? probeModelLimits(cfg.profiles.default)
       : Promise.resolve(undefined),
     cfg.anon
       ? detectIdentity(process.cwd())
@@ -113,7 +113,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
           .catch(() => {})
       : Promise.resolve(),
   ]);
-  if (probed?.window) cfg = withProbedWindow(cfg, 'default', probed.window);
+  if (probed) cfg = withProbedLimits(cfg, 'default', probed);
   const config = resolveProfile(cfg, 'default');
   const offline = isOffline();
   if (offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');

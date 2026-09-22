@@ -273,25 +273,30 @@ function parseIntOrUndef(s: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Records a window the endpoint reported (#417) on one profile. The profile only — never the
-// top-level `contextWindow`, which every profile reads as its fallback and which would hand the
-// default model's window to a different model on a /model switch.
-export function withProbedWindow(config: Config, profileName: string, window: number): Config {
+// Records what the endpoint or the catalog reported (#417) on one profile. The profile only —
+// never the top-level `contextWindow`, which every profile reads as its fallback and which would
+// hand the default model's window to a different model on a /model switch. A configured value is
+// never overwritten: the env is the override.
+export function withProbedLimits(
+  config: Config,
+  profileName: string,
+  limits: { window?: number; maxOutput?: number },
+): Config {
   const profile = config.profiles[profileName];
   if (!profile) return config;
-  return {
-    ...config,
-    profiles: {
-      ...config.profiles,
-      [profileName]: { ...profile, contextWindow: window, contextWindowProbed: true },
-    },
-  };
+  const next: Profile = { ...profile };
+  if (limits.window && profile.contextWindow == null) {
+    next.contextWindow = limits.window;
+    next.contextWindowProbed = true;
+  }
+  if (limits.maxOutput && profile.maxOutputTokens == null) next.maxOutputTokens = limits.maxOutput;
+  return { ...config, profiles: { ...config.profiles, [profileName]: next } };
 }
 
 // A new profile built on `from` (an ad-hoc /model target) takes its connection settings but not
-// a probed window: that number was measured for `from`'s model, and the new one gets its own probe.
+// probed limits: those were measured for `from`'s model, and the new one gets its own probe.
 export function inheritProfile(from: Profile, model: string): Profile {
-  const { contextWindowProbed: _probed, ...rest } = from;
+  const { contextWindowProbed: _probed, maxOutputTokens: _maxOutput, ...rest } = from;
   return {
     ...rest,
     model,
@@ -310,6 +315,7 @@ export function resolveProfile(config: Config, profileName: string): Config {
     apiKey: profile.apiKey,
     maxTokens: profile.maxTokens,
     contextWindow: profile.contextWindow,
+    maxOutputTokens: profile.maxOutputTokens,
     minGenTokens: profile.minGenTokens ?? config.minGenTokens,
   };
 }

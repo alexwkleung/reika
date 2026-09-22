@@ -332,7 +332,15 @@ claim 131k on a `-c 24576` server and then nothing compacts). Probed once at sta
 `/model` switch to a profile without one, recorded on that profile only (`contextWindowProbed`)
 so an ad-hoc profile inheriting from it re-probes rather than carrying another model's number;
 a server that reports nothing leaves the window unset — the gauge shows absolute tokens and
-nothing is capped. A probe that never **reached** a server (llama-server still loading when
+nothing is capped. **Hosted endpoints fall back to the models.dev catalog**
+(`provider/modellimits.ts`): OpenCode Go and most routers list bare ids, so when the listing has
+no window the catalog supplies one, matched by the provider's `api` base URL and never by model id
+alone (a local `qwen3.8-27b` shares its id with hosted entries claiming 262k). It also supplies the
+model's **output cap**, which bounds the generation backstop — asked even when the window is
+configured, since that is the case it exists for: a 300k window left ~295k of `max_tokens`, which a
+131k-output model rejects as too large. Loopback and private hosts are never looked up. The
+compact index is cached at `~/.config/reika/model-limits.json` (24h, stale served while it
+refreshes, so only a first-ever run waits on the ~5MB download). A probe that never **reached** a server (llama-server still loading when
 reika started) is asked again at the next submit, awaited so the window governs that turn; one
 the server answered without a window is not, since asking again changes nothing
 (`ContextWindowProbe.reached`, `windowRetryRef` in `App.tsx`). Each layer has a non-obvious invariant — don't "simplify" them without
@@ -460,7 +468,7 @@ reading why:
   untouched.
 - **Generation backstop** (`budget.ts`): each turn the loop computes `max_tokens =
 window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whichever is smaller)
-  and passes it to `callModel`. It caps a spiraling small/quantized model so it can't run to
+  and passes it to `callModel`, never above the model's catalog output cap. It caps a spiraling small/quantized model so it can't run to
   the context end. The cap is a _ceiling_; `minGenTokens` is the _floor_, enforced upstream
   by compaction keeping the prompt under `window − minGen` — so on a normal turn the ceiling
   already lands ≥ the floor and the cap never fires. One number, `REIKA_MIN_GEN_TOKENS`

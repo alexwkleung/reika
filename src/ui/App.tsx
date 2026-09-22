@@ -29,9 +29,13 @@ import {
   loadConfig,
   resolveDefaultMode,
   resolveProfile,
-  withProbedWindow,
+  withProbedLimits,
 } from '../config.js';
-import { probeContextWindow } from '../provider/contextwindow.js';
+import {
+  needsLimitsProbe,
+  probeModelLimits,
+  type ModelLimitsProbe,
+} from '../provider/modellimits.js';
 import {
   loadLastState,
   persistableMode,
@@ -132,8 +136,21 @@ function promptPlaceholder(): string {
 // A window the harness took off the endpoint changes what the session does (compaction, the
 // payload cap), so the user is told where the number came from — a gauge denominator alone
 // reads as configured.
-function probedWindowNotice(window: number): string {
-  return `Context window of ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
+// One line for whatever the probe found; undefined when it found nothing worth saying.
+function probedLimitsNotice(probe: ModelLimitsProbe): string | undefined {
+  const parts: string[] = [];
+  if (probe.window) {
+    const from = probe.windowSource === 'catalog' ? 'the models.dev catalog' : 'the endpoint';
+    parts.push(
+      `Context window of ${kFormat(probe.window)} tokens, from ${from} (REIKA_CONTEXT_WINDOW overrides).`,
+    );
+  }
+  if (probe.maxOutput) {
+    parts.push(
+      `Output capped at ${kFormat(probe.maxOutput)} tokens per reply, from the models.dev catalog.`,
+    );
+  }
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 export function App() {
@@ -423,8 +440,8 @@ export function App() {
         // milliseconds, and it must land before the budget report below reads the window.
         const [b, probed] = await Promise.all([
           bootstrap(process.cwd(), cfg.repoMapBudget),
-          cfg.profiles[profile].contextWindow == null
-            ? probeContextWindow(cfg.profiles[profile])
+          needsLimitsProbe(cfg.profiles[profile])
+            ? probeModelLimits(cfg.profiles[profile])
             : Promise.resolve(undefined),
           cfg.anon
             ? detectIdentity(process.cwd())
@@ -432,7 +449,7 @@ export function App() {
                 .catch(() => {})
             : Promise.resolve(),
         ]);
-        if (probed?.window) cfg = withProbedWindow(cfg, profile, probed.window);
+        if (probed) cfg = withProbedLimits(cfg, profile, probed);
         if (probed && !probed.reached) windowRetryRef.current.add(profile);
         setConfig(cfg);
         setActiveProfile(profile);
@@ -475,9 +492,9 @@ export function App() {
         // the model re-reading the same file (#262). Report the numbers to the log always, and
         // say so in the scrollback when they fall under the floor.
         debugLog(formatBudget(b, runtime));
-        if (probed?.window) {
-          const w = probed.window;
-          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+        const limitsNotice = probed && probedLimitsNotice(probed);
+        if (limitsNotice) {
+          setMessages(prev => [...prev, { role: 'system', content: limitsNotice }]);
         }
         const warn = budgetWarning(b, runtime);
         if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
@@ -581,12 +598,13 @@ export function App() {
     // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
     // is instant, and a turn submitted before the answer lands runs without a window, as it
     // would have anyway.
-    if (next.contextWindow == null) {
-      void probeContextWindow(next).then(({ window: w, reached }) => {
-        if (!reached) windowRetryRef.current.add(target);
-        if (!w) return;
-        setConfig(prev => (prev ? withProbedWindow(prev, target, w) : prev));
-        setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+    if (needsLimitsProbe(next)) {
+      void probeModelLimits(next).then(probe => {
+        if (!probe.reached) windowRetryRef.current.add(target);
+        const notice = probedLimitsNotice(probe);
+        if (!notice) return;
+        setConfig(prev => (prev ? withProbedLimits(prev, target, probe) : prev));
+        setMessages(prev => [...prev, { role: 'system', content: notice }]);
       });
     }
     setMessages(prev => [
@@ -1808,12 +1826,13 @@ export function App() {
     let turnConfig = config;
     const profile = config.profiles[activeProfile];
     if (windowRetryRef.current.has(activeProfile) && profile?.contextWindow == null) {
-      const { window: w, reached } = await probeContextWindow(profile);
-      if (reached) windowRetryRef.current.delete(activeProfile);
-      if (w) {
-        turnConfig = withProbedWindow(config, activeProfile, w);
+      const probe = await probeModelLimits(profile);
+      if (probe.reached) windowRetryRef.current.delete(activeProfile);
+      const notice = probedLimitsNotice(probe);
+      if (notice) {
+        turnConfig = withProbedLimits(config, activeProfile, probe);
         setConfig(turnConfig);
-        pendingNoticesRef.current.push({ role: 'system', content: probedWindowNotice(w) });
+        pendingNoticesRef.current.push({ role: 'system', content: notice });
       }
     }
     resetTypecheck();

@@ -355,6 +355,10 @@ export type Profile = {
   // The window above came from the endpoint's model listing (#417), not the env. It belongs to
   // this profile's model: a profile inheriting from this one must not carry it over.
   contextWindowProbed?: boolean;
+  // The model's output cap, from the models.dev catalog (provider/modellimits.ts). Bounds the
+  // max_tokens backstop, which otherwise asks a hosted model for more than it can emit. Belongs to
+  // this profile's model, like a probed window.
+  maxOutputTokens?: number;
   // Generation room reserved from the window, in tokens. Drives the per-turn max_tokens
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
@@ -430,6 +434,8 @@ export type Config = {
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;
+  // The active profile's maxOutputTokens, overlaid by resolveProfile.
+  maxOutputTokens?: number;
   // Generation room reserved from the window, in tokens (REIKA_MIN_GEN_TOKENS). Drives
   // the per-turn max_tokens backstop, the fit-to-window payload reserve, and the
   // compaction trigger — one number, three call sites. See provider/budget.ts.
