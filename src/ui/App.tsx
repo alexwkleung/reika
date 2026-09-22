@@ -176,6 +176,7 @@ export function App() {
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
+  const [streamingToolName, setStreamingToolName] = useState<string>('');
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -397,6 +398,7 @@ export function App() {
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
+  const toolNameRef = useRef<string>('');
   const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reasoningFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
   const toolFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -422,6 +424,7 @@ export function App() {
     toolFlushTimerRef.current = setTimeout(() => {
       toolFlushTimerRef.current = null;
       setStreamingTool(toolRef.current);
+      setStreamingToolName(toolNameRef.current);
     }, 50);
   };
 
@@ -1420,6 +1423,7 @@ export function App() {
         signal: controller.signal,
         onProgress: chunk => {
           toolRef.current += chunk;
+          toolNameRef.current = '';
           scheduleToolFlush();
         },
       });
@@ -1946,8 +1950,9 @@ export function App() {
           reasoningRef.current += delta;
           scheduleReasoningFlush();
         },
-        onToolProgress: chunk => {
+        onToolProgress: (chunk, tool) => {
           toolRef.current += chunk;
+          toolNameRef.current = tool;
           scheduleToolFlush();
         },
         onPhase: p => {
@@ -2110,6 +2115,7 @@ export function App() {
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
             streamingNested={subagentLive || noteLive}
+            streamingCommand={streamingToolName === 'bash'}
             streamingBar={noteLive ? theme.info : undefined}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
