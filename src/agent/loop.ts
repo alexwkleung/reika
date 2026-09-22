@@ -14,6 +14,7 @@ import type {
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
+import { latchesFor } from '../provider/latches.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
 import {
@@ -1365,6 +1366,7 @@ export async function runTurn(opts: {
       reasoningRounds: opts.config.reasoningRounds,
       minGenTokens: opts.config.minGenTokens,
       prefixStable,
+      latches: latchesFor(opts.config),
       trailingNote: roundSuffix,
     });
 
@@ -1855,6 +1857,7 @@ export async function runTurn(opts: {
             window,
             compactCalibration,
             opts.config.minGenTokens,
+            !latchesFor(opts.config).reasoningRoundtrip,
           )
         : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
     ) {
@@ -1994,6 +1997,7 @@ export async function runTurn(opts: {
         () => rawEstimate() * compactCalibration,
         window,
         opts.config.minGenTokens,
+        !latchesFor(opts.config).reasoningRoundtrip,
       );
       agedThisRound = aged.marked > 0;
       if (aged.marked > 0) {

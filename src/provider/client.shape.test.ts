@@ -202,6 +202,44 @@ describe('callModel shape rejections (strict upstreams)', () => {
     expect(lengths(h.bodies[2])).toEqual(lengths(h.bodies[1]));
     expect(reasonings(h.bodies[2])).toEqual(reasonings(h.bodies[1]));
   });
+  describe('per endpoint', () => {
+    const at = (baseURL: string, model = 'test') =>
+      callModel({ system: 'sys', history, tools: [], config: { ...config(), baseURL, model } });
+    const STRICT = 'https://router.example.com/v1';
+    const LOCAL = 'http://localhost:8080/v1';
+
+    it('keeps a latch to the endpoint that refused, and holds it on the way back', async () => {
+      h.scripted.push({ error: REASONING_400 }, { chunks: [textChunk('ok')] });
+      await at(STRICT);
+      h.scripted.push({ error: NAME_400 }, { chunks: [textChunk('ok')] });
+      await at(STRICT);
+      expect(h.bodies).toHaveLength(4);
+
+      // A switch to another server sends the default shape: pruned reasoning, named tool messages.
+      h.scripted.push({ chunks: [textChunk('local')] });
+      await at(LOCAL);
+      expect(h.bodies).toHaveLength(5);
+      expect(reasonings(h.bodies[4])).toEqual([undefined, 'new think']);
+      expect(toolMsgs(h.bodies[4])[0].name).toBe('read');
+
+      // Switching back needs no second 400: the strict endpoint's shape went first time.
+      h.scripted.push({ chunks: [textChunk('back')] });
+      await at(`${STRICT}/`);
+      expect(h.bodies).toHaveLength(6);
+      expect(reasonings(h.bodies[5])).toEqual(['old think', 'new think']);
+      expect(toolMsgs(h.bodies[5])[0]).not.toHaveProperty('name');
+    });
+
+    it('treats another model on the same router as its own endpoint', async () => {
+      h.scripted.push({ error: REASONING_400 }, { chunks: [textChunk('ok')] });
+      await at(STRICT, 'thinking-model');
+      h.scripted.push({ chunks: [textChunk('other')] });
+      await at(STRICT, 'other-model');
+      expect(h.bodies).toHaveLength(3);
+      expect(reasonings(h.bodies[2])).toEqual([undefined, 'new think']);
+    });
+  });
+
   describe('against payloads a previous request froze (prefix-stable)', () => {
     // Round 1 is sent (and stamped) by an earlier call; round 2 arrives with the rejected request.
     // Each read sits between the small-payload floor and the protected-read floor, so only the

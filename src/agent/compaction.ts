@@ -6,7 +6,6 @@ import {
   agedContentChars,
   findFreshToolBlockStart,
   lastUserMessageIndex,
-  shapeLatchActive,
   taskSpecIndex,
 } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
@@ -139,9 +138,10 @@ export function foldAfterShed(
   contextWindow: number,
   calibration = 1,
   minGen = DEFAULT_MIN_GEN_TOKENS,
+  shedReasoning = true,
 ): boolean {
   const copy = history.map(m => ({ ...m }));
-  batchAgePayloads(copy, () => estimate(copy), contextWindow, minGen);
+  batchAgePayloads(copy, () => estimate(copy), contextWindow, minGen, shedReasoning);
   const target = compactThreshold(contextWindow, minGen) * AGE_LOW_FRACTION;
   return estimate(copy) > target && wouldFold(copy, contextWindow, calibration, minGen);
 }
@@ -249,6 +249,11 @@ export function batchAgePayloads(
   estimate: () => number, // calibrated request-token estimate; re-read after each mark
   contextWindow: number,
   minGen = DEFAULT_MIN_GEN_TOKENS,
+  // Whether marking reasoning can still move the estimate this sweep is chasing. False once the
+  // endpoint has demanded every reasoning byte back (latches.ts): serialization then keeps
+  // reasoning whatever `reasoningAged` says, so a mark would shed nothing while still costing the
+  // sweep a pass — and `marked` would report a shed that never happened.
+  shedReasoning = true,
 ): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
   const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
@@ -307,11 +312,6 @@ export function batchAgePayloads(
       out.marked++;
     }
   }
-  // Whether marking reasoning can still move the estimate this sweep is chasing. False once the
-  // endpoint has demanded every reasoning byte back (toolcall.ts shape latches): serialization then
-  // keeps reasoning whatever `reasoningAged` says, so a mark would shed nothing while still costing
-  // the sweep a pass — and `marked` would report a shed that never happened.
-  const shedReasoning = !shapeLatchActive('reasoning-roundtrip');
   for (const takeCrumbs of [false, true]) {
     for (let i = 0; i < protect; i++) {
       if (estimate() <= target) {
