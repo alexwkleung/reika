@@ -10,6 +10,8 @@ import {
   wouldFold,
   AGE_LOW_FRACTION,
 } from './compaction.js';
+import { estimateRequestTokens } from '../provider/tokens.js';
+import { latchShapeRejection, resetShapeLatches } from '../provider/toolcall.js';
 
 describe('shouldCompact', () => {
   it('is false without a context window', () => {
@@ -653,15 +655,40 @@ describe('batchAgePayloads', () => {
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
-  it('drops old reasoning in the same sweep as old payloads', () => {
-    const history: Message[] = [
+  // With the roundtrip latch on, serialization keeps reasoning whatever `reasoningAged` says, so
+  // marking it sheds nothing. The estimate below is the production one (estimateRequestTokens →
+  // messagesToChatParams), which is exactly what makes the mark invisible to the sweep.
+  it('leaves reasoning unmarked once the endpoint has demanded it back (shape latch)', () => {
+    const build = (): Message[] => [
       { role: 'user', content: 'go' },
-      ...round('a', 'x'.repeat(400), 'r'.repeat(400)),
-      ...round('b', 'y'.repeat(400)),
-      ...round('c', 'z'.repeat(400)),
+      ...round('a', 'x'.repeat(8000), 'r'.repeat(4000)),
+      ...round('b', 'y'.repeat(8000), 's'.repeat(4000)),
+      ...round('c', 'z'.repeat(8000)),
+      ...round('d', 'w'.repeat(8000)),
     ];
-    batchAgePayloads(history, estimateOf(history), 1000, 0);
-    expect((history[1] as Message & { role: 'assistant' }).reasoningAged).toBe(true);
+    const estOf = (h: Message[]) => () =>
+      estimateRequestTokens('sys', h, [], {
+        contextWindow: 8192,
+        minGenTokens: 1024,
+        prefixStable: true,
+      });
+
+    // Control: unlatched, the sweep does mark reasoning — the assertion below is not vacuous.
+    const control = build();
+    batchAgePayloads(control, estOf(control), 8192, 1024);
+    expect((control[1] as Message & { role: 'assistant' }).reasoningAged).toBe(true);
+
+    latchShapeRejection('reasoning-roundtrip');
+    try {
+      const latched = build();
+      const aged = batchAgePayloads(latched, estOf(latched), 8192, 1024);
+      expect((latched[1] as Message & { role: 'assistant' }).reasoningAged).toBeUndefined();
+      // Every mark it does report is a payload it actually aged, so `marked` still means "shed".
+      expect(aged.marked).toBe(aged.bulk + aged.crumbs);
+      expect(aged.marked).toBeGreaterThan(0);
+    } finally {
+      resetShapeLatches();
+    }
   });
 });
 

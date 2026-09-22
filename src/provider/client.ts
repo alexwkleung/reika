@@ -94,7 +94,10 @@ export async function callModel(opts: {
   }
   // One closure so the shape-rejection retry below can rebuild this request with a just-latched
   // shape applied — both shapes are produced at serialization time, not editable on the body.
-  const serialize = (): ChatMessageParam[] =>
+  // `rerender` is set only by that retry: it drops the frozen payload stamps so the rebuilt
+  // request is re-rendered and re-capped against the reasoning the retry re-adds, instead of
+  // reusing bytes the cap sized for a request that did not carry it (see toolcall.ts).
+  const serialize = (rerender = false): ChatMessageParam[] =>
     messagesToChatParams(opts.system, opts.history, {
       contextWindow: opts.config.contextWindow,
       calibration: opts.calibration,
@@ -103,6 +106,7 @@ export async function callModel(opts: {
       prefixStable: opts.prefixStable,
       // The real call is the one that freezes live-payload bytes (estimates and warms never do).
       stampRenders: opts.stampRenders ?? opts.prefixStable,
+      rerender,
       trailingNote: opts.trailingNote,
       onCapStats: opts.onCapStats,
       onAgedStats: opts.onAgedStats,
@@ -244,8 +248,16 @@ export async function callModel(opts: {
         const shape = shapeRejection(reason);
         if (shape) {
           latchShapeRejection(shape);
-          const rebuilt = serialize();
-          if (JSON.stringify(rebuilt) === JSON.stringify(req.messages)) throw e;
+          const rebuilt = serialize(true);
+          if (JSON.stringify(rebuilt) === JSON.stringify(req.messages)) {
+            // The shape is already applied and the endpoint still refused it — a reasoning byte
+            // that is no longer in history (a fold took it), or a reworded rejection that latched
+            // on its first match. Either way the rebuild cannot change, so surface it.
+            debugLog(
+              `[reika:debug] ${shape} rejected with that shape already latched — nothing left to change (${reason})\n`,
+            );
+            throw e;
+          }
           debugLog(
             `[reika:debug] ${shape} rejected by backend — retrying reshaped request (${reason})\n`,
           );
@@ -271,6 +283,10 @@ export async function callModel(opts: {
           req = plain;
           continue;
         }
+        // Nothing left to degrade. `shapeRejection` only matches the phrasings we know, so a
+        // reworded rejection lands here with no retry — this line is what makes it diagnosable
+        // from a run rather than from a bug report.
+        debugLog(`[reika:debug] unclassified pre-chunk failure, no degrade left (${reason})\n`);
         throw e;
       }
     }

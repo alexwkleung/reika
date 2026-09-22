@@ -148,4 +148,58 @@ describe('callModel shape rejections (strict upstreams)', () => {
     await expect(call()).rejects.toThrow('is not supported');
     expect(h.bodies).toHaveLength(3);
   });
+
+  it('re-renders and re-caps frozen payloads on the retry (prefix-stable)', async () => {
+    // Prefix-stable pruning is driven by the aging sweep's mark, not the round window — so the
+    // pruned byte the endpoint demands back is one the sweep already spent.
+    const big = (): Message[] => {
+      const h: Message[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'c1', name: 'read', args: { path: 'a' } }],
+          reasoning: 'old think '.repeat(500),
+        },
+        { role: 'tool', callId: 'c1', summary: 'read a', payload: 'X'.repeat(20000) },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'c2', name: 'read', args: { path: 'b' } }],
+          reasoning: 'new think',
+        },
+        { role: 'tool', callId: 'c2', summary: 'read b', payload: 'X'.repeat(20000) },
+      ];
+      (h[1] as Message & { reasoningAged?: boolean }).reasoningAged = true;
+      return h;
+    };
+    const bigConfig = { ...config(), contextWindow: 4096 };
+    const run = (hist: Message[]) =>
+      callModel({
+        system: 'sys',
+        history: hist,
+        tools: [],
+        config: bigConfig,
+        prefixStable: true,
+      });
+    const lengths = (body: ChatCompletionRequest): number[] =>
+      body.messages
+        .filter(m => m.role === 'tool')
+        .map(m => (m as { content: string }).content.length);
+
+    h.scripted.push({ error: REASONING_400 }, { chunks: [textChunk('recovered')] });
+    await run(big());
+    expect(reasonings(h.bodies[0])).toEqual([undefined, 'new think']);
+
+    // The retry carries the reasoning back — and re-caps the payloads to make room, instead of
+    // resending the bytes frozen for the smaller request (which the cap counts as a fixed cost).
+    expect(reasonings(h.bodies[1])).toEqual(['old think '.repeat(500), 'new think']);
+    expect(lengths(h.bodies[1])[0]).toBeLessThan(lengths(h.bodies[0])[0]);
+
+    // Byte-for-byte what a session that already knew the shape sends on its first try.
+    h.scripted.push({ chunks: [textChunk('second')] });
+    await run(big());
+    expect(lengths(h.bodies[2])).toEqual(lengths(h.bodies[1]));
+    expect(reasonings(h.bodies[2])).toEqual(reasonings(h.bodies[1]));
+  });
 });

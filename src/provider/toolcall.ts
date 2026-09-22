@@ -291,6 +291,14 @@ export function resetShapeLatches(): void {
   reasoningRoundtripRequired = false;
 }
 
+// Read side of the latches, for machinery whose own decision depends on a shape already spent.
+// compaction.ts's aging sweep is the one caller: it sheds reasoning by marking `reasoningAged`,
+// which this module now ignores while the roundtrip latch is on — so without asking first, the
+// sweep would spend its budget on marks that cannot move the estimate (see batchAgePayloads).
+export function shapeLatchActive(kind: ShapeRejection): boolean {
+  return kind === 'reasoning-roundtrip' ? reasoningRoundtripRequired : toolMessageNameUnsupported;
+}
+
 // The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
 // transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
 export function messagesToChatParams(
@@ -312,6 +320,13 @@ export function messagesToChatParams(
     // estimates must not stamp, or WHEN a payload freezes would depend on estimate timing (which
     // varies with debug logging) instead of deterministically on the request that first sent it.
     stampRenders?: boolean;
+    // Ignore the frozen `m.rendered` stamps for this pass, so live payloads are re-rendered — and
+    // therefore re-capped — instead of reusing bytes capped against a different request. Set only
+    // by client.ts's shape-rejection retry: the first serialize stamped under a cap that did not
+    // yet count the reasoning the retry restores, and a frozen payload is a *fixed* cost to the
+    // cap, so without this the retry would carry the payloads AND the reasoning it just re-added —
+    // over the budget the cap exists to enforce, on the one request that must not 400 again.
+    rerender?: boolean;
     // Transient per-round harness note (loop ledgers / nudges) appended as the FINAL user message
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
@@ -461,7 +476,9 @@ export function messagesToChatParams(
             break;
           }
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
-          const rendered = msg.rendered ?? body();
+          // `rerender` (the shape-rejection retry) drops the stamp instead: those bytes were capped
+          // against a request that did not yet carry the reasoning the retry restores.
+          const rendered = opts?.rerender ? body() : (msg.rendered ?? body());
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
           break;
@@ -665,6 +682,7 @@ function freshPayloadCharCap(
     calibration?: number;
     minGenTokens?: number;
     prefixStable?: boolean;
+    rerender?: boolean;
   },
 ): { cap: number | undefined; verbatim: ReadonlySet<number> } {
   const cw = opts?.contextWindow;
@@ -711,7 +729,10 @@ function freshPayloadCharCap(
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
-      if (m.rendered !== undefined) {
+      // `rerender` (the shape-rejection retry) ignores the stamps, so a frozen payload rejoins the
+      // fresh split and can be traded against the reasoning the retry re-adds — a fixed cost is
+      // exactly what the retry must not have, since the cap's whole job is to make that request fit.
+      if (m.rendered !== undefined && !opts?.rerender) {
         // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
         // that have never been sent split what's left. They are also *measured* whatever their
         // index: `rendered` is stamped only on the call path that actually sent them (stampRenders).
