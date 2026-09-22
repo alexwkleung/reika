@@ -6,6 +6,7 @@ import {
   agedContentChars,
   findFreshToolBlockStart,
   lastUserMessageIndex,
+  shapeLatchActive,
   taskSpecIndex,
 } from '../provider/toolcall.js';
 import { parsePlanSteps } from './plantrack.js';
@@ -306,6 +307,11 @@ export function batchAgePayloads(
       out.marked++;
     }
   }
+  // Whether marking reasoning can still move the estimate this sweep is chasing. False once the
+  // endpoint has demanded every reasoning byte back (toolcall.ts shape latches): serialization then
+  // keeps reasoning whatever `reasoningAged` says, so a mark would shed nothing while still costing
+  // the sweep a pass — and `marked` would report a shed that never happened.
+  const shedReasoning = !shapeLatchActive('reasoning-roundtrip');
   for (const takeCrumbs of [false, true]) {
     for (let i = 0; i < protect; i++) {
       if (estimate() <= target) {
@@ -315,6 +321,7 @@ export function batchAgePayloads(
       if (i === specIdx) continue;
       const m = history[i];
       if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
+        if (!shedReasoning) continue;
         m.reasoningAged = true;
         out.marked++;
       } else if (m.role === 'tool' && m.payload && !m.aged) {
