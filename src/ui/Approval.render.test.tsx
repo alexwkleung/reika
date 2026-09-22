@@ -83,4 +83,22 @@ describe('Approval dialog width', () => {
       expect(row.trim().endsWith('│')).toBe(true);
     }
   });
+
+  // string-width alone can't catch #450: it is the measurer that disagreed with the terminal.
+  // Counting code points (VS15 aside) is the terminal's view for anything it draws one-wide.
+  it('keeps the right border in one column on the title row (#450)', () => {
+    const rows = frame({
+      tool: 'bash',
+      subject: '~/repo',
+      preview: 'npx prettier --write src/tools/bash.test.ts',
+      warnings: ['Remote package execution (npx/bunx/uvx)'],
+    });
+    const drawn = (row: string): number => [...row.replace(/︎/g, '')].length;
+    const bordered = rows.filter(r => r.trim().startsWith('│'));
+    expect(bordered.some(r => r.includes('Bash'))).toBe(true);
+    for (const row of bordered) {
+      expect(drawn(row)).toBe(stringWidth(row));
+      expect(drawn(row)).toBe(drawn(bordered[0]));
+    }
+  });
 });
