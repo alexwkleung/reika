@@ -20,6 +20,7 @@ export function Scrollback({
   streamingBar,
   streamingCommand = false,
   chromeRows = 0,
+  showHeldWorked = true,
 }: {
   messages: Message[];
   streaming: string;
@@ -43,6 +44,9 @@ export function Scrollback({
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
   chromeRows?: number;
+  // Off while the spinner is up: the held "Worked for" line takes the spinner's rows, so the two
+  // must swap in one frame for its height to stay put.
+  showHeldWorked?: boolean;
 }) {
   // The live (non-Static) region must never grow taller than the viewport: Ink can't
   // erase a frame taller than the screen, which is what produces the "duplicated
@@ -80,12 +84,13 @@ export function Scrollback({
     </>
   );
 
-  const scrollback = useScrollbackLog(messages);
+  const { log: scrollback, held } = useScrollbackLog(messages);
   return (
     <>
       <Static items={scrollback}>
-        {(msg, i) => <MessageView key={i} msg={msg} prev={scrollback[i - 1]} />}
+        {(item, i) => <LogItemView key={i} item={item} prev={scrollback[i - 1]} />}
       </Static>
+      {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
       {indent ? (
         // Same box MessageView gives a nested committed row: the margin plus an explicit width
         // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
@@ -114,15 +119,33 @@ export function Scrollback({
 // it appears, in the order it appeared. Restored messages were printed back when they were live;
 // only the trailing echo + banner are new. Nothing in `messages` is ever edited in place after it
 // commits (the live stream is separate state), so identity is the right key.
-function useScrollbackLog(messages: Message[]): Message[] {
+//
+// A top-level turn's "Worked for" line is held out of the log until the next user message (a
+// prompt or a command echo) and drawn live at idle instead, in the spinner's rows: committed with
+// its message it lands while the spinner is still up, and the spinner leaving afterwards shrinks
+// the frame and moves the input up. End-of-turn notices therefore print above it.
+type LogItem = Message | { workedMs: number };
+
+function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number | null } {
   const seen = useRef(new WeakSet<Message>());
-  const log = useRef<Message[]>([]);
+  const log = useRef<LogItem[]>([]);
+  const held = useRef<number | null>(null);
   return useMemo(() => {
     const fresh = messages.filter(m => !seen.current.has(m));
-    if (fresh.length === 0) return log.current;
-    for (const m of fresh) seen.current.add(m);
-    log.current = [...log.current, ...fresh];
-    return log.current;
+    if (fresh.length === 0) return { log: log.current, held: held.current };
+    const next = [...log.current];
+    for (const m of fresh) {
+      seen.current.add(m);
+      const endsTurn = m.role === 'assistant' && m.durationMs !== undefined && !m.nested;
+      if (held.current !== null && (m.role === 'user' || endsTurn)) {
+        next.push({ workedMs: held.current });
+        held.current = null;
+      }
+      next.push(m);
+      if (endsTurn) held.current = m.durationMs!;
+    }
+    log.current = next;
+    return { log: next, held: held.current };
   }, [messages]);
 }
 
@@ -278,6 +301,24 @@ const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
+function WorkedRow({ durationMs }: { durationMs: number }) {
+  return (
+    <Box marginTop={1}>
+      {/* Filled square doubles as a "turn complete" marker (the universal
+          stop/done glyph) and an anchor of color on an otherwise inert line. */}
+      <Text>
+        <Text color={theme.accent}>{'■ '}</Text>
+        <Text color={theme.muted}>{`Worked for ${formatDurationMs(durationMs)}`}</Text>
+      </Text>
+    </Box>
+  );
+}
+
+function LogItemView({ item, prev }: { item: LogItem; prev?: LogItem }) {
+  if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
+  return <MessageView msg={item} prev={prev && 'workedMs' in prev ? undefined : prev} />;
+}
+
 function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   const nested = 'nested' in msg && !!msg.nested;
   const indent = nested ? NESTED_INDENT : 0;
@@ -385,15 +426,10 @@ function renderMessage(
             <Text color={theme.tool}>{scrubDisplay(`Sources: ${msg.sources.join(', ')}`)}</Text>
           </Box>
         ) : null}
-        {msg.durationMs !== undefined ? (
-          <Box marginTop={1}>
-            {/* Filled square doubles as a "turn complete" marker (the universal
-                stop/done glyph) and an anchor of color on an otherwise inert line. */}
-            <Text>
-              <Text color={theme.accent}>{'■ '}</Text>
-              <Text color={theme.muted}>{`Worked for ${formatDurationMs(msg.durationMs)}`}</Text>
-            </Text>
-          </Box>
+        {/* A top-level turn's line is its own log entry (useScrollbackLog); only a subagent's
+            stays inline, since it closes a nested block mid-turn. */}
+        {msg.durationMs !== undefined && ctx.nested ? (
+          <WorkedRow durationMs={msg.durationMs} />
         ) : null}
       </Box>
     );

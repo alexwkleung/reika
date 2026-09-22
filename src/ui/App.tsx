@@ -2117,6 +2117,7 @@ export function App() {
             streamingNested={subagentLive || noteLive}
             streamingCommand={streamingToolName === 'bash'}
             streamingBar={noteLive ? theme.info : undefined}
+            showHeldWorked={status !== 'busy'}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
             }

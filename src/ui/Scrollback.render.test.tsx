@@ -1125,3 +1125,59 @@ describe('Scrollback append-only log', () => {
     expect(last).toEqual(['❯ first', '❯ second']);
   });
 });
+
+// A top-level turn's "Worked for" line committed with its message while the spinner was still up,
+// so the spinner leaving shrank the frame and moved the input up at the end of every turn. It is
+// held and drawn live in the spinner's rows until the next user message commits it.
+describe('Scrollback held "Worked for" line', () => {
+  const answer: Message = { role: 'assistant', content: 'The answer.', durationMs: 5_000 };
+  const notice: Message = { role: 'system', content: 'Typecheck passed.' };
+  const next: Message = { role: 'user', content: 'thanks' };
+  const sb = (messages: Message[], showHeldWorked: boolean) => (
+    <Scrollback
+      messages={messages}
+      streaming=""
+      streamingReasoning=""
+      streamingTool=""
+      showHeldWorked={showHeldWorked}
+    />
+  );
+  const rows = (frame: string | undefined): string[] =>
+    stripAnsi(frame ?? '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+
+  it('stays out of the frame while the spinner holds its rows', () => {
+    const { lastFrame } = render(sb([answer], false));
+    expect(rows(lastFrame())).toEqual(['The answer.']);
+  });
+
+  it('draws below end-of-turn notices once idle', () => {
+    const { lastFrame } = render(sb([answer, notice], true));
+    expect(rows(lastFrame())).toEqual(['The answer.', '❯ Typecheck passed.', '■ Worked for 5s']);
+  });
+
+  it('commits once, above the next user message', () => {
+    const { rerender, lastFrame } = render(sb([answer, notice], true));
+    rerender(sb([answer, notice, next], false));
+    expect(rows(lastFrame())).toEqual([
+      'The answer.',
+      '❯ Typecheck passed.',
+      '■ Worked for 5s',
+      '▎ thanks',
+    ]);
+  });
+
+  it('commits the previous line when another turn ends without a user message between', () => {
+    const second: Message = { role: 'assistant', content: 'Second.', durationMs: 2_000 };
+    const { rerender, lastFrame } = render(sb([answer], true));
+    rerender(sb([answer, second], true));
+    expect(rows(lastFrame())).toEqual([
+      'The answer.',
+      '■ Worked for 5s',
+      'Second.',
+      '■ Worked for 2s',
+    ]);
+  });
+});
