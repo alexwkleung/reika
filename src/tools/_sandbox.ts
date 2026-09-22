@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
@@ -56,6 +56,15 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // typecheck`). That is a very common shape, and losing to it makes the sandbox unusable.
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
+    // Temp is writable: `mktemp -d`, `cd /tmp && …` and `tempfile` are how a model scratches, and
+    // denying them did worse than fail — python's `tempfile.mkdtemp()` fell through TMPDIR and /tmp
+    // to its last resort, the cwd, and silently wrote `tmpXXXX` into the project (measured). The
+    // bounded-damage argument holds: temp is disposable by definition, and `rm -rf` there is what
+    // the model does today. The kernel sees real paths, so these are the `/private/…` forms, and
+    // the per-user `$TMPDIR` (`/private/var/folders/…/T`) rides as a param since it is per machine.
+    '(allow file-write* (subpath "/private/tmp"))',
+    '(allow file-write* (subpath "/private/var/tmp"))',
+    '(allow file-write* (subpath (param "TMPDIR")))',
     '(allow file-write* (subpath "/dev"))',
   ];
   if (!opts.network) {
@@ -202,7 +211,18 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   } catch {
     return { reason: `cwd does not resolve (${cwd})` };
   }
-  return { args: ['-p', sandboxProfile(opts), '-D', `WORKDIR=${resolved}`] };
+  // Same realpath rule for the temp dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink hop away
+  // from the `/private/var/…` the kernel matches. Falls back to `/private/tmp`, which the profile
+  // already allows, so an unresolvable TMPDIR costs nothing rather than an unbound param (exit 65).
+  let tmp = '/private/tmp';
+  try {
+    tmp = realpathSync.native(tmpdir());
+  } catch {
+    // keep the fallback
+  }
+  return {
+    args: ['-p', sandboxProfile(opts), '-D', `WORKDIR=${resolved}`, '-D', `TMPDIR=${tmp}`],
+  };
 }
 
 /** The `spawn` argv for a sandboxed command. `-D` params, never interpolated — a cwd containing `"`
@@ -235,8 +255,8 @@ export function broadWorkdirNotice(cwd: string, home = homedir()): string {
  *  repeating the command the chip already shows doubled the scrollback. Not sent to the model. */
 export function sandboxNotice(cwd: string, home = homedir()): string {
   return (
-    `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')}, network denied ` +
-    'except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
+    `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')} and temp dirs, ` +
+    'network denied except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
   );
 }
 
@@ -317,5 +337,5 @@ export function sandboxFooter(
     );
   }
   if (lines.length === 0) return '';
-  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory.)`;
+  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory and temp dirs.)`;
 }

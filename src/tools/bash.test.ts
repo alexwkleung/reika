@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   bashTool,
@@ -471,10 +471,39 @@ describe('bashTool — sandbox composition', () => {
         expect(await readFile(join(dir, 'sub', 'f.txt'), 'utf8')).toBe('x\n');
         const second = await bashTool.run({ command: 'echo y > sub/g.txt' }, { cwd: dir });
         expect(second.notice?.content ?? '').not.toContain('sandboxed');
-        const outside = join(tmpdir(), 'reika-bash-test-should-not-exist.txt');
+        // Temp is writable now, so "outside" has to be somewhere else — home.
+        const outside = join(homedir(), 'reika-bash-test-should-not-exist.txt');
         const third = await bashTool.run({ command: `echo x > ${outside}` }, { cwd: dir });
         expect(third.payload).toContain('Operation not permitted');
         await expect(readFile(outside, 'utf8')).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The scratchpad workflow — `mktemp -d`, write, `rm -rf` — is the commonest thing a model does
+  // outside cwd, and denying temp made python's mkdtemp fall through to cwd and write scratch into
+  // the project. Real paths matter here: `/tmp` → `/private/tmp`, `$TMPDIR` → `/private/var/…`.
+  it.skipIf(process.platform !== 'darwin')(
+    'lets a sandboxed command scratch in temp dirs, still not elsewhere in $HOME',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const r = await bashTool.run(
+          {
+            command:
+              'd=$(mktemp -d) && echo hi > "$d/f" && cat "$d/f" && rm -rf "$d" && ' +
+              'echo x > /tmp/reika-sandbox-test-$$ && rm /tmp/reika-sandbox-test-$$ && echo tmp-ok',
+          },
+          { cwd: dir },
+        );
+        expect(r.exitCode).toBe(0);
+        expect(r.payload).toContain('tmp-ok');
+        const home = join(homedir(), 'reika-sandbox-test-should-not-exist');
+        const denied = await bashTool.run({ command: `echo x > ${home}` }, { cwd: dir });
+        expect(denied.payload).toContain('Operation not permitted');
+        await expect(readFile(home, 'utf8')).rejects.toThrow();
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

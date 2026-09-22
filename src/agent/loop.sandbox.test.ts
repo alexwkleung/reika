@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
@@ -81,7 +81,8 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
   it.skipIf(process.platform !== 'darwin')(
     'confines an auto-approved command to cwd in bypass, and says it did',
     async () => {
-      const outside = join(tmpdir(), 'reika-should-not-exist.txt');
+      // Temp dirs are writable by design (a model's scratchpad), so the outside target is home.
+      const outside = join(homedir(), 'reika-should-not-exist.txt');
       const messages = await run(cwd, true, `echo x > ${outside}; echo wrote`);
       const tool = toolMsg(messages);
       expect(tool?.payload).toContain('Operation not permitted');

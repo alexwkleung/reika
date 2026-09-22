@@ -16,13 +16,20 @@ import {
 describe('sandboxProfile', () => {
   const profile = sandboxProfile({ network: false });
 
-  it('denies writes wholesale, then re-allows only the workdir and /dev', () => {
+  it('denies writes wholesale, then re-allows only the workdir, temp and /dev', () => {
     const lines = profile.split('\n');
     expect(lines[0]).toBe('(version 1)');
     expect(lines[1]).toBe('(allow default)');
     expect(lines[2]).toBe('(deny file-write*)');
     expect(lines[3]).toBe('(allow file-write* (subpath (param "WORKDIR")))');
-    expect(lines[4]).toBe('(allow file-write* (subpath "/dev"))');
+    // Temp by its REAL paths: `/tmp` is a symlink to `/private/tmp` and the kernel matches the
+    // target, so `(subpath "/tmp")` would allow nothing. Denying temp made python's mkdtemp fall
+    // through to cwd and write scratch into the project.
+    expect(lines[4]).toBe('(allow file-write* (subpath "/private/tmp"))');
+    expect(lines[5]).toBe('(allow file-write* (subpath "/private/var/tmp"))');
+    expect(lines[6]).toBe('(allow file-write* (subpath (param "TMPDIR")))');
+    expect(lines[7]).toBe('(allow file-write* (subpath "/dev"))');
+    expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(5);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode
@@ -37,7 +44,8 @@ describe('sandboxProfile', () => {
   it('allows the workdir by param, never by interpolation', () => {
     // A cwd containing `"` or `)` would escape `(subpath "…")`. There must be no literal path.
     expect(profile).toContain('(param "WORKDIR")');
-    expect(profile).not.toMatch(/subpath "\/(?!dev)/);
+    expect(profile).toContain('(param "TMPDIR")');
+    expect(profile).not.toMatch(/subpath "\/(?!dev|private\/(?:tmp|var\/tmp)")/);
   });
 
   // Both directions and every port: `(remote ip)` alone refused `network-bind`, so a test suite
@@ -57,7 +65,7 @@ describe('sandboxProfile', () => {
   it('drops the network rules entirely for a network-allowed command, keeping the write rules', () => {
     const net = sandboxProfile({ network: true });
     expect(net).not.toContain('network');
-    expect(net.split('\n').slice(0, 5)).toEqual(profile.split('\n').slice(0, 5));
+    expect(net.split('\n').slice(0, 8)).toEqual(profile.split('\n').slice(0, 8));
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,
