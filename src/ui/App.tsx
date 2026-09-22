@@ -158,6 +158,9 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
   const [phase, setPhase] = useState<Phase>('thinking');
+  // Until a spinner has shown there is no slot to hold, and holding one would open the session
+  // with a gap under the splash.
+  const [spinnerShown, setSpinnerShown] = useState(false);
   // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
   // verification is visible in the dispatch gap. Human-only — never part of model context.
   const [typechecking, setTypechecking] = useState<boolean>(false);
@@ -304,6 +307,9 @@ export function App() {
   // Same idea for submit-time expansion, which blocks on the network when the prompt carries a
   // pasted link. Separate from `pasting` so a ctrl-v mid-submit can't clobber either label.
   const [expanding, setExpanding] = useState<string | null>(null);
+  useEffect(() => {
+    if (status === 'busy' || pasting || expanding) setSpinnerShown(true);
+  }, [status, pasting, expanding]);
   // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
@@ -2159,7 +2165,7 @@ export function App() {
             // harness action with a visible wait — it should read like the typecheck gate rather
             // than like the app having stalled.
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
-          ) : !pending && !question && !modelSelect && !confirm ? (
+          ) : spinnerShown && !pending && !question && !modelSelect && !confirm ? (
             // Holds the spinner's rows at idle: the frame shrinking would leave the input above
             // the bottom row until new output refilled the gap. Not under a dialog, whose height
             // budget (`reservedRows`) doesn't count it.
