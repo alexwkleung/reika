@@ -59,7 +59,7 @@ const tableOptions: {
 } = { style: { head: ['white', 'bold'], border: ['grey'] } };
 const terminalExtension = markedTerminal(
   {
-    codespan: (code: string) => chalk.hex(theme.inlineCode).bold(code),
+    codespan: (code: string) => chalk.hex(theme.inlineCode)(code),
     heading: (text: string) => chalk.bold(text),
     firstHeading: (text: string) => chalk.bold(text),
     strong: (text: string) => chalk.bold(text),
