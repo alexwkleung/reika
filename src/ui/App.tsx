@@ -6,7 +6,7 @@ import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
-import { Working, WORKING_ROWS } from './Working.js';
+import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
@@ -158,9 +158,6 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
   const [phase, setPhase] = useState<Phase>('thinking');
-  // Until a spinner has shown there is no slot to hold, and holding one would open the session
-  // with a gap under the splash.
-  const [spinnerShown, setSpinnerShown] = useState(false);
   // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
   // verification is visible in the dispatch gap. Human-only — never part of model context.
   const [typechecking, setTypechecking] = useState<boolean>(false);
@@ -307,9 +304,6 @@ export function App() {
   // Same idea for submit-time expansion, which blocks on the network when the prompt carries a
   // pasted link. Separate from `pasting` so a ctrl-v mid-submit can't clobber either label.
   const [expanding, setExpanding] = useState<string | null>(null);
-  useEffect(() => {
-    if (status === 'busy' || pasting || expanding) setSpinnerShown(true);
-  }, [status, pasting, expanding]);
   // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
@@ -2123,6 +2117,7 @@ export function App() {
             streamingNested={subagentLive || noteLive}
             streamingCommand={streamingToolName === 'bash'}
             streamingBar={noteLive ? theme.info : undefined}
+            showHeldWorked={status !== 'busy'}
             chromeRows={
               planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
             }
@@ -2165,11 +2160,6 @@ export function App() {
             // harness action with a visible wait — it should read like the typecheck gate rather
             // than like the app having stalled.
             <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
-          ) : spinnerShown && !pending && !question && !modelSelect && !confirm ? (
-            // Holds the spinner's rows at idle: the frame shrinking would move the input up at the
-            // end of every turn, off the bottom row once the screen is full. Not under a dialog,
-            // whose height budget (`reservedRows`) doesn't count it.
-            <Box height={WORKING_ROWS} />
           ) : null}
           <QueuedList queue={queue} />
           {pending ? (
