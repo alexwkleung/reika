@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import ignore from 'ignore';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
+import { subagentTool } from '../tools/subagent.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
 
 // The debug line quotes the round's sample, so this test needs the log turned on before loop.ts
@@ -95,8 +96,8 @@ describe('decode rate reporting (integration)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function run(priorDecodeRate?: number): Promise<number[]> {
-    const seen: number[] = [];
+  async function run(priorDecodeRate?: number): Promise<(number | undefined)[]> {
+    const seen: (number | undefined)[] = [];
     const history: Message[] = [];
     await runTurn({
       userInput: 'go',
@@ -179,5 +180,58 @@ describe('decode rate reporting (integration)', () => {
     const log = await readFile(join(dir, 'debug.log'), 'utf8');
     expect(log).toContain('decode=20t/s smoothed=20t/s');
     expect(log).toContain('decode=? smoothed=20t/s');
+  });
+});
+
+// The chip sits beside the token counts, and a subagent already reports its tokens through the
+// parent's onUsage — so its rate has to follow, or the two chips describe different engines.
+describe('decode rate across a subagent', () => {
+  const spawn: ModelResponse = {
+    ...fullRound,
+    content: '',
+    toolCalls: [{ id: 's1', name: 'subagent', args: { task: 'look around' } }],
+  };
+  // 600 tokens over 10 s of decode: 60 tok/s, distinguishable from the parent's 20.
+  const subReport: ModelResponse = {
+    content: 'report',
+    toolCalls: undefined,
+    usage: { promptTokens: 3000, completionTokens: 600 },
+    timing: { ttftMs: 2_000, totalMs: 12_000 },
+  };
+
+  beforeEach(() => {
+    h.scripted.length = 0;
+  });
+
+  async function run(config: Config): Promise<(number | undefined)[]> {
+    const seen: (number | undefined)[] = [];
+    await runTurn({
+      userInput: 'go',
+      history: [],
+      bundle: makeBundle(),
+      config,
+      tools: [subagentTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+      onDecodeRate: r => seen.push(r),
+    });
+    return seen;
+  }
+
+  it('continues one learner on the same engine and hands the rate back', async () => {
+    h.scripted.push(spawn, subReport, fullRound);
+    const seen = await run(makeConfig());
+    // parent 20 → subagent folds 60 into it (32) → parent adopts 32 and folds its 20 in (28.4).
+    expect(seen).toHaveLength(3);
+    expect(seen[0]).toBe(20);
+    expect(seen[1]).toBeCloseTo(32);
+    expect(seen[2]).toBeCloseTo(28.4);
+  });
+
+  it('blanks for a subagent on another model and restores the parent rate after', async () => {
+    h.scripted.push(spawn, subReport, fullRound);
+    const seen = await run({ ...makeConfig(), subagentModel: 'other' });
+    // The subagent's 60 is never smoothed against the parent's 20, and never carried back into it.
+    expect(seen).toEqual([20, undefined, 60, 20, 20]);
   });
 });

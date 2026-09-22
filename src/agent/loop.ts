@@ -1099,7 +1099,8 @@ export async function runTurn(opts: {
   // across turns for the same reason as the prefill rate, and smoothed for the same reason; decode
   // only, since prefill's number is an estimate and stays in the debug log. See agent/decoderate.ts.
   priorDecodeRate?: number;
-  onDecodeRate?: (rate: number) => void;
+  // undefined blanks the chip: a subagent on another endpoint has no rate of its own yet.
+  onDecodeRate?: (rate: number | undefined) => void;
   // Session-long prefix-divergence trace (#426). The engine's cache still holds the previous turn's
   // last request when a new turn starts, so the comparison is only meaningful across the boundary
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
@@ -2938,7 +2939,7 @@ export async function runTurn(opts: {
             requestApproval: opts.requestApproval,
             requestQuestion,
             onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
-            spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
             sandbox: opts.config.sandbox,
@@ -3309,7 +3310,11 @@ function commitAgentLoopStop(
 
 type RunTurnOpts = Parameters<typeof runTurn>[0];
 
-function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
+function makeSpawnSubagent(
+  parent: RunTurnOpts,
+  budget: SubagentBudget,
+  parentDecodeRate: DecodeRate,
+) {
   return async (sub: { task: string }): Promise<ToolResult> => {
     // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
     // allowed", and the width check is against the calls already honoured in this round.
@@ -3348,6 +3353,13 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
     // user with no context for where it came from. It degrades to "decide it yourself" instead.
     const subTools = parent.tools.filter(t => t.name !== 'subagent' && t.name !== 'ask_user');
     const subHistory: Message[] = [];
+    // The tok/s chip sits beside the token counts, and onUsage already reports the subagent's, so
+    // the rate has to follow it. On the same engine the two learners are one measurement, so the
+    // subagent continues the parent's rate and hands its own back; on another endpoint the chip
+    // blanks until the subagent has a sample, and the parent's rate comes back with the parent.
+    const sameEngine =
+      subConfig.model === parent.config.model && subConfig.baseURL === parent.config.baseURL;
+    if (!sameEngine) parent.onDecodeRate?.(undefined);
 
     parent.onSubagent?.(true);
     try {
@@ -3361,6 +3373,11 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
         signal: parent.signal,
         requestApproval: parent.requestApproval,
         onUsage: parent.onUsage,
+        priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
+        onDecodeRate: rate => {
+          if (sameEngine && rate != null) parentDecodeRate.adopt(rate);
+          parent.onDecodeRate?.(rate);
+        },
         onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
         // Streaming + phase callbacks forward into the parent's live region (#342). They used to be
         // withheld "so the parent's live region stays clean", but the parent is blocked inside this
@@ -3378,6 +3395,7 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
       });
     } finally {
       parent.onSubagent?.(false);
+      if (!sameEngine) parent.onDecodeRate?.(parentDecodeRate.get());
       // The subagent's last phase was its report round ('thinking'); the parent is still
       // dispatching this round's tools.
       parent.onPhase?.('tool');
