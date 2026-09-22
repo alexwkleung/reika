@@ -248,7 +248,7 @@ describe('Scrollback nested (subagent) messages', () => {
     streamingReasoning?: string;
     streamingTool?: string;
     streamingNested?: boolean;
-    streamingShell?: boolean;
+    streamingCommand?: boolean;
   }): string => {
     const prev = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
@@ -261,7 +261,7 @@ describe('Scrollback nested (subagent) messages', () => {
             streamingReasoning={props.streamingReasoning ?? ''}
             streamingTool={props.streamingTool ?? ''}
             streamingNested={props.streamingNested}
-            streamingShell={props.streamingShell}
+            streamingCommand={props.streamingCommand}
           />
         </Box>,
       );
@@ -287,7 +287,12 @@ describe('Scrollback nested (subagent) messages', () => {
 
   it('draws nested live content and tool tails at the nested indent, wrapped inside it', () => {
     const long = 'lorem ipsum dolor sit amet consectetur '.repeat(4).trim();
-    const frame = liveFrame({ streaming: long, streamingTool: long, streamingNested: true });
+    const frame = liveFrame({
+      streaming: long,
+      streamingTool: long,
+      streamingNested: true,
+      streamingCommand: true,
+    });
     const rows = frame.split('\n').filter(l => l.trim());
     expect(rows.length).toBeGreaterThan(2);
     // Content on the nested indent; the command tail one chip margin deeper, where its committed
@@ -360,14 +365,14 @@ describe('Scrollback live command tail indent', () => {
     }
   };
 
-  const liveToolFrame = (streamingTool: string, streamingShell = false): string =>
+  const liveToolFrame = (streamingTool: string, streamingCommand = true): string =>
     inApp(
       <Scrollback
         messages={[]}
         streaming=""
         streamingReasoning=""
         streamingTool={streamingTool}
-        streamingShell={streamingShell}
+        streamingCommand={streamingCommand}
       />,
     );
 
@@ -426,10 +431,20 @@ describe('Scrollback live command tail indent', () => {
   });
 
   it('leaves shell mode’s live tail at the left edge, where its shell message prints it', () => {
-    const rows = liveToolFrame('total 8\ndrwxr-xr-x 1 alex staff', true)
+    const rows = liveToolFrame('total 8\ndrwxr-xr-x 1 octocat staff', false)
       .split('\n')
       .filter(l => l.trim());
     expect(rows.length).toBe(2);
+    for (const row of rows) expect(row).toMatch(/^ \S/);
+  });
+
+  it('leaves a non-command tool’s live line at the left edge, where its notice commits', () => {
+    const rows = liveToolFrame(
+      'The search engine served a bot check. Complete it in the browser window.',
+      false,
+    )
+      .split('\n')
+      .filter(l => l.trim());
     for (const row of rows) expect(row).toMatch(/^ \S/);
   });
 });

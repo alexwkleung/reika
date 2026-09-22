@@ -18,7 +18,7 @@ export function Scrollback({
   streamingTool,
   streamingNested = false,
   streamingBar,
-  streamingShell = false,
+  streamingCommand = false,
   chromeRows = 0,
 }: {
   messages: Message[];
@@ -33,12 +33,12 @@ export function Scrollback({
   // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
   // on screen reads as compaction work. Undefined keeps the normal reasoning color.
   streamingBar?: string;
-  // Shell mode's live tail is the one that does NOT commit under a command chip. Everywhere else the
-  // tail streaming here is `bash`'s output, which commits inside the `$ command` block MessageView
-  // draws at COMMAND_MARGIN (under the `↳ Ran: …` row); a `shell` message draws that same `$ command`
-  // line and then its output flush left. The live tail therefore has to know which of the two it is,
-  // or it sits 4 columns left of where it lands a moment later (#461).
-  streamingShell?: boolean;
+  // The live tail is a model-run `bash` command's output. That one commits inside the `$ command`
+  // block MessageView draws at COMMAND_MARGIN (under the `↳ Ran: …` row), so it has to stream there
+  // too or it sits 4 columns left of where it lands a moment later (#461). Anything else streaming
+  // here stays at the left edge: shell mode's `shell` message prints its output flush left, and
+  // `search`'s bot-check line commits as an ordinary notice, with no chip to sit under.
+  streamingCommand?: boolean;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -73,8 +73,8 @@ export function Scrollback({
           maxLines={budget}
           indent={indent}
           // Relative to the live wrapper above (which already pays `indent`), so the row lands where
-          // the committed one will: inside the command chip's margin, or flush left for shell mode.
-          offset={streamingShell ? 0 : COMMAND_MARGIN}
+          // the committed one will: inside the command chip's margin, or flush left for anything else.
+          offset={streamingCommand ? COMMAND_MARGIN : 0}
         />
       ) : null}
     </>

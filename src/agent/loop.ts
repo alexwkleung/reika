@@ -1105,7 +1105,9 @@ export async function runTurn(opts: {
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
   // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
   prefixTrace?: PrefixTrace;
-  onToolProgress?: (chunk: string) => void;
+  // `tool` names the call the chunk came from: the UI indents only a `bash` tail, since that is the
+  // one that commits under a command chip (#461) — `search`'s bot-check line does not.
+  onToolProgress?: (chunk: string, tool: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
   // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
@@ -2935,7 +2937,7 @@ export async function runTurn(opts: {
             askedQuestions,
             requestApproval: opts.requestApproval,
             requestQuestion,
-            onProgress: opts.onToolProgress,
+            onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
