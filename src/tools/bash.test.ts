@@ -8,6 +8,7 @@ import {
   bashTool,
   decideSandbox,
   execStream,
+  heredocSubstitutionHint,
   readOnlyBashTool,
   sandboxNoticed,
   TailWindow,
@@ -152,6 +153,82 @@ describe('execStream — exit status', () => {
     const result = await execStream('echo hi', { cwd: '/nonexistent-reika-dir' });
     expect(result.summary).toMatch(/^Bash failed: /);
     expect(result.exitCode).toBeUndefined();
+  });
+});
+
+// The macOS /bin/sh parser bug (#446). `/bin/sh` there is bash 3.2.57, whose pre-scan for the
+// closing paren of a `$(…)` tokenizes the interior as ordinary shell text instead of treating a
+// `<<'EOF'` body as opaque — so a single apostrophe in a PR body opens a string that never closes,
+// the *substitution* fails to parse, and the model gets a syntax error from a command it can see is
+// correct. The detector is pinned on the pure function so the same cells run on every platform, and
+// the failure is reproduced for real on darwin, where /bin/sh is that bash.
+describe('heredocSubstitutionHint (#446)', () => {
+  const message =
+    "/bin/sh: -c: line 30: unexpected EOF while looking for matching `''\n" +
+    '/bin/sh: -c: line 35: syntax error: unexpected end of file';
+  const idiom =
+    'gh pr create --title "Fix the ledger" --body "$(cat <<\'EOF\'\n' +
+    'The issue\'s comment asked for "all cases" first, so:\n' +
+    'EOF\n)"';
+
+  it('names the cause and the way out when a body apostrophe breaks the substitution', () => {
+    const hint = heredocSubstitutionHint(idiom, 2, message);
+    expect(hint).toContain('bash 3.2');
+    expect(hint).toContain('--body-file');
+    expect(hint).toContain('git commit -F');
+  });
+
+  it('covers the same pre-scan one edit away, not only the observed spelling', () => {
+    expect(
+      heredocSubstitutionHint('gh pr create --body "$( cat <<EOF\nit\'s\nEOF\n)"', 2, message),
+    ).not.toBe('');
+    expect(
+      heredocSubstitutionHint(
+        'gh issue comment 1 --body "$(cat <<-EOF\nit\'s\nEOF\n)"',
+        2,
+        message,
+      ),
+    ).not.toBe('');
+  });
+
+  it('says nothing on a clean exit, a signal death, or different output', () => {
+    expect(heredocSubstitutionHint(idiom, 0, message)).toBe('');
+    // null is a signal death, not a status this message can arrive with (cf. sandboxFooter).
+    expect(heredocSubstitutionHint(idiom, null, message)).toBe('');
+    expect(heredocSubstitutionHint(idiom, 1, 'gh: not logged in')).toBe('');
+  });
+
+  it('says nothing for an unpaired quote that is not a heredoc inside a $(…)', () => {
+    expect(heredocSubstitutionHint('echo "it\'s', 2, message)).toBe('');
+    // The same body OUTSIDE a substitution is a real heredoc, and parses on every shell.
+    expect(heredocSubstitutionHint("git commit -F - <<'EOF'\nit's\nEOF", 2, message)).toBe('');
+    // A here-string is not a heredoc: the `<` after `<<` is the third one, not a marker.
+    expect(heredocSubstitutionHint('x=$(cat <<< "it\'s")', 2, message)).toBe('');
+  });
+
+  it('reaches the payload of a failing run, on every platform', async () => {
+    // The command text is what the detector reads, and the status and the message are real; the
+    // message is echoed rather than produced because only macOS's bash 3.2 produces it, and the
+    // wiring should be pinned where the rest of the suite also runs.
+    const result = await execStream(
+      'printf \'%s\\n\' "sh: -c: line 3: unexpected EOF while looking for matching" >&2\n' +
+        'exit 2\n' +
+        "# $(cat <<'EOF'",
+      { cwd: process.cwd() },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.payload).toContain('bash 3.2');
+  });
+
+  it.skipIf(process.platform !== 'darwin')('fires on the real parser failure', async () => {
+    // The issue's probe, verbatim. Skipped rather than asserted either way off darwin: dash and
+    // bash 5 parse the same command, print the body and exit 0.
+    const result = await execStream(
+      "printf '%s\\n' \"$(cat <<'EOF'\nThe issue's comment asked for \"all cases\" first.\nEOF\n)\"",
+      { cwd: process.cwd() },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.payload).toContain('bash 3.2');
   });
 });
 
