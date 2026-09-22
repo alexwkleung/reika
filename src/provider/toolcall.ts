@@ -380,7 +380,13 @@ export function messagesToChatParams(
   const systemContent = recapText && hasUserTurn ? `${system}\n\n${recapText}` : system;
   // The newest live read is the model's edit source — candidate for verbatim protection (see
   // PROTECTED_READ_FLOOR_CHARS). Whether protection actually holds is the cap's call below.
-  const protectedIdx = newestLiveReadIndex(history, freshFrom, stubbed, prefixStable);
+  const protectedIdx = newestLiveReadIndex(
+    history,
+    freshFrom,
+    stubbed,
+    prefixStable,
+    !!opts?.rerender,
+  );
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
   const { cap: perPayloadCap, verbatim } = freshPayloadCharCap(
@@ -561,14 +567,17 @@ function newestLiveReadIndex(
   freshFrom: number,
   stubbed: ReadonlySet<number>,
   prefixStable: boolean,
+  rerender: boolean,
 ): number {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     if (m.role !== 'tool' || !m.payload) continue;
     // "Live" mirrors the serialization rules: prefix-stable sends any unaged payload, but an
-    // already-stamped rendering is frozen — protection can only shape a first render.
+    // already-stamped rendering is frozen — protection can only shape a first render. `rerender`
+    // drops the stamps, so every unaged payload is a first render again and the edit source keeps
+    // its protection instead of joining the shared split.
     const live = prefixStable
-      ? !m.aged && m.rendered === undefined
+      ? !m.aged && (rerender || m.rendered === undefined)
       : i >= freshFrom && !stubbed.has(i);
     if (!live) continue;
     if (findToolNameForCall(history, i) === 'read') return i;

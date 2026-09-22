@@ -6,6 +6,7 @@ import {
   latchShapeRejection,
   messagesToChatParams,
   resetShapeLatches,
+  shapeLatchActive,
   shapeRejection,
   toolsToChatTools,
 } from './toolcall.js';
@@ -247,9 +248,15 @@ export async function callModel(opts: {
         // instead of retrying a request that cannot change.
         const shape = shapeRejection(reason);
         if (shape) {
+          // Asked before latching: the byte compare alone cannot see a spent latch once the rebuild
+          // re-renders, since re-capped payloads differ from the request that was just refused.
+          const alreadyLatched = shapeLatchActive(shape);
           latchShapeRejection(shape);
-          const rebuilt = serialize(true);
-          if (JSON.stringify(rebuilt) === JSON.stringify(req.messages)) {
+          // Only the reasoning shape adds bytes the frozen payloads were not capped against; the
+          // name shape only shrinks the request, so re-rendering it would re-cap payloads the model
+          // already saw whole and freeze the cut copies for the rest of the session.
+          const rebuilt = serialize(shape === 'reasoning-roundtrip');
+          if (alreadyLatched || JSON.stringify(rebuilt) === JSON.stringify(req.messages)) {
             // The shape is already applied and the endpoint still refused it — a reasoning byte
             // that is no longer in history (a fold took it), or a reworded rejection that latched
             // on its first match. Either way the rebuild cannot change, so surface it.

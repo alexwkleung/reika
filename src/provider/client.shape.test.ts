@@ -202,4 +202,76 @@ describe('callModel shape rejections (strict upstreams)', () => {
     expect(lengths(h.bodies[2])).toEqual(lengths(h.bodies[1]));
     expect(reasonings(h.bodies[2])).toEqual(reasonings(h.bodies[1]));
   });
+  describe('against payloads a previous request froze (prefix-stable)', () => {
+    // Round 1 is sent (and stamped) by an earlier call; round 2 arrives with the rejected request.
+    // Each read sits between the small-payload floor and the protected-read floor, so only the
+    // newest one is guaranteed verbatim and the older one is cut whenever it rejoins the split.
+    const PAYLOAD = 3500;
+    const round = (n: number, reasoning: string): Message[] => [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: `c${n}`, name: 'read', args: { path: `f${n}` } }],
+        reasoning,
+      },
+      { role: 'tool', callId: `c${n}`, summary: `read f${n}`, payload: String(n).repeat(PAYLOAD) },
+    ];
+    const run = (hist: Message[]) =>
+      callModel({
+        system: 'sys',
+        history: hist,
+        tools: [],
+        config: { ...config(), contextWindow: 4096 },
+        prefixStable: true,
+      });
+    const toolContents = (body: ChatCompletionRequest): string[] =>
+      body.messages.filter(m => m.role === 'tool').map(m => (m as { content: string }).content);
+    // Sends round 1 on its own, stamping it, then returns the two-round history for the next call.
+    const afterFirstRound = async (): Promise<Message[]> => {
+      const hist: Message[] = [{ role: 'user', content: 'go' }, ...round(1, 'r1')];
+      h.scripted.push({ chunks: [textChunk('one')] });
+      await run(hist);
+      hist.push(...round(2, 'r2'));
+      (hist[1] as Message & { reasoningAged?: boolean }).reasoningAged = true;
+      return hist;
+    };
+
+    it('the name retry resends frozen payloads as they were, not re-capped', async () => {
+      const hist = await afterFirstRound();
+      const frozen = toolContents(h.bodies[0])[0];
+      expect(frozen).toBe(`read f1\n\n${'1'.repeat(PAYLOAD)}`);
+
+      h.scripted.push({ error: NAME_400 }, { chunks: [textChunk('recovered')] });
+      await run(hist);
+      expect(h.bodies).toHaveLength(3);
+      expect(toolContents(h.bodies[2])[0]).toBe(frozen);
+      expect(toolContents(h.bodies[2])).toEqual(toolContents(h.bodies[1]));
+    });
+
+    it('the reasoning retry keeps the newest read verbatim while it re-caps the rest', async () => {
+      const hist = await afterFirstRound();
+      h.scripted.push({ error: REASONING_400 }, { chunks: [textChunk('recovered')] });
+      await run(hist);
+      expect(h.bodies).toHaveLength(3);
+      expect(reasonings(h.bodies[2])).toEqual(['r1', 'r2']);
+      const [older, newest] = toolContents(h.bodies[2]);
+      expect(newest).toBe(`read f2\n\n${'2'.repeat(PAYLOAD)}`);
+      expect(older.length).toBeLessThan(PAYLOAD);
+    });
+
+    it('rethrows a reasoning 400 whose latch an earlier call already spent', async () => {
+      const hist: Message[] = [{ role: 'user', content: 'go' }, ...round(1, 'r1')];
+      (hist[1] as Message & { reasoningAged?: boolean }).reasoningAged = true;
+      h.scripted.push({ error: REASONING_400 }, { chunks: [textChunk('one')] });
+      await run(hist);
+      expect(h.bodies).toHaveLength(2);
+      hist.push(...round(2, 'r2'));
+
+      // Re-rendering would re-cap round 1's frozen payload, so the rebuild differs from the refused
+      // request — but it carries no reasoning the refused one lacked, so it cannot be accepted.
+      h.scripted.push({ error: REASONING_400 });
+      await expect(run(hist)).rejects.toThrow('must be passed back');
+      expect(h.bodies).toHaveLength(3);
+    });
+  });
 });
