@@ -7,12 +7,34 @@
 // thousands of characters, and this tool's whole premise is that context is scarce.
 export const MAX_IMAGE_TEXT = 20_000;
 
+// Under a native-vision profile (`VisionRoute`) the bytes are never read: they go to the model as
+// an image part for the turn that attached them, and this note takes the description's place in
+// history. Written to be true *after* the fact — by the time the model reads it again the image is
+// long gone, and the honest thing to say is that it can no longer look.
+export const NATIVE_IMAGE_NOTE =
+  '(not transcribed — you were shown this image directly, once. ' +
+  'Ask for a re-paste if you need to look at it again.)';
+
 export type ImageAttachment = {
   marker: string;
   text: string;
   // What the image came from, surfaced to the model as the block's `source` attribute.
   source: string;
+  // Held only under a native-vision profile: sent to the model by the turn that attaches it, then
+  // dropped with the attachment (the ref is cleared the moment a turn sends), so an image reaches
+  // the model exactly once and is never re-sent.
+  native?: NativeImageBytes;
 };
+
+export type NativeImageBytes = {
+  bytes: Uint8Array;
+  mime: string;
+};
+
+// Those bytes stamped with the marker of the attachment they belong to — the link that ties an
+// image to the single history user message the user pasted it into, so a marker deleted from the
+// input takes its bytes with it. See provider/toolcall.ts for where they land in the request.
+export type NativeImage = NativeImageBytes & { marker: string };
 
 const MARKER_RE = /\[Image (\d+)\]/g;
 

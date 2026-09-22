@@ -1,7 +1,14 @@
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AutoApproveMode, Config, DefaultMode, Profile, SkillAutoMode } from './types.js';
+import type {
+  AutoApproveMode,
+  Config,
+  DefaultMode,
+  Profile,
+  SkillAutoMode,
+  VisionRoute,
+} from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
@@ -45,6 +52,10 @@ export function loadConfig(): Config {
   );
   const visionBaseURL = emptyToUndefined(process.env.REIKA_VISION_BASE_URL);
   if (visionBaseURL) validateBaseURL(visionBaseURL, 'REIKA_VISION_BASE_URL');
+  // The default profile's route. Profiles read it as their own fallback, so a per-profile
+  // REIKA_<NAME>_VISION overrides it and everything else inherits it — the same shape as the
+  // connection settings above.
+  const vision = parseVision(process.env.REIKA_VISION);
   const defaultProfile: Profile = {
     model,
     baseURL,
@@ -52,6 +63,7 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
+    vision,
   };
   return {
     baseURL,
@@ -76,6 +88,7 @@ export function loadConfig(): Config {
     visionModel: emptyToUndefined(process.env.REIKA_VISION_MODEL),
     visionBaseURL,
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
+    vision,
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
@@ -139,6 +152,7 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
       maxTokens: profileMaxTokens ?? defaultProfile.maxTokens,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
       minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
+      vision: parseVision(process.env[`REIKA_${upper}_VISION`]) ?? defaultProfile.vision,
     };
     for (const m of profileModels.slice(1)) {
       const key = m.toLowerCase();
@@ -196,6 +210,23 @@ function parseSkillAuto(raw: string | undefined): SkillAutoMode {
       return 'apply';
     default:
       return 'off';
+  }
+}
+
+// REIKA_VISION (and per-profile REIKA_<NAME>_VISION) picks how a pasted image reaches the model:
+// 'describe' (default) reads it into text first, 'native' hands the bytes to the model itself. An
+// unrecognized value falls back to undefined — meaning "inherit", which lands on 'describe', the
+// route that works for every model. A typo must not silently start sending bytes a text-only model
+// will choke on, so the safe direction here is the same as the unrecognized-skill-auto one.
+function parseVision(raw: string | undefined): VisionRoute | undefined {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case 'describe':
+    case 'ocr':
+      return 'describe';
+    case 'native':
+      return 'native';
+    default:
+      return undefined;
   }
 }
 
@@ -288,5 +319,9 @@ export function resolveProfile(config: Config, profileName: string): Config {
     maxTokens: profile.maxTokens,
     contextWindow: profile.contextWindow,
     minGenTokens: profile.minGenTokens ?? config.minGenTokens,
+    // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route is
+    // dead weight: `...config` above would carry the *default* profile's value straight over it, so
+    // a `/model <vl>` switch would keep describing while claiming to be native.
+    vision: profile.vision ?? config.vision,
   };
 }

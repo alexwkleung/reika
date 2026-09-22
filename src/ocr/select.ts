@@ -18,3 +18,15 @@ export function imageReader(config: Config): OcrProvider {
   }
   return systemOcr(config.ocrLangs);
 }
+
+// Whether a clipboard paste should skip reading altogether and hand the raw bytes to the model as
+// an image part, for a profile whose model can already see (`VisionRoute`). This is a property of
+// the *paste* path, not of the reader: the paste path owns the bytes at the moment the turn is
+// built, which is the only point in the pipeline where image bytes and an outgoing request are
+// both in hand. A `@file.png` mention is expanded into the middle of the prompt by
+// agent/mentions.ts, which yields text and has nowhere to put bytes — so mentions always read,
+// whatever this says. That is a deliberate limit, not an oversight: it keeps the native route to
+// one call site, and one place to reason about when bytes are live.
+export function pasteIsNative(config: Config): boolean {
+  return config.vision === 'native';
+}

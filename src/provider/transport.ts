@@ -14,9 +14,17 @@ import type { ToolParameters } from '../types.js';
 // Unknown response fields pass through harmlessly: we JSON.parse each frame and read only the
 // fields we model, so a provider adding fields never breaks us.
 
+// A multimodal user turn: text plus image parts. Built only for the *last* user message of a
+// request, and only when the active profile sends pasted images natively (see VisionRoute) — the
+// rest of the request stays string-only, which is what keeps the string-shaped machinery (aging,
+// compaction, spill, transcripts) from ever having to reason about a non-string content field.
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export type ChatMessageParam =
   | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string | ChatContentPart[] }
   | {
       role: 'assistant';
       content: string | null;
@@ -29,6 +37,16 @@ export type ChatMessageParam =
       reasoning_content?: string;
     }
   | { role: 'tool'; tool_call_id: string; content: string; name?: string };
+
+// The OpenAI multimodal shape for one image, as a base64 data URL. Shared by the two paths that
+// put an image on the wire — the native send (provider/toolcall.ts) and the describe call
+// (ocr/vision.ts) — so the two spellings can't drift.
+export function imageContentPart(mime: string, bytes: Uint8Array): ChatContentPart {
+  return {
+    type: 'image_url',
+    image_url: { url: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` },
+  };
+}
 
 export type ChatTool = {
   type: 'function';

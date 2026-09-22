@@ -13,9 +13,14 @@ import type {
   WebBudget,
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
+import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
-import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
+import {
+  computeMaxTokens,
+  NATIVE_IMAGE_TOKEN_ALLOWANCE,
+  shouldRetryTruncated,
+} from '../provider/budget.js';
 import {
   compactHistory,
   shouldCompact,
@@ -1002,6 +1007,13 @@ export async function runTurn(opts: {
   config: Config;
   tools: Tool[];
   payloads: PayloadStore;
+  // Pasted images to hand to the model directly, for a profile whose model can already see
+  // (VisionRoute 'native'). Constant for the whole turn: every request the turn makes carries
+  // them, so the model keeps seeing the image it was shown across the round's tool calls — and
+  // because they land at the same tail position with identical bytes, carrying them costs no
+  // re-prefill. The caller owns the lifetime: it clears its attachment ref the moment the turn
+  // sends, so the next turn passes nothing and the image is gone.
+  nativeImages?: NativeImage[];
   onMessage: (msg: Message) => void;
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
@@ -1331,6 +1343,10 @@ export async function runTurn(opts: {
   // history from the UI scrollback.
   let calibration = opts.priorCalibration && opts.priorCalibration > 0 ? opts.priorCalibration : 1;
   const rawEstimate = (hist: Message[] = opts.history, tls: Tool[] = opts.tools): number =>
+    // Native images carry no characters for estimateRequestTokens to count, so they are charged
+    // here — the one point every estimate in the turn passes through, which is what gets them into
+    // the max_tokens backstop and the fit-to-window cap. See NATIVE_IMAGE_TOKEN_ALLOWANCE.
+    (opts.nativeImages?.length ?? 0) * NATIVE_IMAGE_TOKEN_ALLOWANCE +
     estimateRequestTokens(system, hist, tls, {
       contextWindow: window,
       calibration,
@@ -1871,6 +1887,9 @@ export async function runTurn(opts: {
             // diverges the real request before the fresh block, so the differing bytes cost nothing
             // they were not paying.
             stampRenders: false,
+            // The note round reads the same history as any other round, so it sees the same image:
+            // withholding it would have the model write a handoff about a screenshot it can't see.
+            nativeImages: opts.nativeImages,
             trailingNote: prefixStable
               ? roundSuffix
                 ? `${roundSuffix}\n\n${suffix}`
@@ -2139,6 +2158,9 @@ export async function runTurn(opts: {
       logitBias,
       prefixStable,
       trailingNote: roundSuffix,
+      // Constant across the turn (see runTurn): every round re-carries the same bytes at the same
+      // tail position, so the model keeps seeing the image it was shown without re-prefilling.
+      nativeImages: opts.nativeImages,
       toolChoice: subagentForceReport ? 'none' : undefined,
       // Measurement only (issue #134), and only when something will read it: the debug log is the
       // sole consumer, so an un-logged run never pays the larger streaming payload.

@@ -1,5 +1,6 @@
 import { jsonrepair } from 'jsonrepair';
 import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
+import type { NativeImage } from '../agent/attachments.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
 import { messagesToChatParams, toolsToChatTools } from './toolcall.js';
@@ -79,6 +80,10 @@ export async function callModel(opts: {
   // `tools` renders a different system turn, which is a re-prefill of the whole prompt on the one
   // round that sits right before a fold. Ignored when `tools` is empty.
   toolChoice?: 'none';
+  // Pasted images to hand to the model directly for this request (VisionRoute 'native'). Set on
+  // every round of the turn that pasted them, undefined on every other request — the loop owns the
+  // lifetime. See provider/toolcall.ts for where they land in the serialized request.
+  nativeImages?: NativeImage[];
 }): Promise<ModelResponse> {
   if (opts.signal?.aborted) {
     return { content: '', toolCalls: undefined };
@@ -92,6 +97,7 @@ export async function callModel(opts: {
     // The real call is the one that freezes live-payload bytes (estimates and warms never do).
     stampRenders: opts.stampRenders ?? opts.prefixStable,
     trailingNote: opts.trailingNote,
+    nativeImages: opts.nativeImages,
     onCapStats: opts.onCapStats,
     onAgedStats: opts.onAgedStats,
   });
