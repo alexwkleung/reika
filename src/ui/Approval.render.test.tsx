@@ -67,6 +67,29 @@ describe('Approval dialog width', () => {
     expect(rows.join('')).toContain('narrower filter');
   });
 
+  it('keeps the space after `$` and a hanging indent when a command line wraps (#489)', () => {
+    // The `$` marker and the command are siblings in a row box; when the line is long enough to
+    // wrap, Ink dropped the character at that sibling boundary — the marker's space — so long
+    // commands rendered as `$git`. Wrapping each line ourselves (as DiffView's WrappedRow does)
+    // keeps every row short enough that Ink never wraps one.
+    const long =
+      'git checkout -b fix/sandbox-notice-spacing && git add src/ui/Scrollback.tsx ' +
+      'src/ui/Scrollback.render.test.tsx';
+    const rows = frame({ tool: 'bash', subject: '~/repo', preview: long });
+    // The space after `$` survived, and the continuation hangs under the command, not at column 0.
+    // Column math runs on the box interior, with the border stripped off both ends.
+    const interior = rows.map(r => r.replace(/^\s*│/, '').replace(/│\s*$/, ''));
+    const first = interior.findIndex(r => r.includes('$ git checkout'));
+    expect(first).toBeGreaterThanOrEqual(0);
+    const commandCol = interior[first].indexOf('git checkout');
+    const continuation = interior.slice(first + 1).find(r => r.trim().length > 0)!;
+    expect(continuation.search(/\S/)).toBe(commandCol);
+    for (const row of rows) {
+      expect(stringWidth(row)).toBeLessThanOrEqual(width());
+      expect(row.trim()).not.toBe('│');
+    }
+  });
+
   it('keeps a command carrying tabs and a carriage return inside the border', () => {
     const TAB = '\t';
     const CR = '\r';
