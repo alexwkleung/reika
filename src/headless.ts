@@ -1,14 +1,8 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { loadConfig, resolveDefaultMode, resolveProfile, withProbedLimits } from './config.js';
-import { needsLimitsProbe, probeModelLimits } from './provider/modellimits.js';
-import { bootstrap } from './context/bootstrap.js';
-import { chatTools, defaultTools, minimalTools, planTools } from './tools/index.js';
-import { isOffline } from './tools/_net.js';
-import { PayloadStore } from './store/payloads.js';
+import { loadConfig, resolveDefaultMode } from './config.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
-import { runTurn } from './agent/loop.js';
-import { PrefixTrace } from './agent/prefixtrace.js';
+import { createSession } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
@@ -16,22 +10,15 @@ import { systemOcr } from './ocr/system.js';
 import { autoApproves } from './approval.js';
 import { debugLog } from './debug.js';
 import { HEADLESS_USAGE, type HeadlessArgs, type HeadlessMode } from './headlessargs.js';
-import { detectIdentity, setIdentity } from './ui/identity.js';
-import {
-  buildImplementPrompt,
-  isMinimalPrompt,
-  planWritten,
-  turnPromptMode,
-  turnTools,
-} from './ui/commands.js';
-import type { ApprovalRequest, Config, ContextBundle, Message, Tool, Usage } from './types.js';
+
+import type { ApprovalRequest, Config, ContextBundle, Message } from './types.js';
 
 // Headless mode (#52): `reika -p "<prompt>"` runs one turn with no TUI and prints the reply.
-// The loop was never coupled to Ink — evals/runner.ts has driven it headless all along — so this
-// is the eval runner's boot plus the pieces of App's submit path that shape what the model sees
-// (mention/URL expansion, skill routing, the approval policy). Those are deliberately the same
-// modules App calls, in the same order: a headless run must be the run the TUI would have made,
-// or it is useless as the debugging instrument the issue asks for.
+// The session (boot, threaded state, the vibe chain) is session.ts, shared with the eval runner;
+// what lives here is the part of App's submit path that shapes what the model sees (mention/URL
+// expansion, skill routing) and the approval policy. Those are deliberately the same modules App
+// calls, in the same order: a headless run must be the run the TUI would have made, or it is
+// useless as the debugging instrument the issue asks for.
 
 export type HeadlessIo = {
   stdout: (text: string) => void;
@@ -101,125 +88,55 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     return 1;
   }
 
-  let cfg = loadConfig();
-  const [bundle, probed] = await Promise.all([
-    bootstrap(process.cwd(), cfg.repoMapBudget),
-    needsLimitsProbe(cfg.profiles.default)
-      ? probeModelLimits(cfg.profiles.default)
-      : Promise.resolve(undefined),
-    cfg.anon
-      ? detectIdentity(process.cwd())
-          .then(setIdentity)
-          .catch(() => {})
-      : Promise.resolve(),
-  ]);
-  if (probed) cfg = withProbedLimits(cfg, 'default', probed);
-  const config = resolveProfile(cfg, 'default');
-  const offline = isOffline();
-  if (offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
-  // No one is at the keyboard, so ask_user is never offered — a model that can see it will call
-  // it and stall. The loop reads canAsk from the list, so the prompt agrees.
-  const noAsk = (tools: Tool[]): Tool[] => tools.filter(t => t.name !== 'ask_user');
-  const lists = {
-    agent: noAsk(defaultTools(cfg, { offline })),
-    plan: noAsk(planTools()),
-    chat: noAsk(chatTools(cfg, { offline })),
-    minimal: noAsk(minimalTools()),
-  };
+  // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
+  const loaded = loadConfig();
+  const session = await createSession({
+    cwd: process.cwd(),
+    config: loaded,
+    canAsk: false,
+    requestApproval:
+      loaded.autoApprove === 'bypass'
+        ? undefined
+        : (req: ApprovalRequest): Promise<boolean> => {
+            if (autoApproves(loaded.autoApprove, req)) return Promise.resolve(true);
+            io.stderr(
+              `reika: declined ${req.tool} (no prompt to ask at): ${firstLine(req.preview)}\n`,
+            );
+            return Promise.resolve(false);
+          },
+    events: {
+      // The persistent receipts App puts in the scrollback — a fold, a declined URL, the
+      // typecheck gate bouncing the model — are the ones a human watching a pipe should see.
+      onMessage: msg => {
+        if (msg.role === 'system') io.stderr(`reika: ${msg.content}\n`);
+      },
+    },
+  });
+  const { config, bundle } = session;
+  if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
+  if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
   const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
   const input = await buildHeadlessInput(prompt, config, bundle, mode);
   for (const n of input.notices) io.stderr(`reika: ${n}\n`);
-
-  const requestApproval =
-    config.autoApprove === 'bypass'
-      ? undefined
-      : (req: ApprovalRequest): Promise<boolean> => {
-          if (autoApproves(config.autoApprove, req)) return Promise.resolve(true);
-          io.stderr(
-            `reika: declined ${req.tool} (no prompt to ask at): ${firstLine(req.preview)}\n`,
-          );
-          return Promise.resolve(false);
-        };
 
   const controller = new AbortController();
   const onSigint = () => controller.abort();
   process.once('SIGINT', onSigint);
 
-  const history: Message[] = [];
-  const appended: Message[] = [];
-  const payloads = new PayloadStore();
-  const totals: Usage = { promptTokens: 0, completionTokens: 0 };
-  // Boxed: TS narrows a `let` assigned only inside a callback to its initializer.
-  const usage: { last?: Usage } = {};
-  let calibration: number | undefined;
-  let prefillRate: number | undefined;
-  const prefixTrace = new PrefixTrace();
-  let shrink = { sheds: 0, folds: 0 };
-
-  const turn = (modelText: string, active: HeadlessMode, skill?: string): Promise<void> =>
-    runTurn({
-      userInput: modelText,
-      userDisplay: modelText === input.modelText ? prompt : undefined,
-      userSkill: skill,
-      history,
-      bundle,
-      config,
-      tools: turnTools(active, lists),
-      payloads,
-      signal: controller.signal,
-      requestApproval,
-      promptMode: turnPromptMode(active),
-      minimalPrompt: isMinimalPrompt(active),
-      onMessage: raw => {
-        const msg: Message = raw.role === 'user' ? { ...raw, mode } : raw;
-        appended.push(msg);
-        // The persistent receipts App puts in the scrollback — a fold, a declined URL, the
-        // typecheck gate bouncing the model — are the ones a human watching a pipe should see.
-        if (msg.role === 'system') io.stderr(`reika: ${msg.content}\n`);
-      },
-      onUsage: u => {
-        usage.last = u;
-        totals.promptTokens += u.promptTokens;
-        totals.completionTokens += u.completionTokens;
-        if (u.cachedTokens != null)
-          totals.cachedTokens = (totals.cachedTokens ?? 0) + u.cachedTokens;
-      },
-      priorShrink: shrink,
-      onShrink: (_event, counts) => {
-        shrink = counts;
-      },
-      priorCalibration: calibration,
-      onCalibration: f => {
-        calibration = f;
-      },
-      priorPrefillRate: prefillRate,
-      onPrefillRate: r => {
-        prefillRate = r;
-      },
-      prefixTrace,
-    });
-
   let failed: Error | null = null;
   try {
-    if (mode === 'vibe') {
-      // The same chain App.runVibeTurn runs: a plan turn, then the implement prompt as an agent
-      // turn only when the plan phase actually wrote a plan.
-      await turn(input.modelText, 'plan', input.skill);
-      if (planWritten(appended)) {
-        await turn(buildImplementPrompt(''), 'agent');
-      } else {
-        io.stderr(
-          'reika: vibe: the plan phase ended without a written plan — skipping implementation\n',
-        );
-      }
-    } else {
-      await turn(input.modelText, mode, input.skill);
-    }
+    await session.submit(input.modelText, {
+      mode,
+      display: prompt,
+      skill: input.skill,
+      signal: controller.signal,
+    });
   } catch (e) {
     failed = e as Error;
   } finally {
     process.off('SIGINT', onSigint);
   }
+  const appended = session.transcript;
 
   if (args.save) {
     try {
@@ -236,10 +153,10 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
           mode,
           usage: {
             turns: appended.filter(m => m.role === 'assistant').length,
-            ...totals,
-            contextTokens: usage.last?.promptTokens ?? null,
+            ...session.totals,
+            contextTokens: session.lastUsage?.promptTokens ?? null,
             ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
-            ...(shrink.sheds > 0 || shrink.folds > 0 ? shrink : {}),
+            ...(session.shrink.sheds > 0 || session.shrink.folds > 0 ? session.shrink : {}),
           },
         },
       );
