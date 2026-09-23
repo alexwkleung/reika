@@ -95,6 +95,9 @@ export function loadConfig(): Config {
     // rather than a hardcoded path because the sandbox changes what a command may do, so a run that
     // is measuring anything about bash behavior needs a way to get the old world back.
     sandbox: process.env.REIKA_SANDBOX !== '0',
+    // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
+    // conversations to disk at all, which is the one reason to want it off.
+    autosave: process.env.REIKA_AUTOSAVE !== '0',
     skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,

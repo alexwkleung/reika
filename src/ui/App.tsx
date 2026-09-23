@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -55,6 +55,7 @@ import {
   saveTranscript,
   TRANSCRIPT_VERSION,
   type TranscriptShrinkEvent,
+  type TranscriptMeta,
   type TranscriptUsage,
 } from '../store/transcript.js';
 import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
@@ -71,6 +72,19 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
+import { ResumeSelect } from './ResumeSelect.js';
+import {
+  hasRealTurn,
+  listSessions,
+  loadSession,
+  modelHistoryFromScrollback,
+  newSessionPath,
+  projectHistoryDir,
+  ROOT_HISTORY_DIR,
+  writeSession,
+  type SessionEntry,
+  type SessionSides,
+} from '../store/sessions.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
@@ -152,6 +166,8 @@ function probedLimitsNotice(probe: ModelLimitsProbe): string | undefined {
   }
   return parts.length > 0 ? parts.join(' ') : undefined;
 }
+
+const AUTOSAVE_INTERVAL_MS = 3000;
 
 export function App() {
   const { exit } = useApp();
@@ -253,6 +269,13 @@ export function App() {
   // disabled while it's open and the arrow keys drive the list.
   const [modelSelect, setModelSelect] = useState<ModelTarget[] | null>(null);
   const [modelSelected, setModelSelected] = useState(0);
+  // Interactive /resume picker (#1), modal the same way.
+  const [resumeSelect, setResumeSelect] = useState<{
+    entries: SessionEntry[];
+    heading: string;
+    projectDir: string;
+  } | null>(null);
+  const [resumeSelected, setResumeSelected] = useState(0);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
@@ -364,6 +387,18 @@ export function App() {
   modelSelectRef.current = modelSelect;
   const modelSelectedRef = useRef(0);
   modelSelectedRef.current = modelSelected;
+  const resumeSelectRef = useRef(resumeSelect);
+  resumeSelectRef.current = resumeSelect;
+  const resumeSelectedRef = useRef(0);
+  resumeSelectedRef.current = resumeSelected;
+  // The file this session auto-saves to (#1), fixed at its first save so every later save rewrites
+  // one file. null until then, and again after /new, so a new conversation gets a new file.
+  const sessionPathRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Writes run one after another: two in flight could rename out of order and leave the older
+  // snapshot on disk.
+  const autosaveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const autosaveFailedRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
@@ -661,9 +696,13 @@ export function App() {
         return;
       }
       if (hadPending) return;
-      // An open /model picker closes first, like esc.
+      // An open /model or /resume picker closes first, like esc.
       if (modelSelectRef.current) {
         setModelSelect(null);
+        return;
+      }
+      if (resumeSelectRef.current) {
+        setResumeSelect(null);
         return;
       }
       // Idle. A non-empty input clears first — catches the common accidental tap.
@@ -790,6 +829,21 @@ export function App() {
       // anywhere to go.
       return;
     }
+    const rs = resumeSelectRef.current;
+    if (rs) {
+      if (key.upArrow) {
+        setResumeSelected(i => Math.max(0, i - 1));
+      } else if (key.downArrow) {
+        setResumeSelected(i => Math.min(rs.entries.length - 1, i + 1));
+      } else if (key.return) {
+        const sel = rs.entries[resumeSelectedRef.current];
+        setResumeSelect(null);
+        if (sel) void resumeSession(sel, rs.projectDir);
+      } else if (key.escape) {
+        setResumeSelect(null);
+      }
+      return;
+    }
     const ms = modelSelectRef.current;
     if (ms) {
       if (key.upArrow) {
@@ -849,6 +903,162 @@ export function App() {
       }
     }
   });
+
+  // The header both /save and the auto-save write. `msgs` is what the file's body holds.
+  const transcriptMeta = (msgs: Message[], cwd: string, midTurn: boolean): TranscriptMeta => {
+    // Use the active profile's model/base so the saved meta reflects what was actually running,
+    // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
+    const profile = config!.profiles[activeProfileRef.current] ?? config!.profiles.default;
+    // Everything the status line shows, frozen at save time (#199). Computed exactly as the
+    // status bar computes it — same turn count, same last-call-else-estimate context — so the
+    // header and a screenshot of the footer can never disagree.
+    const last = lastUsageRef.current;
+    const totals = usageRef.current;
+    const window = profile.contextWindow ?? config!.contextWindow;
+    const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
+    const usage: TranscriptUsage = {
+      turns: msgs.filter(m => m.role === 'assistant').length,
+      promptTokens: totals.promptTokens,
+      completionTokens: totals.completionTokens,
+      ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+      contextTokens: last?.promptTokens ?? estimatedContextRef.current,
+      // No call has landed yet, so the context size above is the pre-send estimate.
+      ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
+      ...(window ? { contextWindow: window } : {}),
+      ...(usable ? { contextUsable: usable } : {}),
+      ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+      ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
+        ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
+        : {}),
+    };
+    return {
+      version: TRANSCRIPT_VERSION,
+      savedAt: new Date().toISOString(),
+      model: profile.model,
+      baseURL: profile.baseURL,
+      cwd,
+      messageCount: msgs.length,
+      mode: modeRef.current,
+      usage,
+      ...(midTurn ? { midTurn: true as const } : {}),
+    };
+  };
+
+  // Both sides of the chat boundary, wherever each currently lives.
+  const sessionSides = (): SessionSides => {
+    const stash = stashedMessagesRef.current;
+    return modeRef.current === 'chat'
+      ? { agent: stash.agent ?? [], chat: messagesRef.current }
+      : { agent: messagesRef.current, chat: stash.chat ?? [] };
+  };
+
+  const autosaveNow = (): Promise<void> => {
+    if (autosaveTimerRef.current !== null) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    if (!config?.autosave || !bundle) return autosaveChainRef.current;
+    const sides = sessionSides();
+    // Nothing typed yet — the splash notices alone are not a session worth listing.
+    if (!hasRealTurn(sides.agent) && !hasRealTurn(sides.chat)) return autosaveChainRef.current;
+    sessionPathRef.current ??= newSessionPath(projectHistoryDir(bundle.cwd), new Date());
+    const path = sessionPathRef.current;
+    const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
+    autosaveChainRef.current = autosaveChainRef.current
+      .then(() => writeSession(path, sides, meta))
+      .catch((e: unknown) => {
+        // Said once: a full disk fails every save the same way, and the session itself is fine.
+        if (autosaveFailedRef.current) return;
+        autosaveFailedRef.current = true;
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            tone: 'warn',
+            content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
+          },
+        ]);
+      });
+    return autosaveChainRef.current;
+  };
+
+  // When the auto-save runs: at once on the first real prompt (a session exists from the moment it
+  // is typed) and whenever the app goes idle (a turn ended, a command ran), and mid-turn at most
+  // once per AUTOSAVE_INTERVAL_MS, so a crash loses seconds of a long turn without a write per
+  // streamed round.
+  useEffect(() => {
+    if (!config?.autosave) return;
+    if (status !== 'busy' || sessionPathRef.current === null) {
+      void autosaveNow();
+      return;
+    }
+    if (autosaveTimerRef.current !== null) return;
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void autosaveNow();
+    }, AUTOSAVE_INTERVAL_MS);
+    // autosaveNow reads everything through refs; only these two changes mean there is news to save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, status]);
+
+  // What /new and /resume both drop: the conversation and everything measured about it. The next
+  // save starts a new file (/resume re-points it after this when it continues one).
+  const resetConversation = (): void => {
+    stashedMessagesRef.current = {};
+    modelHistoryRef.current = [];
+    // With the messages and stashes gone, no payloadId can reach the store anymore.
+    payloads.clear();
+    setPlanSteps(null);
+    setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+    setLastUsage(null);
+    setEstimatedContext(null);
+    setShrink({ sheds: 0, folds: 0 });
+    shrinkRef.current = { sheds: 0, folds: 0 };
+    shrinkEventsRef.current = [];
+    // The engine holds none of the resumed bytes, so the trace compares against nothing.
+    prefixTraceRef.current = new PrefixTrace();
+    if (autosaveTimerRef.current !== null) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    sessionPathRef.current = null;
+  };
+
+  const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+    let sides: SessionSides;
+    try {
+      sides = await loadSession(entry.path);
+    } catch (e) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'error', content: `resume failed: ${(e as Error).message}` },
+      ]);
+      return;
+    }
+    // Save whatever this session had before it is replaced.
+    await autosaveNow();
+    resetConversation();
+    // A project session carries on in its own file; a manual save from the root is left as it was
+    // and the continuation gets a project file of its own on its next save.
+    if (dirname(entry.path) === projectDir) sessionPathRef.current = entry.path;
+    const inChat = modeRef.current === 'chat';
+    const active = inChat ? sides.chat : sides.agent;
+    const other = inChat ? sides.agent : sides.chat;
+    stashedMessagesRef.current = inChat
+      ? { agent: other, agentModel: modelHistoryFromScrollback(other) }
+      : { chat: other, chatModel: modelHistoryFromScrollback(other) };
+    modelHistoryRef.current = modelHistoryFromScrollback(active);
+    const where = inChat ? 'chat' : 'agent';
+    const otherNote =
+      other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
+    setMessages([
+      ...active,
+      {
+        role: 'system',
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
+      },
+    ]);
+  };
 
   const requestExit = (): void => {
     if (hasActivity(messagesRef.current)) {
@@ -996,17 +1206,7 @@ export function App() {
         echo,
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
-      stashedMessagesRef.current = {};
-      modelHistoryRef.current = [];
-      // With the messages and stashes gone, no payloadId can reach the store anymore.
-      payloads.clear();
-      setPlanSteps(null);
-      setTotalUsage({ promptTokens: 0, completionTokens: 0 });
-      setLastUsage(null);
-      setEstimatedContext(null);
-      setShrink({ sheds: 0, folds: 0 });
-      shrinkRef.current = { sheds: 0, folds: 0 };
-      shrinkEventsRef.current = [];
+      resetConversation();
       calibrationRef.current = 1;
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
@@ -1016,7 +1216,6 @@ export function App() {
       // hardware. The chip itself goes with the token counts it sits next to.
       decodeRateRef.current = undefined;
       setDecodeRate(undefined);
-      prefixTraceRef.current = new PrefixTrace();
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
@@ -1124,6 +1323,54 @@ export function App() {
       return;
     }
 
+    if (name === 'resume') {
+      if (!config || !bundle) return;
+      const say = (content: string): void =>
+        setMessages(prev => [...prev, echo, { role: 'system', content }]);
+      if (statusRef.current === 'busy') {
+        say('Cannot resume while busy. Wait or ctrl-c to abort.');
+        return;
+      }
+      const target = args.trim().toLowerCase();
+      if (target !== '' && target !== 'root') {
+        say('Usage: /resume (this project) or /resume root (manual /save files).');
+        return;
+      }
+      const projectDir = projectHistoryDir(bundle.cwd);
+      // The session in progress is not something to resume into.
+      const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
+      let entries: SessionEntry[] = [];
+      let heading = 'saved with /save';
+      if (target === '') {
+        entries = (await listSessions(projectDir)).filter(notCurrent);
+        heading = 'this project';
+      }
+      // A project with no sessions yet falls back to the manual saves.
+      if (entries.length === 0) {
+        entries = await listSessions(ROOT_HISTORY_DIR);
+        if (target === '' && entries.length > 0)
+          heading = 'none for this project — saved with /save';
+      }
+      if (entries.length === 0) {
+        say(
+          target === 'root'
+            ? `No saved sessions in ${ROOT_HISTORY_DIR}.`
+            : config.autosave
+              ? 'No saved sessions for this project yet.'
+              : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
+        );
+        return;
+      }
+      setMessages(prev => [...prev, echo]);
+      // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
+      // every useInput handler, and an open picker would take it as a selection.
+      queueMicrotask(() => {
+        setResumeSelect({ entries, heading, projectDir });
+        setResumeSelected(0);
+      });
+      return;
+    }
+
     if (name === 'save') {
       if (!config || !bundle) return;
       const raw = args.trim().toLowerCase() === '--raw';
@@ -1137,48 +1384,11 @@ export function App() {
         setMessages(prev => [...prev, echo, { role: 'system', content: 'Nothing to save yet.' }]);
         return;
       }
-      // Use the active profile's model/base so the saved meta reflects what was actually running,
-      // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
-      const profile = config.profiles[activeProfileRef.current] ?? config.profiles.default;
-      // Everything the status line shows, frozen at save time (#199). Computed exactly as the
-      // status bar computes it — same turn count, same last-call-else-estimate context — so the
-      // header and a screenshot of the footer can never disagree.
-      const last = lastUsageRef.current;
-      const totals = usageRef.current;
-      const window = profile.contextWindow ?? config.contextWindow;
-      const usable = window
-        ? Math.round(compactThreshold(window, profile.minGenTokens))
-        : undefined;
-      const usage: TranscriptUsage = {
-        turns: msgs.filter(m => m.role === 'assistant').length,
-        promptTokens: totals.promptTokens,
-        completionTokens: totals.completionTokens,
-        ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
-        contextTokens: last?.promptTokens ?? estimatedContextRef.current,
-        // No call has landed yet, so the context size above is the pre-send estimate.
-        ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
-        ...(window ? { contextWindow: window } : {}),
-        ...(usable ? { contextUsable: usable } : {}),
-        ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
-        ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
-          ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
-          : {}),
-      };
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
           msgs,
-          {
-            version: TRANSCRIPT_VERSION,
-            savedAt: new Date().toISOString(),
-            model: profile.model,
-            baseURL: profile.baseURL,
-            cwd: bundle.cwd,
-            messageCount: msgs.length,
-            mode: modeRef.current,
-            usage,
-            ...(midTurn ? { midTurn: true as const } : {}),
-          },
+          transcriptMeta(msgs, bundle.cwd, midTurn),
           { redact: !raw },
         );
         setMessages(prev => [
@@ -1218,6 +1428,7 @@ export function App() {
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
           '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
+          '  /resume [root]     resume a saved session of this project (root: the /save files)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
@@ -2192,6 +2403,12 @@ export function App() {
                   : undefined
               }
             />
+          ) : resumeSelect ? (
+            <ResumeSelect
+              entries={resumeSelect.entries}
+              selectedIndex={resumeSelected}
+              heading={resumeSelect.heading}
+            />
           ) : confirm ? (
             <Confirm spec={confirm.spec} selectedIndex={confirmSelected} />
           ) : null}
@@ -2201,11 +2418,16 @@ export function App() {
             disabled={
               pending !== null ||
               modelSelect !== null ||
+              resumeSelect !== null ||
               confirm !== null ||
               (question !== null && questionTyping === null)
             }
             attachedAbove={
-              pending !== null || question !== null || modelSelect !== null || confirm !== null
+              pending !== null ||
+              question !== null ||
+              modelSelect !== null ||
+              resumeSelect !== null ||
+              confirm !== null
             }
             attachedBelow={suggestionState !== null}
             reservedRows={
