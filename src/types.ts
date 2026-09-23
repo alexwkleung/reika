@@ -498,6 +498,13 @@ export type Config = {
   // (REIKA_AUTOSAVE, default on — see store/sessions.ts). Optional so a hand-built Config (tests)
   // writes nothing to the home directory unless it asks to.
   autosave?: boolean;
+  // Whether the harness runs the post-edit typecheck gate (`REIKA_TYPECHECK`, default on — see
+  // src/check/typecheck.ts). Off entirely skips the baseline capture, the per-edit checks, and the
+  // done-gate, not just the send-backs. The flag exists because not every TypeScript project
+  // (slow tsc, heavy monorepo, a stricter gate run by the project's own checks) wants the
+  // harness-level checker even when a tsconfig is present, and a fine-grained knob — rounds,
+  // timeout, per-turn budget — composes off a switch rather than a feature.
+  typecheck?: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in

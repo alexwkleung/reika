@@ -107,6 +107,10 @@ export function loadConfig(): Config {
     // rather than a hardcoded path because the sandbox changes what a command may do, so a run that
     // is measuring anything about bash behavior needs a way to get the old world back.
     sandbox: process.env.REIKA_SANDBOX !== '0',
+    // Post-edit typecheck gate (#300), on by default. `0` disables the whole feature — the
+    // baseline capture, the per-edit checks, and the done-gate — for projects that verify types
+    // their own way or find tsc too slow to run twice per turn. See check/typecheck.ts.
+    typecheck: process.env.REIKA_TYPECHECK !== '0',
     // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
     // conversations to disk at all, which is the one reason to want it off.
     autosave: process.env.REIKA_AUTOSAVE !== '0',

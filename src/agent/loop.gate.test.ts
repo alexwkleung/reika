@@ -59,7 +59,7 @@ function makeBundle(cwd: string): ContextBundle {
   };
 }
 
-function makeConfig(): Config {
+function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     baseURL: 'http://localhost',
     apiKey: 'x',
@@ -80,12 +80,14 @@ function makeConfig(): Config {
     skillAuto: 'off',
     anon: false,
     sandbox: false,
+    ...overrides,
   };
 }
 
 async function run(
   cwd: string,
   tools: Tool[] = [editTool, writeTool],
+  config: Config = makeConfig(),
 ): Promise<{ history: Message[]; messages: Message[] }> {
   const messages: Message[] = [];
   const history: Message[] = [];
@@ -93,7 +95,7 @@ async function run(
     userInput: 'do the task',
     history,
     bundle: makeBundle(cwd),
-    config: makeConfig(),
+    config,
     tools,
     payloads: new PayloadStore(),
     onMessage: m => messages.push(m),
@@ -214,6 +216,29 @@ describe('post-edit typecheck gate (integration)', () => {
     const { messages } = await run(cwd, [bashTool]);
 
     expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(false);
+  });
+
+  it('does not run at all when Config.typecheck is false (#300)', async () => {
+    // A tsc shim IS installed and the edit DOES introduce an error, so the only thing standing
+    // between this turn and a send-back is the flag: no baseline capture, no done-gate, no
+    // "Typecheck passed" line — the turn finishes at the first done, exactly two rounds. The
+    // shim's output would also fail the check below on any accidental run, since the fake tsc
+    // still writes nothing and the flag must suppress the whole pipeline, not just the retry.
+    await installTsc();
+    h.scripted.push(
+      writeResponse('src/app.ts', 'export const n = "BREAKME";\n'),
+      finalResponse('all done'),
+    );
+
+    const { history, messages } = await run(
+      cwd,
+      [editTool, writeTool],
+      makeConfig({ typecheck: false }),
+    );
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(history.some(m => m.role === 'user' && m.content.includes('BREAKME'))).toBe(false);
     expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(false);
   });
 
