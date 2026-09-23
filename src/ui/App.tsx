@@ -10,7 +10,7 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
-import { kFormat } from './format.js';
+import { probedLimitsNotice } from '../session.js';
 import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
@@ -31,11 +31,7 @@ import {
   resolveProfile,
   withProbedLimits,
 } from '../config.js';
-import {
-  needsLimitsProbe,
-  probeModelLimits,
-  type ModelLimitsProbe,
-} from '../provider/modellimits.js';
+import { needsLimitsProbe, probeModelLimits } from '../provider/modellimits.js';
 import {
   loadLastState,
   persistableMode,
@@ -146,26 +142,6 @@ function promptPlaceholder(): string {
   if (!clipboardImageSupported()) return base;
   const withHint = `${base}, ctrl-v for images`;
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
-}
-
-// A window the harness took off the endpoint changes what the session does (compaction, the
-// payload cap), so the user is told where the number came from — a gauge denominator alone
-// reads as configured.
-// One line for whatever the probe found; undefined when it found nothing worth saying.
-function probedLimitsNotice(probe: ModelLimitsProbe): string | undefined {
-  const parts: string[] = [];
-  if (probe.window) {
-    const from = probe.windowSource === 'catalog' ? 'the models.dev catalog' : 'the endpoint';
-    parts.push(
-      `Context window of ${kFormat(probe.window)} tokens, from ${from} (REIKA_CONTEXT_WINDOW overrides).`,
-    );
-  }
-  if (probe.maxOutput) {
-    parts.push(
-      `Output capped at ${kFormat(probe.maxOutput)} tokens per reply, from the models.dev catalog.`,
-    );
-  }
-  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 const AUTOSAVE_INTERVAL_MS = 3000;

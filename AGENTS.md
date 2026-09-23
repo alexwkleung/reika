@@ -39,17 +39,18 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 ## Where things live
 
-| Path            | Purpose                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------- |
-| `src/agent/`    | Turn loop, prompt builder, mention parser, history compaction (`compaction.ts`)             |
-| `src/provider/` | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`) |
-| `src/tools/`    | One tool per file; register in `src/tools/index.ts`                                         |
-| `src/context/`  | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore          |
-| `src/search/`   | Web search providers — `types.ts` (interface) + per-provider adapters                       |
-| `src/store/`    | Addressable payload storage                                                                 |
-| `src/ui/`       | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here       |
-| `evals/`        | Fixture-based agent evals; runner + per-fixture files                                       |
-| `src/types.ts`  | Shared types: `Message`, `Tool`, `Config`, `ContextBundle`, etc.                            |
+| Path             | Purpose                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| `src/agent/`     | Turn loop, prompt builder, mention parser, history compaction (`compaction.ts`)                  |
+| `src/provider/`  | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`)      |
+| `src/tools/`     | One tool per file; register in `src/tools/index.ts`                                              |
+| `src/context/`   | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore               |
+| `src/search/`    | Web search providers — `types.ts` (interface) + per-provider adapters                            |
+| `src/store/`     | Addressable payload storage                                                                      |
+| `src/ui/`        | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here            |
+| `evals/`         | Fixture-based agent evals; runner + per-fixture files                                            |
+| `src/types.ts`   | Shared types: `Message`, `Tool`, `Config`, `ContextBundle`, etc.                                 |
+| `src/session.ts` | `createSession`: boot + the state a turn threads to the next (#403); headless and evals drive it |
 
 ## Adding a new tool
 
