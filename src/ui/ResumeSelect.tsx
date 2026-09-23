@@ -45,7 +45,9 @@ export function ResumeSelect({
           const selected = start + i === selectedIndex;
           const when = formatSavedAt(e.savedAt);
           const label = e.title ?? '(untitled)';
-          const budget = Math.max(10, maxDisplay - when.length - 12);
+          // The model is what tells apart two sessions opened with the same prompt.
+          const tail = `  ${e.messageCount} msgs${e.model ? ` · ${e.model}` : ''}`;
+          const budget = Math.max(10, maxDisplay - when.length - tail.length - 2);
           // One Text with nested runs: on wrap Ink drops the char at a sibling boundary.
           return (
             <Text key={e.path}>
@@ -56,7 +58,7 @@ export function ResumeSelect({
               <Text bold={selected} color={selected ? theme.accent : undefined}>
                 {truncate(label, budget)}
               </Text>
-              <Text color={theme.muted}>{`  ${e.messageCount} msgs`}</Text>
+              <Text color={theme.muted}>{tail}</Text>
             </Text>
           );
         })}
