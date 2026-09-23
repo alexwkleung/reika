@@ -98,6 +98,12 @@ and why it matters. Put the most serious first: correctness bugs, data loss, and
 security problems outrank style and naming. If the change is sound, say so
 plainly rather than inventing findings — "no blocking issues" is a real review.
 
+End with one line starting `Not verified:` that names the functions, files or
+paths a finding or a "this is fine" depends on but you did not open — what you
+assumed instead of read. If you opened everything the review relies on, write
+`Not verified: nothing`. Keep it to names; this is the one place to say what you
+did not check.
+
 Do not restate the diff, re-explain what the code does, or narrate how you found
 something — the reader has the PR open in front of them. Say what is wrong and why
 it matters, and stop. Length is not thoroughness: on a slow local model every
@@ -108,7 +114,8 @@ Review the change against that requirement, not only against the PR body. Two
 findings only that step can produce: the diff does something the issue never
 asked for, and the diff misses something the issue did ask for.
 
-Do not edit any files, and do not post anything to GitHub. This review is for
-the terminal; the user decides what to do with it.
+While writing this review, do not edit any files and do not post anything to
+GitHub. The review is for the terminal; the user decides what to do with it, and
+may ask for changes in a later message — that request is theirs to make.
 
 PR number:
