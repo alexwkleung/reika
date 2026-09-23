@@ -463,6 +463,10 @@ export type Config = {
   // Whether model-chosen shell commands run under the local sandbox (`REIKA_SANDBOX`, #163).
   // Default on, macOS only; see tools/bash.ts's composition and tools/_sandbox.ts for the profile.
   sandbox: boolean;
+  // Auto-save each TUI session under ~/.config/reika/history/projects/ for /resume
+  // (REIKA_AUTOSAVE, default on — see store/sessions.ts). Optional so a hand-built Config (tests)
+  // writes nothing to the home directory unless it asks to.
+  autosave?: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in
