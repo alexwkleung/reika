@@ -37,6 +37,9 @@ const ENV_KEYS = [
   'REIKA_PLAN_EXPERIMENT',
   'REIKA_AUTO_APPROVE',
   'REIKA_SKILL_AUTO',
+  'REIKA_VISION_MODEL',
+  'REIKA_VISION_BASE_URL',
+  'REIKA_VISION_API_KEY',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -138,6 +141,34 @@ describe('loadConfig — profiles', () => {
     const cfg = loadConfig();
     expect(cfg.profiles.kimi).toBeDefined();
     expect(cfg.profiles.Kimi).toBeUndefined();
+  });
+});
+
+describe('loadConfig — vision model (#130)', () => {
+  it('is unset by default so images go through system OCR', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    const c = loadConfig();
+    expect(c.visionModel).toBeUndefined();
+    expect(c.visionBaseURL).toBeUndefined();
+    expect(c.visionApiKey).toBeUndefined();
+  });
+
+  it('reads the model and optional server override; blank values count as unset', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION_MODEL = 'qwen-vl';
+    process.env.REIKA_VISION_BASE_URL = 'http://vision:8081/v1';
+    process.env.REIKA_VISION_API_KEY = '   ';
+    const c = loadConfig();
+    expect(c.visionModel).toBe('qwen-vl');
+    expect(c.visionBaseURL).toBe('http://vision:8081/v1');
+    expect(c.visionApiKey).toBeUndefined();
+  });
+
+  it('rejects an endpoint path in the vision base URL like the other base URLs', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION_MODEL = 'qwen-vl';
+    process.env.REIKA_VISION_BASE_URL = 'http://vision:8081/v1/chat/completions';
+    expect(() => loadConfig()).toThrow(/REIKA_VISION_BASE_URL/);
   });
 });
 

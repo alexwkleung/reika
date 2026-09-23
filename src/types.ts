@@ -426,6 +426,13 @@ export type Config = {
   subagentBaseURL?: string;
   subagentApiKey?: string;
   subagentMaxTurns: number;
+  // Vision model for pasted/dragged-in images (REIKA_VISION_MODEL, #130). When set, images are
+  // described by this model instead of run through system OCR; the description reaches the main
+  // model as text, so the main model can stay text-only. Used for nothing else. Base URL and key
+  // fall back to the main server, like the subagent settings.
+  visionModel?: string;
+  visionBaseURL?: string;
+  visionApiKey?: string;
   searxngUrl?: string;
   // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
   // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which
@@ -458,7 +465,7 @@ export type Config = {
   bashIdleMs: number;
   // Preferred OCR languages for pasted images (REIKA_OCR_LANGS, BCP-47, comma-separated).
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
-  // first entry.
+  // first entry. Ignored when a vision model is configured.
   ocrLangs?: string[];
   // What to do with http(s) URLs in a prompt before the turn runs (REIKA_PASTE_FETCH). See
   // PasteFetchMode and agent/pastedurls.ts.

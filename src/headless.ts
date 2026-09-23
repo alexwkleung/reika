@@ -6,7 +6,7 @@ import { createSession } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
-import { systemOcr } from './ocr/system.js';
+import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { debugLog } from './debug.js';
 import { HEADLESS_USAGE, type HeadlessArgs, type HeadlessMode } from './headlessargs.js';
@@ -51,7 +51,7 @@ export async function buildHeadlessInput(
       notices,
     };
   }
-  const expansion = await expandMentions(prompt, bundle.cwd, { ocr: systemOcr(config.ocrLangs) });
+  const expansion = await expandMentions(prompt, bundle.cwd, { ocr: imageReader(config) });
   notices.push(...expansion.notices);
   // No `incidental`: there is nobody to ask, so a link the prompt is not about is left alone
   // under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.

@@ -63,6 +63,7 @@ import { expandMentions } from '../agent/mentions.js';
 import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
 import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
+import { imageReader } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
@@ -1668,7 +1669,7 @@ export function App() {
       setMessages(prev => [...prev, { role: 'system', content, tone }]);
     };
     if (!clipboardImageSupported()) {
-      notice('Image paste needs system OCR — macOS and Windows only.', 'warn');
+      notice('Image paste reads the system clipboard — macOS and Windows only.', 'warn');
       return;
     }
     // Shell mode submits the buffer to bash, which would try to run `[Image 1]` as a command —
@@ -1699,8 +1700,16 @@ export function App() {
       notice('No image on the clipboard.', 'warn');
       return;
     }
-    setPasting('Extracting text');
-    const result = await systemOcr(config?.ocrLangs)(bytes);
+    // Named by what's actually running — a local vision model can take a minute on a full-screen
+    // capture, and "Extracting text" would read as a hang.
+    const vision = config?.visionModel;
+    setPasting(vision ? `Describing image with ${vision}` : 'Extracting text');
+    // A ctrl-v before the async config load lands still gets the platform recognizer. Resolved
+    // onto the active profile: a vision model with no base URL of its own is served by the
+    // profile the session is on now, not the one it started on.
+    const result = await (
+      config ? imageReader(resolveProfile(config, activeProfileRef.current)) : systemOcr()
+    )(bytes);
     if (!result.ok) {
       notice(
         result.reason === 'unavailable'
@@ -1721,7 +1730,9 @@ export function App() {
     // end on any external value change, so a mid-buffer insert would move the caret anyway.
     setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
     notice(
-      `Attached ${marker} — ${result.text.length} chars read from the clipboard image.`,
+      vision
+        ? `Attached ${marker} — ${result.text.length} chars described by ${vision}.`
+        : `Attached ${marker} — ${result.text.length} chars read from the clipboard image.`,
       'info',
     );
   };
@@ -1962,9 +1973,17 @@ export function App() {
     let modelText: string;
     let display: string;
     try {
-      const expansion = await expandMentions(trimmed, bundle.cwd, {
-        ocr: systemOcr(config.ocrLangs),
-      });
+      const reader = imageReader(resolveProfile(config, activeProfileRef.current));
+      // A vision model can take a minute on a screenshot, where OCR takes half a second; without a
+      // label the Enter looks like it did nothing.
+      const vision = config.visionModel;
+      const ocr: typeof reader = vision
+        ? bytes => {
+            setExpanding(`Describing image with ${vision}`);
+            return reader(bytes);
+          }
+        : reader;
+      const expansion = await expandMentions(trimmed, bundle.cwd, { ocr });
       display = expansion.display;
       pendingNoticesRef.current.push(
         ...expansion.notices.map(content => ({
