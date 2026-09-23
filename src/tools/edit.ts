@@ -145,6 +145,15 @@ export const editTool: Tool = {
       if (!ok) return { summary: `Edit declined by user for ${display}` };
     }
 
+    // `next` is built from the bytes read above, and the approval may have waited minutes. Anything
+    // written in between — another session in this cwd, the user's editor — would be silently lost,
+    // even a change far from this span, since the whole file is rewritten (#487).
+    const current = await readFile(full, 'utf8').catch(() => null);
+    if (current !== text) {
+      return {
+        summary: `Edit failed: ${display} changed on disk while the edit was being prepared; nothing was written. Re-read it and retry the edit against its current contents`,
+      };
+    }
     const next = text.slice(0, start) + effectiveNew + text.slice(start + matchLen);
     await writeFile(full, next, 'utf8');
     const line = text.slice(0, start).split('\n').length;
