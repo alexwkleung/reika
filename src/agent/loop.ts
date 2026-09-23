@@ -1142,15 +1142,26 @@ export async function runTurn(opts: {
   // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
   // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
   minimalPrompt?: boolean;
+  // `/compact` (issue #481). One harness-driven compaction round — the same machinery as the
+  // automatic shrink event: compaction-note request, fold, session-cumulative counters, notices —
+  // fired WITHOUT a user turn behind it. The user typed a slash command, so no user message enters
+  // the history (a synthetic one would distort the recap's election) and no reply round follows the
+  // fold: the turn is the compaction. Exists because a large-window setup can sit far under the
+  // trigger all session while still carrying a lot the user would rather have folded now. Sharing
+  // the loop's own numbering (`shrink`) is the point of doing it here rather than beside the loop:
+  // auto compaction and /compact stay in sync regardless of which fired last.
+  manualCompact?: boolean;
 }): Promise<void> {
-  const userMsg: Message = {
-    role: 'user',
-    content: opts.userInput,
-    ...(opts.userDisplay ? { display: opts.userDisplay } : {}),
-    ...(opts.userSkill ? { skill: opts.userSkill } : {}),
-  };
-  opts.history.push(userMsg);
-  opts.onMessage(userMsg);
+  if (!opts.manualCompact) {
+    const userMsg: Message = {
+      role: 'user',
+      content: opts.userInput,
+      ...(opts.userDisplay ? { display: opts.userDisplay } : {}),
+      ...(opts.userSkill ? { skill: opts.userSkill } : {}),
+    };
+    opts.history.push(userMsg);
+    opts.onMessage(userMsg);
+  }
 
   // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
   // diverges from round 0.
@@ -1891,13 +1902,27 @@ export async function runTurn(opts: {
     // is `foldAfterShed`, the same decision replayed on a copy; off prefix-stable there is no shed
     // and `wouldFold` on the history is the decision itself.
     let note: CompactionNote | undefined;
-    if (
+    // /compact (issue #481) reuses this exact gate on a manual trigger: the note round runs whenever
+    // a fold would, regardless of where the estimate sits against `shouldCompact` — that pressure
+    // check is exactly what a manual trigger bypasses. Plan mode stays excluded either way: its
+    // force-write/transform owns the compaction interaction there, and a manual note round would
+    // interleave with it; in plan mode /compact folds without a note (fold gate below), which keeps
+    // the fold still useful and the blast radius on that path zero.
+    const manualRound = !!opts.manualCompact;
+    const autoReport =
+      !manualRound &&
       compactionReportEnabled() &&
-      window &&
+      !!window &&
       !planForceWrite &&
       opts.promptMode !== 'plan' &&
       !opts.signal?.aborted &&
-      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) &&
+      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens);
+    if (
+      (manualRound || autoReport) &&
+      !!window &&
+      !planForceWrite &&
+      opts.promptMode !== 'plan' &&
+      !opts.signal?.aborted &&
       (prefixStable
         ? foldAfterShed(
             opts.history,
@@ -1916,7 +1941,9 @@ export async function runTurn(opts: {
       opts.onMessage({
         role: 'system',
         tone: 'info',
-        content: `Context is near the window — asking the model for a compaction note before fold ${n}.`,
+        content: manualRound
+          ? `/compact — asking the model for a compaction note before fold ${n}.`
+          : `Context is near the window — asking the model for a compaction note before fold ${n}.`,
       });
       opts.onPhase?.('thinking');
       opts.onCompactionNote?.(true);
@@ -2080,10 +2107,14 @@ export async function runTurn(opts: {
         compactThreshold(window, opts.config.minGenTokens) * AGE_LOW_FRACTION;
     // Force-write sends the tiny synthetic context, not opts.history, so there is nothing to
     // compact — skip it. Otherwise collapse the oldest turns if the estimate crosses the threshold.
+    // /compact folds even under the threshold: it is a user request, and `compactHistory` degrades
+    // safely to `removed = 0` when the keep budget still holds everything.
+    let lastFoldRemoved = 0;
     if (
       !planForceWrite &&
       window &&
-      (shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
+      (manualRound ||
+        shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
         agedButAboveWatermark)
     ) {
       const removed = compactHistory(
@@ -2093,6 +2124,7 @@ export async function runTurn(opts: {
         opts.config.minGenTokens,
         note,
       );
+      lastFoldRemoved = removed;
       // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
       // it is spliced into the model history per turn, while the saved transcript is written from
       // the UI scrollback, so no recap that reached a model has ever been readable afterwards. That
@@ -2125,6 +2157,21 @@ export async function runTurn(opts: {
           } into a ${(recapChars / 1000).toFixed(1)}k-char recap (older tool output still re-readable).`,
         });
       }
+    }
+    // /compact ends the turn here (issue #481): no reply round follows the fold, so the note request
+    // is the only model call and the fold's rewrite is what the next turn appends onto. A no-fold
+    // outcome says so honestly rather than silently doing nothing — that line is how the user tells
+    // "nothing fell outside the keep budget" apart from "the command didn't reach the loop".
+    if (opts.manualCompact) {
+      if (lastFoldRemoved === 0) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'info',
+          content:
+            'Nothing to compact — the keep budget still holds the recent turns verbatim, so a recap would summarize nothing not already present.',
+        });
+      }
+      return;
     }
     const sentEstimate = rawEstimate(callHistory, callTools);
     opts.onContextEstimate?.(Math.round(sentEstimate * calibration));

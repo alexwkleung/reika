@@ -385,6 +385,7 @@ Type `/` in the input to see suggestions. Highlights:
 | `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                  |
 | `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                       |
 | `/implement [guidance]`                           | From plan mode: switch to agent and execute the plan above (optional guidance)                                                  |
+| `/compact`                                        | Compact older context now, without a prompt: the model writes a compaction note, then older turns fold into the recap it feeds. Folds number across manual and automatic compaction alike. |
 | `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                             |
 | `/approvals [on\|off]`                            | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                   |
 | `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                        |

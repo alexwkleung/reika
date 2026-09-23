@@ -84,6 +84,10 @@ export type SubmitOptions = {
   nativeImages?: NativeImage[];
   // Overrides the mode's tool list: an eval fixture runs plan tools under the agent prompt.
   tools?: Tool[];
+  // `/compact` (issue #481): a harness-driven compaction — compaction-note round + fold — with no
+  // user turn and no reply. The fold joins the same session-cumulative counters the automatic
+  // shrink events advance, so the two paths stay in sync regardless of which fired last.
+  manualCompact?: boolean;
   signal?: AbortSignal;
   // Per-submit over the session's own, for a front end whose handlers close over render state.
   events?: SessionEvents;
@@ -254,6 +258,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         requestQuestion: submit.requestQuestion ?? opts.requestQuestion,
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
+        manualCompact: submit.manualCompact,
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.
         onMessage: raw => {
