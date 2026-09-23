@@ -157,6 +157,7 @@ describe('session auto-save and /resume', () => {
     await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
     // Newest first and the current session left out, so the only entry is the first conversation.
     expect(plain(app.lastFrame())).toContain('fix the parser');
+    expect(plain(app.lastFrame())).toContain('msgs · test-model');
     expect(plain(app.lastFrame())).not.toMatch(/› .*something else/);
     app.stdin.write('\r');
     await waitFor(() => plain(app.lastFrame()).includes('Resumed "fix the parser"'), 'the resume');
@@ -173,6 +174,25 @@ describe('session auto-save and /resume', () => {
       const entries = await listSessions(projectDir);
       return entries.length === 2 && entries[0].title === 'fix the parser';
     }, 'the resumed session to be re-saved in place');
+    app.unmount();
+  });
+
+  it('leaves a resumed project session untouched until something new happens', async () => {
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    await waitFor(async () => (await listSessions(projectDir)).length === 1, 'the first save');
+    await submit(app, '/new');
+    await tick(200);
+    const [entry] = await listSessions(projectDir);
+    const before = readFileSync(entry.path, 'utf8');
+
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('Resumed "fix the parser"'), 'the resume');
+    await submit(app, '/help');
+    await tick(300);
+    expect(readFileSync(entry.path, 'utf8')).toBe(before);
     app.unmount();
   });
 
@@ -208,7 +228,12 @@ describe('session auto-save and /resume', () => {
     app.stdin.write('\r');
     await waitFor(() => plain(app.lastFrame()).includes('Resumed "an old manual save"'), 'resume');
 
+    // Opened and left alone, it writes nothing — no project copy of the manual save.
+    await tick(300);
+    expect(await listSessions(projectDir)).toEqual([]);
+
     // The continuation is saved as a project session; the manual file is untouched.
+    await submit(app, 'keep going');
     await waitFor(async () => (await listSessions(projectDir)).length === 1, 'the project save');
     expect(readFileSync(manual, 'utf8')).toBe(before);
     app.unmount();

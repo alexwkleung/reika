@@ -74,7 +74,8 @@ import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
-  hasRealTurn,
+  countRealTurns,
+  forAutosave,
   listSessions,
   loadSession,
   modelHistoryFromScrollback,
@@ -399,6 +400,10 @@ export function App() {
   // snapshot on disk.
   const autosaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const autosaveFailedRef = useRef(false);
+  // Set by /resume to the real-turn count it loaded: nothing is written until the conversation
+  // grows past it, so opening a session and leaving neither copies a /save file into the project
+  // nor re-stamps a project session as the newest.
+  const autosaveHoldRef = useRef<number | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
@@ -527,7 +532,11 @@ export function App() {
         if (resumed.length > 0) {
           setMessages(prev => [
             ...prev,
-            { role: 'system', content: `Resumed ${resumed.join(' and ')} from the last session.` },
+            {
+              role: 'system',
+              content: `Resumed ${resumed.join(' and ')} from the last session.`,
+              skipAutosave: true,
+            },
           ]);
         }
         // The window/reserve arithmetic decides how much room reads and history get, and a
@@ -537,10 +546,18 @@ export function App() {
         debugLog(formatBudget(b, runtime));
         const limitsNotice = probed && probedLimitsNotice(probed);
         if (limitsNotice) {
-          setMessages(prev => [...prev, { role: 'system', content: limitsNotice }]);
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: limitsNotice, skipAutosave: true },
+          ]);
         }
         const warn = budgetWarning(b, runtime);
-        if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
+        if (warn) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: warn, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         if (offline) {
           setMessages(prev => [
             ...prev,
@@ -549,6 +566,7 @@ export function App() {
               content:
                 'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
               tone: 'warn',
+              skipAutosave: true,
             },
           ]);
         }
@@ -958,9 +976,12 @@ export function App() {
       autosaveTimerRef.current = null;
     }
     if (!config?.autosave || !bundle) return autosaveChainRef.current;
-    const sides = sessionSides();
+    const all = sessionSides();
+    const sides = { agent: forAutosave(all.agent), chat: forAutosave(all.chat) };
+    const turns = countRealTurns(sides.agent) + countRealTurns(sides.chat);
     // Nothing typed yet — the splash notices alone are not a session worth listing.
-    if (!hasRealTurn(sides.agent) && !hasRealTurn(sides.chat)) return autosaveChainRef.current;
+    if (turns === 0 || turns <= (autosaveHoldRef.current ?? 0)) return autosaveChainRef.current;
+    autosaveHoldRef.current = null;
     sessionPathRef.current ??= newSessionPath(projectHistoryDir(bundle.cwd), new Date());
     const path = sessionPathRef.current;
     const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
@@ -1022,6 +1043,7 @@ export function App() {
       autosaveTimerRef.current = null;
     }
     sessionPathRef.current = null;
+    autosaveHoldRef.current = null;
   };
 
   const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
@@ -1041,6 +1063,7 @@ export function App() {
     // A project session carries on in its own file; a manual save from the root is left as it was
     // and the continuation gets a project file of its own on its next save.
     if (dirname(entry.path) === projectDir) sessionPathRef.current = entry.path;
+    autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
@@ -1068,7 +1091,7 @@ export function App() {
         sessionStartedAtRef.current,
         approvalsRef.current,
       );
-      setMessages(prev => [...prev, { role: 'system', content: summary }]);
+      setMessages(prev => [...prev, { role: 'system', content: summary, skipAutosave: true }]);
     }
     setExitRequested(true);
   };

@@ -156,7 +156,12 @@ export function modelHistoryFromScrollback(messages: Message[]): Message[] {
   });
 }
 
-// Whether a scrollback holds anything worth a file: a real prompt, not just the splash notices.
-export function hasRealTurn(messages: Message[]): boolean {
-  return messages.some(m => (m.role === 'user' && !m.meta) || m.role === 'shell');
+// Real prompts and shell commands — what makes a scrollback worth a file, as opposed to the
+// splash notices or a /resume that was opened and left.
+export function countRealTurns(messages: Message[]): number {
+  return messages.filter(m => (m.role === 'user' && !m.meta) || m.role === 'shell').length;
+}
+
+export function forAutosave(messages: Message[]): Message[] {
+  return messages.filter(m => !(m.role === 'system' && m.skipAutosave));
 }

@@ -105,6 +105,9 @@ export type Message =
       // (agent/plantrack.ts seedPlanProgress), so the waiver must ride a message to survive —
       // without it every later turn would re-bounce the same adjudicated step.
       planWaived?: number[];
+      // About this launch rather than the conversation — the startup notices, the exit summary.
+      // Left out of the auto-save (#1), or every resume would replay them and stack a new set.
+      skipAutosave?: boolean;
     }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by

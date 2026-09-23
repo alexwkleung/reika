@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import type { Message } from '../types.js';
 import { serializeJsonl, TRANSCRIPT_VERSION, type TranscriptMeta } from './transcript.js';
 import {
-  hasRealTurn,
+  countRealTurns,
+  forAutosave,
   listSessions,
   loadSession,
   modelHistoryFromScrollback,
@@ -125,15 +126,30 @@ describe('modelHistoryFromScrollback', () => {
   });
 });
 
-describe('hasRealTurn', () => {
-  it('ignores notices and command echoes', () => {
+describe('countRealTurns', () => {
+  it('counts prompts and shell commands, not notices or command echoes', () => {
     expect(
-      hasRealTurn([
+      countRealTurns([
         { role: 'system', content: 'x' },
         { role: 'user', content: '/help', meta: true },
       ]),
-    ).toBe(false);
-    expect(hasRealTurn([{ role: 'user', content: 'hello' }])).toBe(true);
-    expect(hasRealTurn([{ role: 'shell', command: 'ls', output: '' }])).toBe(true);
+    ).toBe(0);
+    expect(
+      countRealTurns([
+        { role: 'user', content: 'hello' },
+        { role: 'shell', command: 'ls', output: '' },
+      ]),
+    ).toBe(2);
+  });
+});
+
+describe('forAutosave', () => {
+  it('drops launch notices and keeps the conversation', () => {
+    const kept: Message[] = [
+      { role: 'system', content: 'Resumed "x"' },
+      { role: 'user', content: 'hello' },
+    ];
+    const launch: Message = { role: 'system', content: 'Session summary', skipAutosave: true };
+    expect(forAutosave([launch, ...kept])).toEqual(kept);
   });
 });
