@@ -10,6 +10,7 @@ import { isOffline } from './tools/_net.js';
 import { PayloadStore } from './store/payloads.js';
 import { runTurn, type ShrinkCounts } from './agent/loop.js';
 import { PrefixTrace } from './agent/prefixtrace.js';
+import type { NativeImage } from './agent/attachments.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
 import { kFormat } from './ui/format.js';
 import {
@@ -19,13 +20,13 @@ import {
   turnPromptMode,
   turnTools,
 } from './ui/commands.js';
-import type { Config, ContextBundle, Message, Mode, Tool, Usage } from './types.js';
+import type { Config, ContextBundle, Message, Mode, Profile, Tool, Usage } from './types.js';
 
 // One session: boot plus the state a turn hands the next (#403). The loop was never UI-coupled, but
 // "a session" was — each consumer booted its own and threaded calibration, rates and shrink counts
 // by hand, and the copies drifted (the eval runner never probed the window, so it measured a
-// configuration no TUI session runs). Headless and the eval runner drive this; App is the next
-// consumer, and slash commands stay in the TUI.
+// configuration no TUI session runs). App, headless and the eval runner all drive this; slash
+// commands, the scrollback and every dialog stay with the front end that draws them.
 
 type RunTurnOptions = Parameters<typeof runTurn>[0];
 
@@ -72,40 +73,90 @@ export type ToolLists = { agent: Tool[]; plan: Tool[]; chat: Tool[]; minimal: To
 
 export type SubmitOptions = {
   mode: Mode;
+  // What the user prompt is recorded as when it differs from what it runs as: /implement typed in
+  // vibe mode runs an agent turn but belongs to the vibe session. Vibe itself records as vibe.
+  recordAs?: Mode;
   // What the user bubble shows when it differs from the model text (a skill body, a mention).
   display?: string;
   skill?: string;
+  // Images the model is shown directly on a native-vision profile, for the first turn only: vibe's
+  // implement phase gets none, since by then the image is history's note, not live bytes.
+  nativeImages?: NativeImage[];
   // Overrides the mode's tool list: an eval fixture runs plan tools under the agent prompt.
   tools?: Tool[];
   signal?: AbortSignal;
+  // Per-submit over the session's own, for a front end whose handlers close over render state.
+  events?: SessionEvents;
+  requestApproval?: RunTurnOptions['requestApproval'];
+  requestQuestion?: RunTurnOptions['requestQuestion'];
+  // Brackets each loop turn the submit runs (vibe runs two), for a front end that owns per-turn
+  // state. A start that returns a signal aborts that turn alone; otherwise `signal` covers all.
+  onTurnStart?: () => AbortSignal | void;
+  onTurnEnd?: () => void;
+  // Given, a failed turn is reported here and the submit carries on as if the turn had ended —
+  // which for vibe means no written plan, so no implementation. Absent, the failure throws.
+  onTurnError?: (error: Error) => void;
 };
+
+// What a front end renders from: changes whenever the profile, the config or the bundle does.
+export type SessionSnapshot = {
+  // Unresolved: every profile, with `profile` naming the active one.
+  config: Config;
+  profile: string;
+  bundle: ContextBundle;
+};
+
+type Side = 'agent' | 'chat';
 
 export type Session = {
   readonly bundle: ContextBundle;
   // The active profile resolved onto the config — what a turn runs with.
   readonly config: Config;
+  readonly profile: string;
   readonly offline: boolean;
   // What the startup probe learned, worded for the user; undefined when it found nothing.
   readonly limitsNotice: string | undefined;
   readonly lists: ToolLists;
-  // Model-facing history: the loop appends and folds it in place, and the fold must survive.
+  // Model-facing history of the active side: the loop appends and folds it in place, and the fold
+  // must survive to the next turn (#183).
   readonly history: Message[];
-  // Everything the turns emitted, in order — what a transcript saves.
+  // Everything the turns emitted since the last reset, in order — what a transcript saves.
   readonly transcript: Message[];
   readonly totals: Usage;
   readonly lastUsage: Usage | undefined;
   readonly shrink: ShrinkCounts;
+  readonly calibration: number | undefined;
+  readonly decodeRate: number | undefined;
   // Runs one prompt as `mode` and returns the messages it emitted. Vibe is a plan turn, then the
   // implement prompt as an agent turn only when a plan was actually written.
   submit(text: string, opts: SubmitOptions): Promise<Message[]>;
+  getSnapshot(): SessionSnapshot;
+  subscribe(listener: () => void): () => void;
+  // Switches the active profile. A profile with no window asks its endpoint (#417), not awaited by
+  // the switch itself; the promise carries the notice when the probe learned something.
+  setProfile(name: string): Promise<string | undefined>;
+  addProfile(name: string, profile: Profile): void;
+  updateBundle(update: (bundle: ContextBundle) => ContextBundle): void;
+  // Chat keeps its own model history (isolated from agent/plan/shell); crossing the boundary stashes
+  // the side being left and restores the other.
+  switchSide(side: Side): void;
+  // Replaces both sides' model history with a resumed conversation.
+  loadHistory(active: Message[], other: Message[]): void;
+  // Drops the conversation and everything measured about it. `relearn` also forgets what was learned
+  // about the engine and returns to the default profile — /new, where the next model may differ.
+  reset(opts?: { relearn?: boolean }): void;
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
   let cfg = opts.config ?? loadConfig();
-  const profile = opts.profile ?? 'default';
-  // Concurrent for the same reason App boots this way: identity detection and the window probe
-  // are each tens of ms, pure added latency when serialized.
-  const [bundle, probed] = await Promise.all([
+  let profile = opts.profile ?? 'default';
+  // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git subprocesses cost
+  // ~28ms warm, pure added latency to first paint if serialized (measured: 29ms bootstrap + 28ms
+  // detect = 56ms serial, 36ms concurrent). Both are still awaited, so the scrubber's token set is
+  // loaded before any message can be rendered or saved; detection is best-effort, fail-open like
+  // the other scrub layers. The window probe (#417) rides the same concurrency: a local server
+  // answers in milliseconds, and it must land before anything reads the window.
+  const [booted, probed] = await Promise.all([
     bootstrap(opts.cwd, cfg.repoMapBudget),
     needsLimitsProbe(cfg.profiles[profile] ?? cfg.profiles.default)
       ? probeModelLimits(cfg.profiles[profile] ?? cfg.profiles.default)
@@ -116,10 +167,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
           .catch(() => {})
       : Promise.resolve(),
   ]);
+  let bundle = booted;
   if (probed) cfg = withProbedLimits(cfg, profile, probed);
-  // A probe that reached nothing (llama-server still loading) is asked again at the next submit.
-  let retryWindow = probed != null && !probed.reached;
+  // Profiles whose probe reached no server (llama-server still loading): asked again at the next
+  // submit on that profile, awaited so the window governs that turn rather than the one after.
+  const retryWindow = new Set<string>();
+  if (probed && !probed.reached) retryWindow.add(profile);
 
+  // No route out → no web tools this session (#392). Checked once, here, because the tool list is
+  // part of the cached prefix; the per-turn latch in the tools covers a drop later.
   const offline = isOffline();
   const filter = (tools: Tool[]): Tool[] =>
     opts.canAsk === false ? tools.filter(t => t.name !== 'ask_user') : tools;
@@ -130,32 +186,36 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     minimal: filter(minimalTools()),
   };
 
-  const events = opts.events ?? {};
-  const history: Message[] = [];
-  const transcript: Message[] = [];
+  const sessionEvents = opts.events ?? {};
+  let side: Side = 'agent';
+  let history: Message[] = [];
+  let stashed: Partial<Record<Side, Message[]>> = {};
+  let transcript: Message[] = [];
   const payloads = new PayloadStore();
-  const prefixTrace = new PrefixTrace();
-  const totals: Usage = { promptTokens: 0, completionTokens: 0 };
+  let prefixTrace = new PrefixTrace();
+  let totals: Usage = { promptTokens: 0, completionTokens: 0 };
   let lastUsage: Usage | undefined;
   let shrink: ShrinkCounts = { sheds: 0, folds: 0 };
   let calibration: number | undefined;
   let prefillRate: number | undefined;
   let decodeRate: number | undefined;
 
-  const emit = (msg: Message, into: Message[]): void => {
-    transcript.push(msg);
-    into.push(msg);
-    events.onMessage?.(msg);
+  const listeners = new Set<() => void>();
+  let snapshot: SessionSnapshot = { config: cfg, profile, bundle };
+  const changed = (): void => {
+    snapshot = { config: cfg, profile, bundle };
+    for (const l of listeners) l();
   };
 
   const retryWindowProbe = async (): Promise<Message | undefined> => {
     const current = cfg.profiles[profile];
-    if (!retryWindow || current?.contextWindow != null) return undefined;
-    const probe = await probeModelLimits(current ?? cfg.profiles.default);
-    if (probe.reached) retryWindow = false;
+    if (!current || !retryWindow.has(profile) || current.contextWindow != null) return undefined;
+    const probe = await probeModelLimits(current);
+    if (probe.reached) retryWindow.delete(profile);
     const notice = probedLimitsNotice(probe);
     if (!notice) return undefined;
     cfg = withProbedLimits(cfg, profile, probe);
+    changed();
     return { role: 'system', content: notice };
   };
 
@@ -165,108 +225,218 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     recorded: Mode,
     submit: SubmitOptions,
   ): Promise<Message[]> => {
+    const events = { ...sessionEvents, ...submit.events };
     const emitted: Message[] = [];
-    // Staged like App's pendingNotices: a receipt follows the user echo, never precedes it.
-    const pending: Message[] = [];
-    const retried = await retryWindowProbe();
-    if (retried) pending.push(retried);
-    await runTurn({
-      ...events,
-      userInput: text,
-      userDisplay: submit.display,
-      userSkill: submit.skill,
-      history,
-      bundle,
-      config: resolveProfile(cfg, profile),
-      tools: submit.tools ?? turnTools(active, lists),
-      payloads,
-      signal: submit.signal,
-      requestApproval: opts.requestApproval,
-      requestQuestion: opts.requestQuestion,
-      promptMode: turnPromptMode(active),
-      minimalPrompt: isMinimalPrompt(active),
-      // The prompt carries the turn's mode from here on (the loop has no notion of one), so a saved
-      // transcript can say what each turn was.
-      onMessage: raw => {
-        const msg: Message = raw.role === 'user' ? { ...raw, mode: recorded } : raw;
-        emit(msg, emitted);
-        if (msg.role === 'user') for (const n of pending.splice(0)) emit(n, emitted);
-      },
-      onUsage: u => {
-        lastUsage = u;
-        totals.promptTokens += u.promptTokens;
-        totals.completionTokens += u.completionTokens;
-        if (u.cachedTokens != null)
-          totals.cachedTokens = (totals.cachedTokens ?? 0) + u.cachedTokens;
-        events.onUsage?.(u);
-      },
-      priorShrink: shrink,
-      onShrink: (event, counts) => {
-        shrink = counts;
-        events.onShrink?.(event, counts);
-      },
-      priorCalibration: calibration,
-      onCalibration: f => {
-        calibration = f;
-        events.onCalibration?.(f);
-      },
-      priorPrefillRate: prefillRate,
-      onPrefillRate: r => {
-        prefillRate = r;
-        events.onPrefillRate?.(r);
-      },
-      priorDecodeRate: decodeRate,
-      onDecodeRate: r => {
-        decodeRate = r;
-        events.onDecodeRate?.(r);
-      },
-      prefixTrace,
-    });
+    const emit = (msg: Message): void => {
+      transcript.push(msg);
+      emitted.push(msg);
+      events.onMessage?.(msg);
+    };
+    const signal = submit.onTurnStart?.() ?? submit.signal;
+    try {
+      // Staged like App's pendingNotices: a receipt follows the user echo, never precedes it.
+      const pending: Message[] = [];
+      const retried = await retryWindowProbe();
+      if (retried) pending.push(retried);
+      await runTurn({
+        ...events,
+        userInput: text,
+        userDisplay: submit.display,
+        userSkill: submit.skill,
+        nativeImages: submit.nativeImages,
+        history,
+        bundle,
+        config: resolveProfile(cfg, profile),
+        tools: submit.tools ?? turnTools(active, lists),
+        payloads,
+        signal: signal ?? undefined,
+        requestApproval: submit.requestApproval ?? opts.requestApproval,
+        requestQuestion: submit.requestQuestion ?? opts.requestQuestion,
+        promptMode: turnPromptMode(active),
+        minimalPrompt: isMinimalPrompt(active),
+        // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
+        // saved transcript can say what each turn was.
+        onMessage: raw => {
+          const msg: Message = raw.role === 'user' ? { ...raw, mode: recorded } : raw;
+          emit(msg);
+          if (msg.role === 'user') for (const n of pending.splice(0)) emit(n);
+        },
+        onUsage: u => {
+          lastUsage = u;
+          totals = {
+            promptTokens: totals.promptTokens + u.promptTokens,
+            completionTokens: totals.completionTokens + u.completionTokens,
+            ...(u.cachedTokens != null || totals.cachedTokens != null
+              ? { cachedTokens: (totals.cachedTokens ?? 0) + (u.cachedTokens ?? 0) }
+              : {}),
+          };
+          events.onUsage?.(u);
+        },
+        priorShrink: shrink,
+        onShrink: (event, counts) => {
+          shrink = counts;
+          events.onShrink?.(event, counts);
+        },
+        priorCalibration: calibration,
+        onCalibration: f => {
+          calibration = f;
+          events.onCalibration?.(f);
+        },
+        priorPrefillRate: prefillRate,
+        onPrefillRate: r => {
+          prefillRate = r;
+          events.onPrefillRate?.(r);
+        },
+        priorDecodeRate: decodeRate,
+        onDecodeRate: r => {
+          decodeRate = r;
+          events.onDecodeRate?.(r);
+        },
+        prefixTrace,
+      });
+    } catch (e) {
+      if (!submit.onTurnError) throw e;
+      submit.onTurnError(e as Error);
+    } finally {
+      submit.onTurnEnd?.();
+    }
     return emitted;
   };
 
   const submit = async (text: string, submitOpts: SubmitOptions): Promise<Message[]> => {
-    if (submitOpts.mode !== 'vibe')
-      return runOne(text, submitOpts.mode, submitOpts.mode, submitOpts);
+    if (submitOpts.mode !== 'vibe') {
+      return runOne(text, submitOpts.mode, submitOpts.recordAs ?? submitOpts.mode, submitOpts);
+    }
     const planned = await runOne(text, 'plan', 'vibe', submitOpts);
     // No planFinal marker means the plan phase was aborted or dead-ended — never chain edits off a
     // turn that didn't actually commit a plan.
     if (!planWritten(planned)) {
-      emit(
-        {
-          role: 'system',
-          content: 'vibe: the plan phase ended without a written plan — skipping implementation.',
-        },
-        planned,
-      );
+      const skipped: Message = {
+        role: 'system',
+        content: 'vibe: the plan phase ended without a written plan — skipping implementation.',
+      };
+      transcript.push(skipped);
+      planned.push(skipped);
+      ({ ...sessionEvents, ...submitOpts.events }).onMessage?.(skipped);
       return planned;
     }
+    // No history threading needed: the plan phase appended straight into the shared model history,
+    // so the implement phase picks it up from there.
     const implemented = await runOne(buildImplementPrompt(''), 'agent', 'vibe', {
+      ...submitOpts,
       mode: 'agent',
       display: '/implement (vibe)',
-      signal: submitOpts.signal,
+      skill: undefined,
+      nativeImages: undefined,
     });
     return [...planned, ...implemented];
   };
 
+  const setProfile = (name: string): Promise<string | undefined> => {
+    const next = cfg.profiles[name];
+    if (!next) return Promise.resolve(undefined);
+    profile = name;
+    // The tok/s chip describes the model that produced it (#204) — left standing, the previous
+    // model's rate reads as the new one's until a round here measures one.
+    decodeRate = undefined;
+    changed();
+    if (!needsLimitsProbe(next)) return Promise.resolve(undefined);
+    return probeModelLimits(next).then(probe => {
+      if (!probe.reached) retryWindow.add(name);
+      const notice = probedLimitsNotice(probe);
+      if (!notice) return undefined;
+      cfg = withProbedLimits(cfg, name, probe);
+      changed();
+      return notice;
+    });
+  };
+
+  const reset = (resetOpts: { relearn?: boolean } = {}): void => {
+    history = [];
+    stashed = {};
+    transcript = [];
+    // With the history and stashes gone, no payloadId can reach the store anymore.
+    payloads.clear();
+    totals = { promptTokens: 0, completionTokens: 0 };
+    lastUsage = undefined;
+    shrink = { sheds: 0, folds: 0 };
+    // The engine holds none of the dropped bytes, so the trace compares against nothing.
+    prefixTrace = new PrefixTrace();
+    if (!resetOpts.relearn) return;
+    calibration = undefined;
+    // The default profile may be a different model on different hardware — a rate learned under
+    // the old one would misprice every round until it re-learns.
+    prefillRate = undefined;
+    decodeRate = undefined;
+    if (profile !== 'default') {
+      profile = 'default';
+      changed();
+    }
+  };
+
   return {
-    bundle,
+    get bundle() {
+      return bundle;
+    },
     get config() {
       return resolveProfile(cfg, profile);
+    },
+    get profile() {
+      return profile;
     },
     offline,
     limitsNotice: probed && probedLimitsNotice(probed),
     lists,
-    history,
-    transcript,
-    totals,
+    get history() {
+      return history;
+    },
+    get transcript() {
+      return transcript;
+    },
+    get totals() {
+      return totals;
+    },
     get lastUsage() {
       return lastUsage;
     },
     get shrink() {
       return shrink;
     },
+    get calibration() {
+      return calibration;
+    },
+    get decodeRate() {
+      return decodeRate;
+    },
     submit,
+    getSnapshot: () => snapshot,
+    subscribe: listener => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setProfile,
+    addProfile: (name, next) => {
+      cfg = { ...cfg, profiles: { ...cfg.profiles, [name]: next } };
+      changed();
+    },
+    updateBundle: update => {
+      const next = update(bundle);
+      if (next === bundle) return;
+      bundle = next;
+      changed();
+    },
+    switchSide: next => {
+      if (next === side) return;
+      stashed[side] = history;
+      history = stashed[next] ?? [];
+      delete stashed[next];
+      side = next;
+    },
+    loadHistory: (active, other) => {
+      history = active;
+      stashed = { [side === 'chat' ? 'agent' : 'chat']: other };
+    },
+    reset,
   };
 }
 
