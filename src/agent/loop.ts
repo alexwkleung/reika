@@ -1423,12 +1423,12 @@ export async function runTurn(opts: {
   };
 
   // REIKA_TYPECHECK=0 (Config.typecheck, default on) disables the whole post-edit gate: no
-  // baseline at the first mutating call, no per-edit checks, no done-gate send-backs. One local
-  // boolean because the gate lives at three sites (baseline capture below, the done-gate above in
-  // the isFinal branch, and the per-edit offer in the dispatch loop), and `undefined` (a
-  // hand-built test Config predating the knob) stays on — the same fail-default shape as
-  // Config.autosave. Everything else about the gate is unchanged: non-TS projects still fail
-  // open, and tsc never runs for a project without a tsconfig even when the flag is on.
+  // baseline at the first mutating call, no final re-check, no done-gate send-backs. One local
+  // boolean because the gate runs at two sites (the baseline capture below in the dispatch loop,
+  // the done-gate above in the isFinal branch), and `undefined` (a hand-built test Config
+  // predating the knob) stays on — the same fail-default shape as Config.autosave. Everything
+  // else about the gate is unchanged: non-TS projects still fail open, and tsc never runs for a
+  // project without a tsconfig even when the flag is on.
   const typecheckEnabled = opts.config.typecheck !== false;
 
   // EXPERIMENT (plan→agent handoff): one-shot pre-pass before the round loop. Folds the plan-mode

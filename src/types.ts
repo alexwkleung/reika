@@ -499,8 +499,8 @@ export type Config = {
   // writes nothing to the home directory unless it asks to.
   autosave?: boolean;
   // Whether the harness runs the post-edit typecheck gate (`REIKA_TYPECHECK`, default on — see
-  // src/check/typecheck.ts). Off entirely skips the baseline capture, the per-edit checks, and the
-  // done-gate, not just the send-backs. The flag exists because not every TypeScript project
+  // src/check/typecheck.ts). Off entirely skips the baseline capture, the final re-check, and the
+  // done-gate send-backs — not just the retries. The flag exists because not every TypeScript project
   // (slow tsc, heavy monorepo, a stricter gate run by the project's own checks) wants the
   // harness-level checker even when a tsconfig is present, and a fine-grained knob — rounds,
   // timeout, per-turn budget — composes off a switch rather than a feature.

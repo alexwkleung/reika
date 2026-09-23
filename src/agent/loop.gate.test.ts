@@ -222,9 +222,10 @@ describe('post-edit typecheck gate (integration)', () => {
   it('does not run at all when Config.typecheck is false (#300)', async () => {
     // A tsc shim IS installed and the edit DOES introduce an error, so the only thing standing
     // between this turn and a send-back is the flag: no baseline capture, no done-gate, no
-    // "Typecheck passed" line — the turn finishes at the first done, exactly two rounds. The
-    // shim's output would also fail the check below on any accidental run, since the fake tsc
-    // still writes nothing and the flag must suppress the whole pipeline, not just the retry.
+    // "Typecheck passed" line — the turn finishes at the first done, exactly two rounds. An
+    // accidental run would also trip the BREAKME check below: the shim's diagnostic quotes the
+    // sentinel, and the send-back carries that text into history — the flag must suppress the
+    // whole pipeline, not just the retry.
     await installTsc();
     h.scripted.push(
       writeResponse('src/app.ts', 'export const n = "BREAKME";\n'),
