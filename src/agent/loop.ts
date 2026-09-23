@@ -502,6 +502,15 @@ function gatherPlanAnalysis(history: Message[]): string {
 // the reference, do not invent" is load-bearing — small models otherwise fall back to generic
 // React/CSS priors with made-up paths. `budgetChars` bounds the whole turn so a large task that
 // read more than the window holds degrades to partial grounding rather than overflowing (400).
+// The force-write replaces the whole history with one synthesized message, and serialization
+// attaches native images only to a user message that names their marker — the rebuilt request quotes
+// the task truncated, often without it. Naming the live markers keeps the screenshot in front of the
+// round that writes the plan, which is the round vibe mode attached it for.
+export function nativeImageReminder(images: NativeImage[] | undefined): string {
+  if (!images?.length) return '';
+  return `\n\nThe request came with ${images.map(im => im.marker).join(', ')}, shown again here.`;
+}
+
 export function buildPlanTransformInput(
   history: Message[],
   budgetChars: number,
@@ -1779,11 +1788,12 @@ export async function runTurn(opts: {
       ? [
           {
             role: 'user',
-            content: buildPlanTransformInput(
-              opts.history,
-              planTransformBudget,
-              planForceWriteLoopTriggered,
-            ),
+            content:
+              buildPlanTransformInput(
+                opts.history,
+                planTransformBudget,
+                planForceWriteLoopTriggered,
+              ) + nativeImageReminder(opts.nativeImages),
           } as Message,
         ]
       : opts.history;

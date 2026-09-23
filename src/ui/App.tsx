@@ -63,6 +63,7 @@ import { expandMentions } from '../agent/mentions.js';
 import {
   attachImageBlocks,
   NATIVE_IMAGE_NOTE,
+  readNativeAttachments,
   nextImageMarker,
   type ImageAttachment,
   type NativeImage,
@@ -1713,7 +1714,9 @@ export function App() {
     // NATIVE_IMAGE_NOTE is what history keeps in their place. Skipped entirely when config hasn't
     // loaded yet: falling back to the recognizer is better than a marker whose bytes were never
     // registered.
-    if (config && pasteIsNative(config)) {
+    // The active profile's route, not the startup one: REIKA_<NAME>_VISION is per profile.
+    const active = config && resolveProfile(config, activeProfileRef.current);
+    if (active && pasteIsNative(active)) {
       const marker = nextImageMarker(imageAttachmentsRef.current);
       imageAttachmentsRef.current = [
         ...imageAttachmentsRef.current,
@@ -1725,7 +1728,7 @@ export function App() {
         },
       ];
       setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
-      notice(`Attached ${marker} — sent to ${config.model} as an image.`, 'info');
+      notice(`Attached ${marker} — sent to ${active.model} as an image.`, 'info');
       return;
     }
     // Named by what's actually running — a local vision model can take a minute on a full-screen
@@ -2004,7 +2007,8 @@ export function App() {
     // attachments still referenced in the text, then handed to runTurn for the turn's lifetime.
     let nativeImages: NativeImage[] | undefined;
     try {
-      const reader = imageReader(resolveProfile(config, activeProfileRef.current));
+      const active = resolveProfile(config, activeProfileRef.current);
+      const reader = imageReader(active);
       // A vision model can take a minute on a screenshot, where OCR takes half a second; without a
       // label the Enter looks like it did nothing.
       const vision = config.visionModel;
@@ -2036,7 +2040,18 @@ export function App() {
       // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
       // in the bubble, but recalling that text from history later must not silently re-attach an
       // image the user has moved on from.
-      const liveImages = imageAttachmentsRef.current;
+      let liveImages = imageAttachmentsRef.current;
+      if (!pasteIsNative(active) && liveImages.some(a => a.native)) {
+        const read = await readNativeAttachments(liveImages, ocr);
+        liveImages = read.attachments;
+        for (const marker of read.failed) {
+          pendingNoticesRef.current.push({
+            role: 'system',
+            content: `Couldn't read ${marker} for ${active.model}, which can't see images — it was pasted under a profile that could.`,
+            tone: 'warn',
+          });
+        }
+      }
       modelText = attachImageBlocks(expansion.augmented, liveImages);
       // The same liveness rule attachImageBlocks just applied, so an attachment whose marker the
       // user deleted sends neither its text nor its bytes. Read from `modelText` because that is

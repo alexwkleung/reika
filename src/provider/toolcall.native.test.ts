@@ -130,4 +130,19 @@ describe('messagesToChatParams — native images', () => {
     expect(asParts(params[0])[0]).toEqual({ type: 'text', text: original });
     expect(params[1].content).toBe('LEDGER');
   });
+
+  // A harness nudge (typecheck send-back, continuation, length/verbatim recovery) lands as a later
+  // user message without the marker. Targeting it dropped the image for the rest of the turn.
+  it('keeps the image on the pasted message after a harness nudge', () => {
+    const history: Message[] = [
+      ...withImage('[Image 1]'),
+      { role: 'assistant', content: 'looking' },
+      { role: 'user', content: 'Fix the type errors you introduced.', harness: true },
+    ];
+    const params = users(
+      messagesToChatParams('sys', history, { nativeImages: [image('[Image 1]')] }),
+    );
+    expect(asParts(params[0])).toHaveLength(2);
+    expect(typeof params[1].content).toBe('string');
+  });
 });

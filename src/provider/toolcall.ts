@@ -446,7 +446,10 @@ export function messagesToChatParams(
       // sees a bare `/model` or `/stats` turn (its system response was already dropped).
       if (msg.meta) continue;
       out.push({ role: 'user', content: msg.content });
-      lastUserIdx = out.length - 1;
+      // A harness nudge mid-turn (typecheck send-back, continuation, length/verbatim recovery) is a
+      // user message too, but it never carries the marker — targeting it would drop the images for
+      // the rest of the turn.
+      if (!msg.harness) lastUserIdx = out.length - 1;
     } else if (msg.role === 'assistant') {
       const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;
       const param: Record<string, unknown> = {

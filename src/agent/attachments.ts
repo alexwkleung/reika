@@ -1,3 +1,5 @@
+import type { OcrOutcome } from '../ocr/types.js';
+
 // Pasted-image attachments. A clipboard image is OCR'd the moment it's pasted and parked here
 // keyed by a short marker (`[Image 1]`) that goes into the input buffer in its place — the user
 // sees a token they can move or delete, not a wall of extracted text, and the marker survives
@@ -69,6 +71,27 @@ export function attachImageBlocks(input: string, attachments: ImageAttachment[])
     imageBlock({ id: /\d+/.exec(a.marker)?.[0] ?? '1', source: a.source }, a.text),
   );
   return `${blocks.join('\n\n')}\n\n${input}`;
+}
+
+// A native attachment's route is chosen at paste time, but the turn that sends it can run on a
+// profile that cannot see — a /model switch in between, or a queued message replayed after one.
+// Its bytes would then reach a text-only model, and history would hold only NATIVE_IMAGE_NOTE. So
+// the sending turn reads them first, the way the describe route would have at paste time.
+export async function readNativeAttachments(
+  attachments: ImageAttachment[],
+  ocr: (bytes: Uint8Array) => Promise<OcrOutcome>,
+): Promise<{ attachments: ImageAttachment[]; failed: string[] }> {
+  const failed: string[] = [];
+  const read = await Promise.all(
+    attachments.map(async (a): Promise<ImageAttachment> => {
+      if (!a.native) return a;
+      const result = await ocr(a.native.bytes);
+      if (result.ok) return { marker: a.marker, text: result.text, source: a.source };
+      failed.push(a.marker);
+      return { marker: a.marker, text: '(image could not be read)', source: a.source };
+    }),
+  );
+  return { attachments: read, failed };
 }
 
 // Whether any marker at all is present — lets the caller skip the work when nothing was pasted.
