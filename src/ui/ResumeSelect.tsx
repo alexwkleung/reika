@@ -24,6 +24,10 @@ export function ResumeSelect({
   const start = windowStart(entries.length, selectedIndex, RESUME_VISIBLE_ROWS);
   const shown = entries.slice(start, start + RESUME_VISIBLE_ROWS);
   const below = entries.length - start - shown.length;
+  const now = new Date();
+  // Locale formats vary in width ("9:05 a.m." vs "11:28 p.m."); padding over every entry, not just
+  // the visible ones, keeps the title column still while the window scrolls.
+  const whenWidth = Math.max(0, ...entries.map(e => formatSavedAt(e.savedAt, now).length));
   return (
     <Box
       borderStyle="round"
@@ -43,7 +47,7 @@ export function ResumeSelect({
         <Text color={theme.muted}>{start > 0 ? `  ↑ ${start} newer` : ' '}</Text>
         {shown.map((e, i) => {
           const selected = start + i === selectedIndex;
-          const when = formatSavedAt(e.savedAt);
+          const when = formatSavedAt(e.savedAt, now).padEnd(whenWidth);
           const label = e.title ?? '(untitled)';
           // The model is what tells apart two sessions opened with the same prompt.
           const tail = `  ${e.messageCount} msgs${e.model ? ` · ${e.model}` : ''}`;
@@ -77,12 +81,18 @@ export function windowStart(total: number, selected: number, rows: number): numb
   return Math.min(Math.max(0, selected - Math.floor(rows / 2)), total - rows);
 }
 
-// `2026-09-22 14:05`, local time. The save stamp is ISO UTC; a list is read by wall clock.
-export function formatSavedAt(iso: string): string {
+// Local time in the user's own convention (`Sep 22, 11:28 p.m.` under en-CA), with the year only
+// when it isn't this one. The save stamp is ISO UTC; a list is read by wall clock.
+export function formatSavedAt(iso: string, now: Date = new Date(), locale?: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.toLocaleString(locale, {
+    year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function truncate(s: string, max: number): string {
