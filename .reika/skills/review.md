@@ -85,7 +85,13 @@ If the diff renames a function, changes its parameters, or changes what it
 returns, `grep` for its name. Because the files on disk are the code before this
 PR, every call site grep finds is one that existed before the change. A call
 site in a file that is not on the PR's file list was not updated — that is a
-finding. One grep per changed function; do not go looking for other edge cases.
+finding. One grep per changed function — that grep is the only caller search to
+run.
+
+The PR body and the diff's own comments make claims about what the code does
+("runs whenever X", "only bypasses Y", "unchanged for Z"). Check each claim
+against the code it describes, following a condition into the function it
+calls when the claim depends on it. A claim the code does not keep is a finding.
 
 Then write the review. For each finding, give the file and line, what is wrong,
 and why it matters. Put the most serious first: correctness bugs, data loss, and
