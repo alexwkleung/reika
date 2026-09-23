@@ -13,6 +13,8 @@ export function DiffView({
   maxWidth,
   startLine,
   oldStartLine,
+  maxRows,
+  hiddenNote = n => `… ${n} more lines`,
 }: {
   diff: string;
   path: string;
@@ -27,6 +29,10 @@ export function DiffView({
   // of a multi-hunk diff, after an earlier hunk added or removed lines. Defaults to `startLine`,
   // which is exact for an edit's single block.
   oldStartLine?: number;
+  // Display-row ceiling, footer included. Only the live region needs one: a frame at the
+  // viewport's height makes Ink repaint the whole terminal (#447). Omit for no bound.
+  maxRows?: number;
+  hiddenNote?: (hiddenLines: number) => string;
 }) {
   const lang = detectLanguage(path);
   const blocks = parseDiffBlocks(sanitizeDiffLines(diff));
@@ -36,10 +42,14 @@ export function DiffView({
   const gutterWidth = showGutter ? String(rows.maxLineNo).length : 0;
   // Gutter eats columns the content background must not pad over: digits + one space.
   const contentWidth = showGutter ? Math.max(0, maxWidth - gutterWidth - 1) : maxWidth;
+  const fit =
+    maxRows === undefined
+      ? { lines: rows.lines, hidden: 0 }
+      : fitRowsToHeight(rows.lines, maxRows, contentWidth);
 
   return (
     <>
-      {rows.lines.map((row, i) => {
+      {fit.lines.map((row, i) => {
         const gutter = showGutter ? String(row.lineNo).padStart(gutterWidth) : '';
         if (row.kind === 'context') {
           return (
@@ -76,8 +86,30 @@ export function DiffView({
           />
         );
       })}
+      {fit.hidden > 0 ? <Text color={theme.muted}>{hiddenNote(fit.hidden)}</Text> : null}
     </>
   );
+}
+
+// Keep the leading rows that fit in `maxRows` display rows, one row reserved for the footer when
+// anything is cut. Counted with the wrap WrappedRow applies, so a long line costs what it draws.
+// Exported for unit tests.
+export function fitRowsToHeight(
+  lines: RenderRow[],
+  maxRows: number,
+  contentWidth: number,
+): { lines: RenderRow[]; hidden: number } {
+  const wrapWidth = Math.max(1, contentWidth - CONTINUATION.length);
+  const heights = lines.map(
+    row => wrapAnsi(row.text, wrapWidth, { trim: false, hard: true }).split('\n').length,
+  );
+  const total = heights.reduce((a, b) => a + b, 0);
+  if (total <= maxRows) return { lines, hidden: 0 };
+  const budget = Math.max(1, maxRows - 1);
+  let used = 0;
+  let kept = 0;
+  while (kept < lines.length && used + heights[kept] <= budget) used += heights[kept++];
+  return { lines: lines.slice(0, kept), hidden: lines.length - kept };
 }
 
 // File content reaches Ink here, and a tab in it is measured as zero columns while the terminal

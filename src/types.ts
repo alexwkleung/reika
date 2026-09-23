@@ -105,6 +105,9 @@ export type Message =
       // (agent/plantrack.ts seedPlanProgress), so the waiver must ride a message to survive —
       // without it every later turn would re-bounce the same adjudicated step.
       planWaived?: number[];
+      // About this launch rather than the conversation — the startup notices, the exit summary.
+      // Left out of the auto-save (#1), or every resume would replay them and stack a new set.
+      skipAutosave?: boolean;
     }
   // A deterministic recap that replaces an older span of history once context nears the
   // window. Lives only in the model-facing history (merged into the system prompt by
@@ -314,6 +317,10 @@ export type ToolContext = {
   // The turn's abort signal. A running command is killed on it, so ctrl-c reaches the child
   // instead of waiting out whatever bound would have ended it.
   signal?: AbortSignal;
+  // Whether bash may sandbox a command (#163), threaded from Config. Undefined means yes — the
+  // sandbox is on by default and only `REIKA_SANDBOX=0` turns it off — so a caller that predates the
+  // flag (a test, a subagent) gets the default rather than silently opting out.
+  sandbox?: boolean;
 };
 
 export type ToolParameters = {
@@ -351,6 +358,10 @@ export type Profile = {
   // The window above came from the endpoint's model listing (#417), not the env. It belongs to
   // this profile's model: a profile inheriting from this one must not carry it over.
   contextWindowProbed?: boolean;
+  // The model's output cap, from the models.dev catalog (provider/modellimits.ts). Bounds the
+  // max_tokens backstop, which otherwise asks a hosted model for more than it can emit. Belongs to
+  // this profile's model, like a probed window.
+  maxOutputTokens?: number;
   // Generation room reserved from the window, in tokens. Drives the per-turn max_tokens
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
@@ -376,6 +387,14 @@ export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 // (a human present is never a reason to inject silently), and headless applies a strong match
 // without asking, under the tighter 12-word gate.
 export type SkillAutoMode = 'off' | 'ask' | 'apply';
+// Pasted-URL fetching (#448), the same three values with the same split. A URL that IS the
+// request (short prompt, link at the start or end or after a read verb) is fetched under 'ask' and
+// 'apply' alike; one that merely appears in the prompt — inside a pasted error, a log line — is
+// what the mode decides. 'off' fetches nothing (an airgapped machine). 'ask' (default) — the TUI
+// opens the confirm dialog; headless, with nobody to ask, leaves it and says so. 'apply' — the TUI
+// still asks, and headless fetches it too, with the private-host policy kept since nobody vouched
+// for the address.
+export type PasteFetchMode = 'off' | 'ask' | 'apply';
 
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
@@ -425,6 +444,8 @@ export type Config = {
   profiles: Record<string, Profile>;
   maxTokens?: number;
   contextWindow?: number;
+  // The active profile's maxOutputTokens, overlaid by resolveProfile.
+  maxOutputTokens?: number;
   // Generation room reserved from the window, in tokens (REIKA_MIN_GEN_TOKENS). Drives
   // the per-turn max_tokens backstop, the fit-to-window payload reserve, and the
   // compaction trigger — one number, three call sites. See provider/budget.ts.
@@ -446,10 +467,16 @@ export type Config = {
   // Undefined lets the platform recognizer pick its default (en-US). Windows uses only the
   // first entry. Ignored when a vision model is configured.
   ocrLangs?: string[];
-  // Fetch http(s) URLs the user pastes into a prompt before the turn runs (REIKA_PASTE_FETCH=0
-  // to disable). On by default: pasting a link is an unambiguous request to read it. The opt-out
-  // exists because it's an outbound request on a machine that may be offline or airgapped.
-  pasteFetch: boolean;
+  // What to do with http(s) URLs in a prompt before the turn runs (REIKA_PASTE_FETCH). See
+  // PasteFetchMode and agent/pastedurls.ts.
+  pasteFetch: PasteFetchMode;
+  // Whether model-chosen shell commands run under the local sandbox (`REIKA_SANDBOX`, #163).
+  // Default on, macOS only; see tools/bash.ts's composition and tools/_sandbox.ts for the profile.
+  sandbox: boolean;
+  // Auto-save each TUI session under ~/.config/reika/history/projects/ for /resume
+  // (REIKA_AUTOSAVE, default on — see store/sessions.ts). Optional so a hand-built Config (tests)
+  // writes nothing to the home directory unless it asks to.
+  autosave?: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in

@@ -14,6 +14,8 @@
 // nothing changes — the gauge shows absolute tokens as before. Never throws; startup must not
 // depend on a network round trip succeeding.
 
+import { API_USER_AGENT } from '../version.js';
+
 const PROBE_TIMEOUT_MS = 3000;
 // Floored to the thousand below (24555 → 24000): the window bounds a budget, and a round number
 // under the real one is a margin, where one over it is a 400.
@@ -77,7 +79,10 @@ export async function probeContextWindow(opts: {
   for (const url of modelsEndpoints(opts.baseURL)) {
     try {
       const res = await fetch(url, {
-        headers: opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {},
+        headers: {
+          'User-Agent': API_USER_AGENT,
+          ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+        },
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
       reached = true;

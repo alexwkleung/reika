@@ -369,6 +369,55 @@ describe('groundCandidates — budget and host policy', () => {
     expect(out.note).toBeUndefined();
   });
 
+  // Observed: `http://vision:8081/v1` in a config test, fetched once per turn for three turns, each
+  // time telling the model "the network may be down" on an online machine. A dotless host is never
+  // public, so it is skipped before the cap and never charged to the budget.
+  it('skips a dotless host without fetching, charging, or writing a note', async () => {
+    const webBudget = budget();
+    const out = await groundUrls({ cwd: '/tmp', webBudget }, "baseURL: 'http://vision:8081/v1'");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(webBudget.fetches.used).toBe(0);
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toBeUndefined();
+  });
+
+  it('still grounds the dotted URL beside a dotless one', async () => {
+    await groundUrls(
+      { cwd: '/tmp', webBudget: budget() },
+      'http://vision:8081/v1 and https://example.com/docs',
+    );
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0][0])).toContain('example.com');
+  });
+
+  it('skips an edit to a test or fixture file whole', async () => {
+    for (const path of [
+      'src/ocr/select.test.ts',
+      'src/config.spec.ts',
+      'src/__tests__/config.ts',
+      'evals/fixtures/09-bash.ts',
+      'tests/setup.ts',
+    ]) {
+      const out = await groundUrls(
+        { cwd: '/tmp', webBudget: budget() },
+        'https://example.com/a',
+        path,
+      );
+      expect(out.note, path).toBeUndefined();
+    }
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('grounds a source file whose name merely contains "test"', async () => {
+    await groundUrls(
+      { cwd: '/tmp', webBudget: budget() },
+      'https://example.com/a',
+      'src/latest.ts',
+    );
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('still works with no budget on the context', async () => {
     const out = await groundUrls({ cwd: '/tmp' }, 'https://example.com/a');
     expect(out.note).toContain('example.com');

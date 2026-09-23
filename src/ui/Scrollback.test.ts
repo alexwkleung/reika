@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tailDisplay, tailText } from './Scrollback.js';
+import { allocateLiveRows, displayRows, fitTail, tailText } from './Scrollback.js';
 
 describe('tailText', () => {
   it('returns text unchanged when within the line budget', () => {
@@ -29,27 +29,59 @@ describe('tailText', () => {
   });
 });
 
-describe('tailDisplay', () => {
-  it('returns text unchanged when within the row budget', () => {
-    const t = 'a\nb\nc';
-    expect(tailDisplay(t, 5, 80)).toEqual({ text: t, truncated: false });
-  });
-
+describe('displayRows', () => {
   it('counts wrapped rows, not logical lines, so a long line costs many rows', () => {
-    // One logical line of 30 chars wraps to 3 rows at width 10. tailText would see
-    // it as a single line (under budget); tailDisplay must truncate it to 2 rows.
-    const t = 'w '.repeat(15).trim(); // "w w w ..." → 29 chars
-    const out = tailDisplay(t, 2, 10);
-    expect(out.truncated).toBe(true);
-    expect(out.text.split('\n').length).toBe(2);
+    const t = 'w '.repeat(15).trim(); // "w w w ..." → 29 chars, 3 rows at width 10
+    expect(displayRows(t, 10)).toHaveLength(3);
+  });
+});
+
+describe('fitTail', () => {
+  it('shows every row when they fit', () => {
+    expect(fitTail({ rows: ['a', 'b', 'c'], cut: false }, 5)).toEqual({
+      text: 'a\nb\nc',
+      marker: false,
+    });
   });
 
-  it('bounds rendered output to at most maxRows display rows', () => {
-    const t = Array.from({ length: 200 }, (_, i) => `row ${i} `.repeat(20)).join('\n');
-    const out = tailDisplay(t, 8, 40);
-    // The whole point: the live frame can never be taller than the budget, which is
+  it('counts the marker inside the allowance', () => {
+    const rows = Array.from({ length: 20 }, (_, i) => `row ${i}`);
+    const tail = fitTail({ rows, cut: false }, 8);
+    // The whole point: the live frame can never be taller than its share, which is
     // what keeps Ink from crossing `outputHeight >= rows` and clearing scrollback.
-    expect(out.text.split('\n').length).toBeLessThanOrEqual(8);
-    expect(out.truncated).toBe(true);
+    expect(tail.marker).toBe(true);
+    expect(tail.text.split('\n')).toEqual(rows.slice(-7));
+  });
+
+  it('marks a pre-trimmed block even when its rows fit', () => {
+    expect(fitTail({ rows: ['a'], cut: true }, 5).marker).toBe(true);
+  });
+});
+
+describe('allocateLiveRows', () => {
+  it('gives a lone block what it needs, up to the pool', () => {
+    expect(allocateLiveRows([4], 20)).toEqual([4]);
+    expect(allocateLiveRows([50], 20)).toEqual([20]);
+  });
+
+  // The regression: an even split dropped a 20-row reasoning tail to 10 the moment a 1-row
+  // answer began, so the frame shrank and the input jumped up mid-turn.
+  it('takes rows from the older block only as the newer one grows', () => {
+    expect(allocateLiveRows([50, 1], 20)).toEqual([19, 1]);
+    expect(allocateLiveRows([50, 6], 20)).toEqual([14, 6]);
+  });
+
+  it('never grows past the pool, and leaves each older block its floor', () => {
+    expect(allocateLiveRows([50, 50], 20)).toEqual([3, 17]);
+    expect(allocateLiveRows([50, 50, 50], 20)).toEqual([3, 3, 14]);
+  });
+
+  it('keeps the total from shrinking as a new block streams in', () => {
+    let prev = 0;
+    for (let answer = 1; answer <= 40; answer++) {
+      const total = allocateLiveRows([50, answer], 20).reduce((a, b) => a + b, 0);
+      expect(total).toBeGreaterThanOrEqual(prev);
+      prev = total;
+    }
   });
 });

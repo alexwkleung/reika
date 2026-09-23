@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -10,21 +10,28 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
-import { kFormat } from './format.js';
+import { probedLimitsNotice } from '../session.js';
 import { resolvePr } from './pr.js';
 import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
-import { SKILL_CONFIRM_APPLY, SKILL_CONFIRM_SEND, SkillConfirm } from './SkillConfirm.js';
-import { Question, type QuestionTyping } from './Question.js';
+import {
+  CONFIRM_ACCEPT,
+  CONFIRM_DECLINE,
+  Confirm,
+  type ConfirmSpec,
+  pastedUrlConfirmSpec,
+  skillConfirmSpec,
+} from './Confirm.js';
+import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import {
   inheritProfile,
   loadConfig,
   resolveDefaultMode,
   resolveProfile,
-  withProbedWindow,
+  withProbedLimits,
 } from '../config.js';
-import { probeContextWindow } from '../provider/contextwindow.js';
+import { needsLimitsProbe, probeModelLimits } from '../provider/modellimits.js';
 import {
   loadLastState,
   persistableMode,
@@ -44,6 +51,7 @@ import {
   saveTranscript,
   TRANSCRIPT_VERSION,
   type TranscriptShrinkEvent,
+  type TranscriptMeta,
   type TranscriptUsage,
 } from '../store/transcript.js';
 import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
@@ -53,14 +61,28 @@ import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
 import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
-import { expandPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldConfirmInject, type SkillMatch } from '../skillmatch.js';
+import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
+import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
 import { imageReader } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
-import { Suggestions } from './Suggestions.js';
+import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
+import { ResumeSelect } from './ResumeSelect.js';
+import {
+  countRealTurns,
+  forAutosave,
+  listSessions,
+  loadSession,
+  modelHistoryFromScrollback,
+  newSessionPath,
+  projectHistoryDir,
+  ROOT_HISTORY_DIR,
+  writeSession,
+  type SessionEntry,
+  type SessionSides,
+} from '../store/sessions.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
@@ -123,12 +145,7 @@ function promptPlaceholder(): string {
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
 }
 
-// A window the harness took off the endpoint changes what the session does (compaction, the
-// payload cap), so the user is told where the number came from — a gauge denominator alone
-// reads as configured.
-function probedWindowNotice(window: number): string {
-  return `Context window of ${kFormat(window)} tokens, reported by the endpoint (REIKA_CONTEXT_WINDOW overrides).`;
-}
+const AUTOSAVE_INTERVAL_MS = 3000;
 
 export function App() {
   const { exit } = useApp();
@@ -153,6 +170,7 @@ export function App() {
   const [streaming, setStreaming] = useState<string>('');
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
+  const [streamingToolName, setStreamingToolName] = useState<string>('');
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -183,6 +201,11 @@ export function App() {
   // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
   // enough to measure one. See agent/prefillcost.ts.
   const prefillRateRef = useRef<number | undefined>(undefined);
+  // Decode throughput (tokens/second) for the status bar's tok/s chip (#204) — the smoothed value
+  // in state for display, mirrored into a ref for the same reason as the two learners above: a new
+  // turn seeds from it, and a handler that hasn't re-rendered still has to read the latest.
+  const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
+  const decodeRateRef = useRef<number | undefined>(undefined);
   // Session-long so the prefix-cache line prices the turn boundary too (#426); see runTurn's opt.
   const prefixTraceRef = useRef(new PrefixTrace());
   const [pending, setPending] = useState<{
@@ -199,14 +222,15 @@ export function App() {
   } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
-  // The skill confirm (#425): the harness asking, before submit, whether a strongly matched skill
-  // should be applied. Modal like Approval; resolves to the skill name to apply, null for "send as
-  // typed", or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
-  const [skillConfirm, setSkillConfirm] = useState<{
-    match: SkillMatch;
-    resolve: (choice: string | null | 'abort') => void;
+  // The harness asking before submit (#425 skill confirm, #448 pasted-link confirm): one modal
+  // slot like Approval, whatever is being asked about. Resolves true to accept (apply the skill,
+  // fetch the link), false for "send as typed", or 'abort' (ctrl-c: nothing is sent and the
+  // prompt stays in the box).
+  const [confirm, setConfirm] = useState<{
+    spec: ConfirmSpec;
+    resolve: (accept: boolean | 'abort') => void;
   } | null>(null);
-  const [skillConfirmSelected, setSkillConfirmSelected] = useState<number>(SKILL_CONFIRM_SEND);
+  const [confirmSelected, setConfirmSelected] = useState<number>(CONFIRM_DECLINE);
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
@@ -223,6 +247,13 @@ export function App() {
   // disabled while it's open and the arrow keys drive the list.
   const [modelSelect, setModelSelect] = useState<ModelTarget[] | null>(null);
   const [modelSelected, setModelSelected] = useState(0);
+  // Interactive /resume picker (#1), modal the same way.
+  const [resumeSelect, setResumeSelect] = useState<{
+    entries: SessionEntry[];
+    heading: string;
+    projectDir: string;
+  } | null>(null);
+  const [resumeSelected, setResumeSelected] = useState(0);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
@@ -255,6 +286,8 @@ export function App() {
   // replay (the way images go back onto imageAttachmentsRef) so the replay routes on the decision
   // taken at keypress instead of asking again at drain, when nobody may be at the desk (#425).
   const queuedSkillRouteRef = useRef<string | null | undefined>(undefined);
+  // Same for the pasted-link confirm's answer (#448): fetch or not, decided at keypress.
+  const queuedUrlFetchRef = useRef<boolean | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
@@ -312,10 +345,10 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
-  const skillConfirmRef = useRef<typeof skillConfirm>(null);
-  skillConfirmRef.current = skillConfirm;
-  const skillConfirmSelectedRef = useRef<number>(SKILL_CONFIRM_SEND);
-  skillConfirmSelectedRef.current = skillConfirmSelected;
+  const confirmRef = useRef<typeof confirm>(null);
+  confirmRef.current = confirm;
+  const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
+  confirmSelectedRef.current = confirmSelected;
   const sessionAutoApproveRef = useRef<boolean | null>(null);
   sessionAutoApproveRef.current = sessionAutoApprove;
   const modeRef = useRef<Mode>('agent');
@@ -332,6 +365,22 @@ export function App() {
   modelSelectRef.current = modelSelect;
   const modelSelectedRef = useRef(0);
   modelSelectedRef.current = modelSelected;
+  const resumeSelectRef = useRef(resumeSelect);
+  resumeSelectRef.current = resumeSelect;
+  const resumeSelectedRef = useRef(0);
+  resumeSelectedRef.current = resumeSelected;
+  // The file this session auto-saves to (#1), fixed at its first save so every later save rewrites
+  // one file. null until then, and again after /new, so a new conversation gets a new file.
+  const sessionPathRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Writes run one after another: two in flight could rename out of order and leave the older
+  // snapshot on disk.
+  const autosaveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const autosaveFailedRef = useRef(false);
+  // Set by /resume to the real-turn count it loaded: nothing is written until the conversation
+  // grows past it, so opening a session and leaving neither copies a /save file into the project
+  // nor re-stamps a project session as the newest.
+  const autosaveHoldRef = useRef<number | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
   // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
@@ -366,6 +415,7 @@ export function App() {
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
+  const toolNameRef = useRef<string>('');
   const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reasoningFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
   const toolFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -391,6 +441,7 @@ export function App() {
     toolFlushTimerRef.current = setTimeout(() => {
       toolFlushTimerRef.current = null;
       setStreamingTool(toolRef.current);
+      setStreamingToolName(toolNameRef.current);
     }, 50);
   };
 
@@ -414,8 +465,8 @@ export function App() {
         // milliseconds, and it must land before the budget report below reads the window.
         const [b, probed] = await Promise.all([
           bootstrap(process.cwd(), cfg.repoMapBudget),
-          cfg.profiles[profile].contextWindow == null
-            ? probeContextWindow(cfg.profiles[profile])
+          needsLimitsProbe(cfg.profiles[profile])
+            ? probeModelLimits(cfg.profiles[profile])
             : Promise.resolve(undefined),
           cfg.anon
             ? detectIdentity(process.cwd())
@@ -423,7 +474,7 @@ export function App() {
                 .catch(() => {})
             : Promise.resolve(),
         ]);
-        if (probed?.window) cfg = withProbedWindow(cfg, profile, probed.window);
+        if (probed) cfg = withProbedLimits(cfg, profile, probed);
         if (probed && !probed.reached) windowRetryRef.current.add(profile);
         setConfig(cfg);
         setActiveProfile(profile);
@@ -458,7 +509,11 @@ export function App() {
         if (resumed.length > 0) {
           setMessages(prev => [
             ...prev,
-            { role: 'system', content: `Resumed ${resumed.join(' and ')} from the last session.` },
+            {
+              role: 'system',
+              content: `Resumed ${resumed.join(' and ')} from the last session.`,
+              skipAutosave: true,
+            },
           ]);
         }
         // The window/reserve arithmetic decides how much room reads and history get, and a
@@ -466,12 +521,20 @@ export function App() {
         // the model re-reading the same file (#262). Report the numbers to the log always, and
         // say so in the scrollback when they fall under the floor.
         debugLog(formatBudget(b, runtime));
-        if (probed?.window) {
-          const w = probed.window;
-          setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+        const limitsNotice = probed && probedLimitsNotice(probed);
+        if (limitsNotice) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: limitsNotice, skipAutosave: true },
+          ]);
         }
         const warn = budgetWarning(b, runtime);
-        if (warn) setMessages(prev => [...prev, { role: 'system', content: warn, tone: 'warn' }]);
+        if (warn) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: warn, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         if (offline) {
           setMessages(prev => [
             ...prev,
@@ -480,6 +543,7 @@ export function App() {
               content:
                 'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
               tone: 'warn',
+              skipAutosave: true,
             },
           ]);
         }
@@ -498,18 +562,18 @@ export function App() {
     [],
   );
 
-  // Every route to a new mode or profile (slash command, Shift+Tab, /implement, /clear, the
-  // picker) lands here, so the saved state can't miss one. The profile waits for the config, since
-  // until then 'default' is only the initial state and would overwrite the value about to be
-  // restored.
+  // Every route to a new mode (slash command, Shift+Tab, /implement, /clear) lands here, so the
+  // saved state can't miss one. The mount run is skipped: the start mode is already on disk, or is
+  // a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it pinned.
+  const modeMountedRef = useRef(false);
   useEffect(() => {
+    if (!modeMountedRef.current) {
+      modeMountedRef.current = true;
+      return;
+    }
     const persisted = persistableMode(mode);
     if (persisted) saveLastState({ mode: persisted });
   }, [mode]);
-  const configLoaded = config !== null;
-  useEffect(() => {
-    if (configLoaded) saveLastState({ profile: activeProfile });
-  }, [configLoaded, activeProfile]);
 
   useEffect(() => {
     if (!exitRequested) return;
@@ -569,15 +633,24 @@ export function App() {
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     setActiveProfile(target);
+    // Saved here rather than on every activeProfile change: /clear's reset to default and a launch
+    // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
+    saveLastState({ profile: target });
+    // The tok/s chip describes the model that produced it (#204) — left standing, the previous
+    // model's rate reads as the new one's until a round here measures one, which on a slow local
+    // endpoint is minutes of a number about the wrong engine.
+    decodeRateRef.current = undefined;
+    setDecodeRate(undefined);
     // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
     // is instant, and a turn submitted before the answer lands runs without a window, as it
     // would have anyway.
-    if (next.contextWindow == null) {
-      void probeContextWindow(next).then(({ window: w, reached }) => {
-        if (!reached) windowRetryRef.current.add(target);
-        if (!w) return;
-        setConfig(prev => (prev ? withProbedWindow(prev, target, w) : prev));
-        setMessages(prev => [...prev, { role: 'system', content: probedWindowNotice(w) }]);
+    if (needsLimitsProbe(next)) {
+      void probeModelLimits(next).then(probe => {
+        if (!probe.reached) windowRetryRef.current.add(target);
+        const notice = probedLimitsNotice(probe);
+        if (!notice) return;
+        setConfig(prev => (prev ? withProbedLimits(prev, target, probe) : prev));
+        setMessages(prev => [...prev, { role: 'system', content: notice }]);
       });
     }
     setMessages(prev => [
@@ -606,11 +679,11 @@ export function App() {
         setQuestion(null);
         setQuestionTyping(null);
       }
-      // An open skill confirm closes first, like the /model picker, and the turn (if one is
-      // running) keeps going: the dialog is about the prompt being submitted, not the turn.
-      if (!hadPending && !questionRef.current && skillConfirmRef.current) {
-        skillConfirmRef.current.resolve('abort');
-        setSkillConfirm(null);
+      // An open confirm closes first, like the /model picker, and the turn (if one is running)
+      // keeps going: the dialog is about the prompt being submitted, not the turn.
+      if (!hadPending && !questionRef.current && confirmRef.current) {
+        confirmRef.current.resolve('abort');
+        setConfirm(null);
         return;
       }
       if (statusRef.current === 'busy' && abortRef.current) {
@@ -618,9 +691,13 @@ export function App() {
         return;
       }
       if (hadPending) return;
-      // An open /model picker closes first, like esc.
+      // An open /model or /resume picker closes first, like esc.
       if (modelSelectRef.current) {
         setModelSelect(null);
+        return;
+      }
+      if (resumeSelectRef.current) {
+        setResumeSelect(null);
         return;
       }
       // Idle. A non-empty input clears first — catches the common accidental tap.
@@ -725,26 +802,41 @@ export function App() {
       // Modal while the list is up: the input is disabled, so no other key has anywhere to go.
       return;
     }
-    const sc = skillConfirmRef.current;
-    if (sc) {
+    const cf = confirmRef.current;
+    if (cf) {
       // Digits and y/n only move the cursor, as in the question dialog: Enter is the one key that
-      // answers, and y lands on Apply — the row Approval-trained fingers expect to be first.
+      // answers, and y lands on the accepting row — the one Approval-trained fingers expect first.
       if (key.upArrow) {
-        setSkillConfirmSelected(i => Math.max(SKILL_CONFIRM_SEND, i - 1));
+        setConfirmSelected(i => Math.max(CONFIRM_DECLINE, i - 1));
       } else if (key.downArrow) {
-        setSkillConfirmSelected(i => Math.min(SKILL_CONFIRM_APPLY, i + 1));
+        setConfirmSelected(i => Math.min(CONFIRM_ACCEPT, i + 1));
       } else if (input === '1' || input === 'n' || input === 'N') {
-        setSkillConfirmSelected(SKILL_CONFIRM_SEND);
+        setConfirmSelected(CONFIRM_DECLINE);
       } else if (input === '2' || input === 'y' || input === 'Y') {
-        setSkillConfirmSelected(SKILL_CONFIRM_APPLY);
+        setConfirmSelected(CONFIRM_ACCEPT);
       } else if (key.return) {
-        const apply = skillConfirmSelectedRef.current === SKILL_CONFIRM_APPLY;
-        setSkillConfirm(null);
-        sc.resolve(apply ? sc.match.skill.name : null);
+        const accept = confirmSelectedRef.current === CONFIRM_ACCEPT;
+        setConfirm(null);
+        cf.resolve(accept);
       }
       // No escape, for the reason Approval and Question bind none: a split arrow sequence arrives
       // as a bare escape on a loaded pty. Modal: the input is disabled, so nothing else has
       // anywhere to go.
+      return;
+    }
+    const rs = resumeSelectRef.current;
+    if (rs) {
+      if (key.upArrow) {
+        setResumeSelected(i => Math.max(0, i - 1));
+      } else if (key.downArrow) {
+        setResumeSelected(i => Math.min(rs.entries.length - 1, i + 1));
+      } else if (key.return) {
+        const sel = rs.entries[resumeSelectedRef.current];
+        setResumeSelect(null);
+        if (sel) void resumeSession(sel, rs.projectDir);
+      } else if (key.escape) {
+        setResumeSelect(null);
+      }
       return;
     }
     const ms = modelSelectRef.current;
@@ -807,6 +899,167 @@ export function App() {
     }
   });
 
+  // The header both /save and the auto-save write. `msgs` is what the file's body holds.
+  const transcriptMeta = (msgs: Message[], cwd: string, midTurn: boolean): TranscriptMeta => {
+    // Use the active profile's model/base so the saved meta reflects what was actually running,
+    // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
+    const profile = config!.profiles[activeProfileRef.current] ?? config!.profiles.default;
+    // Everything the status line shows, frozen at save time (#199). Computed exactly as the
+    // status bar computes it — same turn count, same last-call-else-estimate context — so the
+    // header and a screenshot of the footer can never disagree.
+    const last = lastUsageRef.current;
+    const totals = usageRef.current;
+    const window = profile.contextWindow ?? config!.contextWindow;
+    const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
+    const usage: TranscriptUsage = {
+      turns: msgs.filter(m => m.role === 'assistant').length,
+      promptTokens: totals.promptTokens,
+      completionTokens: totals.completionTokens,
+      ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+      contextTokens: last?.promptTokens ?? estimatedContextRef.current,
+      // No call has landed yet, so the context size above is the pre-send estimate.
+      ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
+      ...(window ? { contextWindow: window } : {}),
+      ...(usable ? { contextUsable: usable } : {}),
+      ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+      ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
+        ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
+        : {}),
+    };
+    return {
+      version: TRANSCRIPT_VERSION,
+      savedAt: new Date().toISOString(),
+      model: profile.model,
+      baseURL: profile.baseURL,
+      cwd,
+      messageCount: msgs.length,
+      mode: modeRef.current,
+      usage,
+      ...(midTurn ? { midTurn: true as const } : {}),
+    };
+  };
+
+  // Both sides of the chat boundary, wherever each currently lives.
+  const sessionSides = (): SessionSides => {
+    const stash = stashedMessagesRef.current;
+    return modeRef.current === 'chat'
+      ? { agent: stash.agent ?? [], chat: messagesRef.current }
+      : { agent: messagesRef.current, chat: stash.chat ?? [] };
+  };
+
+  const autosaveNow = (): Promise<void> => {
+    if (autosaveTimerRef.current !== null) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    if (!config?.autosave || !bundle) return autosaveChainRef.current;
+    const all = sessionSides();
+    const sides = { agent: forAutosave(all.agent), chat: forAutosave(all.chat) };
+    const turns = countRealTurns(sides.agent) + countRealTurns(sides.chat);
+    // Nothing typed yet — the splash notices alone are not a session worth listing.
+    if (turns === 0 || turns <= (autosaveHoldRef.current ?? 0)) return autosaveChainRef.current;
+    autosaveHoldRef.current = null;
+    sessionPathRef.current ??= newSessionPath(projectHistoryDir(bundle.cwd), new Date());
+    const path = sessionPathRef.current;
+    const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
+    autosaveChainRef.current = autosaveChainRef.current
+      .then(() => writeSession(path, sides, meta))
+      .catch((e: unknown) => {
+        // Said once: a full disk fails every save the same way, and the session itself is fine.
+        if (autosaveFailedRef.current) return;
+        autosaveFailedRef.current = true;
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'system',
+            tone: 'warn',
+            content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
+          },
+        ]);
+      });
+    return autosaveChainRef.current;
+  };
+
+  // When the auto-save runs: at once on the first real prompt (a session exists from the moment it
+  // is typed) and whenever the app goes idle (a turn ended, a command ran), and mid-turn at most
+  // once per AUTOSAVE_INTERVAL_MS, so a crash loses seconds of a long turn without a write per
+  // streamed round.
+  useEffect(() => {
+    if (!config?.autosave) return;
+    if (status !== 'busy' || sessionPathRef.current === null) {
+      void autosaveNow();
+      return;
+    }
+    if (autosaveTimerRef.current !== null) return;
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void autosaveNow();
+    }, AUTOSAVE_INTERVAL_MS);
+    // autosaveNow reads everything through refs; only these two changes mean there is news to save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, status]);
+
+  // What /new and /resume both drop: the conversation and everything measured about it. The next
+  // save starts a new file (/resume re-points it after this when it continues one).
+  const resetConversation = (): void => {
+    stashedMessagesRef.current = {};
+    modelHistoryRef.current = [];
+    // With the messages and stashes gone, no payloadId can reach the store anymore.
+    payloads.clear();
+    setPlanSteps(null);
+    setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+    setLastUsage(null);
+    setEstimatedContext(null);
+    setShrink({ sheds: 0, folds: 0 });
+    shrinkRef.current = { sheds: 0, folds: 0 };
+    shrinkEventsRef.current = [];
+    // The engine holds none of the resumed bytes, so the trace compares against nothing.
+    prefixTraceRef.current = new PrefixTrace();
+    if (autosaveTimerRef.current !== null) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    sessionPathRef.current = null;
+    autosaveHoldRef.current = null;
+  };
+
+  const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+    let sides: SessionSides;
+    try {
+      sides = await loadSession(entry.path);
+    } catch (e) {
+      setMessages(prev => [
+        ...prev,
+        { role: 'error', content: `resume failed: ${(e as Error).message}` },
+      ]);
+      return;
+    }
+    // Save whatever this session had before it is replaced.
+    await autosaveNow();
+    resetConversation();
+    // A project session carries on in its own file; a manual save from the root is left as it was
+    // and the continuation gets a project file of its own on its next save.
+    if (dirname(entry.path) === projectDir) sessionPathRef.current = entry.path;
+    autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
+    const inChat = modeRef.current === 'chat';
+    const active = inChat ? sides.chat : sides.agent;
+    const other = inChat ? sides.agent : sides.chat;
+    stashedMessagesRef.current = inChat
+      ? { agent: other, agentModel: modelHistoryFromScrollback(other) }
+      : { chat: other, chatModel: modelHistoryFromScrollback(other) };
+    modelHistoryRef.current = modelHistoryFromScrollback(active);
+    const where = inChat ? 'chat' : 'agent';
+    const otherNote =
+      other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
+    setMessages([
+      ...active,
+      {
+        role: 'system',
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
+      },
+    ]);
+  };
+
   const requestExit = (): void => {
     if (hasActivity(messagesRef.current)) {
       const summary = buildSummary(
@@ -815,7 +1068,7 @@ export function App() {
         sessionStartedAtRef.current,
         approvalsRef.current,
       );
-      setMessages(prev => [...prev, { role: 'system', content: summary }]);
+      setMessages(prev => [...prev, { role: 'system', content: summary, skipAutosave: true }]);
     }
     setExitRequested(true);
   };
@@ -953,22 +1206,16 @@ export function App() {
         echo,
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
-      stashedMessagesRef.current = {};
-      modelHistoryRef.current = [];
-      // With the messages and stashes gone, no payloadId can reach the store anymore.
-      payloads.clear();
-      setPlanSteps(null);
-      setTotalUsage({ promptTokens: 0, completionTokens: 0 });
-      setLastUsage(null);
-      setEstimatedContext(null);
-      setShrink({ sheds: 0, folds: 0 });
-      shrinkRef.current = { sheds: 0, folds: 0 };
-      shrinkEventsRef.current = [];
+      resetConversation();
       calibrationRef.current = 1;
       // /clear also drops back to the default profile, which may be a different model on different
       // hardware — a rate learned under the old one would misprice every round until it re-learns.
       prefillRateRef.current = undefined;
-      prefixTraceRef.current = new PrefixTrace();
+      // Same for decode throughput (#204): the chip describes the model that produced it, and
+      // /clear drops back to the default profile, which may be a different one on different
+      // hardware. The chip itself goes with the token counts it sits next to.
+      decodeRateRef.current = undefined;
+      setDecodeRate(undefined);
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
@@ -1076,6 +1323,54 @@ export function App() {
       return;
     }
 
+    if (name === 'resume') {
+      if (!config || !bundle) return;
+      const say = (content: string): void =>
+        setMessages(prev => [...prev, echo, { role: 'system', content }]);
+      if (statusRef.current === 'busy') {
+        say('Cannot resume while busy. Wait or ctrl-c to abort.');
+        return;
+      }
+      const target = args.trim().toLowerCase();
+      if (target !== '' && target !== 'root') {
+        say('Usage: /resume (this project) or /resume root (manual /save files).');
+        return;
+      }
+      const projectDir = projectHistoryDir(bundle.cwd);
+      // The session in progress is not something to resume into.
+      const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
+      let entries: SessionEntry[] = [];
+      let heading = 'saved with /save';
+      if (target === '') {
+        entries = (await listSessions(projectDir)).filter(notCurrent);
+        heading = 'this project';
+      }
+      // A project with no sessions yet falls back to the manual saves.
+      if (entries.length === 0) {
+        entries = await listSessions(ROOT_HISTORY_DIR);
+        if (target === '' && entries.length > 0)
+          heading = 'none for this project — saved with /save';
+      }
+      if (entries.length === 0) {
+        say(
+          target === 'root'
+            ? `No saved sessions in ${ROOT_HISTORY_DIR}.`
+            : config.autosave
+              ? 'No saved sessions for this project yet.'
+              : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
+        );
+        return;
+      }
+      setMessages(prev => [...prev, echo]);
+      // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
+      // every useInput handler, and an open picker would take it as a selection.
+      queueMicrotask(() => {
+        setResumeSelect({ entries, heading, projectDir });
+        setResumeSelected(0);
+      });
+      return;
+    }
+
     if (name === 'save') {
       if (!config || !bundle) return;
       const raw = args.trim().toLowerCase() === '--raw';
@@ -1089,48 +1384,11 @@ export function App() {
         setMessages(prev => [...prev, echo, { role: 'system', content: 'Nothing to save yet.' }]);
         return;
       }
-      // Use the active profile's model/base so the saved meta reflects what was actually running,
-      // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
-      const profile = config.profiles[activeProfileRef.current] ?? config.profiles.default;
-      // Everything the status line shows, frozen at save time (#199). Computed exactly as the
-      // status bar computes it — same turn count, same last-call-else-estimate context — so the
-      // header and a screenshot of the footer can never disagree.
-      const last = lastUsageRef.current;
-      const totals = usageRef.current;
-      const window = profile.contextWindow ?? config.contextWindow;
-      const usable = window
-        ? Math.round(compactThreshold(window, profile.minGenTokens))
-        : undefined;
-      const usage: TranscriptUsage = {
-        turns: msgs.filter(m => m.role === 'assistant').length,
-        promptTokens: totals.promptTokens,
-        completionTokens: totals.completionTokens,
-        ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
-        contextTokens: last?.promptTokens ?? estimatedContextRef.current,
-        // No call has landed yet, so the context size above is the pre-send estimate.
-        ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
-        ...(window ? { contextWindow: window } : {}),
-        ...(usable ? { contextUsable: usable } : {}),
-        ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
-        ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
-          ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
-          : {}),
-      };
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
           msgs,
-          {
-            version: TRANSCRIPT_VERSION,
-            savedAt: new Date().toISOString(),
-            model: profile.model,
-            baseURL: profile.baseURL,
-            cwd: bundle.cwd,
-            messageCount: msgs.length,
-            mode: modeRef.current,
-            usage,
-            ...(midTurn ? { midTurn: true as const } : {}),
-          },
+          transcriptMeta(msgs, bundle.cwd, midTurn),
           { redact: !raw },
         );
         setMessages(prev => [
@@ -1170,6 +1428,7 @@ export function App() {
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
           '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
+          '  /resume [root]     resume a saved session of this project (root: the /save files)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
@@ -1378,6 +1637,7 @@ export function App() {
         signal: controller.signal,
         onProgress: chunk => {
           toolRef.current += chunk;
+          toolNameRef.current = '';
           scheduleToolFlush();
         },
       });
@@ -1493,6 +1753,16 @@ export function App() {
     });
   };
 
+  // Open the confirm dialog and wait for its answer. Deferred past the current keypress dispatch:
+  // Ink hands the Enter that submitted to every useInput handler, and opening synchronously would
+  // let the dialog's own handler see it and answer "send as typed" on the spot.
+  const askConfirm = (spec: ConfirmSpec): Promise<boolean | 'abort'> => {
+    setConfirmSelected(CONFIRM_DECLINE);
+    return new Promise(resolve => {
+      queueMicrotask(() => setConfirm({ spec, resolve }));
+    });
+  };
+
   // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
   // a strong match opens the confirm dialog rather than injecting — the user is the classifier,
   // and the keyword matcher's false positives (a prompt that merely opens with the skill's noun)
@@ -1514,13 +1784,27 @@ export function App() {
     const match = matchSkill(prompt, bundle.skills);
     const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
     if (!match || !shouldConfirmInject(match, window)) return undefined;
-    setSkillConfirmSelected(SKILL_CONFIRM_SEND);
-    return new Promise(resolve => {
-      // Deferred past the current keypress dispatch: Ink hands the Enter that submitted to every
-      // useInput handler, and opening synchronously would let the dialog's own handler see it
-      // and answer "send as typed" on the spot.
-      queueMicrotask(() => setSkillConfirm({ match, resolve }));
-    });
+    const accept = await askConfirm(skillConfirmSpec(match));
+    return accept === 'abort' ? 'abort' : accept ? match.skill.name : null;
+  };
+
+  // The pasted-link confirm (#448): a URL that is not what the prompt is about — one inside a
+  // pasted error, a log line — is asked about rather than fetched, since a GET on a confirm or
+  // tracking link has already acted. A URL the prompt IS about (agent/pastedurls.ts's shape gate)
+  // needs no dialog and fetches as before. Resolves true/false for the fetch, 'abort' for ctrl-c,
+  // undefined when nothing needed asking. Same placement as the skill confirm: before the busy
+  // queue, so the entry carries the answer, and before the expansions, so no fetch precedes it.
+  const decidePastedUrls = async (prompt: string): Promise<boolean | 'abort' | undefined> => {
+    if (queuedUrlFetchRef.current !== undefined) {
+      const decided = queuedUrlFetchRef.current;
+      queuedUrlFetchRef.current = undefined;
+      return decided;
+    }
+    if (!config || config.pasteFetch === 'off') return undefined;
+    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
+    const plan = planPastedUrls(prompt);
+    if (plan.urls.length === 0 || plan.request) return undefined;
+    return askConfirm(pastedUrlConfirmSpec(plan.urls));
   };
 
   // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
@@ -1569,10 +1853,10 @@ export function App() {
   // regular image pipeline (hasImageMarker → attachImageBlocks) applies.
   // onSubmit re-seals itself while busy, so a still-busy replay just lands
   // back on the queue.
-  // Held while a skill confirm is up too: a replay under an open dialog could open a second one
-  // over it, and the first prompt's answer would never arrive.
+  // Held while a confirm is up too: a replay under an open dialog could open a second one over
+  // it, and the first prompt's answer would never arrive.
   useEffect(() => {
-    if (status !== 'idle' || pending !== null || skillConfirm !== null) return;
+    if (status !== 'idle' || pending !== null || confirm !== null) return;
     if (queueRef.current.length === 0) return;
     const [next, ...rest] = queueRef.current;
     queueRef.current = rest;
@@ -1580,10 +1864,11 @@ export function App() {
     const images = next.images ?? [];
     imageAttachmentsRef.current = images;
     queuedSkillRouteRef.current = next.skill;
+    queuedUrlFetchRef.current = next.fetchUrls;
     const markers = images.map(img => img.marker).join(' ');
     void onSubmit(next.content + (markers ? ` ${markers}` : ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pending, skillConfirm, queue]);
+  }, [status, pending, confirm, queue]);
 
   const onSubmit = async (input: string) => {
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
@@ -1637,10 +1922,13 @@ export function App() {
       // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
       const route = await decideSkillRoute(trimmed);
       if (route === 'abort') return;
+      const fetchUrls = await decidePastedUrls(trimmed);
+      if (fetchUrls === 'abort') return;
       const msg: QueuedMessage = {
         content: trimmed,
         images: images.length > 0 ? images : undefined,
         ...(route !== undefined ? { skill: route } : {}),
+        ...(fetchUrls !== undefined ? { fetchUrls } : {}),
       };
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
@@ -1661,6 +1949,8 @@ export function App() {
     // about should still be visible underneath. A ctrl-c leaves it there to edit.
     const route = await decideSkillRoute(trimmed);
     if (route === 'abort') return;
+    const fetchUrls = await decidePastedUrls(trimmed);
+    if (fetchUrls === 'abort') return;
     setInputValue('');
     setSuggestionState(null);
     if (!trimmed) return;
@@ -1691,7 +1981,8 @@ export function App() {
       // Scans `trimmed`, never the expanded text: a URL inside an @mention'd file is file
       // content, not a link the user handed over.
       const urls = await expandPastedUrls(trimmed, {
-        enabled: config.pasteFetch,
+        mode: config.pasteFetch,
+        incidental: fetchUrls,
         onStart: count => setExpanding(`Fetching ${count} pasted link${count > 1 ? 's' : ''}`),
       });
       pendingNoticesRef.current.push(
@@ -1772,12 +2063,13 @@ export function App() {
     let turnConfig = config;
     const profile = config.profiles[activeProfile];
     if (windowRetryRef.current.has(activeProfile) && profile?.contextWindow == null) {
-      const { window: w, reached } = await probeContextWindow(profile);
-      if (reached) windowRetryRef.current.delete(activeProfile);
-      if (w) {
-        turnConfig = withProbedWindow(config, activeProfile, w);
+      const probe = await probeModelLimits(profile);
+      if (probe.reached) windowRetryRef.current.delete(activeProfile);
+      const notice = probedLimitsNotice(probe);
+      if (notice) {
+        turnConfig = withProbedLimits(config, activeProfile, probe);
         setConfig(turnConfig);
-        pendingNoticesRef.current.push({ role: 'system', content: probedWindowNotice(w) });
+        pendingNoticesRef.current.push({ role: 'system', content: notice });
       }
     }
     resetTypecheck();
@@ -1876,8 +2168,9 @@ export function App() {
           reasoningRef.current += delta;
           scheduleReasoningFlush();
         },
-        onToolProgress: chunk => {
+        onToolProgress: (chunk, tool) => {
           toolRef.current += chunk;
+          toolNameRef.current = tool;
           scheduleToolFlush();
         },
         onPhase: p => {
@@ -1935,6 +2228,11 @@ export function App() {
         priorPrefillRate: prefillRateRef.current,
         onPrefillRate: r => {
           prefillRateRef.current = r;
+        },
+        priorDecodeRate: decodeRateRef.current,
+        onDecodeRate: r => {
+          decodeRateRef.current = r;
+          setDecodeRate(r);
         },
         prefixTrace: prefixTraceRef.current,
       });
@@ -2004,6 +2302,11 @@ export function App() {
         )
       : undefined;
 
+  // Live rows above a dialog (plan checklist, queued messages) it has to leave viewport room for.
+  const dialogReservedRows =
+    (planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0) +
+    (queue.length > 0 ? queue.length + 1 : 0);
+
   if (status === 'error') {
     return (
       <Box flexDirection="column">
@@ -2030,10 +2333,13 @@ export function App() {
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
             streamingNested={subagentLive || noteLive}
+            streamingCommand={streamingToolName === 'bash'}
             streamingBar={noteLive ? theme.info : undefined}
-            chromeRows={
-              planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0
-            }
+            showHeldWorked={status !== 'busy'}
+            // Everything the live frame draws besides the stream and the baseline chrome — the
+            // suggestion list and queue grow it mid-turn, and unbudgeted they push it to viewport
+            // height, where Ink repaints with a scrollback clear on every chunk (#470).
+            chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
           />
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
             <PlanProgress steps={planSteps} />
@@ -2076,12 +2382,17 @@ export function App() {
           ) : null}
           <QueuedList queue={queue} />
           {pending ? (
-            <Approval request={pending.request} selectedIndex={approvalSelected} />
+            <Approval
+              request={pending.request}
+              selectedIndex={approvalSelected}
+              reservedRows={dialogReservedRows}
+            />
           ) : question ? (
             <Question
               request={question.request}
               selectedIndex={questionSelected}
               typing={questionTyping}
+              reservedRows={dialogReservedRows}
             />
           ) : modelSelect ? (
             <ModelSelect
@@ -2096,8 +2407,14 @@ export function App() {
                   : undefined
               }
             />
-          ) : skillConfirm ? (
-            <SkillConfirm match={skillConfirm.match} selectedIndex={skillConfirmSelected} />
+          ) : resumeSelect ? (
+            <ResumeSelect
+              entries={resumeSelect.entries}
+              selectedIndex={resumeSelected}
+              heading={resumeSelect.heading}
+            />
+          ) : confirm ? (
+            <Confirm spec={confirm.spec} selectedIndex={confirmSelected} />
           ) : null}
           <Input
             // The question dialog is modal only while its list is up; once the user is typing an
@@ -2105,13 +2422,23 @@ export function App() {
             disabled={
               pending !== null ||
               modelSelect !== null ||
-              skillConfirm !== null ||
+              resumeSelect !== null ||
+              confirm !== null ||
               (question !== null && questionTyping === null)
             }
             attachedAbove={
-              pending !== null || question !== null || modelSelect !== null || skillConfirm !== null
+              pending !== null ||
+              question !== null ||
+              modelSelect !== null ||
+              resumeSelect !== null ||
+              confirm !== null
             }
             attachedBelow={suggestionState !== null}
+            reservedRows={
+              question
+                ? questionDialogHeight(question.request, questionTyping, dialogReservedRows)
+                : 0
+            }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
             mode={mode}
@@ -2143,6 +2470,7 @@ export function App() {
             sheds={shrink.sheds}
             folds={shrink.folds}
             cachedTokens={lastUsage?.cachedTokens}
+            decodeRate={decodeRate}
             pr={pr}
             autoApprove={
               config?.autoApprove === 'bypass'

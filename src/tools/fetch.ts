@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { WEB_USER_AGENT } from '../version.js';
 import { classifyPrivateUrl } from './_hosts.js';
 import { errorCode, offlineCode, rootMessage } from './_net.js';
 import {
@@ -143,7 +144,11 @@ export async function extractUrl(url: string, opts: ExtractOptions = {}): Promis
           };
         }
       }
-      const res = await fetch(current, { signal: controller.signal, redirect: 'manual' });
+      const res = await fetch(current, {
+        headers: { 'User-Agent': WEB_USER_AGENT },
+        signal: controller.signal,
+        redirect: 'manual',
+      });
       const location = redirectLocation(res);
       if (location !== undefined) {
         // Drain the redirect's body before moving on. `redirect: 'manual'` hands back a real

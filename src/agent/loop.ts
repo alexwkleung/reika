@@ -14,6 +14,7 @@ import type {
 } from '../types.js';
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import { callModel } from '../provider/client.js';
+import { latchesFor } from '../provider/latches.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { computeMaxTokens, shouldRetryTruncated } from '../provider/budget.js';
 import {
@@ -36,6 +37,7 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
+import { DecodeRate, decodeRate, formatRate } from './decoderate.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -55,6 +57,7 @@ import {
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
+import { sandboxExecAvailable } from '../tools/_sandbox.js';
 import { writeTargets } from '../tools/_writetargets.js';
 import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
@@ -617,10 +620,34 @@ export function prefixStableActive(contextWindow?: number): boolean {
 // after pushing one. Under REIKA_PREFIX_STABLE the ledgers ride the transient trailing note
 // instead of the system block (which the warm never sends — the note lands after the warm's
 // whole prefix), so the round-0 system is the bare base prompt.
+/**
+ * The tool-list-derived gates the agent prompt is built with. One function for both call sites
+ * (`buildRoundZeroPrefix` and `runTurn`), because the warm prefix is worthless if it diverges from
+ * round 0 by a line — see the canAsk note on buildSystemPrompt.
+ */
+export function promptGates(
+  tools: Tool[],
+  sandbox: boolean,
+): Pick<
+  Parameters<typeof buildSystemPrompt>[0],
+  'canAsk' | 'canSubagent' | 'sandbox' | 'canFetch' | 'canSearch'
+> {
+  const has = (name: string): boolean => tools.some(t => t.name === name);
+  return {
+    canAsk: has('ask_user'),
+    canSubagent: has('subagent'),
+    sandbox: sandbox && has('bash') && sandboxExecAvailable(),
+    canFetch: has('fetch_url'),
+    canSearch: has('search'),
+  };
+}
+
 export function buildRoundZeroPrefix(opts: {
   history: Message[];
   bundle: ContextBundle;
   promptMode: PromptMode;
+  // `config.sandbox`, for the agent prompt's sandbox sentence — same gate as runTurn's.
+  sandbox: boolean;
   // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
@@ -639,8 +666,7 @@ export function buildRoundZeroPrefix(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    canAsk: opts.tools.some(t => t.name === 'ask_user'),
-    canSubagent: opts.tools.some(t => t.name === 'subagent'),
+    ...promptGates(opts.tools, opts.sandbox),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
@@ -906,6 +932,11 @@ export function buildDroppedPayloadLedger(): string {
   ].join('\n');
 }
 
+// The answer settles the one point that was asked, not the turn: ask_user fires mid-discussion as
+// readily as mid-edit (its trigger is "two readings would produce different code"), and the earlier
+// "Build exactly what that answer says" read as a go-ahead to implement whatever was being discussed
+// — observed on an API model that reasoned "the system says build it" into an unrequested refactor.
+// The prohibition half is the anti-relitigation force weak models need and is unchanged.
 export function buildQuestionLedger(answers: { question: string; answer: string }[]): string {
   if (answers.length === 0) return '';
   const lines = ['', '--- reika status (auto-generated — not user input) ---'];
@@ -914,8 +945,8 @@ export function buildQuestionLedger(answers: { question: string; answer: string 
     lines.push(`  Q: ${a.question}`, `  A: ${a.answer}`);
   }
   lines.push(
-    'Build exactly what that answer says. Do not re-open it, do not weigh the alternatives again,',
-    'and do not ask about it a second time.',
+    'That settles this one point — continue what you were doing on that basis. Do not re-open it,',
+    'do not weigh the alternatives again, and do not ask about it a second time.',
   );
   return lines.join('\n');
 }
@@ -1064,12 +1095,20 @@ export async function runTurn(opts: {
   // rate to price themselves with — and those are the expensive ones.
   priorPrefillRate?: number;
   onPrefillRate?: (rate: number) => void;
+  // Learned decode throughput (tokens/second) — the status bar's `21 t/s` chip (#204). Threaded
+  // across turns for the same reason as the prefill rate, and smoothed for the same reason; decode
+  // only, since prefill's number is an estimate and stays in the debug log. See agent/decoderate.ts.
+  priorDecodeRate?: number;
+  // undefined blanks the chip: a subagent on another endpoint has no rate of its own yet.
+  onDecodeRate?: (rate: number | undefined) => void;
   // Session-long prefix-divergence trace (#426). The engine's cache still holds the previous turn's
   // last request when a new turn starts, so the comparison is only meaningful across the boundary
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
   // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
   prefixTrace?: PrefixTrace;
-  onToolProgress?: (chunk: string) => void;
+  // `tool` names the call the chunk came from: the UI indents only a `bash` tail, since that is the
+  // one that commits under a command chip (#461) — `search`'s bot-check line does not.
+  onToolProgress?: (chunk: string, tool: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
   // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
@@ -1092,14 +1131,13 @@ export async function runTurn(opts: {
   opts.history.push(userMsg);
   opts.onMessage(userMsg);
 
-  // canAsk/canSubagent/minimal must match what buildRoundZeroPrefix passes, or the warm prefix
+  // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
   // diverges from round 0.
   const baseSystem = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    canAsk: opts.tools.some(t => t.name === 'ask_user'),
-    canSubagent: opts.tools.some(t => t.name === 'subagent'),
+    ...promptGates(opts.tools, opts.config.sandbox),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
@@ -1319,6 +1357,10 @@ export async function runTurn(opts: {
   // that buys. The rate is learned from observed TTFT the way `calibration` is learned from the
   // provider's reported prompt tokens. See agent/prefillcost.ts.
   const prefillRate = new PrefillRate(opts.priorPrefillRate);
+  // How fast the model actually decodes, for the status bar (#204). Same learned-and-threaded shape
+  // as prefillRate, but this one is displayed rather than logged, and decode-only for that reason.
+  // See agent/decoderate.ts.
+  const decodeThroughput = new DecodeRate(opts.priorDecodeRate);
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -1337,6 +1379,7 @@ export async function runTurn(opts: {
       reasoningRounds: opts.config.reasoningRounds,
       minGenTokens: opts.config.minGenTokens,
       prefixStable,
+      latches: latchesFor(opts.config),
       trailingNote: roundSuffix,
     });
 
@@ -1827,6 +1870,7 @@ export async function runTurn(opts: {
             window,
             compactCalibration,
             opts.config.minGenTokens,
+            !latchesFor(opts.config).reasoningRoundtrip,
           )
         : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
     ) {
@@ -1861,6 +1905,7 @@ export async function runTurn(opts: {
               contextWindow: window,
               promptTokens: Math.round(rawEstimate() * calibration),
               userMaxTokens: opts.config.maxTokens,
+              modelMaxOutput: opts.config.maxOutputTokens,
             }),
             prefixStable,
             // Do not freeze this round's fresh payloads at the note request's render. Pre-shed the
@@ -1966,6 +2011,7 @@ export async function runTurn(opts: {
         () => rawEstimate() * compactCalibration,
         window,
         opts.config.minGenTokens,
+        !latchesFor(opts.config).reasoningRoundtrip,
       );
       agedThisRound = aged.marked > 0;
       if (aged.marked > 0) {
@@ -2133,6 +2179,7 @@ export async function runTurn(opts: {
         contextWindow: window,
         promptTokens: Math.round(sentEstimate * calibration),
         userMaxTokens: opts.config.maxTokens,
+        modelMaxOutput: opts.config.maxOutputTokens,
       }),
       // Set only on the one-shot Tier 2 logit-recovery round (see the rumination dead-end above);
       // undefined otherwise, so a normal turn's request is byte-identical to before.
@@ -2231,10 +2278,21 @@ export async function runTurn(opts: {
       );
       if (learned != null) opts.onPrefillRate?.(learned);
     }
+    // What that round decoded at (#204) — the status bar's tok/s chip. Both facts come off the
+    // response the engine just sent: `timing` splits prefill from decode, `usage` counts the tokens.
+    // The debug line quotes both the round's own sample and the value the chip actually shows, so
+    // the displayed number is checkable from the log alone — the smoothed one is a fold over the
+    // session's accepted samples, which nothing else records. `get()` rather than the observe
+    // result on purpose: a round too small to measure leaves the chip showing the last rate, and the
+    // log has to say the same thing the chip does.
+    const sample = decodeRate(response.usage, response.timing);
+    const learned = decodeThroughput.observe(response.usage, response.timing);
+    if (learned != null) opts.onDecodeRate?.(learned);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
-        `finishReason=${response.finishReason ?? '?'}\n`,
+        `finishReason=${response.finishReason ?? '?'} ` +
+        `decode=${formatRate(sample)} smoothed=${formatRate(decodeThroughput.get())}\n`,
     );
 
     if (opts.signal?.aborted) {
@@ -2880,10 +2938,11 @@ export async function runTurn(opts: {
             askedQuestions,
             requestApproval: opts.requestApproval,
             requestQuestion,
-            onProgress: opts.onToolProgress,
-            spawnSubagent: makeSpawnSubagent(opts, subagentCalls),
+            onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
+            sandbox: opts.config.sandbox,
             signal: opts.signal,
           });
           summary = result.summary;
@@ -3251,7 +3310,11 @@ function commitAgentLoopStop(
 
 type RunTurnOpts = Parameters<typeof runTurn>[0];
 
-function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
+function makeSpawnSubagent(
+  parent: RunTurnOpts,
+  budget: SubagentBudget,
+  parentDecodeRate: DecodeRate,
+) {
   return async (sub: { task: string }): Promise<ToolResult> => {
     // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
     // allowed", and the width check is against the calls already honoured in this round.
@@ -3279,12 +3342,24 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
       baseURL: parent.config.subagentBaseURL ?? parent.config.baseURL,
       apiKey: parent.config.subagentApiKey ?? parent.config.apiKey,
       maxTurns: parent.config.subagentMaxTurns,
+      // The catalog's output cap is the parent model's; a different subagent model has its own.
+      maxOutputTokens:
+        parent.config.subagentModel && parent.config.subagentModel !== parent.config.model
+          ? undefined
+          : parent.config.maxOutputTokens,
     };
     // No `subagent` (no recursion) and no `ask_user`: a subagent runs underneath a tool call the
     // parent is already blocked on, so a question from down here would stack a second prompt on the
     // user with no context for where it came from. It degrades to "decide it yourself" instead.
     const subTools = parent.tools.filter(t => t.name !== 'subagent' && t.name !== 'ask_user');
     const subHistory: Message[] = [];
+    // The tok/s chip sits beside the token counts, and onUsage already reports the subagent's, so
+    // the rate has to follow it. On the same engine the two learners are one measurement, so the
+    // subagent continues the parent's rate and hands its own back; on another endpoint the chip
+    // blanks until the subagent has a sample, and the parent's rate comes back with the parent.
+    const sameEngine =
+      subConfig.model === parent.config.model && subConfig.baseURL === parent.config.baseURL;
+    if (!sameEngine) parent.onDecodeRate?.(undefined);
 
     parent.onSubagent?.(true);
     try {
@@ -3298,6 +3373,11 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
         signal: parent.signal,
         requestApproval: parent.requestApproval,
         onUsage: parent.onUsage,
+        priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
+        onDecodeRate: rate => {
+          if (sameEngine && rate != null) parentDecodeRate.adopt(rate);
+          parent.onDecodeRate?.(rate);
+        },
         onMessage: msg => parent.onMessage({ ...msg, nested: true } as Message),
         // Streaming + phase callbacks forward into the parent's live region (#342). They used to be
         // withheld "so the parent's live region stays clean", but the parent is blocked inside this
@@ -3315,6 +3395,7 @@ function makeSpawnSubagent(parent: RunTurnOpts, budget: SubagentBudget) {
       });
     } finally {
       parent.onSubagent?.(false);
+      if (!sameEngine) parent.onDecodeRate?.(parentDecodeRate.get());
       // The subagent's last phase was its report round ('thinking'); the parent is still
       // dispatching this round's tools.
       parent.onPhase?.('tool');

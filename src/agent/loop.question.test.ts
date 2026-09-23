@@ -22,6 +22,15 @@ describe('buildQuestionLedger', () => {
     expect(out).toMatch(/do not ask about it a second time/i);
   });
 
+  // The answer resolves one fork, not the whole task: a ledger that read "Build exactly what that
+  // answer says" was taken by a model mid-design-discussion as a go-ahead to implement.
+  it('scopes the answer to the point asked, never as a go-ahead to build', () => {
+    const out = buildQuestionLedger([{ question: 'q?', answer: 'a' }]);
+    expect(out).toMatch(/settles this one point/i);
+    expect(out).toMatch(/continue what you were doing/i);
+    expect(out).not.toMatch(/\bbuild\b/i);
+  });
+
   it('marks itself as harness-generated, not user input', () => {
     expect(buildQuestionLedger([{ question: 'q?', answer: 'a' }])).toContain(
       'auto-generated — not user input',

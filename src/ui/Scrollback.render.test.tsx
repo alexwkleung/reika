@@ -159,6 +159,8 @@ describe('Scrollback shell-mode scrubbing', () => {
 describe('Scrollback nested (subagent) messages', () => {
   const COLS = 60;
   const INDENT = 4;
+  // The command chip's marginLeft, which the committed output sits behind.
+  const CHIP = 4;
 
   const framePlusApp = (messages: Message[]): string => {
     const prev = process.stdout.columns;
@@ -246,6 +248,7 @@ describe('Scrollback nested (subagent) messages', () => {
     streamingReasoning?: string;
     streamingTool?: string;
     streamingNested?: boolean;
+    streamingCommand?: boolean;
   }): string => {
     const prev = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
@@ -258,6 +261,7 @@ describe('Scrollback nested (subagent) messages', () => {
             streamingReasoning={props.streamingReasoning ?? ''}
             streamingTool={props.streamingTool ?? ''}
             streamingNested={props.streamingNested}
+            streamingCommand={props.streamingCommand}
           />
         </Box>,
       );
@@ -283,13 +287,19 @@ describe('Scrollback nested (subagent) messages', () => {
 
   it('draws nested live content and tool tails at the nested indent, wrapped inside it', () => {
     const long = 'lorem ipsum dolor sit amet consectetur '.repeat(4).trim();
-    const frame = liveFrame({ streaming: long, streamingTool: long, streamingNested: true });
+    const frame = liveFrame({
+      streaming: long,
+      streamingTool: long,
+      streamingNested: true,
+      streamingCommand: true,
+    });
     const rows = frame.split('\n').filter(l => l.trim());
     expect(rows.length).toBeGreaterThan(2);
-    for (const row of rows) {
-      expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}\\S`));
-      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
-    }
+    // Content on the nested indent; the command tail one chip margin deeper, where its committed
+    // row lands under the `$ command` row (#461). Both wrap inside the nested box.
+    const leads = rows.map(row => /^ */.exec(row)![0].length);
+    expect(new Set(leads)).toEqual(new Set([1 + INDENT, 1 + INDENT + CHIP]));
+    for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
   });
 
   // #280: a compaction note's reasoning bar (committed and live) takes the info accent, matching
@@ -328,6 +338,114 @@ describe('Scrollback nested (subagent) messages', () => {
       liveFrame({ streamingReasoning: text }),
     );
     expect(liveFrame({ streamingReasoning: text })).toMatch(/^ ▎/m);
+  });
+});
+
+// #461: a running command's output streams into the live region before its committed chip exists,
+// and it has to land where that chip's output will — inside the command margin (the row the `$ …`
+// line and its output share, under the `↳ Ran: …` summary), not flush against the tool call above
+// it. Shell mode is the exception: its `shell` message draws the `$ command` row and then the output
+// at the left edge, so its live tail stays there too.
+describe('Scrollback live command tail indent', () => {
+  const COLS = 60;
+  const CHIP = 4;
+
+  const inApp = (node: React.ReactElement): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          {node}
+        </Box>,
+      );
+      return lastFrame() ?? '';
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  const liveToolFrame = (streamingTool: string, streamingCommand = true): string =>
+    inApp(
+      <Scrollback
+        messages={[]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool={streamingTool}
+        streamingCommand={streamingCommand}
+      />,
+    );
+
+  // The column a row's text starts in — the thing the issue is about.
+  const lead = (frame: string, needle: string): number => {
+    const row = frame.split('\n').find(l => l.includes(needle));
+    expect(row, `no row containing ${needle}`).toBeDefined();
+    return /^ */.exec(row!)![0].length;
+  };
+
+  it('draws a running command’s tail inside the command margin, where its committed row lands', () => {
+    const rows = liveToolFrame('Checking formatting...\nAll matched files are formatted.')
+      .split('\n')
+      .filter(l => l.trim());
+    expect(rows.length).toBe(2);
+    for (const row of rows) expect(row).toMatch(new RegExp(`^ {${1 + CHIP}}\\S`));
+  });
+
+  it('puts the live tail on the column of the committed output it becomes', () => {
+    const output = 'Checking formatting...\nAll matched files are formatted.';
+    const committed = inApp(
+      <Scrollback
+        messages={[
+          {
+            role: 'tool',
+            callId: 't1',
+            summary: 'Ran: npm run format:check (55 bytes output)',
+            command: { text: 'npm run format:check', outputTail: output, outputTruncated: false },
+          },
+        ]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    );
+    expect(lead(committed, 'Checking formatting')).toBe(
+      lead(liveToolFrame(output), 'Checking formatting'),
+    );
+  });
+
+  it('wraps a long tail inside the margin instead of running past the terminal', () => {
+    const long = Array.from(
+      { length: 6 },
+      (_, i) => `row ${i}: ${'lorem ipsum dolor '.repeat(6)}`,
+    ).join('\n');
+    const rows = liveToolFrame(long)
+      .split('\n')
+      .filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(6);
+    for (const row of rows) {
+      // Every row of the block, wrapped ones included: the break no longer leaves its space at the
+      // head of the continuation row, which used to stagger those rows one column right.
+      expect(row).toMatch(new RegExp(`^ {${1 + CHIP}}\\S`));
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  it('leaves shell mode’s live tail at the left edge, where its shell message prints it', () => {
+    const rows = liveToolFrame('total 8\ndrwxr-xr-x 1 octocat staff', false)
+      .split('\n')
+      .filter(l => l.trim());
+    expect(rows.length).toBe(2);
+    for (const row of rows) expect(row).toMatch(/^ \S/);
+  });
+
+  it('leaves a non-command tool’s live line at the left edge, where its notice commits', () => {
+    const rows = liveToolFrame(
+      'The search engine served a bot check. Complete it in the browser window.',
+      false,
+    )
+      .split('\n')
+      .filter(l => l.trim());
+    for (const row of rows) expect(row).toMatch(/^ \S/);
   });
 });
 
@@ -1005,5 +1123,61 @@ describe('Scrollback append-only log', () => {
     rerender(sb([a, b]));
     const last = rows([frames.at(-1) ?? '']);
     expect(last).toEqual(['❯ first', '❯ second']);
+  });
+});
+
+// A top-level turn's "Worked for" line committed with its message while the spinner was still up,
+// so the spinner leaving shrank the frame and moved the input up at the end of every turn. It is
+// held and drawn live in the spinner's rows until the next user message commits it.
+describe('Scrollback held "Worked for" line', () => {
+  const answer: Message = { role: 'assistant', content: 'The answer.', durationMs: 5_000 };
+  const notice: Message = { role: 'system', content: 'Typecheck passed.' };
+  const next: Message = { role: 'user', content: 'thanks' };
+  const sb = (messages: Message[], showHeldWorked: boolean) => (
+    <Scrollback
+      messages={messages}
+      streaming=""
+      streamingReasoning=""
+      streamingTool=""
+      showHeldWorked={showHeldWorked}
+    />
+  );
+  const rows = (frame: string | undefined): string[] =>
+    stripAnsi(frame ?? '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+
+  it('stays out of the frame while the spinner holds its rows', () => {
+    const { lastFrame } = render(sb([answer], false));
+    expect(rows(lastFrame())).toEqual(['The answer.']);
+  });
+
+  it('draws below end-of-turn notices once idle', () => {
+    const { lastFrame } = render(sb([answer, notice], true));
+    expect(rows(lastFrame())).toEqual(['The answer.', '❯ Typecheck passed.', '■ Worked for 5s']);
+  });
+
+  it('commits once, above the next user message', () => {
+    const { rerender, lastFrame } = render(sb([answer, notice], true));
+    rerender(sb([answer, notice, next], false));
+    expect(rows(lastFrame())).toEqual([
+      'The answer.',
+      '❯ Typecheck passed.',
+      '■ Worked for 5s',
+      '▎ thanks',
+    ]);
+  });
+
+  it('commits the previous line when another turn ends without a user message between', () => {
+    const second: Message = { role: 'assistant', content: 'Second.', durationMs: 2_000 };
+    const { rerender, lastFrame } = render(sb([answer], true));
+    rerender(sb([answer, second], true));
+    expect(rows(lastFrame())).toEqual([
+      'The answer.',
+      '■ Worked for 5s',
+      'Second.',
+      '■ Worked for 2s',
+    ]);
   });
 });

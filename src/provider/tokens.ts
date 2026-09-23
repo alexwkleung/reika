@@ -1,4 +1,5 @@
 import type { Message, Tool } from '../types.js';
+import type { EndpointLatches } from './latches.js';
 import { messagesToChatParams, toolsToChatTools } from './toolcall.js';
 
 // Average characters per token. ~4 is the common English/code heuristic; it tends to
@@ -26,6 +27,7 @@ export function estimateRequestTokens(
     reasoningRounds?: number;
     minGenTokens?: number;
     prefixStable?: boolean;
+    latches?: EndpointLatches;
     trailingNote?: string;
   },
 ): number {
@@ -36,6 +38,7 @@ export function estimateRequestTokens(
     reasoningRounds: opts?.reasoningRounds,
     minGenTokens: opts?.minGenTokens,
     prefixStable: opts?.prefixStable,
+    latches: opts?.latches,
     trailingNote: opts?.trailingNote,
   });
   const toolDefs = tools.length > 0 ? toolsToChatTools(tools) : [];

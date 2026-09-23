@@ -39,6 +39,7 @@ export function Input({
   history,
   attachedAbove,
   attachedBelow,
+  reservedRows = 0,
   onPasteImage,
   onPasteText,
 }: {
@@ -56,6 +57,9 @@ export function Input({
   // Same idea for the completion list, which hangs off the bottom instead: it
   // omits its top border and we omit our bottom border.
   attachedBelow?: boolean;
+  // Rows a live dialog above takes (the question dialog while the user types an answer): the box
+  // scrolls its window that much sooner so the two can't outgrow the viewport together (#456).
+  reservedRows?: number;
   // True while the completion/approval overlay owns Up/Down and Return (App
   // navigates/accepts); we leave those keys alone then instead of moving the
   // cursor between lines or submitting.
@@ -368,7 +372,7 @@ export function Input({
   const idlePrompt = mode === 'shell' ? '$ ' : mode === 'chat' ? '? ' : '> ';
   const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
-  const view = clampToViewport(value, cursor);
+  const view = clampToViewport(value, cursor, (process.stdout.rows || 24) - reservedRows);
 
   // marginX={-1} pulls the frame out to the terminal's edge columns, past the App's paddingX={1}:
   // a box-drawing line runs down the centre of its cell, so a border sharing a column with the
