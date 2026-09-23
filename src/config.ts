@@ -5,6 +5,7 @@ import type {
   AutoApproveMode,
   Config,
   DefaultMode,
+  PasteFetchMode,
   Profile,
   SkillAutoMode,
   VisionRoute,
@@ -101,7 +102,14 @@ export function loadConfig(): Config {
     // the reasoning roundtrip on providers that validate it).
     reasoningRounds: Math.max(1, parseIntOrUndef(process.env.REIKA_REASONING_ROUNDS) ?? 2),
     ocrLangs: parseList(process.env.REIKA_OCR_LANGS),
-    pasteFetch: process.env.REIKA_PASTE_FETCH !== '0',
+    pasteFetch: parsePasteFetch(process.env.REIKA_PASTE_FETCH),
+    // On by default, and only macOS has an implementation (#163) — see tools/_sandbox.ts. A flag
+    // rather than a hardcoded path because the sandbox changes what a command may do, so a run that
+    // is measuring anything about bash behavior needs a way to get the old world back.
+    sandbox: process.env.REIKA_SANDBOX !== '0',
+    // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
+    // conversations to disk at all, which is the one reason to want it off.
+    autosave: process.env.REIKA_AUTOSAVE !== '0',
     skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,
@@ -230,6 +238,23 @@ function parseVision(raw: string | undefined): VisionRoute | undefined {
   }
 }
 
+// REIKA_PASTE_FETCH, the same shape as REIKA_SKILL_AUTO (#448). '1'/'true' map to 'apply' because
+// before the shape gate they meant "fetch every pasted URL", which is what 'apply' still does
+// headless. Anything unrecognized is 'off': a typo should cost a fetch, not cause one.
+function parsePasteFetch(raw: string | undefined): PasteFetchMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'ask':
+      return 'ask';
+    case 'apply':
+    case '1':
+    case 'true':
+      return 'apply';
+    default:
+      return 'off';
+  }
+}
+
 // REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe', or
 // 'minimal'.
 // An unrecognized value falls back to 'agent' — fail-open, since a startup warning would have
@@ -281,25 +306,30 @@ function parseIntOrUndef(s: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Records a window the endpoint reported (#417) on one profile. The profile only — never the
-// top-level `contextWindow`, which every profile reads as its fallback and which would hand the
-// default model's window to a different model on a /model switch.
-export function withProbedWindow(config: Config, profileName: string, window: number): Config {
+// Records what the endpoint or the catalog reported (#417) on one profile. The profile only —
+// never the top-level `contextWindow`, which every profile reads as its fallback and which would
+// hand the default model's window to a different model on a /model switch. A configured value is
+// never overwritten: the env is the override.
+export function withProbedLimits(
+  config: Config,
+  profileName: string,
+  limits: { window?: number; maxOutput?: number },
+): Config {
   const profile = config.profiles[profileName];
   if (!profile) return config;
-  return {
-    ...config,
-    profiles: {
-      ...config.profiles,
-      [profileName]: { ...profile, contextWindow: window, contextWindowProbed: true },
-    },
-  };
+  const next: Profile = { ...profile };
+  if (limits.window && profile.contextWindow == null) {
+    next.contextWindow = limits.window;
+    next.contextWindowProbed = true;
+  }
+  if (limits.maxOutput && profile.maxOutputTokens == null) next.maxOutputTokens = limits.maxOutput;
+  return { ...config, profiles: { ...config.profiles, [profileName]: next } };
 }
 
 // A new profile built on `from` (an ad-hoc /model target) takes its connection settings but not
-// a probed window: that number was measured for `from`'s model, and the new one gets its own probe.
+// probed limits: those were measured for `from`'s model, and the new one gets its own probe.
 export function inheritProfile(from: Profile, model: string): Profile {
-  const { contextWindowProbed: _probed, ...rest } = from;
+  const { contextWindowProbed: _probed, maxOutputTokens: _maxOutput, ...rest } = from;
   return {
     ...rest,
     model,
@@ -318,6 +348,7 @@ export function resolveProfile(config: Config, profileName: string): Config {
     apiKey: profile.apiKey,
     maxTokens: profile.maxTokens,
     contextWindow: profile.contextWindow,
+    maxOutputTokens: profile.maxOutputTokens,
     minGenTokens: profile.minGenTokens ?? config.minGenTokens,
     // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route is
     // dead weight: `...config` above would carry the *default* profile's value straight over it, so

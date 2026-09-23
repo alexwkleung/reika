@@ -4,7 +4,12 @@
 
 export const theme = {
   accent: '#d68cd6', // soft orchid magenta — pastel but luminous enough to read as focus/selection
-  inlineCode: '#d7a8d7', // soft magenta echoing the accent, readable in prose
+  // Soft lilac: the one purple slot the palette had free — redder and brighter than the vibe
+  // periwinkle, far off the link blue, lighter and more saturated than the chat heather, and a
+  // clear step back from the orchid accent so code in prose no longer reads as a pink highlight.
+  // Unbolded on purpose: code recurs several times a line, and bold stacked on the hue (and
+  // brightened by some terminals) made it outweigh the prose it sits in.
+  inlineCode: '#d5afee',
   tool: '#c8c8c8',
   info: 'cyan',
   secondary: '#a0a0a0',
@@ -31,7 +36,7 @@ export const theme = {
   // Status-line mode tags. Every mode gets its own soft hue so the tag reads at a glance
   // (none of them near the yellow warning); the heavily-used modes take the brighter pastels
   // and the secondary ones sit a step back in saturation.
-  modeAgent: '#d7a8d7', // soft magenta, echoes inlineCode — the default workhorse
+  modeAgent: '#d7a8d7', // soft magenta, echoes the accent — the default workhorse
   modePlan: '#8fd0c8', // soft teal-cyan; also the plan-checklist header (PlanProgress) — teal = plan everywhere
   modeVibe: '#b4aee0', // soft periwinkle between plan teal and agent magenta — vibe runs both phases
   // Heather: a desaturated violet, greyer and darker than the vibe periwinkle and agent magenta

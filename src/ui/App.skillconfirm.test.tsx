@@ -30,9 +30,10 @@ const CONFIG: Config = {
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
   bashIdleMs: 1000,
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'ask',
   anon: false,
+  sandbox: false,
 };
 
 const BUNDLE: ContextBundle = {
@@ -119,7 +120,7 @@ async function waitFor(app: Harness, re: RegExp, ms = 3000) {
   expect(plain(app.lastFrame())).toMatch(re);
 }
 
-const DIALOG = /⏺︎ Skill\s+\/review/;
+const DIALOG = /● Skill\s+\/review/;
 const turnInput = (n: number) => (runTurn.mock.calls[n][0] as { userInput: string }).userInput;
 const turnSkill = (n: number) => (runTurn.mock.calls[n][0] as { userSkill?: string }).userSkill;
 

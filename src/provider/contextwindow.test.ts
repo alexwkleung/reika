@@ -5,6 +5,7 @@ import {
   parseContextWindow,
   probeContextWindow,
 } from './contextwindow.js';
+import { API_USER_AGENT } from '../version.js';
 
 const llamaListing = (n_ctx: number, id = 'qwen3.8-27b', aliases: string[] = []) => ({
   object: 'list',
@@ -146,6 +147,7 @@ describe('probeContextWindow', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://localhost:8080/v1/models');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer k');
+    expect((init.headers as Record<string, string>)['User-Agent']).toBe(API_USER_AGENT);
   });
 
   it('reports no window on a non-2xx, a bad body, or a listing without one — reached', async () => {

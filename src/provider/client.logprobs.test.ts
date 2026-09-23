@@ -44,9 +44,10 @@ const config = (): Config => ({
   maxFetchesPerTurn: 0,
   bashTimeoutMs: 5000,
   bashIdleMs: 5000,
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'off',
   anon: false,
+  sandbox: false,
 });
 
 const textChunk = (content: string): ChatCompletionChunk => ({ choices: [{ delta: { content } }] });
@@ -137,12 +138,27 @@ describe('callModel logprobs (issue #134)', () => {
     expect(h.bodies[1]).not.toHaveProperty('logprobs');
     expect(h.bodies[1]).not.toHaveProperty('top_logprobs');
 
-    // Latched off for the session: the next round pays no failed round-trip.
+    // Latched off for this endpoint: the next round pays no failed round-trip.
     h.scripted.push({ chunks: [textChunk('second')] });
     const second = await call(5);
     expect(second.content).toBe('second');
     expect(h.bodies).toHaveLength(3);
     expect(h.bodies[2]).not.toHaveProperty('logprobs');
+  });
+
+  it('asks another endpoint again after one refused the fields', async () => {
+    h.scripted.push({ throwAt: 'start' }, { chunks: [textChunk('recovered')] });
+    await call(5);
+    h.scripted.push({ chunks: [textChunk('elsewhere')] });
+    await callModel({
+      system: 'sys',
+      history: [],
+      tools: [],
+      config: { ...config(), baseURL: 'https://api.example.com/v1' },
+      logprobs: 5,
+    });
+    expect(h.bodies).toHaveLength(3);
+    expect(h.bodies[2]).toMatchObject({ logprobs: true, top_logprobs: 5 });
   });
 
   it('does not retry after content has streamed — that would duplicate it', async () => {

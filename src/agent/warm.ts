@@ -2,6 +2,7 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import type { PromptMode } from './prompt.js';
 import { buildRoundZeroPrefix, prefixStableActive } from './loop.js';
 import { shouldCompact } from './compaction.js';
+import { latchesFor } from '../provider/latches.js';
 import { estimateRequestTokens } from '../provider/tokens.js';
 import { callModel } from '../provider/client.js';
 import { debugLog } from '../debug.js';
@@ -78,6 +79,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     bundle: ctx.bundle,
     promptMode: ctx.promptMode,
     minimalPrompt: ctx.minimalPrompt,
+    sandbox: ctx.config.sandbox,
     tools: ctx.tools,
     contextWindow: ctx.config.contextWindow,
     calibration: ctx.calibration,
@@ -100,6 +102,7 @@ export function shouldSkipWarm(
     reasoningRounds: ctx.config.reasoningRounds,
     minGenTokens: ctx.config.minGenTokens,
     prefixStable: prefixStableActive(ctx.config.contextWindow),
+    latches: latchesFor(ctx.config),
   });
   const projected = (estimate + USER_MSG_ALLOWANCE_TOKENS) * ctx.calibration;
   if (shouldCompact(projected, ctx.config.contextWindow, ctx.config.minGenTokens)) {

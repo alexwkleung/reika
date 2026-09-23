@@ -4,7 +4,7 @@ import {
   loadConfig,
   resolveDefaultMode,
   resolveProfile,
-  withProbedWindow,
+  withProbedLimits,
 } from './config.js';
 
 const ENV_KEYS = [
@@ -497,12 +497,12 @@ describe('contextWindow', () => {
   });
 });
 
-describe('withProbedWindow (#417)', () => {
+describe('withProbedLimits (#417)', () => {
   it('sets the window on that profile only, marked as probed, and resolves through', () => {
     process.env.REIKA_MODEL = 'm';
     process.env.REIKA_PROFILES = 'kimi';
     process.env.REIKA_KIMI_MODEL = 'kimi-k2';
-    const cfg = withProbedWindow(loadConfig(), 'default', 24000);
+    const cfg = withProbedLimits(loadConfig(), 'default', { window: 24000 });
     expect(cfg.profiles.default.contextWindow).toBe(24000);
     expect(cfg.profiles.default.contextWindowProbed).toBe(true);
     expect(resolveProfile(cfg, 'default').contextWindow).toBe(24000);
@@ -512,10 +512,19 @@ describe('withProbedWindow (#417)', () => {
     expect(resolveProfile(cfg, 'kimi').contextWindow).toBeUndefined();
   });
 
+  it('never overrides a configured window, but still records the output cap', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_CONTEXT_WINDOW = '300000';
+    const cfg = withProbedLimits(loadConfig(), 'default', { window: 1000000, maxOutput: 131072 });
+    expect(cfg.profiles.default.contextWindow).toBe(300000);
+    expect(cfg.profiles.default.contextWindowProbed).toBeUndefined();
+    expect(resolveProfile(cfg, 'default').maxOutputTokens).toBe(131072);
+  });
+
   it('is a no-op for an unknown profile', () => {
     process.env.REIKA_MODEL = 'm';
     const cfg = loadConfig();
-    expect(withProbedWindow(cfg, 'nope', 24000)).toBe(cfg);
+    expect(withProbedLimits(cfg, 'nope', { window: 24000 })).toBe(cfg);
   });
 });
 
@@ -532,11 +541,17 @@ describe('inheritProfile (#417)', () => {
 
   it('drops a probed window — it was measured for the other model', () => {
     process.env.REIKA_MODEL = 'm';
-    const from = withProbedWindow(loadConfig(), 'default', 24000).profiles.default;
+    const from = withProbedLimits(loadConfig(), 'default', { window: 24000 }).profiles.default;
     const p = inheritProfile(from, 'other');
     expect(p.contextWindow).toBeUndefined();
     expect(p.contextWindowProbed).toBeUndefined();
     expect(p.model).toBe('other');
+  });
+
+  it('drops a catalog output cap — it belongs to the other model', () => {
+    process.env.REIKA_MODEL = 'm';
+    const from = withProbedLimits(loadConfig(), 'default', { maxOutput: 131072 }).profiles.default;
+    expect(inheritProfile(from, 'other').maxOutputTokens).toBeUndefined();
   });
 });
 
@@ -710,6 +725,30 @@ describe('REIKA_SKILL_AUTO (#425)', () => {
     for (const v of ['off', '0', 'false', 'aks']) {
       process.env.REIKA_SKILL_AUTO = v;
       expect(loadConfig().skillAuto, v).toBe('off');
+    }
+  });
+});
+
+describe('REIKA_SANDBOX (#163)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+    delete process.env.REIKA_SANDBOX;
+  });
+
+  // On by default, which is the whole point: the commands it covers are the ones a human never saw,
+  // so an opt-in flag would leave the autonomous case — the one it exists for — unprotected.
+  it('unset is on', () => {
+    expect(loadConfig().sandbox).toBe(true);
+  });
+
+  it('only =0 turns it off, so a typo leaves the sandbox in place', () => {
+    for (const v of ['0']) {
+      process.env.REIKA_SANDBOX = v;
+      expect(loadConfig().sandbox, v).toBe(false);
+    }
+    for (const v of ['1', 'true', 'yes', '']) {
+      process.env.REIKA_SANDBOX = v;
+      expect(loadConfig().sandbox, v).toBe(true);
     }
   });
 });

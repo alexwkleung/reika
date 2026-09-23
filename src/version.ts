@@ -15,3 +15,11 @@ try {
 }
 
 export const VERSION = version;
+
+// Sent on every outbound request so reika identifies itself by name rather than as undici's
+// default `node` — the generic-library fingerprint that bot filters deny and that API providers
+// (OpenCode Go states it outright) ask clients not to use. Two shapes: a bare product token for
+// API calls, and the `Mozilla/5.0 (compatible; …)` crawler convention for web pages, which tells
+// a site "a bot that renders modern HTML" without pretending to be a browser.
+export const API_USER_AGENT = `reika/${VERSION}`;
+export const WEB_USER_AGENT = `Mozilla/5.0 (compatible; reika/${VERSION})`;

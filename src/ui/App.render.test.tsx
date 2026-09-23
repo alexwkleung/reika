@@ -21,6 +21,12 @@ const CONFIG: Config = {
   subagentMaxTurns: 5,
   profiles: {
     default: { model: 'test-model', baseURL: 'http://127.0.0.1:1/v1', apiKey: 'test' },
+    alt: {
+      model: 'alt-model',
+      baseURL: 'http://127.0.0.1:1/v1',
+      apiKey: 'test',
+      contextWindow: 8000,
+    },
   },
   minGenTokens: 512,
   reasoningRounds: 1,
@@ -28,9 +34,10 @@ const CONFIG: Config = {
   maxFetchesPerTurn: 3,
   bashTimeoutMs: 1000,
   bashIdleMs: 1000,
-  pasteFetch: false,
+  pasteFetch: 'off',
   skillAuto: 'off',
   anon: false,
+  sandbox: false,
 };
 
 const BUNDLE: ContextBundle = {
@@ -263,12 +270,25 @@ describe('last session state (#365)', () => {
     app.unmount();
   });
 
-  it('records the mode and profile once loaded, and nothing for a saved profile the config lacks', async () => {
+  it('writes nothing at startup, so a launch pin or a fallback does not replace the saved state', async () => {
     lastState.value = { profile: 'gone' };
     const app = await mountApp();
     expect(plain(app.lastFrame())).not.toContain('Resumed');
-    expect(savedState).toHaveBeenCalledWith({ mode: 'agent' });
+    expect(savedState).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it('opens on the saved profile, saves a /model switch, and keeps it through /clear', async () => {
+    lastState.value = { profile: 'alt' };
+    const app = await mountApp();
+    expect(plain(app.lastFrame())).toContain('alt-model');
+    await submit(app, '/model default');
     expect(savedState).toHaveBeenCalledWith({ profile: 'default' });
+    await submit(app, '/model alt');
+    expect(savedState).toHaveBeenLastCalledWith({ profile: 'alt' });
+    savedState.mockClear();
+    await submit(app, '/clear');
+    expect(savedState).not.toHaveBeenCalledWith({ profile: 'default' });
     app.unmount();
   });
 

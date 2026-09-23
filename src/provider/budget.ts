@@ -26,15 +26,19 @@ export const BUDGET_MARGIN_TOKENS = 384;
 // here on purpose: it's guaranteed by compaction, and forcing it up would override an
 // intentionally-small REIKA_MAX_TOKENS. The 256 floor is a last-resort so a prompt that
 // (even after compaction) nearly fills the window still gets a few tokens to emit an
-// error or a terse reply rather than a zero-budget request.
+// error or a terse reply rather than a zero-budget request. `modelMaxOutput` bounds the
+// window room: on a hosted 300k window that room is ~295k, and a model capped at 131k
+// rejects the request outright rather than clamping it.
 export function computeMaxTokens(opts: {
   contextWindow?: number;
   promptTokens: number; // calibrated, real-token estimate of the prompt
   userMaxTokens?: number;
+  modelMaxOutput?: number;
 }): number | undefined {
-  const { contextWindow: cw, promptTokens, userMaxTokens } = opts;
-  if (!cw) return userMaxTokens;
-  const ceiling = Math.max(256, cw - promptTokens - BUDGET_MARGIN_TOKENS);
+  const { contextWindow: cw, promptTokens, userMaxTokens, modelMaxOutput } = opts;
+  const outputCap = modelMaxOutput ?? Infinity;
+  if (!cw) return userMaxTokens ? Math.min(userMaxTokens, outputCap) : undefined;
+  const ceiling = Math.min(outputCap, Math.max(256, cw - promptTokens - BUDGET_MARGIN_TOKENS));
   return userMaxTokens ? Math.min(userMaxTokens, ceiling) : ceiling;
 }
 

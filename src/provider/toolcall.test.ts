@@ -1590,6 +1590,41 @@ describe('messagesToChatParams prefix-stable', () => {
     expect(reasonings2).toEqual([undefined, 'think 2']);
   });
 
+  it('keeps every roundtrip once an endpoint has demanded the reasoning back (latch)', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      { ...toolRound('r1')[0], reasoning: 'think 1' } as Message,
+      toolRound('r1')[1],
+      { ...toolRound('r2')[0], reasoning: 'think 2' } as Message,
+      toolRound('r2')[1],
+    ];
+    // The aging sweep must not outvote the latch either — the endpoint wants the byte back even
+    // though prefix-stable eviction already marked it spent.
+    (history[1] as Message & { role: 'assistant' }).reasoningAged = true;
+    const latches = { reasoningRoundtrip: true, toolMessageName: false };
+    for (const prefixStable of [true, false]) {
+      const out = messagesToChatParams('sys', history, {
+        prefixStable,
+        reasoningRounds: 1,
+        latches,
+      });
+      const reasonings = out
+        .filter(m => m.role === 'assistant')
+        .map(m => (m as { reasoning_content?: string }).reasoning_content);
+      expect(reasonings).toEqual(['think 1', 'think 2']);
+    }
+  });
+
+  it('omits name on tool messages once an endpoint has rejected it (latch)', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+    const before = messagesToChatParams('sys', history)[3] as { name?: string };
+    expect(before.name).toBe('read');
+    const out = messagesToChatParams('sys', history, {
+      latches: { reasoningRoundtrip: false, toolMessageName: true },
+    });
+    expect(out[3]).not.toHaveProperty('name');
+  });
+
   it('appends the trailing note as the final user message', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
     const out = messagesToChatParams('sys', history, { trailingNote: '--- reika status ---' });

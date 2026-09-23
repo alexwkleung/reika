@@ -3,6 +3,9 @@ import type { NativeImage } from '../agent/attachments.js';
 import type { ChatMessageParam, ChatTool } from './transport.js';
 import { imageContentPart } from './transport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
+import type { EndpointLatches } from './latches.js';
+
+type ShapeLatches = Pick<EndpointLatches, 'reasoningRoundtrip' | 'toolMessageName'>;
 
 // Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
 // token-denominated window to the char-denominated payload length.
@@ -254,6 +257,33 @@ type AgedContent = { content: string; kind: AgedKind };
 // records, so a verification run could not tell an outline that fired from one that never did.
 export type AgedStats = Record<AgedKind, number>;
 
+// Endpoint-shape rejections (latched per endpoint in latches.ts, the same family as the
+// logprobs/tool_choice latches). Strict upstreams — the validators behind hosted routers like OpenCode Go — 400 on two
+// shapes reika emits by default:
+//   - a pruned old `reasoning_content` ("The reasoning_content in the thinking mode must be
+//     passed back to the API"): the REIKA_REASONING_ROUNDS window and the prefix-stable aging
+//     sweep both drop older reasoning, and this endpoint wants every bit it returned passed back;
+//   - the `name` this file adds to tool messages (`"name" is not supported by this endpoint):
+//     OpenAI's wire shape accepts role/tool_call_id/content on tool messages only.
+// client.ts's degrade ladder classifies the rejection text (shapeRejection), latches it for that
+// endpoint, and re-serializes — the retried request, and every later request to that endpoint,
+// carry the shape it accepts (the caller passes the latches in as `opts.latches`). Cost when the
+// reasoning latch fires: that endpoint gives up the round-window saving for the session — a 400
+// costs the turn outright, so keeping is the only side that can lose.
+
+export type ShapeRejection = 'reasoning-roundtrip' | 'tool-message-name';
+
+// Classify a transport error by the backend's own words; null for anything else — only a
+// rejection naming its cause may spend a retry. Matched against the whole error string
+// (`chat/completions failed: 400 … — {raw JSON body}`), whose quotes arrive JSON-escaped, so
+// each pattern tolerates a backslash before them.
+export function shapeRejection(reason: string): ShapeRejection | null {
+  if (/`?reasoning_content`?[\s\S]{0,80}must be passed back/.test(reason))
+    return 'reasoning-roundtrip';
+  if (/(\\?")name(\\?") is not supported/.test(reason)) return 'tool-message-name';
+  return null;
+}
+
 // The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
 // transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
 export function messagesToChatParams(
@@ -275,6 +305,16 @@ export function messagesToChatParams(
     // estimates must not stamp, or WHEN a payload freezes would depend on estimate timing (which
     // varies with debug logging) instead of deterministically on the request that first sent it.
     stampRenders?: boolean;
+    // Ignore the frozen `m.rendered` stamps for this pass, so live payloads are re-rendered — and
+    // therefore re-capped — instead of reusing bytes capped against a different request. Set only
+    // by client.ts's shape-rejection retry: the first serialize stamped under a cap that did not
+    // yet count the reasoning the retry restores, and a frozen payload is a *fixed* cost to the
+    // cap, so without this the retry would carry the payloads AND the reasoning it just re-added —
+    // over the budget the cap exists to enforce, on the one request that must not 400 again.
+    rerender?: boolean;
+    // The target endpoint's shape latches (latches.ts). Estimates pass them too, so a latched
+    // endpoint's larger request is what the compaction trigger and the cap measure.
+    latches?: ShapeLatches;
     // Transient per-round harness note (loop ledgers / nudges) appended as the FINAL user message
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
@@ -318,7 +358,9 @@ export function messagesToChatParams(
   // break, see the cloud-thinking-models note) and drop older reasoning.
   const reasoningRounds =
     opts?.reasoningRounds && opts.reasoningRounds > 0 ? opts.reasoningRounds : 1;
-  const keepReasoningFrom = reasoningKeepFromIndex(history, reasoningRounds);
+  // Latched roundtrip (shape rejection above): keep every round's reasoning, not just the last N.
+  const keepAllReasoning = !!opts?.latches?.reasoningRoundtrip;
+  const keepReasoningFrom = keepAllReasoning ? 0 : reasoningKeepFromIndex(history, reasoningRounds);
   // Compaction recaps fold into the single leading system block (rather than a second
   // system message mid-array) for the widest chat-template compatibility.
   const recaps = history.filter(m => m.role === 'compaction').map(m => m.content);
@@ -335,7 +377,13 @@ export function messagesToChatParams(
   const systemContent = recapText && hasUserTurn ? `${system}\n\n${recapText}` : system;
   // The newest live read is the model's edit source — candidate for verbatim protection (see
   // PROTECTED_READ_FLOOR_CHARS). Whether protection actually holds is the cap's call below.
-  const protectedIdx = newestLiveReadIndex(history, freshFrom, stubbed, prefixStable);
+  const protectedIdx = newestLiveReadIndex(
+    history,
+    freshFrom,
+    stubbed,
+    prefixStable,
+    !!opts?.rerender,
+  );
   // Fit-to-window: cap the fresh tool payloads to whatever room is left after everything
   // else in the request, so a single big tool round can never overflow the server.
   const { cap: perPayloadCap, verbatim } = freshPayloadCharCap(
@@ -415,7 +463,9 @@ export function messagesToChatParams(
           },
         }));
       }
-      if (msg.reasoning && (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom)) {
+      const keepReasoning =
+        keepAllReasoning || (prefixStable ? !msg.reasoningAged : i >= keepReasoningFrom);
+      if (msg.reasoning && keepReasoning) {
         param.reasoning_content = msg.reasoning;
       }
       out.push(param as unknown as ChatMessageParam);
@@ -433,7 +483,9 @@ export function messagesToChatParams(
             break;
           }
           // Frozen bytes: reuse the stamped rendering while live; stamp on the real call only.
-          const rendered = msg.rendered ?? body();
+          // `rerender` (the shape-rejection retry) drops the stamp instead: those bytes were capped
+          // against a request that did not yet carry the reasoning the retry restores.
+          const rendered = opts?.rerender ? body() : (msg.rendered ?? body());
           if (opts?.stampRenders) msg.rendered = rendered;
           content = rendered;
           break;
@@ -461,7 +513,7 @@ export function messagesToChatParams(
         tool_call_id: msg.callId,
         content,
       };
-      if (toolName) param.name = toolName;
+      if (toolName && !opts?.latches?.toolMessageName) param.name = toolName;
       out.push(param as unknown as ChatMessageParam);
     }
     // error messages are UI-only and intentionally skipped here
@@ -536,14 +588,17 @@ function newestLiveReadIndex(
   freshFrom: number,
   stubbed: ReadonlySet<number>,
   prefixStable: boolean,
+  rerender: boolean,
 ): number {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     if (m.role !== 'tool' || !m.payload) continue;
     // "Live" mirrors the serialization rules: prefix-stable sends any unaged payload, but an
-    // already-stamped rendering is frozen — protection can only shape a first render.
+    // already-stamped rendering is frozen — protection can only shape a first render. `rerender`
+    // drops the stamps, so every unaged payload is a first render again and the edit source keeps
+    // its protection instead of joining the shared split.
     const live = prefixStable
-      ? !m.aged && m.rendered === undefined
+      ? !m.aged && (rerender || m.rendered === undefined)
       : i >= freshFrom && !stubbed.has(i);
     if (!live) continue;
     if (findToolNameForCall(history, i) === 'read') return i;
@@ -657,6 +712,8 @@ function freshPayloadCharCap(
     calibration?: number;
     minGenTokens?: number;
     prefixStable?: boolean;
+    rerender?: boolean;
+    latches?: ShapeLatches;
   },
 ): { cap: number | undefined; verbatim: ReadonlySet<number> } {
   const cw = opts?.contextWindow;
@@ -703,7 +760,10 @@ function freshPayloadCharCap(
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
     if (prefixStable && m.role === 'tool' && m.payload && !m.aged) {
-      if (m.rendered !== undefined) {
+      // `rerender` (the shape-rejection retry) ignores the stamps, so a frozen payload rejoins the
+      // fresh split and can be traded against the reasoning the retry re-adds — a fixed cost is
+      // exactly what the retry must not have, since the cap's whole job is to make that request fit.
+      if (m.rendered !== undefined && !opts?.rerender) {
         // Already-frozen bytes are a fixed cost, not a share of the fresh budget — only payloads
         // that have never been sent split what's left. They are also *measured* whatever their
         // index: `rendered` is stamped only on the call path that actually sent them (stampRenders).
@@ -737,9 +797,9 @@ function freshPayloadCharCap(
       }
     } else {
       // Match the build loop: reasoning only counts where it's actually sent.
-      const includeReasoning = prefixStable
-        ? !(m.role === 'assistant' && m.reasoningAged)
-        : i >= keepReasoningFrom;
+      const includeReasoning =
+        !!opts?.latches?.reasoningRoundtrip ||
+        (prefixStable ? !(m.role === 'assistant' && m.reasoningAged) : i >= keepReasoningFrom);
       addNonFresh(i, nonFreshChars0(m, includeReasoning));
     }
   }

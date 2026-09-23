@@ -18,7 +18,9 @@ export function Scrollback({
   streamingTool,
   streamingNested = false,
   streamingBar,
+  streamingCommand = false,
   chromeRows = 0,
+  showHeldWorked = true,
 }: {
   messages: Message[];
   streaming: string;
@@ -32,46 +34,80 @@ export function Scrollback({
   // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
   // on screen reads as compaction work. Undefined keeps the normal reasoning color.
   streamingBar?: string;
+  // The live tail is a model-run `bash` command's output. That one commits inside the `$ command`
+  // block MessageView draws at COMMAND_MARGIN (under the `↳ Ran: …` row), so it has to stream there
+  // too or it sits 4 columns left of where it lands a moment later (#461). Anything else streaming
+  // here stays at the left edge: shell mode's `shell` message prints its output flush left, and
+  // `search`'s bot-check line commits as an ordinary notice, with no chip to sit under.
+  streamingCommand?: boolean;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
   chromeRows?: number;
+  // Off while the spinner is up: the held "Worked for" line takes the spinner's rows, so the two
+  // must swap in one frame for its height to stay put.
+  showHeldWorked?: boolean;
 }) {
   // The live (non-Static) region must never grow taller than the viewport: Ink can't
   // erase a frame taller than the screen, which is what produces the "duplicated
   // terminal" on long streamed output and breaks native scrollback. Each active stream
   // block shows only its tail, sized so the blocks together fit the viewport. Full text
   // lands in <Static> when the message commits, where the terminal scrolls it natively.
-  const active = [streamingReasoning, streaming.trim(), streamingTool].filter(Boolean).length || 1;
-  const budget = liveTailBudget(active, chromeRows);
   const indent = streamingNested ? NESTED_INDENT : 0;
+  const toolOffset = streamingCommand ? COMMAND_MARGIN : 0;
+  const region = liveRegionRows(chromeRows);
+  // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label.
+  const blocks: { kind: 'reasoning' | 'content' | 'tool'; live: LiveRows; fixed: number }[] = [];
+  if (streamingReasoning) {
+    const rows = reasoningLines(streamingReasoning, indent);
+    blocks.push({ kind: 'reasoning', live: { rows, cut: false }, fixed: 2 });
+  }
+  if (streaming.trim()) {
+    const live = streamingContentRows(streaming, liveContentWidth(indent), region);
+    blocks.push({ kind: 'content', live, fixed: 1 });
+  }
+  if (streamingTool) {
+    const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
+    blocks.push({ kind: 'tool', live, fixed: 1 });
+  }
+  const pool = region - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const shares = allocateLiveRows(
+    blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
+    pool,
+  );
   const live = (
     <>
-      {streamingReasoning ? (
-        <Box marginTop={1}>
-          <ReasoningBlock
-            text={streamingReasoning}
-            maxLines={budget}
-            indent={indent}
-            barColor={streamingBar}
+      {blocks.map((b, i) =>
+        b.kind === 'reasoning' ? (
+          <Box key={b.kind} marginTop={1}>
+            <ReasoningBlock
+              text={streamingReasoning}
+              maxLines={shares[i]}
+              indent={indent}
+              barColor={streamingBar}
+            />
+          </Box>
+        ) : (
+          <StreamingTail
+            key={b.kind}
+            tail={fitTail(b.live, shares[i])}
+            muted={b.kind === 'tool'}
+            // Relative to the live wrapper (which already pays `indent`), so a command's output
+            // lands where the committed one will: inside the chip's margin, or flush left.
+            offset={b.kind === 'tool' ? toolOffset : 0}
           />
-        </Box>
-      ) : null}
-      {streaming.trim() ? (
-        <StreamingContent text={streaming} maxLines={budget} indent={indent} />
-      ) : null}
-      {streamingTool ? (
-        <StreamingTool text={streamingTool} maxLines={budget} indent={indent} />
-      ) : null}
+        ),
+      )}
     </>
   );
 
-  const scrollback = useScrollbackLog(messages);
+  const { log: scrollback, held } = useScrollbackLog(messages);
   return (
     <>
       <Static items={scrollback}>
-        {(msg, i) => <MessageView key={i} msg={msg} prev={scrollback[i - 1]} />}
+        {(item, i) => <LogItemView key={i} item={item} prev={scrollback[i - 1]} />}
       </Static>
+      {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
       {indent ? (
         // Same box MessageView gives a nested committed row: the margin plus an explicit width
         // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
@@ -100,32 +136,63 @@ export function Scrollback({
 // it appears, in the order it appeared. Restored messages were printed back when they were live;
 // only the trailing echo + banner are new. Nothing in `messages` is ever edited in place after it
 // commits (the live stream is separate state), so identity is the right key.
-function useScrollbackLog(messages: Message[]): Message[] {
+//
+// A top-level turn's "Worked for" line is held out of the log until the next user message (a
+// prompt or a command echo) and drawn live at idle instead, in the spinner's rows: committed with
+// its message it lands while the spinner is still up, and the spinner leaving afterwards shrinks
+// the frame and moves the input up. End-of-turn notices therefore print above it.
+type LogItem = Message | { workedMs: number };
+
+function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number | null } {
   const seen = useRef(new WeakSet<Message>());
-  const log = useRef<Message[]>([]);
+  const log = useRef<LogItem[]>([]);
+  const held = useRef<number | null>(null);
   return useMemo(() => {
     const fresh = messages.filter(m => !seen.current.has(m));
-    if (fresh.length === 0) return log.current;
-    for (const m of fresh) seen.current.add(m);
-    log.current = [...log.current, ...fresh];
-    return log.current;
+    if (fresh.length === 0) return { log: log.current, held: held.current };
+    const next = [...log.current];
+    for (const m of fresh) {
+      seen.current.add(m);
+      const endsTurn = m.role === 'assistant' && m.durationMs !== undefined && !m.nested;
+      if (held.current !== null && (m.role === 'user' || endsTurn)) {
+        next.push({ workedMs: held.current });
+        held.current = null;
+      }
+      next.push(m);
+      if (endsTurn) held.current = m.durationMs!;
+    }
+    log.current = next;
+    return { log: next, held: held.current };
   }, [messages]);
 }
 
-// Per-block budget for the live region, in *display* rows. Ink repaints the whole
-// terminal — including `\x1b[3J`, which clears native scrollback (iTerm2's "a control
-// sequence attempted to clear scrollback") — whenever the dynamic frame is at least
-// as tall as the viewport (build/ink.js: `outputHeight >= stdout.rows`). So the
-// active stream blocks plus the fixed chrome must stay strictly under it. Reserve
-// chrome (input/status/working + the Box margins), a per-block overhead (each block's
-// marginTop plus its header/"…" line), and one safety row, then split what's left.
-function liveTailBudget(activeBlocks: number, extraChromeRows = 0): number {
+// Rows the live region may use, in *display* rows. Ink repaints the whole terminal —
+// including `\x1b[3J`, which clears native scrollback (iTerm2's "a control sequence
+// attempted to clear scrollback") — whenever the dynamic frame is at least as tall as
+// the viewport (build/ink.js: `outputHeight >= stdout.rows`). So the active stream
+// blocks plus the fixed chrome must stay strictly under it: reserve the chrome
+// (input/status/working + the Box margins) and a safety margin.
+function liveRegionRows(extraChromeRows = 0): number {
   const rows = process.stdout.rows || 24;
   const CHROME = 8;
-  const PER_BLOCK_OVERHEAD = 3;
   const SAFETY = 2;
-  const avail = rows - CHROME - extraChromeRows - SAFETY - activeBlocks * PER_BLOCK_OVERHEAD;
-  return Math.max(3, Math.floor(avail / activeBlocks));
+  return rows - CHROME - extraChromeRows - SAFETY;
+}
+
+const MIN_BLOCK_ROWS = 3;
+
+// Splits `pool` rows between the live blocks, given in display order, so the newest block (last)
+// grows first and the older ones give up a row for each row it gains. An even split shrank a long
+// reasoning tail to half the moment the answer began, so the frame dropped and the input jumped up
+// mid-turn; this way the region's height only grows until it reaches the pool, then holds.
+export function allocateLiveRows(needs: number[], pool: number): number[] {
+  const out = needs.map(() => 0);
+  let left = pool;
+  for (let i = needs.length - 1; i >= 0; i--) {
+    out[i] = Math.min(needs[i], Math.max(MIN_BLOCK_ROWS, left - MIN_BLOCK_ROWS * i));
+    left -= out[i];
+  }
+  return out;
 }
 
 // Content width for a live block. Matches the width Ink lays the block's <Text> out at.
@@ -133,18 +200,23 @@ function liveContentWidth(indent = 0): number {
   return contentWidth(indent);
 }
 
-// Bound text to its last `maxRows` *display* rows — the unit Ink measures when it
-// decides the live frame exceeds the viewport. We wrap with the exact same wrap-ansi
-// options Ink uses (build/wrap-text.js), so the row count matches and Ink's own
-// re-wrap of the result is a no-op (lines are already ≤ width).
-export function tailDisplay(
-  text: string,
-  maxRows: number,
-  width: number,
-): { text: string; truncated: boolean } {
-  const rows = wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
-  if (rows.length <= maxRows) return { text: rows.join('\n'), truncated: false };
-  return { text: rows.slice(-maxRows).join('\n'), truncated: true };
+// Display rows of already-rendered text — the unit Ink measures when it decides the live frame
+// exceeds the viewport. Wrapped with the exact wrap-ansi options Ink uses (build/wrap-text.js), so
+// the count matches and Ink's own re-wrap of a row is a no-op (rows are already ≤ width).
+export function displayRows(text: string, width: number): string[] {
+  return wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
+}
+
+// A live block's rows before they are fitted to its share of the region. `cut` means the cheap
+// pre-trim already dropped earlier output, so the block needs more rows than it will ever get.
+type LiveRows = { rows: string[]; cut: boolean };
+
+// The block's last rows that fit `allowance`, the "…" marker counted inside it.
+export function fitTail(block: LiveRows, allowance: number): { text: string; marker: boolean } {
+  if (!block.cut && block.rows.length <= allowance) {
+    return { text: block.rows.join('\n'), marker: false };
+  }
+  return { text: block.rows.slice(-Math.max(1, allowance - 1)).join('\n'), marker: true };
 }
 
 // Keep only the last `maxLines` newline-rows, with a character backstop for pathological
@@ -169,47 +241,46 @@ export function tailText(
 }
 
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
-// message re-renders the full text in <Static>.
-function StreamingContent({
-  text,
-  maxLines,
-  indent = 0,
-}: {
-  text: string;
-  maxLines: number;
-  indent?: number;
-}) {
-  const width = liveContentWidth(indent);
-  // Cheap logical-line pre-trim caps markdown render cost on very long streams; the
-  // factor keeps enough lines to fill `maxLines` display rows even when each wraps.
-  // The render-then-tailDisplay below is what actually bounds the frame height — it
-  // measures the *rendered* output (markdown can expand lines, e.g. code fences) in
-  // wrapped display rows, which is what Ink counts against the viewport.
-  const pre = tailText(text, maxLines * 4);
-  const tail = tailDisplay(renderMarkdown(pre.text, width), maxLines, width);
-  const truncated = pre.truncated || tail.truncated;
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text>{tail.text}</Text>
-    </Box>
-  );
+// message re-renders the full text in <Static>. The logical-line pre-trim caps markdown render cost
+// on very long streams; the factor keeps enough lines to fill `bound` display rows even when each
+// wraps. The rows are measured *rendered* (markdown can expand lines, e.g. code fences), which is
+// what Ink counts against the viewport.
+function streamingContentRows(text: string, width: number, bound: number): LiveRows {
+  const pre = tailText(text, bound * 4);
+  return { rows: displayRows(renderMarkdown(pre.text, width), width), cut: pre.truncated };
 }
 
-function StreamingTool({
-  text,
-  maxLines,
-  indent = 0,
+// The live tail of a running command. The App accumulates the run's whole output, and scrubbing
+// plus wrapping all of it on every 50ms flush is the cost the pre-trim avoids. trimEnd matches the
+// committed chip, which drops the trailing newline — left in, the live tail grows a blank row that
+// vanishes on commit. Scrubbed first, as the committed chip is: `sanitizeTerminalText` resolves
+// carriage returns and flattens control codes, so wrapping the raw stream would break its rows
+// somewhere else. `hangingWrap(…, 0)` is the committed chip's own wrap of raw output — the same
+// wrap-ansi options, so the row count is unchanged — and it drops the whitespace a break happened
+// on, putting a continuation row at the block's left edge instead of staggered right of it (#461).
+function streamingToolRows(text: string, width: number, bound: number): LiveRows {
+  const pre = tailText(text.trimEnd(), bound * 4);
+  return {
+    rows: displayRows(hangingWrap(scrubOutput(pre.text), width, 0), width),
+    cut: pre.truncated,
+  };
+}
+
+// `offset` is how far inside the live wrapper the committed row will sit (the command chip's
+// margin), so the tail doesn't jump sideways when it commits (#461).
+function StreamingTail({
+  tail,
+  muted = false,
+  offset = 0,
 }: {
-  text: string;
-  maxLines: number;
-  indent?: number;
+  tail: { text: string; marker: boolean };
+  muted?: boolean;
+  offset?: number;
 }) {
-  const { text: shown, truncated } = tailDisplay(text, maxLines, liveContentWidth(indent));
   return (
-    <Box flexDirection="column" marginTop={1}>
-      {truncated ? <Text color={theme.muted}>{'…'}</Text> : null}
-      <Text color={theme.muted}>{scrubOutput(shown)}</Text>
+    <Box flexDirection="column" marginTop={1} marginLeft={offset}>
+      {tail.marker ? <Text color={theme.muted}>{'…'}</Text> : null}
+      <Text color={muted ? theme.muted : undefined}>{tail.text}</Text>
     </Box>
   );
 }
@@ -244,6 +315,24 @@ const CALL_MARKER_MEASURED = stringWidth(CALL_MARKER);
 const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
+
+function WorkedRow({ durationMs }: { durationMs: number }) {
+  return (
+    <Box marginTop={1}>
+      {/* Filled square doubles as a "turn complete" marker (the universal
+          stop/done glyph) and an anchor of color on an otherwise inert line. */}
+      <Text>
+        <Text color={theme.accent}>{'■ '}</Text>
+        <Text color={theme.muted}>{`Worked for ${formatDurationMs(durationMs)}`}</Text>
+      </Text>
+    </Box>
+  );
+}
+
+function LogItemView({ item, prev }: { item: LogItem; prev?: LogItem }) {
+  if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
+  return <MessageView msg={item} prev={prev && 'workedMs' in prev ? undefined : prev} />;
+}
 
 function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   const nested = 'nested' in msg && !!msg.nested;
@@ -289,9 +378,11 @@ function renderMessage(
             {hangingWrap(scrubOutput(msg.command), contentWidth(indent), SHELL_MARKER.length)}
           </Text>
         </Text>
-        {msg.output ? (
+        {/* Trimmed like the bash chip's tail: a trailing newline drew a stray blank row above
+            the next block's margin. */}
+        {msg.output.trimEnd() ? (
           <Text color={theme.muted}>
-            {hangingWrap(scrubOutput(msg.output), contentWidth(indent), 0)}
+            {hangingWrap(scrubOutput(msg.output.trimEnd()), contentWidth(indent), 0)}
           </Text>
         ) : null}
       </Box>
@@ -350,15 +441,10 @@ function renderMessage(
             <Text color={theme.tool}>{scrubDisplay(`Sources: ${msg.sources.join(', ')}`)}</Text>
           </Box>
         ) : null}
-        {msg.durationMs !== undefined ? (
-          <Box marginTop={1}>
-            {/* Filled square doubles as a "turn complete" marker (the universal
-                stop/done glyph) and an anchor of color on an otherwise inert line. */}
-            <Text>
-              <Text color={theme.accent}>{'■ '}</Text>
-              <Text color={theme.muted}>{`Worked for ${formatDurationMs(msg.durationMs)}`}</Text>
-            </Text>
-          </Box>
+        {/* A top-level turn's line is its own log entry (useScrollbackLog); only a subagent's
+            stays inline, since it closes a nested block mid-turn. */}
+        {msg.durationMs !== undefined && ctx.nested ? (
+          <WorkedRow durationMs={msg.durationMs} />
         ) : null}
       </Box>
     );
@@ -510,6 +596,18 @@ function renderMessage(
 // label on top. Shares the user bubble's left-bar visual language but stays
 // understated — colored bar, muted text, no background, and dimmer than the
 // user bar's accent — so it reads as a subordinate aside, not a user message.
+function reasoningLines(text: string, indent: number): string[] {
+  const term = process.stdout.columns || 80;
+  const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
+  const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
+  // Models often emit leading/trailing newlines and blank-line runs; those would
+  // become empty bar rows, so collapse blank lines and trim the ends first.
+  const cleaned = stripReasoningMarkdown(text)
+    .replace(/\n\s*\n/g, '\n')
+    .trim();
+  return wrapText(cleaned, contentW);
+}
+
 function ReasoningBlock({
   text,
   maxLines,
@@ -521,15 +619,7 @@ function ReasoningBlock({
   indent?: number;
   barColor?: string;
 }) {
-  const term = process.stdout.columns || 80;
-  const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
-  const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
-  // Models often emit leading/trailing newlines and blank-line runs; those would
-  // become empty bar rows, so collapse blank lines and trim the ends first.
-  const cleaned = stripReasoningMarkdown(text)
-    .replace(/\n\s*\n/g, '\n')
-    .trim();
-  let lines = wrapText(cleaned, contentW);
+  let lines = reasoningLines(text, indent);
   // Bound the live preview to its tail so the frame can't exceed the viewport; the
   // committed message passes no maxLines and shows in full (in <Static>).
   if (maxLines !== undefined && lines.length > maxLines) {

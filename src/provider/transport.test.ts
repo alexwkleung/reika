@@ -4,6 +4,7 @@ import type { Server, ServerResponse } from 'node:http';
 import { SESSION_ID, createSSEDecoder, streamChatCompletion, tokenize } from './transport.js';
 import type { ChatCompletionChunk, ChatCompletionRequest, SSEEvent } from './transport.js';
 import { resetStreamDispatcher } from './dispatcher.js';
+import { API_USER_AGENT } from '../version.js';
 
 const enc = new TextEncoder();
 
@@ -205,7 +206,20 @@ describe('session header', () => {
     vi.stubGlobal('fetch', fetchMock);
     await drain('http://x/v1');
     const [headers] = sentHeaders(fetchMock);
-    expect(headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(headers).toEqual({ 'Content-Type': 'application/json', 'User-Agent': API_USER_AGENT });
+  });
+
+  // undici's default is `node`, the generic-library name providers ask clients not to send.
+  it('identifies as reika on chat and tokenize requests, keyed or not', async () => {
+    const fetchMock = vi.fn(async () => new Response('data: [DONE]\n\n', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await drain('http://x/v1');
+    await drain('http://x/v1', 'sk-test');
+    await tokenize({ baseURL: 'http://x/v1', apiKey: '', content: 'hi' });
+    expect(API_USER_AGENT).toMatch(/^reika\/\d+\.\d+\.\d+$/);
+    for (const headers of sentHeaders(fetchMock)) {
+      expect(headers['User-Agent']).toBe(API_USER_AGENT);
+    }
   });
 });
 

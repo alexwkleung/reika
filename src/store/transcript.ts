@@ -334,7 +334,7 @@ function renderMessageTxt(msg: Message): string | null {
     }
     case 'shell': {
       const lines = [`$ ${msg.command}`];
-      if (msg.output) lines.push(msg.output);
+      if (msg.output.trimEnd()) lines.push(msg.output.trimEnd());
       return lines.join('\n');
     }
     case 'system':
