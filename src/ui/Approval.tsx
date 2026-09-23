@@ -135,7 +135,7 @@ function CommandPreview({ command, maxRows }: { command: string; maxRows: number
   const all = sanitizeTerminalText(command).split('\n');
   // Same width the rows are rendered at below, so the row counts fitted here are the row counts
   // the dialog actually draws.
-  const width = Math.max(1, contentWidth(DIALOG_CHROME) - 2 - MARKER_WIDTH);
+  const width = Math.max(1, contentWidth(DIALOG_CHROME) - MARKER_WIDTH);
   const { lines, hidden } = fitCommandLines(all, maxRows, width);
   // Each logical line is pre-wrapped to the dialog width the way DiffView's WrappedRow does it
   // (#489): the `$`/`  ` marker and the text are adjacent siblings in a row Box, and when the row
@@ -146,17 +146,28 @@ function CommandPreview({ command, maxRows }: { command: string; maxRows: number
   return (
     <>
       {lines.flatMap((line, i) => {
-        const rows = wrapAnsi(highlightCode(line, 'bash'), width, { trim: false, hard: true }).split('\n');
+        const rows = wrapAnsi(highlightCode(line, 'bash'), width, {
+          trim: false,
+          hard: true,
+        }).split('\n');
         return rows.map((row, j) => (
           <Box key={`${i}:${j}`}>
-            <Text color={theme.success}>{j === 0 && i === 0 ? MARKER : ' '.repeat(MARKER_WIDTH)}</Text>
-            <Text>{row}</Text>
+            <Text color={theme.success}>
+              {j === 0 && i === 0 ? MARKER : ' '.repeat(MARKER_WIDTH)}
+            </Text>
+            <Text>{j === 0 ? row : dropWrapWhitespace(row)}</Text>
           </Box>
         ));
       })}
       {hidden > 0 ? <Text color={theme.muted}>{`… ${hidden} more lines`}</Text> : null}
     </>
   );
+}
+
+// trim:false leaves the space wrap-ansi broke on at the head of a continuation row, one column
+// right of the hang — the same noise hangingWrap drops. Highlighting can open a color ahead of it.
+function dropWrapWhitespace(row: string): string {
+  return row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
 }
 
 // Leading lines that fit in `maxRows` wrapped rows, one reserved for the footer when any are cut.

@@ -6,6 +6,7 @@ import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import { Approval, approvalPreviewRows, fitCommandLines } from './Approval.js';
+import { contentWidth } from './layout.js';
 import type { ApprovalRequest } from '../types.js';
 
 // The approval dialog is the one place a diff renders inside a BORDER, in the live region. Ink
@@ -88,6 +89,21 @@ describe('Approval dialog width', () => {
       expect(stringWidth(row)).toBeLessThanOrEqual(width());
       expect(row.trim()).not.toBe('│');
     }
+  });
+
+  it('starts a continuation in the hang when the break lands on a space, at full width', () => {
+    // The text column is the dialog interior minus the `$ ` marker. A run that fills it exactly
+    // puts the next break on the space after it, which trim:false carried onto the continuation
+    // row, one column right of the hang.
+    const textWidth = contentWidth(4) - 2;
+    const run = 'a'.repeat(textWidth);
+    const rows = frame({ tool: 'bash', subject: '~/repo', preview: `${run} bbb ccc` });
+    const interior = rows.map(r => r.replace(/^\s*│/, '').replace(/│\s*$/, ''));
+    const first = interior.findIndex(r => r.includes(`$ ${run}`));
+    // The whole run fits on the first row: the text column is not narrower than the interior.
+    expect(first).toBeGreaterThanOrEqual(0);
+    const commandCol = interior[first].indexOf(run);
+    expect(interior[first + 1].indexOf('bbb ccc')).toBe(commandCol);
   });
 
   it('keeps a command carrying tabs and a carriage return inside the border', () => {
