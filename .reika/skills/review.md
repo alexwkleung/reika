@@ -42,7 +42,16 @@ Then a fourth call, for the file list:
     gh pr diff <number> --name-only
 
 Treat that list as complete. A file not on it is not part of this PR, no matter
-what you remember reading in the diff.
+what you remember reading in the diff. Check it for tests: if the PR changes how
+code behaves and no test file on the list covers that code, say so as a finding.
+
+Then a fifth call, for CI:
+
+    gh pr checks <number>
+
+This exits non-zero when a check is failing or still running, and prints "no
+checks reported" when there is no CI — none of that means the command failed.
+A failing check goes first in your review, named as it appears in the output.
 
 Reading the output. `gh pr view` returns JSON, and `body` is often empty — that
 is normal and does not mean the command failed. When `body` is empty, the
@@ -66,8 +75,17 @@ calling something broken, open the file with the `read` tool and look at the
 surrounding code. Most wrong review findings come from judging a hunk in
 isolation — the variable you think is undefined is usually defined ten lines up.
 
-If a file lookup fails, the file does not exist. Do not investigate why the tool is
-wrong, and do not re-check it a second way.
+The files on disk are not the PR's version. They are whatever branch is checked
+out locally, usually the code before this PR. Use `read` only for the unchanged
+code around a hunk. Expect the `+` lines to be missing from the file, and files
+this PR adds not to exist at all — that is not a finding, and not a reason to
+investigate. What the PR changes comes from the diff alone.
+
+If the diff renames a function, changes its parameters, or changes what it
+returns, `grep` for its name. Because the files on disk are the code before this
+PR, every call site grep finds is one that existed before the change. A call
+site in a file that is not on the PR's file list was not updated — that is a
+finding. One grep per changed function; do not go looking for other edge cases.
 
 Then write the review. For each finding, give the file and line, what is wrong,
 and why it matters. Put the most serious first: correctness bugs, data loss, and
