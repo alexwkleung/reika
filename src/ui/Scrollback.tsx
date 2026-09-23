@@ -342,7 +342,12 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   // call that produced them), so without this the subagent's closing "Worked for …"
   // and the parent's "↳ Subagent completed (…)" collide on adjacent lines.
   const afterNested = !nested && !!prev && 'nested' in prev && !!prev.nested;
-  const inner = renderMessage(msg, indent, { nested, afterNested });
+  // The notice that immediately precedes a tool row (e.g. the once-per-cwd sandbox line the first
+  // bash call of a session commits mid-turn, #485) has spacing above but none below: the tool row
+  // normally sits tight under the call that produced it, so a notice following one runs straight
+  // into the next tool row. The gap belongs before the tool row, where the margin field is.
+  const afterNotice = !!prev && prev.role === 'system';
+  const inner = renderMessage(msg, indent, { nested, afterNested, afterNotice });
   if (inner === null) return null;
   // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
   // inherit the App's paddingX={1}, so a plain <Text> here wraps at the FULL terminal width and is
@@ -360,7 +365,7 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
 function renderMessage(
   msg: Message,
   indent = 0,
-  ctx: { nested?: boolean; afterNested?: boolean } = {},
+  ctx: { nested?: boolean; afterNested?: boolean; afterNotice?: boolean } = {},
 ): ReactElement | null {
   if (msg.role === 'user') {
     return <UserBubble text={msg.display ?? msg.content} indent={indent} nested={ctx.nested} />;
@@ -451,7 +456,7 @@ function renderMessage(
   }
   if (msg.role === 'tool') {
     return (
-      <Box flexDirection="column" marginTop={ctx.afterNested ? 1 : 0}>
+      <Box flexDirection="column" marginTop={ctx.afterNested || ctx.afterNotice ? 1 : 0}>
         <Text>
           <Text color={theme.tool}>{TOOL_MARKER}</Text>
           {/* Drop the redundant leading "Read " for display only: the `↳` already

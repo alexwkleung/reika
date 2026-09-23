@@ -1181,3 +1181,47 @@ describe('Scrollback held "Worked for" line', () => {
     ]);
   });
 });
+
+// The mid-turn sandbox notice (once per cwd, committed alongside the first bash result) sits
+// between two tool rows. Tool rows carry no marginTop of their own — spacing normally belongs to
+// the assistant call above them — so the notice used to run straight into the next tool row (#485).
+describe('Scrollback notice before a tool row', () => {
+  const messages: Message[] = [
+    { role: 'tool', callId: 't1', summary: 'Ran: gh issue view 482 (2516 bytes output)' },
+    {
+      role: 'system',
+      content: 'Shell commands run sandboxed: writes confined to ~/Git/reika, temp and cache dirs.',
+    },
+    { role: 'tool', callId: 't2', summary: 'Ran: gh issue view 481 (558 bytes output)' },
+  ];
+  const raw = (frame: string | undefined): string[] => (frame ?? '').split('\n');
+
+  it('leaves a blank row between the notice and the next tool row', () => {
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    const lines = raw(lastFrame());
+    const notice = lines.findIndex(l => l.includes('❯ Shell commands run sandboxed'));
+    const nextRow = lines.findIndex(l => l.includes('↳ Ran: gh issue view 481'));
+    expect(notice).toBeGreaterThanOrEqual(0);
+    expect(nextRow).toBeGreaterThan(notice);
+    // Not adjacent: at least one blank display row belongs between the two.
+    const between = lines.slice(notice + 1, nextRow);
+    expect(between).toContain('');
+  });
+
+  it('keeps back-to-back tool rows tight when no notice intervenes', () => {
+    const { lastFrame } = render(
+      <Scrollback
+        messages={[messages[0], messages[2]]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    );
+    const lines = raw(lastFrame());
+    const second = lines.findIndex(l => l.includes('↳ Ran: gh issue view 481'));
+    expect(second).toBeGreaterThan(0);
+    expect(lines[second - 1]).not.toBe('');
+  });
+});
