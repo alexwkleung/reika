@@ -173,8 +173,9 @@ export class ChromeHost implements BrowserHost {
     throw new Error(`Chrome did not expose a debugging port within ${LAUNCH_TIMEOUT_MS}ms`);
   }
 
-  // Idle shutdown only ever kills a browser this process launched *and* that nothing has used for
-  // the full window. Unref'd so a pending timer can't hold the CLI open at exit.
+  // The idle clock is this process's, but the browser is shared by every reika on the port, so
+  // shutdown also checks for open tabs (see below). Unref'd so a pending timer can't hold the CLI
+  // open at exit.
   private touch(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => void this.shutdown(), IDLE_SHUTDOWN_MS);
@@ -184,6 +185,10 @@ export class ChromeHost implements BrowserHost {
   async shutdown(): Promise<void> {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = undefined;
+    if (await this.hasOpenTabs()) {
+      debugLog('[cdp] idle shutdown skipped: a tab is still open');
+      return;
+    }
     // Closing the browser is a CDP call on the *browser* target, not an HTTP path — /json/close
     // takes a tab id, so the earlier spelling silently did nothing and left Chrome resident.
     try {
@@ -199,6 +204,21 @@ export class ChromeHost implements BrowserHost {
       /* already gone */
     }
     debugLog('[cdp] browser shut down after idle timeout');
+  }
+
+  // Every search closes its tab when it answers, and a bot check leaves its tab open on purpose, so
+  // an open page means some session — this one or another reika reattached to the same browser —
+  // is mid-search or waiting on a human. `about:blank` is the tab the launch itself opens.
+  private async hasOpenTabs(): Promise<boolean> {
+    try {
+      const res = await fetch(`http://127.0.0.1:${this.port}/json/list`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      const targets = (await res.json()) as { type?: string; url?: string }[];
+      return targets.some(t => t.type === 'page' && t.url !== 'about:blank');
+    } catch {
+      return false;
+    }
   }
 }
 
