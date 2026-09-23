@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -10,9 +10,9 @@ import { Working } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
-import { probedLimitsNotice } from '../session.js';
+import { createSession, type Session } from '../session.js';
 import { resolvePr } from './pr.js';
-import { clearIdentity, detectIdentity, enableAnon, isAnon, setIdentity } from './identity.js';
+import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import {
@@ -24,14 +24,7 @@ import {
   skillConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
-import {
-  inheritProfile,
-  loadConfig,
-  resolveDefaultMode,
-  resolveProfile,
-  withProbedLimits,
-} from '../config.js';
-import { needsLimitsProbe, probeModelLimits } from '../provider/modellimits.js';
+import { inheritProfile, loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import {
   loadLastState,
   persistableMode,
@@ -44,9 +37,6 @@ import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
-import { chatTools, defaultTools, minimalTools, planTools } from '../tools/index.js';
-import { isOffline } from '../tools/_net.js';
-import { PayloadStore } from '../store/payloads.js';
 import {
   saveTranscript,
   TRANSCRIPT_VERSION,
@@ -54,8 +44,7 @@ import {
   type TranscriptMeta,
   type TranscriptUsage,
 } from '../store/transcript.js';
-import { runTurn, type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
-import { PrefixTrace } from '../agent/prefixtrace.js';
+import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
@@ -98,7 +87,6 @@ import {
   isMinimalPrompt,
   isSaveCommand,
   nextMode,
-  planWritten,
   turnMode,
   turnPromptMode,
   turnTools,
@@ -109,15 +97,7 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
-import type {
-  ApprovalRequest,
-  Config,
-  ContextBundle,
-  Message,
-  QuestionAnswer,
-  QuestionRequest,
-  Usage,
-} from '../types.js';
+import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -184,12 +164,18 @@ export function App() {
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
   const [noteLive, setNoteLive] = useState<boolean>(false);
-  const [config, setConfig] = useState<Config | null>(null);
-  const [bundle, setBundle] = useState<ContextBundle | null>(null);
+  // The session owns the config, the active profile, the bundle and everything a turn threads to
+  // the next (#403); App renders from its snapshot and never keeps a copy of its own.
+  const [session, setSession] = useState<Session | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const snapshot = useSyncExternalStore(
+    useCallback((listener: () => void) => session?.subscribe(listener) ?? (() => {}), [session]),
+    () => session?.getSnapshot() ?? null,
+  );
+  const config = snapshot?.config ?? null;
+  const bundle = snapshot?.bundle ?? null;
+  const activeProfile = snapshot?.profile ?? 'default';
   const [error, setError] = useState<string | null>(null);
-  const [tools, setTools] = useState<ReturnType<typeof defaultTools>>(() => defaultTools());
-  const [chatToolsList, setChatToolsList] = useState<ReturnType<typeof chatTools>>(() => []);
-  const [payloads] = useState(() => new PayloadStore());
   const [elapsed, setElapsed] = useState(0);
   const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
   // Most recent call's usage (the authoritative current context size + cache hit rate),
@@ -201,22 +187,10 @@ export function App() {
   // while a saved file wants the timeline). Refs because the loop reads/writes them from a turn
   // in flight and /save reads them from a handler that may be a render behind (#199).
   const [shrink, setShrink] = useState<ShrinkCounts>({ sheds: 0, folds: 0 });
-  const shrinkRef = useRef<ShrinkCounts>({ sheds: 0, folds: 0 });
   const shrinkEventsRef = useRef<TranscriptShrinkEvent[]>([]);
-  // Learned char→token calibration for the context estimate, persisted across turns so the
-  // first call of each turn (which re-seeds the full history) triggers compaction accurately.
-  const calibrationRef = useRef(1);
-  // Learned prefill throughput (tokens/second), persisted the same way so a turn's round 0 — its
-  // most expensive prefill — can already quote a cost estimate. Undefined until a round reprocesses
-  // enough to measure one. See agent/prefillcost.ts.
-  const prefillRateRef = useRef<number | undefined>(undefined);
-  // Decode throughput (tokens/second) for the status bar's tok/s chip (#204) — the smoothed value
-  // in state for display, mirrored into a ref for the same reason as the two learners above: a new
-  // turn seeds from it, and a handler that hasn't re-rendered still has to read the latest.
+  // Decode throughput (tokens/second) for the status bar's tok/s chip (#204). The session keeps
+  // the learned value a turn seeds from; this is what the chip shows.
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
-  const decodeRateRef = useRef<number | undefined>(undefined);
-  // Session-long so the prefix-cache line prices the turn boundary too (#426); see runTurn's opt.
-  const prefixTraceRef = useRef(new PrefixTrace());
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (allow: boolean) => void;
@@ -244,7 +218,6 @@ export function App() {
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
   const [mode, setMode] = useState<Mode>(() => startMode(loadLastState()));
-  const [activeProfile, setActiveProfile] = useState<string>('default');
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
@@ -303,10 +276,6 @@ export function App() {
   // action, never as an announcement in front of it. Flushed by submitToModel's user echo, which
   // runTurn always emits first, so nothing can strand here.
   const pendingNoticesRef = useRef<Message[]>([]);
-  // Profiles whose window probe (#417) never reached the server — llama-server still loading when
-  // reika started. Asked again at the next submit, when the turn needs the server up anyway. A
-  // probe the server answered without a window is not retried: the answer would not change.
-  const windowRetryRef = useRef(new Set<string>());
   // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
@@ -392,23 +361,9 @@ export function App() {
   const autosaveHoldRef = useRef<number | null>(null);
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
-  // The MODEL-facing history, distinct from `messages` (the scrollback). Same message objects, but
-  // it holds only what the model actually sees — the loop appends every user/assistant/tool message
-  // it commits — and, critically, it PERSISTS the loop's history rewrites across turns (#183).
-  // Compaction and the plan→agent handoff fold spans of it into a `compaction` recap; seeding each
-  // turn from `messages` instead (the old `.slice()`) re-expanded those folds, so every turn redid
-  // the work, re-paid the context, and rewrote the recap that lives in the system block — a
-  // from-token-0 prefill on a local server (measured: ~6 min for 8.4k tokens at 22.9 tok/s). The
-  // loop mutates this array in place, so nothing has to be copied back at turn end.
-  const modelHistoryRef = useRef<Message[]>([]);
-  // Stash for the inactive side of the chat/agent boundary. Shell shares with agent. Model history
-  // stashes alongside the scrollback so a round trip through /chat doesn't resurrect folded spans.
-  const stashedMessagesRef = useRef<{
-    agent?: Message[];
-    chat?: Message[];
-    agentModel?: Message[];
-    chatModel?: Message[];
-  }>({});
+  // Scrollback stash for the inactive side of the chat/agent boundary; shell shares with agent. The
+  // model-facing side of each is the session's (switchSide).
+  const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = totalUsage;
   // The other two halves of the status line's accounting, mirrored for the same reason as
@@ -457,44 +412,18 @@ export function App() {
   useEffect(() => {
     (async () => {
       try {
-        let cfg = loadConfig();
+        const cfg = loadConfig();
         // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
         // the probe and the splash so both describe the model the session actually opens on.
         const profile = startProfile(cfg, loadLastState());
-        // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git
-        // subprocesses cost ~28ms warm, which is pure added latency to first paint if serialized.
-        // Measured on this repo: 29ms bootstrap + 28ms detect = 56ms serial, 36ms concurrent —
-        // so the scrub layer costs ~7ms of startup instead of ~28ms.
-        //
-        // Both are still awaited here, so the ordering guarantee the scrubber needs is intact:
-        // the token set is loaded before any message can be rendered or saved. Detection is
-        // best-effort — a failure leaves the scrubber a no-op rather than blocking startup, the
-        // same fail-open posture as the other scrub layers.
-        // The window probe (#417) rides the same concurrency: a local server answers in
-        // milliseconds, and it must land before the budget report below reads the window.
-        const [b, probed] = await Promise.all([
-          bootstrap(process.cwd(), cfg.repoMapBudget),
-          needsLimitsProbe(cfg.profiles[profile])
-            ? probeModelLimits(cfg.profiles[profile])
-            : Promise.resolve(undefined),
-          cfg.anon
-            ? detectIdentity(process.cwd())
-                .then(setIdentity)
-                .catch(() => {})
-            : Promise.resolve(),
-        ]);
-        if (probed) cfg = withProbedLimits(cfg, profile, probed);
-        if (probed && !probed.reached) windowRetryRef.current.add(profile);
-        setConfig(cfg);
-        setActiveProfile(profile);
-        setBundle(b);
-        // No route out → no web tools this session (#392). Checked once, here, because the tool
-        // list is part of the cached prefix; the per-turn latch in the tools covers a drop later.
-        const offline = isOffline();
-        setTools(defaultTools(cfg, { offline }));
-        setChatToolsList(chatTools(cfg, { offline }));
+        // Bootstrap, the window probe (#417) and identity detection run concurrently inside.
+        const s = await createSession({ cwd: process.cwd(), config: cfg, profile });
+        const b = s.bundle;
+        sessionRef.current = s;
+        setSession(s);
+        const offline = s.offline;
         // Startup only: a later /model switch reports its own window in /stats.
-        const runtime = resolveProfile(cfg, profile);
+        const runtime = s.config;
         setHeaderItems(prev => [
           ...prev,
           {
@@ -530,7 +459,7 @@ export function App() {
         // the model re-reading the same file (#262). Report the numbers to the log always, and
         // say so in the scrollback when they fall under the floor.
         debugLog(formatBudget(b, runtime));
-        const limitsNotice = probed && probedLimitsNotice(probed);
+        const limitsNotice = s.limitsNotice;
         if (limitsNotice) {
           setMessages(prev => [
             ...prev,
@@ -634,34 +563,25 @@ export function App() {
   // Switch the active profile and record it in scrollback — shared by
   // `/model <name>` and the interactive picker's enter. The optional echo is
   // the command line that triggered it (the picker already echoed on open).
-  // `cfg` overrides the config state for the same-render case where the caller just
-  // registered an ad-hoc profile via setConfig and the closure hasn't caught up.
-  const applyModelSwitch = (target: string, echo?: Message, cfg: Config | null = config): void => {
-    if (!cfg) return;
+  // Reads the session, not the `config` closure: an ad-hoc profile registered in the same tick is
+  // already there.
+  const applyModelSwitch = (target: string, echo?: Message): void => {
+    const s = sessionRef.current;
+    const cfg = s?.getSnapshot().config;
+    if (!s || !cfg) return;
     const next = cfg.profiles[target];
     if (!next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
-    setActiveProfile(target);
-    // Saved here rather than on every activeProfile change: /clear's reset to default and a launch
+    // Not awaited: the switch is instant, and a turn submitted before the probe (#417) answers runs
+    // without a window, as it would have anyway.
+    void s.setProfile(target).then(notice => {
+      if (notice) setMessages(prev => [...prev, { role: 'system', content: notice }]);
+    });
+    // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
     saveLastState({ profile: target });
-    // The tok/s chip describes the model that produced it (#204) — left standing, the previous
-    // model's rate reads as the new one's until a round here measures one, which on a slow local
-    // endpoint is minutes of a number about the wrong engine.
-    decodeRateRef.current = undefined;
+    // The tok/s chip describes the model that produced it (#204).
     setDecodeRate(undefined);
-    // A profile with no window asks the endpoint for its model's (#417). Not awaited: the switch
-    // is instant, and a turn submitted before the answer lands runs without a window, as it
-    // would have anyway.
-    if (needsLimitsProbe(next)) {
-      void probeModelLimits(next).then(probe => {
-        if (!probe.reached) windowRetryRef.current.add(target);
-        const notice = probedLimitsNotice(probe);
-        if (!notice) return;
-        setConfig(prev => (prev ? withProbedLimits(prev, target, probe) : prev));
-        setMessages(prev => [...prev, { role: 'system', content: notice }]);
-      });
-    }
     setMessages(prev => [
       ...prev,
       ...(echo ? [echo] : []),
@@ -918,6 +838,7 @@ export function App() {
     // header and a screenshot of the footer can never disagree.
     const last = lastUsageRef.current;
     const totals = usageRef.current;
+    const shrink = sessionRef.current?.shrink ?? { sheds: 0, folds: 0 };
     const window = profile.contextWindow ?? config!.contextWindow;
     const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
     const usage: TranscriptUsage = {
@@ -931,8 +852,8 @@ export function App() {
       ...(window ? { contextWindow: window } : {}),
       ...(usable ? { contextUsable: usable } : {}),
       ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
-      ...(shrinkRef.current.sheds > 0 || shrinkRef.current.folds > 0
-        ? { ...shrinkRef.current, shrinkEvents: shrinkEventsRef.current }
+      ...(shrink.sheds > 0 || shrink.folds > 0
+        ? { ...shrink, shrinkEvents: shrinkEventsRef.current }
         : {}),
     };
     return {
@@ -1010,20 +931,15 @@ export function App() {
 
   // What /new and /resume both drop: the conversation and everything measured about it. The next
   // save starts a new file (/resume re-points it after this when it continues one).
-  const resetConversation = (): void => {
+  const resetConversation = (relearn = false): void => {
     stashedMessagesRef.current = {};
-    modelHistoryRef.current = [];
-    // With the messages and stashes gone, no payloadId can reach the store anymore.
-    payloads.clear();
+    sessionRef.current?.reset({ relearn });
     setPlanSteps(null);
     setTotalUsage({ promptTokens: 0, completionTokens: 0 });
     setLastUsage(null);
     setEstimatedContext(null);
     setShrink({ sheds: 0, folds: 0 });
-    shrinkRef.current = { sheds: 0, folds: 0 };
     shrinkEventsRef.current = [];
-    // The engine holds none of the resumed bytes, so the trace compares against nothing.
-    prefixTraceRef.current = new PrefixTrace();
     if (autosaveTimerRef.current !== null) {
       clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
@@ -1053,10 +969,11 @@ export function App() {
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
-    stashedMessagesRef.current = inChat
-      ? { agent: other, agentModel: modelHistoryFromScrollback(other) }
-      : { chat: other, chatModel: modelHistoryFromScrollback(other) };
-    modelHistoryRef.current = modelHistoryFromScrollback(active);
+    stashedMessagesRef.current = inChat ? { agent: other } : { chat: other };
+    sessionRef.current?.loadHistory(
+      modelHistoryFromScrollback(active),
+      modelHistoryFromScrollback(other),
+    );
     const where = inChat ? 'chat' : 'agent';
     const otherNote =
       other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
@@ -1095,26 +1012,22 @@ export function App() {
       setSuggestionState(null);
       return;
     }
-    if (edge && config && statusRef.current === 'idle' && modeRef.current !== 'shell') {
+    const s = sessionRef.current;
+    if (edge && s && statusRef.current === 'idle' && modeRef.current !== 'shell') {
       const m = modeRef.current;
       warmerRef.current.onEdge({
         // The model history, so the warm reproduces the prefix round 0 will actually send —
         // including any span already folded by a previous turn's compaction.
-        history: modelHistoryRef.current,
-        bundle,
-        config: resolveProfile(config, activeProfileRef.current),
+        history: s.history,
+        bundle: s.bundle,
+        config: s.config,
         // Same mapping as submitToModel below, through the same helpers so the two cannot drift —
         // a warm that builds a different prefix than the submit is a guaranteed cache miss.
         // Vibe's first internal turn is a plan turn, so it warms the plan prefix.
-        tools: turnTools(m, {
-          agent: tools,
-          plan: planTools(),
-          chat: chatToolsList,
-          minimal: minimalTools(),
-        }),
+        tools: turnTools(m, s.lists),
         promptMode: turnPromptMode(m),
         minimalPrompt: isMinimalPrompt(m),
-        calibration: calibrationRef.current,
+        calibration: s.calibration ?? 1,
       });
     }
     const next = computeSuggestions(
@@ -1164,17 +1077,12 @@ export function App() {
     if (currentIsChat !== nextIsChat) {
       // Crossing the chat boundary — save current array, restore the other side's stash
       const stash = stashedMessagesRef.current;
-      if (currentIsChat) {
-        stash.chat = messagesRef.current;
-        stash.chatModel = modelHistoryRef.current;
-      } else {
-        stash.agent = messagesRef.current;
-        stash.agentModel = modelHistoryRef.current;
-      }
+      if (currentIsChat) stash.chat = messagesRef.current;
+      else stash.agent = messagesRef.current;
       const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
       setMessages([...restored, ...trailing]);
       // The trailing banner/echo are UI-only (system + meta), so the model history restores bare.
-      modelHistoryRef.current = (nextIsChat ? stash.chatModel : stash.agentModel) ?? [];
+      sessionRef.current?.switchSide(nextIsChat ? 'chat' : 'agent');
     } else if (trailing.length > 0) {
       setMessages(prev => [...prev, ...trailing]);
     }
@@ -1215,21 +1123,16 @@ export function App() {
         echo,
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
-      resetConversation();
-      calibrationRef.current = 1;
-      // /clear also drops back to the default profile, which may be a different model on different
-      // hardware — a rate learned under the old one would misprice every round until it re-learns.
-      prefillRateRef.current = undefined;
-      // Same for decode throughput (#204): the chip describes the model that produced it, and
-      // /clear drops back to the default profile, which may be a different one on different
-      // hardware. The chip itself goes with the token counts it sits next to.
-      decodeRateRef.current = undefined;
+      // Also forgets what was learned about the engine and drops back to the default profile, which
+      // may be a different model on different hardware (#204): the tok/s chip goes with the token
+      // counts it sits next to.
+      resetConversation(true);
+      sessionRef.current?.switchSide('agent');
       setDecodeRate(undefined);
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
       setMode('agent');
-      setActiveProfile('default');
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1319,7 +1222,7 @@ export function App() {
       setMessages(prev => [...prev, echo, { role: 'system', content: `Re-indexing ${newCwd}…` }]);
       try {
         const newBundle = await bootstrap(newCwd, config.repoMapBudget);
-        setBundle(newBundle);
+        sessionRef.current?.updateBundle(() => newBundle);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
         setMessages(prev => [
@@ -1467,15 +1370,8 @@ export function App() {
             // it's off-config. Casing as typed: the key lowercases like every
             // profile key, but the server gets the model string verbatim.
             const inherit = config.profiles[activeProfileRef.current] ?? config.profiles.default;
-            const withAdhoc = {
-              ...config,
-              profiles: {
-                ...config.profiles,
-                [target]: inheritProfile(inherit, args.trim()),
-              },
-            };
-            setConfig(withAdhoc);
-            applyModelSwitch(target, echo, withAdhoc);
+            sessionRef.current?.addProfile(target, inheritProfile(inherit, args.trim()));
+            applyModelSwitch(target, echo);
             return;
           }
           applyModelSwitch(target, echo);
@@ -1612,11 +1508,7 @@ export function App() {
           // would double it. Same pattern as /implement.
           // Skills follow the active mode's prompt handling, so in vibe mode they
           // plan-then-implement like any other prompt.
-          if (modeRef.current === 'vibe') {
-            await runVibeTurn(prompt, raw);
-          } else {
-            await submitToModel(prompt, raw);
-          }
+          await submitToModel(prompt, raw, modeRef.current === 'vibe' ? 'vibe' : undefined);
           return;
         }
         response = `Unknown command: /${name}. Try /help.`;
@@ -2075,7 +1967,12 @@ export function App() {
       submitBusyRef.current = false;
     }
     if (modeRef.current === 'vibe') {
-      await runVibeTurn(modelText, display !== modelText ? display : undefined, nativeImages);
+      await submitToModel(
+        modelText,
+        display !== modelText ? display : undefined,
+        'vibe',
+        nativeImages,
+      );
       return;
     }
     await submitToModel(
@@ -2115,88 +2012,82 @@ export function App() {
   const submitToModel = async (
     modelText: string,
     displayOverride?: string,
-    // For this turn only: overrides which mode's tools + prompt are used, bypassing the `mode`
+    // For this submit only: overrides which mode's tools + prompt are used, bypassing the `mode`
     // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
-    // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
+    // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'. 'vibe'
+    // runs the plan→implement chain (#45) inside the session.
     modeOverride?: Mode,
     // Pasted images the model should be shown directly (native-vision profile). The caller owns the
     // lifetime and has already dropped its attachment ref, so these are this turn's images and no
     // other turn's — an image reaches the model once.
     nativeImages?: NativeImage[],
   ): Promise<Message[]> => {
-    // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
-    // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
-    const appended: Message[] = [];
     // Consumed here whether or not the turn runs, so a skill can never leak onto a later prompt.
     const skill = pendingSkillRef.current;
     pendingSkillRef.current = undefined;
-    if (!config || !bundle) return appended;
+    const s = sessionRef.current;
+    if (!s || !config) return [];
     const activeMode = modeOverride ?? mode;
-    // What this turn is recorded as on its prompt, which is not always what it runs as (vibe).
-    const recordedMode = turnMode(modeRef.current, activeMode);
-    setStatus('busy');
-    setPhase('thinking');
-    // The startup probe found no server; this turn is about to need one, so ask again first and
-    // let the window govern this turn rather than the next. Awaited: a server that is up answers
-    // in milliseconds, and one that is not fails the chat call right after anyway.
-    let turnConfig = config;
-    const profile = config.profiles[activeProfile];
-    if (windowRetryRef.current.has(activeProfile) && profile?.contextWindow == null) {
-      const probe = await probeModelLimits(profile);
-      if (probe.reached) windowRetryRef.current.delete(activeProfile);
-      const notice = probedLimitsNotice(probe);
-      if (notice) {
-        turnConfig = withProbedLimits(config, activeProfile, probe);
-        setConfig(turnConfig);
-        pendingNoticesRef.current.push({ role: 'system', content: notice });
-      }
-    }
-    resetTypecheck();
-    setReasoningSpin(false);
-    streamingRef.current = '';
-    reasoningRef.current = '';
-    toolRef.current = '';
-    setStreaming('');
-    setStreamingReasoning('');
-    setStreamingTool('');
-    // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written plan
-    // is in history) restores it. A turn with no tracked plan leaves the panel gone — no stale
-    // checklist lingering after the conversation moves on.
-    setPlanSteps(null);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      await runTurn({
-        userInput: modelText,
-        userDisplay: displayOverride,
-        userSkill: skill,
-        // This turn's pasted images, handed to the model directly under a native-vision profile.
-        // Undefined on every describe/OCR turn, which is every turn that didn't paste an image.
-        nativeImages,
-        // The persistent model history itself, not a copy: the loop appends this turn's messages
-        // and folds older spans in place, and both must survive to the next turn (#183).
-        history: modelHistoryRef.current,
-        bundle,
-        config: resolveProfile(turnConfig, activeProfile),
-        // Plan mode: read-only tools + the plan prompt. Chat mode: knowledge-only tools. Minimal
-        // mode: the shell alone, with a prompt carrying no project context (#391).
-        tools: turnTools(activeMode, {
-          agent: tools,
-          plan: planTools(),
-          chat: chatToolsList,
-          minimal: minimalTools(),
-        }),
-        payloads,
-        signal: controller.signal,
-        requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
-        requestQuestion,
-        promptMode: turnPromptMode(activeMode),
-        minimalPrompt: isMinimalPrompt(activeMode),
-        onMessage: raw => {
-          // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
-          // saved transcript can say what each turn was. See store/transcript.ts summarizeModes.
-          const msg: Message = raw.role === 'user' ? { ...raw, mode: recordedMode } : raw;
-          appended.push(msg);
+    return s.submit(modelText, {
+      mode: activeMode,
+      // What this turn is recorded as on its prompt, which is not always what it runs as.
+      recordAs: turnMode(modeRef.current, activeMode),
+      display: displayOverride,
+      skill,
+      nativeImages,
+      requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
+      requestQuestion,
+      // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
+      onTurnStart: () => {
+        setStatus('busy');
+        setPhase('thinking');
+        resetTypecheck();
+        setReasoningSpin(false);
+        streamingRef.current = '';
+        reasoningRef.current = '';
+        toolRef.current = '';
+        setStreaming('');
+        setStreamingReasoning('');
+        setStreamingTool('');
+        // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written
+        // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
+        // stale checklist lingering after the conversation moves on.
+        setPlanSteps(null);
+        const controller = new AbortController();
+        abortRef.current = controller;
+        return controller.signal;
+      },
+      onTurnError: e => {
+        setMessages(prev => [...prev, { role: 'error', content: e.message }]);
+      },
+      onTurnEnd: () => {
+        if (flushTimerRef.current !== null) {
+          clearTimeout(flushTimerRef.current);
+          flushTimerRef.current = null;
+        }
+        if (reasoningFlushTimerRef.current !== null) {
+          clearTimeout(reasoningFlushTimerRef.current);
+          reasoningFlushTimerRef.current = null;
+        }
+        if (toolFlushTimerRef.current !== null) {
+          clearTimeout(toolFlushTimerRef.current);
+          toolFlushTimerRef.current = null;
+        }
+        streamingRef.current = '';
+        reasoningRef.current = '';
+        toolRef.current = '';
+        setStreaming('');
+        setStreamingReasoning('');
+        setStreamingTool('');
+        setSubagentLive(false);
+        setNoteLive(false);
+        resetTypecheck();
+        setReasoningSpin(false);
+        setStatus('idle');
+        abortRef.current = null;
+      },
+      events: {
+        onMessage: msg => {
           if (msg.role === 'assistant') {
             streamingRef.current = '';
             reasoningRef.current = '';
@@ -2224,8 +2115,7 @@ export function App() {
                 .map(f => f.path),
             ];
             if (written.length > 0) {
-              setBundle(prev => {
-                if (!prev) return prev;
+              s.updateBundle(prev => {
                 const next = written.reduce(
                   (idx, p) => addFileToIndex(idx, p, prev.ignore),
                   prev.fileIndex,
@@ -2266,12 +2156,12 @@ export function App() {
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
         // re-render.
-        onPlanProgress: steps => setPlanSteps(steps.map(s => ({ ...s }))),
+        onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
         onReasoningStatus: setReasoningSpin,
         onReasoningReset: () => {
-          // Loop-break recovery: drop the degenerate looped reasoning's live preview so the recovery
-          // notice is visible and the next round streams into a fresh Thinking block instead of
-          // appending onto the looped text (#55).
+          // Loop-break recovery: drop the degenerate looped reasoning's live preview so the
+          // recovery notice is visible and the next round streams into a fresh Thinking block
+          // instead of appending onto the looped text (#55).
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);
@@ -2294,89 +2184,16 @@ export function App() {
           }));
         },
         onContextEstimate: t => setEstimatedContext(t),
-        priorShrink: shrinkRef.current,
         onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
-          shrinkRef.current = counts;
           setShrink(counts);
           // Stamp the turn the way the status line counts turns (assistant messages so far), so
           // the saved event lines up with the `turn N` a reader sees in the header.
           const turn = messagesRef.current.filter(m => m.role === 'assistant').length + 1;
           shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
         },
-        priorCalibration: calibrationRef.current,
-        onCalibration: f => {
-          calibrationRef.current = f;
-        },
-        priorPrefillRate: prefillRateRef.current,
-        onPrefillRate: r => {
-          prefillRateRef.current = r;
-        },
-        priorDecodeRate: decodeRateRef.current,
-        onDecodeRate: r => {
-          decodeRateRef.current = r;
-          setDecodeRate(r);
-        },
-        prefixTrace: prefixTraceRef.current,
-      });
-    } catch (e) {
-      setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
-    } finally {
-      if (flushTimerRef.current !== null) {
-        clearTimeout(flushTimerRef.current);
-        flushTimerRef.current = null;
-      }
-      if (reasoningFlushTimerRef.current !== null) {
-        clearTimeout(reasoningFlushTimerRef.current);
-        reasoningFlushTimerRef.current = null;
-      }
-      if (toolFlushTimerRef.current !== null) {
-        clearTimeout(toolFlushTimerRef.current);
-        toolFlushTimerRef.current = null;
-      }
-      streamingRef.current = '';
-      reasoningRef.current = '';
-      toolRef.current = '';
-      setStreaming('');
-      setStreamingReasoning('');
-      setStreamingTool('');
-      setSubagentLive(false);
-      setNoteLive(false);
-      resetTypecheck();
-      setReasoningSpin(false);
-      setStatus('idle');
-      abortRef.current = null;
-    }
-    return appended;
-  };
-
-  // Vibe mode (#45): one prompt runs the full plan→implement pipeline. Phase 1 is a normal
-  // plan-mode turn (read-only tools, plan prompt); if it ends with a written plan, phase 2
-  // executes it immediately as a normal agent turn (the same prompt /implement submits).
-  // Approval wiring is untouched — each phase asks exactly as its underlying mode would, so
-  // REIKA_AUTO_APPROVE / the session toggle stay the sole source of truth for what auto-runs.
-  const runVibeTurn = async (
-    modelText: string,
-    displayOverride?: string,
-    // Native images ride with the plan phase — the turn the user actually pasted into. The
-    // implement phase that follows gets none: by then the image is history's note, not live bytes.
-    nativeImages?: NativeImage[],
-  ): Promise<void> => {
-    const planMsgs = await submitToModel(modelText, displayOverride, 'plan', nativeImages);
-    // No planFinal marker means the plan phase was aborted (ctrl-c) or dead-ended — never
-    // chain edits off a turn that didn't actually commit a plan.
-    if (!planWritten(planMsgs)) {
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'system',
-          content: 'vibe: the plan phase ended without a written plan — skipping implementation.',
-        },
-      ]);
-      return;
-    }
-    // No history threading needed: the plan phase appended straight into the shared model history,
-    // so the implement phase picks it up from there (the `messages` closure never would have).
-    await submitToModel(buildImplementPrompt(''), '/implement (vibe)', 'agent');
+        onDecodeRate: setDecodeRate,
+      },
+    });
   };
 
   // The status line's context gauge: raw window for the ratio, shed ceiling for the percent. Same

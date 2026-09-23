@@ -58,6 +58,9 @@ type TurnOpts = {
   tools: Tool[];
   promptMode?: string;
   prefixTrace?: unknown;
+  signal?: AbortSignal;
+  bundle?: ContextBundle;
+  nativeImages?: unknown[];
   priorCalibration?: number;
   priorPrefillRate?: number;
   priorDecodeRate?: number;
@@ -73,12 +76,19 @@ type TurnOpts = {
 const calls: TurnOpts[] = [];
 // Whether the next plan-mode turn commits a plan (planFinal) or dead-ends.
 let planWrites = true;
+// Set to make the next turn throw, as a failed chat call does.
+let throwNext: Error | null = null;
 
 // Mirrors the real loop's contract: it pushes each committed message onto `opts.history` AND emits
 // it, and reports the learned numbers through the callbacks.
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   calls.push(opts);
   const n = calls.length;
+  if (throwNext) {
+    const e = throwNext;
+    throwNext = null;
+    throw e;
+  }
   const user: Message = { role: 'user', content: opts.userInput };
   opts.history.push(user);
   opts.onMessage(user);
@@ -110,6 +120,7 @@ beforeEach(() => {
   calls.length = 0;
   probes.length = 0;
   planWrites = true;
+  throwNext = null;
   runTurn.mockClear();
   probeModelLimits.mockClear();
 });
@@ -217,6 +228,185 @@ describe('createSession', () => {
       const s = await createSession({ cwd: '/repo', config: CONFIG });
       expect(s.config.contextWindow).toBe(32000);
       expect(s.limitsNotice).toMatch(/from the models.dev catalog/);
+    });
+  });
+
+  describe('per-turn hooks', () => {
+    it("brackets each of vibe's two turns, each with its own abort signal", async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      const log: string[] = [];
+      const signals: AbortSignal[] = [];
+      await s.submit('add a flag', {
+        mode: 'vibe',
+        nativeImages: [{ marker: '[Image 1]', bytes: new Uint8Array(), mime: 'image/png' }],
+        onTurnStart: () => {
+          log.push('start');
+          const c = new AbortController();
+          signals.push(c.signal);
+          return c.signal;
+        },
+        onTurnEnd: () => log.push('end'),
+      });
+      expect(log).toEqual(['start', 'end', 'start', 'end']);
+      expect(calls.map(c => c.signal)).toEqual(signals);
+      // The image rides the turn the user pasted into; the implement phase gets history's note.
+      expect(calls[0].nativeImages).toHaveLength(1);
+      expect(calls[1].nativeImages).toBeUndefined();
+    });
+
+    it('reports a failed turn and carries on — vibe then skips implementation', async () => {
+      throwNext = new Error('connection refused');
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      const errors: string[] = [];
+      const out = await s.submit('add a flag', {
+        mode: 'vibe',
+        onTurnError: e => errors.push(e.message),
+      });
+      expect(errors).toEqual(['connection refused']);
+      expect(calls).toHaveLength(1);
+      expect(text(out.at(-1))).toMatch(/without a written plan/);
+    });
+
+    it('throws a failed turn when nobody handles it', async () => {
+      throwNext = new Error('connection refused');
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      await expect(s.submit('hi', { mode: 'agent' })).rejects.toThrow('connection refused');
+    });
+
+    it("prefers a submit's own events over the session's", async () => {
+      const sessionMessage = vi.fn();
+      const submitMessage = vi.fn();
+      const s = await createSession({
+        cwd: '/repo',
+        config: CONFIG,
+        events: { onMessage: sessionMessage },
+      });
+      await s.submit('hi', { mode: 'agent', events: { onMessage: submitMessage } });
+      expect(submitMessage).toHaveBeenCalledTimes(2);
+      expect(sessionMessage).not.toHaveBeenCalled();
+    });
+
+    it('records the prompt as `recordAs` when it runs as something else', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      const out = await s.submit('implement it', { mode: 'agent', recordAs: 'vibe' });
+      expect(out[0]).toMatchObject({ role: 'user', mode: 'vibe' });
+      expect(calls[0].promptMode).toBe('agent');
+    });
+  });
+
+  describe('profiles', () => {
+    const TWO: Config = {
+      ...CONFIG,
+      profiles: {
+        ...CONFIG.profiles,
+        vl: { model: 'vl-model', baseURL: 'http://127.0.0.1:2/v1', apiKey: 'k' },
+      },
+    };
+
+    it('switches, tells subscribers, runs the next turn on it, and forgets the decode rate', async () => {
+      const s = await createSession({ cwd: '/repo', config: TWO });
+      await s.submit('warm up', { mode: 'agent' });
+      expect(s.decodeRate).toBe(10);
+      const heard = vi.fn();
+      s.subscribe(heard);
+      await s.setProfile('vl');
+      expect(heard).toHaveBeenCalled();
+      expect(s.getSnapshot().profile).toBe('vl');
+      expect(s.decodeRate).toBeUndefined();
+      await s.submit('hi', { mode: 'agent' });
+      expect(calls[1].config.model).toBe('vl-model');
+      expect(calls[1].priorDecodeRate).toBeUndefined();
+    });
+
+    it('returns what the probe learned, and asks again at submit when it reached nothing', async () => {
+      const s = await createSession({ cwd: '/repo', config: TWO });
+      probes.push({ reached: true, window: 32000, windowSource: 'endpoint' });
+      expect(await s.setProfile('vl')).toMatch(/Context window of 32k tokens/);
+      expect(s.config.contextWindow).toBe(32000);
+
+      const other = await createSession({ cwd: '/repo', config: TWO });
+      probes.push({ reached: false }, { reached: true, window: 16000, windowSource: 'endpoint' });
+      expect(await other.setProfile('vl')).toBeUndefined();
+      await other.submit('hi', { mode: 'agent' });
+      expect(calls.at(-1)?.config.contextWindow).toBe(16000);
+    });
+
+    it('ignores an unknown profile', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      await s.setProfile('nope');
+      expect(s.profile).toBe('default');
+    });
+
+    it('registers an ad-hoc profile that can be switched to at once', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      s.addProfile('adhoc', { model: 'try-me', baseURL: 'http://127.0.0.1:1/v1', apiKey: 'test' });
+      await s.setProfile('adhoc');
+      expect(s.config.model).toBe('try-me');
+    });
+  });
+
+  describe('conversation state', () => {
+    it('keeps chat history apart and restores each side on the way back', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      await s.submit('agent work', { mode: 'agent' });
+      const agentHistory = s.history;
+      s.switchSide('chat');
+      expect(s.history).toEqual([]);
+      await s.submit('a question', { mode: 'chat' });
+      s.switchSide('agent');
+      expect(s.history).toBe(agentHistory);
+      s.switchSide('chat');
+      expect(s.history.map(text)).toEqual(['a question', 'done']);
+    });
+
+    it('loads a resumed conversation into the active side and stashes the other', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      const active: Message[] = [{ role: 'user', content: 'resumed agent' }];
+      const other: Message[] = [{ role: 'user', content: 'resumed chat' }];
+      s.loadHistory(active, other);
+      expect(s.history).toBe(active);
+      s.switchSide('chat');
+      expect(s.history).toBe(other);
+    });
+
+    it('reset drops the conversation but keeps what it learned; relearn forgets that too', async () => {
+      const TWO: Config = {
+        ...CONFIG,
+        profiles: { ...CONFIG.profiles, vl: { model: 'vl', baseURL: 'x', apiKey: 'k' } },
+      };
+      const s = await createSession({ cwd: '/repo', config: TWO });
+      await s.setProfile('vl');
+      await s.submit('hi', { mode: 'agent' });
+      const trace = calls[0].prefixTrace;
+
+      s.reset();
+      expect(s.history).toEqual([]);
+      expect(s.transcript).toEqual([]);
+      expect(s.totals).toEqual({ promptTokens: 0, completionTokens: 0 });
+      expect(s.shrink).toEqual({ sheds: 0, folds: 0 });
+      expect(s.calibration).toBe(1.1);
+      expect(s.profile).toBe('vl');
+      await s.submit('again', { mode: 'agent' });
+      expect(calls[1].prefixTrace).not.toBe(trace);
+      expect(calls[1].priorCalibration).toBe(1.1);
+
+      s.reset({ relearn: true });
+      expect(s.calibration).toBeUndefined();
+      expect(s.decodeRate).toBeUndefined();
+      expect(s.profile).toBe('default');
+    });
+
+    it('updates the bundle and tells subscribers only when it changed', async () => {
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      const heard = vi.fn();
+      s.subscribe(heard);
+      s.updateBundle(b => b);
+      expect(heard).not.toHaveBeenCalled();
+      s.updateBundle(b => ({ ...b, fileIndex: ['new.ts'] }));
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(s.getSnapshot().bundle.fileIndex).toEqual(['new.ts']);
+      await s.submit('hi', { mode: 'agent' });
+      expect(calls[0].bundle?.fileIndex).toEqual(['new.ts']);
     });
   });
 });
