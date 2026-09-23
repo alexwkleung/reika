@@ -1,5 +1,7 @@
 import type { Message, Tool } from '../types.js';
+import type { NativeImage } from '../agent/attachments.js';
 import type { ChatMessageParam, ChatTool } from './transport.js';
+import { imageContentPart } from './transport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
 import type { EndpointLatches } from './latches.js';
 
@@ -317,6 +319,16 @@ export function messagesToChatParams(
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
     trailingNote?: string;
+    // Pasted images to hand to the model directly, for a profile whose model can already see
+    // (VisionRoute 'native'). Each is attached to the one history user message whose text carries
+    // its marker — the message the user actually pasted it into — and only that message. An image
+    // whose marker is no longer in the serialized text is dropped rather than sent anyway: the
+    // marker is the user's handle on the attachment, and deleting it has to mean "don't send this"
+    // (the same rule attachImageBlocks applies to the text block).
+    //
+    // The parts land on the LAST matching user message, which is the tail of the request, so the
+    // prefix ahead of it is untouched and the prompt cache stays valid across a turn's rounds.
+    nativeImages?: NativeImage[];
     // Debug-only hook: reports what the fit-to-window cap did to this request (#253).
     onCapStats?: (stats: CapStats) => void;
     onAgedStats?: (stats: AgedStats) => void;
@@ -418,6 +430,9 @@ export function messagesToChatParams(
     return content;
   };
   const out: ChatMessageParam[] = [{ role: 'system', content: systemContent }];
+  // Index of the last user message that came from *history* — never the recap above nor the
+  // trailing note below. Native-image parts attach to it, and only to it.
+  let lastUserIdx = -1;
   // Compaction left no user turn — surface the recap as the user message so a user-requiring
   // template still renders. (Normal case: hasUserTurn is true and the recap stayed in the system
   // block above.) Carries the original task too, since buildRecap records "- User: <task>".
@@ -431,6 +446,10 @@ export function messagesToChatParams(
       // sees a bare `/model` or `/stats` turn (its system response was already dropped).
       if (msg.meta) continue;
       out.push({ role: 'user', content: msg.content });
+      // A harness nudge mid-turn (typecheck send-back, continuation, length/verbatim recovery) is a
+      // user message too, but it never carries the marker — targeting it would drop the images for
+      // the rest of the turn.
+      if (!msg.harness) lastUserIdx = out.length - 1;
     } else if (msg.role === 'assistant') {
       const hasTools = !!msg.toolCalls && msg.toolCalls.length > 0;
       const param: Record<string, unknown> = {
@@ -507,6 +526,26 @@ export function messagesToChatParams(
   // model attends hardest. It also counts as the user message a user-requiring template needs.
   if (opts?.trailingNote) {
     out.push({ role: 'user', content: opts.trailingNote });
+  }
+  // Native vision: fold this turn's pasted images into the user message they were pasted into, as
+  // OpenAI multimodal parts. The message stays text in history — only this outgoing copy carries
+  // bytes, so nothing downstream (aging, compaction, spill, transcripts) ever sees a non-string.
+  if (opts?.nativeImages?.length && lastUserIdx >= 0) {
+    const target = out[lastUserIdx];
+    const text =
+      target.role === 'user' && typeof target.content === 'string' ? target.content : null;
+    if (text !== null) {
+      // One filter for the whole group, against that message's own text: the marker is what links
+      // an attachment to the turn, so a marker the user deleted can't smuggle its bytes in.
+      const live = opts.nativeImages.filter(im => text.includes(im.marker));
+      if (live.length > 0) {
+        // Text first, then images — the order ocr/vision.ts uses for the same wire shape.
+        out[lastUserIdx] = {
+          role: 'user',
+          content: [{ type: 'text', text }, ...live.map(im => imageContentPart(im.mime, im.bytes))],
+        };
+      }
+    }
   }
   // Final backstop: if somehow still no user message (e.g. an all-meta history with no recap), inject
   // a minimal one right after the system block so a user-requiring template doesn't 400. Cheap

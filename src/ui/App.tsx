@@ -60,11 +60,20 @@ import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
 import { expandMentions } from '../agent/mentions.js';
-import { attachImageBlocks, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
+import {
+  attachImageBlocks,
+  NATIVE_IMAGE_NOTE,
+  readNativeAttachments,
+  nextImageMarker,
+  type ImageAttachment,
+  type NativeImage,
+  type NativeImageBytes,
+} from '../agent/attachments.js';
 import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
 import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
-import { imageReader } from '../ocr/select.js';
+import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
+import { sniffImageMime } from '../ocr/vision.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
@@ -1700,6 +1709,28 @@ export function App() {
       notice('No image on the clipboard.', 'warn');
       return;
     }
+    // Native vision (REIKA_VISION=native on the active profile): the model can see, so nothing is
+    // read and nothing is described — the bytes ride along with the turn instead, and
+    // NATIVE_IMAGE_NOTE is what history keeps in their place. Skipped entirely when config hasn't
+    // loaded yet: falling back to the recognizer is better than a marker whose bytes were never
+    // registered.
+    // The active profile's route, not the startup one: REIKA_<NAME>_VISION is per profile.
+    const active = config && resolveProfile(config, activeProfileRef.current);
+    if (active && pasteIsNative(active)) {
+      const marker = nextImageMarker(imageAttachmentsRef.current);
+      imageAttachmentsRef.current = [
+        ...imageAttachmentsRef.current,
+        {
+          marker,
+          text: NATIVE_IMAGE_NOTE,
+          source: 'clipboard',
+          native: { bytes, mime: sniffImageMime(bytes) },
+        },
+      ];
+      setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
+      notice(`Attached ${marker} — sent to ${active.model} as an image.`, 'info');
+      return;
+    }
     // Named by what's actually running — a local vision model can take a minute on a full-screen
     // capture, and "Extracting text" would read as a hang.
     const vision = config?.visionModel;
@@ -1972,8 +2003,12 @@ export function App() {
     submitBusyRef.current = true;
     let modelText: string;
     let display: string;
+    // Native-vision bytes for this turn (empty on a describe/OCR profile): filled in below from the
+    // attachments still referenced in the text, then handed to runTurn for the turn's lifetime.
+    let nativeImages: NativeImage[] | undefined;
     try {
-      const reader = imageReader(resolveProfile(config, activeProfileRef.current));
+      const active = resolveProfile(config, activeProfileRef.current);
+      const reader = imageReader(active);
       // A vision model can take a minute on a screenshot, where OCR takes half a second; without a
       // label the Enter looks like it did nothing.
       const vision = config.visionModel;
@@ -2005,7 +2040,28 @@ export function App() {
       // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
       // in the bubble, but recalling that text from history later must not silently re-attach an
       // image the user has moved on from.
-      modelText = attachImageBlocks(expansion.augmented, imageAttachmentsRef.current);
+      let liveImages = imageAttachmentsRef.current;
+      if (!pasteIsNative(active) && liveImages.some(a => a.native)) {
+        const read = await readNativeAttachments(liveImages, ocr);
+        liveImages = read.attachments;
+        for (const marker of read.failed) {
+          pendingNoticesRef.current.push({
+            role: 'system',
+            content: `Couldn't read ${marker} for ${active.model}, which can't see images — it was pasted under a profile that could.`,
+            tone: 'warn',
+          });
+        }
+      }
+      modelText = attachImageBlocks(expansion.augmented, liveImages);
+      // The same liveness rule attachImageBlocks just applied, so an attachment whose marker the
+      // user deleted sends neither its text nor its bytes. Read from `modelText` because that is
+      // the exact text the model gets.
+      nativeImages = liveImages
+        .filter((a): a is ImageAttachment & { native: NativeImageBytes } =>
+          Boolean(a.native && modelText.includes(a.marker)),
+        )
+        .map((a): NativeImage => ({ marker: a.marker, ...a.native }));
+      if (nativeImages.length === 0) nativeImages = undefined;
       imageAttachmentsRef.current = [];
       if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
       modelText = routeSkill(trimmed, modelText, route);
@@ -2019,10 +2075,15 @@ export function App() {
       submitBusyRef.current = false;
     }
     if (modeRef.current === 'vibe') {
-      await runVibeTurn(modelText, display !== modelText ? display : undefined);
+      await runVibeTurn(modelText, display !== modelText ? display : undefined, nativeImages);
       return;
     }
-    await submitToModel(modelText, display !== modelText ? display : undefined);
+    await submitToModel(
+      modelText,
+      display !== modelText ? display : undefined,
+      undefined,
+      nativeImages,
+    );
   };
 
   // Latch the typecheck indicator: show immediately when a check starts, but defer hiding by
@@ -2058,6 +2119,10 @@ export function App() {
     // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
     // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'.
     modeOverride?: Mode,
+    // Pasted images the model should be shown directly (native-vision profile). The caller owns the
+    // lifetime and has already dropped its attachment ref, so these are this turn's images and no
+    // other turn's — an image reaches the model once.
+    nativeImages?: NativeImage[],
   ): Promise<Message[]> => {
     // Everything the turn appended (user echo, assistant rounds, tool receipts), so a caller can
     // chain on the outcome — vibe mode gates its implement phase on planWritten() over this.
@@ -2105,6 +2170,9 @@ export function App() {
         userInput: modelText,
         userDisplay: displayOverride,
         userSkill: skill,
+        // This turn's pasted images, handed to the model directly under a native-vision profile.
+        // Undefined on every describe/OCR turn, which is every turn that didn't paste an image.
+        nativeImages,
         // The persistent model history itself, not a copy: the loop appends this turn's messages
         // and folds older spans in place, and both must survive to the next turn (#183).
         history: modelHistoryRef.current,
@@ -2286,8 +2354,14 @@ export function App() {
   // executes it immediately as a normal agent turn (the same prompt /implement submits).
   // Approval wiring is untouched — each phase asks exactly as its underlying mode would, so
   // REIKA_AUTO_APPROVE / the session toggle stay the sole source of truth for what auto-runs.
-  const runVibeTurn = async (modelText: string, displayOverride?: string): Promise<void> => {
-    const planMsgs = await submitToModel(modelText, displayOverride, 'plan');
+  const runVibeTurn = async (
+    modelText: string,
+    displayOverride?: string,
+    // Native images ride with the plan phase — the turn the user actually pasted into. The
+    // implement phase that follows gets none: by then the image is history's note, not live bytes.
+    nativeImages?: NativeImage[],
+  ): Promise<void> => {
+    const planMsgs = await submitToModel(modelText, displayOverride, 'plan', nativeImages);
     // No planFinal marker means the plan phase was aborted (ctrl-c) or dead-ended — never
     // chain edits off a turn that didn't actually commit a plan.
     if (!planWritten(planMsgs)) {

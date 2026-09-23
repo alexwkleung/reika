@@ -366,6 +366,12 @@ export type Profile = {
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
   minGenTokens?: number;
+  // How pasted images reach this profile's model. 'describe' (the default) reads the image into
+  // text with the vision model or system OCR, so a text-only model still gets its content;
+  // 'native' hands the bytes to the model itself as an image part, for a model that can see.
+  // Per-profile because this is a property of the model, not of the machine: the local default
+  // stays text-only while `/model <vl>` sends images straight through.
+  vision?: VisionRoute;
   // Registered at runtime by `/model <name>` for a model that isn't in the config:
   // connection settings are inherited from the profile active at switch time. The flag
   // keeps the UI honest about the model being off-config (switch message, picker marker).
@@ -395,6 +401,16 @@ export type SkillAutoMode = 'off' | 'ask' | 'apply';
 // still asks, and headless fetches it too, with the private-host policy kept since nobody vouched
 // for the address.
 export type PasteFetchMode = 'off' | 'ask' | 'apply';
+
+// How a pasted image reaches the model (REIKA_VISION, per-profile as REIKA_<NAME>_VISION).
+//   'describe' — read it into text first: a vision model (REIKA_VISION_MODEL) or system OCR
+//                writes a description that rides into the prompt as an <image> block. The main
+//                model stays text-only, and the description stays in history and is cacheable.
+//   'native'   — send the bytes to the main model as an OpenAI multimodal image part, once per
+//                turn, for the model that can already see. History keeps a short "not transcribed"
+//                note in the block's place instead of a description, so the string-only pipeline
+//                (aging, compaction, spill, transcripts) is untouched either way.
+export type VisionRoute = 'describe' | 'native';
 
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
@@ -433,6 +449,11 @@ export type Config = {
   visionModel?: string;
   visionBaseURL?: string;
   visionApiKey?: string;
+  // How pasted images reach the active profile's model (REIKA_VISION, per-profile as
+  // REIKA_<NAME>_VISION). Unset means 'describe': read the image into text first. Resolved from
+  // the *active profile*, so `/model <vl>` can switch a session over to native image parts and
+  // back without restarting. See VisionRoute.
+  vision?: VisionRoute;
   searxngUrl?: string;
   // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
   // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which

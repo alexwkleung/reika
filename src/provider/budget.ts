@@ -45,6 +45,17 @@ export function computeMaxTokens(opts: {
 // Consecutive length-stops the loop will try to recover from before accepting the partial.
 export const MAX_LENGTH_RETRIES = 1;
 
+// Tokens charged per natively-attached image (VisionRoute 'native') when sizing the prompt.
+//
+// Nothing else in the budget can see an image: every estimate in the codebase is
+// `estimateTokens = chars / 4` (./tokens.ts), and an image part has no characters. Without this,
+// a full-screen capture — a couple of thousand image tokens at a typical VL patch size — would be
+// invisible to the max_tokens backstop and the fit-to-window cap, which is exactly how a 32k local
+// window overflows instead of compacting. Deliberately generous: over-charging costs a little
+// generation room on that turn, under-charging costs a 400. It's a fixed allowance, not a
+// measurement — the real number depends on the model's patching and the capture's aspect ratio.
+export const NATIVE_IMAGE_TOKEN_ALLOWANCE = 2000;
+
 // A `length` finish_reason with no usable tool call is generation cut off mid-thought (the
 // backstop firing, or a spiral hitting max_tokens) — not a real final answer. The loop
 // nudges once to recover; a second consecutive truncation means the model is stuck, so it

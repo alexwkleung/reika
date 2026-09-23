@@ -37,6 +37,8 @@ const ENV_KEYS = [
   'REIKA_PLAN_EXPERIMENT',
   'REIKA_AUTO_APPROVE',
   'REIKA_SKILL_AUTO',
+  'REIKA_VISION',
+  'REIKA_KIMI_VISION',
   'REIKA_VISION_MODEL',
   'REIKA_VISION_BASE_URL',
   'REIKA_VISION_API_KEY',
@@ -172,6 +174,51 @@ describe('loadConfig — vision model (#130)', () => {
   });
 });
 
+describe('REIKA_VISION — the route images take', () => {
+  it('is unset by default, so images are read into text', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    const c = loadConfig();
+    expect(c.vision).toBeUndefined();
+  });
+
+  it('reads native, and treats ocr as the describe spelling', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION = 'native';
+    expect(loadConfig().vision).toBe('native');
+
+    process.env.REIKA_VISION = 'ocr';
+    expect(loadConfig().vision).toBe('describe');
+  });
+
+  // A typo must land on the route that works for every model. 'nativ' inventing native
+  // would start sending bytes to a text-only model, which is a 400 the user didn't ask for.
+  it('falls back to inherit on anything unrecognized', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION = 'nativ';
+    expect(loadConfig().vision).toBeUndefined();
+  });
+
+  it('is inherited by a named profile that does not set its own', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION = 'native';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    const c = loadConfig();
+    expect(c.profiles.kimi.vision).toBe('native');
+  });
+
+  it('lets a named profile override the inherited route', () => {
+    process.env.REIKA_MODEL = 'qwen3-9b';
+    process.env.REIKA_VISION = 'native';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_VISION = 'describe';
+    const c = loadConfig();
+    expect(c.profiles.kimi.vision).toBe('describe');
+    expect(c.vision).toBe('native');
+  });
+});
+
 describe('loadConfig — multi-model REIKA_MODEL', () => {
   it('parses a comma-separated list; first model is the default', () => {
     process.env.REIKA_MODEL = 'a,b,c';
@@ -292,6 +339,26 @@ describe('resolveProfile', () => {
     expect(resolved.apiKey).toBe('kimi-k');
     // Non-profile fields preserved
     expect(resolved.maxTurns).toBe(cfg.maxTurns);
+  });
+
+  // The one line that makes a per-profile route real. `...config` spreads the *default* profile's
+  // value over the top, so without the explicit override a `/model <vl>` switch would keep
+  // describing while the profile claimed to be native — passing its parser test and doing nothing.
+  it('carries the profile vision route over the default one', () => {
+    process.env.REIKA_MODEL = 'default-m';
+    process.env.REIKA_VISION = 'native';
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_VISION = 'describe';
+    const cfg = loadConfig();
+    expect(resolveProfile(cfg, 'kimi').vision).toBe('describe');
+  });
+
+  it('falls back to the config route when the profile sets none', () => {
+    process.env.REIKA_MODEL = 'default-m';
+    process.env.REIKA_VISION = 'native';
+    const cfg = loadConfig();
+    expect(resolveProfile(cfg, 'default').vision).toBe('native');
   });
 });
 
