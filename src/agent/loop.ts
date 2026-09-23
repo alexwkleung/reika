@@ -1422,6 +1422,15 @@ export async function runTurn(opts: {
     }
   };
 
+  // REIKA_TYPECHECK=0 (Config.typecheck, default on) disables the whole post-edit gate: no
+  // baseline at the first mutating call, no final re-check, no done-gate send-backs. One local
+  // boolean because the gate runs at two sites (the baseline capture below in the dispatch loop,
+  // the done-gate above in the isFinal branch), and `undefined` (a hand-built test Config
+  // predating the knob) stays on — the same fail-default shape as Config.autosave. Everything
+  // else about the gate is unchanged: non-TS projects still fail open, and tsc never runs for a
+  // project without a tsconfig even when the flag is on.
+  const typecheckEnabled = opts.config.typecheck !== false;
+
   // EXPERIMENT (plan→agent handoff): one-shot pre-pass before the round loop. Folds the plan-mode
   // exploration that produced the plan into a compact digest so the executing agent sees the plan
   // verbatim plus findings, not the full transcript. Operates on the per-turn opts.history copy
@@ -2730,8 +2739,9 @@ export async function runTurn(opts: {
       // carries the errors to the model (system messages get dropped by messagesToChatParams), and a
       // 'warn' notice tells the human. Bounded by MAX_TYPECHECK_GATE_ROUNDS: past the cap it commits
       // dirty with a notice rather than looping. Fail-open: no baseline or an unrunnable final check
-      // just lets the turn end.
-      if (typecheckBaseline !== null && !opts.signal?.aborted) {
+      // just lets the turn end. REIKA_TYPECHECK=0 leaves `typecheckBaseline` null (the capture
+      // above never runs), so this whole branch collapses for free.
+      if (typecheckEnabled && typecheckBaseline !== null && !opts.signal?.aborted) {
         const final = await typecheck();
         const decision = decideTypecheckGate({
           baseline: typecheckBaseline,
@@ -2895,8 +2905,11 @@ export async function runTurn(opts: {
       // local model is saturating the box) and only on turns that actually edit. Fail-open: a
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
       // `willMutate`, not MUTATING_TOOLS: a shell edit is an edit, and a turn that does its writing
-      // through bash used to finish unverified.
+      // through bash used to finish unverified. The baseline capture is the first thing
+      // REIKA_TYPECHECK=0 (typecheckEnabled) switches off — with it off nothing downstream can
+      // fire either, since the gate is null-baseline fail-open.
       if (
+        typecheckEnabled &&
         !typecheckBaselineAttempted &&
         tool &&
         !refused &&
