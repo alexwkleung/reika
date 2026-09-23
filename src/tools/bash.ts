@@ -598,9 +598,11 @@ function searchHint(command: string, output: string): string {
 // list is bash alone, where "use the grep tool" points at a tool that turn does not offer.
 const RG_WORD_RE = /\brg\b/;
 // The not-found line, in every spelling /bin/sh produces: bash's `sh: rg: command not found`,
-// dash/ash's `sh: 1: rg: not found`, and `xargs`'s `xargs: rg: No such file or directory`. All of
-// them name the missing word on the same line, which is what keeps a match to the failing command.
-const RG_MISSING_RE = /(?:^|\n)[^\n]*\brg\b[^\n]*(?:not found|No such file or directory)/;
+// dash/ash's `sh: 1: rg: not found`, `xargs`'s `xargs: rg: No such file or directory`, and the
+// prefix-less `rg: not found`. The missing word is matched literally in its `: rg:` (or
+// line-initial) slot — a loose `\brg\b` also matches `rg-helper`/`my-rg` (a hyphen is a word
+// boundary) and would blame a sibling's name on rg, the misattribution the gate exists to stop.
+const RG_MISSING_RE = /(?:^|\n)(?:[^\n]*: )?rg: [^\n]*(?:not found|No such file or directory)/;
 
 export function missingRgHint(
   command: string,

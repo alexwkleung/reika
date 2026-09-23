@@ -264,6 +264,8 @@ describe('missingRgHint (#323)', () => {
     expect(
       hint('git ls-files | xargs rg foo', 127, 'xargs: rg: No such file or directory'),
     ).not.toBe('');
+    // The prefix-less spelling some /bin/sh produce (`rg: not found`): rg is the whole message.
+    expect(hint('rg foo .', 127, 'rg: not found')).not.toBe('');
   });
 
   it('points at `grep -rn` alone when this turn has no grep tool (minimal mode)', () => {
@@ -289,6 +291,13 @@ describe('missingRgHint (#323)', () => {
     // `rg` ran — the exit is its neighbour's. The gate is on the message naming the missing word,
     // not on the status plus the command text, which would tell a model holding ripgrep it is gone.
     expect(hint('rg -n x . && nosuchcmd', 127, 'sh: nosuchcmd: command not found')).toBe('');
+  });
+
+  it('does not blame rg when the missing word is a name containing rg', () => {
+    // A hyphen is a word boundary, so `\brg\b` matches the rg inside `rg-helper`/`my-rg`. The
+    // missing word must sit in the message's own slot (`: rg:`), not merely appear on the line.
+    expect(hint('./rg-helper', 127, 'sh: ./rg-helper: not found')).toBe('');
+    expect(hint('my-rg foo', 127, 'sh: my-rg: not found')).toBe('');
   });
 
   it('reaches the payload of a failing run through execStream', async () => {
