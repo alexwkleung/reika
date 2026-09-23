@@ -7,7 +7,8 @@ import { visionOcr } from './vision.js';
 // (REIKA_VISION_MODEL) wins outright — it's an opt-in, and the reason to set it is that OCR's
 // text-only extraction loses whatever the screenshot shows that isn't text. Connection settings
 // fall back to the main server the same way subagent settings do, so a vision model served by the
-// same router needs one variable, not three.
+// same router needs one variable, not three. Callers pass the config resolved onto the active
+// profile, which is what makes "the main server" the one the session is on now.
 export function imageReader(config: Config): OcrProvider {
   if (config.visionModel) {
     return visionOcr({

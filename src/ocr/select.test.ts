@@ -44,3 +44,23 @@ describe('imageReader', () => {
     });
   });
 });
+
+describe('imageReader on a switched profile', () => {
+  it("falls back to the active profile's server, not the default's", async () => {
+    const { resolveProfile } = await import('../config.js');
+    const config = {
+      ...base,
+      visionModel: 'qwen-vl',
+      profiles: {
+        default: { model: 'local', baseURL: 'http://main:8080/v1', apiKey: 'main-key' },
+        kimi: { model: 'kimi', baseURL: 'https://router.example.com/v1', apiKey: 'router-key' },
+      },
+    } as unknown as Config;
+    imageReader(resolveProfile(config, 'kimi'));
+    expect(visionOcr).toHaveBeenLastCalledWith({
+      model: 'qwen-vl',
+      baseURL: 'https://router.example.com/v1',
+      apiKey: 'router-key',
+    });
+  });
+});
