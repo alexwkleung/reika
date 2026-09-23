@@ -85,12 +85,24 @@ If the diff renames a function, changes its parameters, or changes what it
 returns, `grep` for its name. Because the files on disk are the code before this
 PR, every call site grep finds is one that existed before the change. A call
 site in a file that is not on the PR's file list was not updated — that is a
-finding. One grep per changed function; do not go looking for other edge cases.
+finding. One grep per changed function — that grep is the only caller search to
+run.
+
+The PR body and the diff's own comments make claims about what the code does
+("runs whenever X", "only bypasses Y", "unchanged for Z"). Check each claim
+against the code it describes, following a condition into the function it
+calls when the claim depends on it. A claim the code does not keep is a finding.
 
 Then write the review. For each finding, give the file and line, what is wrong,
 and why it matters. Put the most serious first: correctness bugs, data loss, and
 security problems outrank style and naming. If the change is sound, say so
 plainly rather than inventing findings — "no blocking issues" is a real review.
+
+End with one line starting `Not verified:` that names the functions, files or
+paths a finding or a "this is fine" depends on but you did not open — what you
+assumed instead of read. If you opened everything the review relies on, write
+`Not verified: nothing`. Keep it to names; this is the one place to say what you
+did not check.
 
 Do not restate the diff, re-explain what the code does, or narrate how you found
 something — the reader has the PR open in front of them. Say what is wrong and why
@@ -102,7 +114,8 @@ Review the change against that requirement, not only against the PR body. Two
 findings only that step can produce: the diff does something the issue never
 asked for, and the diff misses something the issue did ask for.
 
-Do not edit any files, and do not post anything to GitHub. This review is for
-the terminal; the user decides what to do with it.
+While writing this review, do not edit any files and do not post anything to
+GitHub. The review is for the terminal; the user decides what to do with it, and
+may ask for changes in a later message — that request is theirs to make.
 
 PR number:
