@@ -343,3 +343,39 @@ describe('editTool — the read is gated, not just the write', () => {
     expect(result.summary).toContain(target);
   });
 });
+
+describe('editTool — file changed during approval (#487)', () => {
+  it('writes nothing when another writer changed the file while approval was pending', async () => {
+    const p = await write('a.ts', 'const top = 1;\n\nconst bottom = 1;\n');
+    const result = await editTool.run(
+      { path: 'a.ts', old_string: 'const bottom = 1;', new_string: 'const bottom = 2;' },
+      {
+        ...ctx(),
+        // A change far from the edited span is still lost when the whole file is rewritten.
+        requestApproval: async () => {
+          await writeFile(p, 'const top = 9;\n\nconst bottom = 1;\n', 'utf8');
+          return true;
+        },
+      },
+    );
+    expect(result.summary).toMatch(/changed on disk while the edit was being prepared/);
+    expect(result.diff).toBeUndefined();
+    expect(await readFile(p, 'utf8')).toBe('const top = 9;\n\nconst bottom = 1;\n');
+  });
+
+  it('does not recreate a file deleted while approval was pending', async () => {
+    const p = await write('a.ts', 'x = 1\n');
+    const result = await editTool.run(
+      { path: 'a.ts', old_string: 'x = 1', new_string: 'x = 2' },
+      {
+        ...ctx(),
+        requestApproval: async () => {
+          await rm(p);
+          return true;
+        },
+      },
+    );
+    expect(result.summary).toMatch(/changed on disk/);
+    await expect(readFile(p, 'utf8')).rejects.toThrow();
+  });
+});
