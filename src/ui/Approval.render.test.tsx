@@ -6,6 +6,7 @@ import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import { Approval, approvalPreviewRows, fitCommandLines } from './Approval.js';
+import { contentWidth } from './layout.js';
 import type { ApprovalRequest } from '../types.js';
 
 // The approval dialog is the one place a diff renders inside a BORDER, in the live region. Ink
@@ -65,6 +66,44 @@ describe('Approval dialog width', () => {
     expect(interior[first + 1].search(/\S/)).toBe(codeCol);
     // Nothing hidden.
     expect(rows.join('')).toContain('narrower filter');
+  });
+
+  it('keeps the space after `$` and a hanging indent when a command line wraps (#489)', () => {
+    // The `$` marker and the command are siblings in a row box; when the line is long enough to
+    // wrap, Ink dropped the character at that sibling boundary — the marker's space — so long
+    // commands rendered as `$git`. Wrapping each line ourselves (as DiffView's WrappedRow does)
+    // keeps every row short enough that Ink never wraps one.
+    const long =
+      'git checkout -b fix/sandbox-notice-spacing && git add src/ui/Scrollback.tsx ' +
+      'src/ui/Scrollback.render.test.tsx';
+    const rows = frame({ tool: 'bash', subject: '~/repo', preview: long });
+    // The space after `$` survived, and the continuation hangs under the command, not at column 0.
+    // Column math runs on the box interior, with the border stripped off both ends.
+    const interior = rows.map(r => r.replace(/^\s*│/, '').replace(/│\s*$/, ''));
+    const first = interior.findIndex(r => r.includes('$ git checkout'));
+    expect(first).toBeGreaterThanOrEqual(0);
+    const commandCol = interior[first].indexOf('git checkout');
+    const continuation = interior.slice(first + 1).find(r => r.trim().length > 0)!;
+    expect(continuation.search(/\S/)).toBe(commandCol);
+    for (const row of rows) {
+      expect(stringWidth(row)).toBeLessThanOrEqual(width());
+      expect(row.trim()).not.toBe('│');
+    }
+  });
+
+  it('starts a continuation in the hang when the break lands on a space, at full width', () => {
+    // The text column is the dialog interior minus the `$ ` marker. A run that fills it exactly
+    // puts the next break on the space after it, which trim:false carried onto the continuation
+    // row, one column right of the hang.
+    const textWidth = contentWidth(4) - 2;
+    const run = 'a'.repeat(textWidth);
+    const rows = frame({ tool: 'bash', subject: '~/repo', preview: `${run} bbb ccc` });
+    const interior = rows.map(r => r.replace(/^\s*│/, '').replace(/│\s*$/, ''));
+    const first = interior.findIndex(r => r.includes(`$ ${run}`));
+    // The whole run fits on the first row: the text column is not narrower than the interior.
+    expect(first).toBeGreaterThanOrEqual(0);
+    const commandCol = interior[first].indexOf(run);
+    expect(interior[first + 1].indexOf('bbb ccc')).toBe(commandCol);
   });
 
   it('keeps a command carrying tabs and a carriage return inside the border', () => {

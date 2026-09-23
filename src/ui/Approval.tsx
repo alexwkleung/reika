@@ -123,24 +123,51 @@ export function Approval({
   );
 }
 
+// The marker on a command's first row; every wrapped/extra line hangs under it by this width.
+const MARKER = '$ ';
+const MARKER_WIDTH = 2;
+
 function CommandPreview({ command, maxRows }: { command: string; maxRows: number }) {
   // Sanitized like the scrollback chip (issue #154), but NOT scrubbed: this is the dialog where
   // the user decides whether to run the thing, so it must show the command as written, secrets
   // and all. Tabs and cursor motions still go — inside a bordered box they wrap past the border
   // and the frame comes apart around the very text being approved.
   const all = sanitizeTerminalText(command).split('\n');
-  const { lines, hidden } = fitCommandLines(all, maxRows, contentWidth(DIALOG_CHROME) - 2);
+  // Same width the rows are rendered at below, so the row counts fitted here are the row counts
+  // the dialog actually draws.
+  const width = Math.max(1, contentWidth(DIALOG_CHROME) - MARKER_WIDTH);
+  const { lines, hidden } = fitCommandLines(all, maxRows, width);
+  // Each logical line is pre-wrapped to the dialog width the way DiffView's WrappedRow does it
+  // (#489): the `$`/`  ` marker and the text are adjacent siblings in a row Box, and when the row
+  // is long enough to wrap, Ink drops the character at that sibling boundary — the space of `$ `,
+  // which rendered every long approval as `$git checkout` with continuations back at column 0.
+  // Wrapping ourselves keeps each row inside the width, so Ink never wraps one and the marker's
+  // space survives; short commands were the only ones that kept their space before this.
   return (
     <>
-      {lines.map((line, i) => (
-        <Box key={i}>
-          <Text color={theme.success}>{i === 0 ? '$ ' : '  '}</Text>
-          <Text>{highlightCode(line, 'bash')}</Text>
-        </Box>
-      ))}
+      {lines.flatMap((line, i) => {
+        const rows = wrapAnsi(highlightCode(line, 'bash'), width, {
+          trim: false,
+          hard: true,
+        }).split('\n');
+        return rows.map((row, j) => (
+          <Box key={`${i}:${j}`}>
+            <Text color={theme.success}>
+              {j === 0 && i === 0 ? MARKER : ' '.repeat(MARKER_WIDTH)}
+            </Text>
+            <Text>{j === 0 ? row : dropWrapWhitespace(row)}</Text>
+          </Box>
+        ));
+      })}
       {hidden > 0 ? <Text color={theme.muted}>{`… ${hidden} more lines`}</Text> : null}
     </>
   );
+}
+
+// trim:false leaves the space wrap-ansi broke on at the head of a continuation row, one column
+// right of the hang — the same noise hangingWrap drops. Highlighting can open a color ahead of it.
+function dropWrapWhitespace(row: string): string {
+  return row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
 }
 
 // Leading lines that fit in `maxRows` wrapped rows, one reserved for the footer when any are cut.
