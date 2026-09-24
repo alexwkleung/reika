@@ -7,6 +7,7 @@ import {
   renderInlineMarkdown,
   renderMarkdown,
   renderReasoningMarkdown,
+  unwrapHyperlink,
 } from './markdown.js';
 import { theme } from './theme.js';
 
@@ -21,6 +22,29 @@ describe('renderReasoningMarkdown', () => {
     expect(out).toContain('• read a.ts');
     expect(out).not.toMatch(/\*\*|`|\]\(/);
     expect(out).toContain('const x = 1;');
+  });
+});
+
+// marked-terminal decides OSC 8 once at import, so a clickable link never reaches the tests
+// through renderMarkdown; the unwrap is tested on the escape as ansi-escapes writes it.
+describe('unwrapHyperlink', () => {
+  const osc8 = (url: string, text: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
+
+  it('turns a clickable link back into text plus URL', () => {
+    const link = osc8('https://example.com/a', chalk.hex(theme.link)('the docs'));
+    expect(unwrapHyperlink(`see ${link} here`)).toBe('see the docs (https://example.com/a) here');
+  });
+
+  it('shows a bare URL once', () => {
+    expect(unwrapHyperlink(osc8('https://example.com', 'https://example.com'))).toBe(
+      'https://example.com',
+    );
+  });
+
+  it('reads the tmux passthrough form', () => {
+    const tmux = (seq: string) => `\u001bPtmux;${seq.replaceAll('\u001b', '\u001b\u001b')}\u001b\\`;
+    const link = `${tmux('\u001b]8;;https://example.com/a\u0007')}docs${tmux('\u001b]8;;\u0007')}`;
+    expect(unwrapHyperlink(link)).toBe('docs (https://example.com/a)');
   });
 });
 

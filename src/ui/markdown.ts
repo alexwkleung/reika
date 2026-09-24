@@ -33,6 +33,21 @@ let blockIndent = 0;
 // over for Ink to re-wrap — the last word of each line on a row of its own, flush left (#431).
 let renderWidth = contentWidth();
 
+// Set for a reasoning render, whose styling is stripped afterwards: a clickable link would then be
+// its text alone, and in flat grey the URL is the only cue that it was a link at all.
+let plainLinks = false;
+
+// OSC 8 as ansi-escapes writes it, optionally inside tmux's DCS passthrough.
+const HYPERLINK =
+  /(?:\x1bPtmux;\x1b)?\x1b\]8;;([^\x07]*)\x07(?:\x1b\\)?([\s\S]*?)(?:\x1bPtmux;\x1b)?\x1b\]8;;\x07(?:\x1b\\)?/g;
+
+export function unwrapHyperlink(composed: string): string {
+  return composed.replace(HYPERLINK, (_, url: string, text: string) => {
+    const shown = stripAnsi(text);
+    return shown === url ? url : `${shown} (${url})`;
+  });
+}
+
 function proseWidth(): number {
   return Math.max(20, renderWidth - blockIndent);
 }
@@ -69,7 +84,7 @@ const terminalExtension = markedTerminal(
     // marked-terminal composes the whole link first — `text (href)`, or an OSC 8 hyperlink
     // where the terminal supports one — and hands that single string to `link`. A
     // (href, title, text) signature here read the third argument and printed `undefined`.
-    link: (composed: string) => composed,
+    link: (composed: string) => (plainLinks ? unwrapHyperlink(composed) : composed),
     // Both a bare URL (GFM autolink) and a `[text](href)` land here; see theme.link. Underlined
     // only where marked-terminal is also wrapping it in an OSC 8 hyperlink — the same check it
     // makes (`supportsHyperlinks.stdout`) — so the underline promises a click exactly when the
@@ -327,9 +342,14 @@ export function renderInlineMarkdown(text: string): string {
 
 // Reasoning renders like the reply, then drops the styling: the Thinking block stays flat muted
 // text (no highlighter colors from a code fence) but gets the reply's structure — bullets, link
-// text, no fence lines. A hyperlink-capable terminal's `[text](href)` keeps only `text`.
+// text, no fence lines. Links keep their URL — see plainLinks.
 export function renderReasoningMarkdown(text: string, width: number): string {
-  return stripAnsi(renderMarkdown(text, width));
+  plainLinks = true;
+  try {
+    return stripAnsi(renderMarkdown(text, width));
+  } finally {
+    plainLinks = false;
+  }
 }
 
 // A live stream's last line ends mid-span often: `**the loo` renders as literal asterisks until
