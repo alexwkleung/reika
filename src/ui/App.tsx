@@ -2254,7 +2254,7 @@ export function App() {
   if (status === 'error') {
     return (
       <Box flexDirection="column">
-        <Text bold>Error</Text>
+        <Text>Error</Text>
         <Text>{error}</Text>
       </Box>
     );

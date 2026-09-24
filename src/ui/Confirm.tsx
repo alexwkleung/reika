@@ -67,7 +67,7 @@ export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIn
     >
       {/* One Text with nested runs, as in Approval: a sibling boundary loses a char on wrap. */}
       <Text>
-        <Text bold color={theme.tool}>{`${DIALOG_MARKER} ${spec.title}`}</Text>
+        <Text color={theme.tool}>{`${DIALOG_MARKER} ${spec.title}`}</Text>
         <Text color={theme.secondary}>{`  ${spec.subtitle}`}</Text>
       </Text>
       {spec.details.map((line, i) => (
@@ -80,13 +80,9 @@ export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIn
           const selected = i === selectedIndex;
           return (
             <Text key={i}>
-              <Text bold color={selected ? theme.accent : undefined}>
-                {selected ? '› ' : '  '}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
               <Text color={selected ? theme.accent : theme.secondary}>{`${i + 1}. `}</Text>
-              <Text bold={selected} color={selected ? theme.accent : undefined}>
-                {label}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{label}</Text>
             </Text>
           );
         })}

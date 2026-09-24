@@ -965,7 +965,7 @@ describe('Scrollback nested user-bubble color', () => {
   });
 
   // The escape run chalk emits ahead of the bar glyph for a given hex — what Ink writes too.
-  const open = (hex: string) => chalk.bold.hex(hex)('\u258e').split('\u258e')[0];
+  const open = (hex: string) => chalk.hex(hex)('\u258e').split('\u258e')[0];
   const barRun = (msg: Message): string =>
     (
       frameFor(msg)

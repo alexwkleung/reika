@@ -579,9 +579,7 @@ function renderMessage(
         borderColor={theme.error}
         paddingX={1}
       >
-        <Text bold color={theme.error}>
-          Error
-        </Text>
+        <Text color={theme.error}>Error</Text>
         {/* Scrubbed like the notices below: errors quote paths from whatever threw
             (fs errno strings, save/paste failures), and an error box is the text
             most likely to be screenshotted or pasted into a bug report. `~/…`
@@ -654,9 +652,7 @@ function ReasoningBlock({
     <Box flexDirection="column">
       <Box>
         <Text color={barColor}>{'▎ '}</Text>
-        <Text bold color={theme.muted}>
-          Thinking
-        </Text>
+        <Text color={theme.muted}>Thinking</Text>
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
@@ -698,9 +694,7 @@ function UserBubble({
     <Box flexDirection="column" marginTop={1}>
       {rows.map((line, i) => (
         <Text key={i} backgroundColor={theme.userBg}>
-          <Text bold color={barColor}>
-            ▎
-          </Text>
+          <Text color={barColor}>▎</Text>
           <Text color="whiteBright">{` ${line.padEnd(contentW)} `}</Text>
         </Text>
       ))}
