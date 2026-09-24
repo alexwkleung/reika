@@ -73,11 +73,15 @@ export class DecodeRate {
   }
 }
 
-// `<rate>t/s`, or `?` when there is no number to print — the debug line's field shape. The chip's
-// is `ui/format.ts`'s formatTokensPerSecond (a space, no `?`); this one is for the log, where an
-// absent value is stated rather than omitted (a missing field reads as a cheap round), and where
-// four digits want no decimal. Same shape `prefillcost.ts` gives the rate it logs.
+// `<rate>tok/s`, or `?` when there is no number to print — the debug line's field shape, and the
+// ONLY rendering of a rate that reaches a log line: `prefillcost.ts` imports this one for the
+// prefill rate it prints, so both lines state a rate identically. The chip's is `ui/format.ts`'s
+// formatTokensPerSecond (a space, no `?`); this one is for the log, where an absent value is stated
+// rather than omitted (a missing field reads as a cheap round), and where four digits want no
+// decimal. Both spell the unit `tok/s`, so the log and the chip agree on what the number IS even
+// where they disagree on how to print it. The unit is part of the field, not decoration: a parser
+// matching this line has to match `tok/s` too (`evals/prefixcost-report.ts`).
 export function formatRate(rate?: number): string {
   if (rate == null) return '?';
-  return `${rate >= 10 ? Math.round(rate) : rate.toFixed(1)}t/s`;
+  return `${rate >= 10 ? Math.round(rate) : rate.toFixed(1)}tok/s`;
 }

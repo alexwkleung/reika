@@ -88,7 +88,11 @@ function parse(path: string): Run {
     if (round === 0 && !(prevRound === 0 && prevWasReport)) turn++;
     prevRound = round;
     prevWasReport = isReport;
-    const rate = NUM(line, /rate=([\d.]+)t\/s/);
+    // The unit is part of the field, not decoration: `tok/s` is what `agent/decoderate.ts`'s
+    // formatRate prints for the `rate=` field on both debug lines (prefill's and `round=`'s), so a
+    // rename there has to land here too — a stale pattern doesn't error, it silently falls back to
+    // `rate=?` and the run reads as if it never learned a rate.
+    const rate = NUM(line, /rate=([\d.]+)tok\/s/);
     if (rate != null) finalRate = rate;
     rounds.push({
       turn: Math.max(turn, 0),

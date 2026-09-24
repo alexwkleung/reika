@@ -1116,7 +1116,7 @@ export async function runTurn(opts: {
   // rate to price themselves with — and those are the expensive ones.
   priorPrefillRate?: number;
   onPrefillRate?: (rate: number) => void;
-  // Learned decode throughput (tokens/second) — the status bar's `21 t/s` chip (#204). Threaded
+  // Learned decode throughput (tokens/second) — the status bar's `21 tok/s` chip (#204). Threaded
   // across turns for the same reason as the prefill rate, and smoothed for the same reason; decode
   // only, since prefill's number is an estimate and stays in the debug log. See agent/decoderate.ts.
   priorDecodeRate?: number;
@@ -1267,7 +1267,7 @@ export async function runTurn(opts: {
     // continuation round leaves two near-identical tails resident until a shrink event clears them.
     // Shedding the older one here was tried and reverted (measured 2026-09-10, REIKA_CONTINUE_MAX=3,
     // 3 consecutive carries): rewriting a mid-history assistant message turned an append-only round
-    // into `cause=mid-history`, costing 1785 and 2358 tokens of reprocessing (83s and 106s at 21t/s)
+    // into `cause=mid-history`, costing 1785 and 2358 tokens of reprocessing (83s and 106s at 21tok/s)
     // against a comparable append-only round's 67 — to reclaim ~1375 tokens of window that was not
     // under pressure. Compaction's pre-pass is the right home precisely because it only runs when a
     // shrink is already rewriting those bytes, so the divergence is free; and it is ordered ahead of

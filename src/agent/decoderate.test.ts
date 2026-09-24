@@ -68,13 +68,13 @@ describe('DecodeRate', () => {
 
 describe('formatRate', () => {
   it('prints whole numbers from 10 up and one decimal below', () => {
-    expect(formatRate(19.77)).toBe('20t/s');
-    expect(formatRate(8.44)).toBe('8.4t/s');
-    expect(formatRate(1204.3)).toBe('1204t/s');
+    expect(formatRate(19.77)).toBe('20tok/s');
+    expect(formatRate(8.44)).toBe('8.4tok/s');
+    expect(formatRate(1204.3)).toBe('1204tok/s');
   });
 
   // The log's field shape, not an omitted one: a round that measured nothing has to say so, and `?`
-  // is what makes `decode=? smoothed=20t/s` readable as "this round measured nothing, the chip is
+  // is what makes `decode=? smoothed=20tok/s` readable as "this round measured nothing, the chip is
   // still showing the last rate" rather than as a value that went missing.
   it('states a missing value rather than dropping the field', () => {
     expect(formatRate(undefined)).toBe('?');

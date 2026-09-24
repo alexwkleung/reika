@@ -154,14 +154,14 @@ describe('decode rate reporting (integration)', () => {
     h.scripted.push(fullRound);
     await run();
     const log = await readFile(join(dir, 'debug.log'), 'utf8');
-    expect(log).toContain('decode=20t/s smoothed=20t/s');
+    expect(log).toContain('decode=20tok/s smoothed=20tok/s');
   });
 
   it('quotes both when they differ, so the chip cannot read as this round', async () => {
     h.scripted.push(fullRound);
     await run(10);
     const log = await readFile(join(dir, 'debug.log'), 'utf8');
-    expect(log).toContain('decode=20t/s smoothed=13t/s');
+    expect(log).toContain('decode=20tok/s smoothed=13tok/s');
   });
 
   // A round too small to measure leaves the chip on the last rate, and the log has to say the same:
@@ -178,8 +178,8 @@ describe('decode rate reporting (integration)', () => {
     );
     await run();
     const log = await readFile(join(dir, 'debug.log'), 'utf8');
-    expect(log).toContain('decode=20t/s smoothed=20t/s');
-    expect(log).toContain('decode=? smoothed=20t/s');
+    expect(log).toContain('decode=20tok/s smoothed=20tok/s');
+    expect(log).toContain('decode=? smoothed=20tok/s');
   });
 });
 

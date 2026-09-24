@@ -100,7 +100,7 @@ describe('PrefillRate', () => {
 
 describe('formatPrefillCost', () => {
   it('reads as the most expensive event in the session when it is one', () => {
-    expect(formatPrefillCost(8952, 22.95)).toBe('reprocess=8952tok est=390s rate=23t/s');
+    expect(formatPrefillCost(8952, 22.95)).toBe('reprocess=8952tok est=390s rate=23tok/s');
   });
 
   // `?` rather than an omitted field: a missing estimate must not read as a cheap round.
@@ -109,15 +109,15 @@ describe('formatPrefillCost', () => {
   });
 
   it('keeps sub-10 values readable instead of rounding them to 0', () => {
-    expect(formatPrefillCost(174, 22.95)).toBe('reprocess=174tok est=7.6s rate=23t/s');
-    expect(formatPrefillCost(174, 2.5)).toBe('reprocess=174tok est=70s rate=2.5t/s');
+    expect(formatPrefillCost(174, 22.95)).toBe('reprocess=174tok est=7.6s rate=23tok/s');
+    expect(formatPrefillCost(174, 2.5)).toBe('reprocess=174tok est=70s rate=2.5tok/s');
   });
 
   // A turn's first request has no measured baseline: the full prompt is a ceiling on what the
   // engine re-processed (it usually still holds the previous turn's prefix), so the line says so.
   it('marks an unmeasured round as an upper bound', () => {
     expect(formatPrefillCost(8952, 22.95, true)).toBe(
-      'reprocess\u22648952tok est\u2264390s rate=23t/s',
+      'reprocess\u22648952tok est\u2264390s rate=23tok/s',
     );
     expect(formatPrefillCost(8952, undefined, true)).toBe(
       'reprocess\u22648952tok est\u2264? rate=?',

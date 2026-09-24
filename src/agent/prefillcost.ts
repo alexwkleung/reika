@@ -1,4 +1,5 @@
 import type { Usage } from '../types.js';
+import { formatRate } from './decoderate.js';
 import type { PrefixDivergence } from './prefixtrace.js';
 
 // What the prefix divergence measured in prefixtrace.ts actually COST (issue #195). On a slow local
@@ -69,7 +70,9 @@ export class PrefillRate {
 // two units that matter. `?` (not a silent omission) while the rate is still unlearned, so a
 // missing estimate never reads as a cheap round. `bounded` swaps `=` for `≤` on the round the trace
 // has no baseline for (a turn's first request): the engine usually still holds the previous turn's
-// prefix, so the full prompt is a ceiling on what it re-processed, not a measurement.
+// prefix, so the full prompt is a ceiling on what it re-processed, not a measurement. The rate's
+// `<n>tok/s` rendering is `decoderate.ts`'s `formatRate` — one spelling for both debug lines, so
+// this line and the `round=` line cannot drift apart.
 export function formatPrefillCost(tokens: number, rate?: number, bounded = false): string {
   const seconds = rate != null && rate > 0 ? tokens / rate : undefined;
   const eq = bounded ? '\u2264' : '=';
@@ -82,8 +85,4 @@ export function formatPrefillCost(tokens: number, rate?: number, bounded = false
 
 function formatSeconds(s: number): string {
   return s >= 10 ? `${Math.round(s)}s` : `${s.toFixed(1)}s`;
-}
-
-function formatRate(r: number): string {
-  return r >= 10 ? `${Math.round(r)}t/s` : `${r.toFixed(1)}t/s`;
 }
