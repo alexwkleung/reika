@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { findFreshToolBlockStart } from '../provider/toolcall.js';
 import { escapesProject, resolveUserPath } from '../tools/_paths.js';
+import { classifyEditMatch } from '../tools/edit.js';
 import type { Message } from '../types.js';
 
 // Read-first gate (#72). Weak models blind-apply edits to files whose contents are not in front of
@@ -159,6 +161,29 @@ function liveFromIndex(history: Message[]): number {
 // explicitly so a model that genuinely has the bytes is delayed one round, never blocked. States the
 // absence as a fact about the context rather than about the turn — the model may well have read this
 // file, twenty rounds ago, and telling it otherwise invites an argument instead of a read.
+// The gate's own false-positive meter, for the `read-first bounce` debug line: would the edit it
+// just withheld have applied? `yes` means the round was wasted — the model held the bytes another way
+// (a bash `cat`, grep context) or reproduced them from memory; `no` means it caught a blind edit. The
+// ratio across real sessions is what decides whether the default is right per model, which no
+// fixture can answer. Debug-only, and never throws: a probe must not cost the turn.
+export async function probeWouldLand(
+  cwd: string,
+  path: string,
+  oldStr: string,
+  newStr: string,
+): Promise<string> {
+  if (oldStr === '' || oldStr === newStr) return 'would-land=no match=invalid';
+  let text: string;
+  try {
+    text = await readFile(resolveUserPath(cwd, path), 'utf8');
+  } catch {
+    return 'would-land=no match=unreadable';
+  }
+  const kind = classifyEditMatch(text, oldStr, newStr);
+  const lands = kind === 'exact' || kind === 'fuzzy';
+  return `would-land=${lands ? 'yes' : 'no'} match=${kind}`;
+}
+
 export function buildReadFirstDirective(path: string): string {
   return (
     `(reika: this edit was NOT applied. The current contents of ${path} are not in your context — ` +

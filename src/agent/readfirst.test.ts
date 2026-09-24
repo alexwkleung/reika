@@ -1,7 +1,14 @@
-import { homedir } from 'node:os';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ReadFirstGate, buildReadFirstDirective, isLive, probeLine } from './readfirst.js';
+import {
+  ReadFirstGate,
+  buildReadFirstDirective,
+  isLive,
+  probeLine,
+  probeWouldLand,
+} from './readfirst.js';
 import { resolveUserPath } from '../tools/_paths.js';
 import type { Message } from '../types.js';
 
@@ -301,3 +308,53 @@ describe('ReadFirstGate — out-of-project paths are never bounced', () => {
 function escapesProjectProbe(): string {
   return resolveUserPath(CWD, '~/.aws/credentials');
 }
+
+// The bounce line's would-land field is the gate's false-positive meter, so it must agree with what
+// the edit tool would actually have done — including the whitespace-insensitive fallback, which is
+// why a re-indented old_string counts as landing.
+describe('probeWouldLand', () => {
+  async function inTmp(body: string, fn: (dir: string) => Promise<void>): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), 'reika-rf-'));
+    try {
+      await writeFile(join(dir, 'a.ts'), body);
+      await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+  const BODY = 'function f() {\n  return 1;\n}\n\nconst x = 2;\nconst x = 2;\n';
+
+  it('reports an exact unique match as landing', async () => {
+    await inTmp(BODY, async dir => {
+      expect(await probeWouldLand(dir, 'a.ts', 'return 1;', 'return 3;')).toBe(
+        'would-land=yes match=exact',
+      );
+    });
+  });
+
+  it('counts the whitespace-insensitive fallback as landing', async () => {
+    await inTmp(BODY, async dir => {
+      expect(await probeWouldLand(dir, 'a.ts', 'function f() {\nreturn 1;', 'x')).toBe(
+        'would-land=yes match=fuzzy',
+      );
+    });
+  });
+
+  it('reports a guessed old_string as not landing, with the failure kind', async () => {
+    await inTmp(BODY, async dir => {
+      expect(await probeWouldLand(dir, 'a.ts', 'return 42;', 'x')).toBe(
+        'would-land=no match=absent',
+      );
+      expect(await probeWouldLand(dir, 'a.ts', 'const x = 2;', 'x')).toBe(
+        'would-land=no match=multiple',
+      );
+    });
+  });
+
+  it('never throws on a missing file or a degenerate edit', async () => {
+    await inTmp(BODY, async dir => {
+      expect(await probeWouldLand(dir, 'nope.ts', 'a', 'b')).toBe('would-land=no match=unreadable');
+      expect(await probeWouldLand(dir, 'a.ts', '', 'b')).toBe('would-land=no match=invalid');
+    });
+  });
+});

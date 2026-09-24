@@ -78,7 +78,7 @@ import {
   type PlanStep,
   type StepMatch,
 } from './plantrack.js';
-import { ReadFirstGate, buildReadFirstDirective } from './readfirst.js';
+import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
   SUBAGENT_HOLD_NOTE,
@@ -430,15 +430,15 @@ const PREFIX_STABLE = process.env.REIKA_PREFIX_STABLE !== '0';
 // `=0` is the baseline arm. `read-trace-summary` is blind to it on a bash-fetching task (it records
 // `read` only); transcripts are the instrument. Strict no-op when off.
 const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
-// EXPERIMENT (read-first gate, #72): during agent turns that execute a written plan, withhold a
-// blind edit — one to a file with no read or successful edit/write this turn — ONCE per file, with
-// a directive to read it first. The prevention analogue of the edit-recovery ledger: a fresh step's
-// old_string is a guess (the handoff digest keeps the plan, not file bytes), and when it misses the
-// model burns the failure round and sometimes spirals; a withheld round costs one read it needed
-// anyway. Fail-open (a re-issued edit runs as-is), suspended while inspection tools are withdrawn
-// (the directed read would be refused — deadlock), and plan-scoped because that is where the
-// observed failure lives; ordinary turns keep refreshedFile + edit-recovery. See agent/readfirst.ts.
-const READ_FIRST = process.env.REIKA_READ_FIRST === '1';
+// Read-first gate (#72, on by default since 2026-09-23; `=0` is the baseline arm): withhold a blind
+// edit — one to a file whose bytes are not live in the request the model just answered — ONCE per
+// file, with a directive to read it first. The prevention analogue of the edit-recovery ledger: a
+// blind old_string is a guess, and when it misses the model burns the failure round and sometimes
+// spirals; a withheld round costs one read it needed anyway. Default-on on the risk profile, not a
+// measurement: worst case is one append-only round per file per turn, fail-open (a re-issued edit
+// runs as-is), suspended while inspection tools are withdrawn (the directed read would be refused).
+// The `would-land=` field on the bounce debug line is the measurement. See agent/readfirst.ts.
+const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
 
 // EXPERIMENT (plan mode): the force-write turn is a *transformation*, not another exploration
 // round. Asking the exploring model to "stop and write prose" fights its action prior and lets
@@ -1357,7 +1357,7 @@ export async function runTurn(opts: {
   const readTrace = new ReadTrace();
   // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
-  // Recorded unconditionally (cheap); only the READ_FIRST flag lets it withhold anything.
+  // Recorded unconditionally (cheap); only READ_FIRST (default on) lets it withhold anything.
   const readFirst = new ReadFirstGate(opts.bundle.cwd);
   // Cross-round reasoning-loop detector (Layer 2). Records each round's reasoning to spot the model
   // re-deriving the same analysis instead of converging. Always recorded (cheap, and the debug
@@ -3041,7 +3041,15 @@ export async function runTurn(opts: {
         const blindPath = String(call.args.path);
         summary = `edit paused — read ${blindPath} first, then re-issue the edit`;
         payload = buildReadFirstDirective(blindPath);
-        debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath}\n`);
+        if (debugEnabled()) {
+          const probe = await probeWouldLand(
+            opts.bundle.cwd,
+            blindPath,
+            String(call.args.old_string ?? ''),
+            String(call.args.new_string ?? ''),
+          );
+          debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath} ${probe}\n`);
+        }
       } else if (heldForSubagent) {
         const label = refusedBashGrep ? 'shell inspection' : call.name;
         summary = `${label} held — the subagent dispatched this round covers it`;
