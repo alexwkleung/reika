@@ -78,16 +78,17 @@ export function toolLabel(name: string): string {
 
 // The in-flight verb for a call the loop has just dispatched (#509), for the live `↳ Running…` row
 // `Scrollback` draws in the result's place. Each one parallel the past-tense verb its committed
-// summary actually uses — `Ran:`, `Edited`, `Wrote`, `Read`, `Listed`, `Found`, `Fetched`,
-// `Asked` — so the pending row is the result row's own slot with the result not in it yet: one word
-// swaps for the other and nothing on the line moves. `grep`/`glob`/`search` share one verb because
-// all three commit as a form of "Found … matches/files": what distinguishes them is the argument,
-// which the call row above already shows.
+// summary actually uses — `Ran:`, `Edited`, `Wrote`, `Read`, `Listed`, `Fetched`, `Asked`, and the
+// `Found N matches` / `Found N file(s) matching` pair — so the pending row is the result row's own
+// slot with the result not in it yet: one word swaps for the other and nothing on the line moves.
+// The file-search pair reads `Matching…` rather than sharing web `search`'s `Searching…`: each verb
+// names its own committed noun (matches / files matching, against results), and one word for both
+// would read a local regex scan as an outbound query — the more expensive of the two to mistake.
 const TOOL_VERBS: Record<string, string> = {
   read: 'Reading',
   list: 'Listing',
-  grep: 'Searching',
-  glob: 'Searching',
+  grep: 'Matching',
+  glob: 'Matching',
   edit: 'Editing',
   write: 'Writing',
   bash: 'Running',

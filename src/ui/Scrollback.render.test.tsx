@@ -582,6 +582,10 @@ describe('Scrollback pending tool row', () => {
     expect(liveFrame('bash')).toContain('↳ Running…');
     expect(liveFrame('edit')).toContain('↳ Editing…');
     expect(liveFrame('read')).toContain('↳ Reading…');
+    // File search says Matching, not Searching: that one belongs to the web tool, which is a
+    // different gesture committing under a different noun.
+    expect(liveFrame('grep')).toContain('↳ Matching…');
+    expect(liveFrame('search')).toContain('↳ Searching…');
   });
 
   // The row is the result row's own slot with the result not in it yet: same marker, same column,
