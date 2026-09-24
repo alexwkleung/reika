@@ -6,6 +6,13 @@
 //
 // `detectDangerousPatterns` is the only export, and bashTool.run is its only caller.
 
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
+import { stripHeredocs } from './_writetargets.js';
+
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is
 // recoverable), but they record or publish work, and the user generally wants to stay in the
 // loop rather than have the agent do it autonomously. These funnel through the same warnings
@@ -51,6 +58,8 @@ const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
 // outside the project — a global install trips both and reads as both.
 // The trailing (?![\w./-]) keeps the verb a whole token, so `npm run install-hooks` and
 // `cat install.md` don't read as installs.
+const REMOTE_EXEC_LABEL = 'Remote package execution (npx/bunx/uvx)';
+
 const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
   {
     re: /\b(?:npm|pnpm|bun)\s+(?:-{1,2}[\w-]+\s+)*(?:install|i|add|ci)(?![\w./-])/,
@@ -119,11 +128,9 @@ const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
 
   // Fetch-and-run: no install, same vector. `npx some-cli` downloads a package the model chose
   // — hallucinated or typosquatted just as easily as one it would have installed — and executes
-  // it immediately, so it gets the same gate.
-  {
-    re: /\b(?:npx|bunx|uvx)(?![\w./-])/,
-    label: 'Remote package execution (npx/bunx/uvx)',
-  },
+  // it immediately, so it gets the same gate. npx/bunx are matched in `remoteExecLabel` instead,
+  // since a binary the project already installed fetches nothing.
+  { re: /\buvx(?![\w./-])/, label: REMOTE_EXEC_LABEL },
   {
     re: /\b(?:pnpm|yarn)\s+dlx(?![\w./-])|\bpipx\s+run(?![\w./-])/,
     label: 'Remote package execution (dlx/pipx run)',
@@ -307,6 +314,92 @@ function clusterLabel(segment: string): string | undefined {
   return `Cluster/container mutation (${tool} ${group ? `${verb} ${next}` : verb})`;
 }
 
+// `gh` takes the cluster polarity for the same reason: reads are a closed set, and the writes
+// (`pr edit`, `pr comment`, `issue close`, `run cancel`, every extension) are an open tail that
+// act on GitHub as the user. A blocklist of the publishing verbs let `gh pr edit` and `gh pr
+// comment` run unprompted — and an unflagged `gh` keeps the network under the sandbox, so nothing
+// contained them either. `*` admits every verb of a read-only noun.
+const GH_READ_VERBS: Record<string, readonly string[]> = {
+  pr: ['view', 'list', 'diff', 'checks', 'status', 'checkout'],
+  issue: ['view', 'list', 'status'],
+  repo: ['view', 'list', 'clone'],
+  run: ['view', 'list', 'watch', 'download'],
+  workflow: ['view', 'list'],
+  release: ['view', 'list', 'download'],
+  gist: ['view', 'list', 'clone'],
+  label: ['list'],
+  cache: ['list'],
+  secret: ['list'],
+  variable: ['list', 'get'],
+  ruleset: ['view', 'list', 'check'],
+  project: ['view', 'list', 'field-list', 'item-list'],
+  codespace: ['list', 'view', 'logs'],
+  extension: ['list', 'search', 'browse'],
+  org: ['list'],
+  alias: ['list'],
+  config: ['get', 'list'],
+  auth: ['status'],
+  'ssh-key': ['list'],
+  'gpg-key': ['list'],
+  search: ['*'],
+  status: ['*'],
+  browse: ['*'],
+  help: ['*'],
+  version: ['*'],
+  completion: ['*'],
+};
+
+// The publishing and deleting verbs already carry their own, more specific label.
+const GH_VERBS_COVERED_ELSEWHERE = ['pr create', 'pr merge', 'release create', 'repo delete'];
+
+// `gh -R owner/repo pr view` puts the flag's value where the noun would be.
+const GH_FLAG_TAKES_VALUE = new Set(['-R', '--repo', '--hostname']);
+
+// `gh api` defaults to POST as soon as it is given a field, so the method has to be derived, not
+// read off an `-X` that is usually absent.
+const GH_API_FIELD_RE = /^(?:-f|-F|--field|--raw-field|--input)(?:=|$)/;
+
+function ghLabel(segment: string): string | undefined {
+  const tokens = segment.split(/\s+/);
+  if (tokens[0] !== 'gh') return undefined;
+  const sub: string[] = [];
+  let i = 1;
+  for (; i < tokens.length && sub.length < 2; i++) {
+    const t = tokens[i];
+    if (t.startsWith('-')) {
+      if (GH_FLAG_TAKES_VALUE.has(t)) i++;
+      if (t === '--version' || t === '--help' || t === '-h') return undefined;
+      continue;
+    }
+    sub.push(t);
+    if (sub[0] === 'api') break;
+  }
+  const [noun, verb] = sub;
+  if (!noun) return undefined;
+  if (noun === 'api') return ghApiLabel(tokens.slice(i + 1));
+  const reads = GH_READ_VERBS[noun];
+  if (reads?.includes('*')) return undefined;
+  if (!verb) return reads ? undefined : `GitHub CLI action (gh ${noun} — not a known read)`;
+  if (reads?.includes(verb) || GH_VERBS_COVERED_ELSEWHERE.includes(`${noun} ${verb}`)) {
+    return undefined;
+  }
+  return `GitHub CLI action (gh ${noun} ${verb} — not a known read)`;
+}
+
+function ghApiLabel(args: string[]): string | undefined {
+  let method: string | undefined;
+  let hasField = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-X' || a === '--method') method = args[++i];
+    else if (a.startsWith('--method=')) method = a.slice('--method='.length);
+    else if (/^-X\w/.test(a)) method = a.slice(2);
+    else if (GH_API_FIELD_RE.test(a)) hasField = true;
+  }
+  const m = (method?.replace(/['"]/g, '') ?? (hasField ? 'POST' : 'GET')).toUpperCase();
+  return m === 'GET' || m === 'HEAD' ? undefined : `GitHub API write (gh api ${m})`;
+}
+
 // Commands whose danger lives in the *verb* position, so they are matched per shell segment
 // rather than anywhere in the string: both words are perfectly ordinary as arguments (`grep -rn
 // curl src/`, `git log --grep pkill`), and blanket matching would fire on reads and erode the
@@ -421,15 +514,34 @@ const VERB_PREFIX_RE =
 
 // Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
 // are seen as the commands they are rather than as arguments of whatever encloses them.
+// A separator inside quotes is data — `grep "a\|gh pr\|b"` is one grep, not a `gh pr` — except a
+// substitution, which runs inside double quotes too.
+const VERB_SEPARATOR_RE = /[\n;&|(){}]+|\$\(|`/g;
+
+function verbSegments(command: string): string[] {
+  const masked = maskQuoted(command);
+  const segments: string[] = [];
+  let start = 0;
+  let keep = true;
+  VERB_SEPARATOR_RE.lastIndex = 0;
+  for (let m = VERB_SEPARATOR_RE.exec(command); m; m = VERB_SEPARATOR_RE.exec(command)) {
+    if (keep) segments.push(command.slice(start, m.index));
+    start = m.index + m[0].length;
+    keep = m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index];
+  }
+  if (keep) segments.push(command.slice(start));
+  return segments;
+}
+
 function verbLabels(command: string): string[] {
   const hits: string[] = [];
-  for (const segment of command.split(/[\n;&|(){}]+|\$\(|`/)) {
+  for (const segment of verbSegments(command)) {
     const seg = segment.trim().replace(VERB_PREFIX_RE, '');
     if (!seg) continue;
     for (const { re, label } of VERB_PATTERNS) {
       if (re.test(seg) && !hits.includes(label)) hits.push(label);
     }
-    const cluster = clusterLabel(seg);
+    const cluster = clusterLabel(seg) ?? ghLabel(seg);
     if (cluster && !hits.includes(cluster)) hits.push(cluster);
   }
   return hits;
@@ -488,6 +600,14 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
     label: 'Force push to remote',
   },
   { re: /\bgit\s+branch\s+-D\b/, label: 'Force-delete git branch' },
+  // Moves an existing branch wherever it is pointed; the commits it left are reachable only
+  // through the reflog.
+  { re: /\bgit\s+branch\b[^&;|]*\s(?:-f|--force)\b/, label: 'Force-move git branch' },
+  // A forced remove deletes the worktree's uncommitted and untracked files with it.
+  {
+    re: /\bgit\s+worktree\s+remove\b[^&;|]*\s(?:-f|--force)\b/,
+    label: 'Force-remove git worktree (discards its uncommitted changes)',
+  },
   { re: /\bgit\s+reset\s+--hard\b/, label: 'Hard reset (discards uncommitted changes)' },
   { re: /\bgit\s+clean\s+-[a-zA-Z]*f/, label: 'Force-clean untracked files' },
   // The same act as the hard reset above through a different verb, and the worst of the set:
@@ -694,17 +814,134 @@ function nestedBodies(command: string): Array<{ context: string; body: string; i
   return found;
 }
 
-export function detectDangerousPatterns(command: string): string[] {
-  return detectAtDepth(command, 0);
+// Two checks read the working tree, because the command text alone cannot answer them: whether
+// `npx vitest` fetches anything, and whether `git checkout App.tsx` names a branch or a file.
+// Without a cwd both fall back to the text — npx flags, checkout stays with the regexes above.
+
+// Each segment with the directory it runs in, leading `cd` hops applied.
+function* segmentsWithDir(
+  command: string,
+  cwd: string,
+): Generator<{ dir: string; words: string[] }> {
+  const stripped = stripHeredocs(command);
+  let dir = cwd;
+  for (const raw of splitSegments(stripped, maskQuoted(stripped))) {
+    const words = (raw.trim().match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
+    if (words[0] === 'cd') {
+      if (words[1]) dir = resolve(dir, expandHome(words[1]));
+      continue;
+    }
+    yield { dir, words };
+  }
 }
 
-function detectAtDepth(command: string, depth: number): string[] {
+function expandHome(path: string): string {
+  return path === '~' || path.startsWith('~/') ? homedir() + path.slice(1) : path;
+}
+
+// npx and bunx run a binary the project already installed without touching the registry, and that
+// is most of what a model runs through them (`npx vitest run`, `npx tsc --noEmit`: 188 of 267
+// flags across a real session history). Flagging those trained exactly the reflexive approval the
+// gate cannot afford. Anything that could fetch still flags: a flag asking for a package, a
+// versioned or scoped name, a name with no local binary — and an occurrence the word scan could
+// not account for (quoted, heredoc'd), which is why the counts must agree.
+const NPX_RE = /\b(?:npx|bunx)(?![\w./-])/g;
+const NPX_FETCH_FLAG_RE = /^(?:-y|--yes|-p|--package|-c|--call)(?:=|$)/;
+
+function remoteExecLabel(command: string, cwd: string | undefined): string | undefined {
+  const expected = command.match(NPX_RE)?.length ?? 0;
+  if (expected === 0) return undefined;
+  if (!cwd) return REMOTE_EXEC_LABEL;
+  let local = 0;
+  for (const { dir, words } of segmentsWithDir(command, cwd)) {
+    const at = words.findIndex(w => w === 'npx' || w === 'bunx');
+    if (at < 0) continue;
+    if (!runsLocalBin(words.slice(at + 1), dir)) return REMOTE_EXEC_LABEL;
+    local++;
+  }
+  return local === expected ? undefined : REMOTE_EXEC_LABEL;
+}
+
+function runsLocalBin(args: string[], dir: string): boolean {
+  for (const a of args) {
+    if (a.startsWith('-')) {
+      if (NPX_FETCH_FLAG_RE.test(a)) return false;
+      continue;
+    }
+    if (/[@/\\$]/.test(a)) return false;
+    return hasLocalBin(dir, a);
+  }
+  return false;
+}
+
+// npm exec resolves a project binary from the nearest node_modules/.bin walking up.
+function hasLocalBin(dir: string, bin: string): boolean {
+  for (let d = dir; ; d = dirname(d)) {
+    if (existsSync(join(d, 'node_modules', '.bin', bin))) return true;
+    if (dirname(d) === d) return false;
+  }
+}
+
+// `git checkout App.tsx` discards the file's uncommitted edits exactly like the `--` form above,
+// and it ran unprompted in a real session. Only the tree can tell it from `git checkout main`: an
+// operand that exists as a path and does not resolve as a commit is a pathspec. A branch that
+// exists only on a remote (checkout's DWIM create) reads as a path and prompts once — the safe
+// side of the ambiguity.
+const CHECKOUT_BRANCH_FLAGS = new Set(['-b', '-B', '--orphan']);
+const CHECKOUT_LABEL = 'Discard working-tree changes (git checkout -- <path>)';
+
+function checkoutPathLabel(command: string, cwd: string | undefined): string | undefined {
+  if (!cwd || !/\bgit\b[^&;|]*\bcheckout\b/.test(command)) return undefined;
+  for (const { dir, words } of segmentsWithDir(command, cwd)) {
+    const g = words.indexOf('git');
+    if (g < 0) continue;
+    let d = dir;
+    let i = g + 1;
+    for (; i < words.length && words[i].startsWith('-'); i++) {
+      if (words[i] === '-C' && words[i + 1]) d = resolve(d, expandHome(words[++i]));
+      else if (words[i] === '-c') i++;
+    }
+    if (words[i] !== 'checkout') continue;
+    const args = words.slice(i + 1);
+    if (args.some(a => CHECKOUT_BRANCH_FLAGS.has(a))) continue;
+    for (const a of args) {
+      if (a.startsWith('-') || !existsSync(resolve(d, a))) continue;
+      if (!resolvesAsCommit(a, d)) return CHECKOUT_LABEL;
+    }
+  }
+  return undefined;
+}
+
+function resolvesAsCommit(name: string, dir: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${name}^{commit}`], {
+      cwd: dir,
+      stdio: 'ignore',
+      timeout: 2000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// `cwd` is the directory the command runs in; without it the two working-tree checks above fall
+// back to what the text alone can say.
+export function detectDangerousPatterns(command: string, cwd?: string): string[] {
+  return detectAtDepth(command, 0, cwd);
+}
+
+function detectAtDepth(command: string, depth: number, cwd: string | undefined): string[] {
   const hits: string[] = [];
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
   }
-  for (const label of verbLabels(command)) {
-    if (!hits.includes(label)) hits.push(label);
+  for (const label of [
+    ...verbLabels(command),
+    remoteExecLabel(command, cwd),
+    checkoutPathLabel(command, cwd),
+  ]) {
+    if (label && !hits.includes(label)) hits.push(label);
   }
   // The long-tail fallback only speaks up when nothing more specific did, so a `pip install`
   // reports one precise label instead of two overlapping ones. Every install/uninstall label
@@ -719,7 +956,7 @@ function detectAtDepth(command: string, depth: number): string[] {
   // prefixed form is signal only when the outer pass genuinely could not see it.
   if (depth === 0) {
     for (const { context, body, interp } of nestedBodies(command)) {
-      const inner = detectAtDepth(body, 1);
+      const inner = detectAtDepth(body, 1, cwd);
       if (interp) {
         for (const { re, label } of INTERPRETER_BODY_PATTERNS) {
           if (re.test(body) && !inner.includes(label)) inner.push(label);

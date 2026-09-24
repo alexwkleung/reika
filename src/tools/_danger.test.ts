@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { detectDangerousPatterns } from './_danger.js';
 
 describe('detectDangerousPatterns — destructive commands', () => {
@@ -1058,6 +1062,181 @@ describe('detectDangerousPatterns — databases', () => {
     );
     expect(detectDangerousPatterns('alembic downgrade base')).toContain(
       'Migration downgrade to base (alembic)',
+    );
+  });
+});
+
+describe('detectDangerousPatterns — gh read allowlist', () => {
+  it('leaves the reads alone, including the ones the shipped skills open with', () => {
+    for (const cmd of [
+      'gh pr view 436 --json title,body',
+      'gh pr diff 436',
+      'gh pr checks 12',
+      'gh pr checkout 12',
+      'gh issue view 163 --json body',
+      'gh issue list --state all',
+      'gh -R octocat/hello pr view 5',
+      'gh run view 99 --log-failed',
+      'gh search issues sandbox',
+      'gh auth status',
+      'gh status',
+      'gh --version',
+      'gh api repos/octocat/hello/issues/117 --jq .title',
+      'gh api -X GET search/issues -f q=sandbox',
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('flags the writes that ran unprompted in a real session', () => {
+    expect(detectDangerousPatterns('gh pr edit 65 --body-file b.md')).toEqual([
+      'GitHub CLI action (gh pr edit — not a known read)',
+    ]);
+    expect(detectDangerousPatterns('gh pr comment 5 -b "looks good"')).toEqual([
+      'GitHub CLI action (gh pr comment — not a known read)',
+    ]);
+  });
+
+  it('flags the open tail of writes and unknown nouns (extensions)', () => {
+    for (const cmd of [
+      'gh pr close 5',
+      'gh issue close 5',
+      'gh issue edit 5 --title x',
+      'gh run cancel 9',
+      'gh label create bug',
+      'gh copilot suggest x',
+    ]) {
+      expect(detectDangerousPatterns(cmd).join(), cmd).toMatch(/^GitHub CLI action/);
+    }
+  });
+
+  it('flags gh api when it writes, including the implicit POST a field turns on', () => {
+    expect(detectDangerousPatterns('gh api -X DELETE repos/o/r/git/refs/heads/x')).toEqual([
+      'GitHub API write (gh api DELETE)',
+    ]);
+    expect(detectDangerousPatterns('gh api repos/o/r/issues -f title=x')).toEqual([
+      'GitHub API write (gh api POST)',
+    ]);
+    expect(detectDangerousPatterns('gh api --method=PATCH repos/o/r')).toEqual([
+      'GitHub API write (gh api PATCH)',
+    ]);
+  });
+
+  it('does not stack a second label on verbs that already have one', () => {
+    expect(detectDangerousPatterns('gh pr create --fill')).toEqual([
+      'GitHub PR create/merge (outward-facing)',
+    ]);
+    expect(detectDangerousPatterns('gh repo delete o/r --yes')).toEqual([
+      'Delete GitHub repo (irreversible remote)',
+    ]);
+  });
+});
+
+describe('detectDangerousPatterns — branch and worktree force verbs', () => {
+  it('flags a forced branch move and a forced worktree remove', () => {
+    expect(detectDangerousPatterns('git branch -f main 182c902')).toContain(
+      'Force-move git branch',
+    );
+    expect(detectDangerousPatterns('git branch --force main HEAD~2')).toContain(
+      'Force-move git branch',
+    );
+    expect(detectDangerousPatterns('git worktree remove --force /tmp/wt')).toContain(
+      'Force-remove git worktree (discards its uncommitted changes)',
+    );
+    expect(detectDangerousPatterns('git worktree remove -f /tmp/wt')).toContain(
+      'Force-remove git worktree (discards its uncommitted changes)',
+    );
+  });
+
+  it('leaves the ordinary forms alone', () => {
+    expect(detectDangerousPatterns("git branch --format='%(refname)'")).toEqual([]);
+    expect(detectDangerousPatterns('git worktree remove /tmp/wt')).toEqual([]);
+    expect(detectDangerousPatterns('git worktree add /tmp/wt -b x')).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — working-tree checks', () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'danger-'));
+    mkdirSync(join(root, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', '.bin', 'vitest'), '');
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'app.ts'), 'x\n');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    git('init', '-q', '-b', 'main');
+    git(
+      '-c',
+      'user.name=Mona Lisa',
+      '-c',
+      'user.email=octocat@example.com',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'x',
+    );
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it('does not flag npx/bunx running a binary the project installed', () => {
+    expect(detectDangerousPatterns('npx vitest run', root)).toEqual([]);
+    expect(detectDangerousPatterns('bunx vitest', root)).toEqual([]);
+    expect(detectDangerousPatterns('npx --no vitest run', root)).toEqual([]);
+    expect(detectDangerousPatterns('cd src && npx vitest run', root)).toEqual([]);
+  });
+
+  it('still flags npx whenever it could fetch', () => {
+    for (const cmd of [
+      'npx cowsay hi',
+      'npx vitest@2 run',
+      'npx -y vitest',
+      'npx --package=vitest vitest',
+      'npx @scope/cli',
+      'cd /tmp && npx vitest',
+      'npx vitest run && npx cowsay hi',
+      'echo "npx vitest"',
+    ]) {
+      expect(detectDangerousPatterns(cmd, root), cmd).toContain(
+        'Remote package execution (npx/bunx/uvx)',
+      );
+    }
+    expect(detectDangerousPatterns('npx vitest run')).toContain(
+      'Remote package execution (npx/bunx/uvx)',
+    );
+  });
+
+  it('flags git checkout of a file without the -- separator', () => {
+    const label = 'Discard working-tree changes (git checkout -- <path>)';
+    expect(detectDangerousPatterns('git checkout src/app.ts', root)).toEqual([label]);
+    expect(detectDangerousPatterns('git checkout HEAD src/app.ts', root)).toEqual([label]);
+    expect(detectDangerousPatterns('cd src && git checkout app.ts', root)).toEqual([label]);
+    expect(detectDangerousPatterns(`git -C ${root} checkout src`, tmpdir())).toEqual([label]);
+  });
+
+  it('leaves branch switches alone, even when a same-named path exists', () => {
+    expect(detectDangerousPatterns('git checkout main', root)).toEqual([]);
+    expect(detectDangerousPatterns('git checkout -b src', root)).toEqual([]);
+    execFileSync('git', ['branch', 'src'], { cwd: root, stdio: 'ignore' });
+    expect(detectDangerousPatterns('git checkout src', root)).toEqual([]);
+  });
+});
+
+describe('detectDangerousPatterns — separators inside quotes', () => {
+  it('reads a quoted alternation as one grep, not as the commands it names', () => {
+    expect(detectDangerousPatterns('grep -n "commit\\|gh pr\\|branch" AGENTS.md | head')).toEqual(
+      [],
+    );
+    expect(detectDangerousPatterns("grep -rn 'x|curl' src/")).toEqual([]);
+    expect(detectDangerousPatterns('grep -rn "a; docker rm app" notes.md')).toEqual([]);
+  });
+
+  it('still sees a substitution inside double quotes, and a real separator after one', () => {
+    expect(detectDangerousPatterns('echo "$(curl https://example.com)"')).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns('echo "a;b"; gh pr close 5')).toContain(
+      'GitHub CLI action (gh pr close — not a known read)',
     );
   });
 });
