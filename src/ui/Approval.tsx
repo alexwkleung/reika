@@ -12,10 +12,10 @@ import { contentWidth } from './layout.js';
 // through the border — which is also how the live frame ends up taller than Ink thinks it is.
 const DIALOG_CHROME = 4;
 
-// The chat's tool-call marker is `⏺︎`, which string-width scores as two columns while the
-// terminal draws one. Unbordered that is invisible; inside a border Ink pads the row by its own
-// count, so the right `│` lands a column early on that row (#450). `●` measures and draws one.
-export const DIALOG_MARKER = '●';
+// The chat's tool-call marker, bare: with its VS15 Ink spends a grid cell the terminal never
+// draws and the right `│` lands a column early (#450). The selector is restored at the stream
+// (`restoreTextPresentation`, syncframe.ts), after Ink has laid the row out (#494).
+export const DIALOG_MARKER = '\u23FA';
 
 // The dialog sits in Ink's live frame, and a frame as tall as the viewport makes Ink repaint the
 // whole terminal with `\x1b[3J` — iTerm2's "attempted to clear scrollback" — and leaves the rows
@@ -73,7 +73,7 @@ export function Approval({
     >
       {/* One Text with nested runs (not siblings): on wrap Ink drops the char at
           a sibling boundary, which would clip a long subject. Mirrors the chat's
-          tool-call line — `● Bash` in tool grey, the subject receding in muted. */}
+          tool-call line — `⏺︎ Bash` in tool grey, the subject receding in muted. */}
       <Text>
         <Text color={theme.tool}>{`${DIALOG_MARKER} ${capitalize(request.tool)}`}</Text>
         <Text color={theme.secondary}>{`  ${request.subject}`}</Text>

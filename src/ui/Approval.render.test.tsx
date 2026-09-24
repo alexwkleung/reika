@@ -5,8 +5,9 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
-import { Approval, approvalPreviewRows, fitCommandLines } from './Approval.js';
+import { Approval, DIALOG_MARKER, approvalPreviewRows, fitCommandLines } from './Approval.js';
 import { contentWidth } from './layout.js';
+import { restoreTextPresentation } from './syncframe.js';
 import type { ApprovalRequest } from '../types.js';
 
 // The approval dialog is the one place a diff renders inside a BORDER, in the live region. Ink
@@ -36,6 +37,8 @@ describe('Approval dialog width', () => {
   };
 
   const width = (): number => process.stdout.columns || 100;
+  // string-width scores the bare marker 2; Ink gives it one cell and the terminal draws one (#494).
+  const drawnWidth = (row: string): number => stringWidth(row.replaceAll(DIALOG_MARKER, '•'));
 
   it('keeps the gutter/prefix boundary and the code column when a long line wraps', () => {
     const long =
@@ -50,7 +53,7 @@ describe('Approval dialog width', () => {
     const bordered = rows.filter(r => r.trim().startsWith('│'));
     expect(bordered.length).toBeGreaterThan(0);
     for (const row of bordered) {
-      expect(stringWidth(row)).toBeLessThanOrEqual(width());
+      expect(drawnWidth(row)).toBeLessThanOrEqual(width());
       // Every interior row still closes its border.
       expect(row.trim().endsWith('│')).toBe(true);
     }
@@ -86,7 +89,7 @@ describe('Approval dialog width', () => {
     const continuation = interior.slice(first + 1).find(r => r.trim().length > 0)!;
     expect(continuation.search(/\S/)).toBe(commandCol);
     for (const row of rows) {
-      expect(stringWidth(row)).toBeLessThanOrEqual(width());
+      expect(drawnWidth(row)).toBeLessThanOrEqual(width());
       expect(row.trim()).not.toBe('│');
     }
   });
@@ -118,27 +121,25 @@ describe('Approval dialog width', () => {
     for (const row of bordered) {
       expect(row).not.toContain(TAB);
       expect(row).not.toContain(CR);
-      expect(stringWidth(row)).toBeLessThanOrEqual(width());
+      expect(drawnWidth(row)).toBeLessThanOrEqual(width());
       expect(row.trim().endsWith('│')).toBe(true);
     }
   });
 
   // string-width alone can't catch #450: it is the measurer that disagreed with the terminal.
-  // Counting code points (VS15 aside) is the terminal's view for anything it draws one-wide.
-  it('keeps the right border in one column on the title row (#450)', () => {
+  // Counting code points (VS15 aside) is the terminal's view for anything it draws one-wide, and
+  // it is taken on the bytes the terminal receives — after the stream restores the marker's VS15.
+  it('keeps the right border in one column on the title row (#450, #494)', () => {
     const rows = frame({
       tool: 'bash',
       subject: '~/repo',
       preview: 'npx prettier --write src/tools/bash.test.ts',
       warnings: ['Remote package execution (npx/bunx/uvx)'],
     });
-    const drawn = (row: string): number => [...row.replace(/︎/g, '')].length;
-    const bordered = rows.filter(r => r.trim().startsWith('│'));
-    expect(bordered.some(r => r.includes('Bash'))).toBe(true);
-    for (const row of bordered) {
-      expect(drawn(row)).toBe(stringWidth(row));
-      expect(drawn(row)).toBe(drawn(bordered[0]));
-    }
+    const drawn = (row: string): number => [...row.replace(/\uFE0E/g, '')].length;
+    const bordered = rows.filter(r => r.trim().startsWith('│')).map(restoreTextPresentation);
+    expect(bordered.some(r => r.includes('\u23FA\uFE0E Bash'))).toBe(true);
+    for (const row of bordered) expect(drawn(row)).toBe(drawn(bordered[0]));
   });
 });
 

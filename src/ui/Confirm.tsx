@@ -1,7 +1,6 @@
 import { Box, Text } from 'ink';
 import type { SkillMatch } from '../skillmatch.js';
 import { theme } from './theme.js';
-import { DIALOG_MARKER } from './Approval.js';
 
 // Row 0 is "send as typed" and starts selected — the inverse of Approval, where Approve is row 0.
 // There the model has already committed to an action; here nothing has happened yet and the
@@ -14,7 +13,7 @@ export const CONFIRM_ACCEPT = 1;
 // and a pasted link the prompt is not obviously about (#448). Same frame, same keys, same row
 // order — the user learns one widget.
 export type ConfirmSpec = {
-  // `● <title>` in the tool color, `<subtitle>` beside it in secondary.
+  // `• <title>` in the tool color, `<subtitle>` beside it in secondary.
   title: string;
   subtitle: string;
   // Muted lines under the header: the matched phrases, the links.
@@ -67,7 +66,7 @@ export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIn
     >
       {/* One Text with nested runs, as in Approval: a sibling boundary loses a char on wrap. */}
       <Text>
-        <Text color={theme.tool}>{`${DIALOG_MARKER} ${spec.title}`}</Text>
+        <Text color={theme.tool}>{`• ${spec.title}`}</Text>
         <Text color={theme.secondary}>{`  ${spec.subtitle}`}</Text>
       </Text>
       {spec.details.map((line, i) => (
