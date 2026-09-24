@@ -1,12 +1,22 @@
+import { lookup } from 'node:dns/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPlanUrlNote,
   buildUrlGroundingNote,
   buildUrlGroundingNotice,
+  carriesSecret,
   extractUrls,
   groundUrls,
   groundUrlsForPlan,
+  isInternalName,
 } from './_urls.js';
+
+// The grounder resolves every candidate host; a real lookup would make the suite depend on the
+// network. Public by default, and a test that needs a private answer overrides it once.
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.215.14', family: 4 }]),
+}));
+const mockLookup = lookup as unknown as ReturnType<typeof vi.fn>;
 
 describe('extractUrls', () => {
   it('finds http(s) URLs and dedupes', () => {
@@ -192,7 +202,7 @@ describe('groundUrls', () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       mockOk('<article>x</article>'),
     );
-    const text = 'https://a.example https://b.example https://c.example';
+    const text = 'https://a.example.com https://b.example.com https://c.example.com';
     await groundUrls({ cwd: '/tmp' }, text);
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
   });
@@ -354,11 +364,70 @@ describe('groundCandidates — budget and host policy', () => {
     expect(out.notice).toBeUndefined();
   });
 
-  it('takes only what is left when the budget is nearly spent', async () => {
-    const webBudget = budget(4, 5);
+  it("takes only what is left above the model's reserve when the budget is nearly spent", async () => {
+    const webBudget = budget(2, 5);
     await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a and https://example.com/b');
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-    expect(webBudget.fetches.used).toBe(5);
+    expect(webBudget.fetches.used).toBe(3);
+  });
+
+  it('never takes the last two fetch slots, which stay with the model', async () => {
+    const webBudget = budget(3, 5);
+    await groundUrls({ cwd: '/tmp', webBudget }, 'https://example.com/a');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(mockLookup).not.toHaveBeenCalled();
+    expect(webBudget.fetches.used).toBe(3);
+  });
+
+  it('skips a URL carrying a secret without fetching or charging it', async () => {
+    const webBudget = budget();
+    const out = await groundUrls(
+      { cwd: '/tmp', webBudget },
+      'fetch("https://api.example.com/v1/items?api_key=sk_live_abc123")',
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(webBudget.fetches.used).toBe(0);
+    expect(out.note).toBeUndefined();
+    expect(out.notice).toBeUndefined();
+  });
+
+  it('skips an internal-only name and still grounds the public URL beside it', async () => {
+    await groundUrls(
+      { cwd: '/tmp', webBudget: budget() },
+      'https://jira.acme.internal/browse/X-1 and https://example.com/docs',
+    );
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0][0])).toContain('example.com');
+  });
+
+  it('skips a public-looking name that resolves to a private address', async () => {
+    mockLookup.mockResolvedValueOnce([{ address: '10.0.4.12', family: 4 }]);
+    const webBudget = budget();
+    const out = await groundUrls({ cwd: '/tmp', webBudget }, 'https://grafana.example.com/d/x');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(webBudget.fetches.used).toBe(0);
+    expect(out.note).toBeUndefined();
+  });
+
+  it('skips a name that resolves to a private IPv6 address', async () => {
+    mockLookup.mockResolvedValueOnce([{ address: 'fd12:3456::1', family: 6 }]);
+    await groundUrls({ cwd: '/tmp', webBudget: budget() }, 'https://grafana.example.com/d/x');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('treats a failed lookup as public and lets the fetch report it', async () => {
+    mockLookup.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOTFOUND' }));
+    await groundUrls({ cwd: '/tmp', webBudget: budget() }, 'https://example.com/a');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let secret-bearing URLs consume the per-call cap', async () => {
+    const text =
+      'https://example.com/a?token=x https://example.com/b?sig=y https://example.com/real';
+    await groundUrls({ cwd: '/tmp' }, text);
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map(c => c[0])).toEqual(['https://example.com/real']);
   });
 
   it('degrades quietly rather than reporting a budget refusal to the model', async () => {
@@ -456,5 +525,77 @@ describe('groundCandidates — budget and host policy', () => {
     const out = await groundUrlsForPlan({ cwd: '/tmp', webBudget }, 'and http://127.0.0.1:11434');
     expect(out.note).toBeUndefined();
     expect(webBudget.fetches.used).toBe(1);
+  });
+});
+
+describe('carriesSecret', () => {
+  it('flags userinfo', () => {
+    expect(carriesSecret('https://octocat:hunter2@example.com/repo')).toBe(true);
+    expect(carriesSecret('https://octocat@example.com/repo')).toBe(true);
+  });
+
+  it('flags secret-named query parameters in any spelling', () => {
+    for (const url of [
+      'https://example.com/?api_key=x',
+      'https://example.com/?apiKey=x',
+      'https://example.com/?access-token=x',
+      'https://example.com/?client_secret=x',
+      'https://bucket.example.com/o?X-Amz-Signature=abc&X-Amz-Credential=def',
+      'https://example.com/?key=x',
+      'https://example.com/?sig=x',
+      'https://example.com/cb?code=x&state=y',
+      'https://example.com/?password=x',
+    ]) {
+      expect(carriesSecret(url), url).toBe(true);
+    }
+  });
+
+  it('flags capability URLs whose path is the secret', () => {
+    for (const url of [
+      'https://hooks.slack.com/services/T000/B000/XXXX',
+      'https://discord.com/api/webhooks/123/abc',
+      'https://acme.webhook.office.com/webhookb2/abc',
+    ]) {
+      expect(carriesSecret(url), url).toBe(true);
+    }
+  });
+
+  it('leaves ordinary URLs alone', () => {
+    for (const url of [
+      'https://example.com/docs/api',
+      'https://example.com/search?q=token+bucket&page=2',
+      'https://example.com/?keyword=x&sort=asc',
+      'https://cdn.example.net/lib@3.2.1/dist/lib.min.js',
+      'https://slack.com/help',
+    ]) {
+      expect(carriesSecret(url), url).toBe(false);
+    }
+  });
+});
+
+describe('isInternalName', () => {
+  it('flags internal and reserved suffixes', () => {
+    for (const url of [
+      'https://jira.acme.internal/x',
+      'http://nas.lan/',
+      'https://wiki.corp/',
+      'http://printer.home.arpa/',
+      'https://api.example.test/v1',
+      'https://thing.invalid/',
+      'https://jira.acme.internal./x',
+    ]) {
+      expect(isInternalName(url), url).toBe(true);
+    }
+  });
+
+  it('leaves public names alone, including ones merely containing the words', () => {
+    for (const url of [
+      'https://example.com/',
+      'https://internal.example.com/',
+      'https://testing.example.org/',
+      'https://docs.lan-party.example.com/',
+    ]) {
+      expect(isInternalName(url), url).toBe(false);
+    }
   });
 });
