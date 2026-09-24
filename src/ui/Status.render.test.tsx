@@ -63,12 +63,12 @@ describe('Status', () => {
     const { lastFrame } = render(
       <Status {...BASE} usage={{ promptTokens: 5000, completionTokens: 900 }} decodeRate={21.4} />,
     );
-    expect(lastFrame()).toContain('5.0k↑ 900↓ · 21 t/s');
+    expect(lastFrame()).toContain('5.0k↑ 900↓ · 21 tok/s');
   });
 
   it('leaves the chip off when no round has been measurable yet', () => {
     const { lastFrame } = render(<Status {...BASE} />);
-    expect(lastFrame()).not.toContain('t/s');
+    expect(lastFrame()).not.toContain('tok/s');
   });
 });
 
@@ -111,7 +111,7 @@ describe('Status wrap', () => {
       'agent (shift+tab to cycle)',
       'auto approve',
       'qwen3-coder-30b-a3b-instruct · turn 12',
-      'idle · 123k↑ 4.6k↓ · 21 t/s',
+      'idle · 123k↑ 4.6k↓ · 21 tok/s',
       'ctx 11k/24k (70% of 16k)',
       '3 sheds · 1 fold · 80% cached (9.0k)',
       'PR: #99 · ctrl-c to exit',

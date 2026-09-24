@@ -40,28 +40,28 @@ describe('formatDurationMs', () => {
 
 describe('formatTokensPerSecond', () => {
   it('keeps one decimal under 10, where the difference is what the reader is looking at', () => {
-    expect(formatTokensPerSecond(8.44)).toBe('8.4 t/s');
-    expect(formatTokensPerSecond(3.16)).toBe('3.2 t/s');
+    expect(formatTokensPerSecond(8.44)).toBe('8.4 tok/s');
+    expect(formatTokensPerSecond(3.16)).toBe('3.2 tok/s');
   });
 
-  // 9.96 rounds to 10, and `10.0 t/s` next to `10 t/s` on the next round is the kind of jitter a
+  // 9.96 rounds to 10, and `10.0 tok/s` next to `10 tok/s` on the next round is the kind of jitter a
   // status bar must not show.
   it('crosses to whole numbers without a trailing .0', () => {
-    expect(formatTokensPerSecond(9.96)).toBe('10 t/s');
-    expect(formatTokensPerSecond(20.4)).toBe('20 t/s');
-    expect(formatTokensPerSecond(999.4)).toBe('999 t/s');
+    expect(formatTokensPerSecond(9.96)).toBe('10 tok/s');
+    expect(formatTokensPerSecond(20.4)).toBe('20 tok/s');
+    expect(formatTokensPerSecond(999.4)).toBe('999 tok/s');
   });
 
-  // Rounded before the four-digit branch is chosen, or 999.6 prints `1000 t/s` — a width no other
-  // rate shows — on its way from `999 t/s` to `1.0k t/s`.
+  // Rounded before the four-digit branch is chosen, or 999.6 prints `1000 tok/s` — a width no other
+  // rate shows — on its way from `999 tok/s` to `1.0k tok/s`.
   it('rounds before choosing the compact form', () => {
-    expect(formatTokensPerSecond(999.6)).toBe('1.0k t/s');
-    expect(formatTokensPerSecond(999.99)).toBe('1.0k t/s');
+    expect(formatTokensPerSecond(999.6)).toBe('1.0k tok/s');
+    expect(formatTokensPerSecond(999.99)).toBe('1.0k tok/s');
   });
 
   it('compacts a four-digit rate like a token count', () => {
-    expect(formatTokensPerSecond(1234)).toBe('1.2k t/s');
-    expect(formatTokensPerSecond(20_000)).toBe('20k t/s');
+    expect(formatTokensPerSecond(1234)).toBe('1.2k tok/s');
+    expect(formatTokensPerSecond(20_000)).toBe('20k tok/s');
   });
 
   it('renders nothing when there is no rate', () => {
