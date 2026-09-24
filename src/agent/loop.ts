@@ -268,10 +268,11 @@ const PLAN_HARD_CEILING = 12;
 // reasoning+plan in one shot while still leaving ample window for grounding. The truncation-retry
 // remains the backstop for an unusually long generation.
 const PLAN_WRITE_RESERVE_TOKENS = 4096;
-// EXPERIMENT (reasoning-loop break, Layer 2): force a plan-mode commit when the model's reasoning
-// goes cross-round circular — re-deriving the same analysis instead of converging. Gated behind
-// REIKA_REASONING_LOOP so it can be A/B'd; strict no-op when off (the ReasoningTrace still records
-// for the debug diagnostic, but its verdict is never acted on). Calibrated from real transcripts:
+// Reasoning-loop break (Layer 2, on by default since 2026-09-24; `=0` is the baseline arm): act when
+// the model's reasoning goes cross-round circular — re-deriving the same analysis instead of
+// converging. Plan mode force-writes; agent mode drives the ledger → withdrawal → terminal-stop
+// ladder. Off, the ReasoningTrace still records for the debug diagnostic but its verdict is never
+// acted on. Calibrated from real transcripts:
 // healthy runs topped out at crossSim ~0.21 even on long reasoning rounds, while the observed loop
 // locked at crossSim=1.00 — so 0.6 sits in the wide dead zone between them. A streak of 2 fires one
 // round after the loop locks (the lock was observed to happen within a round of onset), trading one
@@ -287,7 +288,7 @@ const PLAN_WRITE_RESERVE_TOKENS = 4096;
 const REASONING_LOOP_THRESHOLD = 0.6;
 const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_IMMEDIATE = 0.9;
-const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP === '1';
+const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP !== '0';
 // EXPERIMENT (Tier 2 logit recovery): one biased round before the rumination terminal stop, gently
 // down-weighting the loop's recurring tokens to nudge the model off the rut. Gated for A/B; strict
 // no-op when off, and self-gating on /tokenize being reachable (so non-llama.cpp backends just stop
