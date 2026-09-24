@@ -232,6 +232,22 @@ type EditFailureCore =
   | { kind: 'absent'; at?: number; excerpt?: string }
   | { kind: 'diverged'; divergentLine: number; expected: string; actual: string; excerpt: string };
 
+// How `run` would resolve old_string against these bytes, without applying anything. Shares the
+// matcher rather than restating it, so the read-first gate's would-land probe (agent/readfirst.ts)
+// cannot drift from what the edit would actually have done.
+export type EditMatchKind = 'exact' | 'fuzzy' | 'multiple' | 'mixed' | 'absent' | 'diverged';
+
+export function classifyEditMatch(text: string, oldStr: string, newStr: string): EditMatchKind {
+  const first = text.indexOf(oldStr);
+  if (first !== -1) {
+    return text.indexOf(oldStr, first + oldStr.length) === -1 ? 'exact' : 'multiple';
+  }
+  const fuzzy = fuzzyLineMatch(text, oldStr, newStr);
+  if (fuzzy.status === 'unique') return 'fuzzy';
+  if (fuzzy.status === 'none') return fuzzy.failure.kind;
+  return fuzzy.status;
+}
+
 function withPath(core: EditFailureCore, path: string): EditFailure {
   return { ...core, path };
 }
