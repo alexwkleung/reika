@@ -1131,6 +1131,14 @@ export async function runTurn(opts: {
   // `tool` names the call the chunk came from: the UI indents only a `bash` tail, since that is the
   // one that commits under a command chip (#461) — `search`'s bot-check line does not.
   onToolProgress?: (chunk: string, tool: string) => void;
+  // Fired inside the dispatch loop the moment a call is about to run (#509), for the UI's live
+  // "…ing" row. That is the one gap `onToolProgress` cannot cover: a tool that emits nothing
+  // (`read`/`grep`/`edit`/`write` never call onProgress) or a `bash` that has not printed yet is
+  // otherwise silent between its call row committing and its result row landing. Fired only for a
+  // call that actually executes — a refused, held, bounced or unknown call runs nothing, so it gets
+  // no row; approval still happens inside the tool, after this fires, which is why the UI hides the
+  // row while its own dialog is up.
+  onToolStart?: (tool: string) => void;
   // Deterministic plan-progress snapshots (#68/#71): fired at agent turn start when the history
   // holds a written plan, and again whenever a step checks off (a successful edit/write touched a
   // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
@@ -3069,6 +3077,10 @@ export async function runTurn(opts: {
         ) {
           recordFollowed({ by: call.name });
         }
+        // Live in-flight row (#509). After the spill-stats bookkeeping and the typecheck baseline
+        // above — both harness work that happens before the command runs — so the row's lifetime is
+        // exactly the call's.
+        opts.onToolStart?.(call.name);
         try {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,
@@ -3532,6 +3544,12 @@ function makeSpawnSubagent(
         onContentDelta: parent.onContentDelta,
         onReasoningDelta: parent.onReasoningDelta,
         onToolProgress: parent.onToolProgress,
+        // `onToolStart` is the one callback deliberately NOT forwarded (#509). The parent's live row
+        // is a single slot keyed to its own round: forwarding a nested start would overwrite the
+        // parent's "Delegating…" with one of the subagent's verbs, and the nested tool message that
+        // follows would clear the slot outright — leaving the subagent's own call row unmarked for
+        // the rest of the run. The parent's row covers the whole subagent; the nested stream below it
+        // already shows what the subagent is doing.
         onPhase: parent.onPhase,
         onReasoningStatus: parent.onReasoningStatus,
         onReasoningReset: parent.onReasoningReset,

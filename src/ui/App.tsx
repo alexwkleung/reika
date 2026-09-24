@@ -160,6 +160,10 @@ export function App() {
   const [streamingReasoning, setStreamingReasoning] = useState<string>('');
   const [streamingTool, setStreamingTool] = useState<string>('');
   const [streamingToolName, setStreamingToolName] = useState<string>('');
+  // The model tool call running right now (#509), by name: what the scrollback's live "…ing" row
+  // under the call is drawn from. Set when the loop dispatches a call, cleared when that call's
+  // result commits — so it spans exactly the gap the committed call row would otherwise leave.
+  const [pendingTool, setPendingTool] = useState<string>('');
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -2085,6 +2089,7 @@ export function App() {
         setStreaming('');
         setStreamingReasoning('');
         setStreamingTool('');
+        setPendingTool('');
         // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written
         // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
         // stale checklist lingering after the conversation moves on.
@@ -2115,6 +2120,7 @@ export function App() {
         setStreaming('');
         setStreamingReasoning('');
         setStreamingTool('');
+        setPendingTool('');
         setSubagentLive(false);
         setNoteLive(false);
         resetTypecheck();
@@ -2133,6 +2139,8 @@ export function App() {
           if (msg.role === 'tool') {
             toolRef.current = '';
             setStreamingTool('');
+            // The result this row was standing in for has landed (#509).
+            setPendingTool('');
             // Keep `@` autocomplete current with files the model writes this turn,
             // so a just-created file is attachable without a restart or /cd. The
             // diff path is relative (write/edit emit `relative(cwd, …)`), matching
@@ -2181,6 +2189,7 @@ export function App() {
           toolNameRef.current = tool;
           scheduleToolFlush();
         },
+        onToolStart: setPendingTool,
         onPhase: p => {
           // Leaving the thinking phase ends the reasoning block — clear any spin hint.
           if (p !== 'thinking') setReasoningSpin(false);
@@ -2278,6 +2287,12 @@ export function App() {
             streamingTool={status === 'busy' ? streamingTool : ''}
             streamingNested={subagentLive}
             streamingCommand={streamingToolName === 'bash'}
+            // Hidden while a dialog is up: the approval a tool asks for happens *inside* the call
+            // (after the loop announced it), so an "Editing…" row behind the prompt would name work
+            // that has not been permitted yet. Same condition the spinner uses.
+            pendingTool={
+              status === 'busy' && pending === null && question === null ? pendingTool : ''
+            }
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the

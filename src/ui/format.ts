@@ -76,6 +76,33 @@ export function toolLabel(name: string): string {
   return name.length > 0 ? name[0].toUpperCase() + name.slice(1) : name;
 }
 
+// The in-flight verb for a call the loop has just dispatched (#509), for the live `↳ Running…` row
+// `Scrollback` draws in the result's place. Each one parallel the past-tense verb its committed
+// summary actually uses — `Ran:`, `Edited`, `Wrote`, `Read`, `Listed`, `Found`, `Fetched`,
+// `Asked` — so the pending row is the result row's own slot with the result not in it yet: one word
+// swaps for the other and nothing on the line moves. `grep`/`glob`/`search` share one verb because
+// all three commit as a form of "Found … matches/files": what distinguishes them is the argument,
+// which the call row above already shows.
+const TOOL_VERBS: Record<string, string> = {
+  read: 'Reading',
+  list: 'Listing',
+  grep: 'Searching',
+  glob: 'Searching',
+  edit: 'Editing',
+  write: 'Writing',
+  bash: 'Running',
+  fetch_url: 'Fetching',
+  search: 'Searching',
+  ask_user: 'Asking',
+  subagent: 'Delegating',
+};
+
+// Anything unlisted still gets an honest row rather than none: the label is ephemeral and carries
+// no claim beyond "this call is in flight".
+export function toolVerb(name: string): string {
+  return TOOL_VERBS[name] ?? 'Working';
+}
+
 // `(+3 -1)`, `(new, +12)`, `(deleted, -40)`, `(binary)` — the stat tag after a file a bash command
 // changed, in the scrollback and the saved transcript. Reads like the edit tool's `(+a -r)` so a
 // shell edit and a tool edit scan the same, with the kind named only when the counts don't say it.

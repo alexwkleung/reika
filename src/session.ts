@@ -52,6 +52,7 @@ export type SessionEvents = Partial<
     | 'onPrefillRate'
     | 'onDecodeRate'
     | 'onToolProgress'
+    | 'onToolStart'
     | 'onPlanProgress'
   >
 >;
