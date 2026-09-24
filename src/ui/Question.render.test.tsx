@@ -5,6 +5,7 @@ import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
 import { Question, OWN_ANSWER_LABEL, fitQuestionToHeight, layoutQuestion } from './Question.js';
 import { clampToViewport } from './Input.js';
+import { restoreTextPresentation } from './syncframe.js';
 import type { QuestionRequest } from '../types.js';
 
 const frame = (
@@ -33,6 +34,18 @@ const req: QuestionRequest = {
 };
 
 describe('Question dialog', () => {
+  // Same check as Approval's: counted on the bytes the terminal receives, after the stream puts
+  // the marker's VS15 back, the title row must end where every other bordered row does.
+  it('keeps the right border in one column on the title row (#494)', () => {
+    const drawn = (row: string): number => [...row.replace(/\uFE0E/g, '')].length;
+    const bordered = frame(req)
+      .split('\n')
+      .filter(r => r.trim().startsWith('│'))
+      .map(restoreTextPresentation);
+    expect(bordered.some(r => r.includes('\u23FA\uFE0E Question'))).toBe(true);
+    for (const row of bordered) expect(drawn(row)).toBe(drawn(bordered[0]));
+  });
+
   it('shows the question, the options, and their descriptions', () => {
     const out = frame(req);
     expect(out).toContain('Flag every interpreter, or only inline bodies?');

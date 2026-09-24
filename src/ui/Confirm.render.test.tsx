@@ -38,7 +38,7 @@ const skillSpec = () => skillConfirmSpec(matchSkill('review pr 420', [review])!)
 describe('Confirm — skill', () => {
   it('names the skill, the matched phrase, and numbers the rows with send-as-typed first', () => {
     const rows = frame(skillSpec(), CONFIRM_DECLINE);
-    expect(rows.some(r => r.includes('● Skill') && r.includes('/review — read a GitHub'))).toBe(
+    expect(rows.some(r => r.includes('• Skill') && r.includes('/review — read a GitHub'))).toBe(
       true,
     );
     expect(rows.some(r => r.includes('matched: review pr'))).toBe(true);
@@ -68,7 +68,7 @@ describe('Confirm — skill', () => {
 describe('Confirm — pasted link (#448)', () => {
   it('lists the link and offers the fetch on row 2, send-as-typed first', () => {
     const rows = frame(pastedUrlConfirmSpec(['https://example.com/unsubscribe?t=1']), 0);
-    expect(rows.some(r => r.includes('● Pasted link') && r.includes('fetch before the turn'))).toBe(
+    expect(rows.some(r => r.includes('• Pasted link') && r.includes('fetch before the turn'))).toBe(
       true,
     );
     expect(rows.some(r => r === 'https://example.com/unsubscribe?t=1')).toBe(true);
@@ -80,7 +80,7 @@ describe('Confirm — pasted link (#448)', () => {
   it('pluralizes for two links and shortens a long one', () => {
     const long = `https://example.com/${'a'.repeat(200)}`;
     const rows = frame(pastedUrlConfirmSpec(['https://example.com/x', long]), 1);
-    expect(rows.some(r => r.includes('● Pasted links'))).toBe(true);
+    expect(rows.some(r => r.includes('• Pasted links'))).toBe(true);
     expect(rows.find(r => r.includes('2. Fetch 2 links'))).toMatch(/› 2\./);
     const shown = rows.find(r => r.startsWith('https://example.com/aaa'));
     expect(shown).toBeDefined();

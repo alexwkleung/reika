@@ -5,6 +5,7 @@ import {
   END_SYNC,
   createFrameWriter,
   createSyncedStdout,
+  restoreTextPresentation,
   syncedOutputEnabled,
 } from './syncframe.js';
 
@@ -72,6 +73,31 @@ describe('createFrameWriter', () => {
   });
 });
 
+describe('restoreTextPresentation', () => {
+  it('puts VS15 back on a bare record glyph', () => {
+    expect(restoreTextPresentation('│ \u23FA Bash  npm test │')).toBe(
+      '│ \u23FA\uFE0E Bash  npm test │',
+    );
+  });
+
+  // The scrollback marker already carries VS15, and an explicit VS16 is someone asking for the
+  // emoji — neither gets a second selector.
+  it('leaves an existing variation selector alone', () => {
+    expect(restoreTextPresentation('\u23FA\uFE0E a \u23FA\uFE0F b')).toBe(
+      '\u23FA\uFE0E a \u23FA\uFE0F b',
+    );
+  });
+
+  it('is applied to the synchronized frame and to writes after close', () => {
+    const out = sink();
+    const w = createFrameWriter(out);
+    w.write('\u23FA');
+    w.close();
+    w.write('\u23FA');
+    expect(out.writes).toEqual([BEGIN_SYNC + '\u23FA\uFE0E' + END_SYNC, '\u23FA\uFE0E']);
+  });
+});
+
 describe('createSyncedStdout', () => {
   function fakeTty(isTTY = true) {
     const stream = new EventEmitter() as EventEmitter & {
@@ -89,13 +115,20 @@ describe('createSyncedStdout', () => {
     return stream;
   }
 
-  it('returns the stream itself off a TTY or when switched off', () => {
+  it('returns the stream itself off a TTY', () => {
     const pipe = fakeTty(false);
     expect(createSyncedStdout(pipe as never, {})).toBe(pipe);
-    const tty = fakeTty();
-    expect(createSyncedStdout(tty as never, { REIKA_SYNC_OUTPUT: '0' })).toBe(tty);
     expect(syncedOutputEnabled({})).toBe(true);
     expect(syncedOutputEnabled({ REIKA_SYNC_OUTPUT: '0' })).toBe(false);
+  });
+
+  // The kill switch is for terminals that misbehave on mode 2026; the dialog marker must not
+  // regress to an emoji disc on them.
+  it('switched off, writes through unbatched but still restores text presentation', () => {
+    const tty = fakeTty();
+    const plain = createSyncedStdout(tty as never, { REIKA_SYNC_OUTPUT: '0' });
+    plain.write('\u23FA Bash');
+    expect(tty.writes).toEqual(['\u23FA\uFE0E Bash']);
   });
 
   it('wraps writes and leaves size, TTY-ness and resize events on the real stream', async () => {

@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import type { QuestionRequest } from '../types.js';
 import { contentWidth, hangingWrap, useContentWidth } from './layout.js';
+import { DIALOG_MARKER } from './Approval.js';
 import { theme } from './theme.js';
 
 // The dialog's own border plus its paddingX={1}, on top of the App padding contentWidth already
@@ -82,7 +83,8 @@ export function Question({
       marginX={-1}
       marginTop={1}
     >
-      <Text color={theme.tool}>{'• Question'}</Text>
+      {/* ask_user is a tool call, so it wears the tool-call marker like Approval does. */}
+      <Text color={theme.tool}>{`${DIALOG_MARKER} Question`}</Text>
       <Box marginTop={1} flexDirection="column">
         <Text>{questionLines.slice(0, fit.questionRows).join('\n')}</Text>
         {hiddenQuestionRows > 0 ? (

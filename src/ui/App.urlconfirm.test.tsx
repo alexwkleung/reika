@@ -119,7 +119,7 @@ async function waitFor(app: Harness, re: RegExp, ms = 3000) {
   expect(plain(app.lastFrame())).toMatch(re);
 }
 
-const DIALOG = /● Pasted link/;
+const DIALOG = /• Pasted link/;
 const INCIDENTAL = 'TypeError: fetch failed at https://api.example.com/v1/users why';
 const turnInput = (n: number) => (runTurn.mock.calls[n][0] as { userInput: string }).userInput;
 

@@ -19,6 +19,16 @@
 // Writes are only queued for a real TTY; a pipe (tests, CI) gets the stream back untouched.
 // `REIKA_SYNC_OUTPUT=0` is the kill switch for a terminal that misbehaves on mode 2026.
 
+// Ink gives every code point its own grid cell, so `⏺︎` (U+23FA + VS15) spends two cells on a
+// glyph the terminal draws in one, and a bordered row comes up a column short (#450). Components
+// write a bare `⏺` — one cell, no phantom — and the selector goes back on here, after Ink has laid
+// the row out, so the terminal still picks text presentation over the colored emoji disc (#494).
+const BARE_RECORD_GLYPH = /\u23FA(?![\uFE0E\uFE0F])/g;
+
+export function restoreTextPresentation(text: string): string {
+  return text.replace(BARE_RECORD_GLYPH, '\u23FA\uFE0E');
+}
+
 export const BEGIN_SYNC = '\x1b[?2026h';
 export const END_SYNC = '\x1b[?2026l';
 
@@ -44,12 +54,12 @@ export function createFrameWriter(target: { write: (chunk: Chunk) => boolean }):
     if (pending.length === 0) return;
     const frame = pending.join('');
     pending = [];
-    target.write(BEGIN_SYNC + frame + END_SYNC);
+    target.write(BEGIN_SYNC + restoreTextPresentation(frame) + END_SYNC);
   };
 
   return {
     write(chunk) {
-      if (closed) return target.write(chunk);
+      if (closed) return target.write(presentable(chunk));
       pending.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
       if (!scheduled) {
         scheduled = true;
@@ -65,6 +75,10 @@ export function createFrameWriter(target: { write: (chunk: Chunk) => boolean }):
   };
 }
 
+function presentable(chunk: Chunk): Chunk {
+  return typeof chunk === 'string' ? restoreTextPresentation(chunk) : chunk;
+}
+
 export function syncedOutputEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.REIKA_SYNC_OUTPUT !== '0';
 }
@@ -76,12 +90,20 @@ export function createSyncedStdout(
   target: NodeJS.WriteStream,
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.WriteStream {
-  if (!target.isTTY || !syncedOutputEnabled(env)) return target;
-  const writer = createFrameWriter(target);
-  process.once('exit', writer.close);
+  if (!target.isTTY) return target;
+  // The kill switch drops the frame batching, not the presentation fix: without it the dialog
+  // marker would be a bare `⏺` some terminals draw as an emoji.
+  let write: (chunk: Chunk) => boolean;
+  if (syncedOutputEnabled(env)) {
+    const writer = createFrameWriter(target);
+    process.once('exit', writer.close);
+    write = writer.write;
+  } else {
+    write = chunk => target.write(presentable(chunk));
+  }
   return new Proxy(target, {
     get(stream, prop) {
-      if (prop === 'write') return writer.write;
+      if (prop === 'write') return write;
       const value = Reflect.get(stream, prop);
       return typeof value === 'function' ? value.bind(stream) : value;
     },
