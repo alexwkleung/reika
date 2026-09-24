@@ -165,7 +165,7 @@ export const WORKING_WORDS = [
 ] as const;
 // A word holds for this many full shimmer sweeps, so it swaps in the pause after a sweep
 // rather than mid-glow, and a longer word stays up as long as it takes to sweep it.
-const SWEEPS_PER_WORD = 2;
+const SWEEPS_PER_WORD = 3;
 
 export function ticksPerWord(word: string): number {
   return SWEEPS_PER_WORD * (word.length + 1 + SHIMMER_PAUSE) * SHIMMER_STEP;
