@@ -9,7 +9,7 @@ import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
-import { changeLabel, formatDurationMs, toolLabel } from './format.js';
+import { changeLabel, formatDurationMs, toolLabel, toolVerb } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 
 export function Scrollback({
@@ -20,6 +20,7 @@ export function Scrollback({
   streamingNested = false,
   streamingNote = false,
   streamingCommand = false,
+  pendingTool = '',
   chromeRows = 0,
   showHeldWorked = true,
 }: {
@@ -40,6 +41,11 @@ export function Scrollback({
   // here stays at the left edge: shell mode's `shell` message prints its output flush left, and
   // `search`'s bot-check line commits as an ordinary notice, with no chip to sit under.
   streamingCommand?: boolean;
+  // The model tool call running right now (#509), by name, or '' when none is. Drawn as a live
+  // `↳ Running…` row in its result's place, so a call that stalls — a `bash` with output still to
+  // come, an `edit`/`read`/`grep` that never streams at all — is visibly in flight instead of
+  // leaving the committed call row above it looking like the app stopped.
+  pendingTool?: string;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -73,13 +79,23 @@ export function Scrollback({
     const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
-  const pool = region - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const pool = region - (pendingTool ? 1 : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
   const shares = allocateLiveRows(
     blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
     pool,
   );
   const live = (
     <>
+      {/* The call in flight (#509): the `↳` row its result will replace, drawn before the result
+          exists. Same marker and colors as the committed row (MessageView), so the swap is a text-only
+          change — nothing shifts when the tool returns. A `bash` tail streams under it at
+          COMMAND_MARGIN, which is where that output commits too, so the block stays put as well. */}
+      {pendingTool ? (
+        <Text color={theme.secondary}>
+          <Text color={theme.tool}>{TOOL_MARKER}</Text>
+          {`${toolVerb(pendingTool)}…`}
+        </Text>
+      ) : null}
       {blocks.map((b, i) =>
         b.kind === 'reasoning' ? (
           <Box key={b.kind} marginTop={1}>

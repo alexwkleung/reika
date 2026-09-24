@@ -539,6 +539,127 @@ describe('Scrollback live command tail indent', () => {
   });
 });
 
+// The live in-flight row (#509): a model tool call that is dispatched but has not returned yet —
+// the gap where a stalled `bash` or a never-streaming `edit` left the committed call row above it
+// looking like the app had stopped.
+describe('Scrollback pending tool row', () => {
+  const COLS = 60;
+
+  const inApp = (node: React.ReactElement): string => {
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1} width={COLS}>
+          {node}
+        </Box>,
+      );
+      return lastFrame() ?? '';
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
+  };
+
+  const liveFrame = (pendingTool: string, streamingTool = ''): string =>
+    inApp(
+      <Scrollback
+        messages={[]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool={streamingTool}
+        streamingCommand
+        pendingTool={pendingTool}
+      />,
+    );
+
+  const lead = (frame: string, needle: string): number => {
+    const row = frame.split('\n').find(l => l.includes(needle));
+    expect(row, `no row containing ${needle}`).toBeDefined();
+    return /^ */.exec(row!)![0].length;
+  };
+
+  it('draws the arrow and the call’s verb while the call is in flight', () => {
+    expect(liveFrame('bash')).toContain('↳ Running…');
+    expect(liveFrame('edit')).toContain('↳ Editing…');
+    expect(liveFrame('read')).toContain('↳ Reading…');
+    // File search says Matching, not Searching: that one belongs to the web tool, which is a
+    // different gesture committing under a different noun.
+    expect(liveFrame('grep')).toContain('↳ Matching…');
+    expect(liveFrame('search')).toContain('↳ Searching…');
+  });
+
+  // The row is the result row's own slot with the result not in it yet: same marker, same column,
+  // so the swap when the tool returns is a text-only change and nothing jumps.
+  it('sits where the committed result row lands', () => {
+    const committed = inApp(
+      <Scrollback
+        messages={[
+          {
+            role: 'tool',
+            callId: 't1',
+            summary: 'Ran: npm run format:check',
+            command: { text: 'npm run format:check', outputTail: 'ok', outputTruncated: false },
+          },
+        ]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    );
+    expect(lead(liveFrame('bash'), '↳ Running…')).toBe(lead(committed, '↳ Ran:'));
+  });
+
+  // Above the tail, not below it: the `$ command` chip's output commits under the `↳ Ran:` row.
+  it('sits above a running command’s live tail', () => {
+    const frame = liveFrame('bash', 'Checking formatting...');
+    const rows = frame.split('\n');
+    expect(rows.findIndex(l => l.includes('↳ Running…'))).toBeLessThan(
+      rows.findIndex(l => l.includes('Checking formatting')),
+    );
+  });
+
+  it('draws nothing when no call is running', () => {
+    expect(liveFrame('')).not.toContain('↳ ');
+  });
+
+  // The row is a live-region row like any other, so it has to come out of the same viewport budget
+  // the streamed blocks do — otherwise a long tail plus the row tops stdout.rows and Ink repaints
+  // the whole terminal (clearing native scrollback) every frame. The frame is therefore exactly as
+  // tall with the row as without it: the tail gives up the row the call row takes.
+  it('comes out of the live frame’s budget instead of adding to it', () => {
+    const prev = { rows: process.stdout.rows, columns: process.stdout.columns };
+    Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
+    Object.defineProperty(process.stdout, 'columns', { value: 60, configurable: true });
+    try {
+      const big = Array.from({ length: 500 }, (_, i) => `tool ${i}: ${'word '.repeat(12)}`).join(
+        '\n',
+      );
+      const frame = (pendingTool: string): string[] =>
+        (
+          render(
+            <Scrollback
+              messages={[]}
+              streaming=""
+              streamingReasoning=""
+              streamingTool={big}
+              pendingTool={pendingTool}
+            />,
+          ).lastFrame() ?? ''
+        ).split('\n');
+      const withRow = frame('bash');
+      const without = frame('');
+      expect(withRow[0]).toContain('↳ Running…');
+      expect(withRow.length).toBe(without.length);
+      expect(withRow.length).toBeLessThan(process.stdout.rows);
+    } finally {
+      Object.defineProperties(process.stdout, {
+        rows: { value: prev.rows, configurable: true },
+        columns: { value: prev.columns, configurable: true },
+      });
+    }
+  });
+});
+
 // Regression: Ink repaints the whole terminal — emitting `\x1b[3J`, which clears
 // native scrollback (iTerm2: "a control sequence attempted to clear scrollback") —
 // whenever the live frame is at least as tall as the viewport (build/ink.js:

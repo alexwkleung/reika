@@ -5,6 +5,7 @@ import {
   formatDurationMs,
   formatTokensPerSecond,
   toolLabel,
+  toolVerb,
 } from './format.js';
 
 describe('formatElapsed', () => {
@@ -91,6 +92,40 @@ describe('toolLabel', () => {
 
   it('leaves an empty name alone', () => {
     expect(toolLabel('')).toBe('');
+  });
+});
+
+describe('toolVerb', () => {
+  // The two the issue asked for by name, plus the past-tense summary each one's row becomes.
+  it('gives bash and edit the verbs of their committed rows', () => {
+    expect(toolVerb('bash')).toBe('Running');
+    expect(toolVerb('edit')).toBe('Editing');
+  });
+
+  it('covers every tool the loop can dispatch', () => {
+    expect(toolVerb('read')).toBe('Reading');
+    expect(toolVerb('list')).toBe('Listing');
+    expect(toolVerb('grep')).toBe('Matching');
+    expect(toolVerb('glob')).toBe('Matching');
+    expect(toolVerb('write')).toBe('Writing');
+    expect(toolVerb('fetch_url')).toBe('Fetching');
+    expect(toolVerb('search')).toBe('Searching');
+    expect(toolVerb('ask_user')).toBe('Asking');
+    expect(toolVerb('subagent')).toBe('Delegating');
+  });
+
+  // A local regex scan and an outbound query, both committing as "Found …": grep's matches, glob's
+  // files matching, web search's results. Only the last is a web lookup, so only it says Searching.
+  it('separates the file search pair from web search', () => {
+    expect(toolVerb('search')).not.toBe(toolVerb('grep'));
+    expect(toolVerb('grep')).toBe(toolVerb('glob'));
+  });
+
+  // A tool the table has never heard of still gets a row — the alternative is a call that runs
+  // silently, which is the whole complaint.
+  it('falls back to Working for an unknown tool', () => {
+    expect(toolVerb('some_plugin')).toBe('Working');
+    expect(toolVerb('')).toBe('Working');
   });
 });
 

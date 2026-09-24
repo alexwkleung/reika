@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import type { Config, ContextBundle } from '../types.js';
+import type { Config, ContextBundle, Message } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
 
@@ -195,6 +195,35 @@ describe('App layout', () => {
     expect(working).toBeGreaterThanOrEqual(0);
     // Above the input's own top border, which the input keeps when nothing is attached.
     expect(working).toBeLessThan(inputTop);
+    app.unmount();
+  });
+
+  // The in-flight tool row (#509). The loop announces each call it is about to run; the row has to
+  // be on screen for the whole dispatch — that is the point, a stalled call otherwise leaves the
+  // committed call row above it looking like the app stopped — and gone the moment the result it
+  // was standing in for commits.
+  it('draws the running call’s row, in the result’s place, until the result lands', async () => {
+    const app = await mountApp();
+    await submit(app, 'hi');
+
+    // The mock is declared with no parameters (it never settles), so the recorded call is typed as
+    // an empty tuple — the loop options the session spread it are what this test needs.
+    const opts = (runTurn.mock.calls[0] as unknown as unknown[] | undefined)?.[0] as
+      | { onToolStart?: (tool: string) => void; onMessage: (m: Message) => void }
+      | undefined;
+    expect(opts?.onToolStart).toBeTypeOf('function');
+
+    opts!.onToolStart!('edit');
+    await tick();
+    const rows = lines(app);
+    const row = findLine(rows, /↳ Editing…/);
+    expect(row).toBeGreaterThanOrEqual(0);
+    // Above the input, like the spinner — not inside the input's frame.
+    expect(row).toBeLessThan(findLine(rows, /^╭/));
+
+    opts!.onMessage({ role: 'tool', callId: 'e1', summary: 'Edited src/a.ts (+1 -1)' });
+    await tick();
+    expect(findLine(lines(app), /Editing…/)).toBe(-1);
     app.unmount();
   });
 
