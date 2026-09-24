@@ -45,6 +45,8 @@ describe('buildSummary', () => {
       { role: 'assistant', content: 'b' },
       { role: 'user', content: 'sub', nested: true },
       { role: 'assistant', content: 'sub-resp', nested: true },
+      // A compaction note is top-level in the scrollback (#498) but answers the harness, not a turn.
+      { role: 'assistant', content: 'note', compactionNote: true },
       { role: 'user', content: 'c' },
     ];
     const out = buildSummary(msgs, baseUsage, startedAt, baseApprovals);

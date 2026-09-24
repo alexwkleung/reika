@@ -187,8 +187,9 @@ describe('compaction report round (#280)', () => {
     expect(recap.content).toContain(compactionNoteHeader(1));
     expect(recap.content).toContain(NOTE);
     // The note never enters history as an assistant message. The user sees: a top-level notice
-    // that a note is being asked for, then the note as a nested (markdown-rendered) assistant
+    // that a note is being asked for, then the note as a top-level (markdown-rendered) assistant
     // message carrying its reasoning as a trace and marked compactionNote, then the fold notice.
+    // Not nested: an indent reads as a subagent, and nothing above it is one (#498).
     expect(history.some(m => m.role === 'assistant' && m.content === NOTE)).toBe(false);
     const startAt = messages.findIndex(
       m => m.role === 'system' && m.content.includes('compaction note before fold 1'),
@@ -199,7 +200,7 @@ describe('compaction report round (#280)', () => {
     expect(shown.role).toBe('assistant');
     expect(shown.content).toBe(NOTE);
     expect(shown.reasoning).toBe('how I got here');
-    expect(shown.nested).toBe(true);
+    expect(shown.nested).toBeUndefined();
     expect(shown.compactionNote).toBe(true);
     const foldAt = messages.findIndex(
       m => m.role === 'system' && m.content.includes('Context compacted (fold 1)'),

@@ -219,13 +219,11 @@ describe('Scrollback nested (subagent) messages', () => {
   // #431: markdown wrapped to the top-level width and then landed in a box four columns
   // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
   // bullet, on a row of its own and flush left, under no hanging indent. The compaction note
-  // is where it showed (a nested assistant reply with prose and a constants list).
+  // is where it showed (then a nested assistant reply with prose and a constants list).
   it('wraps a nested reply’s prose and bullets inside the nested box', () => {
     const sentence = 'Tuned constants drift from their documented values, unchecked and unnoticed';
     const content = `Task: ${sentence} (state OPEN).\n\nConstants:\n\n- \`src/agent/loop.ts\`: ${sentence}\n- \`src/agent/compaction.ts\`: ${sentence}`;
-    const frame = framePlusApp([
-      { role: 'assistant', content, nested: true, compactionNote: true },
-    ]);
+    const frame = framePlusApp([{ role: 'assistant', content, nested: true }]);
     const rows = frame.split('\n').filter(l => l.trim());
     expect(rows.length).toBeGreaterThan(4);
     for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
@@ -254,6 +252,7 @@ describe('Scrollback nested (subagent) messages', () => {
     streamingTool?: string;
     streamingNested?: boolean;
     streamingCommand?: boolean;
+    streamingNote?: boolean;
   }): string => {
     const prev = process.stdout.columns;
     Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
@@ -267,6 +266,7 @@ describe('Scrollback nested (subagent) messages', () => {
             streamingTool={props.streamingTool ?? ''}
             streamingNested={props.streamingNested}
             streamingCommand={props.streamingCommand}
+            streamingNote={props.streamingNote}
           />
         </Box>,
       );
@@ -384,6 +384,42 @@ describe('Scrollback nested (subagent) messages', () => {
     } finally {
       chalk.level = prevLevel;
     }
+  });
+
+  // #498: the note is one block behind a single bar at the left edge — Thinking, a bar row, the
+  // label, then the note. Nested, it read as a subagent with no chip above it; with the prose
+  // marker, as the model's reply.
+  const NOTE = 'Findings so far.\n\n- `src/agent/loop.ts` runs the report round before the shed.';
+  const noteRows = (frame: string) => frame.split('\n').filter(l => l.trim());
+
+  it('draws a committed compaction note as one barred block at the left edge', () => {
+    const rows = noteRows(
+      framePlusApp([
+        { role: 'assistant', content: NOTE, reasoning: 'deriving it', compactionNote: true },
+      ]),
+    );
+    expect(rows.length).toBeGreaterThan(4);
+    for (const row of rows) {
+      expect(row).toMatch(/^ ▎/);
+      expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+    }
+    expect(rows.map(r => r.trimEnd())).toEqual(
+      expect.arrayContaining([' ▎ Thinking', ' ▎', ' ▎ Compaction note']),
+    );
+    const label = rows.findIndex(r => r.includes('Compaction note'));
+    expect(rows[label + 1].trimEnd()).toBe(' ▎');
+    expect(rows.join('\n')).not.toContain('⏺');
+  });
+
+  it('streams a compaction note where it will commit', () => {
+    const reasoning = 'deriving it';
+    const live = noteRows(
+      liveFrame({ streamingReasoning: reasoning, streaming: NOTE, streamingNote: true }),
+    );
+    const committed = noteRows(
+      framePlusApp([{ role: 'assistant', content: NOTE, reasoning, compactionNote: true }]),
+    );
+    expect(live).toEqual(committed);
   });
 
   it('leaves the top-level live region byte-identical when not nested', () => {
