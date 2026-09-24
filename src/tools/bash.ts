@@ -62,7 +62,7 @@ export const bashTool: Tool = {
     // never ran, and a sandbox keyed on it would have covered nothing in exactly the autonomous
     // configuration this exists for. The signal was always computed one line before the prompt; this
     // is the same signal feeding both decisions, not a second classifier.
-    const warnings = detectDangerousPatterns(command);
+    const warnings = detectDangerousPatterns(command, ctx.cwd);
     if (ctx.requestApproval) {
       const ok = await ctx.requestApproval({
         tool: 'bash',
