@@ -6,7 +6,7 @@ import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
-import { Working } from './Working.js';
+import { Working, WORKING_WORDS } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
@@ -2308,6 +2308,7 @@ export function App() {
                           ? 'Subagent working'
                           : undefined
               }
+              words={config?.workingWords ? WORKING_WORDS : undefined}
               accent={
                 typechecking || recovering || noteLive
                   ? theme.info
