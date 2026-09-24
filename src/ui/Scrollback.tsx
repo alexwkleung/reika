@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message } from '../types.js';
-import { renderMarkdown, stripReasoningMarkdown } from './markdown.js';
+import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
@@ -65,8 +65,11 @@ export function Scrollback({
   // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label.
   const blocks: { kind: 'reasoning' | 'content' | 'tool'; live: LiveRows; fixed: number }[] = [];
   if (streamingReasoning) {
-    const rows = reasoningLines(streamingReasoning, indent);
-    blocks.push({ kind: 'reasoning', live: { rows, cut: false }, fixed: 2 });
+    blocks.push({
+      kind: 'reasoning',
+      live: streamingReasoningRows(streamingReasoning, indent, region),
+      fixed: 2,
+    });
   }
   if (streaming.trim()) {
     const live = streamingNote
@@ -100,9 +103,7 @@ export function Scrollback({
         b.kind === 'reasoning' ? (
           <Box key={b.kind} marginTop={1}>
             <ReasoningBlock
-              text={streamingReasoning}
-              maxLines={shares[i]}
-              indent={indent}
+              lines={b.live.rows.slice(-shares[i])}
               barColor={streamingNote ? theme.info : undefined}
             />
           </Box>
@@ -273,7 +274,10 @@ export function tailText(
 function streamingContentRows(text: string, width: number, bound: number): LiveRows {
   const pre = tailText(text, bound * 4);
   // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
-  const prose = markProse(renderMarkdown(pre.text, width - CALL_MARKER_MEASURED), !pre.truncated);
+  const prose = markProse(
+    renderMarkdown(hideDanglingMarkers(pre.text), width - CALL_MARKER_MEASURED),
+    !pre.truncated,
+  );
   return { rows: displayRows(prose, width), cut: pre.truncated };
 }
 
@@ -281,7 +285,7 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
 // columns narrower. Same pre-trim and measuring as streamingContentRows.
 function streamingNoteRows(text: string, width: number, bound: number): LiveRows {
   const pre = tailText(text, bound * 4);
-  return { rows: noteBodyRows(pre.text, width), cut: pre.truncated };
+  return { rows: noteBodyRows(hideDanglingMarkers(pre.text), width), cut: pre.truncated };
 }
 
 function noteBodyRows(text: string, width: number): string[] {
@@ -377,7 +381,9 @@ function CompactionNoteBlock({
 }) {
   return (
     <Box flexDirection="column" marginTop={1}>
-      {reasoning ? <ReasoningBlock text={reasoning} indent={indent} barColor={theme.info} /> : null}
+      {reasoning ? (
+        <ReasoningBlock lines={reasoningLines(reasoning, indent)} barColor={theme.info} />
+      ) : null}
       <NoteBody
         tail={{ text: noteBodyRows(note, contentWidth(indent)).join('\n'), marker: false }}
         joined={!!reasoning}
@@ -538,7 +544,7 @@ function renderMessage(
     const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} indent={indent} /> : null}
+        {msg.reasoning ? <ReasoningBlock lines={reasoningLines(msg.reasoning, indent)} /> : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>
@@ -741,30 +747,27 @@ function reasoningLines(text: string, indent: number): string[] {
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
-  const cleaned = stripReasoningMarkdown(text)
+  const cleaned = renderReasoningMarkdown(text, contentW)
     .replace(/\n\s*\n/g, '\n')
-    .trim();
-  return wrapText(cleaned, contentW);
+    .replace(/^\s*\n|\s+$/g, '');
+  return displayRows(cleaned, contentW);
 }
 
+// The live Thinking tail. Pre-trimmed like the reply's stream, since every flush re-parses it; the
+// committed block renders the whole text.
+function streamingReasoningRows(text: string, indent: number, bound: number): LiveRows {
+  const pre = tailText(text, bound * 4);
+  return { rows: reasoningLines(hideDanglingMarkers(pre.text), indent), cut: pre.truncated };
+}
+
+// `lines` arrives already bounded: the live region passes its tail, a committed message all of it.
 function ReasoningBlock({
-  text,
-  maxLines,
-  indent = 0,
+  lines,
   barColor = theme.reasoning,
 }: {
-  text: string;
-  maxLines?: number;
-  indent?: number;
+  lines: string[];
   barColor?: string;
 }) {
-  let lines = reasoningLines(text, indent);
-  // Bound the live preview to its tail so the frame can't exceed the viewport; the
-  // committed message passes no maxLines and shows in full (in <Static>).
-  if (maxLines !== undefined && lines.length > maxLines) {
-    lines = lines.slice(-maxLines);
-  }
-
   return (
     <Box flexDirection="column">
       <Box>

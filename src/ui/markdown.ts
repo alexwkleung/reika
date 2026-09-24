@@ -325,14 +325,61 @@ export function renderInlineMarkdown(text: string): string {
   }
 }
 
-// Strip the most common markdown markers without applying any styling. Used for
-// reasoning text so it stays in flat muted color (no syntax-highlight escape from
-// code blocks). Edge cases like links/tables/fences degrade to the prior literal-text
-// behavior — strict improvement, never worse.
-export function stripReasoningMarkdown(text: string): string {
-  return sanitizeTerminalText(text)
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/(?<!\*)\*(.+?)\*(?!\*)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '');
+// Reasoning renders like the reply, then drops the styling: the Thinking block stays flat muted
+// text (no highlighter colors from a code fence) but gets the reply's structure — bullets, link
+// text, no fence lines. A hyperlink-capable terminal's `[text](href)` keeps only `text`.
+export function renderReasoningMarkdown(text: string, width: number): string {
+  return stripAnsi(renderMarkdown(text, width));
+}
+
+// A live stream's last line ends mid-span often: `**the loo` renders as literal asterisks until
+// the closer arrives, then they vanish, which reads as the markup parsing in front of the user.
+// Holding back an unmatched opener on that line lets the text gain its styling in place instead.
+// Live tails only — committed text renders the whole string. Inside an open fence nothing is
+// markup, so it is left alone.
+export function hideDanglingMarkers(text: string): string {
+  const fences = text.match(/^ {0,3}(```|~~~)/gm);
+  if (fences && fences.length % 2 === 1) return text;
+  const start = text.lastIndexOf('\n') + 1;
+  const line = text.slice(start);
+  const drop: [number, number][] = [];
+
+  // Past an unclosed backtick is a code span still streaming, so its stars are not markup.
+  const ticks = [...line.matchAll(/`/g)].map(m => m.index);
+  const openTick = ticks.length % 2 === 1 ? ticks.pop()! : Infinity;
+  if (openTick !== Infinity) drop.push([openTick, 1]);
+  const inCode = (i: number): boolean => {
+    for (let k = 0; k < ticks.length; k += 2) if (i > ticks[k] && i < ticks[k + 1]) return true;
+    return i > openTick;
+  };
+
+  const strong = [...line.matchAll(/\*\*/g)].map(m => m.index).filter(i => !inCode(i));
+  if (strong.length % 2 === 1) drop.push([strong.at(-1)!, 2]);
+
+  // A single `*` counts only with text on at least one side: `2 * 3` is arithmetic and a line
+  // opening `* ` is a list marker. Only an opener-shaped last one is held back.
+  const em = [...line.matchAll(/(?<!\*)\*(?!\*)/g)]
+    .map(m => m.index)
+    .filter(i => !inCode(i))
+    .filter(i => !(line.slice(0, i).trim() === '' && line[i + 1] === ' '))
+    .filter(i => /\S/.test(line[i - 1] ?? ' ') || /\S/.test(line[i + 1] ?? ' '));
+  const lastEm = em.at(-1);
+  if (em.length % 2 === 1 && lastEm !== undefined && /\S/.test(line[lastEm + 1] ?? ' ')) {
+    drop.push([lastEm, 1]);
+  }
+
+  // A trailing `*` or `**` after a space is the first half of something not yet streamed.
+  const tail = /(^|\s)(\*{1,2})$/.exec(line);
+  if (tail) {
+    const at = line.length - tail[2].length;
+    if (!drop.some(([i]) => i === at || i === at - 1)) drop.push([at, tail[2].length]);
+  }
+
+  let out = line;
+  for (const [i, len] of drop.sort((a, b) => b[0] - a[0]))
+    out = out.slice(0, i) + out.slice(i + len);
+  // A link whose URL is still arriving shows as `[text](https://ex` until the `)`; its text alone
+  // is what it renders to. After a space only, so `arr[i` stays an index.
+  out = out.replace(/(^|\s)\[([^\]]*)(\](\([^)]*)?)?$/, '$1$2');
+  return out === line ? text : text.slice(0, start) + out;
 }

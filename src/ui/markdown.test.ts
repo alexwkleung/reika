@@ -2,54 +2,67 @@ import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
-import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
+import {
+  hideDanglingMarkers,
+  renderInlineMarkdown,
+  renderMarkdown,
+  renderReasoningMarkdown,
+} from './markdown.js';
 import { theme } from './theme.js';
 
-describe('stripReasoningMarkdown', () => {
-  it('strips bold markers', () => {
-    expect(stripReasoningMarkdown('This is **bold** text')).toBe('This is bold text');
-  });
-
-  it('strips italic markers', () => {
-    expect(stripReasoningMarkdown('This is *italic* text')).toBe('This is italic text');
-  });
-
-  it('strips inline code backticks', () => {
-    expect(stripReasoningMarkdown('Call `foo()` to start')).toBe('Call foo() to start');
-  });
-
-  it('strips heading prefixes', () => {
-    expect(stripReasoningMarkdown('# Heading\nbody')).toBe('Heading\nbody');
-    expect(stripReasoningMarkdown('### h3 here')).toBe('h3 here');
-  });
-
-  it('leaves plain text unchanged', () => {
-    expect(stripReasoningMarkdown('just plain text')).toBe('just plain text');
-  });
-
-  it('handles mixed markers in one line', () => {
-    expect(stripReasoningMarkdown('**bold** and *italic* and `code`')).toBe(
-      'bold and italic and code',
+describe('renderReasoningMarkdown', () => {
+  it("gives reasoning the reply's structure with no styling left in it", () => {
+    const out = renderReasoningMarkdown(
+      '**Plan**\n\n- read `a.ts`\n- see [docs](http://example.com)\n\n```ts\nconst x = 1;\n```',
+      60,
     );
+    expect(out).toBe(stripAnsi(out));
+    expect(out).toContain('Plan');
+    expect(out).toContain('• read a.ts');
+    expect(out).not.toMatch(/\*\*|`|\]\(/);
+    expect(out).toContain('const x = 1;');
+  });
+});
+
+describe('hideDanglingMarkers', () => {
+  it('holds back an unclosed bold or code opener on the last line', () => {
+    expect(hideDanglingMarkers('Let me check **the loo')).toBe('Let me check the loo');
+    expect(hideDanglingMarkers('**done** and `foo')).toBe('**done** and foo');
+    expect(hideDanglingMarkers('1. *Step')).toBe('1. Step');
   });
 
-  it('does not strip ** inside text without closing', () => {
-    expect(stripReasoningMarkdown('open ** but no close')).toBe('open ** but no close');
+  it('holds back a trailing half-streamed marker', () => {
+    expect(hideDanglingMarkers('check *')).toBe('check ');
+    expect(hideDanglingMarkers('check **')).toBe('check ');
+    expect(hideDanglingMarkers('*')).toBe('');
   });
 
-  it('leaves links as-is (no link syntax handling)', () => {
-    expect(stripReasoningMarkdown('see [docs](url) here')).toBe('see [docs](url) here');
+  it('leaves balanced markers, arithmetic and list markers alone', () => {
+    for (const s of ['**a** and *b* and `c`', '2 * 3 = 6', '* item', '  * nested item']) {
+      expect(hideDanglingMarkers(s)).toBe(s);
+    }
   });
 
-  it('partially degrades fenced code blocks (rare in reasoning, acceptable result)', () => {
-    // codespan regex catches the innermost backtick pair; outer backticks stay
-    const result = stripReasoningMarkdown('```ts\nconst x = 1\n```');
-    expect(result).toContain('``'); // some backticks remain — readable as "code-like"
-    expect(result).not.toContain('```'); // the triple opener/closer gets partially eaten
+  it('does not count stars inside a code span', () => {
+    expect(hideDanglingMarkers('use `a ** b` here')).toBe('use `a ** b` here');
+    expect(hideDanglingMarkers('use `**kwargs')).toBe('use **kwargs');
   });
 
-  it('does not confuse italic regex with bold (no false match on **)', () => {
-    expect(stripReasoningMarkdown('**hello**')).toBe('hello');
+  it('shows only the text of a link still streaming', () => {
+    expect(hideDanglingMarkers('see [the docs](https://ex')).toBe('see the docs');
+    expect(hideDanglingMarkers('see [the do')).toBe('see the do');
+    expect(hideDanglingMarkers('see [the docs]')).toBe('see the docs');
+    expect(hideDanglingMarkers('see [docs](http://x.y) now')).toBe('see [docs](http://x.y) now');
+    expect(hideDanglingMarkers('read arr[i')).toBe('read arr[i');
+  });
+
+  it('only touches the last line', () => {
+    expect(hideDanglingMarkers('an **odd line\nnext **one')).toBe('an **odd line\nnext one');
+  });
+
+  it('leaves the text alone inside an open fence', () => {
+    const s = '```py\ndef f(**kwargs';
+    expect(hideDanglingMarkers(s)).toBe(s);
   });
 });
 
@@ -330,7 +343,7 @@ describe('markdown terminal-unsafe characters', () => {
   });
 
   it('flattens tabs in reasoning text', () => {
-    expect(stripReasoningMarkdown(`plan:${TAB}step one`)).not.toContain(TAB);
+    expect(renderReasoningMarkdown(`plan:${TAB}step one`, 60)).not.toContain(TAB);
   });
 
   it('leaves ordinary prose unchanged', () => {
