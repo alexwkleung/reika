@@ -198,4 +198,85 @@ describe('manual compaction (/compact)', () => {
     expect(notices.some(n => n.includes('no context window is known'))).toBe(true);
     expect(notices.some(n => n.startsWith('Context compacted'))).toBe(false);
   });
+
+  it('neither folds nor keeps a note when ctrl-c lands mid-note', async () => {
+    h.scripted.length = 0;
+    const controller = new AbortController();
+    // callModel returns what streamed before the abort rather than throwing.
+    vi.mocked(client.callModel).mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        content: '',
+        reasoning: 'Let me think about what I have established so',
+        toolCalls: undefined,
+      };
+    });
+    const history = bigHistory();
+    const before = history.length;
+    const notices: string[] = [];
+    const events: unknown[] = [];
+    await runTurn({
+      userInput: '/compact',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      manualCompact: true,
+      signal: controller.signal,
+      onMessage: m => {
+        if (m.role === 'system') notices.push(m.content);
+      },
+      onShrink: e => events.push(e),
+    });
+    expect(history.length).toBe(before);
+    expect(history.some(m => m.role === 'compaction')).toBe(false);
+    expect(events).toEqual([]);
+    expect(notices).toContain('/compact cancelled — nothing was folded.');
+  });
+
+  it('folds without a note under REIKA_COMPACTION_REPORT=0', async () => {
+    h.scripted.length = 0;
+    const prior = process.env.REIKA_COMPACTION_REPORT;
+    process.env.REIKA_COMPACTION_REPORT = '0';
+    try {
+      vi.mocked(client.callModel).mockClear();
+      const history = bigHistory();
+      await runTurn({
+        userInput: '/compact',
+        history,
+        bundle: makeBundle(),
+        config: makeConfig(),
+        tools: [readTool],
+        payloads: new PayloadStore(),
+        manualCompact: true,
+        onMessage: () => {},
+      });
+      expect(vi.mocked(client.callModel)).not.toHaveBeenCalled();
+      expect(history.some(m => m.role === 'compaction')).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env.REIKA_COMPACTION_REPORT;
+      else process.env.REIKA_COMPACTION_REPORT = prior;
+    }
+  });
+
+  it('sends the directive as a trailing user note, not only in the system prompt', async () => {
+    h.scripted.length = 0;
+    h.scripted.push({ content: 'note', toolCalls: undefined });
+    vi.mocked(client.callModel).mockClear();
+    await runTurn({
+      userInput: '/compact',
+      history: bigHistory(),
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      manualCompact: true,
+      onMessage: () => {},
+    });
+    // The history ends on an assistant reply; without a trailing user note the request would too.
+    const args = vi.mocked(client.callModel).mock.calls[0][0];
+    expect(args.trailingNote).toMatch(/compaction note for yourself/);
+    expect(args.system).not.toMatch(/compaction note for yourself/);
+  });
 });

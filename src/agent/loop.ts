@@ -1909,16 +1909,19 @@ export async function runTurn(opts: {
     // and a manual note round would interleave with it; in plan mode /compact folds without a note
     // (fold gate below), which keeps the fold still useful and the blast radius on that path zero.
     const manualRound = !!opts.manualCompact;
+    // REIKA_COMPACTION_REPORT=0 is the ledger-only baseline arm; /compact honors it too, and then
+    // folds without a note exactly as an automatic fold would.
+    const reportEnabled = compactionReportEnabled();
     const autoReport =
       !manualRound &&
-      compactionReportEnabled() &&
+      reportEnabled &&
       !!window &&
       !planForceWrite &&
       opts.promptMode !== 'plan' &&
       !opts.signal?.aborted &&
       shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens);
     if (
-      (manualRound || autoReport) &&
+      ((manualRound && reportEnabled) || autoReport) &&
       !!window &&
       !planForceWrite &&
       opts.promptMode !== 'plan' &&
@@ -1949,10 +1952,28 @@ export async function runTurn(opts: {
       });
       opts.onPhase?.('thinking');
       opts.onCompactionNote?.(true);
+      // A manual round runs at a turn boundary, where the history ends on the previous turn's final
+      // assistant reply. With the directive only in the system prompt, that request would end on an
+      // assistant turn — a prefill llama.cpp continues, and one strict upstreams reject — so off
+      // prefix-stable the manual directive rides the trailing user note too.
+      const directiveAsTail = prefixStable || manualRound;
+      // /compact has no user turn behind it, so an "(aborted)" assistant reply would be an answer to
+      // nothing in the history; the user gets a receipt that the fold did not happen instead.
+      const commitNoteRoundAbort = () => {
+        if (!manualRound) {
+          commitAborted(opts, '', undefined, turnStart, fetchedUrls);
+          return;
+        }
+        opts.onMessage({
+          role: 'system',
+          tone: 'info',
+          content: '/compact cancelled — nothing was folded.',
+        });
+      };
       try {
         const report = (suffix: string) =>
           callModel({
-            system: prefixStable ? baseSystem : system + '\n\n' + suffix,
+            system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
             history: opts.history,
             // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
             // Sending none rendered a different system turn: on the measured 24k runs the note
@@ -1987,14 +2008,16 @@ export async function runTurn(opts: {
               ? roundSuffix
                 ? `${roundSuffix}\n\n${suffix}`
                 : suffix
-              : undefined,
+              : directiveAsTail
+                ? suffix
+                : undefined,
             // The note round is a request like any other, so it gets its own prefix-cache line:
             // before #426 it was the one request the trace never saw, and the fold's line that
             // followed compared against the round before it.
             onRequest: debugEnabled()
               ? msgs => {
                   const d = prefixTrace.record(msgs, {
-                    trailingNote: prefixStable,
+                    trailingNote: directiveAsTail,
                     tools: toolsToChatTools(callTools),
                   });
                   const pct =
@@ -2015,6 +2038,12 @@ export async function runTurn(opts: {
           });
         let rep = await report(directive);
         if (rep.usage) opts.onUsage?.(rep.usage);
+        // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
+        // is a cut-off fragment — never a note, and not a reason to fold.
+        if (opts.signal?.aborted) {
+          commitNoteRoundAbort();
+          return;
+        }
         // Diagnosable from the log: an empty content channel with a recovered in-band call is the
         // model trying to read instead of writing; a `length` stop is the budget.
         const describe = (r: typeof rep): string =>
@@ -2029,6 +2058,10 @@ export async function runTurn(opts: {
           retried = true;
           const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
           if (again.usage) opts.onUsage?.(again.usage);
+          if (opts.signal?.aborted) {
+            commitNoteRoundAbort();
+            return;
+          }
           // Keep whichever reply has a note in the content channel; failing both, the first
           // reasoning is the better fallback (it is the longer, less nagged thinking).
           if (again.content?.trim()) rep = again;
@@ -2054,7 +2087,10 @@ export async function runTurn(opts: {
             `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
         );
       } catch (err) {
-        if (opts.signal?.aborted) return;
+        if (opts.signal?.aborted) {
+          commitNoteRoundAbort();
+          return;
+        }
         debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
       } finally {
         opts.onCompactionNote?.(false);
