@@ -358,20 +358,31 @@ export function renderReasoningMarkdown(text: string, width: number): string {
 // Live tails only — committed text renders the whole string. Inside an open fence nothing is
 // markup, so it is left alone.
 export function hideDanglingMarkers(text: string): string {
-  const fences = text.match(/^ {0,3}(```|~~~)/gm);
-  if (fences && fences.length % 2 === 1) return text;
   const start = text.lastIndexOf('\n') + 1;
   const line = text.slice(start);
+  // A fence line still arriving — `` ` ``, ` `` `, ```` ```ts ```` — shows as literal backticks
+  // (an opener) or an extra code row (a closer) until its newline. Hidden whole until then.
+  if (/^ {0,3}(`|`{2,}[^`]*|~{3,}.*)$/.test(line)) return text.slice(0, start);
+  const fences = text.slice(0, start).match(/^ {0,3}(```|~~~)/gm);
+  if (fences && fences.length % 2 === 1) return text;
   const drop: [number, number][] = [];
 
-  // Past an unclosed backtick is a code span still streaming, so its stars are not markup.
-  const ticks = [...line.matchAll(/`/g)].map(m => m.index);
-  const openTick = ticks.length % 2 === 1 ? ticks.pop()! : Infinity;
-  if (openTick !== Infinity) drop.push([openTick, 1]);
-  const inCode = (i: number): boolean => {
-    for (let k = 0; k < ticks.length; k += 2) if (i > ticks[k] && i < ticks[k + 1]) return true;
-    return i > openTick;
-  };
+  // A code span closes on a backtick run of its opener's length. Past an unclosed opener is a
+  // span still streaming, so its stars are not markup.
+  const runs = [...line.matchAll(/`+/g)].map(m => ({ i: m.index, n: m[0].length }));
+  const spans: [number, number][] = [];
+  let openTick = Infinity;
+  for (let k = 0; k < runs.length; k++) {
+    const close = runs.findIndex((r, j) => j > k && r.n === runs[k].n);
+    if (close === -1) {
+      openTick = runs[k].i;
+      drop.push([openTick, runs[k].n]);
+      break;
+    }
+    spans.push([runs[k].i, runs[close].i]);
+    k = close;
+  }
+  const inCode = (i: number): boolean => spans.some(([a, b]) => i > a && i < b) || i > openTick;
 
   const strong = [...line.matchAll(/\*\*/g)].map(m => m.index).filter(i => !inCode(i));
   if (strong.length % 2 === 1) drop.push([strong.at(-1)!, 2]);

@@ -84,6 +84,21 @@ describe('hideDanglingMarkers', () => {
     expect(hideDanglingMarkers('an **odd line\nnext **one')).toBe('an **odd line\nnext one');
   });
 
+  it('hides a fence line until its newline, at either end of the block', () => {
+    const block = 'Plan:\n```ts\nxxx\n```\ndone';
+    for (let i = 1; i <= block.length; i++) {
+      const out = renderReasoningMarkdown(hideDanglingMarkers(block.slice(0, i)), 60);
+      expect(out, JSON.stringify(block.slice(0, i))).not.toContain('`');
+    }
+    expect(hideDanglingMarkers('a\n``ts')).toBe('a\n');
+    expect(hideDanglingMarkers('a\n```\nx\n``')).toBe('a\n```\nx\n');
+  });
+
+  it('leaves a code span that opens a line alone', () => {
+    expect(hideDanglingMarkers('``a`b`` is code')).toBe('``a`b`` is code');
+    expect(hideDanglingMarkers('`foo')).toBe('foo');
+  });
+
   it('leaves the text alone inside an open fence', () => {
     const s = '```py\ndef f(**kwargs';
     expect(hideDanglingMarkers(s)).toBe(s);
