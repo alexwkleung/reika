@@ -505,6 +505,9 @@ export type Config = {
   // harness-level checker even when a tsconfig is present, and a fine-grained knob — rounds,
   // timeout, per-turn budget — composes off a switch rather than a feature.
   typecheck?: boolean;
+  // Rotate the busy indicator's "Working" through ui/Working.tsx's WORKING_WORDS
+  // (REIKA_WORKING_WORDS, default on). Optional so a hand-built Config keeps the fixed label.
+  workingWords?: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in

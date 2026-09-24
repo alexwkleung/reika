@@ -133,31 +133,98 @@ const TICK_MS = 80;
 const SHIMMER_STEP = 2; // ticks per shimmer step (~160ms) — gentle, not strobey.
 const SHIMMER_PAUSE = 6; // dark frames after each sweep so it breathes.
 
+// Rotating words for the default label (#500, `REIKA_WORKING_WORDS`). Garden and perfumery
+// verbs, after the orchid the brand is drawn from. Only the idle-turn "Working" rotates: a harness state
+// (typechecking, loop recovery, the spin hint) is information and keeps its fixed wording.
+export const WORKING_WORDS = [
+  'Working',
+  'Blooming',
+  'Budding',
+  'Unfurling',
+  'Sprouting',
+  'Tending',
+  'Pruning',
+  'Grafting',
+  'Rooting',
+  'Germinating',
+  'Cultivating',
+  'Pollinating',
+  'Arranging',
+  'Blossoming',
+  'Photosynthesizing',
+  'Perfuming',
+  'Scenting',
+  'Wafting',
+  'Diffusing',
+  'Distilling',
+  'Infusing',
+  'Steeping',
+  'Macerating',
+  'Blending',
+  'Enfleuraging',
+] as const;
+// A word holds for this many full shimmer sweeps, so it swaps in the pause after a sweep
+// rather than mid-glow, and a longer word stays up as long as it takes to sweep it.
+const SWEEPS_PER_WORD = 2;
+
+export function ticksPerWord(word: string): number {
+  return SWEEPS_PER_WORD * (word.length + 1 + SHIMMER_PAUSE) * SHIMMER_STEP;
+}
+
+// A random index other than `current`, so a swap is always visibly a swap.
+export function nextWordIndex(current: number, count: number, rand = Math.random): number {
+  if (count < 2) return 0;
+  const step = 1 + Math.floor(rand() * (count - 1));
+  return (current + step) % count;
+}
+
+type Clock = { tick: number; word: number; since: number };
+
 // `accent` colors the spinner glyph (default = brand magenta). A distinct accent — e.g. cyan while
 // the harness is typechecking — makes a transient state read at a glance rather than as a mere
-// word-swap on an already-spinning indicator.
+// word-swap on an already-spinning indicator. `words` rotates the default label when no `label`
+// is given.
 export function Working({
-  label = 'Working',
+  label,
   accent = theme.accent,
+  words,
 }: {
   label?: string;
   accent?: string;
+  words?: readonly string[];
 }) {
-  const [tick, setTick] = useState(0);
+  const pool = label === undefined && words && words.length > 0 ? words : null;
+  const [clock, setClock] = useState<Clock>(() => ({
+    tick: 0,
+    word: words && words.length > 0 ? Math.floor(Math.random() * words.length) : 0,
+    since: 0,
+  }));
 
   useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), TICK_MS);
+    const id = setInterval(
+      () =>
+        setClock(c => {
+          const tick = c.tick + 1;
+          if (pool && tick - c.since >= ticksPerWord(pool[c.word % pool.length])) {
+            return { tick, word: nextWordIndex(c.word, pool.length), since: tick };
+          }
+          return { ...c, tick };
+        }),
+      TICK_MS,
+    );
     return () => clearInterval(id);
-  }, []);
+  }, [pool]);
 
-  const chars = `${label}…`.split('');
-  const frame = tick % FRAMES.length;
+  const text = pool ? pool[clock.word % pool.length] : (label ?? 'Working');
+  const chars = `${text}…`.split('');
+  const frame = clock.tick % FRAMES.length;
   const ramp = shimmerRamp(accent);
   const base = shimmerBase(accent);
   // The shimmer tip sweeps across every char, then sits in a "pause" region past
-  // the end of the label where no char is highlighted, before looping.
+  // the end of the label where no char is highlighted, before looping. Measured from the
+  // word's first tick so a new word starts on a fresh sweep.
   const cycle = chars.length + SHIMMER_PAUSE;
-  const pos = Math.floor(tick / SHIMMER_STEP) % cycle;
+  const pos = Math.floor((clock.tick - clock.since) / SHIMMER_STEP) % cycle;
 
   return (
     <Box marginTop={1}>
