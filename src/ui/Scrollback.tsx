@@ -347,7 +347,14 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   // normally sits tight under the call that produced it, so a notice following one runs straight
   // into the next tool row. The gap belongs before the tool row, where the margin field is.
   const afterNotice = !!prev && prev.role === 'system';
-  const inner = renderMessage(msg, indent, { nested, afterNested, afterNotice });
+  // Back-to-back tool rows sit tight, but once either one carries a block (a diff, a command
+  // chip, a bash change list) the next `↳` reads as another line of that block's output rather
+  // than a result of its own (#492). Summary-only rows (reads, greps) stay tight among themselves.
+  const afterToolBlock =
+    msg.role === 'tool' &&
+    prev?.role === 'tool' &&
+    (hasBlockUnderSummary(prev) || hasBlockUnderSummary(msg));
+  const inner = renderMessage(msg, indent, { nested, afterNested, afterNotice, afterToolBlock });
   if (inner === null) return null;
   // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
   // inherit the App's paddingX={1}, so a plain <Text> here wraps at the FULL terminal width and is
@@ -362,10 +369,19 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   );
 }
 
+function hasBlockUnderSummary(msg: Message): boolean {
+  return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
+}
+
 function renderMessage(
   msg: Message,
   indent = 0,
-  ctx: { nested?: boolean; afterNested?: boolean; afterNotice?: boolean } = {},
+  ctx: {
+    nested?: boolean;
+    afterNested?: boolean;
+    afterNotice?: boolean;
+    afterToolBlock?: boolean;
+  } = {},
 ): ReactElement | null {
   if (msg.role === 'user') {
     return <UserBubble text={msg.display ?? msg.content} indent={indent} nested={ctx.nested} />;
@@ -456,7 +472,10 @@ function renderMessage(
   }
   if (msg.role === 'tool') {
     return (
-      <Box flexDirection="column" marginTop={ctx.afterNested || ctx.afterNotice ? 1 : 0}>
+      <Box
+        flexDirection="column"
+        marginTop={ctx.afterNested || ctx.afterNotice || ctx.afterToolBlock ? 1 : 0}
+      >
         <Text>
           <Text color={theme.tool}>{TOOL_MARKER}</Text>
           {/* Drop the redundant leading "Read " for display only: the `↳` already

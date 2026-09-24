@@ -1225,3 +1225,79 @@ describe('Scrollback notice before a tool row', () => {
     expect(lines[second - 1]).not.toBe('');
   });
 });
+
+// A result's command chip or diff ends flush against the next `↳`, which then reads as one more
+// line of that output rather than a result of its own — a read after a bash chip looked like it
+// came from the command (#492). Summary-only rows keep sitting tight.
+describe('Scrollback tool rows after an output block', () => {
+  const bash = (id: string, cmd: string): Message => ({
+    role: 'tool',
+    callId: id,
+    summary: `Ran: ${cmd} (12 bytes output)`,
+    command: { text: cmd, outputTail: 'line one\nline two', outputTruncated: false },
+  });
+  const read = (id: string, path: string): Message => ({
+    role: 'tool',
+    callId: id,
+    summary: `Read ${path} (1-40 of 40)`,
+  });
+  const edit: Message = {
+    role: 'tool',
+    callId: 'e1',
+    summary: 'Edited src/b.ts (+1 -1)',
+    diff: { text: '- old\n+ new', path: 'src/b.ts', added: 1, removed: 1 },
+  };
+  const lines = (messages: Message[]): string[] => {
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return (lastFrame() ?? '').split('\n');
+  };
+  const rowAbove = (ls: string[], needle: string): string => {
+    const i = ls.findIndex(l => l.includes(needle));
+    expect(i).toBeGreaterThan(0);
+    return ls[i - 1];
+  };
+
+  it('gaps a bash result that follows another bash result', () => {
+    const ls = lines([bash('b1', 'echo one'), bash('b2', 'echo two')]);
+    expect(rowAbove(ls, '↳ Ran: echo two')).toBe('');
+  });
+
+  it('gaps a read that follows a command chip', () => {
+    const ls = lines([bash('b1', 'echo one'), read('r1', 'src/a.ts')]);
+    expect(rowAbove(ls, '↳ src/a.ts')).toBe('');
+  });
+
+  it('gaps a result that follows a diff', () => {
+    const ls = lines([edit, read('r1', 'src/a.ts')]);
+    expect(rowAbove(ls, '↳ src/a.ts')).toBe('');
+  });
+
+  it('gaps sequential edits', () => {
+    const ls = lines([edit, { ...edit, callId: 'e2', summary: 'Edited src/d.ts (+1 -1)' }]);
+    expect(rowAbove(ls, '↳ Edited src/d.ts')).toBe('');
+  });
+
+  it('gaps a blocked result that follows a summary-only row', () => {
+    const ls = lines([read('r1', 'src/a.ts'), bash('b1', 'echo one')]);
+    expect(rowAbove(ls, '↳ Ran: echo one')).toBe('');
+  });
+
+  it('keeps summary-only rows tight among themselves', () => {
+    const ls = lines([read('r1', 'src/a.ts'), read('r2', 'src/c.ts')]);
+    expect(rowAbove(ls, '↳ src/c.ts')).not.toBe('');
+  });
+
+  it('keeps the first result tight under its tool call', () => {
+    const ls = lines([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'b1', name: 'bash', args: { command: 'echo one' } }],
+      },
+      bash('b1', 'echo one'),
+    ]);
+    expect(rowAbove(ls, '↳ Ran: echo one')).not.toBe('');
+  });
+});
