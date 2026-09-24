@@ -1209,6 +1209,37 @@ export function App() {
       );
       return;
     }
+    if (name === 'compact') {
+      // Manual compaction (issue #481). The loop runs its own event on this trigger — note round,
+      // fold, session-wide fold numbering — with no user turn, so nothing new enters the history
+      // the recap summarizes. Not available on the chat side (an isolated minibuffer is compacted
+      // by /new, not by context pressure) or shell (no model history at all); vibe routes to an
+      // agent turn the way /implement does, since its plan phase would otherwise claim the turn.
+      if (!config || !bundle) return;
+      if (mode === 'chat' || mode === 'shell') {
+        setMessages(prev => [
+          ...prev,
+          echo,
+          { role: 'system', content: `/compact isn't available in ${mode} mode.` },
+        ]);
+        return;
+      }
+      // The typed command itself must land in scrollback by hand: the manual compaction runs no
+      // user turn, so unlike /implement there is no loop-emitted user message to render it.
+      setMessages(prev => [
+        ...prev,
+        echo,
+        { role: 'system', tone: 'info', content: 'Compacting context…' },
+      ]);
+      await submitToModel(
+        'compact', // text: never reaches the loop — manualCompact drops the user message
+        undefined,
+        mode === 'vibe' ? 'agent' : undefined,
+        undefined,
+        true, // manualCompact
+      );
+      return;
+    }
     if (name === 'cd') {
       const target = args.trim();
       if (!target) {
@@ -1334,6 +1365,7 @@ export function App() {
           '  /vibe              enter vibe mode (every prompt plans first, then implements)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
+          '  /compact           compact older context now (compaction note, then a fold)',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
           '  /anon              show/toggle anonymized display (on|off)',
           '  /cwd               show working directory',
@@ -2021,6 +2053,9 @@ export function App() {
     // lifetime and has already dropped its attachment ref, so these are this turn's images and no
     // other turn's — an image reaches the model once.
     nativeImages?: NativeImage[],
+    // `/compact` (issue #481): the turn is a manual compaction, not a prompt — the loop runs the
+    // note round + fold with no user message in either.
+    manualCompact?: boolean,
   ): Promise<Message[]> => {
     // Consumed here whether or not the turn runs, so a skill can never leak onto a later prompt.
     const skill = pendingSkillRef.current;
@@ -2035,6 +2070,7 @@ export function App() {
       display: displayOverride,
       skill,
       nativeImages,
+      manualCompact,
       requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
       requestQuestion,
       // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
@@ -2186,6 +2222,9 @@ export function App() {
         onContextEstimate: t => setEstimatedContext(t),
         onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
           setShrink(counts);
+          // The last reported prompt size predates the shed/fold, and the gauge prefers it over
+          // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
+          setLastUsage(null);
           // Stamp the turn the way the status line counts turns (assistant messages so far), so
           // the saved event lines up with the `turn N` a reader sees in the header.
           const turn = messagesRef.current.filter(m => m.role === 'assistant').length + 1;

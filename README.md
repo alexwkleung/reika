@@ -378,20 +378,21 @@ npm run -s dev -- -p "..."                           # from a checkout: -- so np
 
 Type `/` in the input to see suggestions. Highlights:
 
-| Command                                           | What                                                                                                                            |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `/help`                                           | List all commands                                                                                                               |
-| `/new` / `/clear`                                 | Reset conversation, tokens, mode                                                                                                |
-| `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                  |
-| `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                       |
-| `/implement [guidance]`                           | From plan mode: switch to agent and execute the plan above (optional guidance)                                                  |
-| `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                             |
-| `/approvals [on\|off]`                            | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                   |
-| `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                        |
-| `/save [--raw]`                                   | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim. |
-| `/skills`                                         | List available skills (loaded from skill dirs at startup)                                                                       |
-| `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                             |
-| `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                 |
+| Command                                           | What                                                                                                                                                                                       |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/help`                                           | List all commands                                                                                                                                                                          |
+| `/new` / `/clear`                                 | Reset conversation, tokens, mode                                                                                                                                                           |
+| `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                                                                             |
+| `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                                                                                  |
+| `/implement [guidance]`                           | From plan mode: switch to agent and execute the plan above (optional guidance)                                                                                                             |
+| `/compact`                                        | Compact older context now, without a prompt: the model writes a compaction note, then older turns fold into the recap it feeds. Folds number across manual and automatic compaction alike. |
+| `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                                                                                        |
+| `/approvals [on\|off]`                            | Show or toggle session auto-approve. `REIKA_AUTO_APPROVE` env var still wins.                                                                                                              |
+| `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                                                                                   |
+| `/save [--raw]`                                   | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim.                                                            |
+| `/skills`                                         | List available skills (loaded from skill dirs at startup)                                                                                                                                  |
+| `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                                                                                        |
+| `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                                                                            |
 
 A saved transcript is titled by the first prompt you typed (`title` on the JSONL meta line, `# title:` atop the `.txt`), so a directory of saves reads as a list of sessions rather than timestamps. It also records mode alongside the conversation: each turn is labelled with the mode it ran in (`You [plan]:`, and `mode` on the JSONL record), and the header carries the mode at save time plus the whole arc — `# modes: agent (turns 1-3) → plan (turn 4) → agent (turn 5)`. A vibe turn is recorded as `vibe`, not as the plan and agent phases it runs as internally. So a transcript says how the work was done, not just what was said.
 

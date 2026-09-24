@@ -71,6 +71,7 @@ export const COMMANDS: CommandSpec[] = [
   },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },
+  { name: 'compact', desc: 'fold older context into a recap now (compaction note, then fold)' },
   {
     name: 'model',
     desc: 'pick a model/profile interactively (/model <name> switches directly, even to a model not in your config)',

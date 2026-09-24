@@ -52,6 +52,7 @@ vi.mock('./provider/modellimits.js', async importActual => ({
 
 type TurnOpts = {
   userInput: string;
+  manualCompact?: boolean;
   userDisplay?: string;
   history: Message[];
   config: Config;
@@ -88,6 +89,16 @@ const runTurn = vi.fn(async (opts: TurnOpts) => {
     const e = throwNext;
     throwNext = null;
     throw e;
+  }
+  // A manual compaction (#481) pushes no user turn and runs no reply round — the note request is
+  // the only model call, and the loop emits harness notices instead of a user/assistant pair.
+  if (opts.manualCompact) {
+    opts.onMessage({
+      role: 'system',
+      content:
+        'Context compacted (fold 1) — folded 3 earlier messages into a 0.5k-char recap (older tool output still re-readable).',
+    });
+    return;
   }
   const user: Message = { role: 'user', content: opts.userInput };
   opts.history.push(user);
@@ -213,6 +224,20 @@ describe('createSession', () => {
 
       await s.submit('again', { mode: 'agent' });
       expect(probeModelLimits).toHaveBeenCalledTimes(2);
+    });
+
+    it('lands the receipt after the opening line even on a /compact turn, which has no echo', async () => {
+      probes.push(
+        { reached: false },
+        { reached: false },
+        { reached: true, window: 24000, windowSource: 'endpoint' },
+      );
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      await s.submit('hi', { mode: 'agent' });
+      const out = await s.submit('compact', { mode: 'agent', manualCompact: true });
+      expect(out.map(m => m.role)).toEqual(['system', 'system']);
+      expect(text(out[0])).toMatch(/Context compacted/);
+      expect(text(out[1])).toMatch(/Context window of 24k tokens, from the endpoint/);
     });
 
     it('does not ask again when the server answered without a window', async () => {

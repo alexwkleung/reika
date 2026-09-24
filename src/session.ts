@@ -84,6 +84,10 @@ export type SubmitOptions = {
   nativeImages?: NativeImage[];
   // Overrides the mode's tool list: an eval fixture runs plan tools under the agent prompt.
   tools?: Tool[];
+  // `/compact` (issue #481): a harness-driven compaction — compaction-note round + fold — with no
+  // user turn and no reply. The fold joins the same session-cumulative counters the automatic
+  // shrink events advance, so the two paths stay in sync regardless of which fired last.
+  manualCompact?: boolean;
   signal?: AbortSignal;
   // Per-submit over the session's own, for a front end whose handlers close over render state.
   events?: SessionEvents;
@@ -233,9 +237,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       events.onMessage?.(msg);
     };
     const signal = submit.onTurnStart?.() ?? submit.signal;
+    // Staged like App's pendingNotices: a receipt follows whatever opens the turn and never
+    // precedes it — the user echo normally, but a manual compaction (#481) has none. Hoisted out of
+    // try so the tail flush below can't drop it on a turn that emits no message at all.
+    const pending: Message[] = [];
     try {
-      // Staged like App's pendingNotices: a receipt follows the user echo, never precedes it.
-      const pending: Message[] = [];
       const retried = await retryWindowProbe();
       if (retried) pending.push(retried);
       await runTurn({
@@ -254,12 +260,13 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         requestQuestion: submit.requestQuestion ?? opts.requestQuestion,
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
+        manualCompact: submit.manualCompact,
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.
         onMessage: raw => {
           const msg: Message = raw.role === 'user' ? { ...raw, mode: recorded } : raw;
           emit(msg);
-          if (msg.role === 'user') for (const n of pending.splice(0)) emit(n);
+          for (const n of pending.splice(0)) emit(n);
         },
         onUsage: u => {
           lastUsage = u;
@@ -298,6 +305,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       if (!submit.onTurnError) throw e;
       submit.onTurnError(e as Error);
     } finally {
+      for (const n of pending.splice(0)) emit(n);
       submit.onTurnEnd?.();
     }
     return emitted;
