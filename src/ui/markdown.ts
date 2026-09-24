@@ -33,6 +33,21 @@ let blockIndent = 0;
 // over for Ink to re-wrap — the last word of each line on a row of its own, flush left (#431).
 let renderWidth = contentWidth();
 
+// Set for a reasoning render, whose styling is stripped afterwards: a clickable link would then be
+// its text alone, and in flat grey the URL is the only cue that it was a link at all.
+let plainLinks = false;
+
+// OSC 8 as ansi-escapes writes it, optionally inside tmux's DCS passthrough.
+const HYPERLINK =
+  /(?:\x1bPtmux;\x1b)?\x1b\]8;;([^\x07]*)\x07(?:\x1b\\)?([\s\S]*?)(?:\x1bPtmux;\x1b)?\x1b\]8;;\x07(?:\x1b\\)?/g;
+
+export function unwrapHyperlink(composed: string): string {
+  return composed.replace(HYPERLINK, (_, url: string, text: string) => {
+    const shown = stripAnsi(text);
+    return shown === url ? url : `${shown} (${url})`;
+  });
+}
+
 function proseWidth(): number {
   return Math.max(20, renderWidth - blockIndent);
 }
@@ -69,7 +84,7 @@ const terminalExtension = markedTerminal(
     // marked-terminal composes the whole link first — `text (href)`, or an OSC 8 hyperlink
     // where the terminal supports one — and hands that single string to `link`. A
     // (href, title, text) signature here read the third argument and printed `undefined`.
-    link: (composed: string) => composed,
+    link: (composed: string) => (plainLinks ? unwrapHyperlink(composed) : composed),
     // Both a bare URL (GFM autolink) and a `[text](href)` land here; see theme.link. Underlined
     // only where marked-terminal is also wrapping it in an OSC 8 hyperlink — the same check it
     // makes (`supportsHyperlinks.stdout`) — so the underline promises a click exactly when the
@@ -325,14 +340,77 @@ export function renderInlineMarkdown(text: string): string {
   }
 }
 
-// Strip the most common markdown markers without applying any styling. Used for
-// reasoning text so it stays in flat muted color (no syntax-highlight escape from
-// code blocks). Edge cases like links/tables/fences degrade to the prior literal-text
-// behavior — strict improvement, never worse.
-export function stripReasoningMarkdown(text: string): string {
-  return sanitizeTerminalText(text)
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/(?<!\*)\*(.+?)\*(?!\*)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '');
+// Reasoning renders like the reply, then drops the styling: the Thinking block stays flat muted
+// text (no highlighter colors from a code fence) but gets the reply's structure — bullets, link
+// text, no fence lines. Links keep their URL — see plainLinks.
+export function renderReasoningMarkdown(text: string, width: number): string {
+  plainLinks = true;
+  try {
+    return stripAnsi(renderMarkdown(text, width));
+  } finally {
+    plainLinks = false;
+  }
+}
+
+// A live stream's last line ends mid-span often: `**the loo` renders as literal asterisks until
+// the closer arrives, then they vanish, which reads as the markup parsing in front of the user.
+// Holding back an unmatched opener on that line lets the text gain its styling in place instead.
+// Live tails only — committed text renders the whole string. Inside an open fence nothing is
+// markup, so it is left alone.
+export function hideDanglingMarkers(text: string): string {
+  const start = text.lastIndexOf('\n') + 1;
+  const line = text.slice(start);
+  // A fence line still arriving — `` ` ``, ` `` `, ```` ```ts ```` — shows as literal backticks
+  // (an opener) or an extra code row (a closer) until its newline. Hidden whole until then.
+  if (/^ {0,3}(`|`{2,}[^`]*|~{3,}.*)$/.test(line)) return text.slice(0, start);
+  const fences = text.slice(0, start).match(/^ {0,3}(```|~~~)/gm);
+  if (fences && fences.length % 2 === 1) return text;
+  const drop: [number, number][] = [];
+
+  // A code span closes on a backtick run of its opener's length. Past an unclosed opener is a
+  // span still streaming, so its stars are not markup.
+  const runs = [...line.matchAll(/`+/g)].map(m => ({ i: m.index, n: m[0].length }));
+  const spans: [number, number][] = [];
+  let openTick = Infinity;
+  for (let k = 0; k < runs.length; k++) {
+    const close = runs.findIndex((r, j) => j > k && r.n === runs[k].n);
+    if (close === -1) {
+      openTick = runs[k].i;
+      drop.push([openTick, runs[k].n]);
+      break;
+    }
+    spans.push([runs[k].i, runs[close].i]);
+    k = close;
+  }
+  const inCode = (i: number): boolean => spans.some(([a, b]) => i > a && i < b) || i > openTick;
+
+  const strong = [...line.matchAll(/\*\*/g)].map(m => m.index).filter(i => !inCode(i));
+  if (strong.length % 2 === 1) drop.push([strong.at(-1)!, 2]);
+
+  // A single `*` counts only with text on at least one side: `2 * 3` is arithmetic and a line
+  // opening `* ` is a list marker. Only an opener-shaped last one is held back.
+  const em = [...line.matchAll(/(?<!\*)\*(?!\*)/g)]
+    .map(m => m.index)
+    .filter(i => !inCode(i))
+    .filter(i => !(line.slice(0, i).trim() === '' && line[i + 1] === ' '))
+    .filter(i => /\S/.test(line[i - 1] ?? ' ') || /\S/.test(line[i + 1] ?? ' '));
+  const lastEm = em.at(-1);
+  if (em.length % 2 === 1 && lastEm !== undefined && /\S/.test(line[lastEm + 1] ?? ' ')) {
+    drop.push([lastEm, 1]);
+  }
+
+  // A trailing `*` or `**` after a space is the first half of something not yet streamed.
+  const tail = /(^|\s)(\*{1,2})$/.exec(line);
+  if (tail) {
+    const at = line.length - tail[2].length;
+    if (!drop.some(([i]) => i === at || i === at - 1)) drop.push([at, tail[2].length]);
+  }
+
+  let out = line;
+  for (const [i, len] of drop.sort((a, b) => b[0] - a[0]))
+    out = out.slice(0, i) + out.slice(i + len);
+  // A link whose URL is still arriving shows as `[text](https://ex` until the `)`; its text alone
+  // is what it renders to. After a space only, so `arr[i` stays an index.
+  out = out.replace(/(^|\s)\[([^\]]*)(\](\([^)]*)?)?$/, '$1$2');
+  return out === line ? text : text.slice(0, start) + out;
 }

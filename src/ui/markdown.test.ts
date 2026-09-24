@@ -2,54 +2,106 @@ import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
-import { renderInlineMarkdown, renderMarkdown, stripReasoningMarkdown } from './markdown.js';
+import {
+  hideDanglingMarkers,
+  renderInlineMarkdown,
+  renderMarkdown,
+  renderReasoningMarkdown,
+  unwrapHyperlink,
+} from './markdown.js';
 import { theme } from './theme.js';
 
-describe('stripReasoningMarkdown', () => {
-  it('strips bold markers', () => {
-    expect(stripReasoningMarkdown('This is **bold** text')).toBe('This is bold text');
+describe('renderReasoningMarkdown', () => {
+  it("gives reasoning the reply's structure with no styling left in it", () => {
+    const out = renderReasoningMarkdown(
+      '**Plan**\n\n- read `a.ts`\n- see [docs](http://example.com)\n\n```ts\nconst x = 1;\n```',
+      60,
+    );
+    expect(out).toBe(stripAnsi(out));
+    expect(out).toContain('Plan');
+    expect(out).toContain('• read a.ts');
+    expect(out).not.toMatch(/\*\*|`|\]\(/);
+    expect(out).toContain('const x = 1;');
+  });
+});
+
+// marked-terminal decides OSC 8 once at import, so a clickable link never reaches the tests
+// through renderMarkdown; the unwrap is tested on the escape as ansi-escapes writes it.
+describe('unwrapHyperlink', () => {
+  const osc8 = (url: string, text: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
+
+  it('turns a clickable link back into text plus URL', () => {
+    const link = osc8('https://example.com/a', chalk.hex(theme.link)('the docs'));
+    expect(unwrapHyperlink(`see ${link} here`)).toBe('see the docs (https://example.com/a) here');
   });
 
-  it('strips italic markers', () => {
-    expect(stripReasoningMarkdown('This is *italic* text')).toBe('This is italic text');
-  });
-
-  it('strips inline code backticks', () => {
-    expect(stripReasoningMarkdown('Call `foo()` to start')).toBe('Call foo() to start');
-  });
-
-  it('strips heading prefixes', () => {
-    expect(stripReasoningMarkdown('# Heading\nbody')).toBe('Heading\nbody');
-    expect(stripReasoningMarkdown('### h3 here')).toBe('h3 here');
-  });
-
-  it('leaves plain text unchanged', () => {
-    expect(stripReasoningMarkdown('just plain text')).toBe('just plain text');
-  });
-
-  it('handles mixed markers in one line', () => {
-    expect(stripReasoningMarkdown('**bold** and *italic* and `code`')).toBe(
-      'bold and italic and code',
+  it('shows a bare URL once', () => {
+    expect(unwrapHyperlink(osc8('https://example.com', 'https://example.com'))).toBe(
+      'https://example.com',
     );
   });
 
-  it('does not strip ** inside text without closing', () => {
-    expect(stripReasoningMarkdown('open ** but no close')).toBe('open ** but no close');
+  it('reads the tmux passthrough form', () => {
+    const tmux = (seq: string) => `\u001bPtmux;${seq.replaceAll('\u001b', '\u001b\u001b')}\u001b\\`;
+    const link = `${tmux('\u001b]8;;https://example.com/a\u0007')}docs${tmux('\u001b]8;;\u0007')}`;
+    expect(unwrapHyperlink(link)).toBe('docs (https://example.com/a)');
+  });
+});
+
+describe('hideDanglingMarkers', () => {
+  it('holds back an unclosed bold or code opener on the last line', () => {
+    expect(hideDanglingMarkers('Let me check **the loo')).toBe('Let me check the loo');
+    expect(hideDanglingMarkers('**done** and `foo')).toBe('**done** and foo');
+    expect(hideDanglingMarkers('1. *Step')).toBe('1. Step');
   });
 
-  it('leaves links as-is (no link syntax handling)', () => {
-    expect(stripReasoningMarkdown('see [docs](url) here')).toBe('see [docs](url) here');
+  it('holds back a trailing half-streamed marker', () => {
+    expect(hideDanglingMarkers('check *')).toBe('check ');
+    expect(hideDanglingMarkers('check **')).toBe('check ');
+    expect(hideDanglingMarkers('*')).toBe('');
   });
 
-  it('partially degrades fenced code blocks (rare in reasoning, acceptable result)', () => {
-    // codespan regex catches the innermost backtick pair; outer backticks stay
-    const result = stripReasoningMarkdown('```ts\nconst x = 1\n```');
-    expect(result).toContain('``'); // some backticks remain — readable as "code-like"
-    expect(result).not.toContain('```'); // the triple opener/closer gets partially eaten
+  it('leaves balanced markers, arithmetic and list markers alone', () => {
+    for (const s of ['**a** and *b* and `c`', '2 * 3 = 6', '* item', '  * nested item']) {
+      expect(hideDanglingMarkers(s)).toBe(s);
+    }
   });
 
-  it('does not confuse italic regex with bold (no false match on **)', () => {
-    expect(stripReasoningMarkdown('**hello**')).toBe('hello');
+  it('does not count stars inside a code span', () => {
+    expect(hideDanglingMarkers('use `a ** b` here')).toBe('use `a ** b` here');
+    expect(hideDanglingMarkers('use `**kwargs')).toBe('use **kwargs');
+  });
+
+  it('shows only the text of a link still streaming', () => {
+    expect(hideDanglingMarkers('see [the docs](https://ex')).toBe('see the docs');
+    expect(hideDanglingMarkers('see [the do')).toBe('see the do');
+    expect(hideDanglingMarkers('see [the docs]')).toBe('see the docs');
+    expect(hideDanglingMarkers('see [docs](http://x.y) now')).toBe('see [docs](http://x.y) now');
+    expect(hideDanglingMarkers('read arr[i')).toBe('read arr[i');
+  });
+
+  it('only touches the last line', () => {
+    expect(hideDanglingMarkers('an **odd line\nnext **one')).toBe('an **odd line\nnext one');
+  });
+
+  it('hides a fence line until its newline, at either end of the block', () => {
+    const block = 'Plan:\n```ts\nxxx\n```\ndone';
+    for (let i = 1; i <= block.length; i++) {
+      const out = renderReasoningMarkdown(hideDanglingMarkers(block.slice(0, i)), 60);
+      expect(out, JSON.stringify(block.slice(0, i))).not.toContain('`');
+    }
+    expect(hideDanglingMarkers('a\n``ts')).toBe('a\n');
+    expect(hideDanglingMarkers('a\n```\nx\n``')).toBe('a\n```\nx\n');
+  });
+
+  it('leaves a code span that opens a line alone', () => {
+    expect(hideDanglingMarkers('``a`b`` is code')).toBe('``a`b`` is code');
+    expect(hideDanglingMarkers('`foo')).toBe('foo');
+  });
+
+  it('leaves the text alone inside an open fence', () => {
+    const s = '```py\ndef f(**kwargs';
+    expect(hideDanglingMarkers(s)).toBe(s);
   });
 });
 
@@ -330,7 +382,7 @@ describe('markdown terminal-unsafe characters', () => {
   });
 
   it('flattens tabs in reasoning text', () => {
-    expect(stripReasoningMarkdown(`plan:${TAB}step one`)).not.toContain(TAB);
+    expect(renderReasoningMarkdown(`plan:${TAB}step one`, 60)).not.toContain(TAB);
   });
 
   it('leaves ordinary prose unchanged', () => {
