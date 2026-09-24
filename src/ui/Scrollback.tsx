@@ -753,7 +753,11 @@ function ReasoningBlock({
     <Box flexDirection="column">
       <Box>
         <Text color={barColor}>{'▎ '}</Text>
-        <Text color={theme.muted}>Thinking</Text>
+        {/* The bar's color, not the body's muted gray: in the same color the label read as the
+            thought's first line and the block's top edge blurred into the reply beneath it. */}
+        <Text color={barColor} bold>
+          Thinking
+        </Text>
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
