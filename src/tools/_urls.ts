@@ -1,5 +1,6 @@
+import { lookup } from 'node:dns/promises';
 import type { ToolContext } from '../types.js';
-import { classifyPrivateUrl } from './_hosts.js';
+import { classifyPrivateHost, classifyPrivateUrl } from './_hosts.js';
 import { extractUrl, type UrlExtraction } from './fetch.js';
 
 // Local models sometimes write a plausible-looking URL into code or a comment — an API endpoint, a
@@ -13,6 +14,15 @@ import { extractUrl, type UrlExtraction } from './fetch.js';
 
 // Cap URLs grounded per call so one change pasting a wall of links can't fan out a wall of fetches.
 const MAX_URLS = 2;
+// Grounding never takes the last fetch slots of a turn: the model's own fetch_url calls are the
+// ones someone asked for, and grounding spending them first starved those calls without a word.
+const FETCH_SLOTS_KEPT_FOR_MODEL = 2;
+// How many eligible URLs get a DNS check per call. Bounded because a change naming a wall of links
+// would otherwise cost a wall of lookups, and only MAX_URLS of them can be grounded anyway.
+const MAX_HOST_LOOKUPS = 8;
+// A lookup that has not answered by now is treated as public and left to the fetch, which then
+// reports it on its own terms (unverified when offline). Two seconds against the fetch's fifteen.
+const HOST_LOOKUP_TIMEOUT_MS = 2000;
 // Tight per-URL snippet cap. The grounder confirms "this resolves and is roughly X", NOT "read me
 // the page" — a small-context model can't afford a 64KB dump on every edit, and the window-physics
 // cost would swamp the grounding value. The model can call `fetch_url` for the full content when it
@@ -50,6 +60,71 @@ export function isDotlessHost(url: string): boolean {
     return !new URL(url).hostname.includes('.');
   } catch {
     return false;
+  }
+}
+
+// Grounding sends a GET nobody asked for, so a URL whose request would carry a secret is never
+// grounded: userinfo, a secret-named query parameter (normalized, so `api_key`, `X-Amz-Signature`
+// and `access-token` all match), or a capability URL whose path IS the secret (a webhook). Skipped
+// silently like a private address: the fetch would have sent the secret to a server, and the
+// receipt would have printed it into the scrollback.
+const SECRET_PARAM =
+  /token|secret|signature|passw|apikey|accesskey|credential|session|jwt|^(key|sig|auth|code|pwd)$/;
+const CAPABILITY_URL =
+  /^https?:\/\/(hooks\.slack\.com\/|(discord|discordapp)\.com\/api\/webhooks\/|[^/?#]*\.webhook\.office\.com\/|outlook\.office\.com\/webhook\/)/i;
+
+export function carriesSecret(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.username || parsed.password) return true;
+  if (CAPABILITY_URL.test(url)) return true;
+  for (const name of parsed.searchParams.keys()) {
+    if (SECRET_PARAM.test(name.toLowerCase().replace(/[-_]/g, ''))) return true;
+  }
+  return false;
+}
+
+// Suffixes that are internal by convention or reserved never to resolve publicly (RFC 2606, 6761,
+// 8375). A corporate `jira.acme.internal` is reachable only on the user's network, and a fetch to
+// `api.example.test` fails DNS and would be flagged as an invented link — neither is ours to check.
+const INTERNAL_SUFFIX =
+  /\.(internal|intranet|corp|lan|home|home\.arpa|localdomain|private|test|example|invalid)$/;
+
+export function isInternalName(url: string): boolean {
+  try {
+    return INTERNAL_SUFFIX.test(new URL(url).hostname.toLowerCase().replace(/\.$/, ''));
+  } catch {
+    return false;
+  }
+}
+
+// A dotted public-looking name can still point inside the network (split-horizon corporate DNS,
+// `grafana.acme.com` → 10.x). classifyPrivateUrl sees the name only, so the grounder resolves it
+// and skips any host with a private address. A failed or slow lookup counts as public: the fetch
+// that follows fails or answers on its own terms, which is what grounding reported before this.
+export async function resolvesPrivate(url: string): Promise<boolean> {
+  let host: string;
+  try {
+    host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>(resolve => {
+    timer = setTimeout(() => resolve(undefined), HOST_LOOKUP_TIMEOUT_MS);
+    timer.unref();
+  });
+  try {
+    const addresses = await Promise.race([lookup(host, { all: true }), timeout]);
+    return addresses?.some(a => classifyPrivateHost(a.address) !== undefined) ?? false;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -195,7 +270,9 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
     // this project's own model server is one. Silence is the honest report for an address we chose
     // not to check, and filtering first also stops two such URLs from eating the whole per-call cap.
     .filter(u => !classifyPrivateUrl(u))
-    .filter(u => !isDotlessHost(u));
+    .filter(u => !isDotlessHost(u))
+    .filter(u => !isInternalName(u))
+    .filter(u => !carriesSecret(u));
 
   // Grounding is harness-driven — the model never asked for these fetches — so it must answer to
   // the same per-turn cap as the ones it does ask for (fetch.ts). Without this, N edits in a turn
@@ -203,9 +280,18 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
   // the tool-call half of the traffic. Degrades quietly by taking what's left rather than
   // returning an error the way fetch_url does: nothing here was requested, so there is nobody to
   // report a budget refusal to, and a note saying so would be pure noise in the model's context.
+  // It also leaves the last FETCH_SLOTS_KEPT_FOR_MODEL slots to the model.
   const budget = ctx.webBudget?.fetches;
-  const room = budget ? Math.max(0, budget.max - budget.used) : Number.POSITIVE_INFINITY;
-  const candidates = eligible.slice(0, Math.min(MAX_URLS, room));
+  const room = budget
+    ? Math.max(0, budget.max - budget.used - FETCH_SLOTS_KEPT_FOR_MODEL)
+    : Number.POSITIVE_INFINITY;
+  const limit = Math.min(MAX_URLS, room);
+  if (limit === 0 || eligible.length === 0) return [];
+
+  // Resolved only once there is room to fetch, so a spent budget sends no DNS query either.
+  const checked = eligible.slice(0, MAX_HOST_LOOKUPS);
+  const internal = await Promise.all(checked.map(resolvesPrivate));
+  const candidates = checked.filter((_, i) => !internal[i]).slice(0, limit);
   if (candidates.length === 0) return [];
   if (budget) budget.used += candidates.length;
   candidates.forEach(u => seen?.add(u));
