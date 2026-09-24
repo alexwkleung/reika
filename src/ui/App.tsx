@@ -2222,6 +2222,9 @@ export function App() {
         onContextEstimate: t => setEstimatedContext(t),
         onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
           setShrink(counts);
+          // The last reported prompt size predates the shed/fold, and the gauge prefers it over
+          // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
+          setLastUsage(null);
           // Stamp the turn the way the status line counts turns (assistant messages so far), so
           // the saved event lines up with the `turn N` a reader sees in the header.
           const turn = messagesRef.current.filter(m => m.role === 'assistant').length + 1;
