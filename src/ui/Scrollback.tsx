@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
+import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message } from '../types.js';
@@ -247,7 +248,9 @@ export function tailText(
 // what Ink counts against the viewport.
 function streamingContentRows(text: string, width: number, bound: number): LiveRows {
   const pre = tailText(text, bound * 4);
-  return { rows: displayRows(renderMarkdown(pre.text, width), width), cut: pre.truncated };
+  // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
+  const prose = markProse(renderMarkdown(pre.text, width - CALL_MARKER_MEASURED), !pre.truncated);
+  return { rows: displayRows(prose, width), cut: pre.truncated };
 }
 
 // The live tail of a running command. The App accumulates the run's whole output, and scrubbing
@@ -313,6 +316,21 @@ const CALL_MARKER = '\u23FA\uFE0E ';
 const CALL_MARKER_WIDTH = 2;
 const CALL_MARKER_MEASURED = stringWidth(CALL_MARKER);
 const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
+
+// Assistant prose wears the tool-call glyph so a turn reads as one sequence of steps (#497), in
+// theme.secondary against a call's theme.tool: one shape told apart by brightness, the way `▎` is
+// by hue. Rendered markdown is budgeted CALL_MARKER_MEASURED narrower and every row hangs under
+// the marker's drawn width. A string, not nested <Text>: the live tail slices it by rows.
+export function markProse(rendered: string, withMarker = true): string {
+  const pad = ' '.repeat(CALL_MARKER_WIDTH);
+  return rendered
+    .split('\n')
+    .map((line, i) => {
+      if (i === 0 && withMarker) return chalk.hex(theme.secondary)(CALL_MARKER) + line;
+      return line ? pad + line : line;
+    })
+    .join('\n');
+}
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
@@ -426,7 +444,9 @@ function renderMessage(
         ) : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
-            <Text>{renderMarkdown(msg.content!, contentWidth(indent))}</Text>
+            <Text>
+              {markProse(renderMarkdown(msg.content!, contentWidth(indent) - CALL_MARKER_MEASURED))}
+            </Text>
           </Box>
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
