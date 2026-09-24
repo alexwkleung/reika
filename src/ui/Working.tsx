@@ -134,7 +134,7 @@ const SHIMMER_STEP = 2; // ticks per shimmer step (~160ms) — gentle, not strob
 const SHIMMER_PAUSE = 6; // dark frames after each sweep so it breathes.
 
 // Rotating words for the default label (#500, `REIKA_WORKING_WORDS`). Garden and perfumery
-// verbs, after the orchid the brand is drawn from. Only the idle-turn "Working" rotates: a harness state
+// verbs, after the orchid the brand is drawn from. Other verbs may be included for completeness. Only the idle-turn "Working" rotates: a harness state
 // (typechecking, loop recovery, the spin hint) is information and keeps its fixed wording.
 export const WORKING_WORDS = [
   'Working',
@@ -162,6 +162,32 @@ export const WORKING_WORDS = [
   'Macerating',
   'Blending',
   'Enfleuraging',
+  'Fragrancing',
+  'Reminiscenting',
+  'Perfuminating',
+  'Majesticating',
+  'Beautifying',
+  'Lovelifying',
+  'Cherrying',
+  'Cherryifying',
+  'Eleganting',
+  'Summering',
+  'Flowering',
+  'Exploring',
+  'Reikaing',
+  'Reikaifying',
+  'Reikaizing',
+  'Naturing',
+  'Leafing',
+  'Candying',
+  'Wising',
+  'Refining',
+  'Floraling',
+  'Adoring',
+  'Gracing',
+  'Floralizing',
+  'Cherryizing',
+  'Majesticizing',
 ] as const;
 // A word holds for this many full shimmer sweeps, so it swaps in the pause after a sweep
 // rather than mid-glow, and a longer word stays up as long as it takes to sweep it.
