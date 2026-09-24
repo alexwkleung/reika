@@ -93,6 +93,31 @@ function mediumHistory(): Message[] {
   return out;
 }
 
+// The other side of the manual trigger's band: the weight sits in tool payloads, which push the
+// estimate past the trigger (so a shed fires) but which the keep-budget walk prices at their summary
+// (so the fold afterwards finds nothing to fold). Exactly where a "still verbatim" claim would be
+// false. Sized by measurement: estimate ~8.6k tokens vs the 6.5k trigger, keep-walk ~6.3k chars vs
+// the 8.6k budget.
+function payloadHeavyHistory(): Message[] {
+  const out: Message[] = [];
+  for (let t = 0; t < 30; t++) {
+    out.push({ role: 'user', content: `task ${t}` });
+    out.push({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: `c${t}`, name: 'read', args: { path: `src/file${t}.ts` } }],
+    });
+    out.push({
+      role: 'tool',
+      callId: `c${t}`,
+      summary: `Read src/file${t}.ts lines 1-90 of 90`,
+      payload: 'x'.repeat(20000),
+    });
+    out.push({ role: 'assistant', content: `ok ${t} ${'y'.repeat(100)}` });
+  }
+  return out;
+}
+
 describe('manual compaction under the default prefix-stable regime (#481)', () => {
   it('writes the note and folds below the batch-age watermark, with no shed', async () => {
     h.scripted.length = 0;
@@ -127,5 +152,36 @@ describe('manual compaction under the default prefix-stable regime (#481)', () =
     expect(compacted?.content).toContain('Carry: refactoring A is open.');
     expect(notices.join('\n')).toMatch(/^\/compact — asking the model for a compaction note/);
     expect(notices.join('\n')).toMatch(/Context compacted \(fold 1\)/);
+  });
+
+  it('owns up to the shed when it fires and leaves nothing to fold', async () => {
+    h.scripted.length = 0;
+    // Shared spy: the earlier test's note request is still on the count.
+    vi.mocked(client.callModel).mockClear();
+    const history = payloadHeavyHistory();
+    const events: { kind: string }[] = [];
+    const notices: string[] = [];
+    await runTurn({
+      userInput: '/compact',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      manualCompact: true,
+      onMessage: m => {
+        if (m.role === 'system') notices.push(m.content);
+      },
+      onShrink: e => events.push(e as { kind: string }),
+    });
+
+    expect(events.filter(e => e.kind === 'age').length).toBeGreaterThan(0);
+    expect(events.filter(e => e.kind === 'fold')).toHaveLength(0);
+    expect(history.some(m => m.role === 'tool' && m.aged)).toBe(true);
+    // No note either: without a fold there is no recap for it to live in (#280's gate).
+    expect(vi.mocked(client.callModel)).toHaveBeenCalledTimes(0);
+    // The message must not claim everything is verbatim right after the shed summarized it.
+    expect(notices.join('\n')).toMatch(/Nothing to compact — the batch-age shed just summarized/);
+    expect(notices.join('\n')).not.toMatch(/verbatim/);
   });
 });

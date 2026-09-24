@@ -237,9 +237,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       events.onMessage?.(msg);
     };
     const signal = submit.onTurnStart?.() ?? submit.signal;
+    // Staged like App's pendingNotices: a receipt follows whatever opens the turn and never
+    // precedes it — the user echo normally, but a manual compaction (#481) has none. Hoisted out of
+    // try so the tail flush below can't drop it on a turn that emits no message at all.
+    const pending: Message[] = [];
     try {
-      // Staged like App's pendingNotices: a receipt follows the user echo, never precedes it.
-      const pending: Message[] = [];
       const retried = await retryWindowProbe();
       if (retried) pending.push(retried);
       await runTurn({
@@ -264,7 +266,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         onMessage: raw => {
           const msg: Message = raw.role === 'user' ? { ...raw, mode: recorded } : raw;
           emit(msg);
-          if (msg.role === 'user') for (const n of pending.splice(0)) emit(n);
+          for (const n of pending.splice(0)) emit(n);
         },
         onUsage: u => {
           lastUsage = u;
@@ -303,6 +305,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       if (!submit.onTurnError) throw e;
       submit.onTurnError(e as Error);
     } finally {
+      for (const n of pending.splice(0)) emit(n);
       submit.onTurnEnd?.();
     }
     return emitted;

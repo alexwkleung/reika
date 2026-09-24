@@ -2169,9 +2169,13 @@ export async function runTurn(opts: {
         opts.onMessage({
           role: 'system',
           tone: 'info',
-          content: window
-            ? 'Nothing to compact — the keep budget still holds the recent turns verbatim, so a recap would summarize nothing not already present.'
-            : 'Nothing to compact — no context window is known for this model, so there is no keep budget to fold against.',
+          content: !window
+            ? 'Nothing to compact — no context window is known for this model, so there is no keep budget to fold against.'
+            : agedThisRound
+              ? // "Nothing changed" would be a lie here: the age event above just summarized older
+                // tool output in this same pass.
+                'Nothing to compact — the batch-age shed just summarized the older tool output, and everything left fits the keep budget, so a recap would fold nothing.'
+              : 'Nothing to compact — the keep budget still holds the recent turns verbatim, so a recap would summarize nothing not already present.',
         });
       }
       // The gauge would otherwise keep the pre-fold fill until the next real turn (#481).
