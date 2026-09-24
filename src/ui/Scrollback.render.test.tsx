@@ -6,7 +6,7 @@ import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
-import { Scrollback } from './Scrollback.js';
+import { Scrollback, markProse } from './Scrollback.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -161,6 +161,9 @@ describe('Scrollback nested (subagent) messages', () => {
   const INDENT = 4;
   // The command chip's marginLeft, which the committed output sits behind.
   const CHIP = 4;
+  // Prose hangs under the `⏺︎ ` marker (#497): drawn 2 columns, budgeted as the 3 Ink measures.
+  const PROSE_HANG = 2;
+  const PROSE_MARKER_MEASURED = 3;
 
   const framePlusApp = (messages: Message[]): string => {
     const prev = process.stdout.columns;
@@ -228,7 +231,9 @@ describe('Scrollback nested (subagent) messages', () => {
     for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
     // Ink's own wrap was a no-op: the rows are the markdown's, wrapped to the nested width,
     // each sitting at the nested indent.
-    const expected = stripAnsi(renderMarkdown(content, COLS - 2 - INDENT))
+    const expected = stripAnsi(
+      markProse(renderMarkdown(content, COLS - 2 - INDENT - PROSE_MARKER_MEASURED)),
+    )
       .split('\n')
       .filter(l => l.trim())
       .map(l => ' '.repeat(1 + INDENT) + l);
@@ -237,7 +242,7 @@ describe('Scrollback nested (subagent) messages', () => {
     const bullets = rows.filter(r => r.trimStart().startsWith('•'));
     expect(bullets.length).toBe(2);
     const after = rows[rows.indexOf(bullets[0]) + 1];
-    expect(after).toMatch(new RegExp(`^ {${1 + INDENT + 4}}\\S`));
+    expect(after).toMatch(new RegExp(`^ {${1 + INDENT + PROSE_HANG + 4}}\\S`));
   });
 
   // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must
@@ -295,11 +300,60 @@ describe('Scrollback nested (subagent) messages', () => {
     });
     const rows = frame.split('\n').filter(l => l.trim());
     expect(rows.length).toBeGreaterThan(2);
-    // Content on the nested indent; the command tail one chip margin deeper, where its committed
-    // row lands under the `$ command` row (#461). Both wrap inside the nested box.
+    // Content's marker row on the nested indent and its continuations hanging under the marker
+    // (#497); the command tail one chip margin deeper, where its committed row lands under the
+    // `$ command` row (#461). Both wrap inside the nested box.
     const leads = rows.map(row => /^ */.exec(row)![0].length);
-    expect(new Set(leads)).toEqual(new Set([1 + INDENT, 1 + INDENT + CHIP]));
+    expect(new Set(leads)).toEqual(
+      new Set([1 + INDENT, 1 + INDENT + PROSE_HANG, 1 + INDENT + CHIP]),
+    );
     for (const row of rows) expect(row.trimEnd().length).toBeLessThanOrEqual(COLS);
+  });
+
+  // #497: the live tail must draw the marker and hang exactly where the committed message lands,
+  // or the prose jumps two columns when it commits (the #461 failure, for prose).
+  it('streams prose where it commits, marker and hang included, top level and nested', () => {
+    const text = [
+      'lorem ipsum dolor sit amet consectetur '.repeat(3).trim(),
+      '',
+      '- a bullet long enough to wrap onto a second row inside the box',
+    ].join('\n');
+    const rows = (frame: string): string[] =>
+      stripAnsi(frame)
+        .split('\n')
+        .filter(l => l.trim())
+        .map(l => l.trimEnd());
+    for (const nested of [false, true]) {
+      const live = rows(liveFrame({ streaming: text, streamingNested: nested }));
+      const committed = rows(framePlusApp([{ role: 'assistant', content: text, nested }]));
+      expect(live).toEqual(committed);
+      const lead = 1 + (nested ? INDENT : 0);
+      expect(committed[0]).toMatch(new RegExp(`^ {${lead}}⏺︎ lorem`));
+      expect(committed[1]).toMatch(new RegExp(`^ {${lead + PROSE_HANG}}\\S`));
+      for (const row of committed) expect(stringWidth(row)).toBeLessThanOrEqual(COLS);
+    }
+  });
+
+  // Prose and tool calls share the glyph and are told apart by brightness (#497).
+  it('draws the prose marker in secondary, not the tool-call color', () => {
+    const prevLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const frame = framePlusApp([
+        {
+          role: 'assistant',
+          content: 'Checking the caller next.',
+          toolCalls: [{ id: 'c1', name: 'read', args: { path: 'src/a.ts' } }],
+        },
+      ]);
+      const open = (hex: string) => chalk.hex(hex)('⏺︎').split('⏺︎')[0];
+      const proseRow = frame.split('\n').find(l => l.includes('Checking'))!;
+      const callRow = frame.split('\n').find(l => l.includes('src/a.ts'))!;
+      expect(proseRow).toContain(open(theme.secondary) + '⏺︎');
+      expect(callRow).toContain(open(theme.tool) + '⏺︎');
+    } finally {
+      chalk.level = prevLevel;
+    }
   });
 
   // #280: a compaction note's reasoning bar (committed and live) takes the info accent, matching
@@ -1150,19 +1204,19 @@ describe('Scrollback held "Worked for" line', () => {
 
   it('stays out of the frame while the spinner holds its rows', () => {
     const { lastFrame } = render(sb([answer], false));
-    expect(rows(lastFrame())).toEqual(['The answer.']);
+    expect(rows(lastFrame())).toEqual(['⏺︎ The answer.']);
   });
 
   it('draws below end-of-turn notices once idle', () => {
     const { lastFrame } = render(sb([answer, notice], true));
-    expect(rows(lastFrame())).toEqual(['The answer.', '❯ Typecheck passed.', '■ Worked for 5s']);
+    expect(rows(lastFrame())).toEqual(['⏺︎ The answer.', '❯ Typecheck passed.', '■ Worked for 5s']);
   });
 
   it('commits once, above the next user message', () => {
     const { rerender, lastFrame } = render(sb([answer, notice], true));
     rerender(sb([answer, notice, next], false));
     expect(rows(lastFrame())).toEqual([
-      'The answer.',
+      '⏺︎ The answer.',
       '❯ Typecheck passed.',
       '■ Worked for 5s',
       '▎ thanks',
@@ -1174,9 +1228,9 @@ describe('Scrollback held "Worked for" line', () => {
     const { rerender, lastFrame } = render(sb([answer], true));
     rerender(sb([answer, second], true));
     expect(rows(lastFrame())).toEqual([
-      'The answer.',
+      '⏺︎ The answer.',
       '■ Worked for 5s',
-      'Second.',
+      '⏺︎ Second.',
       '■ Worked for 2s',
     ]);
   });
@@ -1299,5 +1353,15 @@ describe('Scrollback tool rows after an output block', () => {
       bash('b1', 'echo one'),
     ]);
     expect(rowAbove(ls, '↳ Ran: echo one')).not.toBe('');
+  });
+});
+
+describe('markProse', () => {
+  // A pre-trimmed live tail starts mid-message: its first row must hang, not claim a new step.
+  it('indents without a marker when the start of the text is not in view', () => {
+    expect(stripAnsi(markProse('mid-sentence tail\n\nnext para', false))).toBe(
+      '  mid-sentence tail\n\n  next para',
+    );
+    expect(stripAnsi(markProse('start\nmore'))).toBe('⏺︎ start\n  more');
   });
 });
