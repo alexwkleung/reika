@@ -75,7 +75,7 @@ export function Approval({
           a sibling boundary, which would clip a long subject. Mirrors the chat's
           tool-call line — `● Bash` in tool grey, the subject receding in muted. */}
       <Text>
-        <Text bold color={theme.tool}>{`${DIALOG_MARKER} ${capitalize(request.tool)}`}</Text>
+        <Text color={theme.tool}>{`${DIALOG_MARKER} ${capitalize(request.tool)}`}</Text>
         <Text color={theme.secondary}>{`  ${request.subject}`}</Text>
       </Text>
       <Box flexDirection="column" marginTop={1}>
@@ -95,7 +95,7 @@ export function Approval({
       {warnings.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
           {warnings.map((w, i) => (
-            <Text key={i} bold color={theme.warning}>{`▲ ${w}`}</Text>
+            <Text key={i} color={theme.warning}>{`▲ ${w}`}</Text>
           ))}
         </Box>
       ) : null}
@@ -104,12 +104,8 @@ export function Approval({
           const selected = i === selectedIndex;
           return (
             <Text key={i}>
-              <Text bold color={selected ? theme.accent : undefined}>
-                {selected ? '› ' : '  '}
-              </Text>
-              <Text bold={selected} color={selected ? theme.accent : undefined}>
-                {label}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
+              <Text color={selected ? theme.accent : undefined}>{label}</Text>
             </Text>
           );
         })}

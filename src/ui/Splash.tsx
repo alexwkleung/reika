@@ -61,9 +61,7 @@ export function Splash({
         </Box>
         <Box flexDirection="column" marginLeft={gutter} width={columnWidth}>
           <Box>
-            <Text color={theme.accent} bold>
-              {`${MARK} ${NAME}`}
-            </Text>
+            <Text color={theme.accent}>{`${MARK} ${NAME}`}</Text>
             <Text color={theme.muted}>{` · ${tag}`}</Text>
           </Box>
           <Text>{model}</Text>

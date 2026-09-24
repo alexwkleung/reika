@@ -82,13 +82,9 @@ export function Question({
       marginX={-1}
       marginTop={1}
     >
-      <Text bold color={theme.tool}>
-        {'• Question'}
-      </Text>
-      {/* Bold so the question reads above the choices: unselected rows are plain, and the selected
-          one is set apart by the accent color, not by weight alone. */}
+      <Text color={theme.tool}>{'• Question'}</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text bold>{questionLines.slice(0, fit.questionRows).join('\n')}</Text>
+        <Text>{questionLines.slice(0, fit.questionRows).join('\n')}</Text>
         {hiddenQuestionRows > 0 ? (
           <Text color={theme.muted}>{`… ${hiddenQuestionRows} more lines`}</Text>
         ) : null}
@@ -115,13 +111,9 @@ export function Question({
                     sibling boundary, which would clip a long label — and labels here are
                     deliberately full sentences. */}
                 <Text>
-                  <Text bold color={selected ? theme.accent : undefined}>
-                    {selected ? '› ' : '  '}
-                  </Text>
+                  <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
                   <Text color={selected ? theme.accent : theme.secondary}>{num}</Text>
-                  <Text bold={selected} color={selected ? theme.accent : undefined}>
-                    {label}
-                  </Text>
+                  <Text color={selected ? theme.accent : undefined}>{label}</Text>
                   {tagAt >= 0 ? <Text color={theme.info}>{wrapped.slice(tagAt)}</Text> : null}
                 </Text>
                 {fit.showDescriptions && descriptions[i] ? (
@@ -131,16 +123,13 @@ export function Question({
             );
           })}
           <Text>
-            <Text bold color={selectedIndex === request.options.length ? theme.accent : undefined}>
+            <Text color={selectedIndex === request.options.length ? theme.accent : undefined}>
               {selectedIndex === request.options.length ? '› ' : '  '}
             </Text>
             <Text color={selectedIndex === request.options.length ? theme.accent : theme.secondary}>
               {`${request.options.length + 1}. `}
             </Text>
-            <Text
-              bold={selectedIndex === request.options.length}
-              color={selectedIndex === request.options.length ? theme.accent : theme.secondary}
-            >
+            <Text color={selectedIndex === request.options.length ? theme.accent : theme.secondary}>
               {ownAnswer}
             </Text>
           </Text>

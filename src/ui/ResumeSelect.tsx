@@ -38,9 +38,7 @@ export function ResumeSelect({
       marginTop={1}
     >
       <Text>
-        <Text bold color={theme.tool}>
-          {'• Resume'}
-        </Text>
+        <Text color={theme.tool}>{'• Resume'}</Text>
         <Text color={theme.secondary}>{`  ${heading} · ${entries.length}`}</Text>
       </Text>
       <Box flexDirection="column" marginTop={1}>
@@ -55,13 +53,9 @@ export function ResumeSelect({
           // One Text with nested runs: on wrap Ink drops the char at a sibling boundary.
           return (
             <Text key={e.path}>
-              <Text bold color={selected ? theme.accent : undefined}>
-                {selected ? '› ' : '  '}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
               <Text color={theme.muted}>{`${when}  `}</Text>
-              <Text bold={selected} color={selected ? theme.accent : undefined}>
-                {truncate(label, budget)}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{truncate(label, budget)}</Text>
               <Text color={theme.muted}>{tail}</Text>
             </Text>
           );

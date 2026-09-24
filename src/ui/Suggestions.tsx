@@ -54,10 +54,8 @@ export function Suggestions({
         // a sibling boundary, which would clip a long item.
         return (
           <Text key={start + j}>
-            <Text bold color={selected ? theme.accent : undefined}>
-              {selected ? '› ' : '  '}
-            </Text>
-            <Text bold={selected} color={selected ? theme.accent : undefined}>
+            <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
+            <Text color={selected ? theme.accent : undefined}>
               {truncate(item.display, maxDisplay)}
             </Text>
           </Text>

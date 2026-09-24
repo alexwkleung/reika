@@ -34,9 +34,7 @@ export function ModelSelect({
       marginTop={1}
     >
       <Text>
-        <Text bold color={theme.tool}>
-          {'• Model'}
-        </Text>
+        <Text color={theme.tool}>{'• Model'}</Text>
         <Text color={theme.secondary}>{`  ${currentModel}`}</Text>
       </Text>
       <Text color={theme.muted}>{`  base: ${baseURL}`}</Text>
@@ -58,12 +56,8 @@ export function ModelSelect({
           // char at a sibling boundary, which would clip a long label.
           return (
             <Text key={i}>
-              <Text bold color={selected ? theme.accent : undefined}>
-                {selected ? '› ' : '  '}
-              </Text>
-              <Text bold={selected} color={selected ? theme.accent : undefined}>
-                {truncate(label, maxDisplay)}
-              </Text>
+              <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
+              <Text color={selected ? theme.accent : undefined}>{truncate(label, maxDisplay)}</Text>
               {offBase ? <Text color={theme.muted}>{`  @ ${t.baseURL}`}</Text> : null}
               {t.adhoc ? <Text color={theme.muted}>{'  (not in config)'}</Text> : null}
               {t.active ? <Text color={theme.muted}>{'  (current)'}</Text> : null}
