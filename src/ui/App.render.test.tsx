@@ -51,9 +51,13 @@ const BUNDLE: ContextBundle = {
   skills: [],
 };
 
+// `setAtLaunch` reads the keys present in process.env at import (config.ts), so a developer shell
+// that exports REIKA_MODEL — common, it is how reika is run — counts as a launch pin and makes
+// startProfile ignore the saved profile below, failing the #365 resume test on their machine but
+// nowhere else. No test here asserts on a launch pin, so pin nothing and read the saved state.
 vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof ConfigModule>('../config.js');
-  return { ...actual, loadConfig: () => CONFIG };
+  return { ...actual, loadConfig: () => CONFIG, setAtLaunch: () => false };
 });
 
 vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
