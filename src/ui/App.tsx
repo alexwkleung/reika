@@ -2276,9 +2276,9 @@ export function App() {
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
             streamingTool={status === 'busy' ? streamingTool : ''}
-            streamingNested={subagentLive || noteLive}
+            streamingNested={subagentLive}
             streamingCommand={streamingToolName === 'bash'}
-            streamingBar={noteLive ? theme.info : undefined}
+            streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the
             // suggestion list and queue grow it mid-turn, and unbudgeted they push it to viewport

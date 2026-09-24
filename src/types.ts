@@ -48,8 +48,8 @@ export type Message =
       sources?: string[];
       nested?: boolean;
       // UI-only (#280): this message is a compaction note — the reply to the report round before a
-      // fold, shown nested with its reasoning kept as a trace, with the info accent on its bar so it
-      // reads as compaction work rather than the answer. Never enters model history.
+      // fold, drawn at the left edge as one info-barred block (reasoning, then the note) so it reads
+      // as a harness aside — not the answer, and not a subagent (#498). Never enters model history.
       compactionNote?: boolean;
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never

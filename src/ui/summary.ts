@@ -15,7 +15,9 @@ export function buildSummary(
 ): string {
   const elapsed = Math.floor((Date.now() - startedAt) / 1000);
   const userTurns = messages.filter(m => m.role === 'user' && !m.nested && !m.meta).length;
-  const assistantTurns = messages.filter(m => m.role === 'assistant' && !m.nested).length;
+  const assistantTurns = messages.filter(
+    m => m.role === 'assistant' && !m.nested && !m.compactionNote,
+  ).length;
 
   const toolCounts: Record<string, number> = {};
   const files = new Set<string>();

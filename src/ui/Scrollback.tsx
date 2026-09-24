@@ -18,7 +18,7 @@ export function Scrollback({
   streamingReasoning,
   streamingTool,
   streamingNested = false,
-  streamingBar,
+  streamingNote = false,
   streamingCommand = false,
   chromeRows = 0,
   showHeldWorked = true,
@@ -31,10 +31,9 @@ export function Scrollback({
   // at NESTED_INDENT so the streaming tail sits where its committed row will land a moment later,
   // instead of jumping left while live and right on commit.
   streamingNested?: boolean;
-  // Color for the live reasoning bar when the stream is something other than the reply — the
-  // compaction report round (#280) passes the info accent, matching its spinner, so the thinking
-  // on screen reads as compaction work. Undefined keeps the normal reasoning color.
-  streamingBar?: string;
+  // The stream is the compaction report round (#280): reasoning and note stream as one info-barred
+  // block, the shape the committed note takes, so it reads as a harness aside rather than the reply.
+  streamingNote?: boolean;
   // The live tail is a model-run `bash` command's output. That one commits inside the `$ command`
   // block MessageView draws at COMMAND_MARGIN (under the `↳ Ran: …` row), so it has to stream there
   // too or it sits 4 columns left of where it lands a moment later (#461). Anything else streaming
@@ -64,8 +63,11 @@ export function Scrollback({
     blocks.push({ kind: 'reasoning', live: { rows, cut: false }, fixed: 2 });
   }
   if (streaming.trim()) {
-    const live = streamingContentRows(streaming, liveContentWidth(indent), region);
-    blocks.push({ kind: 'content', live, fixed: 1 });
+    const live = streamingNote
+      ? streamingNoteRows(streaming, liveContentWidth(indent), region)
+      : streamingContentRows(streaming, liveContentWidth(indent), region);
+    // The note pays its label row and the bar row under it on top of the gap above it.
+    blocks.push({ kind: 'content', live, fixed: streamingNote ? 3 : 1 });
   }
   if (streamingTool) {
     const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
@@ -85,9 +87,15 @@ export function Scrollback({
               text={streamingReasoning}
               maxLines={shares[i]}
               indent={indent}
-              barColor={streamingBar}
+              barColor={streamingNote ? theme.info : undefined}
             />
           </Box>
+        ) : b.kind === 'content' && streamingNote ? (
+          <NoteBody
+            key={b.kind}
+            tail={fitTail(b.live, shares[i])}
+            joined={blocks[i - 1]?.kind === 'reasoning'}
+          />
         ) : (
           <StreamingTail
             key={b.kind}
@@ -253,6 +261,18 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
   return { rows: displayRows(prose, width), cut: pre.truncated };
 }
 
+// The live tail of a compaction note: its rows sit behind the bar, so no prose marker and two
+// columns narrower. Same pre-trim and measuring as streamingContentRows.
+function streamingNoteRows(text: string, width: number, bound: number): LiveRows {
+  const pre = tailText(text, bound * 4);
+  return { rows: noteBodyRows(pre.text, width), cut: pre.truncated };
+}
+
+function noteBodyRows(text: string, width: number): string[] {
+  const inner = width - NOTE_BAR.length;
+  return displayRows(renderMarkdown(text, inner), inner);
+}
+
 // The live tail of a running command. The App accumulates the run's whole output, and scrubbing
 // plus wrapping all of it on every 50ms flush is the cost the pre-trim avoids. trimEnd matches the
 // committed chip, which drops the trailing newline — left in, the live tail grows a blank row that
@@ -284,6 +304,68 @@ function StreamingTail({
     <Box flexDirection="column" marginTop={1} marginLeft={offset}>
       {tail.marker ? <Text color={theme.muted}>{'…'}</Text> : null}
       <Text color={muted ? theme.muted : undefined}>{tail.text}</Text>
+    </Box>
+  );
+}
+
+// A compaction note is one block behind a single info bar: its Thinking, then the note under a
+// label (#498). It sits at the left edge — a nested indent read as a subagent with no chip above
+// it — and wears no prose marker, which would make it read as the model's reply to the user.
+const NOTE_BAR = '▎ ';
+const NOTE_LABEL = 'Compaction note';
+
+function NoteBarRow({ children }: { children?: ReactElement | string }) {
+  return (
+    <Box>
+      <Text color={theme.info}>{NOTE_BAR}</Text>
+      {typeof children === 'string' ? <Text>{children}</Text> : (children ?? null)}
+    </Box>
+  );
+}
+
+// `joined`: a Thinking block sits directly above, so the gap between them is a bar row that keeps
+// the bar unbroken; alone, the block takes an ordinary margin.
+function NoteBody({ tail, joined }: { tail: { text: string; marker: boolean }; joined: boolean }) {
+  return (
+    <Box flexDirection="column" marginTop={joined ? 0 : 1}>
+      {joined ? <NoteBarRow /> : null}
+      <NoteBarRow>
+        {/* Louder than Thinking on purpose: this is the part that survives the fold. */}
+        <Text color={theme.info} bold>
+          {NOTE_LABEL}
+        </Text>
+      </NoteBarRow>
+      {/* Unlike Thinking's muted body, the note's is ordinary text that often opens on a bold
+          heading; without a gap the label reads as the note's own first line. */}
+      <NoteBarRow />
+      {tail.marker ? (
+        <NoteBarRow>
+          <Text color={theme.muted}>{'…'}</Text>
+        </NoteBarRow>
+      ) : null}
+      {tail.text.split('\n').map((row, i) => (
+        <NoteBarRow key={i}>{row}</NoteBarRow>
+      ))}
+    </Box>
+  );
+}
+
+function CompactionNoteBlock({
+  note,
+  reasoning,
+  indent,
+}: {
+  note: string;
+  reasoning?: string;
+  indent: number;
+}) {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {reasoning ? <ReasoningBlock text={reasoning} indent={indent} barColor={theme.info} /> : null}
+      <NoteBody
+        tail={{ text: noteBodyRows(note, contentWidth(indent)).join('\n'), marker: false }}
+        joined={!!reasoning}
+      />
     </Box>
   );
 }
@@ -427,6 +509,11 @@ function renderMessage(
       </Box>
     );
   }
+  if (msg.role === 'assistant' && msg.compactionNote) {
+    return (
+      <CompactionNoteBlock note={msg.content ?? ''} reasoning={msg.reasoning} indent={indent} />
+    );
+  }
   if (msg.role === 'assistant') {
     // Models sometimes emit whitespace-only content alongside reasoning + a tool
     // call; rendering that as a real line would add a blank row (with margins on
@@ -435,13 +522,7 @@ function renderMessage(
     const hasContent = !!msg.content?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? (
-          <ReasoningBlock
-            text={msg.reasoning}
-            indent={indent}
-            barColor={msg.compactionNote ? theme.info : undefined}
-          />
-        ) : null}
+        {msg.reasoning ? <ReasoningBlock text={msg.reasoning} indent={indent} /> : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>
