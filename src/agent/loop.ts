@@ -1903,11 +1903,11 @@ export async function runTurn(opts: {
     // and `wouldFold` on the history is the decision itself.
     let note: CompactionNote | undefined;
     // /compact (issue #481) reuses this exact gate on a manual trigger: the note round runs whenever
-    // a fold would, regardless of where the estimate sits against `shouldCompact` — that pressure
-    // check is exactly what a manual trigger bypasses. Plan mode stays excluded either way: its
-    // force-write/transform owns the compaction interaction there, and a manual note round would
-    // interleave with it; in plan mode /compact folds without a note (fold gate below), which keeps
-    // the fold still useful and the blast radius on that path zero.
+    // a fold would, regardless of where the estimate sits — `shouldCompact` and foldAfterShed's
+    // watermark half are both pressure checks, exactly what a manual trigger bypasses. Plan mode
+    // stays excluded either way: its force-write/transform owns the compaction interaction there,
+    // and a manual note round would interleave with it; in plan mode /compact folds without a note
+    // (fold gate below), which keeps the fold still useful and the blast radius on that path zero.
     const manualRound = !!opts.manualCompact;
     const autoReport =
       !manualRound &&
@@ -1931,6 +1931,8 @@ export async function runTurn(opts: {
             compactCalibration,
             opts.config.minGenTokens,
             !latchesFor(opts.config).reasoningRoundtrip,
+            // The manual trigger's only question is "would the fold remove anything" (#481).
+            !manualRound,
           )
         : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
     ) {
@@ -2167,10 +2169,13 @@ export async function runTurn(opts: {
         opts.onMessage({
           role: 'system',
           tone: 'info',
-          content:
-            'Nothing to compact — the keep budget still holds the recent turns verbatim, so a recap would summarize nothing not already present.',
+          content: window
+            ? 'Nothing to compact — the keep budget still holds the recent turns verbatim, so a recap would summarize nothing not already present.'
+            : 'Nothing to compact — no context window is known for this model, so there is no keep budget to fold against.',
         });
       }
+      // The gauge would otherwise keep the pre-fold fill until the next real turn (#481).
+      opts.onContextEstimate?.(Math.round(rawEstimate() * calibration));
       return;
     }
     const sentEstimate = rawEstimate(callHistory, callTools);

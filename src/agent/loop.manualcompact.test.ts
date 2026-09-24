@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
+import { compactThreshold } from './compaction.js';
 
 // /compact (issue #481): a manual compaction runs the loop's own shrink event — compaction-note
 // request, fold, session-cumulative counters — with no user turn behind it and no reply round after
@@ -11,7 +12,7 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 // automatic folds, and an automatic fold after it must advance the same counter.
 //
 // Pinned to the flag-off path: under REIKA_PREFIX_STABLE the batch-age shed runs first on this
-// history and is its own event (loop.shrink.prefixstable.test.ts covers that arm).
+// history and is its own event (loop.manualcompact.prefixstable.test.ts covers the default arm).
 const PRIOR_STABLE = process.env.REIKA_PREFIX_STABLE;
 process.env.REIKA_PREFIX_STABLE = '0';
 afterAll(() => {
@@ -99,10 +100,14 @@ describe('manual compaction (/compact)', () => {
     h.scripted.length = 0;
     // The turn's only model call: the note request. A reply round (or a pushed user turn) would
     // come back "done" here and the assertions below would catch either.
-    h.scripted.push({ content: 'Carry: the task is refactoring A. Open: B.', toolCalls: undefined });
+    h.scripted.push({
+      content: 'Carry: the task is refactoring A. Open: B.',
+      toolCalls: undefined,
+    });
     const history = bigHistory();
     const events: { kind: string; removed?: number; round?: number }[] = [];
     const notices: string[] = [];
+    const estimates: number[] = [];
     await runTurn({
       userInput: '/compact',
       history,
@@ -115,12 +120,11 @@ describe('manual compaction (/compact)', () => {
         if (m.role === 'system') notices.push(m.content);
       },
       onShrink: e => events.push(e as { kind: string }),
+      onContextEstimate: t => estimates.push(t),
     });
 
     expect(vi.mocked(client.callModel)).toHaveBeenCalledTimes(1);
-    expect(
-      history.some(m => (m as { content?: string }).content === '/compact'),
-    ).toBe(false);
+    expect(history.some(m => (m as { content?: string }).content === '/compact')).toBe(false);
     const fold = events.filter(e => e.kind === 'fold')[0];
     expect(fold).toBeDefined();
     expect(fold.round).toBe(0);
@@ -129,6 +133,9 @@ describe('manual compaction (/compact)', () => {
     expect(compacted?.content).toContain('Carry: the task is refactoring A.');
     expect(notices.join('\n')).toMatch(/^\/compact — asking the model for a compaction note/);
     expect(notices.join('\n')).toMatch(/Context compacted \(fold 1\)/);
+    // The gauge is refreshed from the folded history — under the trigger it just went below.
+    expect(estimates.length).toBe(1);
+    expect(estimates[0]).toBeLessThan(compactThreshold(8192, 1024));
   });
 
   it('advances the shared counter from priorShrink, in sync with automatic folds', async () => {
@@ -156,7 +163,10 @@ describe('manual compaction (/compact)', () => {
     const notices: string[] = [];
     await runTurn({
       userInput: '/compact',
-      history: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
+      history: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+      ],
       bundle: makeBundle(),
       config: makeConfig(),
       tools: [readTool],
@@ -167,6 +177,25 @@ describe('manual compaction (/compact)', () => {
       },
     });
     expect(notices.some(n => n.startsWith('Nothing to compact'))).toBe(true);
+    expect(notices.some(n => n.startsWith('Context compacted'))).toBe(false);
+  });
+
+  it('names the real blocker when no context window is known', async () => {
+    h.scripted.length = 0;
+    const notices: string[] = [];
+    await runTurn({
+      userInput: '/compact',
+      history: bigHistory(),
+      bundle: makeBundle(),
+      config: { ...makeConfig(), contextWindow: undefined },
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      manualCompact: true,
+      onMessage: m => {
+        if (m.role === 'system') notices.push(m.content);
+      },
+    });
+    expect(notices.some(n => n.includes('no context window is known'))).toBe(true);
     expect(notices.some(n => n.startsWith('Context compacted'))).toBe(false);
   });
 });

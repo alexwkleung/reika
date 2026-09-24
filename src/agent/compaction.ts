@@ -139,11 +139,15 @@ export function foldAfterShed(
   calibration = 1,
   minGen = DEFAULT_MIN_GEN_TOKENS,
   shedReasoning = true,
+  // `/compact` (#481) folds on request, not on pressure: its gate is only "will the fold remove
+  // anything", so it drops the watermark half of the event decision.
+  requirePressure = true,
 ): boolean {
   const copy = history.map(m => ({ ...m }));
   batchAgePayloads(copy, () => estimate(copy), contextWindow, minGen, shedReasoning);
   const target = compactThreshold(contextWindow, minGen) * AGE_LOW_FRACTION;
-  return estimate(copy) > target && wouldFold(copy, contextWindow, calibration, minGen);
+  if (requirePressure && estimate(copy) <= target) return false;
+  return wouldFold(copy, contextWindow, calibration, minGen);
 }
 
 export function compactHistory(

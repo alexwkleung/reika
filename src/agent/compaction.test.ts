@@ -759,6 +759,22 @@ describe('foldAfterShed (#426)', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(2000))];
     expect(foldAfterShed(history, estimate, 1000, 1, 0)).toBe(false);
   });
+
+  it('drops the watermark half on demand for /compact, keeping only the fold-point half (#481)', () => {
+    // Below the low watermark (the shed no-ops) but past the keep budget in older turns — exactly
+    // the manual trigger's case, where pressure is not the reason for folding.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('a', 'x'.repeat(400)),
+      { role: 'assistant', content: 'w'.repeat(700) },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'w'.repeat(700) },
+    ];
+    expect(estimate(history)).toBeLessThanOrEqual(compactThreshold(1000, 0) * AGE_LOW_FRACTION);
+    expect(wouldFold(history, 1000, 1, 0)).toBe(true);
+    expect(foldAfterShed(history, estimate, 1000, 1, 0)).toBe(false);
+    expect(foldAfterShed(history, estimate, 1000, 1, 0, true, false)).toBe(true);
+  });
 });
 
 describe('recap narrative and ranges (#247)', () => {
