@@ -174,9 +174,9 @@ export const askUserTool: Tool = {
       };
     }
 
-    // No one to ask (subagent, test, non-interactive). Degrade to a directive rather than hanging on
-    // a prompt that will never render.
-    if (!ctx.requestQuestion) {
+    // No one to ask (subagent, test, non-interactive, or a session switched unattended mid-way #526).
+    // Degrade to a directive rather than hanging on a prompt that will never be answered.
+    if (!ctx.requestQuestion || ctx.unattended) {
       return {
         summary: 'ask_user: no user available to answer',
         payload:

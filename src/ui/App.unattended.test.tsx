@@ -102,6 +102,16 @@ async function submit(app: Harness, text: string) {
   await tick(120);
 }
 
+// A slash command runs no turn, so there is nothing to wait for beyond the render.
+async function command(app: Harness, text: string) {
+  for (let i = 0; i < 200 && !plain(app.lastFrame()).includes(text); i++) {
+    app.stdin.write(text);
+    await tick(20);
+  }
+  app.stdin.write('\r');
+  await tick(150);
+}
+
 const toolNames = () => (runTurn.mock.calls[0][0] as TurnOpts).tools.map(t => t.name);
 
 describe('REIKA_UNATTENDED (#526)', () => {
@@ -133,6 +143,34 @@ describe('REIKA_UNATTENDED (#526)', () => {
     expect(plain(app.lastFrame())).toContain('Bash  /repo');
     expect(answers).toEqual([]);
     expect(toolNames()).toContain('ask_user');
+    app.unmount();
+  });
+
+  // /unattended (#526): the escape hatch for coming back — and the way to leave mid-session.
+  it('/unattended off puts the dialog back for the next action', async () => {
+    CONFIG.unattended = true;
+    const app = await mountApp();
+    await command(app, '/unattended off');
+    expect(plain(app.lastFrame())).toContain('unattended: off');
+    await submit(app, 'now run the commit');
+    expect(plain(app.lastFrame())).toContain('Bash  /repo');
+    expect(answers).toEqual([]);
+    // ask_user stays out: the tool list is fixed at launch, or the cached prefix would be rewritten.
+    expect(toolNames()).not.toContain('ask_user');
+    app.unmount();
+  });
+
+  it('/unattended on declines mid-session and tells the turn it is unattended', async () => {
+    const app = await mountApp();
+    expect(plain(app.lastFrame())).not.toContain('auto approve · unattended');
+    await command(app, '/unattended on');
+    expect(plain(app.lastFrame())).toContain('unattended: on');
+    expect(plain(app.lastFrame())).toContain('auto approve · unattended');
+    await submit(app, 'set up the project');
+    expect(answers).toEqual([false]);
+    expect(plain(app.lastFrame())).not.toContain('Bash  /repo');
+    const opts = runTurn.mock.calls[0][0] as TurnOpts & { isUnattended?: () => boolean };
+    expect(opts.isUnattended?.()).toBe(true);
     app.unmount();
   });
 });
