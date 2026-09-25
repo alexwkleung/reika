@@ -1,6 +1,9 @@
-# Records docs/demo.gif. Install VHS (`brew install vhs`), start your model server, then:
+# Records docs/demo.gif. Install VHS (`brew install vhs`), start your model server, then run
+# from the repo root:
 #   vhs docs/demo.tape
-# The demo runs in DEMO_DIR, so point it at a small throwaway project, not this repo.
+# Each run copies docs/demo/project to a fresh temp dir, so every take starts from the same state
+# and the model's edits never touch this repo. The fixture is a git repo there so reika's edit
+# diffs have a baseline.
 
 Output docs/demo.gif
 
@@ -12,13 +15,15 @@ Set Padding 20
 Set TypingSpeed 45ms
 
 Hide
-Type "cd ${DEMO_DIR:-/tmp/reika-demo} && clear && reika"
+Type "rm -rf /tmp/reika-demo && cp -R docs/demo/project /tmp/reika-demo && cd /tmp/reika-demo"
+Enter
+Type "git init -q && git add -A && git commit -qm init && clear && reika"
 Enter
 Wait+Screen@60s /ctrl-c to exit/
 Show
 
 Sleep 1s
-Type "the retry helper in src/fetch.ts never backs off, fix it and add a test"
+Type "withRetry in src/fetch.js never backs off, make it exponential and add a test for the delays"
 Sleep 500ms
 Enter
 Sleep 3s
