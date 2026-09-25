@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { sweepStaleSpills } from './tools/_spill.js';
-import { HEADLESS_USAGE, parseHeadlessArgs } from './headlessargs.js';
+import { USAGE, parseHeadlessArgs } from './headlessargs.js';
+import { VERSION } from './version.js';
 
 // Spill directories are removed on a normal exit, but SIGHUP (closing the terminal window),
 // SIGTERM, SIGKILL and hard crashes never reach that handler (#224). The sweep is the cleanup
@@ -19,6 +20,17 @@ try {
   process.exit(2);
 }
 
+// Answered before either front-end loads, so neither needs a model, a config or a terminal — the
+// shape a package manager's install check runs them in.
+if (headless?.version) {
+  process.stdout.write(`${VERSION}\n`);
+  process.exit(0);
+}
+if (headless?.help) {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
+}
+
 if (headless) {
   const { runHeadless } = await import('./headless.js');
   const code = await runHeadless(headless, {
@@ -26,7 +38,7 @@ if (headless) {
     stderr: text => process.stderr.write(text),
     readStdin: async () => {
       if (process.stdin.isTTY) {
-        process.stderr.write(`reika: -p needs a prompt or piped stdin\n${HEADLESS_USAGE}\n`);
+        process.stderr.write(`reika: -p needs a prompt or piped stdin\n${USAGE}\n`);
         return '';
       }
       let text = '';

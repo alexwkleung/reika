@@ -48,6 +48,18 @@ describe('parseHeadlessArgs', () => {
 
   it('--help is headless on its own', () => {
     expect(parseHeadlessArgs(['--help'])?.help).toBe(true);
+    expect(parseHeadlessArgs(['-h'])?.help).toBe(true);
+  });
+
+  it('--version is headless on its own', () => {
+    expect(parseHeadlessArgs(['--version'])?.version).toBe(true);
+    expect(parseHeadlessArgs(['-v'])?.version).toBe(true);
+  });
+
+  it('a prompt mentioning --version is still a prompt', () => {
+    const args = parseHeadlessArgs(['-p', 'add a --version flag']);
+    expect(args?.prompt).toBe('add a --version flag');
+    expect(args?.version).toBe(false);
   });
 });
 
