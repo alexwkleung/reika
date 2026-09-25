@@ -32,7 +32,12 @@ import {
   startMode,
   startProfile,
 } from '../laststate.js';
-import { autoApproveForced, autoApproves, effectiveAutoApprove } from '../approval.js';
+import {
+  autoApproveForced,
+  autoApproves,
+  effectiveAutoApprove,
+  formatUnattendedDeclines,
+} from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugLog } from '../debug.js';
@@ -333,6 +338,8 @@ export function App() {
   confirmSelectedRef.current = confirmSelected;
   const sessionAutoApproveRef = useRef<boolean | null>(null);
   sessionAutoApproveRef.current = sessionAutoApprove;
+  // What this turn declined under REIKA_UNATTENDED, rolled up into one notice when it ends (#526).
+  const unattendedDeclinesRef = useRef<ApprovalRequest[]>([]);
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
   const activeProfileRef = useRef('default');
@@ -1063,6 +1070,7 @@ export function App() {
     // Unattended (#526): a dialog nobody answers stalls the turn until morning. Declined the way
     // headless declines; the tool's own summary is the receipt, and says why.
     if (config?.unattended) {
+      unattendedDeclinesRef.current.push(req);
       setApprovals(a => ({ ...a, declined: a.declined + 1 }));
       return Promise.resolve(false);
     }
@@ -2117,6 +2125,12 @@ export function App() {
         setMessages(prev => [...prev, { role: 'error', content: e.message }]);
       },
       onTurnEnd: () => {
+        // After the final reply, so a glance at the end of a night's scrollback shows what is left.
+        const declined = formatUnattendedDeclines(unattendedDeclinesRef.current);
+        unattendedDeclinesRef.current = [];
+        if (declined) {
+          setMessages(prev => [...prev, { role: 'system', content: declined, tone: 'warn' }]);
+        }
         if (flushTimerRef.current !== null) {
           clearTimeout(flushTimerRef.current);
           flushTimerRef.current = null;

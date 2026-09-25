@@ -119,6 +119,11 @@ describe('REIKA_UNATTENDED (#526)', () => {
     expect(answers).toEqual([false]);
     expect(plain(app.lastFrame())).not.toContain('Bash  /repo');
     expect(toolNames()).not.toContain('ask_user');
+    // The harness's own roll-up, after the turn — complete without asking the model to recall it.
+    for (let i = 0; i < 80 && !plain(app.lastFrame()).includes('Declined while'); i++)
+      await tick(25);
+    expect(plain(app.lastFrame())).toContain('Declined while unattended — 1 action left for you:');
+    expect(plain(app.lastFrame())).toContain('bash: npm install left-pad');
     app.unmount();
   });
 

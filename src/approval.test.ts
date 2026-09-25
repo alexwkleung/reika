@@ -3,6 +3,7 @@ import {
   autoApproveForced,
   autoApproves,
   declineSummary,
+  formatUnattendedDeclines,
   effectiveAutoApprove,
 } from './approval.js';
 import type { ApprovalRequest } from './types.js';
@@ -83,5 +84,25 @@ describe('declineSummary (#526)', () => {
     expect(s).toContain('npm install');
     expect(s).toContain('unattended');
     expect(s).toContain('Carry on without it');
+  });
+});
+
+describe('formatUnattendedDeclines (#526)', () => {
+  it('is null when nothing was declined', () => {
+    expect(formatUnattendedDeclines([])).toBeNull();
+  });
+
+  it('lists each decline: the command for bash, the path for edit and write', () => {
+    const out = formatUnattendedDeclines([
+      { tool: 'bash', subject: '/repo', preview: 'npm install left-pad\nsecond line' },
+      { tool: 'write', subject: '~/.zshrc', preview: '+ export X=1' },
+    ]);
+    expect(out).toBe(
+      [
+        'Declined while unattended — 2 actions left for you:',
+        '  bash: npm install left-pad',
+        '  write: ~/.zshrc',
+      ].join('\n'),
+    );
   });
 });

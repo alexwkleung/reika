@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { buildSystemPrompt } from './prompt.js';
+import { promptGates } from './loop.js';
 import { defaultTools, planTools } from '../tools/index.js';
 import type { ContextBundle } from '../types.js';
 
@@ -228,5 +229,46 @@ describe('agent prompt sandbox sentence (#163)', () => {
     expect(neither).not.toContain('fetch_url');
     expect(neither).not.toContain('search for a query');
     expect(neither).toContain('tell the user');
+  });
+});
+
+// Unattended (#526): ask_user is gone, and its slot says to decide and name the choice — the one
+// part of an unattended run only the model can report.
+describe('decide-alone rule (#526)', () => {
+  const flat = (o: Parameters<typeof buildSystemPrompt>[0]): string =>
+    buildSystemPrompt(o).replace(/\s+/g, ' ');
+
+  it('takes the ask rule slot in agent, minimal and plan prompts', () => {
+    const agent = flat({ bundle, mode: 'agent', decideAlone: true });
+    expect(agent).toContain('No one can answer questions this session');
+    expect(agent).toContain('name each such choice in your final reply');
+    expect(agent).not.toContain('ask_user');
+    expect(flat({ bundle, mode: 'agent', minimal: true, decideAlone: true })).toContain(
+      'No one can answer questions this session',
+    );
+    const plan = flat({ bundle, mode: 'plan', decideAlone: true });
+    expect(plan).toContain('state that choice at the top of the plan');
+    expect(plan).not.toContain('ask_user');
+  });
+
+  it('leaves the prompt byte-identical when off', () => {
+    for (const mode of ['agent', 'plan'] as const) {
+      expect(buildSystemPrompt({ bundle, mode, decideAlone: false })).toBe(
+        buildSystemPrompt({ bundle, mode }),
+      );
+    }
+  });
+});
+
+// One gate for runTurn and the warm prefix; on only when unattended AND ask_user is absent.
+describe('promptGates decideAlone (#526)', () => {
+  const withAsk = defaultTools();
+  const noAsk = withAsk.filter(t => t.name !== 'ask_user');
+
+  it('is on only unattended with no ask_user', () => {
+    expect(promptGates(noAsk, false, true).decideAlone).toBe(true);
+    expect(promptGates(withAsk, false, true).decideAlone).toBe(false);
+    expect(promptGates(noAsk, false, false).decideAlone).toBe(false);
+    expect(promptGates(noAsk, false).decideAlone).toBe(false);
   });
 });

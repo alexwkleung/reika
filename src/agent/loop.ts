@@ -643,13 +643,15 @@ export function prefixStableActive(contextWindow?: number): boolean {
 export function promptGates(
   tools: Tool[],
   sandbox: boolean,
+  unattended?: boolean,
 ): Pick<
   Parameters<typeof buildSystemPrompt>[0],
-  'canAsk' | 'canSubagent' | 'sandbox' | 'canFetch' | 'canSearch'
+  'canAsk' | 'decideAlone' | 'canSubagent' | 'sandbox' | 'canFetch' | 'canSearch'
 > {
   const has = (name: string): boolean => tools.some(t => t.name === name);
   return {
     canAsk: has('ask_user'),
+    decideAlone: unattended === true && !has('ask_user'),
     canSubagent: has('subagent'),
     sandbox: sandbox && has('bash') && sandboxExecAvailable(),
     canFetch: has('fetch_url'),
@@ -663,6 +665,8 @@ export function buildRoundZeroPrefix(opts: {
   promptMode: PromptMode;
   // `config.sandbox`, for the agent prompt's sandbox sentence — same gate as runTurn's.
   sandbox: boolean;
+  // `config.unattended`, for the decide-alone line (#526) — same gate as runTurn's.
+  unattended?: boolean;
   // Minimal mode (#391). Rides alongside promptMode rather than replacing it — a minimal turn IS
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
@@ -681,7 +685,7 @@ export function buildRoundZeroPrefix(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    ...promptGates(opts.tools, opts.sandbox),
+    ...promptGates(opts.tools, opts.sandbox, opts.unattended),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
   const planSteps = opts.promptMode === 'agent' ? seedPlanProgress(opts.history) : null;
@@ -1178,7 +1182,7 @@ export async function runTurn(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
-    ...promptGates(opts.tools, opts.config.sandbox),
+    ...promptGates(opts.tools, opts.config.sandbox, opts.config.unattended),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
