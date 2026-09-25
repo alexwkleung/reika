@@ -454,18 +454,22 @@ export function clampToViewport(
   };
 }
 
+// Wraps like a letter, not a space, so the cursor cell stays on the row of the word it ends.
+const NO_BREAK_SPACE = String.fromCharCode(0xa0);
+
 function renderWithCursor(value: string, cursor: number, visible: boolean): string {
-  if (!visible) return value;
   const before = value.slice(0, cursor);
   const ch = value[cursor];
   // At a line break or the end of the buffer there's no glyph to invert, so the
   // block would land on a zero-width newline and vanish. Draw it over a space
-  // instead, and re-emit the newline after it so the line break is preserved. A no-break space,
-  // so the wrap can't break between the word being typed and the cursor: with a plain space the
-  // cursor dropped to the next row alone, and the word followed it one keystroke later.
-  const at = ch === undefined || ch === '\n' ? ' ' : ch;
+  // instead, and re-emit the newline after it so the line break is preserved.
+  // The cell is drawn in both blink states, only its inverse toggles: dropping it on the off
+  // phase changed the text's width, and at the wrap edge the word jumped rows twice a second.
+  const synthetic = ch === undefined || ch === '\n';
+  if (!visible && !synthetic) return value;
+  const at = synthetic ? NO_BREAK_SPACE : ch;
   const after = ch === '\n' ? '\n' + value.slice(cursor + 1) : value.slice(cursor + 1);
-  return before + INVERSE_ON + at + INVERSE_OFF + after;
+  return visible ? before + INVERSE_ON + at + INVERSE_OFF + after : before + at + after;
 }
 
 function wordForward(value: string, cursor: number): number {

@@ -196,4 +196,23 @@ describe('typing up to the wrap edge', () => {
       for (const row of body.slice(1)) expect(row).not.toMatch(/^│\s*│$/);
     }
   });
+
+  it('lays the wrap edge out the same in both blink phases', async () => {
+    const { stdin, lastFrame } = render(
+      <Box paddingX={1}>
+        <Harness withPasteStore={false} />
+      </Box>,
+    );
+    await tick();
+    // Wide enough that the word fits the first row and only the cursor cell spills over.
+    stdin.write(
+      'the quick brown fox jumps over the lazy dog and keeps running along the river bank until some',
+    );
+    await tick();
+    const on = lastFrame() ?? '';
+    await new Promise(r => setTimeout(r, 600));
+    const off = lastFrame() ?? '';
+    expect(off).not.toBe(on);
+    expect(plain(off)).toBe(plain(on));
+  });
 });
