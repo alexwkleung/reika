@@ -9,7 +9,7 @@ import { matchSkill, shouldAutoInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { debugLog } from './debug.js';
-import { HEADLESS_USAGE, type HeadlessArgs, type HeadlessMode } from './headlessargs.js';
+import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
 import type { ApprovalRequest, Config, ContextBundle, Message } from './types.js';
 
@@ -78,10 +78,6 @@ export async function buildHeadlessInput(
 }
 
 export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<number> {
-  if (args.help) {
-    io.stdout(`${HEADLESS_USAGE}\n`);
-    return 0;
-  }
   const prompt = (args.prompt ?? (await io.readStdin())).trim();
   if (!prompt) {
     io.stderr('reika: no prompt given\n');
