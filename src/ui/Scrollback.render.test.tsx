@@ -122,6 +122,14 @@ describe('Scrollback system-message tone', () => {
     expect(frame).toContain('save failed: EACCES ~/x.jsonl');
     expect(frame).not.toContain(homedir());
   });
+
+  // An error takes prose's row shape, not a box; the label keeps it apart from a reply when color
+  // is off, and the body is plain text so a JSON 400 body isn't read as markdown.
+  it('renders an error as a marked row with a label, body verbatim', () => {
+    const frame = frameFor({ role: 'error', content: '400 {"error":"*bad* `req`"}' });
+    expect(frame).toContain('⏺︎ Error: 400 {"error":"*bad* `req`"}');
+    expect(frame).not.toContain('╭');
+  });
 });
 
 // Shell mode ran the same commands as the bash tool through the same terminal but rendered them
