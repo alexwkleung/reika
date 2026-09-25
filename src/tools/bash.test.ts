@@ -554,6 +554,22 @@ describe('bashTool — sandbox composition', () => {
     }
   });
 
+  // #526: nobody declined it, so the summary must not say the user did.
+  it('reports an unattended decline as nobody there to approve, and still does not run it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const r = await bashTool.run(
+        { command: 'npm install && touch ran.txt' },
+        { cwd: dir, requestApproval: async () => false, unattended: true },
+      );
+      expect(r.summary).not.toContain('declined by user');
+      expect(r.summary).toContain('unattended');
+      await expect(readFile(join(dir, 'ran.txt'), 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // The receipt is once per cwd (the confinement is a session property, and a line under every chip
   // doubled the scrollback), and the write lands because WORKDIR is the realpath'd cwd — the
   // /tmp -> /private/tmp trap that made every create fail.

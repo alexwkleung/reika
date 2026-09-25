@@ -1,4 +1,4 @@
-import type { ApprovalRequest, AutoApproveMode, Config } from './types.js';
+import type { ApprovalRequest, AutoApproveMode, Config, ToolContext } from './types.js';
 
 // Whether an approval request runs without asking. The one rule both front-ends share (#52):
 // `safe` approves anything the danger scan didn't flag, `off` approves nothing, and `bypass`
@@ -30,4 +30,17 @@ export function effectiveAutoApprove(
   if (autoApproveForced(config)) return config.autoApprove;
   const on = session ?? config.autoApprove === 'safe';
   return on ? 'safe' : 'off';
+}
+
+// What a tool reports when its approval came back false. `target` is the tail the summary always
+// carried (`: <command>`, ` for <path>`), so the attended wording is unchanged. Unattended (#526)
+// the decline is nobody's answer, and saying "by user" makes a model stop or ask again; the
+// wording steers it to go on without the step and leave it for the human.
+export function declineSummary(
+  action: string,
+  target: string,
+  ctx: Pick<ToolContext, 'unattended'>,
+): string {
+  if (!ctx.unattended) return `${action} declined by user${target}`;
+  return `${action} not run${target} — unattended session, nobody to approve it. Carry on without it, or leave it for the user in your final reply.`;
 }

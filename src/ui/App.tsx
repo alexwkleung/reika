@@ -421,7 +421,13 @@ export function App() {
         // the probe and the splash so both describe the model the session actually opens on.
         const profile = startProfile(cfg, loadLastState());
         // Bootstrap, the window probe (#417) and identity detection run concurrently inside.
-        const s = await createSession({ cwd: process.cwd(), config: cfg, profile });
+        // Unattended (#526): ask_user would open a dialog nobody answers, so it is not offered.
+        const s = await createSession({
+          cwd: process.cwd(),
+          config: cfg,
+          profile,
+          canAsk: !cfg.unattended,
+        });
         const b = s.bundle;
         sessionRef.current = s;
         setSession(s);
@@ -1054,6 +1060,12 @@ export function App() {
       setApprovals(a => ({ ...a, approved: a.approved + 1 }));
       return Promise.resolve(true);
     }
+    // Unattended (#526): a dialog nobody answers stalls the turn until morning. Declined the way
+    // headless declines; the tool's own summary is the receipt, and says why.
+    if (config?.unattended) {
+      setApprovals(a => ({ ...a, declined: a.declined + 1 }));
+      return Promise.resolve(false);
+    }
     setApprovalSelected(0);
     return new Promise(resolve => {
       const wrappedResolve = (allow: boolean): void => {
@@ -1468,6 +1480,9 @@ export function App() {
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
           `  source: ${source}`,
+          ...(config?.unattended
+            ? ['  unattended: REIKA_UNATTENDED=1 — anything that would prompt is declined instead']
+            : []),
           '',
           envOn
             ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
@@ -2439,6 +2454,7 @@ export function App() {
                   ? 'safe'
                   : undefined
             }
+            unattended={config?.unattended}
             modeTag={mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />

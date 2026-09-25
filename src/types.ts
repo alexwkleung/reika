@@ -321,6 +321,9 @@ export type ToolContext = {
   // sandbox is on by default and only `REIKA_SANDBOX=0` turns it off — so a caller that predates the
   // flag (a test, a subagent) gets the default rather than silently opting out.
   sandbox?: boolean;
+  // Threaded from Config (#526): a decline then means nobody was there to approve, not that the user
+  // refused, and the summary has to say which — a model told "declined by user" stops or re-asks.
+  unattended?: boolean;
 };
 
 export type ToolParameters = {
@@ -438,6 +441,10 @@ export type Config = {
   // True when REIKA_AUTO_APPROVE was set: `safe` is the default when it isn't, and the session
   // toggle (/approvals) has to know whether a `safe` came from the env or from that default.
   autoApproveExplicit?: boolean;
+  // Nobody is at the keyboard (REIKA_UNATTENDED=1, #526): whatever the approval policy would have
+  // prompted for is declined instead, and ask_user is not offered — headless's rule, in the TUI.
+  // Launch-only, like `bypass`, so the tool list (part of the cached prefix) never changes mid-session.
+  unattended?: boolean;
   subagentModel?: string;
   subagentBaseURL?: string;
   subagentApiKey?: string;

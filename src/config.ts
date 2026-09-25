@@ -81,6 +81,7 @@ export function loadConfig(): Config {
     repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
+    unattended: process.env.REIKA_UNATTENDED === '1',
     subagentModel: emptyToUndefined(process.env.REIKA_SUBAGENT_MODEL),
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),

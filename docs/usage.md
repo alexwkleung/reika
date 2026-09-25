@@ -36,6 +36,8 @@ npm run -s dev -- -p "..."                           # from a checkout: -- so np
 - **Exit status**: 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted (ctrl-c aborts the turn cleanly).
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
+For a TUI session left to run on its own — a long turn grinding while you do something else, or overnight — `REIKA_UNATTENDED=1 reika` gives the TUI the same approval rule: whatever would prompt is declined, the model is told nobody was there to approve, and `ask_user` isn't offered, so the turn never stalls on a dialog. The status bar shows `unattended` while it's on. How far the model gets on its own depends on the model and the context window; the harness only guarantees it won't wait on you.
+
 ## Slash commands
 
 Type `/` in the input to see suggestions. Highlights:

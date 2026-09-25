@@ -5,6 +5,7 @@ import type { Tool } from '../types.js';
 import { buildWriteDiff } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
 import { groundUrls } from './_urls.js';
+import { declineSummary } from '../approval.js';
 
 export const writeTool: Tool = {
   name: 'write',
@@ -59,7 +60,7 @@ export const writeTool: Tool = {
         startLine: 1,
         warnings: [OUTSIDE_PROJECT_WARNING],
       });
-      if (!ok) return { summary: `Write declined by user for ${display}` };
+      if (!ok) return { summary: declineSummary('Write', ` for ${display}`, ctx) };
       approved = true;
     }
 
@@ -75,7 +76,7 @@ export const writeTool: Tool = {
         preview: diffText,
         startLine: 1,
       });
-      if (!ok) return { summary: `Write declined by user for ${display}` };
+      if (!ok) return { summary: declineSummary('Write', ` for ${display}`, ctx) };
     }
 
     await mkdir(dirname(full), { recursive: true });

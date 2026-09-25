@@ -27,6 +27,7 @@ export function Status({
   decodeRate,
   pr,
   autoApprove,
+  unattended,
   modeTag,
   exitArmed,
 }: {
@@ -50,6 +51,9 @@ export function Status({
   decodeRate?: number;
   pr?: number | null;
   autoApprove?: 'safe' | 'bypass';
+  // REIKA_UNATTENDED (#526). A standing chip because the mode silently declines: left on by
+  // accident during the day, it refuses a command the user would have approved.
+  unattended?: boolean;
   modeTag?: string;
   exitArmed?: boolean;
 }) {
@@ -96,6 +100,10 @@ export function Status({
         color: autoApprove === 'bypass' ? theme.error : theme.autoApprove,
       },
     ]);
+  }
+  // Not under bypass: nothing prompts there, so there is nothing for unattended to decline.
+  if (unattended && autoApprove !== 'bypass' && modeTag !== 'chat' && modeTag !== 'shell') {
+    chips.push([{ text: 'unattended', color: theme.autoApprove }]);
   }
   chips.push(muted(model), muted(`turn ${turns}`), muted(`${status}${timer}`));
   if (tokens) chips.push(muted(tokens));

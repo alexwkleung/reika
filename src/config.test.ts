@@ -752,3 +752,24 @@ describe('REIKA_SANDBOX (#163)', () => {
     }
   });
 });
+
+describe('REIKA_UNATTENDED (#526)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+    delete process.env.REIKA_UNATTENDED;
+  });
+
+  it('unset is off', () => {
+    expect(loadConfig().unattended).toBe(false);
+  });
+
+  // Opt-in, and only by the exact value: it declines things, so a typo must not turn it on.
+  it('only =1 turns it on', () => {
+    process.env.REIKA_UNATTENDED = '1';
+    expect(loadConfig().unattended).toBe(true);
+    for (const v of ['0', 'true', 'yes', '']) {
+      process.env.REIKA_UNATTENDED = v;
+      expect(loadConfig().unattended, v).toBe(false);
+    }
+  });
+});

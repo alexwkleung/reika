@@ -85,7 +85,8 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   }
 
   // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
-  const loaded = loadConfig();
+  // Always unattended: nobody can answer a prompt here, so a decline must not read as the user's.
+  const loaded = { ...loadConfig(), unattended: true };
   const session = await createSession({
     cwd: process.cwd(),
     config: loaded,

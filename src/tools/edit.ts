@@ -5,6 +5,7 @@ import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
 import { groundUrls } from './_urls.js';
+import { declineSummary } from '../approval.js';
 
 export const editTool: Tool = {
   name: 'edit',
@@ -71,7 +72,7 @@ export const editTool: Tool = {
         preview: intentDiff(oldStr, newStr),
         warnings: [OUTSIDE_PROJECT_WARNING],
       });
-      if (!ok) return { summary: `Edit declined by user for ${display}` };
+      if (!ok) return { summary: declineSummary('Edit', ` for ${display}`, ctx) };
       approvedOutside = true;
     }
 
@@ -142,7 +143,7 @@ export const editTool: Tool = {
         preview: diffText,
         startLine,
       });
-      if (!ok) return { summary: `Edit declined by user for ${display}` };
+      if (!ok) return { summary: declineSummary('Edit', ` for ${display}`, ctx) };
     }
 
     // `next` is built from the bytes read above, and the approval may have waited minutes. Anything
