@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
+import { declineSummary } from '../approval.js';
 import {
   SANDBOX_EXEC_ERROR_PREFIX,
   SANDBOX_PROFILE_ERROR_CODE,
@@ -70,7 +71,7 @@ export const bashTool: Tool = {
         preview: command,
         warnings: warnings.length > 0 ? warnings : undefined,
       });
-      if (!ok) return { summary: `Bash declined by user: ${command}` };
+      if (!ok) return { summary: declineSummary('Bash', `: ${command}`, ctx) };
     }
     const sandbox = decideSandbox(command, warnings, ctx);
 

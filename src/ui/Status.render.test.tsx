@@ -57,6 +57,25 @@ describe('Status', () => {
     expect(lastFrame()).toContain('auto approve');
   });
 
+  it('shows the unattended chip beside the approval chip (#526)', () => {
+    const { lastFrame } = render(
+      <Status {...BASE} modeTag="agent" autoApprove="safe" unattended />,
+    );
+    expect(lastFrame()).toContain('auto approve · unattended');
+  });
+
+  // Nothing prompts under bypass, so there is nothing for unattended to decline.
+  it('hides the unattended chip under bypass and where no tool asks', () => {
+    for (const props of [
+      { modeTag: 'agent', autoApprove: 'bypass' as const },
+      { modeTag: 'chat' },
+      { modeTag: 'shell' },
+    ]) {
+      const { lastFrame } = render(<Status {...BASE} {...props} unattended />);
+      expect(lastFrame(), props.modeTag).not.toContain('unattended');
+    }
+  });
+
   // Decode throughput (#204) — the last measurable round's rate, next to the token counts it is
   // derived from. Absent until a round was big enough to measure (see agent/decoderate.ts).
   it('shows the decode rate of the last measurable round', () => {

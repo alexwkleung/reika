@@ -3099,6 +3099,7 @@ export async function runTurn(opts: {
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
             sandbox: opts.config.sandbox,
+            unattended: opts.config.unattended,
             signal: opts.signal,
           });
           summary = result.summary;

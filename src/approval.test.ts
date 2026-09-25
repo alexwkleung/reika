@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { autoApproveForced, autoApproves, effectiveAutoApprove } from './approval.js';
+import {
+  autoApproveForced,
+  autoApproves,
+  declineSummary,
+  effectiveAutoApprove,
+} from './approval.js';
 import type { ApprovalRequest } from './types.js';
 
 const plain: ApprovalRequest = { tool: 'bash', subject: '/repo', preview: 'ls' };
@@ -60,5 +65,23 @@ describe('effectiveAutoApprove', () => {
     expect(autoApproveForced(envSafe)).toBe(true);
     expect(autoApproveForced(envBypass)).toBe(true);
     expect(autoApproveForced({ autoApprove: 'off' })).toBe(false);
+  });
+});
+
+describe('declineSummary (#526)', () => {
+  it('keeps the attended wording byte-identical', () => {
+    expect(declineSummary('Bash', ': npm install', {})).toBe('Bash declined by user: npm install');
+    expect(declineSummary('Edit', ' for src/a.ts', { unattended: false })).toBe(
+      'Edit declined by user for src/a.ts',
+    );
+  });
+
+  // "declined by user" reads to a model as a refusal to respect, and it stops or asks again.
+  it('says nobody was there to approve when unattended, and steers the model on', () => {
+    const s = declineSummary('Bash', ': npm install', { unattended: true });
+    expect(s).not.toContain('by user');
+    expect(s).toContain('npm install');
+    expect(s).toContain('unattended');
+    expect(s).toContain('Carry on without it');
   });
 });
