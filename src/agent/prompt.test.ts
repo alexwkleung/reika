@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
-import { buildSystemPrompt } from './prompt.js';
+import { buildSystemPrompt, reikaSelfLine } from './prompt.js';
 import { promptGates } from './loop.js';
 import { defaultTools, planTools } from '../tools/index.js';
 import type { ContextBundle } from '../types.js';
@@ -270,5 +270,44 @@ describe('promptGates decideAlone (#526)', () => {
     expect(promptGates(withAsk, false, true).decideAlone).toBe(false);
     expect(promptGates(noAsk, false, false).decideAlone).toBe(false);
     expect(promptGates(noAsk, false).decideAlone).toBe(false);
+  });
+});
+
+// Self-awareness (#531): agent and plan know they run inside reika and where its docs are; the
+// secrets file and the binary are never named, since pointing at either is an invitation to use it.
+describe('reika self line (#531)', () => {
+  const line = reikaSelfLine();
+
+  it('rides the agent and plan prompts, not minimal or chat', () => {
+    expect(buildSystemPrompt({ bundle, mode: 'agent' })).toContain(line);
+    expect(buildSystemPrompt({ bundle, mode: 'plan' })).toContain(line);
+    expect(buildSystemPrompt({ bundle, mode: 'agent', minimal: true })).not.toContain('reika');
+    expect(buildSystemPrompt({ bundle, mode: 'chat' })).not.toContain('reika');
+  });
+
+  it('REIKA_SELF_AWARE=0 drops it from both prompts', () => {
+    process.env.REIKA_SELF_AWARE = '0';
+    try {
+      expect(buildSystemPrompt({ bundle, mode: 'agent' })).not.toContain('reika');
+      expect(buildSystemPrompt({ bundle, mode: 'plan' })).not.toContain('reika');
+    } finally {
+      delete process.env.REIKA_SELF_AWARE;
+    }
+  });
+
+  it('scopes itself to questions about reika', () => {
+    expect(line).toContain('Only if the user asks about reika itself');
+  });
+
+  it('points at the shipped docs, and names none when they are missing', () => {
+    expect(line).toMatch(/reference docs are in .*docs/);
+    expect(reikaSelfLine(null)).not.toContain('docs');
+    expect(reikaSelfLine(null)).toContain('~/.config/reika/skills/');
+  });
+
+  it('never names the env file, the browser profile or the binary', () => {
+    expect(line).not.toContain('.env');
+    expect(line).not.toContain('chrome');
+    expect(line).not.toMatch(/dist|cli\.js|reika -p/);
   });
 });
