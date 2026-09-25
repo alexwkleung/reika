@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { buildSystemPrompt, reikaSelfLine } from './prompt.js';
-import { promptGates } from './loop.js';
+import { buildPlanWritePrompt, promptGates } from './loop.js';
 import { defaultTools, planTools } from '../tools/index.js';
 import type { ContextBundle } from '../types.js';
 
@@ -383,5 +383,24 @@ describe('reika self line (#531)', () => {
     expect(line).not.toContain('.env');
     expect(line).not.toContain('chrome');
     expect(line).not.toMatch(/dist|cli\.js|reika -p/);
+  });
+});
+
+// The plan is the one output another turn executes, so the two ways plan mode can produce it must
+// agree on its shape: the converged path (this prompt) and the force-write (buildPlanWritePrompt)
+// both allow a quoted snippet, which is what plantrack's content match checks a step off by.
+describe('plan prompt asks for a specific plan, not a short one', () => {
+  it('scopes brevity to the messages between tool calls', () => {
+    const prompt = planPromptFlat();
+    expect(prompt).not.toContain('Be concise');
+    expect(prompt).toContain('Keep your messages between tool calls short');
+    expect(prompt).toContain('make it specific rather than short');
+  });
+
+  it('allows a quoted snippet, as the force-write prompt does', () => {
+    const prompt = planPromptFlat();
+    expect(prompt).not.toContain('Do not write any code');
+    expect(prompt).toContain('A short snippet quoting the code being changed is fine');
+    expect(buildPlanWritePrompt()).toContain('a short code snippet is fine');
   });
 });

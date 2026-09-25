@@ -205,7 +205,11 @@ function buildPlanPrompt(
     .join('/');
   const parts: string[] = [
     [
-      'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',
+      // Not the other prompts' "Be concise": the plan is the one output here that another turn
+      // executes, and after the handoff fold it is the only place the exploration's findings
+      // survive. Brevity is scoped to the chatter; the plan is asked for precision, not length.
+      'You are a coding assistant in PLAN MODE, operating in a terminal.',
+      'Keep your messages between tool calls short. The plan itself is what gets executed: make it specific rather than short.',
       ...(planBash
         ? [
             'You can ONLY explore the codebase — read, list, grep, glob, and READ-ONLY shell',
@@ -233,7 +237,10 @@ function buildPlanPrompt(
       '2. Explore only what you need. The moment you can describe the steps, STOP exploring.',
       '3. Do NOT re-read or re-grep something you already examined — act on what you have.',
       '4. End by writing a numbered, file-specific plan of the steps to make the change.',
-      '   Each step names the file and what changes. Do not write any code — just the plan.',
+      // A quoted snippet is what plantrack's content match checks a step off by, and what the
+      // force-write prompt already allows — "no code" here contradicted it on the converged path.
+      '   Each step names the file, the exact identifiers involved, and what changes.',
+      '   A short snippet quoting the code being changed is fine; do not write the implementation.',
       // Plan mode is a one-shot pass: the plan it writes is handed straight to an implementation
       // turn with no refinement round in between (#46 is still open), so a plan built on the wrong
       // reading of the request costs the whole implementation turn, not one edit. That makes the ask
