@@ -460,8 +460,10 @@ function renderWithCursor(value: string, cursor: number, visible: boolean): stri
   const ch = value[cursor];
   // At a line break or the end of the buffer there's no glyph to invert, so the
   // block would land on a zero-width newline and vanish. Draw it over a space
-  // instead, and re-emit the newline after it so the line break is preserved.
-  const at = ch === undefined || ch === '\n' ? ' ' : ch;
+  // instead, and re-emit the newline after it so the line break is preserved. A no-break space,
+  // so the wrap can't break between the word being typed and the cursor: with a plain space the
+  // cursor dropped to the next row alone, and the word followed it one keystroke later.
+  const at = ch === undefined || ch === '\n' ? ' ' : ch;
   const after = ch === '\n' ? '\n' + value.slice(cursor + 1) : value.slice(cursor + 1);
   return before + INVERSE_ON + at + INVERSE_OFF + after;
 }

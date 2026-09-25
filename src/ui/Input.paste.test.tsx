@@ -192,6 +192,8 @@ describe('typing up to the wrap edge', () => {
       const body = rows.filter(r => r.startsWith('│'));
       expect(body[0]).toMatch(/^│ > the quick/);
       for (const row of rows) expect(row.length).toBe(rows[0].length);
+      // The cursor wraps with the word it ends, never onto a row of its own.
+      for (const row of body.slice(1)) expect(row).not.toMatch(/^│\s*│$/);
     }
   });
 });
