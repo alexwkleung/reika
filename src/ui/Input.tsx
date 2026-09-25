@@ -384,11 +384,17 @@ export function Input({
       borderStyle="round"
       borderTop={!attachedAbove}
       borderBottom={!attachedBelow}
-      paddingX={1}
+      paddingLeft={1}
+      paddingRight={2}
       marginX={-1}
       marginTop={attachedAbove ? 0 : 1}
     >
-      <Text>{promptText}</Text>
+      {/* Unshrinkable: at the wrap edge Yoga otherwise squeezes "> " to ">" before wrapping the
+          buffer, so the text jumps a column left for one keystroke and back on the next. The extra
+          right padding keeps the wrap (and the cursor cell) off the border. */}
+      <Box flexShrink={0}>
+        <Text>{promptText}</Text>
+      </Box>
       {showPlaceholder ? (
         <Box>
           {blinkOn ? (

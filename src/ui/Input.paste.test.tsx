@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import React, { useState } from 'react';
+import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import { Input, clampToViewport } from './Input.js';
 import { rememberPaste, type PastedText } from './pastes.js';
@@ -168,5 +169,29 @@ describe('clampToViewport', () => {
     expect(text).toContain('l99');
     expect(text).not.toContain('lines below');
     expect(cursor).toBe(text.length);
+  });
+});
+
+describe('typing up to the wrap edge', () => {
+  it('keeps the prompt and the right border in place while the buffer wraps', async () => {
+    // App's gutter: the box's marginX={-1} assumes it.
+    const { stdin, lastFrame } = render(
+      <Box paddingX={1}>
+        <Harness withPasteStore={false} />
+      </Box>,
+    );
+    await tick();
+    stdin.write('the quick brown fox jumps over the lazy dog and keeps running along the river');
+    await tick();
+    for (const ch of ' bank until something') {
+      stdin.write(ch);
+      await tick();
+      const rows = plain(lastFrame())
+        .split('\n')
+        .filter(r => r !== '');
+      const body = rows.filter(r => r.startsWith('│'));
+      expect(body[0]).toMatch(/^│ > the quick/);
+      for (const row of rows) expect(row.length).toBe(rows[0].length);
+    }
   });
 });
