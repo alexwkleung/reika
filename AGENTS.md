@@ -166,7 +166,7 @@ Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.
 - `tool` (cyan) — tool activity (tool call `·` + name, tool result `↳`)
 - `secondary` (gray) — muted UI text
 - `warning` (yellow) — wait/caution (approval box border)
-- `error` (red) — problem (error box border, diff `-` lines, WARNING heading)
+- `error` (red) — problem (error row marker, diff `-` lines, WARNING heading)
 - `success` (green) — positive (diff `+` lines, shell `$` prompt)
 
 To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors.

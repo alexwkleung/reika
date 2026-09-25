@@ -420,6 +420,7 @@ const CALL_MARKER = '\u23FA\uFE0E ';
 const CALL_MARKER_WIDTH = 2;
 const CALL_MARKER_MEASURED = stringWidth(CALL_MARKER);
 const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
+const ERROR_LABEL = 'Error: ';
 
 // Assistant prose wears the tool-call glyph so a turn reads as one sequence of steps (#497), in
 // theme.secondary against a call's theme.tool: one shape told apart by brightness, the way `▎` is
@@ -694,20 +695,24 @@ function renderMessage(
     );
   }
   if (msg.role === 'error') {
+    // Prose's row shape with the glyph in red. The `Error:` label is what tells it from a reply
+    // without color — the glyph alone reads as the model speaking, which is exactly what didn't
+    // happen. Plain text, not markdown: an endpoint's 400 body is JSON full of `*`/`_`/backticks.
     return (
-      <Box
-        flexDirection="column"
-        marginTop={1}
-        borderStyle="round"
-        borderColor={theme.error}
-        paddingX={1}
-      >
-        <Text color={theme.error}>Error</Text>
-        {/* Scrubbed like the notices below: errors quote paths from whatever threw
-            (fs errno strings, save/paste failures), and an error box is the text
-            most likely to be screenshotted or pasted into a bug report. `~/…`
-            costs nothing diagnostically — only the prefix is rewritten. */}
-        <Text>{scrubDisplay(msg.content)}</Text>
+      <Box marginTop={1}>
+        <Text>
+          <Text color={theme.error}>{`${CALL_MARKER}${ERROR_LABEL}`}</Text>
+          {/* Scrubbed like the notices below: errors quote paths from whatever threw
+              (fs errno strings, save/paste failures), and an error row is the text
+              most likely to be screenshotted or pasted into a bug report. `~/…`
+              costs nothing diagnostically — only the prefix is rewritten. */}
+          {hangingWrap(
+            scrubDisplay(msg.content),
+            contentWidth(indent),
+            CALL_MARKER_WIDTH,
+            CALL_MARKER_MEASURED + ERROR_LABEL.length,
+          )}
+        </Text>
       </Box>
     );
   }
