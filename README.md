@@ -1,6 +1,20 @@
-# Reika
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/reika-dark.svg">
+    <img alt="Reika" src="docs/assets/reika-light.svg" width="262">
+  </picture>
+</p>
 
-A coding agent CLI for small local models, tuned for low quantization, with a focus on context discipline and capability alignment.
+<p align="center">
+  A coding agent CLI for small local models, tuned for low quantization,<br>
+  with a focus on context discipline and capability alignment.
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="docs/models.md">Tested models</a>
+</p>
 
 ![Reika fixing a retry helper and its test with a local model](docs/demo.gif)
 
