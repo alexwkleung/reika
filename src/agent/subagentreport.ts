@@ -15,6 +15,18 @@ export const SUBAGENT_REPORT_DIRECTIVE =
   'string the task asked for quoted verbatim. Then, under "Not covered:", list every file or ' +
   'question from the task you did not get to. Do not apologise and do not ask to continue.)';
 
+// The directive above only reaches a subagent that runs to its cap; one that finishes early writes
+// its report under the agent prompt's "Be concise" alone, and a thin report is what sent the #340
+// parent back to re-read what its subagent had covered. So the report's shape rides the subagent's
+// system prompt from round 0 — stable for the whole run, so no cache churn. File and function names,
+// not line numbers: pinning lines is what drove a subagent to read one file in 14 slices (#341).
+export const SUBAGENT_REPORT_FRAME = [
+  'You are a subagent. Your final message is the report the parent agent acts on, and the only part',
+  'of your work it sees. Keep messages between tool calls short, but make the report complete: the',
+  'chain in order with file and function names, what each does, and any string the task asked for',
+  'quoted verbatim. Name files and functions, not line numbers.',
+].join('\n');
+
 // Subagent DECISIONS per parent turn — rounds that dispatched at least one subagent. The coverage
 // note invites a re-spawn for what a subagent left unread, so the loop needs a floor under it: a
 // model that re-spawns on every return would burn N × the subagent cap in rounds and evict the
