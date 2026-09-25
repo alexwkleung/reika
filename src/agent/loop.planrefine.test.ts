@@ -202,7 +202,7 @@ describe('plan refinement turn (#46)', () => {
   });
 
   it("does not on vibe's plan phase (allowRefine: false) even with the plan right above", async () => {
-    // The case the "last thing the model said" rule cannot tell from a follow-up: a vibe prompt
+    // The case the "only plan turns since" rule cannot tell from a follow-up: a vibe prompt
     // whose plan phase directly follows a written plan (a /plan → /vibe switch, or a chat detour
     // and back). The front end gates it off (ui/commands.ts turnRefines → allowRefine); the loop
     // obeys and reads the turn as a fresh planning pass, so a new task cannot absorb the earlier
@@ -232,7 +232,7 @@ describe('plan refinement turn (#46)', () => {
     const refine = refineTarget(preTurn);
     expect(refine).not.toBeNull();
     // Mid-turn H, the turn has added its own assistant tool-call message: a fresh derivation would
-    // now see the plan as "not the last thing the model said" and drop the refinement from the
+    // now see an unstamped model turn after the plan and drop the refinement from the
     // ledger — so the loop resolves it once and passes it down.
     const midTurn: Message[] = [
       ...preTurn,
@@ -260,6 +260,93 @@ describe('plan refinement turn (#46)', () => {
       refine,
     });
     expect(carried).toContain('This turn refines it');
+  });
+});
+
+// #46 review: the retry after a botched refinement is the flow the feature exists for. The loop
+// stamps its own user message as a plan turn, so an aborted follow-up leaves the plan refinable.
+describe('an aborted refinement leaves the plan refinable', () => {
+  beforeEach(() => {
+    h.scripted.length = 0;
+    vi.mocked(callModel).mockClear();
+  });
+
+  it('refines on the prompt after a ctrl-c', async () => {
+    const history = plannedHistory();
+    const base = {
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [],
+      payloads: new PayloadStore(),
+      promptMode: 'plan' as const,
+      onMessage: () => {},
+    };
+    const aborted = new AbortController();
+    aborted.abort();
+    await runTurn({ ...base, userInput: 'also cover X', signal: aborted.signal });
+    expect(history[history.length - 1]).toMatchObject({ role: 'assistant', content: '(aborted)' });
+    h.scripted.push({ content: '1. Edit `src/theme.ts`.\n2. Edit `x.ts`.', toolCalls: undefined });
+    await runTurn({ ...base, userInput: 'also cover X, settings only' });
+    const req = vi.mocked(callModel).mock.calls[0]?.[0];
+    expect(`${req?.system ?? ''}\n${req?.trailingNote ?? ''}`).toContain('This turn refines it');
+  });
+
+  it("does not stamp vibe's plan phase as a plan turn", async () => {
+    const history = plannedHistory();
+    h.scripted.push({ content: '1. Edit `y.ts`.', toolCalls: undefined });
+    await runTurn({
+      userInput: 'a new task',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [],
+      payloads: new PayloadStore(),
+      promptMode: 'plan',
+      allowRefine: false,
+      onMessage: () => {},
+    });
+    expect(history.find(m => m.role === 'user' && m.content === 'a new task')).not.toHaveProperty(
+      'mode',
+    );
+  });
+});
+
+// #46 review: a fold mid-turn splices the history under the refinement resolved at turn start.
+describe('the refinement survives a mid-turn fold', () => {
+  it('filters the plan out of the analysis by identity, not index', () => {
+    const preTurn = plannedHistory();
+    const refine = refineTarget(preTurn)!;
+    const midTurn: Message[] = [
+      ...preTurn,
+      { role: 'user', content: 'also cover the settings screen' },
+      { role: 'assistant', content: 'Checking the settings screen.', reasoning: 'KEPT ANALYSIS' },
+    ];
+    // What a fold does: everything before the plan becomes one recap message, shifting indices.
+    midTurn.splice(0, 3, { role: 'compaction', content: 'recap' } as Message);
+    const out = buildPlanTransformInput(midTurn, 100000, false, refine);
+    expect(out.split(PLAN_STEP)).toHaveLength(2);
+    expect(out).toContain('KEPT ANALYSIS');
+  });
+
+  it('carries the plan in the ledger once the fold took it', () => {
+    const preTurn = plannedHistory();
+    const refine = refineTarget(preTurn)!;
+    const folded: Message[] = [
+      { role: 'compaction', content: 'recap' } as Message,
+      { role: 'user', content: 'also cover the settings screen' },
+    ];
+    const sys = buildSteadySystem({
+      baseSystem: 'BASE',
+      promptMode: 'plan',
+      history: folded,
+      round: 1,
+      planSteps: null,
+      refine,
+    });
+    expect(sys).toContain('folded out of the history');
+    expect(sys).toContain(PLAN_STEP);
+    expect(sys).not.toContain('is above');
   });
 });
 

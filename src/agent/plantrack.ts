@@ -381,45 +381,71 @@ export function ranSuccessfully(m: { summary: string; exitCode?: number | null }
   return m.exitCode !== undefined ? m.exitCode === 0 : m.summary.startsWith('Ran: ');
 }
 
-// The newest plan-final marker on the history, with the steps it parses to — possibly none, since
-// loop.ts stamps `planFinal` on ANY final plan-mode message and a force-written spiral stop ends a
-// plan turn without being one (#126). One backwards scan and one definition of "the live plan",
-// shared by seedPlanProgress, distillPlanHandoff and plan mode's refinement turn (#46), so the
-// three cannot drift about which plan is current.
-export type PlanMarker = { index: number; content: string; steps: PlanStep[] };
+// The live plan on the history, with the steps it parses to — possibly none, since loop.ts stamps
+// `planFinal` on ANY final plan-mode message and a force-written spiral stop ends a plan turn
+// without being one (#126). One definition of "the live plan", shared by seedPlanProgress,
+// distillPlanHandoff and plan mode's refinement turn (#46), so the three cannot drift about which
+// plan is current. `message` identifies it by object rather than by index: a mid-turn fold splices
+// the history, and an index resolved at turn start then names some other message.
+export type PlanMarker = { index: number; message: Message; content: string; steps: PlanStep[] };
 
+// Newest `planFinal` first. A step-less one is normally the answer (a dead-ended plan turn, which
+// callers read as "no plan"), EXCEPT when it came out of a plan-mode follow-up to a real plan: a
+// user asking "why step 3?" gets a prose reply that is stamped planFinal too, and letting it bury
+// the plan one message up would cost the next refinement, the /implement checklist and the handoff.
 export function latestPlanMarker(history: Message[]): PlanMarker | null {
+  let newest: PlanMarker | null = null;
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     if (m.role !== 'assistant' || !m.planFinal) continue;
     const content = m.content ?? '';
-    return { index: i, content, steps: parsePlanSteps(content) };
+    const marker = { index: i, message: m, content, steps: parsePlanSteps(content) };
+    if (!newest) {
+      if (marker.steps.length > 0) return marker;
+      newest = marker;
+    } else if (!onlyPlanTurnsBetween(history, i, newest.index)) {
+      return newest;
+    } else if (marker.steps.length > 0) {
+      return marker;
+    }
   }
-  return null;
+  return newest;
 }
 
-// The plan a plan-mode turn is *refining* (#46): the newest written plan, when it is still the last
-// thing the model said — i.e. the turn being run is the one immediately after it. A step-less
-// marker is a dead-ended plan turn, not a plan (a refinement round told to "revise the plan above"
-// would be revising "I couldn't determine which file handles this"), so it reads as a fresh
-// planning pass instead. Same 0-step line seedPlanProgress draws, deliberately.
+// Is every model message in (from, to] part of a plan-mode turn? The opening user message carries
+// the recorded mode — the loop stamps 'plan' on its own copy for a refinable plan turn, the session
+// stamps the recorded one on what it emits (so a resumed history says 'vibe' or 'agent' there). A
+// turn that ran in plan mode and ended without a new plan — aborted, spiral-stopped, a prose answer
+// — changed nothing the plan is about; any other turn (an implementation, a vibe chain) means the
+// plan belongs to an earlier exchange. Harness nudges and command echoes open no turn.
+function onlyPlanTurnsBetween(history: Message[], from: number, to: number): boolean {
+  let planTurn = false;
+  for (let i = from + 1; i <= to && i < history.length; i++) {
+    const m = history[i];
+    if (m.role === 'user' && !m.harness && !m.meta) planTurn = m.mode === 'plan';
+    else if (m.role === 'assistant' && !planTurn) return false;
+  }
+  return true;
+}
+
+// The plan a plan-mode turn is *refining* (#46): the live plan, when nothing but plan-mode turns
+// came after it — the user is iterating on it. A follow-up that was aborted, spiral-stopped or
+// answered in prose leaves it the plan to revise, since those turns wrote nothing in its place. A
+// step-less marker is a dead-ended plan turn, not a plan (a refinement round told to "revise the
+// plan above" would be revising "I couldn't determine which file handles this"), so it reads as a
+// fresh planning pass instead. Same 0-step line seedPlanProgress draws, deliberately.
 //
-// "Still the last thing the model said" is what keeps refinement scoped to an actual follow-up: a
-// plan ends its plan-mode turn, so a follow-up prompt lands with the plan as the last assistant
-// message — the user is iterating on it. An implementation turn (or any later model turn) after the
-// plan means the plan belongs to an earlier exchange. It does NOT do the whole job for vibe: vibe's
-// plan phase right after a written plan (a mode switch, or a plan-mode plan followed by a chat
-// detour and back) looks exactly like a follow-up, and framing a new task as a revision would carry
-// the earlier chain's steps into it. That half is the explicit gate — ui/commands.ts turnRefines,
-// threaded through RunTurnOptions.allowRefine — so the two together are what "vibe never refines"
-// actually means.
+// "Only plan turns since" keeps refinement scoped to the plan's own exchange: an implementation
+// turn (or any other model turn) after the plan means it belongs to an earlier one. It does NOT do
+// the whole job for vibe: vibe's plan phase right after a written plan (a mode switch, or a
+// plan-mode plan followed by a chat detour and back) looks exactly like a follow-up, and framing a
+// new task as a revision would carry the earlier chain's steps into it. That half is the explicit
+// gate — ui/commands.ts turnRefines, threaded through RunTurnOptions.allowRefine — so the two
+// together are what "vibe never refines" actually means.
 export function refineTarget(history: Message[]): PlanMarker | null {
   const marker = latestPlanMarker(history);
   if (!marker || marker.steps.length === 0) return null;
-  for (let i = marker.index + 1; i < history.length; i++) {
-    if (history[i].role === 'assistant') return null;
-  }
-  return marker;
+  return onlyPlanTurnsBetween(history, marker.index, history.length - 1) ? marker : null;
 }
 
 // Did a refinement round change the plan it was given? Compared on the PARSED steps rather than the

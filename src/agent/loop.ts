@@ -559,7 +559,8 @@ export function buildPlanTransformInput(
   // the conclusion (Fix-5: the model often reaches the answer, then ruminates), so keep it then.
   // The plan message is filtered out of it when refining: it is carried verbatim above, and counting
   // it as "your analysis" would both pay for it twice and let a 4000-char tail cut it in half.
-  const analysisSource = refine ? history.filter((_, i) => i !== refine.index) : history;
+  // By identity, not index: a fold mid-turn splices the history under the index resolved at turn start.
+  const analysisSource = refine ? history.filter(m => m !== refine.message) : history;
   const analysisRaw = dropAnalysis ? '' : gatherPlanAnalysis(analysisSource);
   // Keep the most recent analysis (where the converged plan lives) within a fixed cap.
   const analysis = analysisRaw.length > 4000 ? `…${analysisRaw.slice(-4000)}` : analysisRaw;
@@ -629,11 +630,20 @@ function buildPlanLedger(
   // silently dropping the decisions the earlier turns settled. The pressure lines below apply as
   // they always do — a refinement usually needs one or two checks against the delta, not an
   // exploration, and the same novelty/ceiling rule is what bounds it.
-  if (refine) {
+  // A fold mid-turn can take the plan message with it, leaving at most a clipped recap line — then
+  // "above" is false and the plan the turn exists to revise is gone, so the ledger carries it.
+  if (refine && history.includes(refine.message)) {
     lines.push(
       'A plan you wrote earlier is above — the LIVE plan. This turn refines it. Keep the steps that',
       'still hold, change only what the latest request asks for, and end by writing the whole revised',
       'plan (the newest plan replaces the older one).',
+    );
+  } else if (refine) {
+    lines.push(
+      'The plan you wrote earlier is the LIVE plan; it was folded out of the history, so here it is:',
+      refine.content,
+      'This turn refines it. Keep the steps that still hold, change only what the latest request asks',
+      'for, and end by writing the whole revised plan (the newest plan replaces the older one).',
     );
   }
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
@@ -1260,6 +1270,12 @@ export async function runTurn(opts: {
       content: opts.userInput,
       ...(opts.userDisplay ? { display: opts.userDisplay } : {}),
       ...(opts.userSkill ? { skill: opts.userSkill } : {}),
+      // What lets a later turn tell a plan-mode follow-up from any other turn (plantrack.ts
+      // refineTarget) on the live history — the session stamps the recorded mode only on the copy
+      // it emits. Only a refinable plan turn: vibe's plan phase opens a new task.
+      ...(opts.promptMode === 'plan' && opts.allowRefine !== false
+        ? { mode: 'plan' as const }
+        : {}),
     };
     opts.history.push(userMsg);
     opts.onMessage(userMsg);
@@ -1579,7 +1595,7 @@ export async function runTurn(opts: {
   // instead of deriving a new one from the request. Resolved ONCE, here, from the history the turn
   // STARTS with — a turn's own plan is only written at its end, and the messages this turn adds are
   // themselves enough to stop the derivation from recognizing the refinement later (refineTarget
-  // asks that the plan be the last thing the model said). It feeds two places: the plan ledger
+  // asks that only plan-mode turns follow the plan). It feeds two places: the plan ledger
   // (every round, so the model is told to revise rather than re-derive) and the force-write
   // transform, which REPLACES the history and would otherwise rebuild the plan from the original
   // request alone. Gated on `allowRefine`: vibe's plan phase passes false (a new task even when a
