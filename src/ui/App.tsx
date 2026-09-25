@@ -1189,7 +1189,7 @@ export function App() {
           : name === 'chat'
             ? 'Chat mode. Filesystem and shell tools disabled. Conversation isolated from agent. /agent to return.'
             : name === 'plan'
-              ? 'Plan mode — read-only exploration; will end with a written plan. /agent to execute it.'
+              ? 'Plan mode — read-only exploration; will end with a written plan. Send another message to refine that plan, or /agent (or /implement) to execute it.'
               : name === 'vibe'
                 ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
                 : name === 'minimal'

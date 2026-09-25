@@ -381,25 +381,66 @@ export function ranSuccessfully(m: { summary: string; exitCode?: number | null }
   return m.exitCode !== undefined ? m.exitCode === 0 : m.summary.startsWith('Ran: ');
 }
 
+// The newest plan-final marker on the history, with the steps it parses to — possibly none, since
+// loop.ts stamps `planFinal` on ANY final plan-mode message and a force-written spiral stop ends a
+// plan turn without being one (#126). One backwards scan and one definition of "the live plan",
+// shared by seedPlanProgress, distillPlanHandoff and plan mode's refinement turn (#46), so the
+// three cannot drift about which plan is current.
+export type PlanMarker = { index: number; content: string; steps: PlanStep[] };
+
+export function latestPlanMarker(history: Message[]): PlanMarker | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'assistant' || !m.planFinal) continue;
+    const content = m.content ?? '';
+    return { index: i, content, steps: parsePlanSteps(content) };
+  }
+  return null;
+}
+
+// The plan a plan-mode turn is *refining* (#46): the newest written plan, when it is still the last
+// thing the model said — i.e. the turn being run is the one immediately after it. A step-less
+// marker is a dead-ended plan turn, not a plan (a refinement round told to "revise the plan above"
+// would be revising "I couldn't determine which file handles this"), so it reads as a fresh
+// planning pass instead. Same 0-step line seedPlanProgress draws, deliberately.
+//
+// "Still the last thing the model said" is what scopes refinement to plan mode without the loop
+// having to know the front end's mode. A plan ends its plan-mode turn, so a follow-up prompt lands
+// with the plan as the last assistant message — the user is iterating on it. Vibe's plan phase
+// ends the same way, but the harness then runs the implementation turn off the same prompt, so by
+// the time the user's NEXT vibe prompt starts a plan phase there is an implementation transcript
+// after the plan: that prompt is a new task, not a revision of the plan it happens to follow, and
+// framing it as one would carry the earlier chain's steps into it.
+export function refineTarget(history: Message[]): PlanMarker | null {
+  const marker = latestPlanMarker(history);
+  if (!marker || marker.steps.length === 0) return null;
+  for (let i = marker.index + 1; i < history.length; i++) {
+    if (history[i].role === 'assistant') return null;
+  }
+  return marker;
+}
+
+// Did a refinement round change the plan it was given? Compared on the PARSED steps rather than the
+// raw text: a model that re-emits the same plan renumber, reheads or reformats it freely, and the
+// question the caller is asking is whether the user's request landed in it, not whether the bytes
+// match. A next plan with no steps at all reads as changed (it isn't a revision of this plan, and
+// whether it is a dead end is the caller's own question — see planWritten).
+export function planChanged(previous: string, next: string): boolean {
+  const before = parsePlanSteps(previous);
+  const after = parsePlanSteps(next);
+  if (after.length === 0 || after.length !== before.length) return true;
+  return before.some((s, i) => s.text !== after[i].text);
+}
+
 // Rebuild the checklist from history: the most recent written plan, with every successful
 // edit/write (path or content match), successful bash run (command match), and gate waiver marker
 // after it replayed. null when there's no plan or it yields no numbered steps — ordinary agent
 // turns cost one backwards scan and nothing else.
 export function seedPlanProgress(history: Message[]): PlanStep[] | null {
-  let planIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    const m = history[i];
-    if (m.role === 'assistant' && m.planFinal) {
-      planIdx = i;
-      break;
-    }
-  }
-  if (planIdx < 0) return null;
-  const plan = history[planIdx];
-  if (plan.role !== 'assistant') return null;
-  const steps = parsePlanSteps(plan.content ?? '');
-  if (steps.length === 0) return null;
-  for (let i = planIdx + 1; i < history.length; i++) {
+  const marker = latestPlanMarker(history);
+  if (!marker || marker.steps.length === 0) return null;
+  const steps = marker.steps;
+  for (let i = marker.index + 1; i < history.length; i++) {
     const m = history[i];
     const edited = editedPathFrom(m);
     if (edited && m.role === 'tool') {

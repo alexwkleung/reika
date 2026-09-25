@@ -4,6 +4,11 @@ export type Fixture = {
   name: string;
   setup: Record<string, string>;
   prompt: string;
+  // A second prompt submitted into the SAME session once the first turn ends, with the same mode and
+  // tools. Plan refinement (#46) is a two-turn behavior — the second prompt is what makes that turn a
+  // revision of the plan the first one wrote — so without this it is unreachable from a fixture. The
+  // assert sees the whole conversation, both turns included.
+  followUp?: string;
   timeoutMs?: number;
   // Which tool set the turn gets. 'plan' is planTools() — read/list/grep/glob, no bash — the
   // configuration plan mode ships, and the only one where a capped result has no pipe to

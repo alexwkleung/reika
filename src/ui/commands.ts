@@ -63,7 +63,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'cd', desc: 'change cwd (re-indexes repo map)' },
   { name: 'shell', desc: 'enter shell mode (raw bash, no model)' },
   { name: 'chat', desc: 'enter chat mode (no filesystem/shell tools; isolated context)' },
-  { name: 'plan', desc: 'enter plan mode (read-only exploration; ends with a written plan)' },
+  {
+    name: 'plan',
+    desc: 'enter plan mode (read-only exploration; ends with a written plan — send another message to refine it)',
+  },
   { name: 'vibe', desc: 'enter vibe mode (every prompt plans first, then implements the plan)' },
   {
     name: 'minimal',

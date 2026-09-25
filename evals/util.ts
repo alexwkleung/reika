@@ -1,4 +1,5 @@
 import type { Message, ToolCall } from '../src/types.js';
+import { parsePlanSteps } from '../src/agent/plantrack.js';
 
 export function lastAssistantContent(messages: Message[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -10,6 +11,17 @@ export function lastAssistantContent(messages: Message[]): string | null {
 
 export function calledTool(messages: Message[], name: string): boolean {
   return messages.some(m => m.role === 'assistant' && m.toolCalls?.some(tc => tc.name === name));
+}
+
+// The written plans in a conversation, oldest first: every plan-final message whose text parses to
+// at least one step (planWritten's definition, so a force-written dead end is not a plan here
+// either). Plan refinement (#46) is a two-turn behavior — a fixture asking whether the model
+// *revised* the plan has to look at both of them, the revision and the plan it replaced.
+export function writtenPlans(messages: Message[]): string[] {
+  return messages
+    .filter((m): m is Message & { role: 'assistant' } => m.role === 'assistant' && !!m.planFinal)
+    .map(m => m.content ?? '')
+    .filter(content => parsePlanSteps(content).length > 0);
 }
 
 // The locator an over-cap grep/glob result pointed the model at (tools/_spill.ts), or null when

@@ -18,8 +18,9 @@ import { fixture as f9 } from './fixtures/09-bash-spill-verdict.js';
 import { fixture as f10 } from './fixtures/10-bash-spill-oneshot.js';
 import { fixture as f11 } from './fixtures/11-plan-gate-verdict.js';
 import { fixture as f12 } from './fixtures/12-sandbox-recovery.js';
+import { fixture as f13 } from './fixtures/13-plan-refine.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {
@@ -56,11 +57,16 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
       // behavior (the plan prompt, force-write, the `planFinal` stamp) was unreachable from an
       // eval — a fixture asserting on it passed vacuously. `tools` stays separate from it: a
       // fixture may run plan tools under the agent prompt (08-grep-spill-noshell).
-      await session.submit(fix.prompt, {
-        mode: fix.mode ?? 'agent',
+      const options = {
+        mode: fix.mode ?? ('agent' as const),
         tools: fix.tools === 'plan' ? session.lists.plan : undefined,
         signal: controller.signal,
-      });
+      };
+      await session.submit(fix.prompt, options);
+      // The follow-up runs in the same session, so the first turn's plan sits in the history the
+      // loop reads — which is what makes that second turn a refinement (#46) rather than a fresh
+      // planning pass. Same mode and tools; the timeout covers both turns.
+      if (fix.followUp) await session.submit(fix.followUp, options);
     } finally {
       clearTimeout(timeoutId);
     }

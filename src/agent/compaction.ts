@@ -8,7 +8,7 @@ import {
   lastUserMessageIndex,
   taskSpecIndex,
 } from '../provider/toolcall.js';
-import { parsePlanSteps } from './plantrack.js';
+import { latestPlanMarker } from './plantrack.js';
 import { parseSavedPage } from '../tools/fetch.js';
 import { parseSearchQuery } from '../tools/search.js';
 
@@ -846,15 +846,8 @@ export function distillPlanHandoff(
 ): HandoffOutcome {
   // The converged plan we anchor on: the most recent plan-final message. Its absence is what makes
   // this a no-op on ordinary agent turns (the marker is set only at plan-mode force-write).
-  let planIdx = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    const m = history[i];
-    if (m.role === 'assistant' && m.planFinal) {
-      planIdx = i;
-      break;
-    }
-  }
-  if (planIdx < 0) return { folded: 0, reason: 'no-marker' };
+  const marker = latestPlanMarker(history);
+  if (!marker) return { folded: 0, reason: 'no-marker' };
 
   // The marker says the plan turn ENDED, not that it produced a plan: loop.ts stamps it on any
   // final plan-mode message, force-written spirals included (#126). Anchoring on a message with no
@@ -862,10 +855,8 @@ export function distillPlanHandoff(
   // turn gets folded into a digest, and what survives verbatim is "I couldn't determine…". Leave
   // history alone instead; an un-distilled turn is merely bigger, not misleading. Same 0-step
   // definition `seedPlanProgress` has always used, so the two agree about what a plan is.
-  const planMsg = history[planIdx];
-  if (planMsg.role === 'assistant' && parsePlanSteps(planMsg.content ?? '').length === 0) {
-    return { folded: 0, reason: 'no-steps' };
-  }
+  if (marker.steps.length === 0) return { folded: 0, reason: 'no-steps' };
+  const planIdx = marker.index;
 
   // Pin the original request at index 0 exactly as compactHistory does; fold only what follows it,
   // up to (but excluding) the plan message. A leading slash-command echo (meta) is not the task.

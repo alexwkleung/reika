@@ -68,6 +68,8 @@ import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
+  planChanged,
+  refineTarget,
   applyEdit as applyPlanEdit,
   applyCommand as applyPlanCommand,
   buildPlanProgressLedger,
@@ -76,6 +78,7 @@ import {
   ranSuccessfully,
   MAX_PLAN_GATE_ROUNDS,
   type PlanStep,
+  type PlanMarker,
   type StepMatch,
 } from './plantrack.js';
 import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
@@ -447,7 +450,7 @@ const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
 // the cap we discard the exploration history (and its read-momentum) and feed the model only the
 // task + its own accumulated reasoning, with no tools, asking it to convert that into a plan.
 // "Summarize your analysis into a plan" is a task weak models do far better than "decide to stop".
-export function buildPlanWritePrompt(steer = false): string {
+export function buildPlanWritePrompt(steer = false, refine = false): string {
   // Deliberately positive and permissive. Heavy negative constraints ("output ONLY … no preamble,
   // no code") make ruminating thinking models burn their whole generation budget litigating the
   // rules instead of writing — they cut off mid-plan and retry. A short snippet or preamble is fine;
@@ -459,6 +462,18 @@ export function buildPlanWritePrompt(steer = false): string {
     'make — a short code snippet is fine. Keep every step grounded in the notes: use their exact file',
     'paths and identifiers, and do not invent paths, filenames, or class names.',
   ];
+  // Refinement (#46): the plan already exists and rides the next message verbatim, so this round is
+  // a revision, not a derivation. Without the line a weak model rewrites the plan from the request
+  // and silently drops the earlier decisions — the failure the refinement turn exists to avoid.
+  // Stated before the steer so the steer stays last, closest to generation.
+  if (refine) {
+    lines.push(
+      '',
+      'A plan for this work was already written, and the next message includes it in full. Revise',
+      'THAT plan: keep the steps that still hold, change only what the latest request from the user',
+      'asks for, and write the whole updated numbered plan. Do not start over from a blank slate.',
+    );
+  }
   // Steered retry (CONVERGE_RETRY): the prior force-write looped. Name the failure mode the way that
   // empirically broke the loop ("don't overcomplicate / don't keep questioning yourself") — a strong
   // last push before the honest stop. Kept short; this round also runs under a tighter reasoning ceil.
@@ -516,26 +531,56 @@ export function buildPlanTransformInput(
   history: Message[],
   budgetChars: number,
   dropAnalysis = false,
+  // The plan this round is revising (#46), resolved by the caller from the history the turn STARTED
+  // with — recomputing it here would see this turn's own assistant messages and lose the plan the
+  // refinement exists to carry. Defaulted for direct callers/tests (a pre-turn history derives the
+  // same answer).
+  refine: PlanMarker | null | undefined = refineTarget(history),
 ): string {
-  const task = (
-    history.find((m): m is Message & { role: 'user' } => m.role === 'user' && !m.meta)?.content ??
-    ''
-  ).slice(0, 2000);
+  const first = history.find((m): m is Message & { role: 'user' } => m.role === 'user' && !m.meta);
+  const task = (first?.content ?? '').slice(0, 2000);
+  // Refinement (#46): a plan-mode turn that follows a written plan revises it rather than deriving
+  // a new one — and this transform REPLACES the history with the single message below, so anything
+  // it does not name is gone for this call. Two things would otherwise go missing on exactly that
+  // turn: the previous plan (its content reaches the caller only as part of `gatherPlanAnalysis`'s
+  // last-4000-char tail, mixed in with everything else, and dropped outright when the force-write
+  // was loop-triggered) and the user's latest message — the delta the refinement exists to apply,
+  // which is not the original request the `task` line quotes.
+  const latestIdx = lastUserMessageIndex(history);
+  const latest = latestIdx >= 0 ? ((history[latestIdx] as { content?: string }).content ?? '') : '';
+  const ask = refine && latest && latest !== (first?.content ?? '') ? latest.slice(0, 2000) : '';
+  // Kept whole, not truncated: the plan is the artifact this round exists to update, and a cut
+  // mid-step plan is worse than a thinner findings dump below (whose budget absorbs the cost, down
+  // to its own floor).
+  const plan = refine?.content ?? '';
   // When the force-write was loop-triggered, the accumulated reasoning IS the spiral — feeding it back
   // as "your analysis" can re-prime the loop at the transform level. Drop it and rebuild the plan from
   // the findings (clean grounding) instead. For a normal (converged) force-write the analysis carries
   // the conclusion (Fix-5: the model often reaches the answer, then ruminates), so keep it then.
-  const analysisRaw = dropAnalysis ? '' : gatherPlanAnalysis(history);
+  // The plan message is filtered out of it when refining: it is carried verbatim above, and counting
+  // it as "your analysis" would both pay for it twice and let a 4000-char tail cut it in half.
+  const analysisSource = refine ? history.filter((_, i) => i !== refine.index) : history;
+  const analysisRaw = dropAnalysis ? '' : gatherPlanAnalysis(analysisSource);
   // Keep the most recent analysis (where the converged plan lives) within a fixed cap.
   const analysis = analysisRaw.length > 4000 ? `…${analysisRaw.slice(-4000)}` : analysisRaw;
-  const findingsBudget = Math.max(2000, budgetChars - task.length - analysis.length - 600);
+  const findingsBudget = Math.max(
+    2000,
+    budgetChars - task.length - plan.length - ask.length - analysis.length - 600,
+  );
   return (
     `Original request:\n${task}\n\n` +
+    (plan ? `The plan you already wrote:\n${plan}\n\n` : '') +
+    (ask ? `The user's latest message (what to change):\n${ask}\n\n` : '') +
     `Reference material you gathered (file contents and search results):\n${gatherPlanFindings(history, findingsBudget)}\n\n` +
     (analysis ? `Your analysis:\n${analysis}\n\n` : '') +
-    'Exploration is over. Write the numbered, file-specific plan for the request now, grounded in ' +
-    'the reference material above — use its exact file paths and identifiers, and do not invent ' +
-    'paths, filenames, or class names.'
+    (plan
+      ? 'Exploration is over. Write the whole updated plan now — the plan above, revised for the ' +
+        "user's latest message — grounded in the reference material: keep the steps that still hold, " +
+        'change only what was asked for, and use the exact file paths and identifiers above. Do not ' +
+        'start over, and do not invent paths, filenames, or class names.'
+      : 'Exploration is over. Write the numbered, file-specific plan for the request now, grounded in ' +
+        'the reference material above — use its exact file paths and identifiers, and do not invent ' +
+        'paths, filenames, or class names.')
   );
 }
 
@@ -544,7 +589,17 @@ export function buildPlanTransformInput(
 // applies escalating, round-count-driven pressure to stop exploring and write the plan — the
 // closure signal a read-only mode otherwise lacks. The model maintains none of this; it is
 // derived in code from this turn's tool calls, so it cannot drift or be hallucinated.
-function buildPlanLedger(history: Message[], round: number): string {
+function buildPlanLedger(
+  history: Message[],
+  round: number,
+  // The plan this turn is refining (#46), resolved once by the caller rather than recomputed here:
+  // from round 1 on, this turn's OWN assistant messages sit after the plan, and a per-round
+  // derivation would stop recognizing the refinement half-way through the turn. Defaulted for the
+  // callers that build a round-0 system out of a pre-turn history (the warm prefix, tests), where
+  // deriving it is correct — and where the no-user-message-yet history gives the same answer
+  // runTurn's round 0 does.
+  refine: PlanMarker | null | undefined = refineTarget(history),
+): string {
   const files = new Set<string>();
   const searches = new Set<string>();
   // Plan mode's read-only `bash` (#109) explores through a call that carries `command` and neither
@@ -566,6 +621,21 @@ function buildPlanLedger(history: Message[], round: number): string {
     return s.size > 8 ? `${shown}, +${s.size - 8} more` : shown;
   };
   const lines = ['', '--- plan-mode status (reika, auto-generated — not user input) ---'];
+  // Refinement (#46): this turn follows a plan the model already wrote, so the plan is the thing to
+  // revise — not the request derived from scratch again. Stated in the regenerated ledger rather
+  // than the static prompt for the usual reason (it must hold every round of the turn, and it is a
+  // fact about THIS turn's history, which the prompt builder never sees), and because a small model
+  // reading its own plan above with no instruction treats a follow-up as a new task: it re-derives,
+  // silently dropping the decisions the earlier turns settled. The pressure lines below apply as
+  // they always do — a refinement usually needs one or two checks against the delta, not an
+  // exploration, and the same novelty/ceiling rule is what bounds it.
+  if (refine) {
+    lines.push(
+      'A plan you wrote earlier is above — the LIVE plan. This turn refines it. Keep the steps that',
+      'still hold, change only what the latest request asks for, and end by writing the whole revised',
+      'plan (the newest plan replaces the older one).',
+    );
+  }
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
   if (searches.size > 0) lines.push(`Searches run: ${cap(searches)}`);
   if (commands.size > 0) lines.push(`Commands run: ${cap(commands)}`);
@@ -603,13 +673,19 @@ export function buildSteadySystem(opts: {
   history: Message[];
   round: number;
   planSteps: PlanStep[] | null;
+  // The plan this plan-mode turn is refining (#46). Absent → buildPlanLedger derives it from
+  // `history`, which is what the warm prefix wants; runTurn passes the value it resolved from the
+  // pre-turn history, since deriving mid-turn would see the turn's own messages.
+  refine?: PlanMarker | null;
 }): string {
   // First, and in both modes: settled context about the request itself, not a directive. Aging hits
   // plan exploration exactly as it hits an agent turn.
   const droppedLedger = droppedPayloadLedgerFor(opts.history, false);
   const dropped = droppedLedger ? '\n\n' + droppedLedger : '';
   if (opts.promptMode === 'plan') {
-    return opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round);
+    return (
+      opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round, opts.refine)
+    );
   }
   const planLedger =
     PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
@@ -1486,6 +1562,18 @@ export async function runTurn(opts: {
     );
   }
 
+  // Plan refinement (#46): a plan-mode turn that follows a plan already written revises that plan
+  // instead of deriving a new one from the request. Resolved ONCE, here, from the history the turn
+  // STARTS with — a turn's own plan is only written at its end, and the messages this turn adds are
+  // themselves enough to stop the derivation from recognizing the refinement later (refineTarget
+  // asks that the plan be the last thing the model said). It feeds two places: the plan ledger
+  // (every round, so the model is told to revise rather than re-derive) and the force-write
+  // transform, which REPLACES the history and would otherwise rebuild the plan from the original
+  // request alone. Everywhere else it is undefined, i.e. "derive it" — which is what a caller
+  // building a round-0 prefix out of a pre-turn history (the warm) should do.
+  const refinePlan: PlanMarker | null =
+    opts.promptMode === 'plan' ? refineTarget(opts.history) : null;
+
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {
       commitAborted(opts, '', undefined, turnStart, fetchedUrls);
@@ -1550,7 +1638,7 @@ export async function runTurn(opts: {
         // "re-run that call" — handing the model a contradiction on the one round it must not
         // explore. Dropped output is a reason the plan may be thin, not a reason to reopen the
         // exploration the force-write exists to end.
-        system = buildPlanWritePrompt(steerRetryActive);
+        system = buildPlanWritePrompt(steerRetryActive, refinePlan !== null);
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
         // here on the round that writes the plan. Gated to a LOOP-triggered force-write
@@ -1596,7 +1684,7 @@ export async function runTurn(opts: {
         roundSuffix = [
           droppedPayloadLedgerFor(opts.history, prefixStable),
           buildQuestionLedger(questionAnswers),
-          buildPlanLedger(opts.history, i),
+          buildPlanLedger(opts.history, i, refinePlan),
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -1609,6 +1697,7 @@ export async function runTurn(opts: {
             history: opts.history,
             round: i,
             planSteps: null,
+            refine: refinePlan,
           }) + prefixed(buildQuestionLedger(questionAnswers));
       }
     } else {
@@ -1826,6 +1915,7 @@ export async function runTurn(opts: {
                 opts.history,
                 planTransformBudget,
                 planForceWriteLoopTriggered,
+                refinePlan,
               ) + nativeImageReminder(opts.nativeImages),
           } as Message,
         ]
@@ -2832,6 +2922,26 @@ export async function runTurn(opts: {
     // The plan-grounding receipt goes out after the plan, as a standalone line (not nested).
     if (planUrlNotice) {
       opts.onMessage({ role: 'system', tone: planUrlNotice.tone, content: planUrlNotice.content });
+    }
+    // Refinement that changed nothing (#46): a weak model handed "also cover X" can re-emit the
+    // plan it already had, and the user would otherwise see a fresh plan turn with no way to tell
+    // it apart from one that absorbed the request. Compared on the PARSED steps, so renumbering or
+    // reformatting the same plan still reads as unchanged, and the grounding notes appended above
+    // can't mask it. User-facing only — the model is told to revise in the ledger, and repeating
+    // that here would just add a line to a prompt that already carries it.
+    if (
+      refinePlan &&
+      isFinal &&
+      assistantContent?.trim() &&
+      !planChanged(refinePlan.content, assistantContent)
+    ) {
+      opts.onMessage({
+        role: 'system',
+        tone: 'warn',
+        content:
+          'Plan unchanged — every step matches the plan from before this request. Rephrase it if ' +
+          "that wasn't what you wanted, or /implement to execute the plan as it stands.",
+      });
     }
 
     if (isFinal) {
