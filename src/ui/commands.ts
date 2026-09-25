@@ -51,6 +51,15 @@ export function isMinimalPrompt(mode: Mode): boolean {
   return mode === 'minimal';
 }
 
+// Whether this turn may refine the plan above (#46). Vibe never refines: vibe's plan phase is a NEW
+// task — it chains its own implementation off the same prompt, so a revision framing would carry
+// the previous chain's steps into it. Keyed on the RECORDED mode because, as far as the loop is
+// concerned, vibe's plan phase is an ordinary plan turn (turnPromptMode maps it to 'plan') and
+// cannot tell the two apart itself — see RunTurnOptions.allowRefine in agent/loop.ts.
+export function turnRefines(mode: Mode): boolean {
+  return mode !== 'vibe';
+}
+
 export type CommandSpec = {
   name: string;
   desc: string;

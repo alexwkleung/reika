@@ -747,6 +747,10 @@ export function buildRoundZeroPrefix(opts: {
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
   minimalPrompt?: boolean;
+  // Same gate as runTurn's `allowRefine` (#46): false for vibe's plan phase. The warm prefix must
+  // match round 0 to the line, and the refine line rides exactly this composition (flag-off regime)
+  // — one side gating and the other deriving would be a guaranteed cache miss.
+  allowRefine?: boolean;
   // Needed only for the ask_user/subagent gates in the agent prompt, but it has to be the SAME list runTurn
   // will send: the warm prefix is worthless if it diverges from round 0 by a line.
   tools: Tool[];
@@ -771,6 +775,8 @@ export function buildRoundZeroPrefix(opts: {
     history: opts.history,
     round: 0,
     planSteps,
+    // null = explicitly no refinement (vibe's plan phase); undefined = derive, like runTurn does.
+    refine: opts.allowRefine === false ? null : undefined,
   });
 }
 
@@ -1231,6 +1237,13 @@ export async function runTurn(opts: {
   // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
   // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
   minimalPrompt?: boolean;
+  // Plan refinement (#46) is for plan-mode FOLLOW-UPS: the turn revises the plan the previous turn
+  // wrote. False for vibe's plan phase — vibe chains its own implementation turn off the same
+  // prompt, so the next vibe prompt is a NEW task whose plan merely happens to sit right after the
+  // last one, and a revision framing would carry the previous chain's steps into it. The front end
+  // knows which kind of turn this is (ui/commands.ts turnRefines); the loop only sees
+  // `promptMode: 'plan'` either way and cannot tell them apart itself.
+  allowRefine?: boolean;
   // `/compact` (issue #481). One harness-driven compaction round — the same machinery as the
   // automatic shrink event: compaction-note request, fold, session-cumulative counters, notices —
   // fired WITHOUT a user turn behind it. The user typed a slash command, so no user message enters
@@ -1569,10 +1582,12 @@ export async function runTurn(opts: {
   // asks that the plan be the last thing the model said). It feeds two places: the plan ledger
   // (every round, so the model is told to revise rather than re-derive) and the force-write
   // transform, which REPLACES the history and would otherwise rebuild the plan from the original
-  // request alone. Everywhere else it is undefined, i.e. "derive it" — which is what a caller
-  // building a round-0 prefix out of a pre-turn history (the warm) should do.
+  // request alone. Gated on `allowRefine`: vibe's plan phase passes false (a new task even when a
+  // plan sits right above — see the option), so it reads as a fresh planning pass. Everywhere else
+  // it is undefined, i.e. "derive it" — which is what a caller building a round-0 prefix out of a
+  // pre-turn history (the warm) should do.
   const refinePlan: PlanMarker | null =
-    opts.promptMode === 'plan' ? refineTarget(opts.history) : null;
+    opts.promptMode === 'plan' && opts.allowRefine !== false ? refineTarget(opts.history) : null;
 
   for (let i = 0; i < opts.config.maxTurns; i++) {
     if (opts.signal?.aborted) {

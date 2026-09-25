@@ -30,6 +30,10 @@ export type WarmContext = {
   // Minimal mode (#391). Separate from promptMode because a minimal turn sends promptMode 'agent'
   // with a very different system prompt — see loop.ts buildRoundZeroPrefix.
   minimalPrompt?: boolean;
+  // Plan refinement gate (#46), same as loop.ts RunTurnOptions.allowRefine: false for vibe's plan
+  // phase. Rides the key beside minimalPrompt for the same reason — vibe and plan BOTH send
+  // promptMode 'plan', so without it the two share a warmable key and one serves the other's prefix.
+  allowRefine?: boolean;
   calibration: number;
 };
 
@@ -57,10 +61,17 @@ export function warmKey(ctx: WarmContext): string {
         : 0;
   const fingerprint = last ? `${last.role}:${lastLen}` : 'empty';
   return [
-    // Minimal rides in the key beside promptMode, not folded into it: agent and minimal BOTH send
-    // promptMode 'agent', so without this the two would share a key and a mode switch would serve
-    // a warm built from the other one's prefix — a guaranteed miss, and a silent one.
-    ctx.minimalPrompt ? `${ctx.promptMode}+minimal` : ctx.promptMode,
+    // Minimal and norefine ride in the key beside promptMode, not folded into it: agent and minimal
+    // BOTH send promptMode 'agent', and plan and vibe's plan phase BOTH send 'plan', so without the
+    // tags the pairs would share a key and a mode switch would serve a warm built from the other
+    // one's prefix — a guaranteed miss, and a silent one.
+    [
+      ctx.promptMode,
+      ctx.minimalPrompt ? 'minimal' : '',
+      ctx.allowRefine === false ? 'norefine' : '',
+    ]
+      .filter(Boolean)
+      .join('+'),
     ctx.config.model,
     ctx.config.baseURL,
     ctx.bundle.hash,
@@ -79,6 +90,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     bundle: ctx.bundle,
     promptMode: ctx.promptMode,
     minimalPrompt: ctx.minimalPrompt,
+    allowRefine: ctx.allowRefine,
     sandbox: ctx.config.sandbox,
     unattended: ctx.config.unattended,
     tools: ctx.tools,

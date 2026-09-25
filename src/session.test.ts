@@ -58,6 +58,7 @@ type TurnOpts = {
   config: Config;
   tools: Tool[];
   promptMode?: string;
+  allowRefine?: boolean;
   prefixTrace?: unknown;
   signal?: AbortSignal;
   bundle?: ContextBundle;
@@ -190,11 +191,22 @@ describe('createSession', () => {
     expect(calls[0].promptMode).toBe('agent');
   });
 
+  it('lets a plan-mode follow-up refine the plan above, unlike vibe (#46)', async () => {
+    const s = await createSession({ cwd: '/repo', config: CONFIG });
+    await s.submit('plan it', { mode: 'plan' });
+    expect(calls[0].promptMode).toBe('plan');
+    expect(calls[0].allowRefine).toBe(true);
+  });
+
   describe('vibe', () => {
     it('runs the implement prompt as an agent turn after a written plan', async () => {
       const s = await createSession({ cwd: '/repo', config: CONFIG });
       const out = await s.submit('add a flag', { mode: 'vibe' });
       expect(calls.map(c => c.promptMode)).toEqual(['plan', 'agent']);
+      // Neither phase refines the plan above (#46): vibe's plan phase is a new task even when a
+      // plan sits right above it, so it is gated off (turnRefines) rather than left to the
+      // "last thing the model said" rule.
+      expect(calls.map(c => c.allowRefine)).toEqual([false, false]);
       expect(calls[1].userDisplay).toBe('/implement (vibe)');
       expect(out.filter(m => m.role === 'user').map(m => m.mode)).toEqual(['vibe', 'vibe']);
     });

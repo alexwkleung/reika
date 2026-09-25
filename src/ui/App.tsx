@@ -94,6 +94,7 @@ import {
   nextMode,
   turnMode,
   turnPromptMode,
+  turnRefines,
   turnTools,
   type Mode,
 } from './commands.js';
@@ -1040,10 +1041,12 @@ export function App() {
         config: s.config,
         // Same mapping as submitToModel below, through the same helpers so the two cannot drift —
         // a warm that builds a different prefix than the submit is a guaranteed cache miss.
-        // Vibe's first internal turn is a plan turn, so it warms the plan prefix.
+        // Vibe's first internal turn is a plan turn, so it warms the plan prefix — but without the
+        // refinement line, since that plan turn is a new task (turnRefines, #46).
         tools: turnTools(m, s.lists),
         promptMode: turnPromptMode(m),
         minimalPrompt: isMinimalPrompt(m),
+        allowRefine: turnRefines(m),
         calibration: s.calibration ?? 1,
       });
     }

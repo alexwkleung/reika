@@ -404,13 +404,15 @@ export function latestPlanMarker(history: Message[]): PlanMarker | null {
 // would be revising "I couldn't determine which file handles this"), so it reads as a fresh
 // planning pass instead. Same 0-step line seedPlanProgress draws, deliberately.
 //
-// "Still the last thing the model said" is what scopes refinement to plan mode without the loop
-// having to know the front end's mode. A plan ends its plan-mode turn, so a follow-up prompt lands
-// with the plan as the last assistant message — the user is iterating on it. Vibe's plan phase
-// ends the same way, but the harness then runs the implementation turn off the same prompt, so by
-// the time the user's NEXT vibe prompt starts a plan phase there is an implementation transcript
-// after the plan: that prompt is a new task, not a revision of the plan it happens to follow, and
-// framing it as one would carry the earlier chain's steps into it.
+// "Still the last thing the model said" is what keeps refinement scoped to an actual follow-up: a
+// plan ends its plan-mode turn, so a follow-up prompt lands with the plan as the last assistant
+// message — the user is iterating on it. An implementation turn (or any later model turn) after the
+// plan means the plan belongs to an earlier exchange. It does NOT do the whole job for vibe: vibe's
+// plan phase right after a written plan (a mode switch, or a plan-mode plan followed by a chat
+// detour and back) looks exactly like a follow-up, and framing a new task as a revision would carry
+// the earlier chain's steps into it. That half is the explicit gate — ui/commands.ts turnRefines,
+// threaded through RunTurnOptions.allowRefine — so the two together are what "vibe never refines"
+// actually means.
 export function refineTarget(history: Message[]): PlanMarker | null {
   const marker = latestPlanMarker(history);
   if (!marker || marker.steps.length === 0) return null;
@@ -424,7 +426,10 @@ export function refineTarget(history: Message[]): PlanMarker | null {
 // raw text: a model that re-emits the same plan renumber, reheads or reformats it freely, and the
 // question the caller is asking is whether the user's request landed in it, not whether the bytes
 // match. A next plan with no steps at all reads as changed (it isn't a revision of this plan, and
-// whether it is a dead end is the caller's own question — see planWritten).
+// whether it is a dead end is the caller's own question — see planWritten). On step TEXT (first
+// lines) only: a revision that reworks a step's body without touching its heading reads as
+// unchanged — the accepted trade, since comparing bodies would let the notes appended at plan
+// commit (grounding, URL) mask a no-op, which is the failure the caller is watching for.
 export function planChanged(previous: string, next: string): boolean {
   const before = parsePlanSteps(previous);
   const after = parsePlanSteps(next);

@@ -201,6 +201,32 @@ describe('plan refinement turn (#46)', () => {
     expect(ledger).not.toContain('This turn refines it');
   });
 
+  it("does not on vibe's plan phase (allowRefine: false) even with the plan right above", async () => {
+    // The case the "last thing the model said" rule cannot tell from a follow-up: a vibe prompt
+    // whose plan phase directly follows a written plan (a /plan → /vibe switch, or a chat detour
+    // and back). The front end gates it off (ui/commands.ts turnRefines → allowRefine); the loop
+    // obeys and reads the turn as a fresh planning pass, so a new task cannot absorb the earlier
+    // chain's steps.
+    const history = plannedHistory();
+    const messages: Message[] = [];
+    // The reply re-emits the very plan above: a refinement turn would flag "Plan unchanged", but a
+    // fresh planning pass legitimately produced a plan and must not.
+    h.scripted.push({ content: PLAN_STEP, toolCalls: undefined });
+    await runTurn({
+      userInput: 'now plan the release script',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [],
+      payloads: new PayloadStore(),
+      promptMode: 'plan',
+      allowRefine: false,
+      onMessage: m => messages.push(m),
+    });
+    expect(sentLedgerText()).not.toContain('This turn refines it');
+    expect(revisionNotice(messages)).not.toContain('Plan unchanged');
+  });
+
   it('resolves the refinement from the pre-turn history, not the growing one', () => {
     const preTurn = plannedHistory();
     const refine = refineTarget(preTurn);
