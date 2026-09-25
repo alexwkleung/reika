@@ -2,7 +2,9 @@
 
 A coding agent CLI for small local models, tuned for low quantization, with a focus on context discipline and capability alignment.
 
-<!-- Demo: record with `vhs docs/demo.tape` and replace this comment with ![Reika demo](docs/demo.gif) -->
+![Reika fixing a retry helper and its test with a local model](docs/demo.gif)
+
+<sup>A real local run of qwen3.6-35b-a3b-coding, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 
 Most coding agents are built for frontier models. Reika is built for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
 
