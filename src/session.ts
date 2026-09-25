@@ -94,6 +94,7 @@ export type SubmitOptions = {
   events?: SessionEvents;
   requestApproval?: RunTurnOptions['requestApproval'];
   requestQuestion?: RunTurnOptions['requestQuestion'];
+  isUnattended?: RunTurnOptions['isUnattended'];
   // Brackets each loop turn the submit runs (vibe runs two), for a front end that owns per-turn
   // state. A start that returns a signal aborts that turn alone; otherwise `signal` covers all.
   onTurnStart?: () => AbortSignal | void;
@@ -259,6 +260,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         signal: signal ?? undefined,
         requestApproval: submit.requestApproval ?? opts.requestApproval,
         requestQuestion: submit.requestQuestion ?? opts.requestQuestion,
+        isUnattended: submit.isUnattended,
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
         manualCompact: submit.manualCompact,

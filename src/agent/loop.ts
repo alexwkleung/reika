@@ -1150,6 +1150,9 @@ export async function runTurn(opts: {
   onPlanProgress?: (steps: PlanStep[]) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
+  // Whether the session is unattended right now (#526): `/unattended` toggles it mid-turn, so tools
+  // read it per call. Absent, `config.unattended` (launch state, and headless's constant) decides.
+  isUnattended?: () => boolean;
   signal?: AbortSignal;
   promptMode?: PromptMode;
   // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
@@ -3103,7 +3106,7 @@ export async function runTurn(opts: {
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
             sandbox: opts.config.sandbox,
-            unattended: opts.config.unattended,
+            unattended: opts.isUnattended?.() ?? opts.config.unattended,
             signal: opts.signal,
           });
           summary = result.summary;
@@ -3533,6 +3536,7 @@ function makeSpawnSubagent(
         payloads: parent.payloads,
         signal: parent.signal,
         requestApproval: parent.requestApproval,
+        isUnattended: parent.isUnattended,
         onUsage: parent.onUsage,
         priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
         onDecodeRate: rate => {
