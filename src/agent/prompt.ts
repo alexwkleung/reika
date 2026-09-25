@@ -16,6 +16,10 @@ export function buildSystemPrompt(opts: {
   // and neither the agent nor the plan prompt may point a model at a tool it does not have — the
   // same coupling the plan prompt keeps with planTools for bash (#109).
   canAsk?: boolean;
+  // Unattended with no ask_user (#526): nobody can answer, so the ask rule's slot says to decide and
+  // say so. The judgment calls are the one part of an unattended run only the model knows about —
+  // declines the harness reports itself. Never true alongside canAsk.
+  decideAlone?: boolean;
   // Whether `subagent` is in this turn's tool list. Same coupling: subagents run without it (no
   // recursion) and plan mode never has it, so neither may be pointed at it.
   canSubagent?: boolean;
@@ -33,10 +37,10 @@ export function buildSystemPrompt(opts: {
     return buildChatPrompt(opts.bundle);
   }
   if (mode === 'plan') {
-    return buildPlanPrompt(opts.bundle, opts.canAsk);
+    return buildPlanPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
   }
   if (opts.minimal) {
-    return buildMinimalPrompt(opts.bundle, opts.canAsk);
+    return buildMinimalPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
   }
   return buildAgentPrompt(opts);
 }
@@ -64,7 +68,11 @@ export function buildSystemPrompt(opts: {
 //    command, not a different tool.
 //  - Rule 5 is the ask_user permission, kept verbatim from the agent prompt and gated on the tool
 //    exactly as it is there.
-function buildMinimalPrompt(bundle: ContextBundle, canAsk?: boolean): string {
+function buildMinimalPrompt(
+  bundle: ContextBundle,
+  canAsk?: boolean,
+  decideAlone?: boolean,
+): string {
   const rules: string[] = [
     "For any question about this project's code, you MUST run a command and read its output before answering. Never describe code from general knowledge — you have been given no project information, so anything you have not looked at you do not know.",
     'You are starting blind. Before anything else, orient yourself: list the directory, then read the files that matter. Never guess a path, a filename, or an extension — check that it exists first.',
@@ -74,7 +82,9 @@ function buildMinimalPrompt(bundle: ContextBundle, canAsk?: boolean): string {
       ? [
           'Stopping to ask is a legitimate outcome, not a failure to try harder: when what you have read contradicts the request, use ask_user instead of silently picking one reading.',
         ]
-      : []),
+      : decideAlone
+        ? [DECIDE_ALONE_RULE]
+        : []),
   ];
   return [
     [
@@ -91,7 +101,7 @@ function buildMinimalPrompt(bundle: ContextBundle, canAsk?: boolean): string {
 // stopping condition is stated explicitly — weak models in a read-only mode have no natural
 // closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
-function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean): string {
+function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: boolean): string {
   // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
   // worse than saying nothing — it won't reach for one it has been told is absent. The `=0` text
   // is the pre-#109 prompt byte-for-byte, so the baseline arm A/Bs against an unchanged prompt.
@@ -131,7 +141,11 @@ function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean): string {
             '5. If the request could be planned two different ways — a choice of approach, of scope, or of where the change belongs — and the code you have read does not settle it, use ask_user ONCE, before writing the plan, then write the plan for the answer.',
             '   Never ask what grep/read could tell you, and never ask instead of writing the plan.',
           ]
-        : []),
+        : decideAlone
+          ? [
+              '5. No one can answer questions this session: if the request could be planned two different ways and the code does not settle it, plan for the most reasonable reading and state that choice at the top of the plan.',
+            ]
+          : []),
     ].join('\n'),
     `Working directory: ${bundle.cwd}`,
   ];
@@ -155,10 +169,16 @@ function sandboxSentence(canFetch: boolean, canSearch: boolean): string {
   );
 }
 
+// The ask rule's counterpart when nobody can answer (#526): the choice still gets made, so it
+// must at least be visible afterwards.
+const DECIDE_ALONE_RULE =
+  'No one can answer questions this session: when the request is ambiguous or the code contradicts it, pick the most reasonable reading, carry on, and name each such choice in your final reply.';
+
 function buildAgentPrompt(opts: {
   bundle: ContextBundle;
   planMode?: boolean;
   canAsk?: boolean;
+  decideAlone?: boolean;
   canSubagent?: boolean;
   sandbox?: boolean;
   canFetch?: boolean;
@@ -208,7 +228,9 @@ function buildAgentPrompt(opts: {
       ? [
           'Stopping to ask is a legitimate outcome, not a failure to try harder: when the code you have read contradicts the request, use ask_user instead of silently picking one reading.',
         ]
-      : []),
+      : opts.decideAlone
+        ? [DECIDE_ALONE_RULE]
+        : []),
   ];
   const parts: string[] = [
     [

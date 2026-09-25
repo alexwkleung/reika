@@ -44,3 +44,16 @@ export function declineSummary(
   if (!ctx.unattended) return `${action} declined by user${target}`;
   return `${action} not run${target} — unattended session, nobody to approve it. Carry on without it, or leave it for the user in your final reply.`;
 }
+
+// The end-of-turn roll-up of what an unattended turn declined (#526). Built from the approval
+// requests themselves, so it is complete by construction — a model asked to recall its declines
+// could drop one or invent one. Null when nothing was declined.
+export function formatUnattendedDeclines(reqs: ApprovalRequest[]): string | null {
+  if (reqs.length === 0) return null;
+  const lines = reqs.map(r => {
+    const what = r.tool === 'bash' ? (r.preview.split('\n')[0] ?? '') : r.subject;
+    return `  ${r.tool}: ${what}`;
+  });
+  const n = reqs.length === 1 ? '1 action' : `${reqs.length} actions`;
+  return [`Declined while unattended — ${n} left for you:`, ...lines].join('\n');
+}
