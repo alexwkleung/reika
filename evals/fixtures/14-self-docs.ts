@@ -17,7 +17,8 @@ export const fixture: Fixture = {
   },
   prompt:
     'What does the reika setting REIKA_AGE_LOW_FRACTION do, and what are its default and allowed range?',
-  timeoutMs: 8 * 60 * 1000,
+  // 15 min: qwen3.8-27b-xhigh timed out twice at 8 after 3–4 calls — slow reasoning, not a stall.
+  timeoutMs: 15 * 60 * 1000,
   assert: ({ messages }) => {
     if (!DOCS_DIR) return { pass: false, reason: 'no docs/ in this install — nothing to find' };
     const calls = messages.flatMap(m => (m.role === 'assistant' ? (m.toolCalls ?? []) : []));
