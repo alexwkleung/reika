@@ -51,6 +51,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `evals/`         | Fixture-based agent evals; runner + per-fixture files                                                                                          |
 | `src/types.ts`   | Shared types: `Message`, `Tool`, `Config`, `ContextBundle`, etc.                                                                               |
 | `src/session.ts` | `createSession`: boot, config/profile/bundle, model history and everything a turn threads to the next (#403); App, headless and evals drive it |
+| `docs/`          | User-facing reference; the README is only a landing page, so new keys, commands and tools are documented here                                  |
 
 ## Adding a new tool
 
@@ -59,6 +60,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 3. Register in `src/tools/index.ts`'s `defaultTools(config)`. If the tool needs a credential or endpoint, branch on the config (env-var-gated registration — keeps the system prompt lean for users who haven't opted in)
 4. Description must be short and action-oriented (small models pay for every token in the system prompt)
 5. Unit-test the logic the wrapper adds (caps, windows, footers — not the syscall), and add an eval fixture only if the question is whether a _model_ uses the tool correctly. See "Choosing a test instrument"
+6. Add it to the tool table in `docs/tools.md`
 
 ## Optional tools and provider abstractions
 
@@ -94,6 +96,7 @@ Two details that follow from what the budget is for. A refused search is **refun
 1. Add to `COMMANDS` in `src/ui/commands.ts` with `name` + `desc`
 2. Handle in `App.tsx`'s `handleCommand` switch
 3. Update the `/help` text inline in `App.tsx` so users see it
+4. Add it to the slash-command table in `docs/usage.md`
 
 A command that both **switches mode and submits to the model in one tick** (e.g. `/implement`, which flips to agent mode and runs "execute the plan above") must pass an explicit mode to `submitToModel`'s `modeOverride` param — the `setMode` call hasn't flushed yet, so `submitToModel`'s `mode` closure would still read the old mode and pick the wrong tools/`promptMode`.
 
@@ -766,6 +769,8 @@ Bootstrap loads `.gitignore` (and `.git/info/exclude`, plus nested `.gitignore` 
 ## Config sources
 
 `loadConfig()` reads dotenv from cwd `.env` first, then `~/.config/reika/.env` as fallback. Shell env vars take precedence over both (dotenv's no-override default). Order matters — don't reorder without thinking about precedence.
+
+A new `REIKA_*` key goes in the table in `docs/configuration.md` (and in `.env.example` if it is worth a commented default); the README lists only the handful a new user needs.
 
 ## Last session state (#365, `src/laststate.ts`)
 

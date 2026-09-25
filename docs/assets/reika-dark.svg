@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="262" height="100" viewBox="0 0 262 100" role="img" aria-labelledby="t">
+  <title id="t">Reika</title>
+  <defs>
+    <linearGradient id="ramp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#edc4e8"/>
+      <stop offset="1" stop-color="#a13d93"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="14" width="7" height="72" rx="3.5" fill="url(#ramp)"/>
+  <text x="34" y="67" fill="#d68cd6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-weight="500" font-size="54">✿</text>
+  <text x="86" y="68" fill="#d68cd6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-weight="500" font-size="54">Reika</text>
+</svg>
