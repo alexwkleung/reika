@@ -37,14 +37,14 @@ Most coding agents are built for frontier models. Reika is built for the models 
 
 - Node.js 22 or newer
 - An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API
-- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR.
+- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR. Windows may work under WSL2.
 
 ## Quick start
 
 Serve a model. With llama.cpp, `--jinja` enables the model's native tool-calling template, which is what makes tool calls reliable:
 
 ```sh
-llama-server -m ~/models/your-model.gguf -c 24576 --jinja
+llama-server -m ~/models/your-model.gguf -c 24576 --jinja <other-launch-args>
 ```
 
 Then install and point Reika at it:
