@@ -119,9 +119,9 @@ const bashSummaries = (messages: Message[]): string[] =>
   messages.flatMap(m => (m.role === 'tool' && m.summary.includes('Ran:') ? [m.summary] : []));
 
 describe('withdrawal ladder still catches bash-shaped inspection (#109 regression)', () => {
-  // The shapes the #109 rewrite dropped. Each is a line-range read: plan mode refuses to ADMIT them
-  // (their program argument can write), but the ladder must still REFUSE them as an escape, which is
-  // the opposite polarity on the same command. Before the predicate split these ran.
+  // The shapes the #109 rewrite dropped. Each is inspection the ladder must REFUSE as an escape,
+  // whether or not plan mode admits it (it admits the sed range print, not awk or tree). Before the
+  // predicate split these ran.
   it.each(["sed -n '1,50p' app.ts", "awk '{print $1}' app.ts", 'tree src'])(
     'refuses %s once inspection is withdrawn',
     async cmd => {

@@ -176,9 +176,11 @@ export const readOnlyBashTool: Tool = {
   ...bashTool,
   description:
     'Execute a READ-ONLY shell command in the working directory. Only inspection commands run: ' +
-    `${READ_ONLY_COMMAND_LIST}; GitHub reads: ${GH_PLAN_READ_LIST}; and pipelines of them. Anything that can write or run something ` +
-    'else is refused — redirection (>), command substitution ($(…)), sed/awk, and any command not ' +
-    'on that list. Use it for inspection the read/grep/glob/list tools cannot express.',
+    `${READ_ONLY_COMMAND_LIST}; GitHub reads: ${GH_PLAN_READ_LIST}; sed range prints ` +
+    "(sed -n '10,40p' f, sed -n '/start/,/end/p' f); and pipelines of them. Anything that can " +
+    'write or run something else is refused — redirection to a file (>), command substitution ' +
+    '($(…)), awk, any other sed script, and any command not on that list. Use it for inspection ' +
+    'the read/grep/glob/list tools cannot express.',
   async run(args, ctx) {
     const command = String(args.command ?? '').trim();
     if (!command) return { summary: 'Bash failed: empty command' };

@@ -52,9 +52,19 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
       'cat <(rm -rf dist)',
       'echo "$(rm -rf dist)"', // still executes inside double quotes
       'echo $((1+1))', // arithmetic is harmless; denied anyway, safety over precision
+      'echo \\\\`rm -rf dist`', // an escaped backslash, then a real substitution
+      'grep "\\`" f `rm -rf dist`', // one escaped backtick does not excuse a real pair
     ])('rejects %s', cmd => {
       expect(isProvablyReadOnly(cmd)).toBe(false);
     });
+
+    // Observed: a markdown-table grep refused in plan mode, costing a round.
+    it.each(['grep -n "^| \\`REIKA" docs/configuration.md', 'grep -n "\\$(" src/a.ts'])(
+      'allows an escaped backtick or dollar, which is a literal: %s',
+      cmd => {
+        expect(isProvablyReadOnly(cmd)).toBe(true);
+      },
+    );
   });
 
   describe('redirection is a write, unless it is search-pattern data', () => {
@@ -70,6 +80,26 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
     it('allows a redirection character that is quoted search data', () => {
       expect(isProvablyReadOnly('grep ">" file.txt')).toBe(true);
       expect(isProvablyReadOnly('cat "; rm -rf /"')).toBe(true); // a file with an alarming name
+    });
+
+    // Observed in a plan session: `grep -n … docs/*.md 2>/dev/null | head -40` refused, a round lost.
+    it.each([
+      'grep -n "MCP" AGENTS.md docs/*.md 2>/dev/null | head -40',
+      'ls src/nope 2> /dev/null',
+      'cat a.ts &>/dev/null',
+      'grep -rn foo src 2>&1 | head',
+      'find . -name "*.ts" 2>/dev/null; wc -l a.ts >&2',
+    ])('allows a redirection that cannot write a file: %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+    });
+
+    it.each([
+      'cat a.ts 2>/dev/null > b.ts',
+      'grep foo bar >/dev/null.txt',
+      'ls 2>/dev/nullfile',
+      'grep foo bar > /dev/null/../../tmp/x',
+    ])('still rejects a real write beside or disguised as one: %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(false);
     });
   });
 
@@ -104,8 +134,43 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
       `sed 's/a/b/w /tmp/pwn' file`, // the w flag writes
       `sed -i "s/x/y/" file.ts`,
       `sed --in-place s/x/y/ file.ts`,
-      `sed -n '1,50p' file`,
       'tree src', // -o writes the listing to a file
+    ])('rejects %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(false);
+    });
+  });
+
+  // sed is admitted only through a positive grammar: addresses, then p, = or q. Observed refusal:
+  // `sed -n '/## Adding a new tool/,/## Optional tools/p' AGENTS.md`, a plan round lost.
+  describe('sed: range prints only', () => {
+    it.each([
+      `sed -n '1,50p' file`,
+      `sed -n '120,$p' src/app.ts`,
+      `sed -n '/## Adding a new tool/,/## Optional tools/p' AGENTS.md`,
+      `sed -n '/start/I,+10p' f`,
+      `sed -n '5p;10p' f`,
+      `sed -ne '1,3p' -e '/x/=' f`,
+      `sed 20q f`,
+      `sed -n '/a\\/b/!p' f`, // escaped slash inside the regex
+      `gh pr diff 420 | sed -n '1,300p'`,
+      `sed -En '/w file/p' f`, // w inside a regex address is data
+    ])('admits %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+    });
+
+    it.each([
+      `sed -n '1,50w out.txt' f`, // w command writes
+      `sed -n 's/a/b/p' f`, // no s at all, so none of its w/e flags can ride along
+      `sed 's/a/b/w /tmp/pwn' f`,
+      `sed -n '1e rm -rf dist' f`, // GNU e executes
+      `sed -n '1r /etc/passwd' f`,
+      `sed -n '1,5{p}' f`, // blocks are outside the grammar
+      `sed -n '\\%x%p' f`, // custom regex delimiter
+      `sed -i -n '1p' f`,
+      `sed -n -f script.sed f`,
+      `sed -n --debug '1p' f`,
+      `sed -n`,
+      `sed -n -e`,
     ])('rejects %s', cmd => {
       expect(isProvablyReadOnly(cmd)).toBe(false);
     });
@@ -268,18 +333,18 @@ describe('isInspectionEscape — the withdrawal ladder refuses the call', () => 
     'cd src && cat app.ts',
     'grep -i foo file.ts',
     'sort -u file.ts',
+    "sed -n '1,50p' src/app.ts", // plan mode admits it via the sed grammar; still a ladder escape
+    "sed -n '100,200p' file.ts",
   ])('refuses everything plan mode admits: %s', cmd => {
     expect(isProvablyReadOnly(cmd)).toBe(true);
     expect(isInspectionEscape(cmd)).toBe(true);
   });
 
-  // The shapes that separate the two questions. These are line-range reads — the model reading
-  // instead of working — so the ladder MUST catch them, while plan mode must not admit them (their
-  // program argument can write, which no regex can rule out). Before the split, one predicate served
-  // both and these silently escaped the ladder.
+  // The shapes that separate the two questions. These are inspection — the model reading instead
+  // of working — so the ladder MUST catch them, while plan mode must not admit them (their program
+  // argument can write, which no regex can rule out). Before the split, one predicate served both
+  // and these silently escaped the ladder. sed's range prints left this list with its grammar.
   it.each([
-    "sed -n '1,50p' src/app.ts",
-    "sed -n '100,200p' file.ts",
     "awk '{print $1}' file.ts",
     "awk 'NR>10 && NR<40' file.ts",
     'tree src',
