@@ -1,41 +1,120 @@
 import { describe, expect, it } from 'vitest';
-import { chatTools, defaultTools, makeSearchProvider } from './index.js';
+import {
+  chatTools,
+  chooseSearchBackend,
+  defaultTools,
+  makeSearchProvider,
+  searchPrecedenceNotice,
+  type SearchProbe,
+} from './index.js';
 import { CdpSearchProvider } from '../search/cdp.js';
 import { SearxngProvider } from '../search/searxng.js';
 import type { Config } from '../types.js';
 
 const config = (over: Partial<Config>): Config => ({ ...over }) as Config;
+const SEARXNG = 'http://localhost:8888';
+const mac: SearchProbe = { platform: 'darwin', hasChrome: () => true };
+const macNoChrome: SearchProbe = { platform: 'darwin', hasChrome: () => false };
+const linux: SearchProbe = { platform: 'linux', hasChrome: () => true };
 
 describe('makeSearchProvider', () => {
   it('registers nothing when neither provider is configured', () => {
-    expect(makeSearchProvider(config({}))).toBeUndefined();
-    expect(makeSearchProvider(undefined)).toBeUndefined();
+    expect(makeSearchProvider(config({}), mac)).toBeUndefined();
+    expect(makeSearchProvider(undefined, mac)).toBeUndefined();
   });
 
   it('uses SearXNG when only it is configured', () => {
-    expect(makeSearchProvider(config({ searxngUrl: 'http://localhost:8888' }))).toBeInstanceOf(
+    expect(makeSearchProvider(config({ searxngUrl: SEARXNG }), mac)).toBeInstanceOf(
       SearxngProvider,
     );
   });
 
-  it('uses CDP when the flag is set, with no SearXNG instance needed', () => {
-    expect(makeSearchProvider(config({ cdpSearch: true }))).toBeInstanceOf(CdpSearchProvider);
+  it('uses CDP when the flag is on, with no SearXNG instance needed', () => {
+    expect(makeSearchProvider(config({ cdpSearch: 'on' }), mac)).toBeInstanceOf(CdpSearchProvider);
   });
 
   // The stated rule from #235: CDP outranks SearXNG. SearXNG reaches engines as a bare HTTP client
   // and gets CAPTCHA'd for it, so when both are available the browser is the one that stays served.
   it('prefers CDP over SearXNG when both are configured', () => {
-    const provider = makeSearchProvider(
-      config({ cdpSearch: true, searxngUrl: 'http://localhost:8888' }),
-    );
-    expect(provider).toBeInstanceOf(CdpSearchProvider);
+    const cfg = config({ cdpSearch: 'on', searxngUrl: SEARXNG });
+    expect(makeSearchProvider(cfg, mac)).toBeInstanceOf(CdpSearchProvider);
+    expect(
+      makeSearchProvider(config({ cdpSearch: 'auto', searxngUrl: SEARXNG }), mac),
+    ).toBeInstanceOf(CdpSearchProvider);
   });
 
   it('falls back to SearXNG when the CDP flag is off', () => {
-    const provider = makeSearchProvider(
-      config({ cdpSearch: false, searxngUrl: 'http://localhost:8888' }),
+    const cfg = config({ cdpSearch: 'off', searxngUrl: SEARXNG });
+    expect(makeSearchProvider(cfg, mac)).toBeInstanceOf(SearxngProvider);
+  });
+
+  // A hand-built Config predating the knob must not probe for a browser: undefined is 'off'.
+  it('treats an unset cdpSearch as off', () => {
+    expect(chooseSearchBackend(config({}), mac).backend).toBeUndefined();
+  });
+});
+
+describe('chooseSearchBackend — auto', () => {
+  it('uses a detected Chrome on macOS', () => {
+    expect(chooseSearchBackend(config({ cdpSearch: 'auto' }), mac)).toEqual({
+      backend: 'cdp',
+      cdpVia: 'detected',
+      searxngShadowed: false,
+    });
+  });
+
+  it('falls through to SearXNG, then nothing, when macOS has no Chrome', () => {
+    expect(
+      chooseSearchBackend(config({ cdpSearch: 'auto', searxngUrl: SEARXNG }), macNoChrome).backend,
+    ).toBe('searxng');
+    expect(chooseSearchBackend(config({ cdpSearch: 'auto' }), macNoChrome).backend).toBeUndefined();
+  });
+
+  // Off macOS the launch spawns a visible window that takes focus, so CDP is opt-in there.
+  it('never auto-selects CDP off macOS, even with Chrome installed', () => {
+    expect(chooseSearchBackend(config({ cdpSearch: 'auto' }), linux).backend).toBeUndefined();
+    expect(
+      chooseSearchBackend(config({ cdpSearch: 'auto', searxngUrl: SEARXNG }), linux).backend,
+    ).toBe('searxng');
+  });
+
+  it('lets Linux opt in explicitly', () => {
+    expect(chooseSearchBackend(config({ cdpSearch: 'on' }), linux).backend).toBe('cdp');
+  });
+
+  // 'on' is a demand, not a probe: without a browser it still picks CDP so the first search fails
+  // loudly with the install remedy, rather than silently searching somewhere else.
+  it('does not probe when the flag is on', () => {
+    let probed = false;
+    const probe: SearchProbe = { platform: 'darwin', hasChrome: () => ((probed = true), false) };
+    expect(chooseSearchBackend(config({ cdpSearch: 'on' }), probe).backend).toBe('cdp');
+    expect(probed).toBe(false);
+  });
+});
+
+describe('searchPrecedenceNotice', () => {
+  it('says nothing unless SearXNG is configured and outranked', () => {
+    expect(
+      searchPrecedenceNotice(chooseSearchBackend(config({ cdpSearch: 'auto' }), mac)),
+    ).toBeUndefined();
+    expect(
+      searchPrecedenceNotice(
+        chooseSearchBackend(config({ cdpSearch: 'off', searxngUrl: SEARXNG }), mac),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('names the winner and the way back when both are configured', () => {
+    const detected = searchPrecedenceNotice(
+      chooseSearchBackend(config({ cdpSearch: 'auto', searxngUrl: SEARXNG }), mac),
     );
-    expect(provider).toBeInstanceOf(SearxngProvider);
+    expect(detected).toMatch(/found automatically/);
+    expect(detected).toMatch(/REIKA_CDP_SEARCH=0/);
+    const flagged = searchPrecedenceNotice(
+      chooseSearchBackend(config({ cdpSearch: 'on', searxngUrl: SEARXNG }), mac),
+    );
+    expect(flagged).not.toMatch(/found automatically/);
+    expect(flagged).toMatch(/takes precedence over REIKA_SEARXNG_URL/);
   });
 });
 

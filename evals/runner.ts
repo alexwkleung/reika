@@ -24,6 +24,11 @@ import { fixture as f15 } from './fixtures/15-self-attractor.js';
 const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f14, f15];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Web search auto-enables on a Mac with Chrome, which would put `search` in every fixture's prompt
+// on some machines and not others. Pinned off before loadConfig's dotenv runs, so only a shell
+// value (not a .env one) opts an eval run back in.
+process.env.REIKA_CDP_SEARCH ??= '0';
+
 type RunRecord = {
   fixture: Fixture;
   result: AssertResult;

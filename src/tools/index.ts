@@ -12,7 +12,8 @@ import { fetchUrlTool } from './fetch.js';
 import { createSearchTool } from './search.js';
 import { SearxngProvider } from '../search/searxng.js';
 import { CdpSearchProvider } from '../search/cdp.js';
-import { ChromeHost } from '../search/_chrome.js';
+import { platform } from 'node:os';
+import { ChromeHost, findChrome } from '../search/_chrome.js';
 import type { SearchProvider } from '../search/types.js';
 
 // `offline` (#392): the machine has no route out (tools/_net.ts `isOffline`), so neither web
@@ -109,16 +110,62 @@ export function chatTools(config?: Config, opts: ToolListOptions = {}): Tool[] {
   return webTools(config, opts);
 }
 
+export type SearchBackend = 'cdp' | 'searxng';
+export type SearchChoice = {
+  backend: SearchBackend | undefined;
+  // Why CDP was picked: the user asked for it, or a browser was found. Worded differently in the
+  // notice, since "found automatically" is the case a user did not configure.
+  cdpVia?: 'flag' | 'detected';
+  // SearXNG is configured but CDP outranks it — the one case the user must be told about.
+  searxngShadowed: boolean;
+};
+export type SearchProbe = { platform: NodeJS.Platform; hasChrome: () => boolean };
+
+const systemProbe: SearchProbe = {
+  platform: platform(),
+  hasChrome: () => findChrome() !== undefined,
+};
+
 // Exported for the precedence test: which provider wins when both are configured is a rule, and a
 // rule stated only in a comment is one refactor away from silently inverting.
-export function makeSearchProvider(config?: Config): SearchProvider | undefined {
-  // Both providers are local-first — no third-party tool-use APIs, no credentials. CDP wins when
-  // enabled (#235): SearXNG reaches engines as a bare HTTP client and gets CAPTCHA'd for it, where
-  // a real browser on a persistent profile keeps being served. SearXNG stays the fallback so a
-  // machine without Chrome, or with the flag off, is exactly as it was.
-  if (config?.cdpSearch) {
-    return new CdpSearchProvider(new ChromeHost({ port: config.cdpPort }));
-  }
-  if (config?.searxngUrl) return new SearxngProvider(config.searxngUrl);
+//
+// Both providers are local-first — no third-party tool-use APIs, no credentials. CDP wins whenever
+// it is chosen (#235): SearXNG reaches engines as a bare HTTP client and gets CAPTCHA'd for it,
+// where a real browser on a persistent profile keeps being served. Auto-detection is macOS-only
+// because only there does the launch stay out of sight (`open -g -na`); elsewhere a Chrome window
+// would pop up and take focus on a search nobody opted into. Detection is an access check on a few
+// fixed paths — nothing launches until the first search.
+export function chooseSearchBackend(
+  config?: Config,
+  probe: SearchProbe = systemProbe,
+): SearchChoice {
+  const mode = config?.cdpSearch ?? 'off';
+  const cdpVia =
+    mode === 'on'
+      ? 'flag'
+      : mode === 'auto' && probe.platform === 'darwin' && probe.hasChrome()
+        ? 'detected'
+        : undefined;
+  const searxng = Boolean(config?.searxngUrl);
+  if (cdpVia) return { backend: 'cdp', cdpVia, searxngShadowed: searxng };
+  return { backend: searxng ? 'searxng' : undefined, searxngShadowed: false };
+}
+
+export function makeSearchProvider(
+  config?: Config,
+  probe: SearchProbe = systemProbe,
+): SearchProvider | undefined {
+  const { backend } = chooseSearchBackend(config, probe);
+  if (backend === 'cdp') return new CdpSearchProvider(new ChromeHost({ port: config?.cdpPort }));
+  if (backend === 'searxng' && config?.searxngUrl) return new SearxngProvider(config.searxngUrl);
   return undefined;
+}
+
+// The startup receipt when both providers are configured: a SearXNG URL the user set that silently
+// goes unused reads as SearXNG being broken. Every session, not once — it describes a standing
+// config the user can resolve in one line.
+export function searchPrecedenceNotice(choice: SearchChoice): string | undefined {
+  if (!choice.searxngShadowed) return undefined;
+  const how = choice.cdpVia === 'detected' ? 'Chrome, found automatically' : 'Chrome';
+  return `Web search uses ${how} (CDP), which takes precedence over REIKA_SEARXNG_URL. Set REIKA_CDP_SEARCH=0 to search through SearXNG instead.`;
 }

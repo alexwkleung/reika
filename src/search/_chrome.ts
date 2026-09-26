@@ -135,7 +135,7 @@ export class ChromeHost implements BrowserHost {
     if (!exe) {
       throw new SearchUnavailableError(
         'no Chrome or Chromium found',
-        'CDP search needs a browser. Install Chrome or Chromium, set REIKA_CHROME_PATH to its binary, or unset REIKA_CDP_SEARCH to fall back to SearXNG.',
+        'CDP search needs a browser. Install Chrome or Chromium, set REIKA_CHROME_PATH to its binary, or set REIKA_CDP_SEARCH=0 to fall back to SearXNG.',
       );
     }
     mkdirSync(this.profileDir, { recursive: true });

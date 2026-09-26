@@ -37,6 +37,7 @@ const ENV_KEYS = [
   'REIKA_PLAN_EXPERIMENT',
   'REIKA_AUTO_APPROVE',
   'REIKA_SKILL_AUTO',
+  'REIKA_CDP_SEARCH',
   'REIKA_VISION',
   'REIKA_KIMI_VISION',
   'REIKA_VISION_MODEL',
@@ -725,6 +726,28 @@ describe('REIKA_SKILL_AUTO (#425)', () => {
     for (const v of ['off', '0', 'false', 'aks']) {
       process.env.REIKA_SKILL_AUTO = v;
       expect(loadConfig().skillAuto, v).toBe('off');
+    }
+  });
+});
+
+describe('REIKA_CDP_SEARCH', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is auto — Chrome is used where one is found', () => {
+    expect(loadConfig().cdpSearch).toBe('auto');
+  });
+
+  it('1/true/on force it on, 0/off and any typo turn it off', () => {
+    for (const v of ['1', 'true', 'ON']) {
+      process.env.REIKA_CDP_SEARCH = v;
+      expect(loadConfig().cdpSearch, v).toBe('on');
+    }
+    // A typo must not be what starts a browser.
+    for (const v of ['0', 'off', 'false', 'yse']) {
+      process.env.REIKA_CDP_SEARCH = v;
+      expect(loadConfig().cdpSearch, v).toBe('off');
     }
   });
 });
