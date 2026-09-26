@@ -81,6 +81,9 @@ export function Approval({
       <Box flexDirection="column" marginTop={1}>
         {isCommand ? (
           <CommandPreview command={request.preview} maxRows={maxRows} />
+        ) : request.tool === 'fetch_url' ? (
+          // A URL, not a diff: DiffView would draw it as one unchanged line with a gutter.
+          <Text>{request.preview}</Text>
         ) : (
           <DiffView
             diff={request.preview}

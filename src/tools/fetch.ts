@@ -3,6 +3,8 @@ import { Defuddle } from 'defuddle/node';
 import { JSDOM } from 'jsdom';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { WEB_USER_AGENT } from '../version.js';
+import { declineSummary } from '../approval.js';
+import { exfiltrationRisk } from './_exfil.js';
 import { classifyPrivateUrl, publicOnlyDispatcher } from './_hosts.js';
 import { errorCode, offlineCode, rootMessage } from './_net.js';
 import {
@@ -288,6 +290,27 @@ export const fetchUrlTool: Tool = {
     const offline = ctx.webHealth?.offline;
     if (offline) {
       return { summary: `Fetch skipped: still offline this turn (${offline})` };
+    }
+    // A new URL carrying data is the one fetch that needs a human (#548). After the saved-page and
+    // offline checks, which send nothing; before the budget, so a declined fetch costs no slot.
+    const risk = exfiltrationRisk(url, ctx.sourcedUrls?.());
+    if (risk) {
+      // Under `bypass` there is nobody to ask, and the one thing this guard exists for is the case
+      // nobody is watching — refused, like an out-of-project write.
+      if (!ctx.requestApproval) {
+        return {
+          summary:
+            `Fetch refused: ${url} — ${risk}. Approvals are bypassed, so it cannot be confirmed ` +
+            'with the user. Fetch a link you were given instead, or ask the user to open this one.',
+        };
+      }
+      const ok = await ctx.requestApproval({
+        tool: 'fetch_url',
+        subject: new URL(url).host,
+        preview: url,
+        warnings: [`Possible data in URL: ${risk}`],
+      });
+      if (!ok) return { summary: declineSummary('Fetch', ` for ${url}`, ctx) };
     }
     const budget = ctx.webBudget?.fetches;
     if (budget && budget.used >= budget.max) {

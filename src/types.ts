@@ -298,6 +298,10 @@ export type ToolContext = {
   // Same per-turn dedupe contract as resolvedDeps: each URL a write/edit introduces is fetched at
   // most once, so a follow-up edit to the same file doesn't re-fetch it.
   groundedUrls?: Set<string>;
+  // Every URL the model was handed this session — user messages and tool results (tools/_exfil.ts,
+  // #548). A thunk so only a fetch pays for the scan. Undefined means unknown, which the exfil
+  // check reads as unsourced.
+  sourcedUrls?: () => ReadonlySet<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   // Put a question to the user and wait for their answer (tools/ask.ts). Resolves null when the
   // user dismisses it. Undefined when there is no one to ask — a subagent, a test, a non-interactive

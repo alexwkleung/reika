@@ -51,7 +51,9 @@ export function declineSummary(
 export function formatUnattendedDeclines(reqs: ApprovalRequest[]): string | null {
   if (reqs.length === 0) return null;
   const lines = reqs.map(r => {
-    const what = r.tool === 'bash' ? (r.preview.split('\n')[0] ?? '') : r.subject;
+    // A fetch's subject is its host; the URL is the preview, and the URL is what was declined.
+    const what =
+      r.tool === 'bash' || r.tool === 'fetch_url' ? (r.preview.split('\n')[0] ?? '') : r.subject;
     return `  ${r.tool}: ${what}`;
   });
   const n = reqs.length === 1 ? '1 action' : `${reqs.length} actions`;

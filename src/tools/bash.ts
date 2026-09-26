@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
+import { remoteUrlRisk } from './_exfil.js';
 import { declineSummary } from '../approval.js';
 import {
   SANDBOX_EXEC_ERROR_PREFIX,
@@ -64,6 +65,14 @@ export const bashTool: Tool = {
     // configuration this exists for. The signal was always computed one line before the prompt; this
     // is the same signal feeding both decisions, not a second classifier.
     const warnings = detectDangerousPatterns(command, ctx.cwd);
+    // A git/gh command keeps the network unprompted (`networkAllowedFor`), so a remote the model
+    // was never handed is the fetch guard's leak shape by another road (#550). Joining the warnings
+    // is the whole mechanism: it prompts under `safe`, and under `bypass` a flagged command never
+    // gets the network allow.
+    const remote = networkAllowedFor(command)
+      ? remoteUrlRisk(command, ctx.sourcedUrls?.())
+      : undefined;
+    if (remote) warnings.push(remote);
     if (ctx.requestApproval) {
       const ok = await ctx.requestApproval({
         tool: 'bash',
@@ -189,6 +198,16 @@ export const readOnlyBashTool: Tool = {
         summary:
           `Bash refused (read-only mode): ${command}. It could write or run something off the ` +
           'read-only list. Use read/grep/glob/list, or rewrite it as a read-only pipeline.',
+      };
+    }
+    // Plan mode never prompts, so a `gh api` at a remote the model built is refused rather than
+    // asked about (#550) — the same leak shape agent mode stops to confirm.
+    const remote = networkAllowedFor(command)
+      ? remoteUrlRisk(command, ctx.sourcedUrls?.())
+      : undefined;
+    if (remote) {
+      return {
+        summary: `Bash refused (read-only mode): ${command}. ${remote}. Use a link you were given.`,
       };
     }
     // No approval prompt, deliberately. `off` is documented as "confirm every MUTATING action"
