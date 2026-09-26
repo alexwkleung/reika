@@ -176,6 +176,86 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
   });
 });
 
+describe('isProvablyReadOnly — gh reads', () => {
+  it.each([
+    'gh issue view 213',
+    'gh issue view 213 --comments',
+    'gh pr view 420 --json title,body',
+    'gh pr diff 420 | head -300',
+    'gh pr checks 420',
+    'gh -R octocat/hello-world issue list --state open',
+    'gh search issues "flicker" --repo octocat/hello-world',
+    'gh api repos/octocat/hello-world/pulls/1/comments',
+    'gh api -X GET repos/octocat/hello-world/commits --paginate',
+    'gh api -H "Accept: application/vnd.github.diff" repos/octocat/hello-world/pulls/1',
+  ])('admits: %s', cmd => {
+    expect(isProvablyReadOnly(cmd)).toBe(true);
+  });
+
+  it.each([
+    ['comments on GitHub', 'gh pr comment 420 --body hi'],
+    ['edits GitHub', 'gh issue edit 213 --add-label bug'],
+    ['writes the working tree', 'gh pr checkout 420'],
+    ['writes a clone', 'gh repo clone octocat/hello-world'],
+    ['writes artifacts', 'gh run download 1'],
+    ['never exits', 'gh run watch 1'],
+    ['never exits (flag)', 'gh pr checks 420 --watch'],
+    ['opens a browser', 'gh pr view 420 --web'],
+    ['opens a browser (short)', 'gh issue view 213 -w'],
+    ['bare noun', 'gh pr'],
+    ['unknown noun (an extension)', 'gh dash'],
+    ['api field = POST', 'gh api repos/octocat/hello-world/issues -f title=x'],
+    ['api explicit method', 'gh api -X DELETE repos/octocat/hello-world'],
+    ['api attached method', 'gh api --method=PATCH repos/octocat/hello-world'],
+    ['api body from stdin', 'gh api repos/octocat/hello-world/issues --input body.json'],
+    ['api graphql', "gh api graphql -F query='{ viewer { login } }'"],
+    ['api graphql, no field', 'gh api graphql'],
+    ['api method override', 'gh api -H "X-HTTP-Method-Override: DELETE" repos/o/r'],
+    ['env prefix', 'GH_HOST=example.com gh issue view 1'],
+    ['redirect', 'gh pr diff 420 > pr.diff'],
+  ])('refuses (%s): %s', (_why, cmd) => {
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
+  // Plan mode's set must stay inside what agent mode already runs unprompted; a verb admitted here
+  // but flagged there would make plan mode the looser of the two.
+  it('admits nothing the danger scan flags', async () => {
+    const { detectDangerousPatterns } = await import('./_danger.js');
+    for (const cmd of [
+      'gh pr view 1',
+      'gh pr list',
+      'gh pr diff 1',
+      'gh pr checks 1',
+      'gh pr status',
+      'gh issue view 1',
+      'gh issue list',
+      'gh issue status',
+      'gh repo view',
+      'gh repo list',
+      'gh run view 1',
+      'gh run list',
+      'gh workflow view ci',
+      'gh workflow list',
+      'gh release view v1',
+      'gh release list',
+      'gh label list',
+      'gh search issues x',
+      'gh search prs x',
+      'gh search repos x',
+      'gh search code x',
+      'gh search commits x',
+      'gh api repos/o/r',
+    ]) {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+      expect(detectDangerousPatterns(cmd)).toEqual([]);
+    }
+  });
+
+  it('is not an inspection escape for the ladder', () => {
+    expect(isInspectionEscape('gh issue view 213')).toBe(false);
+  });
+});
+
 describe('isInspectionEscape — the withdrawal ladder refuses the call', () => {
   // Everything plan mode admits is inspection by definition: the ladder is a strict superset, and a
   // regression that narrowed it would show up here first.

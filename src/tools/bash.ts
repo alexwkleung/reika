@@ -16,7 +16,7 @@ import {
   sandboxRefusedWrite,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
-import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
+import { GH_PLAN_READ_LIST, READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
 import { changesSince, snapshotTree } from './_treediff.js';
 
 // Two bounds, because "long-running" and "stuck" are different shapes (#408). A build or a test
@@ -176,7 +176,7 @@ export const readOnlyBashTool: Tool = {
   ...bashTool,
   description:
     'Execute a READ-ONLY shell command in the working directory. Only inspection commands run: ' +
-    `${READ_ONLY_COMMAND_LIST}, and pipelines of them. Anything that can write or run something ` +
+    `${READ_ONLY_COMMAND_LIST}; GitHub reads: ${GH_PLAN_READ_LIST}; and pipelines of them. Anything that can write or run something ` +
     'else is refused — redirection (>), command substitution ($(…)), sed/awk, and any command not ' +
     'on that list. Use it for inspection the read/grep/glob/list tools cannot express.',
   async run(args, ctx) {
