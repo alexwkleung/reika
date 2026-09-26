@@ -164,6 +164,40 @@ describe('REIKA_REASONING_CEIL', () => {
     expect(nudge?.harness).toBe(true);
   });
 
+  it('writes the plan without the false diagnosis when the plan-mode ladder refused', async () => {
+    // Plan-mode half of the case above: the recovery is the force-write, not a nudge, and it must
+    // not claim repetition the ratio gate just ruled out.
+    h.stream.push(healthy(60, 1), healthy(60, 2));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: '', toolCalls: undefined },
+      { content: 'the plan', toolCalls: undefined },
+    );
+    const messages: Message[] = [];
+    await runTurn({
+      userInput: 'think it through',
+      history: [],
+      bundle: makeBundle(cwd),
+      config: makeConfig(),
+      tools: [],
+      payloads: new PayloadStore(),
+      promptMode: 'plan',
+      onMessage: m => messages.push(m),
+    });
+
+    const notices = messages.filter(
+      (m): m is Extract<Message, { role: 'system' }> => m.role === 'system',
+    );
+    expect(
+      notices.some(
+        m =>
+          m.content ===
+          'Reasoning kept hitting the length limit — writing the plan from what was gathered.',
+      ),
+    ).toBe(true);
+    expect(notices.some(m => m.content.includes('repeating itself'))).toBe(false);
+  });
+
   it('blames the length limit, not looping, when the turn runs out of recoveries', async () => {
     // Two refusals spend MAX_VERBATIM_RECOVERIES and the turn stops. Telling the user the model
     // "kept looping" here sends them after their prompt and their model choice when the cause was a
