@@ -45,10 +45,10 @@ const READ_ONLY_COMMANDS = new Set([
 
 // `awk` and `sed` are absent from the set above despite being read-only in their common uses. Both
 // take a PROGRAM as an argument, and from inside it can write a file (`awk '{print > "f"}'`,
-// `sed 's/a/b/w f'`) or shell out (`awk 'BEGIN{system("…")}'`). Validating a Turing-complete program
-// by regex is a losing game, so plan mode refuses them; `read` with offset/limit, `head`/`tail` and
-// `grep` cover the inspection they were reached for. `tree` is absent for a smaller version of the
-// same reason — its `-o` writes the listing to a file, and `ls`/`find` already cover it.
+// `sed 's/a/b/w f'`) or shell out (`awk 'BEGIN{system("…")}'`). Spotting every write in a
+// Turing-complete program is a losing game, so plan mode refuses awk outright and admits sed only
+// through `sedSegmentIsReadOnly`'s positive grammar, below. `tree` is absent for a smaller version of
+// the same reason — its `-o` writes the listing to a file, and `ls`/`find` already cover it.
 //
 // The LADDER still needs them. `sed -n '1,50p' f`, `awk '{print $1}' f` and `tree src` are exactly
 // the shapes a withdrawn model routes to, and they were refusable before #109 split these questions
@@ -134,9 +134,36 @@ function ghApiIsGet(args: string[]): boolean {
 // negative on a single-quoted literal `$(` in a search pattern — cheap, and it errs safe.
 const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 
+// A backslash-escaped `` ` `` or `$` is a literal character in every quoting context (single quotes
+// make it literal anyway), so it can never open a substitution. Escaped backslashes go first so
+// `\\`…`` — a literal backslash, then a real substitution — still reads as one. Observed: a
+// markdown-table grep (`"^| \`REIKA"`) refused, a plan round lost.
+function dropEscapedSubstitutionChars(raw: string): string {
+  return raw.replace(/\\\\/g, '').replace(/\\[`$]/g, '');
+}
+
 // Redirection is the one metacharacter that is routinely DATA (`grep ">" f`), so it alone is tested
 // against the quote-masked view. `>>` and `2>&1` are subsumed.
 const REDIRECT_RE = />/;
+
+// The redirections that cannot write a file: discarding a stream (`2>/dev/null`, `&>/dev/null`) and
+// duplicating a descriptor (`2>&1`, `>&2`). Blanked before the redirect test and the split, since
+// `2>/dev/null` is how a model quiets a glob that may not match and refusing it cost a plan round,
+// and `2>&1`'s `&` otherwise splits off a segment named `1`. Anchored so `>/dev/null.txt` is not one.
+const HARMLESS_REDIRECT_RE = /(?:\d*|&)>>?\s*\/dev\/null(?=\s|$|[;&|])|\d*>&\d+(?=\s|$|[;&|])/g;
+
+// Blank the same ranges in the raw command and its mask, so offsets still line up for the split.
+function blankHarmlessRedirects(raw: string, masked: string): { raw: string; masked: string } {
+  let r = raw;
+  let m = masked;
+  for (const hit of masked.matchAll(HARMLESS_REDIRECT_RE)) {
+    const blank = ' '.repeat(hit[0].length);
+    const at = hit.index ?? 0;
+    r = r.slice(0, at) + blank + r.slice(at + blank.length);
+    m = m.slice(0, at) + blank + m.slice(at + blank.length);
+  }
+  return { raw: r, masked: m };
+}
 
 // Every separator that starts a new command, including the ones the shell takes without surrounding
 // whitespace: `;`, `&`, `|`, and a bare newline. A missing one lets a second command ride along.
@@ -180,9 +207,46 @@ export function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
-function segmentIsReadOnly(segment: string, recognized: Set<string>, ghReads: boolean): boolean {
+// Plan mode's sed: a line-range or pattern-range print (`sed -n '120,180p' f`,
+// `sed -n '/## A/,/## B/p' f`) — the read models reach for most, refused before at a round's cost.
+// An ALLOWLIST of script shapes, never a scan for writes: every command is `p`, `=` or `q` behind
+// optional addresses, so `w`, `s///w`, GNU `e` and `r` cannot appear at all, and `-i`/`-f`/every
+// other flag is refused. Regex addresses take only the `/` delimiter, since a custom one (`\%re%`)
+// is where a hand-rolled parser starts to guess.
+const SED_ADDR = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/I?)`;
+const SED_RANGE = String.raw`(?:${SED_ADDR}(?:\s*,\s*(?:${SED_ADDR}|[+~]\d+))?)`;
+const SED_COMMAND = String.raw`\s*${SED_RANGE}?\s*!?\s*[p=q]\s*`;
+const SED_SCRIPT_RE = new RegExp(String.raw`^${SED_COMMAND}(?:;${SED_COMMAND})*;?$`);
+const SED_PRINT_FLAGS = /^-[nEr]+$|^--(?:quiet|silent|regexp-extended)$/;
+const SED_SCRIPT_FLAG = /^-[nEr]*e$|^--expression$/;
+
+function sedSegmentIsReadOnly(args: string[]): boolean {
+  const scripts: string[] = [];
+  const operands: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (SED_SCRIPT_FLAG.test(a)) {
+      if (i + 1 >= args.length) return false;
+      scripts.push(args[++i]);
+    } else if (a.startsWith('-')) {
+      if (!SED_PRINT_FLAGS.test(a)) return false;
+    } else {
+      operands.push(a);
+    }
+  }
+  // Without -e, the first operand is the script and the rest are the files it reads.
+  if (scripts.length === 0) {
+    const script = operands.shift();
+    if (script === undefined) return false;
+    scripts.push(script);
+  }
+  return scripts.every(sc => SED_SCRIPT_RE.test(sc));
+}
+
+function segmentIsReadOnly(segment: string, recognized: Set<string>, planReads: boolean): boolean {
   const [name, ...args] = words(segment);
-  if (name === 'gh' && ghReads) return ghSegmentIsReadOnly(args);
+  if (name === 'gh' && planReads) return ghSegmentIsReadOnly(args);
+  if (name === 'sed' && planReads) return sedSegmentIsReadOnly(args);
   if (!name || !recognized.has(name)) return false;
   const writeFlag = WRITE_FLAGS[name];
   if (writeFlag && args.some(a => writeFlag.test(a))) return false;
@@ -227,17 +291,17 @@ export function splitSegments(command: string, masked: string): string[] {
 // The shared core. Every unknown resolves to false, so being wrong costs a refused inspection rather
 // than an unnoticed write on the plan side, and a missed escape rather than a refused build on the
 // ladder side. Pure.
-function classify(command: string, recognized: Set<string>, ghReads = false): boolean {
-  const c = command.trim();
-  if (!c || SUBSTITUTION_RE.test(c)) return false;
-  const masked = maskQuoted(c);
+function classify(command: string, recognized: Set<string>, planReads = false): boolean {
+  const trimmed = command.trim();
+  if (!trimmed || SUBSTITUTION_RE.test(dropEscapedSubstitutionChars(trimmed))) return false;
+  const { raw: c, masked } = blankHarmlessRedirects(trimmed, maskQuoted(trimmed));
   if (REDIRECT_RE.test(masked)) return false;
   const segments = splitSegments(c, masked);
   // Leading `cd <path>` hops (which the observed loops prefix) carry no read of their own; an empty
   // remainder is not read-only.
   const meaningful = segments.map(s => s.trim()).filter(s => s && !/^cd\s/.test(s));
   if (meaningful.length === 0) return false;
-  return meaningful.every(s => segmentIsReadOnly(s, recognized, ghReads));
+  return meaningful.every(s => segmentIsReadOnly(s, recognized, planReads));
 }
 
 // PLAN MODE's gate: true only when the command is PROVABLY pure read-only inspection.
