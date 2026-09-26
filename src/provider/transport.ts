@@ -78,6 +78,11 @@ export type ChatCompletionRequest = {
   // the system prompt), so dropping it diverges the prompt from its first bytes and the round
   // re-prefills everything. Honored by llama.cpp/vllm/OpenAI; client.ts degrades from a rejection.
   tool_choice?: 'none';
+  // Cache-routing hint, sent only to hosts that document it (provider/cachehints.ts). Carries the
+  // process's SESSION_ID, the same id `x-session-id` sends.
+  prompt_cache_key?: string;
+  // Top-level cache breakpoint, sent only for Anthropic models on OpenRouter (provider/cachehints.ts).
+  cache_control?: { type: 'ephemeral' };
 };
 
 // A streamed delta chunk. Field unions cover provider variants:
