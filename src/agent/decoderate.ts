@@ -97,8 +97,12 @@ export function derivedDecodeRate(
 ): number | undefined {
   if (!usage || !timing) return undefined;
   const ms = timing.totalMs - timing.ttftMs;
-  if (usage.completionTokens < MIN_SAMPLE_TOKENS || ms < MIN_SAMPLE_MS) return undefined;
-  const observed = usage.completionTokens / (ms / 1000);
+  // The window opens when the first token arrives, so it times the n-1 tokens after it — the same
+  // count the engine divides. Dividing the full n credited the window with a token it never timed,
+  // an overshoot of n/(n-1) that the chip then showed as throughput.
+  const decoded = usage.completionTokens - 1;
+  if (decoded < MIN_SAMPLE_TOKENS || ms < MIN_SAMPLE_MS) return undefined;
+  const observed = decoded / (ms / 1000);
   if (observed < MIN_RATE || observed > MAX_RATE) return undefined;
   return observed;
 }
