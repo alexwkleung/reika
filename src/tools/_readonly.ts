@@ -60,6 +60,75 @@ const INSPECTION_ALSO = new Set(['sed', 'awk', 'tree']);
 // drift from the set actually enforced.
 export const READ_ONLY_COMMAND_LIST = [...READ_ONLY_COMMANDS].join(', ');
 
+// `gh` reads, for plan mode only. `/issue` and `/review` open on a `gh` fetch, and a plan grounded
+// in the issue it answers needs the same. Stricter than `_danger.ts`'s GH_READ_VERBS on purpose:
+// that table asks "does this act on GitHub as the user", this one "does it touch anything at all",
+// so `pr checkout`, `repo clone`, `run download` (local writes) and `run watch` (never exits) are
+// out. The ladder does not recognize `gh`: a withdrawn model re-fetching an issue is circling, but
+// refusing a fetch it has not made yet is the expensive direction there.
+const GH_PLAN_READS: Record<string, readonly string[]> = {
+  pr: ['view', 'list', 'diff', 'checks', 'status'],
+  issue: ['view', 'list', 'status'],
+  repo: ['view', 'list'],
+  run: ['view', 'list'],
+  workflow: ['view', 'list'],
+  release: ['view', 'list'],
+  label: ['list'],
+  search: ['issues', 'prs', 'repos', 'code', 'commits'],
+};
+
+// Rendered for the tool description, like READ_ONLY_COMMAND_LIST.
+export const GH_PLAN_READ_LIST = Object.entries(GH_PLAN_READS)
+  .map(([noun, verbs]) => `gh ${noun} ${verbs.join('|')}`)
+  .concat('gh api (GET)')
+  .join(', ');
+
+const GH_VALUE_FLAGS = new Set(['-R', '--repo', '--hostname']);
+// `--web` opens the user's browser and `--watch` never exits; neither is a read the model can use.
+// A short cluster carrying `w` is refused with them (pflag accepts `-wc`).
+const GH_REFUSED_FLAG_RE = /^(?:--web|--watch)(?:=|$)|^-[a-zA-Z]*w[a-zA-Z]*$/;
+// Every way `gh api` is told to send a body or a non-GET method. A field alone flips it to POST.
+const GH_API_WRITE_FLAG_RE = /^(?:-f|-F|--field|--raw-field|--input)(?:=|$)|^-[fF]./;
+
+function ghSegmentIsReadOnly(args: string[]): boolean {
+  const sub: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (GH_REFUSED_FLAG_RE.test(a)) return false;
+    if (a.startsWith('-')) {
+      if (GH_VALUE_FLAGS.has(a) && sub.length < 2) i++;
+      continue;
+    }
+    if (sub.length < 2) sub.push(a);
+  }
+  const [noun, verb] = sub;
+  if (noun === 'api') return ghApiIsGet(args.slice(args.indexOf('api') + 1));
+  return !!verb && (GH_PLAN_READS[noun]?.includes(verb) ?? false);
+}
+
+// GET only, derived rather than read off `-X`: a field makes it a POST with no `-X` in sight.
+// `graphql` is refused whole — a mutation is a query string, and no flag says which one it is. A
+// method-override header is refused for the same reason `-X` is.
+function ghApiIsGet(args: string[]): boolean {
+  let endpoint: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (GH_API_WRITE_FLAG_RE.test(a)) return false;
+    if (a === '-X' || a === '--method') {
+      if (args[++i]?.toUpperCase() !== 'GET') return false;
+    } else if (/^(?:-X|--method=)/.test(a)) {
+      if (a.replace(/^(?:-X|--method=)/, '').toUpperCase() !== 'GET') return false;
+    } else if (a === '-H' || a === '--header') {
+      if (/override/i.test(args[++i] ?? '')) return false;
+    } else if (/^(?:-H|--header=)/.test(a)) {
+      if (/override/i.test(a)) return false;
+    } else if (!a.startsWith('-') && endpoint === undefined) {
+      endpoint = a;
+    }
+  }
+  return !!endpoint && endpoint !== 'graphql';
+}
+
 // Substitution runs a nested command the allowlist would never see. Tested against the RAW string,
 // not the quote-masked view, because `$(…)` inside double quotes still executes. Costs a false
 // negative on a single-quoted literal `$(` in a search pattern — cheap, and it errs safe.
@@ -111,8 +180,9 @@ export function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
-function segmentIsReadOnly(segment: string, recognized: Set<string>): boolean {
+function segmentIsReadOnly(segment: string, recognized: Set<string>, ghReads: boolean): boolean {
   const [name, ...args] = words(segment);
+  if (name === 'gh' && ghReads) return ghSegmentIsReadOnly(args);
   if (!name || !recognized.has(name)) return false;
   const writeFlag = WRITE_FLAGS[name];
   if (writeFlag && args.some(a => writeFlag.test(a))) return false;
@@ -157,7 +227,7 @@ export function splitSegments(command: string, masked: string): string[] {
 // The shared core. Every unknown resolves to false, so being wrong costs a refused inspection rather
 // than an unnoticed write on the plan side, and a missed escape rather than a refused build on the
 // ladder side. Pure.
-function classify(command: string, recognized: Set<string>): boolean {
+function classify(command: string, recognized: Set<string>, ghReads = false): boolean {
   const c = command.trim();
   if (!c || SUBSTITUTION_RE.test(c)) return false;
   const masked = maskQuoted(c);
@@ -167,12 +237,12 @@ function classify(command: string, recognized: Set<string>): boolean {
   // remainder is not read-only.
   const meaningful = segments.map(s => s.trim()).filter(s => s && !/^cd\s/.test(s));
   if (meaningful.length === 0) return false;
-  return meaningful.every(s => segmentIsReadOnly(s, recognized));
+  return meaningful.every(s => segmentIsReadOnly(s, recognized, ghReads));
 }
 
 // PLAN MODE's gate: true only when the command is PROVABLY pure read-only inspection.
 export function isProvablyReadOnly(command: string): boolean {
-  return classify(command, READ_ONLY_COMMANDS);
+  return classify(command, READ_ONLY_COMMANDS, true);
 }
 
 // Also read by the sandbox (#163): a pipeline of `gh`/`git` plus these keeps its network allow, since
