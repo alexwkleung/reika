@@ -170,7 +170,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // One id per reika process, sent as `x-session-id` on every chat request that carries a key. Some
 // hosted routers (OpenCode Go) refuse a request with no session id — they use it to pin a
 // conversation to one backend so its prompt cache is reused — and accept this generic name
-// alongside their own. The key is a proxy for "hosted": a keyed local server gets the header too
+// alongside their own, `x-opencode-session`, which is sent too: the documented name is the one
+// they commit to keeping, and losing the alias would refuse every request, not just miss a cache. The key is a proxy for "hosted": a keyed local server gets the header too
 // and ignores it, while an unkeyed local request stays byte-identical to what it always was. Per
 // process rather than per conversation on purpose: a /new on the same node costs nothing, and
 // the id needs no plumbing through App. The same id goes out as `x-session-affinity`, Fireworks'
@@ -197,6 +198,7 @@ async function postWithRetry(
             ? {
                 Authorization: `Bearer ${apiKey}`,
                 'x-session-id': SESSION_ID,
+                'x-opencode-session': SESSION_ID,
                 'x-session-affinity': SESSION_ID,
               }
             : {}),

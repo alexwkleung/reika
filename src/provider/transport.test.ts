@@ -190,7 +190,7 @@ describe('session header', () => {
     );
   }
 
-  it('sends one stable session id, under both header names, on every keyed chat request', async () => {
+  it('sends one stable session id, under every header name, on every keyed chat request', async () => {
     const fetchMock = vi.fn(async () => new Response('data: [DONE]\n\n', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     await drain('http://x/v1', 'sk-test');
@@ -201,6 +201,8 @@ describe('session header', () => {
     expect(second['x-session-id']).toBe(SESSION_ID);
     expect(first['x-session-affinity']).toBe(SESSION_ID);
     expect(second['x-session-affinity']).toBe(SESSION_ID);
+    expect(first['x-opencode-session']).toBe(SESSION_ID);
+    expect(second['x-opencode-session']).toBe(SESSION_ID);
   });
 
   it('leaves an unkeyed (local) request without the header', async () => {
