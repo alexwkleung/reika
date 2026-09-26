@@ -42,7 +42,7 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
-import { DecodeRate, decodeRate, formatRate } from './decoderate.js';
+import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -2481,21 +2481,25 @@ export async function runTurn(opts: {
       );
       if (learned != null) opts.onPrefillRate?.(learned);
     }
-    // What that round decoded at (#204) — the status bar's tok/s chip. Both facts come off the
-    // response the engine just sent: `timing` splits prefill from decode, `usage` counts the tokens.
-    // The debug line quotes both the round's own sample and the value the chip actually shows, so
-    // the displayed number is checkable from the log alone — the smoothed one is a fold over the
-    // session's accepted samples, which nothing else records. `get()` rather than the observe
-    // result on purpose: a round too small to measure leaves the chip showing the last rate, and the
-    // log has to say the same thing the chip does.
-    const sample = decodeRate(response.usage, response.timing);
-    const learned = decodeThroughput.observe(response.usage, response.timing);
+    // What that round decoded at (#204, #536) — the status bar's tok/s chip. The facts come off the
+    // response the engine just sent: an engine that reports its own decode stats (llama.cpp) has
+    // them measured, everything else falls back to our `timing` split and the provider's `usage`
+    // count. The debug line quotes the round's own sample, the value the chip actually shows, and
+    // which of the two sources the sample came from — without that last field a reader cannot tell
+    // a rate the engine measured from one we estimated, which is the whole question #536 raised.
+    // `?` there pairs with `decode=?`: no sample carried this round. The smoothed value is a fold
+    // over the session's accepted samples, which nothing else records. `get()` rather than the
+    // observe result on purpose: a round too small to measure leaves the chip showing the last
+    // rate, and the log has to say the same thing the chip does.
+    const sample = decodeSample(response.usage, response.timing, response.engineTimings);
+    const learned = decodeThroughput.observe(sample);
     if (learned != null) opts.onDecodeRate?.(learned);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
         `finishReason=${response.finishReason ?? '?'} ` +
-        `decode=${formatRate(sample)} smoothed=${formatRate(decodeThroughput.get())}\n`,
+        `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
+        `src=${sample?.source ?? '?'}\n`,
     );
 
     if (opts.signal?.aborted) {

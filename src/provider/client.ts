@@ -9,6 +9,13 @@ import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolca
 import { streamChatCompletion } from './transport.js';
 import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
+// The engine's own decode stats (#536), normalized to the three facts a rate needs here:
+// `predictedN` tokens generated, over the `predictedMs` window the server decoded them in, at
+// `predictedPerSecond`. Read only when all three arrive together — the count and the window are
+// what let `agent/decoderate.ts` bound the rate as a measurement rather than trust it — and named
+// for what they are rather than for llama.cpp's spelling, so nothing downstream reads a wire shape.
+export type EngineTimings = { predictedN: number; predictedMs: number; perSecond: number };
+
 export type ModelResponse = {
   content: string;
   reasoning?: string;
@@ -22,6 +29,11 @@ export type ModelResponse = {
   // whatever the engine's prompt cache could not reuse, plus a fixed per-request overhead — and
   // `totalMs` is the whole stream. Absent when no delta ever arrived (empty or aborted stream).
   timing?: { ttftMs: number; totalMs: number };
+  // The engine's own decode stats, when it reported them (#536). llama.cpp times its decode window
+  // and counts the tokens server-side, so a round against it has a measurement instead of the
+  // derivation below; an OpenAI-compatible API reports nothing of the sort and keeps the
+  // derivation (agent/decoderate.ts picks between the two). Absent on every hosted endpoint.
+  engineTimings?: EngineTimings;
   // Per-token logprobs for the generated content, when they were requested AND the engine
   // returned them (issue #134). Absent otherwise — an absent array means "not measured", never
   // "the model was certain". Only the debug drift instrumentation reads it.
@@ -113,6 +125,10 @@ export async function callModel(opts: {
   const sampled: SampledToken[] = [];
   let usage: Usage | undefined;
   let finishReason: string | undefined;
+  // The engine's own decode stats, when it reported them (#536). Deliberately not cleared per
+  // consume attempt: a retry only happens before any chunk arrived (the `received` gate below), so
+  // there is never a stale one to clear.
+  let engineTimings: EngineTimings | undefined;
   // Reset per consume attempt: the logprobs degrade below re-sends from scratch, so a retry's
   // prefill must not be timed from the rejected request's start.
   let startedAt = Date.now();
@@ -175,6 +191,23 @@ export async function callModel(opts: {
       }
       const fr = chunk.choices?.[0]?.finish_reason;
       if (fr) finishReason = fr;
+      // The engine's own decode stats (#536), when the endpoint sends them. Read as a trio or not
+      // at all: one of the three missing is a rate nothing can bound, and the round falls back to
+      // the derived measurement. `timings_per_token` sends them on every chunk, cumulatively, so
+      // the last complete one is the round's own — which is also the only one on a normal stream.
+      const et = chunk.timings;
+      if (
+        et &&
+        typeof et.predicted_n === 'number' &&
+        typeof et.predicted_ms === 'number' &&
+        typeof et.predicted_per_second === 'number'
+      ) {
+        engineTimings = {
+          predictedN: et.predicted_n,
+          predictedMs: et.predicted_ms,
+          perSecond: et.predicted_per_second,
+        };
+      }
       // Logprobs ride the choice, not the delta, and a chunk can carry them with no delta at all
       // — so collect before the delta guard. Normalized to SampledToken here (the wire's null
       // top_logprobs becomes an absent `top`) so nothing downstream handles wire shapes.
@@ -325,6 +358,7 @@ export async function callModel(opts: {
         usage,
         finishReason,
         timing: timing(),
+        ...(engineTimings ? { engineTimings } : {}),
         ...(sampled.length > 0 ? { sampled } : {}),
       };
     }
@@ -353,6 +387,7 @@ export async function callModel(opts: {
     usage,
     finishReason,
     timing: timing(),
+    ...(engineTimings ? { engineTimings } : {}),
     ...(sampled.length > 0 ? { sampled } : {}),
   };
 }
