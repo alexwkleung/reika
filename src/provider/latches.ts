@@ -4,7 +4,8 @@
 //   - toolChoice: it 400s on `tool_choice: 'none'`, so report rounds fall back to sending no tools;
 //   - reasoningRoundtrip: it wants every `reasoning_content` it returned passed back, so neither
 //     the round window nor the aging sweep may prune any (see toolcall.ts shapeRejection);
-//   - toolMessageName: it refuses `name` on tool messages (OpenAI's wire shape).
+//   - toolMessageName: it refuses `name` on tool messages (OpenAI's wire shape);
+//   - promptCacheKey / cacheControl: it 400s on that cache hint despite a host that documents it.
 // Keyed by endpoint, not held per process, because each is a fact about one server and model: a
 // session switching `/model` between a strict router and a local llama.cpp — or a subagent on
 // REIKA_SUBAGENT_BASE_URL running inside the parent's turn — would otherwise apply one server's
@@ -16,6 +17,8 @@ export type EndpointLatches = {
   toolChoice: boolean;
   reasoningRoundtrip: boolean;
   toolMessageName: boolean;
+  promptCacheKey: boolean;
+  cacheControl: boolean;
 };
 
 const latchesByEndpoint = new Map<string, EndpointLatches>();
@@ -37,6 +40,8 @@ export function latchesFor(endpoint: { baseURL: string; model: string }): Endpoi
       toolChoice: false,
       reasoningRoundtrip: false,
       toolMessageName: false,
+      promptCacheKey: false,
+      cacheControl: false,
     };
     latchesByEndpoint.set(key, latches);
   }

@@ -677,6 +677,8 @@ describe('batchAgePayloads', () => {
             toolChoice: false,
             reasoningRoundtrip,
             toolMessageName: false,
+            promptCacheKey: false,
+            cacheControl: false,
           },
         });
 

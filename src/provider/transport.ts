@@ -78,6 +78,11 @@ export type ChatCompletionRequest = {
   // the system prompt), so dropping it diverges the prompt from its first bytes and the round
   // re-prefills everything. Honored by llama.cpp/vllm/OpenAI; client.ts degrades from a rejection.
   tool_choice?: 'none';
+  // Cache-routing hint, sent only to hosts that document it (provider/cachehints.ts). Carries the
+  // process's SESSION_ID, the same id `x-session-id` sends.
+  prompt_cache_key?: string;
+  // Top-level cache breakpoint, sent only for Anthropic models on OpenRouter (provider/cachehints.ts).
+  cache_control?: { type: 'ephemeral' };
 };
 
 // A streamed delta chunk. Field unions cover provider variants:
@@ -165,10 +170,12 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // One id per reika process, sent as `x-session-id` on every chat request that carries a key. Some
 // hosted routers (OpenCode Go) refuse a request with no session id — they use it to pin a
 // conversation to one backend so its prompt cache is reused — and accept this generic name
-// alongside their own. The key is a proxy for "hosted": a keyed local server gets the header too
+// alongside their own, `x-opencode-session`, which is sent too: the documented name is the one
+// they commit to keeping, and losing the alias would refuse every request, not just miss a cache. The key is a proxy for "hosted": a keyed local server gets the header too
 // and ignores it, while an unkeyed local request stays byte-identical to what it always was. Per
 // process rather than per conversation on purpose: a /new on the same node costs nothing, and
-// the id needs no plumbing through App.
+// the id needs no plumbing through App. The same id goes out as `x-session-affinity`, Fireworks'
+// name for the replica-routing hint that keeps a conversation's prompt cache warm.
 export const SESSION_ID = randomUUID();
 
 async function postWithRetry(
@@ -187,7 +194,14 @@ async function postWithRetry(
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': API_USER_AGENT,
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}`, 'x-session-id': SESSION_ID } : {}),
+          ...(apiKey
+            ? {
+                Authorization: `Bearer ${apiKey}`,
+                'x-session-id': SESSION_ID,
+                'x-opencode-session': SESSION_ID,
+                'x-session-affinity': SESSION_ID,
+              }
+            : {}),
         },
         body: JSON.stringify(body),
         signal,
