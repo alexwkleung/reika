@@ -173,7 +173,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // alongside their own. The key is a proxy for "hosted": a keyed local server gets the header too
 // and ignores it, while an unkeyed local request stays byte-identical to what it always was. Per
 // process rather than per conversation on purpose: a /new on the same node costs nothing, and
-// the id needs no plumbing through App.
+// the id needs no plumbing through App. The same id goes out as `x-session-affinity`, Fireworks'
+// name for the replica-routing hint that keeps a conversation's prompt cache warm.
 export const SESSION_ID = randomUUID();
 
 async function postWithRetry(
@@ -192,7 +193,13 @@ async function postWithRetry(
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': API_USER_AGENT,
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}`, 'x-session-id': SESSION_ID } : {}),
+          ...(apiKey
+            ? {
+                Authorization: `Bearer ${apiKey}`,
+                'x-session-id': SESSION_ID,
+                'x-session-affinity': SESSION_ID,
+              }
+            : {}),
         },
         body: JSON.stringify(body),
         signal,
