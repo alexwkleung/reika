@@ -31,6 +31,7 @@ Most coding agents are built for frontier models. Reika is built for the models 
 - **Guard rails a weak model needs.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
 - **Plan → implement.** A read-only plan mode that ends in a numbered, file-specific plan, and a vibe mode that chains plan and implementation on every prompt.
 - **Safe by default.** Ordinary edits run, dangerous commands still prompt, and on macOS model-chosen shell commands run under a kernel sandbox (writes confined to the project, network denied).
+- **No telemetry.** Your code goes to the model server you configure and nowhere else. The only other requests are the web tools, when a web tool is used or you paste a link, and a download of the public models.dev catalog to look up context limits, only for hosted endpoints and never with your data.
 - **Built for slow local engines.** Tolerates long prefills, handles tool-call dialects from models without a native template, and shows decode speed, context fill, and cache hit rate in the status bar.
 
 ## Requirements
