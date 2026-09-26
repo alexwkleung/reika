@@ -59,6 +59,7 @@ import {
   buildGroundingNote,
   shouldSuppressGrounding,
 } from './groundcheck.js';
+import { collectSourcedUrls } from '../tools/_exfil.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
@@ -2878,7 +2879,10 @@ export async function runTurn(opts: {
     // about the plan, not that read.
     let planUrlNotice: ToolResult['notice'];
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
-      const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
+      const url = await groundUrlsForPlan(
+        { cwd: opts.bundle.cwd, groundedUrls, sourcedUrls: () => collectSourcedUrls(opts.history) },
+        assistantContent,
+      );
       if (url.note) assistantContent = assistantContent + url.note;
       if (url.notice)
         debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
@@ -3168,6 +3172,7 @@ export async function runTurn(opts: {
             toolNames,
             resolvedDeps,
             groundedUrls,
+            sourcedUrls: () => collectSourcedUrls(opts.history),
             askedQuestions,
             requestApproval: opts.requestApproval,
             requestQuestion,

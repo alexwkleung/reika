@@ -1,3 +1,4 @@
+import { exfiltrationRisk } from './_exfil.js';
 import { lookup } from 'node:dns/promises';
 import type { ToolContext } from '../types.js';
 import { classifyPrivateHost, classifyPrivateUrl } from './_hosts.js';
@@ -262,6 +263,7 @@ export type UrlGroundingOutcome = {
 async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGroundingResult[]> {
   if (process.env.REIKA_URL_GROUNDING !== '1') return [];
   const seen = ctx.groundedUrls;
+  const sourced = ctx.sourcedUrls?.();
   const eligible = extractUrls(text)
     .filter(u => !seen?.has(u))
     // Drop private/loopback addresses BEFORE the cap rather than letting extractUrl refuse them.
@@ -272,7 +274,11 @@ async function groundCandidates(ctx: ToolContext, text: string): Promise<UrlGrou
     .filter(u => !classifyPrivateUrl(u))
     .filter(u => !isDotlessHost(u))
     .filter(u => !isInternalName(u))
-    .filter(u => !carriesSecret(u));
+    .filter(u => !carriesSecret(u))
+    // A new URL carrying data (#548) is what fetch_url stops to confirm. Grounding has nobody to
+    // ask, so it skips it — the model writing it into a file is exactly the injection chain #164
+    // described, and a silent skip leaves the URL for the model to fetch, where a human sees it.
+    .filter(u => !exfiltrationRisk(u, sourced));
 
   // Grounding is harness-driven — the model never asked for these fetches — so it must answer to
   // the same per-turn cap as the ones it does ask for (fetch.ts). Without this, N edits in a turn

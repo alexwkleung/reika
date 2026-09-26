@@ -182,6 +182,22 @@ describe('groundUrls', () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 
+  // #548: nobody to ask on the harness path, so the leak shape is skipped rather than sent.
+  it('skips an unsourced data-carrying URL, and grounds it once it is sourced', async () => {
+    process.env.REIKA_URL_GROUNDING = '1';
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(mockOk('<article>x</article>'));
+    const url = 'https://api.example.com/v1?q=abcdef1234567890';
+    const skipped = await groundUrls({ cwd: '/tmp' }, `fetch('${url}')`);
+    expect(skipped).toEqual({ note: undefined, notice: undefined });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const grounded = await groundUrls(
+      { cwd: '/tmp', sourcedUrls: () => new Set([url]) },
+      `fetch('${url}')`,
+    );
+    expect(grounded.note).toContain(url);
+  });
+
   it('returns a user-facing receipt for the loop to place after the chip', async () => {
     process.env.REIKA_URL_GROUNDING = '1';
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
