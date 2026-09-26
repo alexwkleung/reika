@@ -22,7 +22,7 @@
 
 Most coding agents are built for frontier models. Reika is built for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
 
-8/9B models hold their own; 14–35B is the sweet spot for agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+8/9B models hold their own; 14–35B is the sweet spot for small model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
 
 ## Highlights
 
@@ -35,9 +35,10 @@ Most coding agents are built for frontier models. Reika is built for the models 
 
 ## Requirements
 
-- Node.js 22 or newer
-- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API
+- Node.js 22 or newer.
+- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API.
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR. Windows may work under WSL2.
+- A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
 
 ## Quick start
 
