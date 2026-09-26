@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
   AutoApproveMode,
+  CdpSearchMode,
   Config,
   DefaultMode,
   PasteFetchMode,
@@ -92,7 +93,7 @@ export function loadConfig(): Config {
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
     vision,
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
-    cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
+    cdpSearch: parseCdpSearch(process.env.REIKA_CDP_SEARCH),
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
     profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
@@ -224,6 +225,22 @@ function parseSkillAuto(raw: string | undefined): SkillAutoMode {
     case '1':
     case 'true':
       return 'apply';
+    default:
+      return 'off';
+  }
+}
+
+// REIKA_CDP_SEARCH. Unset is 'auto' (see CdpSearchMode). Anything unrecognized is 'off', the
+// polarity parseSkillAuto uses: a typo should not be what starts a browser.
+function parseCdpSearch(raw: string | undefined): CdpSearchMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'auto':
+      return 'auto';
+    case '1':
+    case 'true':
+    case 'on':
+      return 'on';
     default:
       return 'off';
   }

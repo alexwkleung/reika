@@ -447,6 +447,7 @@ export function App() {
         sessionRef.current = s;
         setSession(s);
         const offline = s.offline;
+        const searchNotice = s.searchNotice;
         // Startup only: a later /model switch reports its own window in /stats.
         const runtime = s.config;
         setHeaderItems(prev => [
@@ -508,6 +509,12 @@ export function App() {
               tone: 'warn',
               skipAutosave: true,
             },
+          ]);
+        }
+        if (searchNotice) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
           ]);
         }
         setStatus('idle');

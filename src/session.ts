@@ -5,7 +5,14 @@ import {
   type ModelLimitsProbe,
 } from './provider/modellimits.js';
 import { bootstrap } from './context/bootstrap.js';
-import { chatTools, defaultTools, minimalTools, planTools } from './tools/index.js';
+import {
+  chatTools,
+  chooseSearchBackend,
+  defaultTools,
+  minimalTools,
+  planTools,
+  searchPrecedenceNotice,
+} from './tools/index.js';
 import { isOffline } from './tools/_net.js';
 import { PayloadStore } from './store/payloads.js';
 import { runTurn, type ShrinkCounts } from './agent/loop.js';
@@ -120,6 +127,8 @@ export type Session = {
   readonly config: Config;
   readonly profile: string;
   readonly offline: boolean;
+  // Which search provider won when both are configured; undefined otherwise, or when offline.
+  readonly searchNotice: string | undefined;
   // What the startup probe learned, worded for the user; undefined when it found nothing.
   readonly limitsNotice: string | undefined;
   readonly lists: ToolLists;
@@ -396,6 +405,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       return profile;
     },
     offline,
+    searchNotice: offline ? undefined : searchPrecedenceNotice(chooseSearchBackend(cfg)),
     limitsNotice: probed && probedLimitsNotice(probed),
     lists,
     get history() {

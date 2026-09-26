@@ -396,6 +396,12 @@ export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 // (a human present is never a reason to inject silently), and headless applies a strong match
 // without asking, under the tighter 12-word gate.
 export type SkillAutoMode = 'off' | 'ask' | 'apply';
+// CDP web search. 'auto' (unset) uses Chrome when one is installed — on macOS only, where the
+// launch never takes focus; elsewhere it spawns a visible window, which is an opt-in cost. 'on'
+// uses it on any platform and fails loudly without a browser. 'off' leaves SearXNG or nothing.
+// Whichever way CDP is chosen it outranks SearXNG: a bare HTTP client is the shape engines
+// CAPTCHA, a browser on a persistent profile keeps being served.
+export type CdpSearchMode = 'auto' | 'on' | 'off';
 // Pasted-URL fetching (#448), the same three values with the same split. A URL that IS the
 // request (short prompt, link at the start or end or after a read verb) is fetched under 'ask' and
 // 'apply' alike; one that merely appears in the prompt — inside a pasted error, a log line — is
@@ -462,10 +468,9 @@ export type Config = {
   // back without restarting. See VisionRoute.
   vision?: VisionRoute;
   searxngUrl?: string;
-  // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
-  // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which
-  // is the shape they CAPTCHA — a browser with a persistent profile is the one that stays served.
-  cdpSearch?: boolean;
+  // Drive a real Chrome over CDP for web search (REIKA_CDP_SEARCH, #235). See CdpSearchMode.
+  // Optional, and undefined is 'off', so a hand-built test Config never probes for a browser.
+  cdpSearch?: CdpSearchMode;
   // Port for Chrome's remote debugging endpoint (REIKA_CDP_PORT). An instance already listening
   // here is reused rather than relaunched.
   cdpPort?: number;
