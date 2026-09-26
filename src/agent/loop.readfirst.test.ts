@@ -25,11 +25,12 @@ vi.mock('../provider/client.js', () => ({
 const PRIOR_READ_FIRST = process.env.REIKA_READ_FIRST;
 const PRIOR_PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN;
 process.env.REIKA_READ_FIRST = '1';
-delete process.env.REIKA_PLAN_ALIGN;
+process.env.REIKA_PLAN_ALIGN = '0';
 afterAll(() => {
   if (PRIOR_READ_FIRST === undefined) delete process.env.REIKA_READ_FIRST;
   else process.env.REIKA_READ_FIRST = PRIOR_READ_FIRST;
-  if (PRIOR_PLAN_ALIGN !== undefined) process.env.REIKA_PLAN_ALIGN = PRIOR_PLAN_ALIGN;
+  if (PRIOR_PLAN_ALIGN === undefined) delete process.env.REIKA_PLAN_ALIGN;
+  else process.env.REIKA_PLAN_ALIGN = PRIOR_PLAN_ALIGN;
 });
 const { runTurn } = await import('./loop.js');
 const { callModel } = await import('../provider/client.js');

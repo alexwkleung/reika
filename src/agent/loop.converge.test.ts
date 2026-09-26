@@ -13,16 +13,21 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 // terminal and asserts the steer actually reaches the dispatched request.
 // Pinned to the flag-off (per-round) serialization: the steer rides the system block there, and
 // the trailing note under REIKA_PREFIX_STABLE (on by default since #181; loop.prefixnote.test.ts
-// covers that transport).
+// covers that transport). Logit recovery (on by default) is pinned off: it would spend a round of
+// its own at the same terminal and make a real /tokenize request.
 const PRIOR_CONVERGE = process.env.REIKA_CONVERGE_RETRY;
+const PRIOR_LOGIT = process.env.REIKA_LOGIT_RECOVERY;
 const PRIOR_RLOOP = process.env.REIKA_REASONING_LOOP;
 const PRIOR_STABLE = process.env.REIKA_PREFIX_STABLE;
 process.env.REIKA_CONVERGE_RETRY = '1';
+process.env.REIKA_LOGIT_RECOVERY = '0';
 process.env.REIKA_REASONING_LOOP = '1';
 process.env.REIKA_PREFIX_STABLE = '0';
 afterAll(() => {
   if (PRIOR_CONVERGE === undefined) delete process.env.REIKA_CONVERGE_RETRY;
   else process.env.REIKA_CONVERGE_RETRY = PRIOR_CONVERGE;
+  if (PRIOR_LOGIT === undefined) delete process.env.REIKA_LOGIT_RECOVERY;
+  else process.env.REIKA_LOGIT_RECOVERY = PRIOR_LOGIT;
   if (PRIOR_RLOOP === undefined) delete process.env.REIKA_REASONING_LOOP;
   else process.env.REIKA_REASONING_LOOP = PRIOR_RLOOP;
   if (PRIOR_STABLE === undefined) delete process.env.REIKA_PREFIX_STABLE;
