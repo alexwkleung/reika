@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
-import { grepTool, normalizePattern } from './grep.js';
+import { grepTool, includeSuffixes, normalizePattern } from './grep.js';
 import { resetSpillDir } from './_spill.js';
 
 let cwd: string;
@@ -64,6 +64,21 @@ describe('grepTool', () => {
       const result = await grepTool.run({ pattern: 'sidebar', include }, { cwd, ignore: ignore() });
       expect(result.summary, `include=${include}`).toMatch(/Found 1 matches/);
       expect(result.payload ?? '').toContain('styles.css');
+    }
+  });
+
+  // Observed: "*.ts,*.tsx" searched .tsx alone, and a symbol defined in a .ts file came back as a
+  // silent 0 matches that the model took as "it doesn't exist".
+  it('matches every entry of a list or brace include, not just the last', async () => {
+    await writeFile(join(cwd, 'index.ts'), 'export function defaultTools() {}', 'utf8');
+    await writeFile(join(cwd, 'App.tsx'), 'defaultTools();', 'utf8');
+    await writeFile(join(cwd, 'notes.md'), 'defaultTools', 'utf8');
+    for (const include of ['*.ts,*.tsx', '*.ts, *.tsx', '*.{ts,tsx}', '**/*.{ts,tsx}']) {
+      const result = await grepTool.run(
+        { pattern: 'defaultTools\\(', include },
+        { cwd, ignore: ignore() },
+      );
+      expect(result.summary, `include=${include}`).toMatch(/Found 2 matches/);
     }
   });
 
@@ -236,5 +251,17 @@ describe('normalizePattern (shell-grep dialect)', () => {
     const result = await grepTool.run({ pattern: '\\<foo\\>' }, { cwd, ignore: ignore() });
     expect(result.summary).toMatch(/^Found 1 matches for \/\\bfoo\\b\/ \(rewrote POSIX/);
     expect(result.payload).toContain('c.ts:1: const foo = 1;');
+  });
+});
+
+describe('includeSuffixes', () => {
+  it('reduces each alternative to the suffix after its last star', () => {
+    expect(includeSuffixes('*.ts')).toEqual(['.ts']);
+    expect(includeSuffixes('*.ts,*.tsx,*.md')).toEqual(['.ts', '.tsx', '.md']);
+    expect(includeSuffixes('src/**/*.{ts, tsx}')).toEqual(['.ts', '.tsx']);
+  });
+
+  it('treats a bare star as no filter', () => {
+    expect(includeSuffixes('*')).toBeUndefined();
   });
 });
