@@ -36,7 +36,7 @@ Most coding agents are built for frontier models. Reika is built for the models 
 ## Requirements
 
 - Node.js 22 or newer.
-- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API.
+- An OpenAI-compatible model server: llama.cpp, MLX, vLLM, or a cloud API.
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR. Windows may work under WSL2.
 - A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
 
@@ -106,10 +106,6 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 | [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
-
-## Status
-
-Experimental but stable for daily use. Current testing concentrates on 20–35B models at Q2–Q4 on constrained hardware, alongside cloud models through OpenCode Go and OpenRouter. Output quality in agentic coding will vary more than in plain chat, and more with quantization.
 
 ## Inspired by
 
