@@ -39,7 +39,6 @@ export function requestTimeoutMs(): number {
 // rather than as `RequestInit['dispatcher']` because the ambient `RequestInit` in this project is
 // the DOM one (jsdom's lib is in scope), which has no such field; Node honors it regardless.
 export type FetchDispatcher = { readonly dispatch: unknown };
-type AgentCtor = new (opts: { headersTimeout: number; bodyTimeout: number }) => FetchDispatcher;
 
 // Undici's default, used only to describe the failure honestly when we could NOT install our own
 // dispatcher and the runtime's own limit is what fired.
@@ -47,18 +46,25 @@ const UNDICI_DEFAULT_TIMEOUT_MS = 300_000;
 
 let cached: { dispatcher: FetchDispatcher | undefined; timeoutMs: number } | null = null;
 
+// Captured at import so the `data:` warm-up below reaches the runtime's fetch even while a test
+// has replaced `globalThis.fetch` with a mock — otherwise the warm-up lands in the mock's call log.
+const nativeFetch = globalThis.fetch;
+
 // The Agent class of the dispatcher Node is already using. A `data:` fetch initializes undici's
 // fetch machinery (and with it the global dispatcher) without opening a socket or resolving DNS,
-// so this is safe to call before the first real request.
-async function agentConstructor(): Promise<AgentCtor | null> {
+// so this is safe to call before the first real request. Shared with the web fetch's host-pinning
+// dispatcher (`tools/_hosts.ts`), which needs the same class with different options.
+export async function agentConstructor<O = object>(): Promise<
+  (new (opts: O) => FetchDispatcher) | null
+> {
   const g = globalThis as unknown as Record<symbol, { constructor?: unknown } | undefined>;
-  if (!g[GLOBAL_DISPATCHER]) await fetch('data:text/plain,').catch(() => {});
+  if (!g[GLOBAL_DISPATCHER]) await nativeFetch('data:text/plain,').catch(() => {});
   // A plain `Agent` only. If someone installed a ProxyAgent/MockAgent globally, cloning its class
   // with our options would silently drop their proxy or mock config — leave that setup alone and
   // fall open instead.
   const ctor = g[GLOBAL_DISPATCHER]?.constructor;
   if (typeof ctor !== 'function' || ctor.name !== 'Agent') return null;
-  return ctor as AgentCtor;
+  return ctor as new (opts: O) => FetchDispatcher;
 }
 
 // The dispatcher for chat-completion requests, built once and reused so connections stay pooled
@@ -68,7 +74,7 @@ export async function streamDispatcher(): Promise<FetchDispatcher | undefined> {
   const timeoutMs = requestTimeoutMs();
   let dispatcher: FetchDispatcher | undefined;
   try {
-    const Agent = await agentConstructor();
+    const Agent = await agentConstructor<{ headersTimeout: number; bodyTimeout: number }>();
     if (Agent) dispatcher = new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs });
   } catch (e) {
     dispatcher = undefined;

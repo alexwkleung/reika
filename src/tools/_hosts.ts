@@ -1,3 +1,6 @@
+import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
+import { agentConstructor, type FetchDispatcher } from '../provider/dispatcher.js';
+
 // Host policy for harness- and model-driven network egress (see #164). Every fetch of URL CONTENT
 // goes through `extractUrl`, and three different things can put a URL there: the model calling
 // `fetch_url`, the harness grounding a URL a write/edit introduced, and the user pasting one into
@@ -18,12 +21,13 @@
 // octal, and short-form IPv4 all arrive here as dotted quads — locked by a test in _hosts.test.ts),
 // plus every hop of a redirect chain, since the check is worthless if one 302 walks around it.
 //
-// WHAT THIS DOES NOT COVER: a public DNS name that resolves to a private address (DNS rebinding).
-// Blocking that means resolving the name ourselves and pinning the connection to the address we
-// checked, which Node's fetch gives no hook for. This is a real gap, not a covered case — it is
-// documented rather than implied, because the reason to state a boundary is so nobody trusts past
-// it. The practical bound on it is that the budget cap now applies to grounding too, so a rebinding
-// attempt gets a couple of requests per turn, not an unbounded stream.
+// DNS REBINDING is covered at connect time (#544): a public name that resolves to a private address
+// (split-horizon DNS, or an attacker's resolver answering 127.0.0.1) passes every check above, since
+// they only ever see the name. `publicOnlyDispatcher` hands undici a `lookup` that classifies every
+// address the name resolves to and refuses the connection if any is private. It is the lookup the
+// socket actually connects with, so there is no window between the check and the connection for a
+// second, different answer to slip through — which is what makes resolve-then-fetch the wrong fix.
+// Fail-open where the runtime has no borrowable Agent: the literal checks still apply.
 
 // Reserved IPv4 ranges, as [first octet match, predicate]. Loopback and link-local are the two that
 // matter most for this threat model — 127.0.0.1 is where a local model server lives, and
@@ -173,4 +177,63 @@ export function classifyPrivateUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// The error code a pinned lookup fails with. Deliberately not a DNS code: `_net.ts` latches a turn
+// offline on ENOTFOUND, and a refused private address says nothing about the network.
+export const PRIVATE_ADDRESS_CODE = 'EREIKA_PRIVATE_ADDRESS';
+
+type LookupCallback = (
+  err: NodeJS.ErrnoException | null,
+  address?: string | LookupAddress[],
+  family?: number,
+) => void;
+
+type Resolver = (
+  hostname: string,
+  options: object,
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | LookupAddress[],
+    family?: number,
+  ) => void,
+) => void;
+
+// A `dns.lookup` with the host policy applied to its answer. Node's socket calls it with
+// `all: true` (an address list) and older paths without (one address and a family), so both shapes
+// pass through unchanged when every address is public. Any private address refuses the whole name:
+// a rebinding answer usually mixes one public and one private record, and picking the public one
+// here would still leave the connection's fallback free to try the other.
+export function publicOnlyLookup(
+  hostname: string,
+  options: object,
+  callback: LookupCallback,
+  resolve: Resolver = dnsLookup as unknown as Resolver,
+): void {
+  resolve(hostname, options, (err, address, family) => {
+    if (err) return callback(err, address, family);
+    const list = Array.isArray(address) ? address : [{ address, family: family ?? 0 }];
+    for (const a of list) {
+      const reason = classifyPrivateHost(a.address);
+      if (reason) {
+        const e: NodeJS.ErrnoException = new Error(
+          `blocked by host policy: ${hostname} resolves to ${a.address}, ${reason}`,
+        );
+        e.code = PRIVATE_ADDRESS_CODE;
+        return callback(e);
+      }
+    }
+    callback(null, address, family);
+  });
+}
+
+let pinned: Promise<FetchDispatcher | undefined> | undefined;
+
+// The dispatcher every policed fetch goes through, built once so connections pool across calls.
+// `undefined` when the runtime has no plain undici Agent to borrow (see provider/dispatcher.ts).
+export function publicOnlyDispatcher(): Promise<FetchDispatcher | undefined> {
+  pinned ??= agentConstructor<{ connect: { lookup: typeof publicOnlyLookup } }>()
+    .then(Agent => (Agent ? new Agent({ connect: { lookup: publicOnlyLookup } }) : undefined))
+    .catch(() => undefined);
+  return pinned;
 }

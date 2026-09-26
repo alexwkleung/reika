@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { classifyPrivateHost, classifyPrivateUrl, expandIpv6 } from './_hosts.js';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { agentConstructor } from '../provider/dispatcher.js';
+import {
+  classifyPrivateHost,
+  classifyPrivateUrl,
+  expandIpv6,
+  PRIVATE_ADDRESS_CODE,
+  publicOnlyLookup,
+} from './_hosts.js';
+import { errorCode } from './_net.js';
 
 // The policy is a pure predicate, so it gets exhaustive table coverage rather than a handful of
 // representative cases — an SSRF allowlist is only as good as the encodings it was actually tried
@@ -144,5 +154,75 @@ describe('expandIpv6', () => {
     expect(expandIpv6('gggg::1')).toBeUndefined();
     expect(expandIpv6('1:2:3')).toBeUndefined();
     expect(expandIpv6('::1.2.3.4.5')).toBeUndefined();
+  });
+});
+
+describe('publicOnlyLookup — connect-time pin (#544)', () => {
+  const fake =
+    (answer: Array<{ address: string; family: number }>) =>
+    (_h: string, _o: object, cb: (e: null, a: typeof answer) => void) =>
+      cb(null, answer);
+
+  const run = (answer: Array<{ address: string; family: number }>) =>
+    new Promise<{ err: NodeJS.ErrnoException | null; address: unknown }>(resolve =>
+      publicOnlyLookup(
+        'rebind.example.net',
+        { all: true },
+        (err, address) => resolve({ err, address }),
+        fake(answer),
+      ),
+    );
+
+  it('passes an all-public answer through unchanged', async () => {
+    const answer = [{ address: '93.184.216.34', family: 4 }];
+    expect(await run(answer)).toEqual({ err: null, address: answer });
+  });
+
+  it('refuses a name that resolves to loopback', async () => {
+    const { err } = await run([{ address: '127.0.0.1', family: 4 }]);
+    expect(err?.code).toBe(PRIVATE_ADDRESS_CODE);
+    expect(err?.message).toMatch(/rebind\.example\.net resolves to 127\.0\.0\.1, loopback/);
+  });
+
+  // The rebinding shape: one public record to pass a pre-check, one private for the connection.
+  it('refuses the whole name when any record is private', async () => {
+    const { err } = await run([
+      { address: '93.184.216.34', family: 4 },
+      { address: '::ffff:169.254.169.254', family: 6 },
+    ]);
+    expect(err?.code).toBe(PRIVATE_ADDRESS_CODE);
+  });
+
+  it('handles the single-address callback shape', async () => {
+    const single = (_h: string, _o: object, cb: (e: null, a: string, f: number) => void) =>
+      cb(null, '10.0.0.5', 4);
+    const err = await new Promise<NodeJS.ErrnoException | null>(resolve =>
+      publicOnlyLookup('x.example.net', {}, e => resolve(e), single as never),
+    );
+    expect(err?.code).toBe(PRIVATE_ADDRESS_CODE);
+  });
+
+  // The claim that matters is that undici connects with THIS lookup, so drive a real fetch at a
+  // real loopback server through a name the policy never sees as private.
+  it('stops a real fetch whose name resolves to a loopback server', async () => {
+    const server = createServer((_req, res) => res.end('secret'));
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const Agent = await agentConstructor<{ connect: { lookup: unknown } }>();
+      expect(Agent).not.toBeNull();
+      const dispatcher = new Agent!({
+        connect: {
+          lookup: (h: string, o: object, cb: never) =>
+            publicOnlyLookup(h, o, cb, fake([{ address: '127.0.0.1', family: 4 }])),
+        },
+      });
+      const err = await fetch(`http://rebind.example.net:${port}/`, {
+        dispatcher,
+      } as RequestInit).catch((e: unknown) => e);
+      expect(errorCode(err)).toBe(PRIVATE_ADDRESS_CODE);
+    } finally {
+      server.close();
+    }
   });
 });
