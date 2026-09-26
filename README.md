@@ -36,7 +36,7 @@ Most coding agents are built for frontier models. Reika is built for the models 
 ## Requirements
 
 - Node.js 22 or newer
-- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, Ollama, or a cloud API
+- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR.
 
 ## Quick start
@@ -57,7 +57,7 @@ export REIKA_MODEL=your-model  # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
-`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (Ollama, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
+`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (some inference engines, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
 To run from a checkout without installing: `cp .env.example .env`, edit it, then `npm run dev`. `npm run uninstall:global` removes the global binary.
 
