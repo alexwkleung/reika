@@ -105,21 +105,27 @@ export async function verifyPlanReferences(
   ignore: Ignore | undefined,
   refs: PlanReferences,
 ): Promise<{ missingSymbols: string[]; missingPaths: string[] }> {
-  const missingPaths: string[] = [];
+  // A path that doesn't stat from cwd may still name a real file from a shorter root — plans write
+  // `tools/_spill.ts` for `src/tools/_spill.ts` — so it rides the walk as a segment-boundary suffix.
+  const unresolved = new Set<string>();
   for (const p of refs.paths) {
     const ok = await stat(resolve(cwd, p)).then(
       () => true,
       () => false,
     );
-    if (!ok) missingPaths.push(p);
+    if (!ok) unresolved.add(p);
   }
 
   const remaining = new Map(refs.symbols.map(s => [s, new RegExp(`\\b${escapeRegExp(s)}\\b`)]));
   const budget = { bytes: 0 };
-  if (remaining.size > 0) await scan(cwd, cwd, ignore, remaining, budget);
+  if (remaining.size > 0 || unresolved.size > 0) {
+    await scan(cwd, cwd, ignore, { symbols: remaining, paths: unresolved }, budget);
+  }
   // Anything still unmatched is missing — UNLESS we ran out of scan budget, in which case we can't
   // be sure, so don't flag. (budget.bytes < 0 is the sentinel for "cap hit".)
-  const missingSymbols = budget.bytes < 0 ? [] : [...remaining.keys()];
+  const capHit = budget.bytes < 0;
+  const missingSymbols = capHit ? [] : [...remaining.keys()];
+  const missingPaths = capHit ? [] : [...unresolved];
   return { missingSymbols, missingPaths };
 }
 
@@ -127,22 +133,26 @@ async function scan(
   dir: string,
   cwd: string,
   ig: Ignore | undefined,
-  remaining: Map<string, RegExp>,
+  pending: { symbols: Map<string, RegExp>; paths: Set<string> },
   budget: { bytes: number },
 ): Promise<void> {
-  if (remaining.size === 0 || budget.bytes < 0) return;
+  const remaining = pending.symbols;
+  const done = () => (remaining.size === 0 && pending.paths.size === 0) || budget.bytes < 0;
+  if (done()) return;
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
   if (!entries) return;
   for (const entry of entries) {
-    if (remaining.size === 0 || budget.bytes < 0) return;
+    if (done()) return;
     const full = join(dir, entry.name);
     const rel = relative(cwd, full);
     if (entry.isDirectory()) {
       if (shouldSkipDir(entry.name)) continue;
       if (ig && rel.length > 0 && ig.ignores(rel + '/')) continue;
-      await scan(full, cwd, ig, remaining, budget);
+      await scan(full, cwd, ig, pending, budget);
     } else if (entry.isFile()) {
       if (ig && ig.ignores(rel)) continue;
+      for (const p of pending.paths) if (rel.endsWith('/' + p)) pending.paths.delete(p);
+      if (remaining.size === 0) continue;
       const st = await stat(full).catch(() => null);
       if (!st || st.size > MAX_FILE_BYTES) continue;
       budget.bytes += st.size;

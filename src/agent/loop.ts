@@ -100,6 +100,7 @@ import {
   underPressure,
 } from './subagentpressure.js';
 import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
+import { planFill, planPressureFor, planPressureLine, type PlanPressure } from './planpressure.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -541,10 +542,14 @@ export function buildPlanTransformInput(
 
 // EXPERIMENT (plan mode): a deterministic exploration ledger appended to the system prompt
 // each round. It surfaces what the model has already examined (so it stops re-treading) and
-// applies escalating, round-count-driven pressure to stop exploring and write the plan — the
-// closure signal a read-only mode otherwise lacks. The model maintains none of this; it is
+// applies escalating pressure (agent/planpressure.ts — by window fill, or round count without a
+// window) to stop exploring and write the plan — the closure signal a read-only mode otherwise lacks. The model maintains none of this; it is
 // derived in code from this turn's tool calls, so it cannot drift or be hallucinated.
-function buildPlanLedger(history: Message[], round: number): string {
+function buildPlanLedger(
+  history: Message[],
+  pressure: PlanPressure,
+  basis: { fillPercent?: number; round: number },
+): string {
   const files = new Set<string>();
   const searches = new Set<string>();
   // Plan mode's read-only `bash` (#109) explores through a call that carries `command` and neither
@@ -574,20 +579,23 @@ function buildPlanLedger(history: Message[], round: number): string {
       'Nothing examined yet — start by grepping the relevant symbol or reading the entry file.',
     );
   }
-  // Escalating convergence pressure, driven by round count rather than model judgement.
-  if (round >= 6) {
-    lines.push('STOP. Call no more tools. Write the numbered plan from what you already have.');
-  } else if (round >= 3) {
-    lines.push(
-      `You have explored across ${round} rounds and very likely have enough. Write the numbered ` +
-        'plan now unless one specific unknown truly blocks you.',
-    );
-  } else if (files.size > 0 || searches.size > 0 || commands.size > 0) {
-    lines.push(
-      'If you can already describe the steps, STOP exploring and write the numbered plan.',
-    );
-  }
+  const pressureLine = planPressureLine(pressure, basis);
+  if (pressureLine) lines.push(pressureLine);
   return lines.join('\n');
+}
+
+// Whether this turn's history holds any exploration call — the same fields the ledger lists.
+function planExamined(history: Message[]): boolean {
+  return history.some(
+    m =>
+      m.role === 'assistant' &&
+      (m.toolCalls ?? []).some(
+        tc =>
+          typeof tc.args.path === 'string' ||
+          typeof tc.args.pattern === 'string' ||
+          typeof tc.args.command === 'string',
+      ),
+  );
 }
 
 // Steady-state (prefix-stable OFF) system for round `round` — the base prompt plus the
@@ -603,13 +611,23 @@ export function buildSteadySystem(opts: {
   history: Message[];
   round: number;
   planSteps: PlanStep[] | null;
+  // Plan mode's convergence tier. Omitted means the windowless round-count schedule.
+  planPressure?: PlanPressure;
+  planFillPercent?: number;
 }): string {
   // First, and in both modes: settled context about the request itself, not a directive. Aging hits
   // plan exploration exactly as it hits an agent turn.
   const droppedLedger = droppedPayloadLedgerFor(opts.history, false);
   const dropped = droppedLedger ? '\n\n' + droppedLedger : '';
   if (opts.promptMode === 'plan') {
-    return opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round);
+    const pressure =
+      opts.planPressure ??
+      planPressureFor({ round: opts.round, examined: planExamined(opts.history) });
+    const ledger = buildPlanLedger(opts.history, pressure, {
+      round: opts.round,
+      fillPercent: opts.planFillPercent,
+    });
+    return opts.baseSystem + dropped + '\n\n' + ledger;
   }
   const planLedger =
     PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
@@ -695,6 +713,12 @@ export function buildRoundZeroPrefix(opts: {
     history: opts.history,
     round: 0,
     planSteps,
+    // Must match runTurn's round 0, which has sent no request yet to measure fill from.
+    planPressure: planPressureFor({
+      round: 0,
+      examined: planExamined(opts.history),
+      contextWindow: opts.contextWindow,
+    }),
   });
 }
 
@@ -1301,6 +1325,8 @@ export async function runTurn(opts: {
   // Consecutive plan-mode rounds that surfaced no new information (seenReadOnly didn't grow). Drives
   // the adaptive force-write: a converged or looping model stalls here; a productive one resets it.
   let planStaleRounds = 0;
+  // Plan-mode convergence pressure (agent/planpressure.ts): the turn's peak fill (see planFill).
+  let planFillPeak: number | undefined;
   // Consecutive rounds an agent-mode read loop has stayed active (ledger showing). Once it crosses
   // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
   // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
@@ -1517,6 +1543,34 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    let planPressure: PlanPressure = 'none';
+    let planPressureBasis: { fillPercent?: number; round: number } = { round: i };
+    if (opts.promptMode === 'plan') {
+      // This round's request, measured the way the compaction decision measures it — `system` still
+      // holds last round's ledger, a few dozen tokens off. The last request's usage lags a whole
+      // round of reads, which on a 24k window is 25–30% of the room (it read 76% for a 97% request).
+      // Round 0 stays unmeasured, as the warm prefix (buildRoundZeroPrefix) cannot measure it.
+      if (window && i > 0) {
+        const promptTokens = rawEstimate() * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR);
+        const fill = planFill(promptTokens, window, opts.config.minGenTokens);
+        planFillPeak = Math.max(planFillPeak ?? 0, fill);
+      }
+      planPressure = planPressureFor({
+        round: i,
+        examined: planExamined(opts.history),
+        contextWindow: window,
+        fill: planFillPeak,
+      });
+      const fill = planFillPeak;
+      planPressureBasis = {
+        round: i,
+        fillPercent: fill !== undefined ? Math.round(fill * 100) : undefined,
+      };
+      debugLog(
+        `[reika:debug] round=${i} plan-pressure=${planPressure} ` +
+          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} basis=${window ? 'fill' : 'rounds'}\n`,
+      );
+    }
     // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
     // plan force-write (no tools offered, in-band calls dropped) without the transform — the model
     // reports from its own history, aged payloads and all, because partial and grounded is the
@@ -1599,7 +1653,7 @@ export async function runTurn(opts: {
         roundSuffix = [
           droppedPayloadLedgerFor(opts.history, prefixStable),
           buildQuestionLedger(questionAnswers),
-          buildPlanLedger(opts.history, i),
+          buildPlanLedger(opts.history, planPressure, planPressureBasis),
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -1612,6 +1666,8 @@ export async function runTurn(opts: {
             history: opts.history,
             round: i,
             planSteps: null,
+            planPressure,
+            planFillPercent: planPressureBasis.fillPercent,
           }) + prefixed(buildQuestionLedger(questionAnswers));
       }
     } else {

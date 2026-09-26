@@ -53,9 +53,7 @@ export const grepTool: Tool = {
     const { pattern, note } = normalizePattern(String(args.pattern));
     const startPath = String(args.path ?? '.');
     const include = args.include ? String(args.include) : undefined;
-    // Models often send glob-style filters ("*.css", "**/*.css"); reduce to the
-    // suffix after the last '*' so they behave the same as a plain ".css".
-    const suffix = include ? include.slice(include.lastIndexOf('*') + 1) : undefined;
+    const suffix = include ? includeSuffixes(include) : undefined;
     let re: RegExp;
     let preRe: RegExp;
     try {
@@ -116,7 +114,7 @@ async function walk(
   path: string,
   cwd: string,
   ig: Ignore | undefined,
-  suffix: string | undefined,
+  suffix: string[] | undefined,
   re: RegExp,
   preRe: RegExp,
   state: GrepState,
@@ -148,12 +146,12 @@ async function scanFile(
   filePath: string,
   cwd: string,
   ig: Ignore | undefined,
-  suffix: string | undefined,
+  suffix: string[] | undefined,
   re: RegExp,
   preRe: RegExp,
   state: GrepState,
 ): Promise<void> {
-  if (suffix && !filePath.endsWith(suffix)) {
+  if (suffix && !suffix.some(sfx => filePath.endsWith(sfx))) {
     state.excluded++;
     return;
   }
@@ -270,4 +268,16 @@ export function normalizePattern(raw: string): { pattern: string; note: string }
   }
   const note = rewrites.size ? ` (rewrote POSIX ${[...rewrites].join(', ')})` : '';
   return { pattern: out, note };
+}
+
+// Models send glob-style filters ("*.css", "**/*.css"), lists ("*.ts,*.tsx") and braces
+// ("*.{ts,tsx}"). Each alternative reduces to the suffix after its last '*'. A list read as one
+// filter kept only its last entry, so "*.ts,*.tsx" searched .tsx alone and answered a silent 0.
+export function includeSuffixes(include: string): string[] | undefined {
+  const brace = /^(.*)\{([^}]*)\}(.*)$/.exec(include);
+  const parts = brace
+    ? brace[2].split(',').map(alt => brace[1] + alt.trim() + brace[3])
+    : include.split(/[,\s]+/);
+  const suffixes = parts.map(p => p.slice(p.lastIndexOf('*') + 1)).filter(Boolean);
+  return suffixes.length > 0 ? suffixes : undefined;
 }
