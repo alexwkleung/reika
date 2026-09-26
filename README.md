@@ -96,15 +96,15 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 
 ## Documentation
 
-| Doc                                              | Covers                                                                    |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state  |
-| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts       |
-| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`       |
-| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs |
-| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                          |
-| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                              |
-| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, and a pointer to `AGENTS.md`                  |
+| Doc                                              | Covers                                                                                    |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
+| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
+| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`                       |
+| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
+| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
+| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
+| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
 
 ## Status
 
