@@ -20,9 +20,17 @@ const engine = (predictedN: number, predictedMs: number, perSecond: number): Eng
 });
 
 describe('derivedDecodeRate', () => {
-  it('divides the generated tokens by the window after the first token', () => {
-    // 600 tokens in 30 s, with 10 s of prefill in the call that must not count.
-    expect(derivedDecodeRate(usage(600), timing(10_000, 30_000))).toBeCloseTo(20, 5);
+  it('divides the tokens after the first by the window after the first token', () => {
+    // 601 tokens: the first opens the window, the other 600 land in its 30 s. The 10 s of prefill
+    // in the call must not count.
+    expect(derivedDecodeRate(usage(601), timing(10_000, 30_000))).toBeCloseTo(20, 5);
+  });
+
+  // The window never timed the first token, so counting it overshoots by n/(n-1) — the same n-1
+  // the engine divides, and the bound applies to it the same way.
+  it('does not credit the window with the token that opened it', () => {
+    expect(derivedDecodeRate(usage(17), timing(5_000, 1_000))).toBeCloseTo(16, 5);
+    expect(derivedDecodeRate(usage(16), timing(5_000, 1_000))).toBeUndefined();
   });
 
   it('measures nothing when no timing came back — an empty or aborted stream', () => {
@@ -89,7 +97,7 @@ describe('decodeSample', () => {
   });
 
   it('derives the rate for an endpoint that reports no stats', () => {
-    expect(decodeSample(usage(600), timing(10_000, 30_000))).toEqual({
+    expect(decodeSample(usage(601), timing(10_000, 30_000))).toEqual({
       rate: 20,
       source: 'derived',
     });

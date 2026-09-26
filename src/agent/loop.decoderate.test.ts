@@ -80,7 +80,7 @@ const callNoop = { id: 'n1', name: 'noop', args: {} };
 const fullRound: ModelResponse = {
   content: 'done',
   toolCalls: undefined,
-  usage: { promptTokens: 5000, completionTokens: 600 },
+  usage: { promptTokens: 5000, completionTokens: 601 },
   timing: { ttftMs: 10_000, totalMs: 40_000 },
 };
 
@@ -226,7 +226,7 @@ describe('decode rate across a subagent', () => {
   const subReport: ModelResponse = {
     content: 'report',
     toolCalls: undefined,
-    usage: { promptTokens: 3000, completionTokens: 600 },
+    usage: { promptTokens: 3000, completionTokens: 601 },
     timing: { ttftMs: 2_000, totalMs: 12_000 },
   };
 
