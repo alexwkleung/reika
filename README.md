@@ -37,7 +37,7 @@ Most coding agents are built for frontier models. Reika is built for the models 
 
 - Node.js 22 or newer.
 - An OpenAI-compatible model server: llama.cpp, MLX, vLLM, or a cloud API.
-- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR. Windows may work under WSL2.
+- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR (set `REIKA_VISION_MODEL` to read pasted images with a vision model instead). Windows may work under WSL2.
 - A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
 
 ## Quick start
