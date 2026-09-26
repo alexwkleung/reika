@@ -95,14 +95,12 @@ describe('decodeSample', () => {
     });
   });
 
-  // The fallback is per round, not per session: an engine that reported stats this round only
-  // declines to rate it if its own window was too short, which is no reason to withhold a rate our
-  // own clock can measure.
-  it('falls back to the derivation when the engine stats are unusable', () => {
-    expect(decodeSample(usage(600), timing(10_000, 30_000), engine(16, 5_000, 60))).toEqual({
-      rate: 20,
-      source: 'derived',
-    });
+  // A round the engine declined to rate is not handed to the derivation: 16 tokens is 15 decode
+  // steps, under the bound, while the derivation's full count and longer window would clear it —
+  // readmitting exactly the small round the n-1 bound exists to keep out, at the high-reading rate.
+  it('offers no sample when the engine rejected its own round', () => {
+    expect(decodeSample(usage(16), timing(10_000, 300), engine(16, 250, 64))).toBeUndefined();
+    expect(decodeSample(usage(600), timing(10_000, 30_000), engine(600, 150, 60))).toBeUndefined();
   });
 
   it('offers no sample when neither source can carry the round', () => {

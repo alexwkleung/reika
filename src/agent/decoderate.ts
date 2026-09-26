@@ -44,8 +44,7 @@ const MIN_RATE = 0.1;
 const MAX_RATE = 10_000;
 
 // The engine's own rate, when it reported stats that can carry a measurement (#536). Undefined when
-// it reported none — every hosted API — or reported something unusable, and then the round falls
-// back to the derivation below. Both bounds mean the same thing here as they do there, on the
+// it reported none — every hosted API — or reported something unusable. Both bounds mean the same thing here as they do there, on the
 // engine's own count and window rather than on ours: it is the same round, so it is measurable under
 // both sources or under neither, and a rate that arrives without the pair it was computed from is
 // not read at all (client.ts requires the trio) because nothing here could then tell a measurement
@@ -72,15 +71,19 @@ export type DecodeSample = { rate: number; source: 'engine' | 'derived' };
 // This round's decode rate (tokens/second), or undefined when that round cannot carry a
 // measurement: no engine stats and no timing (nothing ever streamed), no provider token count, or a
 // window under the bounds above. Undefined is the only signal a caller gets that the sample was
-// rejected — the learner keeps the rate it already had. The engine's number is preferred wherever
-// there is one; the derivation is the fallback for the endpoints that report nothing.
+// rejected — the learner keeps the rate it already had. The derivation is only for the endpoints
+// that report nothing: when the engine reported stats and rejected its own round, the derivation
+// would admit that same round against a looser bound (the full count over a longer window) at the
+// rate #536 measured running high, so a rejected engine round offers no sample at all.
 export function decodeSample(
   usage: Usage | undefined,
   timing: ModelResponse['timing'],
   engine?: EngineTimings,
 ): DecodeSample | undefined {
-  const reported = engineDecodeRate(engine);
-  if (reported != null) return { rate: reported, source: 'engine' };
+  if (engine) {
+    const reported = engineDecodeRate(engine);
+    return reported != null ? { rate: reported, source: 'engine' } : undefined;
+  }
   const derived = derivedDecodeRate(usage, timing);
   return derived != null ? { rate: derived, source: 'derived' } : undefined;
 }
