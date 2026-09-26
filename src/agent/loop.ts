@@ -291,11 +291,11 @@ const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP !== '0';
 // EXPERIMENT (Tier 2 logit recovery): one biased round before the rumination terminal stop, gently
-// down-weighting the loop's recurring tokens to nudge the model off the rut. Gated for A/B; strict
-// no-op when off, and self-gating on /tokenize being reachable (so non-llama.cpp backends just stop
-// honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
+// down-weighting the loop's recurring tokens to nudge the model off the rut. On by default since
+// 2026-09-26 (`REIKA_LOGIT_RECOVERY=0` is the baseline arm); strict no-op when off, and self-gating
+// on /tokenize being reachable (so non-llama.cpp backends just stop honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
 // the case where biased tokens are filler, not the work. See agent/logitrecovery.ts.
-const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY === '1';
+const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY !== '0';
 // EXPERIMENT (issue #134, measurement only): ask the engine for per-token logprobs so the drift
 // instrumentation can report the model's REAL predictive entropy instead of the empirical entropy of
 // its own output. Flag-gated because it is the one part of this that changes the request the engine
@@ -316,9 +316,10 @@ const PLAN_LOGIT_BIAS = -3;
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
 // of the agent loops is plans referencing code that isn't there (0-match grep loops, edits whose
 // old_string is in no file). The note rides in the plan message, so it's visible to the user and
-// carried verbatim into the executing agent turn. Gated for A/B; strict no-op when off. See
+// carried verbatim into the executing agent turn. On by default since 2026-09-26
+// (`REIKA_PLAN_VERIFY=0` is the baseline arm); strict no-op when off. See
 // agent/groundcheck.ts and [[reika-reasoning-loop-break]].
-const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
+const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY !== '0';
 // Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
 // need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
 const REASONING_SPIN_DEBOUNCE = 400;
@@ -382,9 +383,10 @@ const CONTINUE_NUDGE =
 // is cut fast — cheap-to-fail. Worst case is unchanged (the same honest stop fires once the budget is
 // spent); we just insert a best-effort push before it. Motivated by a manual finding: a third retry
 // with exactly this steer converged where two unsteered attempts (one logit-biased) spiraled — the
-// natural-language steer reaches the behavioral self-questioning spiral that token bias can't. Strict
-// no-op when off. See AGENTS.md "Loop breaking".
-const CONVERGE_RETRY = process.env.REIKA_CONVERGE_RETRY === '1';
+// natural-language steer reaches the behavioral self-questioning spiral that token bias can't. On by
+// default since 2026-09-26 (`REIKA_CONVERGE_RETRY=0` is the baseline arm); strict no-op when off. See
+// AGENTS.md "Loop breaking".
+const CONVERGE_RETRY = process.env.REIKA_CONVERGE_RETRY !== '0';
 const MAX_CONVERGE_RETRIES = 1; // one strong push; the user can retry fully after. Bump later if worth it.
 // Tighter reasoning ceil for a steered plan-mode retry than a normal force-write (12000): if the steer
 // is ignored and it re-spirals, cut it fast (~2k tokens) rather than burning the full force-write ceil.
@@ -400,8 +402,9 @@ const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF !== '0';
 // harness-tracked step checklist in the system suffix each round (buildPlanProgressLedger) and
 // bounce a turn that tries to finish with file-bearing steps unchecked (decidePlanGate, the plan
 // analogue of the typecheck gate). The *tracking* is always on and deterministic (it feeds the UI
-// checklist); this flag gates only the model-facing pressure, off by default for a clean A/B.
-const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
+// checklist); this flag gates only the model-facing pressure. On by default since 2026-09-26
+// (`REIKA_PLAN_ALIGN=0` is the baseline arm).
+const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN !== '0';
 // EXPERIMENT (prefix-stable context, #69): keep consecutive requests append-only between shrink
 // events so the inference engine's prompt-prefix cache stays valid. Three per-round prefix
 // rewriters move to event-driven or tail-positioned equivalents: payload aging becomes sticky +

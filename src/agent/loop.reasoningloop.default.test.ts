@@ -7,8 +7,8 @@ import type { Config, ContextBundle, Message, Tool } from '../types.js';
 
 // REASONING_LOOP_BREAK is read at loop.js import time. This file leaves REIKA_REASONING_LOOP UNSET
 // to pin the default: on since 2026-09-24, so an unconfigured install must still stop a rumination
-// loop at the terminal rather than spin to maxTurns. The steer and bias recoveries stay off so the
-// stop is the plain ladder's own.
+// loop at the terminal rather than spin to maxTurns. The steer and bias recoveries (both on by
+// default) are pinned off so the stop is the plain ladder's own.
 const PRIOR = {
   REIKA_REASONING_LOOP: process.env.REIKA_REASONING_LOOP,
   REIKA_CONVERGE_RETRY: process.env.REIKA_CONVERGE_RETRY,
@@ -16,8 +16,8 @@ const PRIOR = {
   REIKA_PREFIX_STABLE: process.env.REIKA_PREFIX_STABLE,
 };
 delete process.env.REIKA_REASONING_LOOP;
-delete process.env.REIKA_CONVERGE_RETRY;
-delete process.env.REIKA_LOGIT_RECOVERY;
+process.env.REIKA_CONVERGE_RETRY = '0';
+process.env.REIKA_LOGIT_RECOVERY = '0';
 process.env.REIKA_PREFIX_STABLE = '0';
 afterAll(() => {
   for (const [key, value] of Object.entries(PRIOR)) {
