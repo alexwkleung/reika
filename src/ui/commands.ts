@@ -90,6 +90,10 @@ export const COMMANDS: CommandSpec[] = [
   },
   { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
   {
+    name: 'unattended',
+    desc: 'show/toggle unattended — decline instead of prompting while you are away (on|off)',
+  },
+  {
     name: 'anon',
     desc: 'show/toggle anonymized display — hides your name, email, and account slugs (on|off)',
   },

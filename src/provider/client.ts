@@ -3,6 +3,7 @@ import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../ty
 import type { NativeImage } from '../agent/attachments.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
+import { cacheControlFor, promptCacheKeyFor } from './cachehints.js';
 import { latchesFor, resetEndpointLatches } from './latches.js';
 import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
@@ -124,6 +125,10 @@ export async function callModel(opts: {
   // A latched-off tool_choice means the tools go too: the caller asked for a round with no calls,
   // and without the field the only way to guarantee that is the old no-tools request.
   const sendTools = opts.tools.length > 0 && !(opts.toolChoice && latches.toolChoice);
+  const cacheKey = latches.promptCacheKey ? undefined : promptCacheKeyFor(opts.config.baseURL);
+  const cacheControl = latches.cacheControl
+    ? undefined
+    : cacheControlFor(opts.config.baseURL, opts.config.model);
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -136,6 +141,8 @@ export async function callModel(opts: {
       ? { logit_bias: opts.logitBias }
       : {}),
     ...(wantLogprobs ? { logprobs: true, top_logprobs: opts.logprobs } : {}),
+    ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
+    ...(cacheControl ? { cache_control: cacheControl } : {}),
   };
 
   // True once a single chunk has been consumed. Gates the logprobs degrade below: retrying after
@@ -261,6 +268,27 @@ export async function callModel(opts: {
           );
           opts.onRequest?.(rebuilt);
           req = { ...req, messages: rebuilt };
+          continue;
+        }
+        // The cache hints are keyed on the error naming the field, unlike the two below: they ride
+        // every request to their hosts, so latching one on an unrelated failure (an auth 401, an
+        // exhausted 5xx) would drop it for the session on evidence that says nothing about it.
+        if (req.cache_control !== undefined && reason.includes('cache_control')) {
+          latches.cacheControl = true;
+          debugLog(
+            `[reika:debug] cache_control unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { cache_control: _cacheControl, ...plain } = req;
+          req = plain;
+          continue;
+        }
+        if (req.prompt_cache_key !== undefined && reason.includes('prompt_cache_key')) {
+          latches.promptCacheKey = true;
+          debugLog(
+            `[reika:debug] prompt_cache_key unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { prompt_cache_key: _promptCacheKey, ...plain } = req;
+          req = plain;
           continue;
         }
         if (req.logprobs !== undefined) {

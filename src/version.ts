@@ -1,12 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Read version from package.json at module load. Works in both src/ (tsx) and dist/.
 let version = '0.0.0';
+const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 try {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as {
+  const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
     version?: string;
   };
   if (pkg.version) version = pkg.version;
@@ -15,6 +15,12 @@ try {
 }
 
 export const VERSION = version;
+
+// The reference docs ship with the install (package.json has no `files` field), so the model can
+// read reika's own behavior instead of guessing it (#531). Null when absent, so the prompt names
+// nothing that is not there.
+const docsDir = join(packageRoot, 'docs');
+export const DOCS_DIR: string | null = existsSync(docsDir) ? docsDir : null;
 
 // Sent on every outbound request so reika identifies itself by name rather than as undici's
 // default `node` — the generic-library fingerprint that bot filters deny and that API providers

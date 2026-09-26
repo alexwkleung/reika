@@ -36,15 +36,15 @@ Most coding agents are built for frontier models. Reika is built for the models 
 ## Requirements
 
 - Node.js 22 or newer
-- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, Ollama, or a cloud API
-- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR.
+- An OpenAI-compatible model server: [llama.cpp](https://github.com/ggml-org/llama.cpp), MLX, vLLM, or a cloud API
+- macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR. Windows may work under WSL2.
 
 ## Quick start
 
 Serve a model. With llama.cpp, `--jinja` enables the model's native tool-calling template, which is what makes tool calls reliable:
 
 ```sh
-llama-server -m ~/models/your-model.gguf -c 24576 --jinja
+llama-server -m ~/models/your-model.gguf -c 24576 --jinja <other-launch-args>
 ```
 
 Then install and point Reika at it:
@@ -57,7 +57,7 @@ export REIKA_MODEL=your-model  # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
-`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (Ollama, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
+`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (some inference engines, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
 To run from a checkout without installing: `cp .env.example .env`, edit it, then `npm run dev`. `npm run uninstall:global` removes the global binary.
 
@@ -96,15 +96,15 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 
 ## Documentation
 
-| Doc                                              | Covers                                                                    |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state  |
-| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts       |
-| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`       |
-| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs |
-| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                          |
-| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                              |
-| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, and a pointer to `AGENTS.md`                  |
+| Doc                                              | Covers                                                                                    |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
+| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
+| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`                       |
+| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
+| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
+| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
+| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
 
 ## Status
 

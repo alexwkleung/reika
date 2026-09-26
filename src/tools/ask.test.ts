@@ -92,6 +92,17 @@ describe('ask_user', () => {
     expect(res.summary).toContain('Flag it');
   });
 
+  // #526: a session switched unattended mid-way still has the tool, but nobody will answer.
+  it('does not ask while the session is unattended', async () => {
+    const { seen, requestQuestion } = asker({ text: 'Flag it', index: 0 });
+    const res = await askUserTool.run(
+      { question: 'Flag interpreters?', options: ['Flag it', 'Leave it'] },
+      ctx({ requestQuestion, unattended: true }),
+    );
+    expect(seen).toHaveLength(0);
+    expect(res.summary).toBe('ask_user: no user available to answer');
+  });
+
   it('carries a note added on top of a chosen option', async () => {
     const { requestQuestion } = asker({ text: 'Flag it', index: 0, notes: 'only inline bodies' });
     const res = await askUserTool.run(

@@ -253,6 +253,11 @@ export function App() {
   // null = untouched, so the effective mode falls through to the config default (safe when
   // REIKA_AUTO_APPROVE is unset) — see effectiveAutoApprove.
   const [sessionAutoApprove, setSessionAutoApprove] = useState<boolean | null>(null);
+  // `/unattended on|off` (#526). null = untouched, so REIKA_UNATTENDED's launch state holds. Safe
+  // to switch mid-session where `bypass` is not: either direction only ever adds a decline or
+  // restores the ordinary prompt.
+  const [sessionUnattended, setSessionUnattended] = useState<boolean | null>(null);
+  const unattended = sessionUnattended ?? config?.unattended === true;
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
   const [pr, setPr] = useState<number | null>(null);
@@ -341,6 +346,9 @@ export function App() {
   sessionAutoApproveRef.current = sessionAutoApprove;
   // What this turn declined under REIKA_UNATTENDED, rolled up into one notice when it ends (#526).
   const unattendedDeclinesRef = useRef<ApprovalRequest[]>([]);
+  // Read at each approval and tool call, so a toggle mid-turn applies to the next action.
+  const unattendedRef = useRef(false);
+  unattendedRef.current = unattended;
   const modeRef = useRef<Mode>('agent');
   modeRef.current = mode;
   const activeProfileRef = useRef('default');
@@ -1072,7 +1080,7 @@ export function App() {
     }
     // Unattended (#526): a dialog nobody answers stalls the turn until morning. Declined the way
     // headless declines; the tool's own summary is the receipt, and says why.
-    if (config?.unattended) {
+    if (unattendedRef.current) {
       unattendedDeclinesRef.current.push(req);
       setApprovals(a => ({ ...a, declined: a.declined + 1 }));
       return Promise.resolve(false);
@@ -1395,6 +1403,7 @@ export function App() {
           '  /compact           compact older context now (compaction note, then a fold)',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
           '  /anon              show/toggle anonymized display (on|off)',
+          '  /unattended        show/toggle unattended: decline instead of prompting (on|off)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -1491,14 +1500,31 @@ export function App() {
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
           `  source: ${source}`,
-          ...(config?.unattended
-            ? ['  unattended: REIKA_UNATTENDED=1 — anything that would prompt is declined instead']
+          ...(unattended
+            ? [
+                '  unattended: on — anything that would prompt is declined instead (/unattended off)',
+              ]
             : []),
           '',
           envOn
             ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
             : 'toggle with /approvals on or /approvals off',
         ].join('\n');
+        break;
+      }
+      case 'unattended': {
+        const arg = args.trim().toLowerCase();
+        if (arg !== '' && arg !== 'on' && arg !== 'off') {
+          response = `Unknown argument: ${arg}. Use /unattended on or /unattended off.`;
+          break;
+        }
+        const next = arg === '' ? unattended : arg === 'on';
+        if (arg !== '') setSessionUnattended(next);
+        // ask_user is fixed at launch (the tool list is the cached prefix), so an attended-start
+        // session keeps it; while unattended, its questions resolve as "no user available".
+        response = next
+          ? 'unattended: on — anything that would prompt is declined and listed at turn end; questions go unanswered. /unattended off to approve again.'
+          : 'unattended: off — approvals and questions prompt again.';
         break;
       }
       // Always available, NOT gated on REIKA_ANON — gating it there would make the toggle useless
@@ -2103,6 +2129,7 @@ export function App() {
       manualCompact,
       requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
       requestQuestion,
+      isUnattended: () => unattendedRef.current,
       // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
       onTurnStart: () => {
         setStatus('busy');
@@ -2471,7 +2498,7 @@ export function App() {
                   ? 'safe'
                   : undefined
             }
-            unattended={config?.unattended}
+            unattended={unattended}
             modeTag={mode}
             exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
           />

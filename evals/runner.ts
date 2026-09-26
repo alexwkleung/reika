@@ -19,8 +19,10 @@ import { fixture as f10 } from './fixtures/10-bash-spill-oneshot.js';
 import { fixture as f11 } from './fixtures/11-plan-gate-verdict.js';
 import { fixture as f12 } from './fixtures/12-sandbox-recovery.js';
 import { fixture as f13 } from './fixtures/13-plan-refine.js';
+import { fixture as f14 } from './fixtures/14-self-docs.js';
+import { fixture as f15 } from './fixtures/15-self-attractor.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 type RunRecord = {

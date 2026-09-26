@@ -1,4 +1,5 @@
 import type { ContextBundle } from '../types.js';
+import { DOCS_DIR, VERSION } from '../version.js';
 
 export type PromptMode = 'agent' | 'chat' | 'plan';
 
@@ -150,6 +151,7 @@ function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: 
           : []),
     ].join('\n'),
     `Working directory: ${bundle.cwd}`,
+    ...selfLineParts(),
   ];
   if (bundle.projectSummary) parts.push(`Project:\n${bundle.projectSummary}`);
   if (bundle.repoMap) parts.push(`Repo map:\n${bundle.repoMap}`);
@@ -250,6 +252,7 @@ function buildAgentPrompt(opts: {
       ...rules.map((r, i) => `${i + 1}. ${r}`),
     ].join('\n'),
     `Working directory: ${opts.bundle.cwd}`,
+    ...selfLineParts(),
   ];
   if (opts.bundle.projectSummary) {
     parts.push(`Project:\n${opts.bundle.projectSummary}`);
@@ -264,6 +267,25 @@ function buildAgentPrompt(opts: {
     parts.push('Plan mode: describe your approach first. Do not modify files.');
   }
   return parts.join('\n\n');
+}
+
+// Self-awareness (#531): a model asked about reika itself otherwise answers from its priors. Scoped
+// "only if asked" because on a small model a named path is an attractor for unrelated exploration.
+// Deliberately omitted: `~/.config/reika/.env` (API keys — naming it invites a `cat` that lands
+// them in context and the saved transcript), the chrome profile, and the binary (`reika -p` from
+// bash is a nested agent outside the subagent cap).
+// `REIKA_SELF_AWARE=0` is the baseline arm: the prompt without the line, byte-for-byte.
+function selfLineParts(): string[] {
+  return process.env.REIKA_SELF_AWARE === '0' ? [] : [reikaSelfLine()];
+}
+
+export function reikaSelfLine(docsDir: string | null = DOCS_DIR): string {
+  const where = [
+    ...(docsDir ? [`its reference docs are in ${docsDir}`] : []),
+    'user skills in ~/.config/reika/skills/ (project skills in .reika/skills/)',
+    'saved sessions in ~/.config/reika/history/',
+  ];
+  return `You are running inside reika ${VERSION}. Only if the user asks about reika itself: ${where.join(', ')}.`;
 }
 
 function buildChatPrompt(_bundle: ContextBundle): string {
