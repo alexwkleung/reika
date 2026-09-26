@@ -330,8 +330,9 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // to 0.25 as the block grows, so genuinely-long DISTINCT reasoning (low ratio) is left alone. The
 // bars sit far above every healthy block measured and far below the observed loop — the sample and
 // its margins are documented at the constants, and they are the argument for the numbers. The one place mid-stream abort is sound; without it the only backstop is the
-// max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
-// independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
+// max_tokens wall, ~17k+ tokens away on a near-empty context. On by default since 2026-09-26
+// (`REIKA_VERBATIM_ABORT=0` is the baseline arm), independent of the always-on soft hint. Bounded
+// per turn so the abort→recover cycle can't loop.
 // A positive integer from the environment, or the default. Rejects 0 and negatives: unlike the
 // continuation knobs, a ceiling of 0 would cut every block at the first delta, which is not an arm
 // anyone wants and would read as "the flag disabled it".
@@ -354,7 +355,7 @@ const MAX_VERBATIM_RECOVERIES = 2;
 // different builds. Default unchanged, so a run that does not set it behaves exactly as before.
 const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
-const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
+const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT !== '0';
 // EXPERIMENT (#284): generation cut off mid-thought carries the model's own work forward instead of
 // discarding it and nudging a restart. The retry this replaces destroyed a measured 30,270-char
 // block that was cut ONE CLAUSE after solving its problem (selfRepeatRatio 0.014 — below the p90 of
@@ -2531,9 +2532,11 @@ export async function runTurn(opts: {
       // (5.4%) short of this ceiling, so which cut landed first was near-arbitrary; two cuts that
       // close cannot carry opposite semantics. Both therefore route through the same ratio gate. A
       // RATIO-triggered abort is untouched below — that one is the genuine degenerate case, and
-      // re-feeding a spiral its own text is what makes it worse. Agent mode only for now: plan mode
-      // has its own converge/steer ladder below and is a follow-up.
-      if (CONTINUE && verbatimAbortByLength && opts.promptMode !== 'plan') {
+      // re-feeding a spiral its own text is what makes it worse. Plan exploration rounds take the
+      // same gate: they already carry a cut at the token wall, and discarding the ceiling cut forced
+      // the plan write on a thought that was still working. The force-write round does not: its
+      // tighter ceilings exist to catch a transform spiraling at a low ratio.
+      if (CONTINUE && verbatimAbortByLength && !planForceWrite) {
         // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
         // continuation, and judging/carrying only the new half would drop the first one from both
         // the tail and the trace while leaving its message outside `protect` to be shed.
@@ -2594,14 +2597,18 @@ export async function runTurn(opts: {
         !planForceWrite &&
         verbatimRecoveries < MAX_VERBATIM_RECOVERIES
       ) {
+        const spentOnLength = ladderStop === 'count';
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Reasoning was repeating itself — writing the plan from what was gathered.',
+          content: spentOnLength
+            ? 'Reasoning kept hitting the length limit — writing the plan from what was gathered.'
+            : 'Reasoning was repeating itself — writing the plan from what was gathered.',
         });
         // Capture the repeated span now — the degenerate block is discarded after this, but the plan
-        // force-write next round can bias off it (logit recovery). No-op if logit recovery is off.
-        verbatimRepeatedSpan = repeatedSelfShingles(roundReasoning);
+        // force-write next round can bias off it (logit recovery). A block the ratio gate passed has
+        // no rut, and its recurring words are the work, so there is nothing to bias off.
+        verbatimRepeatedSpan = spentOnLength ? [] : repeatedSelfShingles(roundReasoning);
         forceVerbatimPlanWrite = true;
         continue;
       }
