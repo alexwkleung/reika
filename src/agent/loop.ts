@@ -43,6 +43,7 @@ import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
+import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -1161,6 +1162,9 @@ export async function runTurn(opts: {
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
   // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
   prefixTrace?: PrefixTrace;
+  // Session-long learned generation reserve (#551), for the same reason as the rates above: a
+  // turn's round 0 needs what earlier turns observed. A subagent on the same engine shares it.
+  genReserve?: GenReserve;
   // `tool` names the call the chunk came from: the UI indents only a `bash` tail, since that is the
   // one that commits under a command chip (#461) — `search`'s bot-check line does not.
   onToolProgress?: (chunk: string, tool: string) => void;
@@ -1440,6 +1444,11 @@ export async function runTurn(opts: {
   // as prefillRate, but this one is displayed rather than logged, and decode-only for that reason.
   // See agent/decoderate.ts.
   const decodeThroughput = new DecodeRate(opts.priorDecodeRate);
+  // The reserve every budget in this turn reads (#551): learned from finished rounds unless
+  // REIKA_MIN_GEN_TOKENS pins it, and re-read at each use so a long turn adapts within itself —
+  // a long single turn is exactly where folds happen. See agent/genreserve.ts.
+  const genReserve = opts.genReserve ?? new GenReserve();
+  const minGen = (): number => resolveGenReserve(opts.config, genReserve).tokens;
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -1460,7 +1469,7 @@ export async function runTurn(opts: {
       contextWindow: window,
       calibration,
       reasoningRounds: opts.config.reasoningRounds,
-      minGenTokens: opts.config.minGenTokens,
+      minGenTokens: minGen(),
       prefixStable,
       latches: latchesFor(opts.config),
       trailingNote: roundSuffix,
@@ -1496,12 +1505,7 @@ export async function runTurn(opts: {
   // plan-final marker (every ordinary agent turn) and idempotent on re-runs. Runs before the
   // in-loop shouldCompact so that compaction sees the already-shrunk history.
   if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
-    const { folded, reason } = distillPlanHandoff(
-      opts.history,
-      window,
-      calibration,
-      opts.config.minGenTokens,
-    );
+    const { folded, reason } = distillPlanHandoff(opts.history, window, calibration, minGen());
     // Log every agent turn (debug-gated), including the no-op: a bare folded=0 is otherwise
     // indistinguishable from "feature never ran", which the A/B needs to tell apart.
     debugLog(`[reika:debug] plan-handoff folded=${folded} reason=${reason}\n`);
@@ -1557,7 +1561,7 @@ export async function runTurn(opts: {
       // Round 0 stays unmeasured, as the warm prefix (buildRoundZeroPrefix) cannot measure it.
       if (window && i > 0) {
         const promptTokens = rawEstimate() * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR);
-        const fill = planFill(promptTokens, window, opts.config.minGenTokens);
+        const fill = planFill(promptTokens, window, minGen());
         planFillPeak = Math.max(planFillPeak ?? 0, fill);
       }
       planPressure = planPressureFor({
@@ -1919,8 +1923,8 @@ export async function runTurn(opts: {
         `[reika:debug] round=${i} mode=${opts.promptMode ?? 'agent'} histLen=${opts.history.length} ` +
           `forceWrite=${planForceWrite} estimate=${e} calib=${calibration.toFixed(3)} ` +
           `adjusted=${Math.round(e * compactCalibration)} ` +
-          `threshold=${window ? Math.round(compactThreshold(window, opts.config.minGenTokens)) : 'n/a'} ` +
-          `willCompact=${window ? shouldCompact(e * compactCalibration, window, opts.config.minGenTokens) : false} ` +
+          `threshold=${window ? Math.round(compactThreshold(window, minGen())) : 'n/a'} ` +
+          `willCompact=${window ? shouldCompact(e * compactCalibration, window, minGen()) : false} ` +
           `sys≈${Math.round(system.length / 4)}t reasoning≈${Math.round(rsnChars / 4)}t ` +
           `summaries≈${Math.round(sumChars / 4)}t payloads≈${Math.round(payChars / 4)}t ` +
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
@@ -1996,7 +2000,7 @@ export async function runTurn(opts: {
       !planForceWrite &&
       opts.promptMode !== 'plan' &&
       !opts.signal?.aborted &&
-      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens);
+      shouldCompact(rawEstimate() * compactCalibration, window, minGen());
     if (
       ((manualRound && reportEnabled) || autoReport) &&
       !!window &&
@@ -2009,12 +2013,12 @@ export async function runTurn(opts: {
             h => rawEstimate(h) * compactCalibration,
             window,
             compactCalibration,
-            opts.config.minGenTokens,
+            minGen(),
             !latchesFor(opts.config).reasoningRoundtrip,
             // The manual trigger's only question is "would the fold remove anything" (#481).
             !manualRound,
           )
-        : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
+        : wouldFold(opts.history, window, compactCalibration, minGen()))
     ) {
       const n = shrink.folds + 1;
       const directive = buildCompactionReportDirective(n);
@@ -2058,7 +2062,7 @@ export async function runTurn(opts: {
             // re-prefilled it again — two full prefills per fold, one of them for nothing.
             tools: callTools,
             toolChoice: 'none',
-            config: opts.config,
+            config: withGenReserve(opts.config, genReserve),
             onContentDelta: opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
             signal: opts.signal,
@@ -2188,7 +2192,7 @@ export async function runTurn(opts: {
         // what the floor exists to prevent.
         () => rawEstimate() * compactCalibration,
         window,
-        opts.config.minGenTokens,
+        minGen(),
         !latchesFor(opts.config).reasoningRoundtrip,
       );
       agedThisRound = aged.marked > 0;
@@ -2216,8 +2220,7 @@ export async function runTurn(opts: {
     const agedButAboveWatermark =
       agedThisRound &&
       !!window &&
-      rawEstimate() * compactCalibration >
-        compactThreshold(window, opts.config.minGenTokens) * AGE_LOW_FRACTION;
+      rawEstimate() * compactCalibration > compactThreshold(window, minGen()) * AGE_LOW_FRACTION;
     // Force-write sends the tiny synthetic context, not opts.history, so there is nothing to
     // compact — skip it. Otherwise collapse the oldest turns if the estimate crosses the threshold.
     // /compact folds even under the threshold: it is a user request, and `compactHistory` degrades
@@ -2227,16 +2230,10 @@ export async function runTurn(opts: {
       !planForceWrite &&
       window &&
       (manualRound ||
-        shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
+        shouldCompact(rawEstimate() * compactCalibration, window, minGen()) ||
         agedButAboveWatermark)
     ) {
-      const removed = compactHistory(
-        opts.history,
-        window,
-        compactCalibration,
-        opts.config.minGenTokens,
-        note,
-      );
+      const removed = compactHistory(opts.history, window, compactCalibration, minGen(), note);
       lastFoldRemoved = removed;
       // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
       // it is spliced into the model history per turn, while the saved transcript is written from
@@ -2371,7 +2368,7 @@ export async function runTurn(opts: {
       system,
       history: callHistory,
       tools: callTools,
-      config: opts.config,
+      config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
       signal: callAbort.signal,
@@ -2499,12 +2496,17 @@ export async function runTurn(opts: {
     const sample = decodeSample(response.usage, response.timing, response.engineTimings);
     const learned = decodeThroughput.observe(sample);
     if (learned != null) opts.onDecodeRate?.(learned);
+    // A cut stream (verbatim abort, ctrl-c) is not a finished round, whatever it reports.
+    if (!callAbort.signal.aborted) {
+      genReserve.observe(response.usage?.completionTokens, response.finishReason);
+    }
+    const reserve = resolveGenReserve(opts.config, genReserve);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
         `finishReason=${response.finishReason ?? '?'} ` +
         `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
-        `src=${sample?.source ?? '?'}\n`,
+        `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source}\n`,
     );
 
     if (opts.signal?.aborted) {
@@ -3177,7 +3179,7 @@ export async function runTurn(opts: {
             requestApproval: opts.requestApproval,
             requestQuestion,
             onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
-            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput, genReserve),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
             sandbox: opts.config.sandbox,
@@ -3208,7 +3210,7 @@ export async function runTurn(opts: {
           ) {
             const files = filesInResult(call.name, payload);
             const estimateTokens = Math.round(rawEstimate() * compactCalibration);
-            const thresholdTokens = compactThreshold(window, opts.config.minGenTokens);
+            const thresholdTokens = compactThreshold(window, minGen());
             if (underPressure({ files, estimateTokens, thresholdTokens })) {
               payload = `${payload}\n\n${buildSubagentAffordance(files)}`;
               subagentAffordanceOffered = true;
@@ -3553,6 +3555,7 @@ function makeSpawnSubagent(
   parent: RunTurnOpts,
   budget: SubagentBudget,
   parentDecodeRate: DecodeRate,
+  parentGenReserve: GenReserve,
 ) {
   return async (sub: { task: string }): Promise<ToolResult> => {
     // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
@@ -3614,6 +3617,7 @@ function makeSpawnSubagent(
         isUnattended: parent.isUnattended,
         onUsage: parent.onUsage,
         priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
+        genReserve: sameEngine ? parentGenReserve : undefined,
         onDecodeRate: rate => {
           if (sameEngine && rate != null) parentDecodeRate.adopt(rate);
           parent.onDecodeRate?.(rate);

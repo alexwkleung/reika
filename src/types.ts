@@ -373,6 +373,9 @@ export type Profile = {
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
   minGenTokens?: number;
+  // No explicit reserve was configured for this profile, so the session learns one above
+  // minGenTokens (#551, agent/genreserve.ts). Undefined = pinned.
+  minGenAdaptive?: boolean;
   // How pasted images reach this profile's model. 'describe' (the default) reads the image into
   // text with the vision model or system OCR, so a text-only model still gets its content;
   // 'native' hands the bytes to the model itself as an image part, for a model that can see.
@@ -487,6 +490,9 @@ export type Config = {
   // the per-turn max_tokens backstop, the fit-to-window payload reserve, and the
   // compaction trigger — one number, three call sites. See provider/budget.ts.
   minGenTokens: number;
+  // Set by loadConfig when REIKA_MIN_GEN_TOKENS is unset: minGenTokens is then the floor of a
+  // learned reserve (#551, agent/genreserve.ts). Undefined = pinned, so a hand-built Config is.
+  minGenAdaptive?: boolean;
   // How many recent tool-call rounds keep their reasoning_content in context. Older
   // reasoning is pruned. 1 = only the active roundtrip (leanest); higher keeps the
   // model's chain-of-thought so it doesn't re-derive across rounds, at a token cost.

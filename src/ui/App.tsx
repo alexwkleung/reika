@@ -872,7 +872,9 @@ export function App() {
     const totals = usageRef.current;
     const shrink = sessionRef.current?.shrink ?? { sheds: 0, folds: 0 };
     const window = profile.contextWindow ?? config!.contextWindow;
-    const usable = window ? Math.round(compactThreshold(window, profile.minGenTokens)) : undefined;
+    // The session's reserve is the learned one (#551), the number the next round compacts at.
+    const minGen = sessionRef.current?.config.minGenTokens ?? profile.minGenTokens;
+    const usable = window ? Math.round(compactThreshold(window, minGen)) : undefined;
     const usage: TranscriptUsage = {
       turns: msgs.filter(m => m.role === 'assistant').length,
       promptTokens: totals.promptTokens,
@@ -2314,7 +2316,12 @@ export function App() {
   const statusUsable =
     statusWindow && config
       ? Math.round(
-          compactThreshold(statusWindow, statusProfile?.minGenTokens ?? config.minGenTokens),
+          compactThreshold(
+            statusWindow,
+            sessionRef.current?.config.minGenTokens ??
+              statusProfile?.minGenTokens ??
+              config.minGenTokens,
+          ),
         )
       : undefined;
 

@@ -90,6 +90,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'http://localhost:8080/v1',
       apiKey: 'k',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -109,6 +110,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'https://moonshot.example/v1',
       apiKey: 'kimi-key',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -134,6 +136,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'http://default-base/v1',
       apiKey: 'default-key',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -241,6 +244,7 @@ describe('loadConfig — multi-model REIKA_MODEL', () => {
       baseURL: 'http://router/v1',
       apiKey: 'k',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -593,6 +597,27 @@ describe('minGenTokens', () => {
     process.env.REIKA_KIMI_MIN_GEN_TOKENS = '6144';
     const cfg = loadConfig();
     expect(resolveProfile(cfg, 'kimi').minGenTokens).toBe(6144);
+  });
+
+  // #551: unset, the reserve is learned above the default; any explicit value pins it.
+  it('is adaptive only when no reserve is configured', () => {
+    process.env.REIKA_MODEL = 'm';
+    expect(loadConfig().minGenAdaptive).toBe(true);
+    process.env.REIKA_MIN_GEN_TOKENS = '6144';
+    expect(loadConfig().minGenAdaptive).toBe(false);
+    expect(loadConfig().profiles.default.minGenAdaptive).toBe(false);
+  });
+
+  it('a per-profile reserve pins that profile only', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi,gpt4';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MIN_GEN_TOKENS = '8192';
+    process.env.REIKA_GPT4_MODEL = 'gpt-4o';
+    const cfg = loadConfig();
+    expect(resolveProfile(cfg, 'kimi').minGenAdaptive).toBe(false);
+    expect(resolveProfile(cfg, 'gpt4').minGenAdaptive).toBe(true);
+    expect(resolveProfile(cfg, 'default').minGenAdaptive).toBe(true);
   });
 });
 
