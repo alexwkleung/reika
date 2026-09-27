@@ -60,6 +60,12 @@ describe('resolveGenReserve', () => {
     expect(resolveGenReserve(adaptive(64_000), r).source).toBe('learned');
   });
 
+  it('counts a healthy ceiling cut as demand', () => {
+    const r = new GenReserve();
+    r.observeCeilingCut(8000);
+    expect(resolveGenReserve(adaptive(64_000), r)).toEqual({ tokens: 10_240, source: 'learned' });
+  });
+
   it('forgets rounds past its window, so it can come back down', () => {
     const r = observed(8000);
     for (let i = 0; i < 16; i++) r.observe(500, 'stop');

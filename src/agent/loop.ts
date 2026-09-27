@@ -16,7 +16,7 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
-import { estimateRequestTokens } from '../provider/tokens.js';
+import { estimateRequestTokens, estimateTokens } from '../provider/tokens.js';
 import {
   computeMaxTokens,
   NATIVE_IMAGE_TOKEN_ALLOWANCE,
@@ -2496,15 +2496,25 @@ export async function runTurn(opts: {
     const sample = decodeSample(response.usage, response.timing, response.engineTimings);
     const learned = decodeThroughput.observe(sample);
     if (learned != null) opts.onDecodeRate?.(learned);
-    // A cut stream (verbatim abort, ctrl-c) is not a finished round, whatever it reports.
+    // A cut stream (verbatim abort, ctrl-c) is not a finished round, whatever it reports — except a
+    // ceiling cut the ratio gate passed, which is demand the reserve should cover. No usage arrives
+    // on a cut, so it is sized from the reasoning it produced, at the compaction floor's density.
+    let completion =
+      response.usage?.completionTokens != null ? `${response.usage.completionTokens}` : '?';
     if (!callAbort.signal.aborted) {
       genReserve.observe(response.usage?.completionTokens, response.finishReason);
+    } else if (verbatimAbortByLength && !planForceWrite && !opts.signal?.aborted) {
+      const cut = Math.round(
+        estimateTokens(roundReasoning) * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+      );
+      genReserve.observeCeilingCut(cut);
+      completion = `~${cut}`;
     }
     const reserve = resolveGenReserve(opts.config, genReserve);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
-        `finishReason=${response.finishReason ?? '?'} ` +
+        `completion=${completion} finishReason=${response.finishReason ?? '?'} ` +
         `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
         `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source}\n`,
     );

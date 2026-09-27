@@ -33,9 +33,22 @@ export class GenReserve {
   private samples: number[] = [];
 
   observe(completionTokens: number | undefined, finishReason: string | undefined): void {
-    if (!completionTokens || completionTokens <= 0) return;
     if (!finishReason || !MEASURING_FINISHES.has(finishReason)) return;
-    this.samples.push(completionTokens);
+    this.push(completionTokens);
+  }
+
+  // A reasoning block cut by the length ceiling that the ratio gate judged healthy — the gate that
+  // lets continuation carry it (#284). It never reaches a finish, so `observe` would skip it, yet
+  // on a model whose long thoughts outrun the ceiling it is the one round that shows real demand
+  // (measured: every other round in the run under 150 tokens of reasoning). Its length is a lower
+  // bound, which is the right direction for a reserve. A ratio-triggered abort is never passed here.
+  observeCeilingCut(estimatedTokens: number): void {
+    this.push(estimatedTokens);
+  }
+
+  private push(tokens: number | undefined): void {
+    if (!tokens || tokens <= 0) return;
+    this.samples.push(tokens);
     if (this.samples.length > RESERVE_SAMPLES) this.samples.shift();
   }
 

@@ -494,7 +494,11 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   `agent/genreserve.ts`): with `REIKA_MIN_GEN_TOKENS` unset (`Config.minGenAdaptive`), the
   session starts at 2048 and raises it to p90 × 1.25 of the last 16 rounds that finished on
   their own (`stop`/`tool_calls` — a `length` cut measures the budget, an aborted spiral would
-  inflate it), capped at a quarter of the window, in 256-token steps. A percentile rather than
+  inflate it), capped at a quarter of the window, in 256-token steps. The one abort that does
+  count is a `REASONING_HARD_CEIL` cut the ratio gate passed (the same gate continuation uses),
+  sized from its reasoning at the compaction floor's density: on a model whose long thoughts
+  outrun the ceiling it is the only round showing real demand — measured on qwen3.8-27b-xhigh,
+  where the other rounds of the run carried under 150 tokens of reasoning each. A percentile rather than
   the rates' EMA, because a reserve has to cover the big rounds. The loop re-reads it at every
   use, so a long single turn adapts within itself; the session holds the learner across turns
   and resets it on `/model` and relearn, and a same-engine subagent shares it. An explicit value
@@ -502,7 +506,8 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   `loadConfig`, so a hand-built test Config is pinned. `session.config` carries the resolved
   value, which is what keeps the KV warm's round-0 prefix and the status gauge on the same
   number as the next request. Moving the threshold rewrites no request bytes. The `round=`
-  debug line carries `reserve=` and `reserveSrc=pinned|learned|default`.
+  debug line carries `completion=` (the provider's count, `~n` for a sampled ceiling cut, `?`
+  otherwise), `reserve=` and `reserveSrc=pinned|learned|default`.
 
 **Tool-output spill (on by default, `REIKA_SPILL=0` disables — `tools/_spill.ts`).** Every
 layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
