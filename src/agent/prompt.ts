@@ -104,7 +104,7 @@ function buildMinimalPrompt(
   ].join('\n\n');
 }
 
-// EXPERIMENT (grind mode, #556): the steps a strong model takes on its own, written down as a
+// Grind mode (#556): the steps a strong model takes on its own, written down as a
 // procedure for a model that may not. Two choices carry it:
 //
 //  - Steps, not dispositions. "Be thorough, question everything" gives a model an attitude to act

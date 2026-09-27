@@ -818,7 +818,7 @@ export function App() {
       // has anywhere to go.
       return;
     }
-    // Shift+Tab cycles agent → plan → minimal → vibe → chat → shell. Only while idle — mode picks the
+    // Shift+Tab cycles agent → plan → minimal → vibe → grind → chat → shell. Only while idle — mode picks the
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
@@ -1215,7 +1215,7 @@ export function App() {
                 : name === 'minimal'
                   ? 'Minimal mode — shell only, and no repo map, project summary, or AGENTS.md in the prompt. The model works from what commands show it. /agent to return.'
                   : name === 'grind'
-                    ? 'Grind mode (experimental) — the model works through a fixed procedure: pin down the task, explore, choose, change, prove it by running checks, review the diff, report what was verified. Tools: bash, read, edit. /agent to return.'
+                    ? 'Grind mode — the model works through a fixed procedure: pin down the task, explore, choose, change, prove it by running checks, review the diff, report what was verified. Tools: bash, read, edit. /agent to return.'
                     : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
@@ -1410,7 +1410,7 @@ export function App() {
           '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
           '  /vibe              enter vibe mode (every prompt plans first, then implements)',
           '  /minimal           enter minimal mode (shell only, no upfront project context)',
-          '  /grind             enter grind mode (experimental: verify-everything procedure)',
+          '  /grind             enter grind mode (verify-everything procedure; slower, checks its work)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
           '  /compact           compact older context now (compaction note, then a fold)',
@@ -1425,7 +1425,7 @@ export function App() {
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-          '  shift+tab          cycle mode (agent → plan → minimal → vibe → chat → shell)',
+          '  shift+tab          cycle mode (agent → plan → minimal → vibe → grind → chat → shell)',
         ].join('\n');
         break;
       case 'model': {

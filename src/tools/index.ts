@@ -105,7 +105,7 @@ export function minimalTools(): Tool[] {
   return tools;
 }
 
-// EXPERIMENT (grind mode, #556): the shell plus read and edit. The work surface is bash — the
+// Grind mode (#556): the shell plus read and edit. The work surface is bash — the
 // steps grind asks for (run the tests, write and run an edge-case check, review the diff) are all
 // commands. read and edit stay because their gutter contract and exact-match failures are what the
 // harness's edit machinery (read-first gate, edit-recovery grounding) is built on; editing through

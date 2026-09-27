@@ -4,12 +4,12 @@ import { parsePlanSteps } from '../agent/plantrack.js';
 // Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
 export type { Mode };
 
-// Shift+Tab cycling order: the model-driven modes first (agent → plan → minimal → vibe), then the
-// isolated ones (chat → shell), wrapping back to agent. Minimal sits right after plan (#400): the
-// three single-turn modes are adjacent, and vibe — the plan→implement chain — closes the group.
-// Grind (#556) is left out while it is an experiment: every mode in the cycle is one more stop on
-// every Shift+Tab, and /grind reaches it.
-export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'minimal', 'vibe', 'chat', 'shell'];
+// Shift+Tab cycling order: the model-driven modes first (agent → plan → minimal → vibe → grind),
+// then the isolated ones (chat → shell), wrapping back to agent. Minimal sits right after plan
+// (#400): the three single-turn modes are adjacent, and vibe — the plan→implement chain — follows.
+// Grind (#556) closes the group: it is the slowest mode, so a stray Shift+Tab from agent should not
+// land on it first.
+export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'minimal', 'vibe', 'grind', 'chat', 'shell'];
 
 export function nextMode(current: Mode): Mode {
   return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
@@ -83,7 +83,7 @@ export const COMMANDS: CommandSpec[] = [
   },
   {
     name: 'grind',
-    desc: 'enter grind mode (experimental: work through a verify-everything procedure; bash, read, edit)',
+    desc: 'enter grind mode (works through a verify-everything procedure; bash, read, edit)',
   },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },

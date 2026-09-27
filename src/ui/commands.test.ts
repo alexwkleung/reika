@@ -11,11 +11,12 @@ import {
 import type { Message } from '../types.js';
 
 describe('nextMode — Shift+Tab cycling', () => {
-  it('cycles agent → plan → vibe → chat → shell → agent', () => {
+  it('cycles agent → plan → minimal → vibe → grind → chat → shell → agent', () => {
     expect(nextMode('agent')).toBe('plan');
     expect(nextMode('plan')).toBe('minimal');
     expect(nextMode('minimal')).toBe('vibe');
-    expect(nextMode('vibe')).toBe('chat');
+    expect(nextMode('vibe')).toBe('grind');
+    expect(nextMode('grind')).toBe('chat');
     expect(nextMode('chat')).toBe('shell');
     expect(nextMode('shell')).toBe('agent');
   });
