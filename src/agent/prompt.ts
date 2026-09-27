@@ -274,12 +274,11 @@ function buildAgentPrompt(opts: {
   // questions. Flagged so it A/Bs against a byte-identical prompt; read per call so toggling it
   // doesn't need a restart.
   const subagentNudge = opts.canSubagent && process.env.REIKA_SUBAGENT_NUDGE === '1';
-  // EXPERIMENT (#556): grind mode's step 6 on its own. On deepseek-v4.1-flash grind handled every
-  // caller in 8/10 chunk-fixture runs against agent's 4/10, and every agent miss was a run that never
-  // opened the caller — agent reviewed its diff in 0/10. This arm asks whether that one step carries
-  // the gap, which would make it a prompt line rather than a mode. Off by default and absent from the
-  // prompt byte-for-byte when off, so it A/Bs against the unchanged agent prompt.
-  const callerCheck = process.env.REIKA_CALLER_CHECK === '1';
+  // Grind mode's step 6 on its own (#556). Every agent-mode miss on the chunk fixtures was a run that
+  // never opened the caller; with this line deepseek-v4.1-flash went 4/10 → 10/10 and a local 27B
+  // started searching for callers (0/3 → 2/3), with no extra calls on the fixtures that have none.
+  // On by default since 2026-09-27; `=0` is the baseline arm and restores the prompt byte-for-byte.
+  const callerCheck = process.env.REIKA_CALLER_CHECK !== '0';
   const rules: string[] = [
     "For any question about this project's code, you MUST use tools before answering. Never describe code from general knowledge.",
     'To find where something is defined, use grep for the symbol name. Do NOT guess file paths or extensions.',

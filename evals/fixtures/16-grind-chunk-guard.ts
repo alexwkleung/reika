@@ -81,7 +81,8 @@ export const fixture: Fixture = {
   },
   prompt:
     "chunk() in src/chunk.js hangs forever when size is 0. Make it reject sizes that can't make progress.",
-  timeoutMs: 15 * 60 * 1000,
+  // 30, not 15: a local 27B that checks its own work was cut off mid-check at 15 (#556).
+  timeoutMs: 30 * 60 * 1000,
   assert: async ({ cwd, messages }) =>
     gradeHiddenChecks(
       cwd,
