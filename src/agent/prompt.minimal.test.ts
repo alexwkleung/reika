@@ -151,7 +151,7 @@ describe('minimal mode routing', () => {
     expect(isMinimalPrompt('minimal')).toBe(true);
     expect(isMinimalPrompt('agent')).toBe(false);
     // But it gets its own tool list.
-    const lists = { agent: 'A', plan: 'P', chat: 'C', minimal: 'M' };
+    const lists = { agent: 'A', plan: 'P', chat: 'C', minimal: 'M', grind: 'G' };
     expect(turnTools('minimal', lists)).toBe('M');
     expect(turnTools('agent', lists)).toBe('A');
     expect(turnTools('vibe', lists)).toBe('P');

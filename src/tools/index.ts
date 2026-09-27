@@ -5,7 +5,7 @@ import { grepTool } from './grep.js';
 import { globTool } from './glob.js';
 import { editTool } from './edit.js';
 import { writeTool } from './write.js';
-import { bashTool, minimalBashTool, readOnlyBashTool } from './bash.js';
+import { bashTool, grindBashTool, minimalBashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
 import { askUserTool } from './ask.js';
 import { fetchUrlTool } from './fetch.js';
@@ -101,6 +101,19 @@ export function planTools(): Tool[] {
 // is about the work surface, not a literal count of one.
 export function minimalTools(): Tool[] {
   const tools: Tool[] = [minimalBashTool];
+  if (askEnabled()) tools.push(askUserTool);
+  return tools;
+}
+
+// EXPERIMENT (grind mode, #556): the shell plus read and edit. The work surface is bash — the
+// steps grind asks for (run the tests, write and run an edge-case check, review the diff) are all
+// commands. read and edit stay because their gutter contract and exact-match failures are what the
+// harness's edit machinery (read-first gate, edit-recovery grounding) is built on; editing through
+// heredocs would add a failure class unrelated to the procedure being measured. No write (a new
+// file is a heredoc), no subagent (the procedure is the model's own), no web tools (the mode is
+// about checking the repo, not the web).
+export function grindTools(): Tool[] {
+  const tools: Tool[] = [readTool, editTool, grindBashTool];
   if (askEnabled()) tools.push(askUserTool);
   return tools;
 }

@@ -8,6 +8,7 @@
 
 - **Agent** (default): input goes to the model; it can call tools
 - **Minimal**: `/minimal` to enter — an agent turn with none of the upfront context (no repo map, project summary, or AGENTS.md in the system prompt) and `bash` as its only work tool, plus `ask_user`. `/agent` returns.
+- **Grind** (experimental, #556): `/grind` to enter — an agent turn whose prompt is a fixed seven-step procedure in place of the agent rules: pin down what "done" means, look before acting, name two approaches and pick one, make the smallest change, prove it by running the tests and an edge-case check of its own, review `git diff` and the callers, and report what was and was not verified. The point is to write down the steps a strong model takes unprompted and see how much of that a given model picks up. Tools are `bash`, `read` and `edit` (plus `ask_user`); project context stays in. The loop detectors are unchanged — the prompt asks for verification by running commands rather than by re-thinking, which is what keeps it clear of them. Not in the `Shift+Tab` cycle while experimental; `REIKA_DEFAULT_MODE=grind` launches in it. `/agent` returns. Compare modes with `npm run eval -- grind-chunk --mode=grind` (and `--mode=agent`, `--mode=minimal`), 3+ runs each.
 - **Shell**: `/shell` to enter — input runs as bash directly (no model, no approval), output streams to scrollback. `/agent` returns.
 - **Chat**: `/chat` to enter — pure chat with the model. No filesystem/shell tools registered (only `search` and `fetch_url` if configured). Conversation history is fully isolated from agent mode — switching back and forth keeps each side's history independent. `/agent` returns. Status bar shows a `chat` tag when active.
 - **Plan**: `/plan` to enter — read-only exploration. Only `read`/`list`/`grep`/`glob` and a read-only `bash` are registered (no `edit`/`write`), so the model can't change anything; it explores and ends by writing a numbered, file-specific plan. Unlike chat, history is **shared** with agent mode, so the flow is `/plan` → it writes the plan → `/implement` (or `/agent` then a prompt) to execute it with the plan already in context. `REIKA_DEFAULT_MODE=plan` (or the legacy `REIKA_PLAN_EXPERIMENT=1`) starts the session in plan mode. `/agent` returns. Status bar shows a `plan` tag when active.
@@ -24,7 +25,7 @@
 ```sh
 reika -p "summarize what this repo does"
 echo "explain src/agent/loop.ts" | reika -p          # prompt from stdin
-reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | chat
+reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | grind | chat
 reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
 reika -p --save "..."                                # write the transcript like /save
 reika -p "/verify the input box"                     # run a skill, with the rest as guidance

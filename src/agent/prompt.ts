@@ -13,6 +13,9 @@ export function buildSystemPrompt(opts: {
   // "context management stays the same, only the tools and upfront context are chopped off". So
   // minimal runs as an agent turn in every respect except this prompt and its tool list.
   minimal?: boolean;
+  // Grind mode (#556). A flag on the agent prompt for minimal's reason: the loop's agent-mode
+  // machinery (gates, loop ladders, compaction) must keep running unchanged under it.
+  grind?: boolean;
   // Whether `ask_user` is in this turn's tool list. Subagents run without it (see makeSpawnSubagent),
   // and neither the agent nor the plan prompt may point a model at a tool it does not have — the
   // same coupling the plan prompt keeps with planTools for bash (#109).
@@ -42,6 +45,9 @@ export function buildSystemPrompt(opts: {
   }
   if (opts.minimal) {
     return buildMinimalPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
+  }
+  if (opts.grind) {
+    return buildGrindPrompt(opts);
   }
   return buildAgentPrompt(opts);
 }
@@ -96,6 +102,66 @@ function buildMinimalPrompt(
     ].join('\n'),
     `Working directory: ${bundle.cwd}`,
   ].join('\n\n');
+}
+
+// EXPERIMENT (grind mode, #556): the steps a strong model takes on its own, written down as a
+// procedure for a model that may not. Two choices carry it:
+//
+//  - Steps, not dispositions. "Be thorough, question everything" gives a model an attitude to act
+//    out, and on a small model that is long anxious reasoning — the spiral the converge steer exists
+//    to stop ("do not question yourself" converged where unsteered attempts spiraled). Each step
+//    here is something the model does and a transcript shows, so adherence can be graded per step.
+//  - Verify by running, not by re-thinking. The loop detectors key on repeated reasoning, not on
+//    varied commands, so checking that lands in bash output reads as progress to the harness and
+//    they stay on unchanged. When they fire anyway, the model turned "check it" into rumination,
+//    which is itself the finding.
+//
+// Project context stays in: step 2 is "look before you act", and the bundle is where that starts.
+function buildGrindPrompt(opts: {
+  bundle: ContextBundle;
+  canAsk?: boolean;
+  decideAlone?: boolean;
+  sandbox?: boolean;
+}): string {
+  const steps: string[] = [
+    'Pin down the task. Before your first tool call, state in a sentence or two what "done" means and anything ambiguous about the request.',
+    'Look before you act. Find the code involved (grep through bash), read it, find how this codebase already handles similar things, and find the tests that cover it. Never guess a path.',
+    'Choose deliberately. Name at least two ways to do it and pick one, in a sentence, saying why.',
+    'Make the smallest change that does the job. Read a file before you edit it. read output prefixes each line with `NNNNN│` — that gutter is NOT part of the file; copy only the text after `│` into old_string, verbatim including indentation.',
+    'Prove it by running something. Run the existing tests. Then write and run a quick check for the edge cases your change touches — empty input, boundaries, error paths, whatever this task makes risky. Put throwaway checks in a temp dir (`mktemp -d`), not the project. A check you only reasoned through does not count. If a check fails, fix the code and run it again: that loop is the work, not a failure.',
+    'Review your own diff. Run `git diff`, reread it as a reviewer would, and check the callers of anything whose behavior changed.',
+    'Report honestly. In your final reply, say what you verified by running it, what you did not verify, and what is still uncertain.',
+  ];
+  const rules: string[] = [
+    "Ground every claim about this project's code in something you ran or read. Never describe code from general knowledge.",
+    'Verify by running, not by re-thinking. When you notice yourself re-deriving something a command could check, run the command instead, and do not repeat an analysis you already did.',
+    'Scale the steps to the task: for a one-line fix, steps 3 and 6 can be a sentence each, but never skip step 5. For a question rather than a change, do steps 1, 2 and 7.',
+    'If a command or an edit fails, try a different approach. A failure is information, not a dead end.',
+    ...(opts.canAsk
+      ? [
+          'Stopping to ask is a legitimate outcome, not a failure to try harder: when what you have read contradicts the request, use ask_user instead of silently picking one reading.',
+        ]
+      : opts.decideAlone
+        ? [DECIDE_ALONE_RULE]
+        : []),
+  ];
+  const parts: string[] = [
+    [
+      'You are a coding assistant operating in a terminal, in GRIND MODE: the work is not done until you have checked it. Be concise in what you write and thorough in what you run.',
+      'Your tools: bash for searching, building, testing and everything else; read to view a file; edit to change one.',
+      ...(opts.sandbox ? [sandboxSentence(false, false)] : []),
+      'Work through these steps, in order:',
+      ...steps.map((s, i) => `${i + 1}. ${s}`),
+      'Rules:',
+      ...rules.map(r => `- ${r}`),
+    ].join('\n'),
+    `Working directory: ${opts.bundle.cwd}`,
+    ...selfLineParts(),
+  ];
+  if (opts.bundle.projectSummary) parts.push(`Project:\n${opts.bundle.projectSummary}`);
+  if (opts.bundle.repoMap) parts.push(`Repo map:\n${opts.bundle.repoMap}`);
+  if (opts.bundle.instructions) parts.push(`Project instructions:\n${opts.bundle.instructions}`);
+  return parts.join('\n\n');
 }
 
 // EXPERIMENT (plan mode): read-only exploration that must converge on a written plan. The

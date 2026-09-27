@@ -1,10 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { createSession } from '../src/session.js';
 
-import type { AssertResult, Fixture } from './types.js';
+import type { AssertResult, EvalMode, Fixture } from './types.js';
 
 import { fixture as f1 } from './fixtures/01-list.js';
 import { fixture as f2 } from './fixtures/02-grep.js';
@@ -20,8 +21,9 @@ import { fixture as f11 } from './fixtures/11-plan-gate-verdict.js';
 import { fixture as f12 } from './fixtures/12-sandbox-recovery.js';
 import { fixture as f14 } from './fixtures/14-self-docs.js';
 import { fixture as f15 } from './fixtures/15-self-attractor.js';
+import { fixture as f16 } from './fixtures/16-grind-chunk-guard.js';
 
-const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f14, f15];
+const FIXTURES: Fixture[] = [f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f14, f15, f16];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Web search auto-enables on a Mac with Chrome, which would put `search` in every fixture's prompt
@@ -36,13 +38,27 @@ type RunRecord = {
   toolCallCount: number;
 };
 
-async function runFixture(fix: Fixture): Promise<RunRecord> {
+async function runFixture(fix: Fixture, modeOverride?: EvalMode): Promise<RunRecord> {
   const cwd = await mkdtemp(join(tmpdir(), 'reika-eval-'));
   try {
     for (const [relPath, content] of Object.entries(fix.setup)) {
       const full = join(cwd, relPath);
       await mkdir(dirname(full), { recursive: true });
       await writeFile(full, content, 'utf8');
+    }
+    if (fix.gitInit) {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+      git('init', '-q');
+      git('add', '-A');
+      git(
+        '-c',
+        'user.name=octocat',
+        '-c',
+        'user.email=octocat@example.com',
+        'commit',
+        '-qm',
+        'setup',
+      );
     }
 
     // The TUI's boot, not a copy of it: a runner that booted on its own never probed the window,
@@ -64,7 +80,7 @@ async function runFixture(fix: Fixture): Promise<RunRecord> {
       // eval — a fixture asserting on it passed vacuously. `tools` stays separate from it: a
       // fixture may run plan tools under the agent prompt (08-grep-spill-noshell).
       await session.submit(fix.prompt, {
-        mode: fix.mode ?? 'agent',
+        mode: modeOverride ?? fix.mode ?? 'agent',
         tools: fix.tools === 'plan' ? session.lists.plan : undefined,
         signal: controller.signal,
       });
@@ -99,6 +115,14 @@ async function main(): Promise<void> {
   // `npm run eval -- spill` runs only matching fixtures. A local quantized model takes minutes
   // per fixture, so re-running one under test shouldn't cost the whole suite.
   const filters = process.argv.slice(2).filter(a => !a.startsWith('-'));
+  const modeArg = process.argv.find(a => a.startsWith('--mode='))?.slice('--mode='.length);
+  const MODES: EvalMode[] = ['agent', 'plan', 'minimal', 'grind'];
+  if (modeArg !== undefined && !MODES.includes(modeArg as EvalMode)) {
+    process.stdout.write(`unknown --mode=${modeArg} (expected ${MODES.join(' | ')})\n`);
+    process.exit(1);
+  }
+  const modeOverride = modeArg as EvalMode | undefined;
+  if (modeOverride) process.stdout.write(`  mode: ${modeOverride}\n`);
   const selected =
     filters.length > 0 ? FIXTURES.filter(f => filters.some(q => f.name.includes(q))) : FIXTURES;
   if (selected.length === 0) {
@@ -110,7 +134,7 @@ async function main(): Promise<void> {
   for (const fix of selected) {
     process.stdout.write(`  ${fix.name.padEnd(24)} … `);
     try {
-      const rec = await runFixture(fix);
+      const rec = await runFixture(fix, modeOverride);
       records.push(rec);
       // Print the pass note, not just PASS: for the spill fixtures the interesting part of a
       // pass is *how* it got there (how many calls before it followed the locator), and that was

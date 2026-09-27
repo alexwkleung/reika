@@ -165,6 +165,17 @@ export const minimalBashTool: Tool = {
     'redirect), building, testing, and git — goes through it. Single string, run via /bin/sh.',
 };
 
+// Grind mode (#556). The default description steers toward grep/write/list, none of which grind
+// offers, and a steer at a missing tool is the #377 phantom pointer. Names what the shell is FOR
+// here — the verification steps the grind prompt asks for run through it.
+export const grindBashTool: Tool = {
+  ...bashTool,
+  description:
+    'Execute a shell command in the working directory. Use it for searching (grep, find), ' +
+    'building, running tests, running quick checks you write, git, and anything read and edit do ' +
+    'not cover. Single string, run via /bin/sh.',
+};
+
 const noRepoNoticed = new Set<string>();
 const NO_REPO_NOTICE =
   'Not a git repo — a shell edit here shows a diff only for files the command names directly ' +

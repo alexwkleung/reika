@@ -21,7 +21,7 @@ export const USAGE = `usage: reika                  start the interactive TUI in
        reika -p [prompt] ...   run one turn without the TUI and print the reply
 
   -p, --prompt [text]   run one turn headless; reads stdin when no text is given
-  --mode <mode>         agent | plan | vibe | minimal | chat (default: REIKA_DEFAULT_MODE, else agent)
+  --mode <mode>         agent | plan | vibe | minimal | grind | chat (default: REIKA_DEFAULT_MODE, else agent)
   --json                print the turn's messages as a JSON array instead of the reply text
   --save                save the transcript to ~/.config/reika/history like /save
   -v, --version         print the version
@@ -35,7 +35,7 @@ With -p: a prompt starting with /<skill> runs that skill. Approvals follow REIKA
 declined, and 'off' declines every edit and command. ask_user is never offered. Exit status: 0 on
 a reply, 1 on an error, 130 when interrupted.`;
 
-const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 'chat']);
+const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 'grind', 'chat']);
 
 // Returns null when the argv holds no headless request, so the caller starts the TUI. --help and
 // --version count as requests: both answer without starting either front-end. Throws on
