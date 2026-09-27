@@ -82,7 +82,10 @@ export function Scrollback({
     const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
-  const pool = region - (pendingTool ? 1 : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const { log: scrollback, held } = useScrollbackLog(messages);
+  const pendingGap = pendingTool ? pendingToolGap(pendingTool, scrollback.at(-1)) : 0;
+  const pool =
+    region - (pendingTool ? 1 + pendingGap : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
   const shares = allocateLiveRows(
     blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
     pool,
@@ -94,10 +97,12 @@ export function Scrollback({
           change — nothing shifts when the tool returns. A `bash` tail streams under it at
           COMMAND_MARGIN, which is where that output commits too, so the block stays put as well. */}
       {pendingTool ? (
-        <Text color={theme.secondary}>
-          <Text color={theme.tool}>{TOOL_MARKER}</Text>
-          {`${toolVerb(pendingTool)}…`}
-        </Text>
+        <Box marginTop={pendingGap}>
+          <Text color={theme.secondary}>
+            <Text color={theme.tool}>{TOOL_MARKER}</Text>
+            {`${toolVerb(pendingTool)}…`}
+          </Text>
+        </Box>
       ) : null}
       {blocks.map((b, i) =>
         b.kind === 'reasoning' ? (
@@ -127,7 +132,6 @@ export function Scrollback({
     </>
   );
 
-  const { log: scrollback, held } = useScrollbackLog(messages);
   return (
     <>
       <Static items={scrollback}>
@@ -494,6 +498,18 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
 
 function hasBlockUnderSummary(msg: Message): boolean {
   return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
+}
+
+// The in-flight row takes the committed row's spacing, or the gap MessageView gives the result
+// appears only when it lands. The result doesn't exist yet, so whether it will carry a block is
+// read off the tool: a `bash` always commits a command chip, an `edit`/`write` a diff (unless it
+// fails, a one-row shift at the swap).
+const TOOLS_WITH_BLOCK = new Set(['bash', 'edit', 'write']);
+
+function pendingToolGap(tool: string, prev: LogItem | undefined): number {
+  if (!prev || 'workedMs' in prev) return 0;
+  if (prev.role === 'system' || ('nested' in prev && prev.nested)) return 1;
+  return prev.role === 'tool' && (hasBlockUnderSummary(prev) || TOOLS_WITH_BLOCK.has(tool)) ? 1 : 0;
 }
 
 function renderMessage(
