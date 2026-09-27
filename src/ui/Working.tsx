@@ -188,6 +188,10 @@ export const WORKING_WORDS = [
   'Floralizing',
   'Cherryizing',
   'Majesticizing',
+  'Perfumizing',
+  'Bouqueting',
+  'Flourishing',
+  'Posying',
 ] as const;
 // A word holds for this many full shimmer sweeps, so it swaps in the pause after a sweep
 // rather than mid-glow, and a longer word stays up as long as it takes to sweep it.
