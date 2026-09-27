@@ -489,10 +489,25 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   and passes it to `callModel`, never above the model's catalog output cap. It caps a spiraling small/quantized model so it can't run to
   the context end. The cap is a _ceiling_; `minGenTokens` is the _floor_, enforced upstream
   by compaction keeping the prompt under `window − minGen` — so on a normal turn the ceiling
-  already lands ≥ the floor and the cap never fires. One number, `REIKA_MIN_GEN_TOKENS`
-  (default 2048), drives all three: the cap reserve, the compaction trigger, and this floor.
-  Size it ~2048 for reasoning-off models, 6144–8192 for reasoning-on thinking models on a
-  small window.
+  already lands ≥ the floor and the cap never fires. One number drives all three: the cap
+  reserve, the compaction trigger, and this floor. **It is learned unless pinned** (#551,
+  `agent/genreserve.ts`): with `REIKA_MIN_GEN_TOKENS` unset (`Config.minGenAdaptive`), the
+  session starts at 2048 and raises it to p90 × 1.25 of the last 16 rounds that finished on
+  their own (`stop`/`tool_calls` — a `length` cut measures the budget, an aborted spiral would
+  inflate it), capped at a quarter of the window, in 256-token steps. The one abort that does
+  count is a `REASONING_HARD_CEIL` cut the ratio gate passed (the same gate continuation uses),
+  sized from its reasoning at the compaction floor's density: on a model whose long thoughts
+  outrun the ceiling it is the only round showing real demand — measured on qwen3.8-27b-xhigh,
+  where the other rounds of the run carried under 150 tokens of reasoning each. A percentile rather than
+  the rates' EMA, because a reserve has to cover the big rounds. The loop re-reads it at every
+  use, so a long single turn adapts within itself; the session holds the learner across turns
+  and resets it on `/model` and relearn, and a same-engine subagent shares it. An explicit value
+  (global or per-profile) pins it with no learning on top; `minGenAdaptive` is set only by
+  `loadConfig`, so a hand-built test Config is pinned. `session.config` carries the resolved
+  value, which is what keeps the KV warm's round-0 prefix and the status gauge on the same
+  number as the next request. Moving the threshold rewrites no request bytes. The `round=`
+  debug line carries `completion=` (the provider's count, `~n` for a sampled ceiling cut, `?`
+  otherwise), `reserve=` and `reserveSrc=pinned|learned|default`.
 
 **Tool-output spill (on by default, `REIKA_SPILL=0` disables — `tools/_spill.ts`).** Every
 layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
@@ -792,7 +807,7 @@ Subagent overrides (`REIKA_SUBAGENT_*`) are independent of profiles — they alw
 
 **Per-profile `maxTokens`:** an _explicit_ ceiling on response tokens, falling back to the global `REIKA_MAX_TOKENS`. It is no longer the only source of `max_tokens`: when `contextWindow` is set, the loop computes a per-turn backstop (`window − prompt − margin`, see the Generation backstop above) and sends `min(REIKA_MAX_TOKENS, backstop)`. With no window known and no `REIKA_MAX_TOKENS`, `max_tokens` is omitted (server default). An explicit `REIKA_MAX_TOKENS` still wins as a hard cap, so setting it too low truncates tool-call JSON silently — keep ≥4k for tool-heavy use, or just leave it unset and let `minGenTokens` size the reserve.
 
-**Per-profile `minGenTokens`** (`REIKA_<NAME>_MIN_GEN_TOKENS`): the generation reserve, falling back to the global `REIKA_MIN_GEN_TOKENS` (default 2048). One number drives the cap reserve, the compaction trigger, and the backstop floor — set it larger (6144–8192) on a small-window profile running a reasoning model so compaction fires early enough to leave think-room.
+**Per-profile `minGenTokens`** (`REIKA_<NAME>_MIN_GEN_TOKENS`): the generation reserve, falling back to the global `REIKA_MIN_GEN_TOKENS`. Unset at both levels it is learned from 2048 (see the Generation backstop above); set at either, it pins that profile. One number drives the cap reserve, the compaction trigger, and the backstop floor — pin it larger (6144–8192) on a small-window reasoning profile to have the think-room from round 0 rather than after the first big round.
 
 ## Attaching images
 
