@@ -7,6 +7,12 @@ export type ToolCall = {
   args: Record<string, unknown>;
 };
 
+export type PlanChecks = {
+  at: number;
+  missing: string[];
+  deadUrls: { url: string; error: string }[];
+};
+
 export type Message =
   // `meta` marks a UI-only echo of a slash command (e.g. `/model`, `/stats`): shown in the
   // scrollback as the user's input but never sent to the model — its system response is
@@ -55,6 +61,10 @@ export type Message =
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
       planFinal?: boolean;
+      // UI-only: what the plan-commit grounding checks flagged. The model reads them as the note
+      // text appended to `content` from `at` on; the scrollback cuts there and draws these as a
+      // block instead, so the note never renders as a `---` line of prose.
+      planChecks?: PlanChecks;
       // EXPERIMENT (REIKA_PREFIX_STABLE): reasoning dropped from requests by batch aging. Sticky
       // on the shared message object so the boundary — and the inference engine's prompt-cache
       // prefix — holds across rounds and turns. See agent/compaction.ts batchAgePayloads.

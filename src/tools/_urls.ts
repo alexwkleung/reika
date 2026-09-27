@@ -253,6 +253,7 @@ export function buildPlanUrlNote(results: UrlGroundingResult[]): string {
 export type UrlGroundingOutcome = {
   note?: string;
   notice?: { tone: 'info' | 'warn'; content: string };
+  dead?: { url: string; error: string }[];
 };
 
 // Shared core: fetch the URLs in `text` not already grounded this turn and return the raw results.
@@ -331,5 +332,13 @@ export async function groundUrlsForPlan(
   planText: string,
 ): Promise<UrlGroundingOutcome> {
   const results = await groundCandidates(ctx, planText);
-  return { note: buildPlanUrlNote(results) || undefined, notice: buildUrlGroundingNotice(results) };
+  const online = batchOnline(results);
+  const dead = results.flatMap(r =>
+    !r.res.ok && verdictOf(r.res, online) === 'dead' ? [{ url: r.url, error: r.res.error }] : [],
+  );
+  return {
+    note: buildPlanUrlNote(results) || undefined,
+    notice: buildUrlGroundingNotice(results),
+    ...(dead.length > 0 ? { dead } : {}),
+  };
 }
