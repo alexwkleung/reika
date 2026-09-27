@@ -155,6 +155,37 @@ describe('agent prompt subagent nudge (#273)', () => {
 // implementation turn with no refinement round between (#46 is open), so a wrong reading of the
 // request costs the whole implementation turn. Same tool-list coupling as the agent prompt, but
 // deliberately NOT the same line — see the comment on rule 5 in prompt.ts.
+describe('agent prompt caller-check rule (#556)', () => {
+  afterEach(() => {
+    delete process.env.REIKA_CALLER_CHECK;
+  });
+
+  it('is absent unless the flag is set, and leaves the prompt byte-identical', () => {
+    const off = buildSystemPrompt({ bundle, mode: 'agent', canAsk: true });
+    expect(off).not.toContain('find every place that calls it');
+    process.env.REIKA_CALLER_CHECK = '0';
+    expect(buildSystemPrompt({ bundle, mode: 'agent', canAsk: true })).toBe(off);
+  });
+
+  it('adds one numbered rule under the flag, ahead of the ask rule', () => {
+    process.env.REIKA_CALLER_CHECK = '1';
+    const on = buildSystemPrompt({ bundle, mode: 'agent', canAsk: true });
+    expect(on).toContain('7. After you change what a function accepts, returns or throws');
+    expect(on).toContain('8. Stopping to ask');
+  });
+
+  it('touches only the agent prompt', () => {
+    process.env.REIKA_CALLER_CHECK = '1';
+    for (const p of [
+      buildSystemPrompt({ bundle, mode: 'plan' }),
+      buildSystemPrompt({ bundle, minimal: true }),
+      buildSystemPrompt({ bundle, grind: true }),
+    ]) {
+      expect(p).not.toContain('find every place that calls it');
+    }
+  });
+});
+
 describe('plan prompt tracks the ask_user tool (#272)', () => {
   afterEach(() => {
     delete process.env.REIKA_ASK;

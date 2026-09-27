@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
+import { formatExperimentFlags } from '../src/debug.js';
 import { createSession } from '../src/session.js';
 
 import type { Message } from '../src/types.js';
@@ -68,9 +69,11 @@ async function saveRun(run: {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const path = join(RUNS_DIR, `${stamp}-${run.fix.name}-${run.mode}.json`);
   const { fix, ...rest } = run;
+  // The flags line, so an A/B arm set by env (REIKA_CALLER_CHECK=1) is readable off the file.
+  const flags = formatExperimentFlags().replace(/^\[reika:debug\] flags /, '');
   await writeFile(
     path,
-    JSON.stringify({ fixture: fix.name, prompt: fix.prompt, ...rest }, null, 2),
+    JSON.stringify({ fixture: fix.name, prompt: fix.prompt, flags, ...rest }, null, 2),
   );
   return path;
 }
