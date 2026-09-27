@@ -626,6 +626,34 @@ describe('Scrollback pending tool row', () => {
     );
   });
 
+  // The second call of a round: its result gets a gap when either row carries a block (#492), so
+  // the in-flight row has to take it too or the gap only appears at the swap.
+  it('takes the gap its committed result will get', () => {
+    const chip: Message = {
+      role: 'tool',
+      callId: 't1',
+      summary: 'Ran: npm test',
+      command: { text: 'npm test', outputTail: 'ok', outputTruncated: false },
+    };
+    const readRow: Message = { role: 'tool', callId: 't1', summary: 'Read src/a.ts' };
+    const rowsAbove = (messages: Message[], pendingTool: string): string[] => {
+      const rows = inApp(
+        <Scrollback
+          messages={messages}
+          streaming=""
+          streamingReasoning=""
+          streamingTool=""
+          pendingTool={pendingTool}
+        />,
+      ).split('\n');
+      const at = rows.findIndex(l => l.includes('↳ ') && l.includes('…'));
+      return rows.slice(at - 1, at);
+    };
+    expect(rowsAbove([chip], 'read')[0].trim()).toBe('');
+    expect(rowsAbove([readRow], 'bash')[0].trim()).toBe('');
+    expect(rowsAbove([readRow], 'read')[0]).toContain('↳ src/a.ts');
+  });
+
   it('draws nothing when no call is running', () => {
     expect(liveFrame('')).not.toContain('↳ ');
   });
