@@ -57,6 +57,17 @@ describe('scoreGrindSteps', () => {
     expect(s.edgeChecked).toBe(false);
   });
 
+  it('does not mistake a read with a stderr redirect for the change', () => {
+    const messages: Message[] = [
+      bash('ls -la src/ 2>/dev/null && cat src/chunk.js 2>/dev/null'),
+      bash("cat > src/chunk.js <<'EOF'\nexport const x = 1;\nEOF"),
+      bash('npm test 2>&1 | tail -20'),
+    ];
+    const s = scoreGrindSteps(messages, 'src/chunk.js');
+    expect(s.explored).toBe(true);
+    expect(s.tested).toBe(true);
+  });
+
   it('scores nothing after the change when there was none', () => {
     const s = scoreGrindSteps([bash('npm test'), reply('Looks fine.')], 'src/chunk.js');
     expect(s.tested).toBe(false);

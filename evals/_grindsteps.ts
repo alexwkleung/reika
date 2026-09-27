@@ -18,7 +18,6 @@ export type GrindSteps = {
 
 const TEST_RUNNER_RE = /\b(npm (run )?test|npx vitest|node --test)\b/;
 const OWN_CHECK_RE = /\bnode\b|mktemp|\/tmp\//;
-const SHELL_WRITE_RE = /sed -i|<<|>|\btee\b/;
 
 function command(tc: ToolCall): string {
   return tc.name === 'bash' ? String(tc.args.command ?? '') : '';
@@ -27,7 +26,13 @@ function command(tc: ToolCall): string {
 function isChange(tc: ToolCall, target: string): boolean {
   if (tc.name === 'edit' || tc.name === 'write') return String(tc.args.path ?? '').endsWith(target);
   const cmd = command(tc);
-  return cmd.includes(target) && SHELL_WRITE_RE.test(cmd);
+  // The target must be what is written to: a bare `>` test counted `cat src/chunk.js 2>/dev/null`
+  // as the change and moved every later step's window to round 0.
+  const at = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (
+    new RegExp(`(>>?|\\btee(\\s+-a)?)\\s*['"]?(\\S*/)?${at}`).test(cmd) ||
+    (/\bsed\s+-i\b/.test(cmd) && cmd.includes(target))
+  );
 }
 
 function readsTarget(tc: ToolCall, target: string): boolean {
