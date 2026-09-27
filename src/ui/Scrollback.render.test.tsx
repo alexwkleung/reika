@@ -1558,3 +1558,35 @@ describe('markProse', () => {
     expect(stripAnsi(markProse('start\nmore'))).toBe('⏺︎ start\n  more');
   });
 });
+
+// The plan-commit grounding note is model-facing text appended to the plan; the scrollback cuts it
+// at `planChecks.at` and draws the findings as a barred block under the plan instead of prose.
+describe('Scrollback plan checks', () => {
+  const PLAN = '1. Edit `src/agent/loop.ts` to call `fooBar`.';
+  const NOTE =
+    '\n\n--- reika: plan grounding check (auto-generated) ---\nThese names in the plan were not found';
+  const frame = (msg: Message) =>
+    stripAnsi(
+      render(
+        <Scrollback messages={[msg]} streaming="" streamingReasoning="" streamingTool="" />,
+      ).lastFrame() ?? '',
+    );
+
+  it('draws the findings as a block and hides the note text', () => {
+    const out = frame({
+      role: 'assistant',
+      content: PLAN + NOTE,
+      planFinal: true,
+      planChecks: { at: PLAN.length, missing: ['fooBar'], deadUrls: [] },
+    });
+    expect(out).toContain('src/agent/loop.ts');
+    expect(out).not.toContain('--- reika');
+    expect(out).toMatch(/▎ Plan check/);
+    expect(out).toMatch(/▎ 1 reference not found in the codebase:/);
+    expect(out).toMatch(/▎ fooBar/);
+  });
+
+  it('renders a message without planChecks as before', () => {
+    expect(frame({ role: 'assistant', content: PLAN + NOTE })).toContain('--- reika');
+  });
+});

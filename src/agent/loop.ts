@@ -2864,6 +2864,9 @@ export async function runTurn(opts: {
     // codebase and append an advisory for any that don't, so the executing agent (which inherits this
     // message) is warned up front rather than looping on phantom references. Runs once, at plan
     // commit. Strict no-op when the flag is off or the plan is clean. See agent/groundcheck.ts.
+    const planBodyEnd = assistantContent?.length ?? 0;
+    const planMissing: string[] = [];
+    let planDeadUrls: { url: string; error: string }[] = [];
     if (PLAN_VERIFY && opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
       const refs = extractPlanReferences(assistantContent);
       if (refs.symbols.length > 0 || refs.paths.length > 0) {
@@ -2876,7 +2879,10 @@ export async function runTurn(opts: {
           `[reika:debug] round=${i} plan-verify refs=${refs.symbols.length + refs.paths.length} ` +
             `missing=${missing.missingSymbols.length + missing.missingPaths.length} suppressed=${suppressed}\n`,
         );
-        if (note) assistantContent = (assistantContent ?? '') + note;
+        if (note) {
+          assistantContent = (assistantContent ?? '') + note;
+          planMissing.push(...missing.missingPaths, ...missing.missingSymbols);
+        }
       }
     }
 
@@ -2895,7 +2901,10 @@ export async function runTurn(opts: {
         { cwd: opts.bundle.cwd, groundedUrls, sourcedUrls: () => collectSourcedUrls(opts.history) },
         assistantContent,
       );
-      if (url.note) assistantContent = assistantContent + url.note;
+      if (url.note) {
+        assistantContent = assistantContent + url.note;
+        planDeadUrls = url.dead ?? [];
+      }
       if (url.notice)
         debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
       planUrlNotice = url.notice;
@@ -2915,6 +2924,9 @@ export async function runTurn(opts: {
       // the plan — whether the model self-terminated or was force-written — so mark on the mode,
       // not on planForceWrite (which would miss naturally-completed plans, the common case).
       ...(opts.promptMode === 'plan' && isFinal ? { planFinal: true } : {}),
+      ...(planMissing.length > 0 || planDeadUrls.length > 0
+        ? { planChecks: { at: planBodyEnd, missing: planMissing, deadUrls: planDeadUrls } }
+        : {}),
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
