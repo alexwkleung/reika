@@ -2,18 +2,19 @@ import type { Fixture } from '../types.js';
 import { formatGrindSteps, scoreGrindSteps } from '../_grindsteps.js';
 import { gradeHiddenChecks, type HiddenCheck } from '../_hiddenchecks.js';
 
-// Grind mode (#556): one task, run under each mode (`npm run eval -- grind-chunk --mode=grind`, then
-// `--mode=agent` and `--mode=minimal`), graded on two axes that are reported separately:
+// The harder arm of 16-grind-chunk-guard (#556), same prompt. On deepseek-v4.1-flash, 16 passed 2/3
+// in plain agent mode and every mode found its one caller: in a four-file repo a grep for `chunk`
+// lands on it. Here the callers are reached only through an alias:
 //
-//  - the OUTCOME, by hidden asserts the visible tests do not cover. The report says "reject sizes
-//    that can't make progress"; 0 is the case it names, and -1, NaN, 2.5, Infinity and a string are
-//    the edge cases step 5 asks the model to find. The one a narrow fix misses on purpose is the
-//    CALLER: `paginate` documents `pageSize 0` as "one page with every row", so a chunk() that now
-//    throws on 0 breaks it — the thing step 6 (check the callers) exists to catch.
-//  - the STEPS, from the transcript (`_grindsteps.ts`), so a run says which of the seven steps a
-//    model took whether or not the answer came out right.
+//  - `src/util/index.js` re-exports chunk as `splitEvery`, so `grep 'chunk('` finds the definition
+//    and the test and nothing else; the callers import `splitEvery`.
+//  - `paginate` documents `pageSize 0` as one page with every row (16's trap, now behind the alias).
+//  - `assign` sizes its chunks as `Math.ceil(jobs.length / workers)`, which is 0 for an empty job
+//    list. Today that returns [] because the loop never runs; a fix that validates size before
+//    looking at the input makes `assign([], n)` throw. Only a model that reads the caller and asks
+//    what it passes in finds this one — step 6 in grind's procedure.
 //
-// Judge over 3+ runs per mode; the steps note is the interesting half.
+// Run it next to 16: `npm run eval -- grind-chunk --mode=<m>` matches both.
 
 const TARGET = 'src/chunk.js';
 
@@ -28,12 +29,29 @@ const CHUNK = [
   '',
 ].join('\n');
 
+const UTIL_INDEX = [
+  "export { chunk as splitEvery } from '../chunk.js';",
+  '',
+  'export const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));',
+  '',
+].join('\n');
+
 const PAGER = [
-  "import { chunk } from './chunk.js';",
+  "import { splitEvery } from './util/index.js';",
   '',
   '// Splits rows into pages for the table view. pageSize 0 means one page with every row.',
   'export function paginate(rows, pageSize = 10) {',
-  '  return chunk(rows, pageSize);',
+  '  return splitEvery(rows, pageSize);',
+  '}',
+  '',
+].join('\n');
+
+const WORKERS = [
+  "import { splitEvery } from './util/index.js';",
+  '',
+  '// Spreads jobs as evenly as possible across a fixed number of workers.',
+  'export function assign(jobs, workers) {',
+  '  return splitEvery(jobs, Math.ceil(jobs.length / workers));',
   '}',
   '',
 ].join('\n');
@@ -61,13 +79,14 @@ const HIDDEN_CHECKS: HiddenCheck[] = [
   ['size Infinity rejected', 'throws(() => chunk([1, 2], Infinity))'],
   ['size "2" rejected', "throws(() => chunk([1, 2], '2'))"],
   ['normal chunks unchanged', 'same(chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])'],
-  ['size past length is one chunk', 'same(chunk([1, 2], 5), [[1, 2]])'],
   ['paginate(rows, 0) is one page', 'same(paginate([1, 2, 3], 0), [[1, 2, 3]])'],
   ['paginate default unchanged', 'same(paginate([1, 2, 3]), [[1, 2, 3]])'],
+  ['assign([], n) is no batches', 'same(assign([], 4), [])'],
+  ['assign spreads jobs', 'same(assign([1, 2, 3, 4, 5], 2), [[1, 2, 3], [4, 5]])'],
 ];
 
 export const fixture: Fixture = {
-  name: 'grind-chunk-guard',
+  name: 'grind-chunk-hidden',
   gitInit: true,
   setup: {
     'package.json': JSON.stringify(
@@ -76,7 +95,9 @@ export const fixture: Fixture = {
       2,
     ),
     [TARGET]: CHUNK,
+    'src/util/index.js': UTIL_INDEX,
     'src/pager.js': PAGER,
+    'src/workers.js': WORKERS,
     'test/chunk.test.js': TEST,
   },
   prompt:
@@ -85,7 +106,7 @@ export const fixture: Fixture = {
   assert: async ({ cwd, messages }) =>
     gradeHiddenChecks(
       cwd,
-      { [TARGET]: ['chunk'], 'src/pager.js': ['paginate'] },
+      { [TARGET]: ['chunk'], 'src/pager.js': ['paginate'], 'src/workers.js': ['assign'] },
       HIDDEN_CHECKS,
       formatGrindSteps(scoreGrindSteps(messages, TARGET)),
     ),

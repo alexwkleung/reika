@@ -1007,6 +1007,12 @@ This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatToo
 runs only matching ones, which is what you want while iterating — a local quantized model takes
 minutes per fixture. `REIKA_MODEL=<id> npm run eval -- <name>` pins the model, and comparing against
 a recorded result means pinning the same one (the spill fixtures were measured on `kat-coder-qq2`).
+`--profile=<name>` runs against a named profile instead (its own base URL and key — the runner never
+reads the TUI's saved state, so without it every run is `default`), and `--mode=<m>` overrides every
+selected fixture's mode, which is how one task is compared across agent/minimal/grind. Every run's
+transcript and end state (`git status` + `git diff` for a `gitInit` fixture) is written to
+`~/.config/reika/evals/`, outside the repo, and the path is printed under the result line — read it
+before theorizing about a failure.
 Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
 
 1. New file in `evals/fixtures/NN-name.ts` exporting a `Fixture`
