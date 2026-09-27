@@ -564,12 +564,18 @@ function buildPlanLedger(
   // round-1/2 "you can probably stop" nudge (which keys on having examined something) would never
   // fire. The convergence pressure is the whole point of the ledger, so it has to see them.
   const commands = new Set<string>();
+  // Web lookups (#290) explore through `query` (search) and `url` (fetch_url), which are the same
+  // blind spot as bash's `command`: without them the ledger tells a model that has just grounded a
+  // claim in the docs that it has examined nothing, and the early stop-exploring nudge never fires.
+  const lookups = new Set<string>();
   for (const m of history) {
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
       if (typeof tc.args.path === 'string') files.add(tc.args.path);
       if (typeof tc.args.pattern === 'string') searches.add(tc.args.pattern);
       if (typeof tc.args.command === 'string') commands.add(tc.args.command);
+      if (typeof tc.args.query === 'string') lookups.add(tc.args.query);
+      if (typeof tc.args.url === 'string') lookups.add(tc.args.url);
     }
   }
   const cap = (s: Set<string>): string => {
@@ -580,7 +586,8 @@ function buildPlanLedger(
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
   if (searches.size > 0) lines.push(`Searches run: ${cap(searches)}`);
   if (commands.size > 0) lines.push(`Commands run: ${cap(commands)}`);
-  if (files.size === 0 && searches.size === 0 && commands.size === 0) {
+  if (lookups.size > 0) lines.push(`Web lookups: ${cap(lookups)}`);
+  if (files.size === 0 && searches.size === 0 && commands.size === 0 && lookups.size === 0) {
     lines.push(
       'Nothing examined yet — start by grepping the relevant symbol or reading the entry file.',
     );
@@ -599,7 +606,9 @@ function planExamined(history: Message[]): boolean {
         tc =>
           typeof tc.args.path === 'string' ||
           typeof tc.args.pattern === 'string' ||
-          typeof tc.args.command === 'string',
+          typeof tc.args.command === 'string' ||
+          typeof tc.args.query === 'string' ||
+          typeof tc.args.url === 'string',
       ),
   );
 }
@@ -2890,8 +2899,10 @@ export async function runTurn(opts: {
     // can recommend a URL that never reaches a write — a plan-only workflow, or a docs link in prose
     // — which the edit/write grounder would never see. So at plan commit, fetch the URLs the plan
     // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
-    // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
-    // tools. Strict no-op when the flag is off.
+    // turn. Harness-driven (like the symbol walk above), so it still runs on a turn that never made
+    // the call itself — and plan mode HAS the web tools since #290, so this is now the backstop for
+    // a URL the plan wrote without fetching, not the only way one gets checked. Strict no-op when
+    // the flag is off.
     // Hold the receipt until after the plan message is pushed below, so it lands as a standalone
     // end-of-turn line — not tucked under the unrelated prior tool (a read/list). The grounding is
     // about the plan, not that read.

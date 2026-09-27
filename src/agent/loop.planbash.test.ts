@@ -177,6 +177,68 @@ describe('bash exploration is visible to plan-mode convergence (#109)', () => {
   });
 });
 
+// The convergence machinery has to SEE web lookups, for the same reason it has to see bash (#109):
+// the ledger drives the stop-exploring pressure and the handoff digest is what the agent turn
+// inherits. A `search` carries `query` and a `fetch_url` carries `url`, neither of which the
+// `path`/`pattern` indexing saw — so plan mode went blind the moment it grounded a claim outside
+// the repo, which is exactly what #290 added the tools for.
+describe('web lookups are visible to plan-mode convergence (#290)', () => {
+  const call = (name: string, args: Record<string, string>): Message => ({
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ id: 'w1', name, args }],
+  });
+
+  const planLedgerFor = (history: Message[]): string =>
+    buildSteadySystem({
+      baseSystem: 'BASE',
+      promptMode: 'plan',
+      history,
+      round: 1,
+      planSteps: null,
+    });
+
+  it('lists the query and the URL in the plan ledger', () => {
+    expect(planLedgerFor([call('search', { query: 'zod discriminatedUnion' })])).toContain(
+      'Web lookups: zod discriminatedUnion',
+    );
+    expect(planLedgerFor([call('fetch_url', { url: 'https://zod.dev/api' })])).toContain(
+      'Web lookups: https://zod.dev/api',
+    );
+  });
+
+  it('does not claim nothing was examined after a web-only lookup', () => {
+    expect(planLedgerFor([call('fetch_url', { url: 'https://zod.dev/api' })])).not.toContain(
+      'Nothing examined yet',
+    );
+  });
+
+  // The early convergence nudge keys on having examined something, so a web-only round used to skip
+  // it — the mode losing its stop signal on the round the new tools were used.
+  it('fires the early stop-exploring nudge on a web-only round', () => {
+    expect(planLedgerFor([call('search', { query: 'zod v4 breaking changes' })])).toContain(
+      'STOP exploring',
+    );
+  });
+
+  it('carries web lookups into the plan→agent handoff digest', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'plan a zod v4 upgrade' },
+      call('fetch_url', { url: 'https://zod.dev/v4' }),
+      { role: 'tool', callId: 'w1', summary: 'Fetched https://zod.dev/v4' },
+      {
+        role: 'assistant',
+        content: '1. Edit `src/schema.ts` to use the new API.',
+        planFinal: true,
+      },
+    ];
+    const outcome = distillPlanHandoff(history, 16384);
+    expect(outcome.reason).toBe('folded');
+    const digest = history.find(m => m.role === 'compaction')?.content ?? '';
+    expect(digest).toContain('Web lookups: https://zod.dev/v4');
+  });
+});
+
 // A refusal must not read as a completed step. The refusal message quotes the command back, so a
 // plan step naming that same command is exactly where a sloppy match would wrongly check off — and a
 // falsely checked step is worse than an unchecked one, since PLAN_ALIGN's done-gate trusts it.

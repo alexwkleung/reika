@@ -72,7 +72,14 @@ function askEnabled(): boolean {
 // guarantee is unchanged in kind — plan mode still cannot mutate the repo — but it is enforced by
 // a classifier rather than by the tool's absence, which is why `REIKA_PLAN_BASH=0` can still take
 // it back out on its own. Read per call, not at module load, so toggling it doesn't need a restart.
-export function planTools(): Tool[] {
+//
+// The web pair (#290) is in the list on the same argument: exploring a codebase is the mode's job,
+// but a plan can turn on something the repo cannot settle — a library's docs, an API's shape, the
+// issue the plan answers — and grounding that is the read-only affordance `read` is, one hop out.
+// Same gating as agent mode, for the same reasons: `fetch_url` unconditionally, `search` only when a
+// provider is configured (`makeSearchProvider`), and neither when the machine has no route out
+// (#392). Given at session start, not per turn — the list is part of the round-0 prefix.
+export function planTools(config?: Config, opts: ToolListOptions = {}): Tool[] {
   const tools = [readTool, listTool, grepTool, globTool];
   // `ask_user` belongs here as much as in agent mode: plan mode is where an ambiguity should surface,
   // before any code is written, and the tool touches nothing in the repo. It is also outside the
@@ -82,6 +89,7 @@ export function planTools(): Tool[] {
   // the tool and the rule together in both modes.
   if (askEnabled()) tools.push(askUserTool);
   if (process.env.REIKA_PLAN_BASH !== '0') tools.push(readOnlyBashTool);
+  tools.push(...webTools(config, opts));
   return tools;
 }
 

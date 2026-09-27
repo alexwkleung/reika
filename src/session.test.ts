@@ -190,6 +190,20 @@ describe('createSession', () => {
     expect(calls[0].promptMode).toBe('agent');
   });
 
+  // #290: plan mode's list is built from the config, not a constant — the one wiring step that would
+  // silently drop `search` back out of the mode while every planTools test stayed green.
+  it('builds the plan list with the configured search provider', async () => {
+    const s = await createSession({ cwd: '/repo', config: CONFIG });
+    const names = s.lists.plan.map(t => t.name);
+    expect(names).toContain('fetch_url');
+    expect(names).not.toContain('search');
+    const withSearch = await createSession({
+      cwd: '/repo',
+      config: { ...CONFIG, searxngUrl: 'http://localhost:8888' },
+    });
+    expect(withSearch.lists.plan.map(t => t.name)).toContain('search');
+  });
+
   describe('vibe', () => {
     it('runs the implement prompt as an agent turn after a written plan', async () => {
       const s = await createSession({ cwd: '/repo', config: CONFIG });

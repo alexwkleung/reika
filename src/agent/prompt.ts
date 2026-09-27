@@ -38,7 +38,7 @@ export function buildSystemPrompt(opts: {
     return buildChatPrompt(opts.bundle);
   }
   if (mode === 'plan') {
-    return buildPlanPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
+    return buildPlanPrompt(opts.bundle, opts);
   }
   if (opts.minimal) {
     return buildMinimalPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
@@ -102,11 +102,28 @@ function buildMinimalPrompt(
 // stopping condition is stated explicitly — weak models in a read-only mode have no natural
 // closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
-function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: boolean): string {
+function buildPlanPrompt(
+  bundle: ContextBundle,
+  gates: {
+    canAsk?: boolean;
+    decideAlone?: boolean;
+    // Which web tools this turn actually has (#290). Same coupling as `ask_user` and bash: a mode
+    // claim that leaves them out is a claim the model reads as a prohibition, and one that names a
+    // tool it does not have is the #377 phantom pointer. Both are in plan mode whenever they are in
+    // agent mode (see planTools), so the sentence is absent only offline or with no search provider.
+    canFetch?: boolean;
+    canSearch?: boolean;
+  } = {},
+): string {
+  const { canAsk, decideAlone, canFetch, canSearch } = gates;
   // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
   // worse than saying nothing — it won't reach for one it has been told is absent. The `=0` text
   // is the pre-#109 prompt byte-for-byte, so the baseline arm A/Bs against an unchanged prompt.
   const planBash = process.env.REIKA_PLAN_BASH !== '0';
+  // Named in the order planTools registers them, and only when present — the model sees the list.
+  const webTools = [canSearch ? 'search' : '', canFetch ? 'fetch_url' : '']
+    .filter(Boolean)
+    .join('/');
   const parts: string[] = [
     [
       'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',
@@ -120,6 +137,17 @@ function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: 
             'You can ONLY explore the codebase — read, list, grep, glob. You CANNOT edit, write,',
             'or run commands; those tools are not available and will fail.',
           ]),
+      // The mode claim above reads as a prohibition on anything but the repo, so the one exception
+      // is spelled out where it is claimed rather than as a sixth rule: the exploration ledger
+      // shapes every other line here toward converging on a written plan, and an unrestricted
+      // "you may search the web" would be a new way to keep exploring instead of writing one.
+      ...(webTools
+        ? [
+            'For what the codebase cannot answer — a library docs page, an API shape, an issue the',
+            `request links to — you may also use ${webTools}. Prefer the repo: that grounds a claim,`,
+            'it does not replace reading the code the plan changes.',
+          ]
+        : []),
       'Your job: explore just enough to understand the change, then STOP and write a plan.',
       'Rules:',
       `1. Use ${planBash ? 'grep/read/list/glob/bash' : 'grep/read/list/glob'} to ground every claim in the actual code. Never guess.`,

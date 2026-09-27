@@ -197,7 +197,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     opts.canAsk === false ? tools.filter(t => t.name !== 'ask_user') : tools;
   const lists: ToolLists = {
     agent: filter(defaultTools(cfg, { offline })),
-    plan: filter(planTools()),
+    plan: filter(planTools(cfg, { offline })),
     chat: filter(chatTools(cfg, { offline })),
     minimal: filter(minimalTools()),
   };
