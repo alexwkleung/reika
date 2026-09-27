@@ -10,6 +10,7 @@ import {
   chooseSearchBackend,
   defaultTools,
   minimalTools,
+  grindTools,
   planTools,
   searchPrecedenceNotice,
 } from './tools/index.js';
@@ -24,6 +25,7 @@ import { kFormat } from './ui/format.js';
 import {
   buildImplementPrompt,
   isMinimalPrompt,
+  isGrindPrompt,
   planWritten,
   turnPromptMode,
   turnTools,
@@ -78,7 +80,13 @@ export type SessionOptions = {
   events?: SessionEvents;
 };
 
-export type ToolLists = { agent: Tool[]; plan: Tool[]; chat: Tool[]; minimal: Tool[] };
+export type ToolLists = {
+  agent: Tool[];
+  plan: Tool[];
+  chat: Tool[];
+  minimal: Tool[];
+  grind: Tool[];
+};
 
 export type SubmitOptions = {
   mode: Mode;
@@ -200,6 +208,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     plan: filter(planTools()),
     chat: filter(chatTools(cfg, { offline })),
     minimal: filter(minimalTools()),
+    grind: filter(grindTools()),
   };
 
   const sessionEvents = opts.events ?? {};
@@ -275,6 +284,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         isUnattended: submit.isUnattended,
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
+        grindPrompt: isGrindPrompt(active),
         manualCompact: submit.manualCompact,
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.

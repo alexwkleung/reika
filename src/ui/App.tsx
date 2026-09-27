@@ -90,6 +90,7 @@ import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
   isMinimalPrompt,
+  isGrindPrompt,
   isSaveCommand,
   nextMode,
   turnMode,
@@ -817,7 +818,7 @@ export function App() {
       // has anywhere to go.
       return;
     }
-    // Shift+Tab cycles agent → plan → minimal → vibe → chat → shell. Only while idle — mode picks the
+    // Shift+Tab cycles agent → plan → minimal → vibe → grind → chat → shell. Only while idle — mode picks the
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
@@ -1061,6 +1062,7 @@ export function App() {
         tools: turnTools(m, s.lists),
         promptMode: turnPromptMode(m),
         minimalPrompt: isMinimalPrompt(m),
+        grindPrompt: isGrindPrompt(m),
         calibration: s.calibration ?? 1,
       });
     }
@@ -1198,7 +1200,8 @@ export function App() {
       name === 'chat' ||
       name === 'plan' ||
       name === 'vibe' ||
-      name === 'minimal'
+      name === 'minimal' ||
+      name === 'grind'
     ) {
       const banner =
         name === 'shell'
@@ -1211,7 +1214,9 @@ export function App() {
                 ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
                 : name === 'minimal'
                   ? 'Minimal mode — shell only, and no repo map, project summary, or AGENTS.md in the prompt. The model works from what commands show it. /agent to return.'
-                  : 'Agent mode.';
+                  : name === 'grind'
+                    ? 'Grind mode — the model works through a fixed procedure: pin down the task, explore, choose, change, prove it by running checks, review the diff, report what was verified. Tools: bash, read, edit. /agent to return.'
+                    : 'Agent mode.';
       switchMode(name, banner, echo);
       return;
     }
@@ -1240,13 +1245,13 @@ export function App() {
       }
       // The user bubble renders as `/implement` (displayOverride) while the model receives the
       // built prompt; the override forces this turn's tools + promptMode regardless of the
-      // not-yet-flushed mode state. 'agent' for every mode but minimal, which stays itself —
-      // handing a minimal session the full tool list and the whole repo map for one turn would
-      // undo the only thing the mode does, and silently.
+      // not-yet-flushed mode state. 'agent' for every mode but minimal and grind, which stay
+      // themselves — handing either the full tool list and agent prompt for one turn would undo
+      // the only thing the mode does, and silently.
       await submitToModel(
         buildImplementPrompt(args),
         raw,
-        mode === 'minimal' ? 'minimal' : 'agent',
+        mode === 'minimal' || mode === 'grind' ? mode : 'agent',
       );
       return;
     }
@@ -1404,6 +1409,8 @@ export function App() {
           '  /shell             enter shell mode (raw bash, no model)',
           '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
           '  /vibe              enter vibe mode (every prompt plans first, then implements)',
+          '  /minimal           enter minimal mode (shell only, no upfront project context)',
+          '  /grind             enter grind mode (verify-everything procedure; slower, checks its work)',
           '  /agent             return to agent mode',
           '  /implement         switch to agent mode and execute the plan above',
           '  /compact           compact older context now (compaction note, then a fold)',
@@ -1418,7 +1425,7 @@ export function App() {
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-          '  shift+tab          cycle mode (agent → plan → minimal → vibe → chat → shell)',
+          '  shift+tab          cycle mode (agent → plan → minimal → vibe → grind → chat → shell)',
         ].join('\n');
         break;
       case 'model': {

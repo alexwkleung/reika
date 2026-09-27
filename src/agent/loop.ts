@@ -695,6 +695,8 @@ export function buildRoundZeroPrefix(opts: {
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
   minimalPrompt?: boolean;
+  // Grind mode (#556): the same reason as minimal — a different prompt on an agent turn.
+  grindPrompt?: boolean;
   // Needed only for the ask_user/subagent gates in the agent prompt, but it has to be the SAME list runTurn
   // will send: the warm prefix is worthless if it diverges from round 0 by a line.
   tools: Tool[];
@@ -709,6 +711,7 @@ export function buildRoundZeroPrefix(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
+    grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.sandbox, opts.unattended),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
@@ -1191,6 +1194,9 @@ export async function runTurn(opts: {
   // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
   // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
   minimalPrompt?: boolean;
+  // Grind mode (#556): an agent turn with the grind procedure prompt and grindTools(). Same shape
+  // as minimalPrompt, for the same reason.
+  grindPrompt?: boolean;
   // `/compact` (issue #481). One harness-driven compaction round — the same machinery as the
   // automatic shrink event: compaction-note request, fold, session-cumulative counters, notices —
   // fired WITHOUT a user turn behind it. The user typed a slash command, so no user message enters
@@ -1218,6 +1224,7 @@ export async function runTurn(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
+    grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.config.sandbox, opts.config.unattended),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
