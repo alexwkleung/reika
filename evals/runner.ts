@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { loadConfig } from '../src/config.js';
 import { createSession } from '../src/session.js';
 
 import type { AssertResult, EvalMode, Fixture } from './types.js';
@@ -38,7 +39,11 @@ type RunRecord = {
   toolCallCount: number;
 };
 
-async function runFixture(fix: Fixture, modeOverride?: EvalMode): Promise<RunRecord> {
+async function runFixture(
+  fix: Fixture,
+  modeOverride?: EvalMode,
+  profile?: string,
+): Promise<RunRecord> {
   const cwd = await mkdtemp(join(tmpdir(), 'reika-eval-'));
   try {
     for (const [relPath, content] of Object.entries(fix.setup)) {
@@ -66,7 +71,7 @@ async function runFixture(fix: Fixture, modeOverride?: EvalMode): Promise<RunRec
     // no payload cap — a configuration no interactive session runs. No approver, as before: the
     // gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
     // calls it and stalls.
-    const session = await createSession({ cwd, canAsk: false });
+    const session = await createSession({ cwd, canAsk: false, profile });
     const messages = session.history;
 
     const start = Date.now();
@@ -123,6 +128,20 @@ async function main(): Promise<void> {
   }
   const modeOverride = modeArg as EvalMode | undefined;
   if (modeOverride) process.stdout.write(`  mode: ${modeOverride}\n`);
+  // `--profile=go` runs against a named profile from the config, the way `/model go` would in the
+  // TUI. The runner never reads the TUI's saved state, so without it every run uses `default`.
+  const profile = process.argv
+    .find(a => a.startsWith('--profile='))
+    ?.slice('--profile='.length)
+    .toLowerCase();
+  if (profile) {
+    const known = Object.keys(loadConfig().profiles);
+    if (!known.includes(profile)) {
+      process.stdout.write(`unknown --profile=${profile} (have ${known.join(', ')})\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`  profile: ${profile} (${loadConfig().profiles[profile].model})\n`);
+  }
   const selected =
     filters.length > 0 ? FIXTURES.filter(f => filters.some(q => f.name.includes(q))) : FIXTURES;
   if (selected.length === 0) {
@@ -134,7 +153,7 @@ async function main(): Promise<void> {
   for (const fix of selected) {
     process.stdout.write(`  ${fix.name.padEnd(24)} … `);
     try {
-      const rec = await runFixture(fix, modeOverride);
+      const rec = await runFixture(fix, modeOverride, profile);
       records.push(rec);
       // Print the pass note, not just PASS: for the spill fixtures the interesting part of a
       // pass is *how* it got there (how many calls before it followed the locator), and that was
