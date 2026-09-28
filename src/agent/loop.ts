@@ -1397,6 +1397,9 @@ export async function runTurn(opts: {
   // ceil, and keeps the retry abort-protected so a re-spiral is still cut. See CONVERGE_RETRY.
   let convergeRetries = 0;
   let steerRetryActive = false;
+  // The harness ending exploration is a decision the user must see: without a line saying why, the
+  // first sign of it was a recovery notice on the write round, which read as the model spiraling.
+  let planForceWriteAnnounced = false;
   // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
   // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
   // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
@@ -1638,6 +1641,20 @@ export async function runTurn(opts: {
         // explore. Dropped output is a reason the plan may be thin, not a reason to reopen the
         // exploration the force-write exists to end.
         system = buildPlanWritePrompt(steerRetryActive);
+        // A verbatim abort already announced itself; every other trigger is silent otherwise.
+        if (!planForceWriteAnnounced && !forceVerbatimPlanWrite) {
+          planForceWriteAnnounced = true;
+          const looping = REASONING_LOOP_BREAK && reasoningLoopActive;
+          opts.onMessage({
+            role: 'system',
+            tone: looping ? 'warn' : 'info',
+            content: looping
+              ? 'Reasoning was going in circles — writing the plan from what was gathered.'
+              : planStaleRounds >= PLAN_STALL_ROUNDS
+                ? 'Exploration stopped turning up anything new — writing the plan from what was gathered.'
+                : `Explored for ${PLAN_HARD_CEILING} rounds — writing the plan from what was gathered.`,
+          });
+        }
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
         // here on the round that writes the plan. Gated to a LOOP-triggered force-write
@@ -2679,13 +2696,18 @@ export async function runTurn(opts: {
       // force-write with a strong "commit, stop re-questioning" directive (buildPlanWritePrompt(steer))
       // and a tighter reasoning ceil (cheap-to-fail). Capped at MAX_CONVERGE_RETRIES; falls through to
       // the stop once spent. forceVerbatimPlanWrite is already true, so the next round re-force-writes.
+      // The force-write round never carries a cut forward, so a length-only cut there reaches this
+      // point with no ladderStop — and would otherwise be reported as a loop the ratio says it isn't.
+      const forceWriteCutOnLength = planForceWrite && verbatimAbortByLength;
       if (CONVERGE_RETRY && opts.promptMode === 'plan' && convergeRetries < MAX_CONVERGE_RETRIES) {
         convergeRetries++;
         steerRetryActive = true;
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Still looping — one more focused attempt with a tighter steer before stopping.',
+          content: forceWriteCutOnLength
+            ? 'The plan write hit the reasoning length limit — one more focused attempt with a tighter steer before stopping.'
+            : 'Still looping — one more focused attempt with a tighter steer before stopping.',
         });
         opts.onRecovering?.(true);
         debugLog(`[reika:debug] round=${i} converge-retry (plan) attempt=${convergeRetries}\n`);
@@ -2693,7 +2715,12 @@ export async function runTurn(opts: {
       }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
       // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
-      commitSpiralStop(opts, turnStart, fetchedUrls, ladderStop === 'count' ? 'length' : 'loop');
+      commitSpiralStop(
+        opts,
+        turnStart,
+        fetchedUrls,
+        ladderStop === 'count' || forceWriteCutOnLength ? 'length' : 'loop',
+      );
       return;
     }
 
