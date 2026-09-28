@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type { SkillMatch } from '../skillmatch.js';
+import { IMPLEMENT_MODES, type ImplementMode } from './commands.js';
 import { theme } from './theme.js';
 
 // Row 0 is "send as typed" and starts selected — the inverse of Approval, where Approve is row 0.
@@ -9,18 +10,19 @@ import { theme } from './theme.js';
 export const CONFIRM_DECLINE = 0;
 export const CONFIRM_ACCEPT = 1;
 
-// What the harness is asking about. Two askers share the dialog: a strongly matched skill (#425)
-// and a pasted link the prompt is not obviously about (#448). Same frame, same keys, same row
-// order — the user learns one widget.
+// What the harness is asking about. Three askers share the dialog: a strongly matched skill
+// (#425), a pasted link the prompt is not obviously about (#448), and the mode /implement runs in
+// (#561). Same frame, same keys, row 0 the default — the user learns one widget.
 export type ConfirmSpec = {
   // `• <title>` in the tool color, `<subtitle>` beside it in secondary.
   title: string;
   subtitle: string;
   // Muted lines under the header: the matched phrases, the links.
   details: string[];
-  options: [string, string];
-  // The footer's "y = <accept>" word.
-  accept: string;
+  options: string[];
+  // The footer's "y = <accept>" word, for a yes/no ask whose accepting row is CONFIRM_ACCEPT. A
+  // pick among peers has no "yes", so it binds no y/n.
+  accept?: string;
 };
 
 export function skillConfirmSpec(match: SkillMatch): ConfirmSpec {
@@ -46,6 +48,22 @@ export function pastedUrlConfirmSpec(urls: string[]): ConfirmSpec {
     ),
     options: ['Send as typed', `Fetch ${n > 1 ? `${n} links` : 'the link'}`],
     accept: 'fetch',
+  };
+}
+
+const IMPLEMENT_MODE_LABELS: Record<ImplementMode, string> = {
+  agent: 'Agent — full tool set',
+  minimal: 'Minimal — shell only, no repo map or AGENTS.md',
+  grind: 'Grind — fixed procedure, proves the change by running checks',
+};
+
+// Agent is row 0, so Enter alone keeps the one-keystroke /implement it always was.
+export function implementModeConfirmSpec(): ConfirmSpec {
+  return {
+    title: 'Implement',
+    subtitle: 'which mode should carry out the plan?',
+    details: [],
+    options: IMPLEMENT_MODES.map(m => IMPLEMENT_MODE_LABELS[m]),
   };
 }
 
@@ -91,7 +109,12 @@ export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIn
           that answers. */}
       <Box marginTop={1}>
         <Text color={theme.muted}>
-          {`↑↓ or 1-2 navigate  ·  y/n jump (y = ${spec.accept})  ·  enter select  ·  ctrl-c abort`}
+          {[
+            `↑↓ or 1-${spec.options.length} navigate`,
+            ...(spec.accept ? [`y/n jump (y = ${spec.accept})`] : []),
+            'enter select',
+            'ctrl-c abort',
+          ].join('  ·  ')}
         </Text>
       </Box>
     </Box>
