@@ -18,6 +18,8 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "eval": "tsx evals/runner.ts",
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
     "skills:link": "sh scripts/link-skills.sh",
     "install:global": "npm run build && npm install -g .",
     "uninstall:global": "npm uninstall -g reika",
