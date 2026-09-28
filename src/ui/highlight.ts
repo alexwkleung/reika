@@ -1,5 +1,8 @@
 import chalk, { type ForegroundColorName } from 'chalk';
-import hljs from 'highlight.js';
+// The common set (36 languages, every one detectLanguage maps included), not the full ~190: the
+// full import registers every grammar at startup, ~75ms against ~19ms. A fence in a language
+// outside it renders plain, the same as one in a language highlight.js has never had.
+import hljs from 'highlight.js/lib/common';
 
 type Paint = (text: string) => string;
 
