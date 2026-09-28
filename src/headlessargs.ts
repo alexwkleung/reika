@@ -11,6 +11,9 @@ export type HeadlessArgs = {
   mode?: HeadlessMode;
   // Print every message the turn appended as a JSON array instead of the final reply text.
   json: boolean;
+  // Print as the turn runs: reply text as it is generated, or with --json one message per line as
+  // each is committed.
+  stream: boolean;
   // Write the transcript to the history dir, the way /save does.
   save: boolean;
   help: boolean;
@@ -23,6 +26,8 @@ export const USAGE = `usage: reika                  start the interactive TUI in
   -p, --prompt [text]   run one turn headless; reads stdin when no text is given
   --mode <mode>         agent | plan | vibe | minimal | grind | chat (default: REIKA_DEFAULT_MODE, else agent)
   --json                print the turn's messages as a JSON array instead of the reply text
+  --stream              print as the turn runs: the reply as it is generated, tool calls on
+                        stderr; with --json, one message per line (NDJSON) as each is committed
   --save                save the transcript to ~/.config/reika/history like /save
   -v, --version         print the version
   -h, --help            show this
@@ -41,7 +46,13 @@ const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 
 // --version count as requests: both answer without starting either front-end. Throws on
 // a flag it doesn't know: silently ignoring one would run the wrong turn with no way to notice.
 export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
-  const args: HeadlessArgs = { json: false, save: false, help: false, version: false };
+  const args: HeadlessArgs = {
+    json: false,
+    stream: false,
+    save: false,
+    help: false,
+    version: false,
+  };
   let headless = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -60,6 +71,8 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
       args.mode = value as HeadlessMode;
     } else if (a === '--json') {
       args.json = true;
+    } else if (a === '--stream') {
+      args.stream = true;
     } else if (a === '--save') {
       args.save = true;
     } else if (a === '-h' || a === '--help') {
