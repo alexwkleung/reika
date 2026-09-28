@@ -1,4 +1,5 @@
 import type { ImageAttachment } from '../agent/attachments.js';
+import type { ImplementMode } from './commands.js';
 
 /**
  * A user message captured while the agent is busy (or the session is still
@@ -14,6 +15,8 @@ export type QueuedMessage = {
   // The pasted-link confirm's answer (#448), taken the same way: fetch the links this prompt
   // carries, or leave them. Absent when the prompt's links needed no asking.
   fetchUrls?: boolean;
+  // /implement's mode picker answer (#561), taken the same way. Absent when no dialog fired.
+  implementMode?: ImplementMode;
 };
 
 /**

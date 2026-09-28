@@ -6,6 +6,7 @@ import {
   CONFIRM_DECLINE,
   Confirm,
   type ConfirmSpec,
+  implementModeConfirmSpec,
   pastedUrlConfirmSpec,
   skillConfirmSpec,
 } from './Confirm.js';
@@ -86,5 +87,16 @@ describe('Confirm — pasted link (#448)', () => {
     expect(shown).toBeDefined();
     expect(shown!.length).toBeLessThan(long.length);
     expect(shown!.endsWith('…')).toBe(true);
+  });
+});
+
+describe('Confirm — implement mode (#561)', () => {
+  it('lists the three modes with agent first, and binds no y/n', () => {
+    const rows = frame(implementModeConfirmSpec(), 0);
+    expect(rows.find(r => r.includes('1. Agent'))).toMatch(/^› 1\./);
+    expect(rows.some(r => r.includes('2. Minimal'))).toBe(true);
+    expect(rows.some(r => r.includes('3. Grind'))).toBe(true);
+    expect(rows.some(r => r.includes('1-3 navigate'))).toBe(true);
+    expect(rows.some(r => r.includes('y/n'))).toBe(false);
   });
 });
