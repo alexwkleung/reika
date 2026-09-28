@@ -379,6 +379,17 @@ const CONTINUE_NUDGE =
   'ends mid-thought. continue from that exact point. any earlier part was trimmed to fit; what ' +
   'remains is your most recent working. do not start over, and do not re-run tools you have ' +
   'already called — their results are above.)';
+// The plan write's resume nudge: same four jobs, minus the tool clause (the write round has none)
+// and plus the deliverable, since a draft carried forward is reasoning and the plan is still owed.
+const PLAN_WRITE_CONTINUE_NUDGE =
+  '(your plan write was cut off at the reasoning length limit. the text above is your own work — ' +
+  'it ends mid-thought. continue from that exact point and then write the numbered plan. any ' +
+  'earlier part was trimmed to fit; what remains is your most recent working. do not start over.)';
+// The plan write's tighter ceiling exists to catch a transform spiraling at a LOW ratio (~0.3), so
+// the exploration gate (continuable below verbatimAbortThreshold, 0.35) would admit exactly that
+// case. Healthy blocks measured 0.000–0.063 (#285), and the cut that prompted this was 0.00, so the
+// bar sits between the two populations rather than at the abort curve.
+const PLAN_WRITE_CARRY_MAX_RATIO = 0.15;
 // EXPERIMENT (converge retry): instead of giving up the moment the model can't converge — a plan-mode
 // force-write that spiraled, or an agent reasoning loop that reached its terminal — spend ONE more
 // *steered* attempt first: a strong, failure-naming directive ("you looped and kept re-questioning
@@ -1312,6 +1323,13 @@ export async function runTurn(opts: {
   // channel Layer-2 measures.
   let pendingContinuation = '';
   let pendingReasoning = '';
+  // A plan-write draft cut on length and carried forward. Kept out of opts.history on purpose: the
+  // write round's request is one synthetic message rebuilt from history, so a tail pushed there would
+  // land in "Your analysis" and change that message — a full re-prefill — where appending it after
+  // the unchanged message keeps the next request append-only. Its own ladder: the write round never
+  // makes progress until it lands, so it must not share a budget exploration can reset.
+  let planWriteCarried = '';
+  const planWriteContinuation = new ContinuationGate();
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
@@ -1934,6 +1952,12 @@ export async function runTurn(opts: {
                 planForceWriteLoopTriggered,
               ) + nativeImageReminder(opts.nativeImages),
           } as Message,
+          ...(planWriteCarried
+            ? ([
+                { role: 'assistant', content: continuationTail(planWriteCarried).text },
+                { role: 'user', content: PLAN_WRITE_CONTINUE_NUDGE, harness: true },
+              ] as Message[])
+            : []),
         ]
       : opts.history;
 
@@ -2587,6 +2611,49 @@ export async function runTurn(opts: {
       // same gate: they already carry a cut at the token wall, and discarding the ceiling cut forced
       // the plan write on a thought that was still working. The force-write round does not: its
       // tighter ceilings exist to catch a transform spiraling at a low ratio.
+      // Only a CONVERGENCE write (ceiling, stall) carries: after a loop-triggered one the model just
+      // spiraled, and a long transform from it is suspect at any ratio. Never the steered retry:
+      // that is the last attempt, cheap-to-fail by design, and its ceiling cut is the stop.
+      if (
+        CONTINUE &&
+        verbatimAbortByLength &&
+        planForceWrite &&
+        !planForceWriteLoopTriggered &&
+        !steerRetryActive
+      ) {
+        const carried = planWriteCarried
+          ? `${planWriteCarried}\n${roundReasoning}`
+          : roundReasoning;
+        const ratio = selfRepeatRatio(carried);
+        const allow = planWriteContinuation.allow(roundReasoning);
+        const carry = ratio < PLAN_WRITE_CARRY_MAX_RATIO && allow.ok;
+        debugLog(
+          `[reika:debug] continuation round=${i} cut=plan-write continue=${carry} ` +
+            `ratio=${ratio.toFixed(3)} max=${PLAN_WRITE_CARRY_MAX_RATIO} allow=${allow.ok}` +
+            `${allow.reason ? ` stop=${allow.reason}` : ''} spent=${planWriteContinuation.spent} ` +
+            `chars=${carried.length}\n`,
+        );
+        if (ratio < PLAN_WRITE_CARRY_MAX_RATIO && !allow.ok) ladderStop = allow.reason;
+        if (carry) {
+          planWriteContinuation.noteContinuation(roundReasoning);
+          planWriteCarried = carried;
+          opts.onReasoningStatus?.(false);
+          // Committed for the transcript, as on the exploration path: the live preview is hidden
+          // above, and a carried draft that vanished from scrollback would read as discarded.
+          opts.onMessage({ role: 'assistant', content: '', reasoning: roundReasoning });
+          const { omitted } = continuationTail(carried);
+          opts.onMessage({
+            role: 'system',
+            tone: 'warn',
+            content: `Plan write hit the length ceiling — continuing from where it stopped${
+              omitted > 0 ? ` (${omitted} chars of earlier reasoning trimmed)` : ''
+            }.`,
+          });
+          continue;
+        }
+        // Not carried: whatever recovery follows starts the write over, so the draft goes with it.
+        planWriteCarried = '';
+      }
       if (CONTINUE && verbatimAbortByLength && !planForceWrite) {
         // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
         // continuation, and judging/carrying only the new half would drop the first one from both
