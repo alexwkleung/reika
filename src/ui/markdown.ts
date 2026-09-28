@@ -4,7 +4,7 @@ import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import { supportsHyperlink } from 'supports-hyperlinks';
 import wrapAnsi from 'wrap-ansi';
-import { theme } from './theme.js';
+import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
 import { contentWidth } from './layout.js';
@@ -129,7 +129,7 @@ function renderTable(table: Tokens.Table, ctx: Ctx): string {
     (_, col) => Math.max(...[header, ...rows].map(row => maxLineWidth(row[col] ?? ''))) + 2, // padding
   );
   const widths = fitTableWidths(natural, proseWidth(ctx)) ?? natural;
-  const border = chalk.hex(theme.muted);
+  const border = themeChalk(theme.muted);
   const rule = (left: string, mid: string, right: string) =>
     border(left + widths.map(w => '─'.repeat(w)).join(mid) + right);
   const drawRow = (row: string[], paint: (s: string) => string) => {
@@ -214,7 +214,7 @@ function renderSpan(token: MarkedToken, ctx: Ctx): string {
     case 'del':
       return chalk.dim(renderInline(token.tokens, ctx));
     case 'codespan':
-      return chalk.hex(theme.inlineCode)(token.text.replace(/\n/g, ' '));
+      return themeChalk(theme.inlineCode)(token.text.replace(/\n/g, ' '));
     case 'br':
       return '\n';
     case 'link':
@@ -234,7 +234,7 @@ function renderSpan(token: MarkedToken, ctx: Ctx): string {
 // a link and not a colored word. Elsewhere the URL follows in parentheses. The function form of
 // the check rather than the cached `.stdout`: it re-reads the env, so FORCE_HYPERLINK reaches it.
 function renderLink(href: string, text: string, ctx: Ctx): string {
-  const paint = chalk.hex(theme.link);
+  const paint = themeChalk(theme.link);
   if (!ctx.plainLinks && supportsHyperlink(process.stdout)) {
     return `\x1b]8;;${href}\x07${paint.underline(text || href)}\x1b]8;;\x07`;
   }

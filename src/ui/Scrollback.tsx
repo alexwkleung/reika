@@ -1,12 +1,12 @@
 import type { ReactElement } from 'react';
 import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
-import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message, PlanChecks } from '../types.js';
 import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
-import { theme } from './theme.js';
+import { glyphs } from './glyphs.js';
+import { theme, themeChalk } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolVerb } from './format.js';
@@ -335,7 +335,7 @@ function StreamingTail({
 // A compaction note is one block behind a single info bar: its Thinking, then the note under a
 // label (#498). It sits at the left edge — a nested indent read as a subagent with no chip above
 // it — and wears no prose marker, which would make it read as the model's reply to the user.
-const NOTE_BAR = '▎ ';
+const NOTE_BAR = `${glyphs.bar} `;
 const NOTE_LABEL = 'Compaction note';
 const PLAN_CHECK_LABEL = 'Plan check';
 
@@ -469,7 +469,7 @@ const NESTED_INDENT = 4;
 // Line markers, and the hanging indent each one buys: a wrapped row lands under the text the
 // marker introduces, not under the marker and not at column 0. Kept as constants because the
 // indent must be the marker's exact rendered width — `↳` measures 1 column, so '  ↳ ' is 4.
-const TOOL_MARKER = '  ↳ ';
+const TOOL_MARKER = `  ${glyphs.toolResult} `;
 const SHELL_MARKER = '$ ';
 // U+23FA (the record glyph) with U+FE0E, Variation Selector-15: the selector pins text
 // presentation, so a terminal that would otherwise pull the emoji font and draw a colored,
@@ -482,7 +482,7 @@ const SHELL_MARKER = '$ ';
 //   CALL_MARKER_MEASURED — the columns Ink thinks the first row spends: its wrap budget. Budgeting
 //   with the larger number keeps Ink from re-wrapping a row that fills the width; the first row
 //   comes out one column short of what the terminal could fit, which is invisible.
-const CALL_MARKER = '\u23FA\uFE0E ';
+const CALL_MARKER = `${glyphs.call} `;
 const CALL_MARKER_WIDTH = 2;
 const CALL_MARKER_MEASURED = stringWidth(CALL_MARKER);
 const NOTICE_MARKER_WIDTH = 2; // '❯ ' / '⟳ '
@@ -497,7 +497,7 @@ export function markProse(rendered: string, withMarker = true): string {
   return rendered
     .split('\n')
     .map((line, i) => {
-      if (i === 0 && withMarker) return chalk.hex(theme.secondary)(CALL_MARKER) + line;
+      if (i === 0 && withMarker) return themeChalk(theme.secondary)(CALL_MARKER) + line;
       return line ? pad + line : line;
     })
     .join('\n');
@@ -807,7 +807,7 @@ function renderMessage(
     // Keeping the marker off the user's accent makes auto-events read as not-the-user.
     const markerColor =
       msg.tone === 'warn' ? theme.warning : msg.tone === 'info' ? theme.info : theme.accent;
-    const marker = msg.tone === 'warn' ? '⟳ ' : '❯ ';
+    const marker = `${msg.tone === 'warn' ? glyphs.noticeWarn : glyphs.notice} `;
     // Color must be on the OUTER Text so wrapped continuation lines inherit it;
     // a colored inner Text loses its color on wrap because Ink falls back to the
     // outer's color. The marker overrides for its own segment.
@@ -861,7 +861,7 @@ function ReasoningBlock({
   return (
     <Box flexDirection="column">
       <Box>
-        <Text color={barColor}>{'▎ '}</Text>
+        <Text color={barColor}>{`${glyphs.bar} `}</Text>
         {/* The bar's color, not the body's muted gray: in the same color the label read as the
             thought's first line and the block's top edge blurred into the reply beneath it. */}
         <Text color={barColor} bold>
@@ -870,7 +870,7 @@ function ReasoningBlock({
       </Box>
       {lines.map((line, i) => (
         <Box key={i}>
-          <Text color={barColor}>{'▎ '}</Text>
+          <Text color={barColor}>{`${glyphs.bar} `}</Text>
           <Text color={theme.muted}>{line}</Text>
         </Box>
       ))}
@@ -908,7 +908,7 @@ function UserBubble({
     <Box flexDirection="column" marginTop={1}>
       {rows.map((line, i) => (
         <Text key={i} backgroundColor={theme.userBg}>
-          <Text color={barColor}>▎</Text>
+          <Text color={barColor}>{glyphs.bar}</Text>
           <Text color="whiteBright">{` ${line.padEnd(contentW)} `}</Text>
         </Text>
       ))}

@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import chalk, { type ForegroundColorName } from 'chalk';
 import hljs from 'highlight.js';
 
 type Paint = (text: string) => string;
@@ -19,6 +19,20 @@ const YELLOW = '#e5d49a'; // types, class names — echoes theme.warning
 const ROSE = '#db9499'; // variables, tag names
 const GRAY = '#7f848e'; // comments, meta
 
+// On a 16-color terminal every tone above but GRAY downsamples to white, which is no highlighting
+// at all; each gets the named color nearest its role instead.
+const ANSI16: Record<string, ForegroundColorName> = {
+  [ORCHID]: 'magentaBright',
+  [PERIWINKLE]: 'blueBright',
+  [TEAL]: 'cyan',
+  [GREEN]: 'green',
+  [APRICOT]: 'yellow',
+  [YELLOW]: 'yellowBright',
+  [ROSE]: 'redBright',
+  [GRAY]: 'gray',
+};
+const tone = (hex: string) => (chalk.level === 1 ? chalk[ANSI16[hex]] : chalk.hex(hex));
+
 // Keyed by highlight.js 11 scope, dotted for sub-scopes (`title.function`). A scope with no entry
 // falls back to its parent (`title.class.inherited` → `title.class` → `title`), and one with none
 // at all is left unstyled, so its nested spans keep their own colors. Rebuilt when chalk.level
@@ -33,51 +47,51 @@ function codeTheme(): Record<string, Paint> {
 
 function buildCodeTheme(): Record<string, Paint> {
   return {
-    keyword: chalk.hex(ORCHID),
-    built_in: chalk.hex(TEAL),
-    type: chalk.hex(YELLOW),
-    literal: chalk.hex(APRICOT), // true/false/null
-    number: chalk.hex(APRICOT),
-    string: chalk.hex(GREEN),
-    regexp: chalk.hex(TEAL),
+    keyword: tone(ORCHID),
+    built_in: tone(TEAL),
+    type: tone(YELLOW),
+    literal: tone(APRICOT), // true/false/null
+    number: tone(APRICOT),
+    string: tone(GREEN),
+    regexp: tone(TEAL),
     // `${...}` regions inside template strings. Nested tokens keep their own
     // colors; the delimiters and unclassified identifiers inside read as
     // variables instead of dropping to plain white mid-string.
-    subst: chalk.hex(ROSE),
-    symbol: chalk.hex(APRICOT),
-    'char.escape': chalk.hex(TEAL),
-    title: chalk.hex(PERIWINKLE),
-    'title.class': chalk.hex(YELLOW),
+    subst: tone(ROSE),
+    symbol: tone(APRICOT),
+    'char.escape': tone(TEAL),
+    title: tone(PERIWINKLE),
+    'title.class': tone(YELLOW),
     // Call sites, which highlight.js 10 never classified: same color as the definition.
-    'title.function.invoke': chalk.hex(PERIWINKLE),
-    comment: chalk.hex(GRAY).italic,
-    doctag: chalk.hex(GRAY),
+    'title.function.invoke': tone(PERIWINKLE),
+    comment: tone(GRAY).italic,
+    doctag: tone(GRAY),
     // Annotations, preprocessor, shebang. Its keyword and string are nested spans in 11.
-    meta: chalk.hex(GRAY),
-    section: chalk.hex(PERIWINKLE),
-    tag: chalk.hex(ROSE), // html/xml angle brackets
-    name: chalk.hex(ROSE), // html/xml tag names
-    attr: chalk.hex(APRICOT), // object keys, html attributes
-    attribute: chalk.hex(GREEN),
-    variable: chalk.hex(ROSE),
-    'variable.language': chalk.hex(ORCHID), // this, self
-    'variable.constant': chalk.hex(APRICOT),
-    bullet: chalk.hex(APRICOT),
-    code: chalk.hex(GREEN), // ```markdown fences: indented/inline code
-    formula: chalk.hex(TEAL),
+    meta: tone(GRAY),
+    section: tone(PERIWINKLE),
+    tag: tone(ROSE), // html/xml angle brackets
+    name: tone(ROSE), // html/xml tag names
+    attr: tone(APRICOT), // object keys, html attributes
+    attribute: tone(GREEN),
+    variable: tone(ROSE),
+    'variable.language': tone(ORCHID), // this, self
+    'variable.constant': tone(APRICOT),
+    bullet: tone(APRICOT),
+    code: tone(GREEN), // ```markdown fences: indented/inline code
+    formula: tone(TEAL),
     emphasis: chalk.italic,
     strong: chalk.bold,
-    link: chalk.hex(PERIWINKLE).underline,
-    quote: chalk.hex(GRAY),
-    'selector-tag': chalk.hex(ROSE),
-    'selector-id': chalk.hex(PERIWINKLE),
-    'selector-class': chalk.hex(APRICOT),
-    'selector-attr': chalk.hex(APRICOT),
-    'selector-pseudo': chalk.hex(TEAL),
-    'template-tag': chalk.hex(GRAY),
-    'template-variable': chalk.hex(ROSE),
-    addition: chalk.hex(GREEN),
-    deletion: chalk.hex(ROSE),
+    link: tone(PERIWINKLE).underline,
+    quote: tone(GRAY),
+    'selector-tag': tone(ROSE),
+    'selector-id': tone(PERIWINKLE),
+    'selector-class': tone(APRICOT),
+    'selector-attr': tone(APRICOT),
+    'selector-pseudo': tone(TEAL),
+    'template-tag': tone(GRAY),
+    'template-variable': tone(ROSE),
+    addition: tone(GREEN),
+    deletion: tone(ROSE),
   };
 }
 

@@ -2,7 +2,9 @@
 // Pattern across the app: accent = brand/focus, secondary = muted, warning = wait,
 // error = problem, success = additions.
 
-export const theme = {
+import chalk, { type ForegroundColorName } from 'chalk';
+
+const truecolor = {
   accent: '#d68cd6', // soft orchid magenta — pastel but luminous enough to read as focus/selection
   // Soft lilac: the one purple slot the palette had free — redder and brighter than the vibe
   // periwinkle, far off the link blue, lighter and more saturated than the chat heather, and a
@@ -58,4 +60,44 @@ export const theme = {
   // that marks the Thinking bar. Underlined only on terminals that take OSC 8 hyperlinks
   // (markdown.ts): an underline promises a click, and elsewhere there is none to deliver.
   link: '#aac0f0',
-} as const;
+};
+
+export type Theme = Record<keyof typeof truecolor, string>;
+
+// A 16-color terminal (the Linux console, TERM=vt100/ansi, an old ssh client) gets named colors in
+// place of the pastels. Chalk downsamples a hex to the nearest of 16, and nearly every pastel above
+// is nearest to white — accent, warning and every mode tag collapsed into one, so the colors meant
+// nothing. The hues are chosen per slot; 16 colors cannot keep every distinction, so the ones that
+// share a color (queued/subagent, link/reasoning) never meet on screen. `userBg` and the named
+// slots already downsample fine and are left alone.
+const ansi16: Partial<Theme> = {
+  accent: 'magentaBright',
+  inlineCode: 'magenta',
+  tool: 'white',
+  secondary: 'gray',
+  muted: 'gray',
+  reasoning: 'blueBright',
+  warning: 'yellowBright',
+  queued: 'yellow',
+  subagent: 'yellow',
+  autoApprove: 'redBright',
+  modeAgent: 'magentaBright',
+  modePlan: 'cyanBright',
+  modeVibe: 'blue',
+  modeMinimal: 'white',
+  modeGrind: 'magenta',
+  modeChat: 'cyan',
+  modeShell: 'greenBright',
+  link: 'blueBright',
+};
+
+export function themeForLevel(level: number): Theme {
+  return level === 1 ? { ...truecolor, ...ansi16 } : truecolor;
+}
+
+export const theme: Theme = themeForLevel(chalk.level);
+
+// chalk.hex for a theme slot, which may hold a named color on a 16-color terminal.
+export function themeChalk(color: string) {
+  return color.startsWith('#') ? chalk.hex(color) : chalk[color as ForegroundColorName];
+}

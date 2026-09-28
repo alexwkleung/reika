@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type { ModelTarget } from './models.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 // Interactive /model picker. Like Approval and Suggestions, this renders as the
@@ -26,7 +27,7 @@ export function ModelSelect({
   const maxDisplay = Math.max(20, termWidth - 8);
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderBottom={false}
       flexDirection="column"
       paddingX={1}
