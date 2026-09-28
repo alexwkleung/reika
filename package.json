@@ -34,8 +34,8 @@
     "highlight.js": "^11.12.0",
     "ignore": "^7.0.5",
     "ink": "^5.0.1",
-    "jsdom": "^27.0.1",
     "jsonrepair": "^3.14.0",
+    "linkedom": "^0.18.13",
     "marked": "^15.0.12",
     "picomatch": "^4.0.4",
     "react": "^18.3.1",
@@ -49,7 +49,6 @@
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
-    "@types/jsdom": "^28.0.3",
     "@types/node": "^22.9.0",
     "@types/picomatch": "^4.0.3",
     "@types/react": "^18.3.12",
