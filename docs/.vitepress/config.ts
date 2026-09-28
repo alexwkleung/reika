@@ -20,6 +20,7 @@ export default defineConfig({
           { text: 'Tools', link: '/tools' },
           { text: 'Instructions and skills', link: '/skills' },
           { text: 'Models', link: '/models' },
+          { text: 'Platforms', link: '/platforms' },
           { text: 'Architecture', link: '/architecture' },
         ],
       },
