@@ -1703,7 +1703,7 @@ export async function runTurn(opts: {
               ? 'Reasoning was going in circles — writing the plan from what was gathered.'
               : planStaleRounds >= PLAN_STALL_ROUNDS
                 ? 'Exploration stopped turning up anything new — writing the plan from what was gathered.'
-                : `Explored for ${PLAN_HARD_CEILING} rounds — writing the plan from what was gathered.`,
+                : `Explored for ${i} rounds — writing the plan from what was gathered.`,
           });
         }
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
