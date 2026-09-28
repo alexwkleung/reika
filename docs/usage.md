@@ -27,6 +27,8 @@ reika -p "summarize what this repo does"
 echo "explain src/agent/loop.ts" | reika -p          # prompt from stdin
 reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | grind | chat
 reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
+reika -p --stream "explain the build"                # print the reply as it is generated
+reika -p --json --stream "..." | jq -c .role         # one message per line (NDJSON) as each lands
 reika -p --save "..."                                # write the transcript like /save
 reika -p "/verify the input box"                     # run a skill, with the rest as guidance
 npm run -s dev -- -p "..."                           # from a checkout: -- so npm doesn't eat -p, -s to keep its banner off stdout
@@ -34,6 +36,7 @@ npm run -s dev -- -p "..."                           # from a checkout: -- so np
 
 - **Approvals** follow `REIKA_AUTO_APPROVE` with no prompt to fall back on: `bypass` runs everything, `safe` (the default) runs ordinary edits/commands and _declines_ anything the danger scan flags, `off` declines every edit and command (the model is told) — set it explicitly for a run that must not write. `ask_user` is never offered.
 - **stdout is the reply only** — notices the TUI would put in the scrollback (a fold, a declined command, a skill match) go to stderr, and `REIKA_DEBUG=1` still writes the log file.
+- **Streaming** (`--stream`): by default nothing prints until the turn ends. With `--stream` the reply text goes to stdout as the model generates it — every round's, so the text written before a tool call shows too, separated by a blank line — and each tool call's summary goes to stderr (`reika: ↳ Read src/a.ts`). Reasoning, a subagent's own rounds and the compaction note stay off stdout. With `--json` it prints each message as its own JSON line when it is committed, the same objects `--json` alone prints as one array at the end. Text streamed from a model with no native tool-call template can include its in-band call text, which the TUI hides once the round lands but a pipe can't take back.
 - **Exit status**: 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted (ctrl-c aborts the turn cleanly).
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
