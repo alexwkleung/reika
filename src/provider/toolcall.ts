@@ -524,8 +524,17 @@ export function messagesToChatParams(
   // The transient harness note rides at the very END: the tail is rewritten every round anyway (new
   // tool results), so a note here is free for the prefix cache — and recency-adjacent, where a small
   // model attends hardest. It also counts as the user message a user-requiring template needs.
+  // When the tail is already a user message (round 0, or a harness nudge) the note joins it rather
+  // than following it: a template or router that reads the LAST user message as the query picked
+  // the note ("not user input") and the model answered as if nothing had been asked. The user's
+  // text stays first, so the next round still diverges only where the note sat.
   if (opts?.trailingNote) {
-    out.push({ role: 'user', content: opts.trailingNote });
+    const tail = out[out.length - 1];
+    if (tail?.role === 'user' && typeof tail.content === 'string') {
+      out[out.length - 1] = { role: 'user', content: `${tail.content}\n\n${opts.trailingNote}` };
+    } else {
+      out.push({ role: 'user', content: opts.trailingNote });
+    }
   }
   // Native vision: fold this turn's pasted images into the user message they were pasted into, as
   // OpenAI multimodal parts. The message stays text in history — only this outgoing copy carries
