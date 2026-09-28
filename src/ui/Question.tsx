@@ -3,6 +3,7 @@ import wrapAnsi from 'wrap-ansi';
 import type { QuestionRequest } from '../types.js';
 import { contentWidth, hangingWrap, useContentWidth } from './layout.js';
 import { DIALOG_MARKER } from './Approval.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 // The dialog's own border plus its paddingX={1}, on top of the App padding contentWidth already
@@ -75,7 +76,7 @@ export function Question({
   const hang = HANG;
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderBottom={false}
       flexDirection="column"
       paddingX={1}

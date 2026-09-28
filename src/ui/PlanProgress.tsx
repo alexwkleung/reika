@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { renderInlineMarkdown } from './markdown.js';
 import type { PlanStep } from '../agent/plantrack.js';
@@ -48,7 +49,7 @@ export function PlanProgress({ steps }: { steps: PlanStep[] }) {
       </Text>
       {collapsedDone > 0 ? (
         <Text color={theme.muted}>
-          <Text color={theme.success}>{'✓ '}</Text>
+          <Text color={theme.success}>{`${glyphs.check} `}</Text>
           steps {steps[0].n}–{steps[collapsedDone - 1].n} done
         </Text>
       ) : null}
@@ -73,7 +74,13 @@ export function PlanProgress({ steps }: { steps: PlanStep[] }) {
                     : theme.muted
             }
           >
-            {s.done ? '✓ ' : s.waived ? '~ ' : i === nextIdx ? '▸ ' : '· '}
+            {s.done
+              ? `${glyphs.check} `
+              : s.waived
+                ? '~ '
+                : i === nextIdx
+                  ? `${glyphs.next} `
+                  : '· '}
           </Text>
           {s.n}. {renderInlineMarkdown(s.text)}
         </Text>

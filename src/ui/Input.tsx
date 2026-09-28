@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { isLargePaste } from './pastes.js';
 import { isFocusKeypress, useTerminalFocus } from './focus.js';
@@ -381,7 +382,7 @@ export function Input({
   // that merges into this frame (Approval, Question, ModelSelect, Suggestions) does the same.
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderTop={!attachedAbove}
       borderBottom={!attachedBelow}
       paddingLeft={1}

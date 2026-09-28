@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { displayCwd } from './scrub.js';
 import { contentWidth } from './layout.js';
@@ -12,7 +13,7 @@ import { contentWidth } from './layout.js';
 // monochrome on purpose, off the blue→magenta "AI CLI" palette.
 const BAR = '▐';
 // The filled florette (✿, U+273F) leads the name — reika (レイカ) means "beautiful flower".
-const MARK = '✿';
+const MARK = glyphs.brand;
 const RAMP_START = [0xed, 0xc4, 0xe8];
 const RAMP_END = [0xa1, 0x3d, 0x93];
 const NAME = 'Reika';

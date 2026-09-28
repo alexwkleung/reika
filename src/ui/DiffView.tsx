@@ -3,7 +3,7 @@ import { diffWordsWithSpace } from 'diff';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
 import chalk from 'chalk';
-import { theme } from './theme.js';
+import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
 
@@ -243,7 +243,7 @@ export function assignLineNumbers(
 function Gutter({ gutter, bg, side }: { gutter: string; bg?: string; side?: Side }) {
   if (!gutter) return null;
   return (
-    <Text color={side ? MARKER_FG[side] : theme.muted} backgroundColor={bg}>
+    <Text color={side ? markerFg(side) : theme.muted} backgroundColor={bg}>
       {`${gutter} `}
     </Text>
   );
@@ -258,6 +258,12 @@ type Side = 'removed' | 'added';
 // above the ~3.8:1 the previous neutral gray managed on green, and below the code's default
 // foreground so the numbers still recede behind the line rather than competing with it.
 const MARKER_FG: Record<Side, string> = { added: '#6fdc8c', removed: '#f28b8b' };
+// A 16-color terminal downsamples both tints to black and the markers to cyan and white, so the
+// two sides read the same. There the row keeps no tint and the side is carried by the marker's
+// color and the changed word's background, the shape of `git diff` at 16 colors.
+const ANSI16_MARKER_FG: Record<Side, string> = { added: 'green', removed: 'red' };
+const markerFg = (side: Side) => (chalk.level === 1 ? ANSI16_MARKER_FG : MARKER_FG)[side];
+const rowBg = (side: Side) => (chalk.level === 1 ? undefined : ROW_BG[side]);
 // Continuation rows sit under the code, past where the `+`/`-` prefix ended, so a wrapped line
 // reads as one line and the prefix column stays scannable.
 const CONTINUATION = '  ';
@@ -289,7 +295,7 @@ function WrappedRow({
   // Omitted for context lines: only `+`/`-` rows are tinted, and an untinted row needs no padding.
   side?: Side;
 }) {
-  const bg = side ? ROW_BG[side] : undefined;
+  const bg = side ? rowBg(side) : undefined;
   const rows = wrapAnsi(content, Math.max(1, maxWidth - prefix.length), {
     trim: false,
     hard: true,
@@ -304,7 +310,7 @@ function WrappedRow({
                 continuation slides left and the code column stops lining up. */}
             <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} bg={bg} side={side} />
             <Text backgroundColor={bg}>
-              {side && i === 0 ? chalk.hex(MARKER_FG[side])(lead) : lead}
+              {side && i === 0 ? themeChalk(markerFg(side))(lead) : lead}
               {row}
               {bg ? padToWidth(lead + row, maxWidth) : ''}
             </Text>
@@ -467,7 +473,9 @@ function PairedLine({
       const isChange = side === 'removed' ? p.removed : p.added;
       // Brighter background for the changed portion — stands out against the line's own.
       return isChange
-        ? chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value)
+        ? chalk.level === 1
+          ? chalk[side === 'added' ? 'bgGreen' : 'bgRed'].whiteBright(p.value)
+          : chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value)
         : highlightCode(p.value, language);
     })
     .join('');
