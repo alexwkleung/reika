@@ -165,10 +165,13 @@ describe('warm prefix under REIKA_PREFIX_STABLE', () => {
 
       const warmMsgs = serialize(config, warm.system, warm.history);
       const realMsgs = serialize(config, real.system, real.history, real.trailingNote);
-      // Real request = warm request + user message (+ trailing note in plan mode) — the warm
-      // prefix survives intact, which is the whole point under this flag.
-      expect(realMsgs.length).toBe(warmMsgs.length + (real.trailingNote ? 2 : 1));
+      // Real request = warm request + user message (the plan-mode trailing note joins it) — the
+      // warm prefix survives intact, which is the whole point under this flag.
+      expect(realMsgs.length).toBe(warmMsgs.length + 1);
       expect(realMsgs.slice(0, warmMsgs.length)).toEqual(warmMsgs);
+      if (real.trailingNote) {
+        expect(realMsgs[realMsgs.length - 1].content).toContain(real.trailingNote);
+      }
     });
   }
 
