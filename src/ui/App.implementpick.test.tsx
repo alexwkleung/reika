@@ -145,6 +145,8 @@ describe('/implement mode picker (#561)', () => {
     // A pick among peers has no "yes", so the footer offers no y/n.
     expect(frame).toContain('1-3 navigate');
     expect(frame).not.toContain('y/n jump');
+    // The command's autocomplete row does not linger under the dialog.
+    expect(frame).not.toContain('tab/enter accept');
     expect(runTurn).not.toHaveBeenCalled();
 
     app.stdin.write('\r');

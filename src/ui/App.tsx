@@ -1864,6 +1864,9 @@ export function App() {
       return decided;
     }
     if (modeRef.current !== 'plan' || !isImplementCommand(prompt)) return undefined;
+    // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
+    // up, it draws a second `/implement` under the dialog.
+    setSuggestionState(null);
     const choice = await askChoice(implementModeConfirmSpec());
     return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
   };
