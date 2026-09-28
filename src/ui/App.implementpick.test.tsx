@@ -202,6 +202,19 @@ describe('/implement mode picker (#561)', () => {
     app.unmount();
   });
 
+  it('esc cancels like ctrl-c', async () => {
+    const app = await mountApp();
+    await submit(app, '/implement');
+    await waitFor(app, DIALOG);
+    expect(plain(app.lastFrame())).toContain('esc/ctrl-c abort');
+    app.stdin.write('\x1b');
+    await tick(200);
+    expect(plain(app.lastFrame())).not.toMatch(DIALOG);
+    expect(inputLine(app)).toContain('/implement');
+    expect(runTurn).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
   it('asks a /implement queued behind a running turn at keypress, and the replay does not ask again', async () => {
     const app = await mountApp();
     await submit(app, 'plan the change');

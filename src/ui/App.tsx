@@ -788,10 +788,14 @@ export function App() {
       } else if (key.return) {
         setConfirm(null);
         cf.resolve(confirmSelectedRef.current);
+      } else if (key.escape) {
+        // Unlike Approval and Question, escape is safe here: a split arrow sequence arriving as a
+        // bare escape only cancels — nothing is sent and the prompt stays in the box — the same
+        // cost the /model picker's escape carries. Approval's escape would decline for the user.
+        setConfirm(null);
+        cf.resolve('abort');
       }
-      // No escape, for the reason Approval and Question bind none: a split arrow sequence arrives
-      // as a bare escape on a loaded pty. Modal: the input is disabled, so nothing else has
-      // anywhere to go.
+      // Modal: the input is disabled, so nothing else has anywhere to go.
       return;
     }
     const rs = resumeSelectRef.current;

@@ -113,7 +113,7 @@ export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIn
             `↑↓ or 1-${spec.options.length} navigate`,
             ...(spec.accept ? [`y/n jump (y = ${spec.accept})`] : []),
             'enter select',
-            'ctrl-c abort',
+            'esc/ctrl-c abort',
           ].join('  ·  ')}
         </Text>
       </Box>
