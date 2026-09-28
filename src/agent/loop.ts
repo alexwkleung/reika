@@ -102,7 +102,14 @@ import {
   underPressure,
 } from './subagentpressure.js';
 import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
-import { planFill, planPressureFor, planPressureLine, type PlanPressure } from './planpressure.js';
+import {
+  ceilingPressure,
+  planFill,
+  planPressureFor,
+  planPressureLine,
+  planRoundCeiling,
+  type PlanPressure,
+} from './planpressure.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -258,20 +265,33 @@ export function flagRepeatedCall(
 // information, force the write once it stops. Crucially this can't reintroduce spiraling — "no new
 // information" IS the spiral signature, so the same rule stops both a finished model and a stuck
 // one. A big/unfamiliar repo gets as many rounds as it keeps finding new files; a converged or
-// looping model is cut off PLAN_STALL_ROUNDS rounds after it stops making progress. PLAN_HARD_CEILING
-// is a backstop against a model that keeps finding trivially-new things forever.
+// looping model is cut off PLAN_STALL_ROUNDS rounds after it stops making progress. The round
+// ceiling (planRoundCeiling, agent/planpressure.ts) is a backstop against a model that keeps finding
+// trivially-new things forever.
 const PLAN_STALL_ROUNDS = 2;
-// 12 is right for ~16k: the model over-gathers vs the transform's findings budget well before then
-// (measured ~26k tokens read against a ~10k budget), so more rounds are wasted. On a larger window
-// this is too low — scale it with contextWindow, tuned by the gathered-payloads vs transform-budget
-// ratio (visible under REIKA_DEBUG). Don't add the scaling speculatively; pick the curve with data.
-const PLAN_HARD_CEILING = 12;
 // Generation room reserved for the plan at force-write — the rest of the window budgets the
 // transform's reference material. These models emit a few thousand tokens of reasoning *before*
 // the plan, so 2048 left them cut off mid-write (finishReason=length → a wasted retry); 4096 fits
 // reasoning+plan in one shot while still leaving ample window for grounding. The truncation-retry
 // remains the backstop for an unusually long generation.
 const PLAN_WRITE_RESERVE_TOKENS = 4096;
+
+// Char budget for the transform turn: the window minus the plan's generation reserve, in chars
+// (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
+// overflows the window on a large task — the real cause of the large-repo 400s.
+function planTransformBudgetChars(window: number): number {
+  return Math.floor((window - PLAN_WRITE_RESERVE_TOKENS) * 4 * 0.85);
+}
+
+// What the write's findings would cost at full size, measured as gatherPlanFindings charges it.
+function planGatheredChars(history: Message[]): number {
+  let chars = 0;
+  for (const m of history) {
+    const body = m.role === 'tool' ? m.payload?.trim() : undefined;
+    if (m.role === 'tool' && body) chars += m.summary.length + body.length + 8;
+  }
+  return chars;
+}
 // Reasoning-loop break (Layer 2, on by default since 2026-09-24; `=0` is the baseline arm): act when
 // the model's reasoning goes cross-round circular — re-deriving the same analysis instead of
 // converging. Plan mode force-writes; agent mode drives the ledger → withdrawal → terminal-stop
@@ -1567,10 +1587,17 @@ export async function runTurn(opts: {
     // the novelty proxy misses: tool results that look new each round keep planStaleRounds reset while
     // the reasoning is identical (the observed crossSim=1.00 loop). reasoningLoopActive reflects round
     // i-1 here (set after that round's call), so a loop confirmed at i-1 force-writes at i.
+    const planCeiling =
+      opts.promptMode === 'plan'
+        ? planRoundCeiling({
+            transformBudgetChars: window ? planTransformBudgetChars(window) : undefined,
+            gatheredChars: planGatheredChars(opts.history),
+          })
+        : 0;
     const planForceWrite =
       opts.promptMode === 'plan' &&
       (planStaleRounds >= PLAN_STALL_ROUNDS ||
-        i >= PLAN_HARD_CEILING ||
+        i >= planCeiling ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
     let planPressure: PlanPressure = 'none';
@@ -1585,20 +1612,26 @@ export async function runTurn(opts: {
         const fill = planFill(promptTokens, window, minGen());
         planFillPeak = Math.max(planFillPeak ?? 0, fill);
       }
+      const ceiling = planCeiling;
       planPressure = planPressureFor({
         round: i,
         examined: planExamined(opts.history),
         contextWindow: window,
         fill: planFillPeak,
+        ceiling,
       });
       const fill = planFillPeak;
+      // Pressure raised by the approaching ceiling names rounds, not fill: "the context is 7% full
+      // and you very likely have enough" states a fact that argues the other way.
+      const byCeiling = planPressure !== 'none' && ceilingPressure(i, ceiling) === planPressure;
       planPressureBasis = {
         round: i,
-        fillPercent: fill !== undefined ? Math.round(fill * 100) : undefined,
+        fillPercent: fill !== undefined && !byCeiling ? Math.round(fill * 100) : undefined,
       };
       debugLog(
         `[reika:debug] round=${i} plan-pressure=${planPressure} ` +
-          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} basis=${window ? 'fill' : 'rounds'}\n`,
+          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} ` +
+          `basis=${window && !byCeiling ? 'fill' : 'rounds'} ceiling=${ceiling}\n`,
       );
     }
     // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
@@ -1900,12 +1933,7 @@ export async function runTurn(opts: {
       : withdrawInspection
         ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
         : opts.tools;
-    // Char budget for the transform turn: the window minus the plan's generation reserve, in chars
-    // (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
-    // overflows the window on a large task — the real cause of the large-repo 400s.
-    const planTransformBudget = window
-      ? Math.floor((window - PLAN_WRITE_RESERVE_TOKENS) * 4 * 0.85)
-      : Number.MAX_SAFE_INTEGER;
+    const planTransformBudget = window ? planTransformBudgetChars(window) : Number.MAX_SAFE_INTEGER;
     const callHistory = planForceWrite
       ? [
           {

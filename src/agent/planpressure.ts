@@ -10,8 +10,8 @@ import { compactThreshold } from './compaction.js';
 // ("my knowledge is thin… the instructions say to stop"), where the old schedule kept exploring and
 // the shed carried it past the threshold. Taking the minimum means pressure is never stronger than
 // the schedule that worked on small windows, and never stronger than the room warrants on large ones.
-// Loops are not this module's job: the novelty stall, the reasoning-loop break and the hard round
-// ceiling still force the write whatever the window.
+// Loops are not this module's job: the novelty stall and the reasoning-loop break force the write
+// whatever the window. The round ceiling lives here because it is the last rung of this ladder.
 
 export type PlanPressure = 'none' | 'soft' | 'firm' | 'stop';
 
@@ -26,16 +26,52 @@ const LEVELS: PlanPressure[] = ['none', 'soft', 'firm', 'stop'];
 const FIRM_ROUND = 3;
 const STOP_ROUND = 6;
 
+// The round ceiling: a backstop against a model that keeps finding trivially-new things, since the
+// novelty stall and the loop breakers already end a finished or a stuck exploration. 12 is sized for
+// ~16k windows, where the model over-gathers against the plan write's findings budget well before
+// then (~26k tokens read against ~10k), so later rounds gather what the write cannot hold. While the
+// write CAN still hold everything gathered, it is 30: a 1M-window API run was cut at 12 having
+// gathered a fraction of that budget, with fill pressure never above `none`. Keyed on the budget,
+// not on fill, because fill does not climb on a small window — the shed holds it near half while
+// the model keeps reading (measured: 0.49 at round 12 on 24k), so a fill rule handed small models 30.
+const ROUND_CEILING = 12;
+const ROOMY_ROUND_CEILING = 30;
+// With the roomy ceiling the fill schedule can stay `none` to the end, so the ceiling would land
+// unannounced. Ramp to firm this many rounds before it, and to STOP on its last round.
+const CEILING_FIRM_ROUNDS = 3;
+
+export function planRoundCeiling(opts: {
+  // The plan write's findings budget in chars; undefined without a window.
+  transformBudgetChars?: number;
+  gatheredChars: number;
+}): number {
+  if (opts.transformBudgetChars === undefined) return ROUND_CEILING;
+  return opts.gatheredChars < opts.transformBudgetChars ? ROOMY_ROUND_CEILING : ROUND_CEILING;
+}
+
+// Only the roomy ceiling ramps: under 12 the round schedule has already said STOP at 6.
+export function ceilingPressure(round: number, ceiling: number): PlanPressure {
+  if (ceiling <= ROUND_CEILING) return 'none';
+  if (round >= ceiling - 1) return 'stop';
+  if (round >= ceiling - CEILING_FIRM_ROUNDS) return 'firm';
+  return 'none';
+}
+
 export function planPressureFor(opts: {
   round: number;
   examined: boolean;
   contextWindow?: number;
   // The turn's peak planFill; undefined at round 0, which the warm prefix cannot measure.
   fill?: number;
+  // When given, pressure never trails the approach to it (see CEILING_FIRM_ROUNDS).
+  ceiling?: number;
 }): PlanPressure {
   const byRound = roundPressure(opts.round, opts.examined);
   if (!opts.contextWindow) return byRound;
-  return LEVELS[Math.min(LEVELS.indexOf(byRound), LEVELS.indexOf(fillPressure(opts)))];
+  const gentler = Math.min(LEVELS.indexOf(byRound), LEVELS.indexOf(fillPressure(opts)));
+  const ramp =
+    opts.ceiling === undefined ? 0 : LEVELS.indexOf(ceilingPressure(opts.round, opts.ceiling));
+  return LEVELS[Math.max(gentler, ramp)];
 }
 
 function roundPressure(round: number, examined: boolean): PlanPressure {
