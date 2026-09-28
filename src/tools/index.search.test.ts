@@ -4,6 +4,7 @@ import {
   chooseSearchBackend,
   defaultTools,
   makeSearchProvider,
+  planTools,
   searchPrecedenceNotice,
   type SearchProbe,
 } from './index.js';
@@ -143,5 +144,39 @@ describe('tool lists — offline', () => {
     const cfg = config({});
     expect(names(defaultTools(cfg, { offline: false }))).toEqual(names(defaultTools(cfg)));
     expect(names(chatTools(cfg, {}))).toEqual(['fetch_url']);
+  });
+});
+
+// #290: the web pair is plan mode's too. Plan mode explores the codebase, but a plan can turn on
+// something the repo cannot settle — a library's docs, an API's shape, the issue it answers — and
+// grounding that is a read, so it fits the mode's one guarantee. Which of the two registers is the
+// same rule as agent mode: `fetch_url` unconditionally (the harness hands this mode URLs too,
+// through pasted-link expansion and the plan-commit grounder), `search` only with a provider.
+describe('tool lists — plan mode web tools (#290)', () => {
+  const cfg = config({ searxngUrl: SEARXNG });
+  const names = (tools: { name: string }[]) => tools.map(t => t.name);
+
+  it('gives plan mode both when a search provider is configured', () => {
+    expect(names(planTools(cfg))).toEqual(expect.arrayContaining(['search', 'fetch_url']));
+  });
+
+  it('gives it fetch_url alone with no provider, exactly as agent mode does', () => {
+    expect(names(planTools(config({})))).toEqual(expect.arrayContaining(['fetch_url']));
+    expect(names(planTools(config({})))).not.toContain('search');
+  });
+
+  it('drops both with the rest of the web pair offline (#392)', () => {
+    const offline = names(planTools(cfg, { offline: true }));
+    expect(offline).not.toContain('search');
+    expect(offline).not.toContain('fetch_url');
+  });
+
+  // The mode's guarantee, restated against the new list: adding reads cannot bend it. A `search`
+  // that arrived with a mutating sibling would be the whole point of plan mode gone silently.
+  it('still registers nothing that could write', () => {
+    const list = names(planTools(cfg));
+    expect(list).not.toContain('edit');
+    expect(list).not.toContain('write');
+    expect(list).not.toContain('subagent');
   });
 });

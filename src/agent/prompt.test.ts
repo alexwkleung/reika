@@ -51,6 +51,45 @@ describe('plan prompt tracks planTools (#109)', () => {
   });
 });
 
+// Plan mode's web pair (#290) is the one exception to "You can ONLY explore the codebase", and it
+// gets the same treatment as bash above: named only when the tool is in the list. `planTools()` with
+// no config has `fetch_url` (unconditional, as in agent mode) and no `search` (no provider), so the
+// two are asserted separately.
+describe('plan prompt tracks the web tools (#290)', () => {
+  const planPromptWeb = (o: { canFetch?: boolean; canSearch?: boolean }): string =>
+    buildSystemPrompt({ bundle, mode: 'plan', ...o }).replace(/\s+/g, ' ');
+
+  it('names the tools planTools actually registers, and only those', () => {
+    const names = planTools().map(t => t.name);
+    expect(names).toContain('fetch_url');
+    expect(names).not.toContain('search');
+    expect(planPromptWeb({ canFetch: true, canSearch: false })).toContain('may also use fetch_url');
+    expect(planPromptWeb({ canFetch: true, canSearch: false })).not.toContain('search');
+    expect(planPromptWeb({ canFetch: true, canSearch: true })).toContain(
+      'may also use search/fetch_url',
+    );
+  });
+
+  // Offline is the other arm that has neither tool; pointing at one there is the #377 phantom
+  // pointer, and with neither the prompt stays byte-identical to the pre-#290 text.
+  it('says nothing about the web when neither tool is present', () => {
+    const none = planPromptWeb({});
+    expect(none).not.toContain('may also use');
+    expect(buildSystemPrompt({ bundle, mode: 'plan', canFetch: false, canSearch: false })).toBe(
+      planPrompt(),
+    );
+  });
+
+  // The exception is scoped to what the codebase cannot answer, and the repo stays the tiebreaker:
+  // an unrestricted "you may search the web" is a new way to keep exploring instead of writing the
+  // plan, which every other line here pulls against.
+  it('scopes the lookup to what the codebase cannot answer', () => {
+    const plan = planPromptWeb({ canFetch: true, canSearch: true });
+    expect(plan).toContain('For what the codebase cannot answer');
+    expect(plan).toContain('it does not replace reading the code the plan changes');
+  });
+});
+
 // Same coupling as the plan-prompt block above, for the same reason: rule 7 names `ask_user`, and a
 // prompt that points a model at a tool it has not been given is worse than saying nothing.
 describe('agent prompt tracks the ask_user tool (#214)', () => {
