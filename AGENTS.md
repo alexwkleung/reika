@@ -107,7 +107,7 @@ A command that both **switches mode and submits to the model in one tick** (e.g.
 - Components: `.tsx` in `src/ui/`
 - Helpers: `.ts` in `src/ui/` — don't move to a generic `utils/` dir; they're UI-coupled
 - Lift state to `App.tsx` for cross-component features (suggestions, approval, mode)
-- Bordered boxes use `borderStyle="round"` consistently
+- Bordered boxes use `borderStyle={glyphs.border}` (`round`, or `single` on a console that cannot draw the rounded corners — see below)
 
 ### The session is the source of truth (#403)
 
@@ -174,7 +174,9 @@ Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.
 - `error` (red) — problem (error row marker, diff `-` lines, WARNING heading)
 - `success` (green) — positive (diff `+` lines, shell `$` prompt)
 
-To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors.
+To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors. A theme slot may hold a named color, so paint one through `themeChalk`, never `chalk.hex`.
+
+**Old terminals.** Two fallbacks, each engaging only where the full set cannot render. On a 16-color terminal (`chalk.level === 1`) `theme.ts` swaps its pastels for named colors: downsampled, nearly every pastel lands on white, so accent, warning and every mode tag became one color. The syntax palette (`highlight.ts`) and the diff tints (`DiffView.tsx`, where both row backgrounds downsampled to black) follow the same rule. On a console whose font lacks the ornaments (`TERM=linux`/`vt*`, or `REIKA_BASIC_GLYPHS=1`), `glyphs.ts` swaps the non-WGL4 glyphs — `⏺`, braille, `❯`, `▎`, `↳`, rounded corners — for WGL4 ones and leaves everything else alone. A new ornament goes in `glyphs.ts` with a basic counterpart, or it draws as a replacement diamond there.
 
 ## Layout
 

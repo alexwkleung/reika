@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink';
 import type { SkillMatch } from '../skillmatch.js';
 import { IMPLEMENT_MODES, type ImplementMode } from './commands.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 // Row 0 is "send as typed" and starts selected — the inverse of Approval, where Approve is row 0.
@@ -74,7 +75,7 @@ export function implementModeConfirmSpec(): ConfirmSpec {
 export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIndex: number }) {
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderBottom={false}
       flexDirection="column"
       paddingX={1}

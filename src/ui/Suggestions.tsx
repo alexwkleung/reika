@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type { SuggestionState } from './suggest.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 const MAX_VISIBLE_SUGGESTIONS = 8;
@@ -47,7 +48,13 @@ export function Suggestions({
   // than above (unlike Approval) because the eye is already on the input line
   // and a long list reads more naturally dropping down from it than stacking up.
   return (
-    <Box borderStyle="round" borderTop={false} flexDirection="column" paddingX={1} marginX={-1}>
+    <Box
+      borderStyle={glyphs.border}
+      borderTop={false}
+      flexDirection="column"
+      paddingX={1}
+      marginX={-1}
+    >
       {state.items.slice(start, start + visible).map((item, j) => {
         const selected = start + j === selectedIndex;
         // One Text with nested runs (not siblings): on wrap Ink drops the char at

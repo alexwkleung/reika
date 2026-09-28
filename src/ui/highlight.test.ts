@@ -42,6 +42,15 @@ describe('highlightCode', () => {
     expect(out).toContain(STRING('<x.h>'));
   });
 
+  // Downsampled, the pastel tones all land on white; 16 colors get named ones instead.
+  it('keeps keywords, types and strings apart on a 16-color terminal', () => {
+    chalk.level = 1;
+    const out = highlightCode('class A { f() { return "s"; } }', 'ts');
+    expect(out).toContain(chalk.magentaBright('class'));
+    expect(out).toContain(chalk.yellowBright('A'));
+    expect(out).toContain(chalk.green('"s"'));
+  });
+
   it('leaves code alone with colors off', () => {
     chalk.level = 0;
     expect(highlightCode('const x = 1;', 'ts')).toBe('const x = 1;');
