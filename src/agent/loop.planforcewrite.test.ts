@@ -26,6 +26,9 @@ vi.mock('../provider/client.js', () => ({
 const PRIOR = { ...process.env };
 process.env.REIKA_VERBATIM_ABORT = '1';
 process.env.REIKA_CONVERGE_RETRY = '1';
+// The no-carry arm: a coherent draft cut on length is now carried forward (#572, covered in
+// loop.planwritecarry.test.ts), and these pin the wording for the cuts that are not carried.
+process.env.REIKA_CONTINUE = '0';
 afterAll(() => {
   process.env = PRIOR;
 });
