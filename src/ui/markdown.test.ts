@@ -7,7 +7,6 @@ import {
   renderInlineMarkdown,
   renderMarkdown,
   renderReasoningMarkdown,
-  unwrapHyperlink,
 } from './markdown.js';
 import { theme } from './theme.js';
 
@@ -23,28 +22,15 @@ describe('renderReasoningMarkdown', () => {
     expect(out).not.toMatch(/\*\*|`|\]\(/);
     expect(out).toContain('const x = 1;');
   });
-});
 
-// marked-terminal decides OSC 8 once at import, so a clickable link never reaches the tests
-// through renderMarkdown; the unwrap is tested on the escape as ansi-escapes writes it.
-describe('unwrapHyperlink', () => {
-  const osc8 = (url: string, text: string) => `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
-
-  it('turns a clickable link back into text plus URL', () => {
-    const link = osc8('https://example.com/a', chalk.hex(theme.link)('the docs'));
-    expect(unwrapHyperlink(`see ${link} here`)).toBe('see the docs (https://example.com/a) here');
-  });
-
-  it('shows a bare URL once', () => {
-    expect(unwrapHyperlink(osc8('https://example.com', 'https://example.com'))).toBe(
-      'https://example.com',
-    );
-  });
-
-  it('reads the tmux passthrough form', () => {
-    const tmux = (seq: string) => `\u001bPtmux;${seq.replaceAll('\u001b', '\u001b\u001b')}\u001b\\`;
-    const link = `${tmux('\u001b]8;;https://example.com/a\u0007')}docs${tmux('\u001b]8;;\u0007')}`;
-    expect(unwrapHyperlink(link)).toBe('docs (https://example.com/a)');
+  it("keeps a link's URL even where the terminal takes OSC 8 hyperlinks", () => {
+    vi.stubEnv('FORCE_HYPERLINK', '1');
+    try {
+      const out = renderReasoningMarkdown('see [the docs](https://example.com/a) here', 60);
+      expect(out).toBe('see the docs (https://example.com/a) here');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -115,10 +101,9 @@ describe('renderInlineMarkdown', () => {
     expect(out).not.toContain('\n');
   });
 
-  it('restores colons inside codespans (no leaked sentinel)', () => {
+  it('keeps colons inside codespans', () => {
     const out = renderInlineMarkdown('read `src/a.ts:120` first');
     expect(out).toContain('src/a.ts:120');
-    expect(out).not.toContain('COLON');
   });
 
   it('leaves plain text unchanged', () => {
@@ -161,16 +146,14 @@ describe('renderMarkdown lists', () => {
     expect(out).not.toContain('2 • 3');
   });
 
-  it('renders colons inside inline code within a list item (no *#COLON|* leak)', () => {
+  it('keeps colons inside inline code within a list item', () => {
     const out = renderMarkdown('- Run `http://localhost:3000` now');
     expect(out).toContain('http://localhost:3000');
-    expect(out).not.toContain('*#COLON|*');
   });
 
-  it('does not leak the colon sentinel for ordered-list inline code', () => {
+  it('keeps colons inside ordered-list inline code', () => {
     const out = renderMarkdown('1. `git:status`\n2. plain');
     expect(out).toContain('git:status');
-    expect(out).not.toContain('*#COLON|*');
   });
 });
 
@@ -204,9 +187,7 @@ describe('renderMarkdown links', () => {
   });
 
   // Under vitest stdout is a pipe, so the default is the no-hyperlink branch (the assertions
-  // above rely on that). FORCE_HYPERLINK=1 is supports-hyperlinks' override; our href check
-  // re-reads it per call. marked-terminal's own copy is cached at import, so the OSC 8 wrapper
-  // itself never shows up here — only our half of the "underline iff OSC 8" pairing is testable.
+  // above rely on that). FORCE_HYPERLINK=1 is supports-hyperlinks' override, re-read per render.
   it('does not underline where the terminal has no OSC 8 hyperlinks', () => {
     chalk.level = 3;
     const out = renderMarkdown('see https://example.com/docs here');
@@ -222,6 +203,32 @@ describe('renderMarkdown links', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('shows only the text of a markdown link, as an OSC 8 hyperlink to the href', () => {
+    chalk.level = 3;
+    vi.stubEnv('FORCE_HYPERLINK', '1');
+    try {
+      const out = renderMarkdown('see [the docs](https://example.com/a+b) here');
+      const text = chalk.hex(theme.link).underline('the docs');
+      expect(out).toBe(`see \u001b]8;;https://example.com/a+b\u0007${text}\u001b]8;;\u0007 here`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('renderMarkdown hard line breaks', () => {
+  it('breaks the line on two trailing spaces', () => {
+    expect(renderMarkdown('first line  \nsecond line')).toBe('first line\nsecond line');
+  });
+
+  it('breaks the line on a trailing backslash', () => {
+    expect(renderMarkdown('first line\\\nsecond line')).toBe('first line\nsecond line');
+  });
+
+  it('still joins a soft break', () => {
+    expect(renderMarkdown('first line \nsecond line')).toBe('first line second line');
   });
 });
 
@@ -247,8 +254,6 @@ describe('renderMarkdown blockquotes', () => {
   });
 
   it('keeps every bullet of a quoted list at the same column', () => {
-    // marked-terminal's stock renderer trim()s the body before indenting, which eats the
-    // first bullet's own list indent and left it two columns off from the rest.
     const out = renderMarkdown('> - one\n> - two');
     const [first, second] = out.split('\n');
     expect(first).toBe('│   • one');
@@ -259,7 +264,6 @@ describe('renderMarkdown blockquotes', () => {
     const out = renderMarkdown('> see `a:b` and **bold**');
     expect(out).toContain('a:b');
     expect(out).toContain('bold');
-    expect(out).not.toContain('*#COLON|*');
     expect(out).not.toContain('**');
   });
 });
@@ -267,7 +271,13 @@ describe('renderMarkdown blockquotes', () => {
 describe('renderMarkdown tables', () => {
   const table = '| Flag | Default |\n| --- | --- |\n| `REIKA_WARM` | off |';
 
+  const savedLevel = chalk.level;
+  afterEach(() => {
+    chalk.level = savedLevel;
+  });
+
   it('renders header cells bold white, not cyan', () => {
+    chalk.level = 3;
     const out = renderMarkdown(table);
     expect(out).toContain('\u001b[1m\u001b[37m'); // bold + white opener on the header row
     expect(out).not.toContain('\u001b[36m'); // cyan, the old header color
@@ -280,8 +290,8 @@ describe('renderMarkdown tables', () => {
     expect(out).toContain('REIKA_WARM');
   });
 
-  // #439: cli-table3 lays a table out at its natural content width, and any line past the
-  // pane used to be left for Ink to wrap — which tore the borders mid-glyph.
+  // #439: a table laid out at its natural content width left any line past the pane for Ink
+  // to wrap — which tore the borders mid-glyph.
   const wide = [
     '| File | Resolution |',
     '| --- | --- |',
@@ -313,6 +323,21 @@ describe('renderMarkdown tables', () => {
     expect(stripAnsi(renderMarkdown(table, 80))).toBe(stripAnsi(renderMarkdown(table, 120)));
   });
 
+  it('honors column alignment', () => {
+    const out = stripAnsi(
+      renderMarkdown('| n | name |\n| --: | :-: |\n| 7 | ab |\n| 100 | abcdef |'),
+    );
+    expect(out).toContain('│   7 │   ab   │');
+    expect(out).toContain('│ 100 │ abcdef │');
+  });
+
+  it('splits a word longer than its cell rather than dropping it', () => {
+    const long = 'x'.repeat(80);
+    const out = stripAnsi(renderMarkdown(`| k | v |\n| - | - |\n| a | ${long} |`, 40));
+    expect(out.replace(/[│\s]/g, '')).toContain('a' + long);
+    for (const line of out.split('\n')) expect(line.length).toBeLessThanOrEqual(40);
+  });
+
   it('fits a table nested in a list within the block width', () => {
     const nested = `- item:\n\n  ${wide.split('\n').join('\n  ')}\n`;
     for (const line of stripAnsi(renderMarkdown(nested, 60)).split('\n')) {
@@ -322,8 +347,8 @@ describe('renderMarkdown tables', () => {
 });
 
 describe('unsupported fence languages', () => {
-  // marked-terminal skips highlighting entirely at chalk.level 0 (non-TTY test
-  // run), which would make these tests vacuous — force colors on.
+  // Highlighting is skipped entirely at chalk.level 0 (non-TTY test run), which
+  // would make these tests vacuous — force colors on.
   const savedLevel = chalk.level;
   afterEach(() => {
     chalk.level = savedLevel;
@@ -338,7 +363,6 @@ describe('unsupported fence languages', () => {
     // throwing; Ink folds that into the frame as chat spam.
     expect(consoleError).not.toHaveBeenCalled();
     expect(out).toContain('toggle()');
-    // marked-terminal's catch fallback paints the whole block chalk.yellow.
     expect(out).not.toContain('[33m');
   });
 
@@ -349,16 +373,21 @@ describe('unsupported fence languages', () => {
     expect(out).toContain('const x = 1;');
   });
 
-  it('resolveLanguage keeps supported names and auto-detect, rewrites unknown ones', () => {
+  it('resolveLanguage keeps supported names, rewrites unknown and missing ones to plaintext', () => {
     expect(resolveLanguage('ts')).toBe('ts');
     expect(resolveLanguage('astro')).toBe('plaintext');
-    expect(resolveLanguage('')).toBe('');
-    expect(resolveLanguage(undefined)).toBe('');
+    expect(resolveLanguage('')).toBe('plaintext');
+    expect(resolveLanguage(undefined)).toBe('plaintext');
+  });
+
+  it('leaves an unlabeled fence plain rather than guessing a language', () => {
+    chalk.level = 3;
+    expect(renderMarkdown('```\nSELECT * FROM t;\n```')).toBe('SELECT * FROM t;');
   });
 });
 
 // Issue #154, fourth surface. A model answering about Go or a Makefile emits tab-indented code
-// fences, and marked-terminal passes tabs straight through. Ink measures a tab as zero columns and
+// fences, and a renderer passes tabs straight through. Ink measures a tab as zero columns and
 // the terminal draws it as eight, so the live block's row budget — the guard that keeps the
 // dynamic frame under the viewport height — undercounts exactly the lines that are widest.
 describe('markdown terminal-unsafe characters', () => {
