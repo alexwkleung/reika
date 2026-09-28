@@ -117,6 +117,7 @@ import {
 // `ls` through it; its summary carries the output byte count, so a repeat only fires on
 // byte-identical output (a flaky/changed command differs and is left alone).
 const TRACKED_TOOLS = new Set(['read', 'grep', 'list', 'glob', 'bash']);
+const WEB_LOOKUP_ARG: Record<string, string> = { search: 'query', fetch_url: 'url' };
 // Tools whose whole purpose is mutation. They reset the repeat memory, since repo state may
 // have changed, so a legitimate read-after-edit is never mistaken for a loop. Deliberately
 // NOT including `bash`: it's used for read-only greps far more than mutation here, and letting
@@ -1410,6 +1411,10 @@ export async function runTurn(opts: {
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
   const seenReadOnly = new Map<string, RepeatEntry>();
+  // Web lookups (query / URL) that returned content this turn. Kept apart from seenReadOnly so the
+  // repeat nudge stays off the web tools; only plan mode's novelty watermark reads it (#290), or a
+  // docs-only exploration counts as a stall and force-writes before any code is read.
+  const seenWebLookups = new Set<string>();
   // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
@@ -3047,6 +3052,7 @@ export async function runTurn(opts: {
     // Novelty watermark for the adaptive cap: seenReadOnly only gains a key on a first-time
     // (path, offset) / search, so growth across this round means the model learned something new.
     const seenBeforeRound = seenReadOnly.size;
+    const seenWebBeforeRound = seenWebLookups.size;
     // A subagent call is exclusive in its round (#346): sibling inspection calls are held, so the
     // report is the only fresh payload the next round has to fit. Decided over the whole round up
     // front — the siblings are held whichever side of the subagent call they were listed on. Not
@@ -3313,6 +3319,10 @@ export async function runTurn(opts: {
       // isn't flagged. Skipped for unknown tools (nothing produced).
       if (tool && !refused && !bouncedBlindEdit && !heldForSubagent)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
+      // A refusal (budget, offline, latch) carries no payload, so it is never novelty.
+      if (tool && !refused && payload && WEB_LOOKUP_ARG[call.name]) {
+        seenWebLookups.add(`${call.name}\0${String(call.args[WEB_LOOKUP_ARG[call.name]] ?? '')}`);
+      }
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
       // A BOUNCED edit doesn't: the harness withheld it, nothing ran, and the directed read that
@@ -3450,7 +3460,9 @@ export async function runTurn(opts: {
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.
-    planStaleRounds = seenReadOnly.size > seenBeforeRound ? 0 : planStaleRounds + 1;
+    const roundLearned =
+      seenReadOnly.size > seenBeforeRound || seenWebLookups.size > seenWebBeforeRound;
+    planStaleRounds = roundLearned ? 0 : planStaleRounds + 1;
   }
 
   const exhausted: Message = {
