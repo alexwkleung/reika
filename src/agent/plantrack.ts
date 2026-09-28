@@ -398,7 +398,9 @@ export function latestPlanMarker(history: Message[]): PlanMarker | null {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
     if (m.role !== 'assistant' || !m.planFinal) continue;
-    const content = m.content ?? '';
+    // The grounding/URL notes appended at commit (planChecks.at) are reika's, not the plan's: a
+    // refinement handed them as its own plan text copies a stale advisory into the revision.
+    const content = (m.content ?? '').slice(0, m.planChecks?.at);
     const marker = { index: i, message: m, content, steps: parsePlanSteps(content) };
     if (!newest) {
       if (marker.steps.length > 0) return marker;

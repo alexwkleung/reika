@@ -525,6 +525,19 @@ describe('latestPlanMarker / refineTarget', () => {
     expect(latestPlanMarker([{ role: 'user', content: 'hi' }])).toBeNull();
   });
 
+  // The grounding/URL notes are appended to the plan message at commit; a refinement handed them as
+  // its own plan text would copy a stale advisory into the revision.
+  it('stops at the appended plan-check notes', () => {
+    const body = '1. Edit `src/config.ts`';
+    const withNotes = {
+      ...plan(body + '\n\n--- reika: plan grounding check (auto-generated) ---\n- `src/config.ts`'),
+      planChecks: { at: body.length, missing: ['src/config.ts'], deadUrls: [] },
+    };
+    const marker = latestPlanMarker([withNotes]);
+    expect(marker?.content).toBe(body);
+    expect(marker?.steps).toHaveLength(1);
+  });
+
   it('keeps a step-less marker visible to latestPlanMarker but not as a refinement target', () => {
     const marker = latestPlanMarker([plan('1. Edit `a.ts`'), plan('I could not determine that.')]);
     expect(marker?.steps).toEqual([]);

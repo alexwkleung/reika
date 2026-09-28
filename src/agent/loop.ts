@@ -592,6 +592,14 @@ export function buildPlanTransformInput(
   );
 }
 
+// A follow-up that only asks about the plan ("why step 3?") is answered in prose: re-emitting an
+// unchanged plan costs a full plan of decode and then reads as a refinement that absorbed nothing.
+const REFINE_LEDGER_RULE = [
+  'If the latest message asks for a change: keep the steps that still hold, change only what it',
+  'asks for, and end by writing the whole revised plan (the newest plan replaces the older one).',
+  'If it only asks about the plan: answer it, and do not re-emit the plan — it stays live as written.',
+];
+
 // EXPERIMENT (plan mode): a deterministic exploration ledger appended to the system prompt
 // each round. It surfaces what the model has already examined (so it stops re-treading) and
 // applies escalating pressure (agent/planpressure.ts — by window fill, or round count without a
@@ -642,16 +650,15 @@ function buildPlanLedger(
   // "above" is false and the plan the turn exists to revise is gone, so the ledger carries it.
   if (refine && history.includes(refine.message)) {
     lines.push(
-      'A plan you wrote earlier is above — the LIVE plan. This turn refines it. Keep the steps that',
-      'still hold, change only what the latest request asks for, and end by writing the whole revised',
-      'plan (the newest plan replaces the older one).',
+      'A plan you wrote earlier is above — the LIVE plan. This turn follows up on it.',
+      ...REFINE_LEDGER_RULE,
     );
   } else if (refine) {
     lines.push(
       'The plan you wrote earlier is the LIVE plan; it was folded out of the history, so here it is:',
       refine.content,
-      'This turn refines it. Keep the steps that still hold, change only what the latest request asks',
-      'for, and end by writing the whole revised plan (the newest plan replaces the older one).',
+      'This turn follows up on it.',
+      ...REFINE_LEDGER_RULE,
     );
   }
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
@@ -3071,6 +3078,9 @@ export async function runTurn(opts: {
     if (
       refinePlan &&
       isFinal &&
+      // A question re-answered alongside the same plan did what it was asked; the warning's
+      // "rephrase it" is advice for a change request that got lost.
+      !opts.userInput.trim().endsWith('?') &&
       assistantContent?.trim() &&
       !planChanged(refinePlan.content, assistantContent)
     ) {

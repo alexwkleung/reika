@@ -164,7 +164,7 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
       calibration: 1,
     });
     const real = await captureRoundZero(preTurn.slice(), 'plan', config, [], false);
-    expect(warm.system).not.toContain('This turn refines it');
+    expect(warm.system).not.toContain('This turn follows up on it');
     expect(warm.system).toBe(real.system);
   });
 

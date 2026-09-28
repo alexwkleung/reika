@@ -113,7 +113,7 @@ describe('plan refinement turn (#46)', () => {
       onMessage: () => {},
     });
     const sent = sentLedgerText();
-    expect(sent).toContain('This turn refines it');
+    expect(sent).toContain('This turn follows up on it');
     expect(sent).toContain('LIVE plan');
     // The revised plan is a fresh planFinal message, so the handoff/checklist/`/implement` all
     // anchor on the newest one — no new mechanism for superseding the old plan.
@@ -131,13 +131,17 @@ describe('plan refinement turn (#46)', () => {
       .map(m => m.content)
       .join('\n');
 
-  async function refine(previousPlan: string, reply: string): Promise<Message[]> {
+  async function refine(
+    previousPlan: string,
+    reply: string,
+    userInput = 'also cover the settings screen',
+  ): Promise<Message[]> {
     const history = plannedHistory();
     (history[history.length - 1] as { content: string }).content = previousPlan;
     const messages: Message[] = [];
     h.scripted.push({ content: reply, toolCalls: undefined });
     await runTurn({
-      userInput: 'also cover the settings screen',
+      userInput,
       history,
       bundle: makeBundle(),
       config: makeConfig(),
@@ -152,6 +156,21 @@ describe('plan refinement turn (#46)', () => {
   it('says so when the revision changed nothing', async () => {
     const messages = await refine(PLAN_STEP, PLAN_STEP);
     expect(revisionNotice(messages)).toContain('Plan unchanged');
+  });
+
+  // A question about the plan did what it was asked whether or not the reply repeats the plan, so
+  // "rephrase it" would be wrong advice either way.
+  it('stays quiet on a question, whether answered in prose or alongside the same plan', async () => {
+    const q = 'why step 1?';
+    expect(revisionNotice(await refine(PLAN_STEP, 'Because the theme owns it.', q))).not.toContain(
+      'Plan unchanged',
+    );
+    expect(revisionNotice(await refine(PLAN_STEP, PLAN_STEP, q))).not.toContain('Plan unchanged');
+  });
+
+  it('tells a question to answer without re-emitting the plan', async () => {
+    await refine(PLAN_STEP, 'Because the theme owns it.', 'why step 1?');
+    expect(sentLedgerText()).toContain('If it only asks about the plan: answer it');
   });
 
   it('stays quiet when the revision changed the plan, renumbered or not', async () => {
@@ -178,7 +197,7 @@ describe('plan refinement turn (#46)', () => {
       promptMode: 'plan',
       onMessage: () => {},
     });
-    expect(sentLedgerText()).not.toContain('This turn refines it');
+    expect(sentLedgerText()).not.toContain('This turn follows up on it');
   });
 
   it('does not when the plan is followed by another model turn (a vibe chain, not a follow-up)', () => {
@@ -198,7 +217,7 @@ describe('plan refinement turn (#46)', () => {
       round: 0,
       planSteps: null,
     });
-    expect(ledger).not.toContain('This turn refines it');
+    expect(ledger).not.toContain('This turn follows up on it');
   });
 
   it("does not on vibe's plan phase (allowRefine: false) even with the plan right above", async () => {
@@ -223,7 +242,7 @@ describe('plan refinement turn (#46)', () => {
       allowRefine: false,
       onMessage: m => messages.push(m),
     });
-    expect(sentLedgerText()).not.toContain('This turn refines it');
+    expect(sentLedgerText()).not.toContain('This turn follows up on it');
     expect(revisionNotice(messages)).not.toContain('Plan unchanged');
   });
 
@@ -250,7 +269,7 @@ describe('plan refinement turn (#46)', () => {
       round: 1,
       planSteps: null,
     });
-    expect(derived).not.toContain('This turn refines it');
+    expect(derived).not.toContain('This turn follows up on it');
     const carried = buildSteadySystem({
       baseSystem: 'BASE',
       promptMode: 'plan',
@@ -259,7 +278,7 @@ describe('plan refinement turn (#46)', () => {
       planSteps: null,
       refine,
     });
-    expect(carried).toContain('This turn refines it');
+    expect(carried).toContain('This turn follows up on it');
   });
 });
 
@@ -289,7 +308,9 @@ describe('an aborted refinement leaves the plan refinable', () => {
     h.scripted.push({ content: '1. Edit `src/theme.ts`.\n2. Edit `x.ts`.', toolCalls: undefined });
     await runTurn({ ...base, userInput: 'also cover X, settings only' });
     const req = vi.mocked(callModel).mock.calls[0]?.[0];
-    expect(`${req?.system ?? ''}\n${req?.trailingNote ?? ''}`).toContain('This turn refines it');
+    expect(`${req?.system ?? ''}\n${req?.trailingNote ?? ''}`).toContain(
+      'This turn follows up on it',
+    );
   });
 
   it("does not stamp vibe's plan phase as a plan turn", async () => {
