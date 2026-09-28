@@ -53,6 +53,8 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/session.ts` | `createSession`: boot, config/profile/bundle, model history and everything a turn threads to the next (#403); App, headless and evals drive it |
 | `docs/`          | User-facing reference; the README is only a landing page, so new keys, commands and tools are documented here                                  |
 
+The docs site is VitePress (`docs/.vitepress/`, its own `package.json`; #521). Write links GitHub-relative, add a new page to the sidebar in `config.ts`, and run `npm run docs:build`, which fails on a broken link or anchor.
+
 ## Adding a new tool
 
 1. Create `src/tools/<name>.ts` exporting a `Tool` (see `read.ts` for read-only shape, `bash.ts` for streaming + approval shape)
