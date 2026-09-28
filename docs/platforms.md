@@ -46,6 +46,7 @@ Run reika inside WSL. The `bash` tool runs commands through `/bin/sh` and stops 
 
 Any terminal that runs a full-screen program works. A few things to know on older or unusual ones:
 
-- **Colors** step down on their own to what the terminal reports. An ssh session can inherit `COLORTERM` or `TERM_PROGRAM` from the machine you connected from, which makes it claim more colors than it has. `FORCE_COLOR=1` pins it to 16.
+- **Colors** step down on their own to what the terminal reports. An ssh session can inherit `COLORTERM` or `TERM_PROGRAM` from the machine you connected from, which makes it claim more colors than it has. `FORCE_COLOR=1` pins it to 16. At 16 colors reika switches to a palette of named colors, since its usual pastels would nearly all turn white.
+- **Glyphs.** The Linux console's fonts lack some of the symbols reika draws (the tool-call dot, the braille spinner, rounded box corners). Under `TERM=linux` or `vt*` it draws simpler ones those fonts carry instead. `REIKA_BASIC_GLYPHS=1` forces that for a terminal it doesn't detect, such as an old Windows console font, and `0` turns it off (see [Configuration](configuration.md)).
 - **Flicker.** reika asks the terminal to draw each frame at once. A terminal that does not support that ignores the request. If one misbehaves instead, `REIKA_SYNC_OUTPUT=0` turns it off.
 - **No terminal at all.** For scripts, CI and pipes, use headless mode (`reika -p`, see [Usage](usage.md#headless-mode)).
