@@ -53,6 +53,8 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/session.ts` | `createSession`: boot, config/profile/bundle, model history and everything a turn threads to the next (#403); App, headless and evals drive it |
 | `docs/`          | User-facing reference; the README is only a landing page, so new keys, commands and tools are documented here                                  |
 
+The docs site is VitePress (`docs/.vitepress/`, its own `package.json`; #521). Write links GitHub-relative, add a new page to the sidebar in `config.ts`, and run `npm run docs:build`, which fails on a broken link or anchor.
+
 ## Adding a new tool
 
 1. Create `src/tools/<name>.ts` exporting a `Tool` (see `read.ts` for read-only shape, `bash.ts` for streaming + approval shape)
@@ -105,7 +107,7 @@ A command that both **switches mode and submits to the model in one tick** (e.g.
 - Components: `.tsx` in `src/ui/`
 - Helpers: `.ts` in `src/ui/` — don't move to a generic `utils/` dir; they're UI-coupled
 - Lift state to `App.tsx` for cross-component features (suggestions, approval, mode)
-- Bordered boxes use `borderStyle="round"` consistently
+- Bordered boxes use `borderStyle={glyphs.border}` (`round`, or `single` on a console that cannot draw the rounded corners — see below)
 
 ### The session is the source of truth (#403)
 
@@ -172,7 +174,9 @@ Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.
 - `error` (red) — problem (error row marker, diff `-` lines, WARNING heading)
 - `success` (green) — positive (diff `+` lines, shell `$` prompt)
 
-To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors.
+To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors. A theme slot may hold a named color, so paint one through `themeChalk`, never `chalk.hex`.
+
+**Old terminals.** Two fallbacks, each engaging only where the full set cannot render. On a 16-color terminal (`chalk.level === 1`) `theme.ts` swaps its pastels for named colors: downsampled, nearly every pastel lands on white, so accent, warning and every mode tag became one color. The syntax palette (`highlight.ts`) and the diff tints (`DiffView.tsx`, where both row backgrounds downsampled to black) follow the same rule. On a console whose font lacks the ornaments (`TERM=linux`/`vt*`, or `REIKA_BASIC_GLYPHS=1`), `glyphs.ts` swaps the non-WGL4 glyphs — `⏺`, braille, `❯`, `▎`, `↳`, rounded corners — for WGL4 ones and leaves everything else alone. A new ornament goes in `glyphs.ts` with a basic counterpart, or it draws as a replacement diamond there.
 
 ## Layout
 
@@ -1009,6 +1013,12 @@ This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatToo
 runs only matching ones, which is what you want while iterating — a local quantized model takes
 minutes per fixture. `REIKA_MODEL=<id> npm run eval -- <name>` pins the model, and comparing against
 a recorded result means pinning the same one (the spill fixtures were measured on `kat-coder-qq2`).
+`--profile=<name>` runs against a named profile instead (its own base URL and key — the runner never
+reads the TUI's saved state, so without it every run is `default`), and `--mode=<m>` overrides every
+selected fixture's mode, which is how one task is compared across agent/minimal/grind. Every run's
+transcript and end state (`git status` + `git diff` for a `gitInit` fixture) is written to
+`~/.config/reika/evals/`, outside the repo, and the path is printed under the result line — read it
+before theorizing about a failure.
 Each fixture is self-contained: `setup` files + `prompt` + `assert`. To add one:
 
 1. New file in `evals/fixtures/NN-name.ts` exporting a `Fixture`

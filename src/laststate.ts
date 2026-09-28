@@ -12,7 +12,7 @@ export type LastState = { mode?: DefaultMode; profile?: string };
 
 export const LAST_STATE_PATH = join(homedir(), '.config', 'reika', 'state.json');
 
-const DEFAULT_MODES: readonly DefaultMode[] = ['agent', 'plan', 'vibe', 'minimal'];
+const DEFAULT_MODES: readonly DefaultMode[] = ['agent', 'plan', 'vibe', 'minimal', 'grind'];
 
 // Chat isolates its history and shell bypasses the model, so neither is a mode a session can open
 // in (see DefaultMode) — switching to one leaves the last work mode on record instead.

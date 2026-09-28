@@ -36,7 +36,7 @@ Most coding agents are built for frontier models. Reika is built for the models 
 
 ## Requirements
 
-- Node.js 22 or newer.
+- Node.js 22 or newer (macOS 11+, glibc 2.28+ Linux, or Windows through WSL — see [Platforms](docs/platforms.md)).
 - An OpenAI-compatible model server: llama.cpp, MLX, vLLM, or a cloud API.
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR (set `REIKA_VISION_MODEL` to read pasted images with a vision model instead). Windows may work under WSL2.
 - A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
@@ -105,6 +105,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 | [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`                       |
 | [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
 | [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
+| [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
 

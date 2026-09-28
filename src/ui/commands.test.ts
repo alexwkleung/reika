@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isImplementCommand,
   COMMANDS,
   MODE_CYCLE,
   buildImplementPrompt,
@@ -11,11 +12,12 @@ import {
 import type { Message } from '../types.js';
 
 describe('nextMode — Shift+Tab cycling', () => {
-  it('cycles agent → plan → vibe → chat → shell → agent', () => {
+  it('cycles agent → plan → minimal → vibe → grind → chat → shell → agent', () => {
     expect(nextMode('agent')).toBe('plan');
     expect(nextMode('plan')).toBe('minimal');
     expect(nextMode('minimal')).toBe('vibe');
-    expect(nextMode('vibe')).toBe('chat');
+    expect(nextMode('vibe')).toBe('grind');
+    expect(nextMode('grind')).toBe('chat');
     expect(nextMode('chat')).toBe('shell');
     expect(nextMode('shell')).toBe('agent');
   });
@@ -53,7 +55,15 @@ describe('COMMANDS — /implement', () => {
   it('is registered so it autocompletes and shows in suggestions', () => {
     const implement = COMMANDS.find(c => c.name === 'implement');
     expect(implement).toBeDefined();
-    expect(implement?.desc).toMatch(/agent mode/i);
+    expect(implement?.desc).toMatch(/agent, minimal, or grind/i);
+  });
+
+  it('isImplementCommand matches the whole word, with or without guidance', () => {
+    expect(isImplementCommand('/implement')).toBe(true);
+    expect(isImplementCommand('  /implement keep it small ')).toBe(true);
+    expect(isImplementCommand('/IMPLEMENT')).toBe(true);
+    expect(isImplementCommand('/implementation-notes')).toBe(false);
+    expect(isImplementCommand('implement the plan')).toBe(false);
   });
 });
 

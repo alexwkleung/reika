@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import type { ApprovalRequest } from '../types.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
 import { highlightCode } from './highlight.js';
@@ -15,7 +16,7 @@ const DIALOG_CHROME = 4;
 // The chat's tool-call marker, bare: with its VS15 Ink spends a grid cell the terminal never
 // draws and the right `│` lands a column early (#450). The selector is restored at the stream
 // (`restoreTextPresentation`, syncframe.ts), after Ink has laid the row out (#494).
-export const DIALOG_MARKER = '\u23FA';
+export const DIALOG_MARKER = glyphs.dialogCall;
 
 // The dialog sits in Ink's live frame, and a frame as tall as the viewport makes Ink repaint the
 // whole terminal with `\x1b[3J` — iTerm2's "attempted to clear scrollback" — and leaves the rows
@@ -63,7 +64,7 @@ export function Approval({
   const maxRows = approvalPreviewRows(warnings.length, reservedRows);
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderBottom={false}
       flexDirection="column"
       paddingX={1}

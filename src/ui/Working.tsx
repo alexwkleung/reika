@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
+import chalk from 'chalk';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 // Lighter braille "dots" spinner — its dot-mass sits nearer the text's x-height,
 // so it reads as vertically aligned with the label (the fuller circular braille
 // glyphs span the whole cell and look like they float above/below the text).
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const FRAMES = glyphs.spinner;
 
 // Shimmer band: a soft glow rides across the label, brightest at the tip and feathering to
 // the dim baseline at the edges. Purely cosmetic — it just keeps the label from looking inert
@@ -260,16 +262,20 @@ export function Working({
     <Box marginTop={1}>
       <Text color={accent}>{FRAMES[frame]}</Text>
       <Text color={theme.muted}> </Text>
-      {chars.map((ch, i) => {
-        const d = i - pos; // signed distance from the shimmer tip.
-        const within = Math.abs(d) <= SHIMMER_HALF;
-        const color = within ? ramp[d + SHIMMER_HALF] : base;
-        return (
-          <Text key={i} color={color}>
-            {ch}
-          </Text>
-        );
-      })}
+      {/* A ramp of tints needs more than 16 colors: downsampled, every stop lands on one. */}
+      {chalk.level === 1 ? <Text color={accent}>{chars.join('')}</Text> : null}
+      {chalk.level === 1
+        ? null
+        : chars.map((ch, i) => {
+            const d = i - pos; // signed distance from the shimmer tip.
+            const within = Math.abs(d) <= SHIMMER_HALF;
+            const color = within ? ramp[d + SHIMMER_HALF] : base;
+            return (
+              <Text key={i} color={color}>
+                {ch}
+              </Text>
+            );
+          })}
     </Box>
   );
 }

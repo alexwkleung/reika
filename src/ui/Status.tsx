@@ -192,6 +192,8 @@ function modeColor(mode: string): string {
       return theme.modeVibe;
     case 'minimal':
       return theme.modeMinimal;
+    case 'grind':
+      return theme.modeGrind;
     case 'chat':
       return theme.modeChat;
     case 'shell':

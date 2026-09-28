@@ -283,8 +283,8 @@ function parsePasteFetch(raw: string | undefined): PasteFetchMode {
   }
 }
 
-// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe', or
-// 'minimal'.
+// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe',
+// 'minimal', or 'grind'.
 // An unrecognized value falls back to 'agent' — fail-open, since a startup warning would have
 // nowhere safe to go (stderr corrupts the Ink frame). REIKA_PLAN_EXPERIMENT=1 is the older,
 // narrower spelling of REIKA_DEFAULT_MODE=plan, kept as an alias; an explicit REIKA_DEFAULT_MODE
@@ -302,6 +302,8 @@ export function resolveDefaultMode(): DefaultMode {
       return 'vibe';
     case 'minimal':
       return 'minimal';
+    case 'grind':
+      return 'grind';
     default:
       return process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent';
   }

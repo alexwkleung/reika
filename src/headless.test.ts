@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHeadlessInput, finalReply } from './headless.js';
+import { buildHeadlessInput, createStreamPrinter, finalReply } from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
 import type { Config, ContextBundle, Message } from './types.js';
 
@@ -28,6 +28,11 @@ describe('parseHeadlessArgs', () => {
   it('parses mode, json and save', () => {
     const args = parseHeadlessArgs(['-p', 'x', '--mode', 'plan', '--json', '--save']);
     expect(args).toMatchObject({ prompt: 'x', mode: 'plan', json: true, save: true });
+  });
+
+  it('parses --stream, off by default', () => {
+    expect(parseHeadlessArgs(['-p', 'x'])?.stream).toBe(false);
+    expect(parseHeadlessArgs(['-p', '--stream', 'x'])).toMatchObject({ prompt: 'x', stream: true });
   });
 
   it('rejects an unknown mode', () => {
@@ -158,5 +163,76 @@ describe('buildHeadlessInput', () => {
   it('passes a plain prompt through untouched', async () => {
     const out = await buildHeadlessInput('what does this do', config, bundleWith([]), 'agent');
     expect(out).toEqual({ modelText: 'what does this do', notices: [] });
+  });
+});
+
+function capture() {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io = { stdout: (t: string) => void out.push(t), stderr: (t: string) => void err.push(t) };
+  return { io, stdout: () => out.join(''), stderr: () => err.join('') };
+}
+
+describe('createStreamPrinter', () => {
+  it('writes the content channel as it arrives and tool summaries to stderr', () => {
+    const c = capture();
+    const p = createStreamPrinter(c.io, false);
+    p.events.onPhase?.('thinking');
+    p.events.onContentDelta?.('\n\nLet me ');
+    expect(c.stdout()).toBe('Let me ');
+    p.events.onContentDelta?.('look.');
+    p.onMessage({ role: 'assistant', content: 'Let me look.' });
+    p.events.onPhase?.('tool');
+    p.onMessage({ role: 'tool', callId: '1', summary: 'Read src/a.ts\n(40 lines)' });
+    p.events.onPhase?.('thinking');
+    p.events.onContentDelta?.('Done.');
+    p.onMessage({ role: 'assistant', content: 'Done.' });
+    p.finish();
+    expect(c.stdout()).toBe('Let me look.\n\nDone.\n');
+    expect(c.stderr()).toBe('reika: ↳ Read src/a.ts\n');
+  });
+
+  it("keeps a subagent's rounds and the compaction note off stdout", () => {
+    const c = capture();
+    const p = createStreamPrinter(c.io, false);
+    p.events.onSubagent?.(true);
+    p.events.onContentDelta?.('nested report');
+    p.onMessage({ role: 'tool', callId: 'n', summary: 'Read nested.ts', nested: true });
+    p.events.onSubagent?.(false);
+    p.onMessage({ role: 'tool', callId: '1', summary: 'Subagent completed' });
+    p.events.onCompactionNote?.(true);
+    p.events.onContentDelta?.('findings note');
+    p.events.onCompactionNote?.(false);
+    p.events.onContentDelta?.('answer');
+    p.finish();
+    expect(c.stdout()).toBe('answer\n');
+    expect(c.stderr()).toBe('reika: ↳ Subagent completed\n');
+  });
+
+  it('adds no newline when the reply already ended on one', () => {
+    const c = capture();
+    const p = createStreamPrinter(c.io, false);
+    p.events.onContentDelta?.('line\n');
+    p.finish();
+    expect(c.stdout()).toBe('line\n');
+  });
+
+  it('with json, prints each committed message as one NDJSON line and no deltas', () => {
+    const c = capture();
+    const p = createStreamPrinter(c.io, true);
+    expect(p.events.onContentDelta).toBeUndefined();
+    const msgs: Message[] = [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'a' },
+    ];
+    for (const m of msgs) p.onMessage(m);
+    p.finish();
+    expect(
+      c
+        .stdout()
+        .trimEnd()
+        .split('\n')
+        .map(l => JSON.parse(l)),
+    ).toEqual(msgs);
   });
 });
