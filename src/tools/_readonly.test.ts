@@ -52,9 +52,19 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
       'cat <(rm -rf dist)',
       'echo "$(rm -rf dist)"', // still executes inside double quotes
       'echo $((1+1))', // arithmetic is harmless; denied anyway, safety over precision
+      'echo \\\\`rm -rf dist`', // an escaped backslash, then a real substitution
+      'grep "\\`" f `rm -rf dist`', // one escaped backtick does not excuse a real pair
     ])('rejects %s', cmd => {
       expect(isProvablyReadOnly(cmd)).toBe(false);
     });
+
+    // Observed: a markdown-table grep refused in plan mode, costing a round.
+    it.each(['grep -n "^| \\`REIKA" docs/configuration.md', 'grep -n "\\$(" src/a.ts'])(
+      'allows an escaped backtick or dollar, which is a literal: %s',
+      cmd => {
+        expect(isProvablyReadOnly(cmd)).toBe(true);
+      },
+    );
   });
 
   describe('redirection is a write, unless it is search-pattern data', () => {
@@ -70,6 +80,26 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
     it('allows a redirection character that is quoted search data', () => {
       expect(isProvablyReadOnly('grep ">" file.txt')).toBe(true);
       expect(isProvablyReadOnly('cat "; rm -rf /"')).toBe(true); // a file with an alarming name
+    });
+
+    // Observed in a plan session: `grep -n … docs/*.md 2>/dev/null | head -40` refused, a round lost.
+    it.each([
+      'grep -n "MCP" AGENTS.md docs/*.md 2>/dev/null | head -40',
+      'ls src/nope 2> /dev/null',
+      'cat a.ts &>/dev/null',
+      'grep -rn foo src 2>&1 | head',
+      'find . -name "*.ts" 2>/dev/null; wc -l a.ts >&2',
+    ])('allows a redirection that cannot write a file: %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+    });
+
+    it.each([
+      'cat a.ts 2>/dev/null > b.ts',
+      'grep foo bar >/dev/null.txt',
+      'ls 2>/dev/nullfile',
+      'grep foo bar > /dev/null/../../tmp/x',
+    ])('still rejects a real write beside or disguised as one: %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(false);
     });
   });
 
@@ -104,8 +134,43 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
       `sed 's/a/b/w /tmp/pwn' file`, // the w flag writes
       `sed -i "s/x/y/" file.ts`,
       `sed --in-place s/x/y/ file.ts`,
-      `sed -n '1,50p' file`,
       'tree src', // -o writes the listing to a file
+    ])('rejects %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(false);
+    });
+  });
+
+  // sed is admitted only through a positive grammar: addresses, then p, = or q. Observed refusal:
+  // `sed -n '/## Adding a new tool/,/## Optional tools/p' AGENTS.md`, a plan round lost.
+  describe('sed: range prints only', () => {
+    it.each([
+      `sed -n '1,50p' file`,
+      `sed -n '120,$p' src/app.ts`,
+      `sed -n '/## Adding a new tool/,/## Optional tools/p' AGENTS.md`,
+      `sed -n '/start/I,+10p' f`,
+      `sed -n '5p;10p' f`,
+      `sed -ne '1,3p' -e '/x/=' f`,
+      `sed 20q f`,
+      `sed -n '/a\\/b/!p' f`, // escaped slash inside the regex
+      `gh pr diff 420 | sed -n '1,300p'`,
+      `sed -En '/w file/p' f`, // w inside a regex address is data
+    ])('admits %s', cmd => {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+    });
+
+    it.each([
+      `sed -n '1,50w out.txt' f`, // w command writes
+      `sed -n 's/a/b/p' f`, // no s at all, so none of its w/e flags can ride along
+      `sed 's/a/b/w /tmp/pwn' f`,
+      `sed -n '1e rm -rf dist' f`, // GNU e executes
+      `sed -n '1r /etc/passwd' f`,
+      `sed -n '1,5{p}' f`, // blocks are outside the grammar
+      `sed -n '\\%x%p' f`, // custom regex delimiter
+      `sed -i -n '1p' f`,
+      `sed -n -f script.sed f`,
+      `sed -n --debug '1p' f`,
+      `sed -n`,
+      `sed -n -e`,
     ])('rejects %s', cmd => {
       expect(isProvablyReadOnly(cmd)).toBe(false);
     });
@@ -176,6 +241,86 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
   });
 });
 
+describe('isProvablyReadOnly — gh reads', () => {
+  it.each([
+    'gh issue view 213',
+    'gh issue view 213 --comments',
+    'gh pr view 420 --json title,body',
+    'gh pr diff 420 | head -300',
+    'gh pr checks 420',
+    'gh -R octocat/hello-world issue list --state open',
+    'gh search issues "flicker" --repo octocat/hello-world',
+    'gh api repos/octocat/hello-world/pulls/1/comments',
+    'gh api -X GET repos/octocat/hello-world/commits --paginate',
+    'gh api -H "Accept: application/vnd.github.diff" repos/octocat/hello-world/pulls/1',
+  ])('admits: %s', cmd => {
+    expect(isProvablyReadOnly(cmd)).toBe(true);
+  });
+
+  it.each([
+    ['comments on GitHub', 'gh pr comment 420 --body hi'],
+    ['edits GitHub', 'gh issue edit 213 --add-label bug'],
+    ['writes the working tree', 'gh pr checkout 420'],
+    ['writes a clone', 'gh repo clone octocat/hello-world'],
+    ['writes artifacts', 'gh run download 1'],
+    ['never exits', 'gh run watch 1'],
+    ['never exits (flag)', 'gh pr checks 420 --watch'],
+    ['opens a browser', 'gh pr view 420 --web'],
+    ['opens a browser (short)', 'gh issue view 213 -w'],
+    ['bare noun', 'gh pr'],
+    ['unknown noun (an extension)', 'gh dash'],
+    ['api field = POST', 'gh api repos/octocat/hello-world/issues -f title=x'],
+    ['api explicit method', 'gh api -X DELETE repos/octocat/hello-world'],
+    ['api attached method', 'gh api --method=PATCH repos/octocat/hello-world'],
+    ['api body from stdin', 'gh api repos/octocat/hello-world/issues --input body.json'],
+    ['api graphql', "gh api graphql -F query='{ viewer { login } }'"],
+    ['api graphql, no field', 'gh api graphql'],
+    ['api method override', 'gh api -H "X-HTTP-Method-Override: DELETE" repos/o/r'],
+    ['env prefix', 'GH_HOST=example.com gh issue view 1'],
+    ['redirect', 'gh pr diff 420 > pr.diff'],
+  ])('refuses (%s): %s', (_why, cmd) => {
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
+  // Plan mode's set must stay inside what agent mode already runs unprompted; a verb admitted here
+  // but flagged there would make plan mode the looser of the two.
+  it('admits nothing the danger scan flags', async () => {
+    const { detectDangerousPatterns } = await import('./_danger.js');
+    for (const cmd of [
+      'gh pr view 1',
+      'gh pr list',
+      'gh pr diff 1',
+      'gh pr checks 1',
+      'gh pr status',
+      'gh issue view 1',
+      'gh issue list',
+      'gh issue status',
+      'gh repo view',
+      'gh repo list',
+      'gh run view 1',
+      'gh run list',
+      'gh workflow view ci',
+      'gh workflow list',
+      'gh release view v1',
+      'gh release list',
+      'gh label list',
+      'gh search issues x',
+      'gh search prs x',
+      'gh search repos x',
+      'gh search code x',
+      'gh search commits x',
+      'gh api repos/o/r',
+    ]) {
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+      expect(detectDangerousPatterns(cmd)).toEqual([]);
+    }
+  });
+
+  it('is not an inspection escape for the ladder', () => {
+    expect(isInspectionEscape('gh issue view 213')).toBe(false);
+  });
+});
+
 describe('isInspectionEscape — the withdrawal ladder refuses the call', () => {
   // Everything plan mode admits is inspection by definition: the ladder is a strict superset, and a
   // regression that narrowed it would show up here first.
@@ -188,18 +333,18 @@ describe('isInspectionEscape — the withdrawal ladder refuses the call', () => 
     'cd src && cat app.ts',
     'grep -i foo file.ts',
     'sort -u file.ts',
+    "sed -n '1,50p' src/app.ts", // plan mode admits it via the sed grammar; still a ladder escape
+    "sed -n '100,200p' file.ts",
   ])('refuses everything plan mode admits: %s', cmd => {
     expect(isProvablyReadOnly(cmd)).toBe(true);
     expect(isInspectionEscape(cmd)).toBe(true);
   });
 
-  // The shapes that separate the two questions. These are line-range reads — the model reading
-  // instead of working — so the ladder MUST catch them, while plan mode must not admit them (their
-  // program argument can write, which no regex can rule out). Before the split, one predicate served
-  // both and these silently escaped the ladder.
+  // The shapes that separate the two questions. These are inspection — the model reading instead
+  // of working — so the ladder MUST catch them, while plan mode must not admit them (their program
+  // argument can write, which no regex can rule out). Before the split, one predicate served both
+  // and these silently escaped the ladder. sed's range prints left this list with its grammar.
   it.each([
-    "sed -n '1,50p' src/app.ts",
-    "sed -n '100,200p' file.ts",
     "awk '{print $1}' file.ts",
     "awk 'NR>10 && NR<40' file.ts",
     'tree src',

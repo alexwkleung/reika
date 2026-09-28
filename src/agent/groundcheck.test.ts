@@ -156,6 +156,15 @@ describe('verifyPlanReferences', () => {
     expect(missing.missingPaths).toEqual(['src/gone.ts']);
   });
 
+  // Observed: a plan naming `tools/_spill.ts` and `search/_chrome.ts` had both flagged as missing.
+  it('resolves a path written from a shorter root, on a segment boundary only', async () => {
+    const missing = await verifyPlanReferences(dir, undefined, {
+      symbols: [],
+      paths: ['service.ts', 'rc/service.ts', 'lib/service.ts'],
+    });
+    expect(missing.missingPaths).toEqual(['rc/service.ts', 'lib/service.ts']);
+  });
+
   it('uses word boundaries — a substring of a real symbol still reads as missing', async () => {
     // `realTarg` is a substring of realTarget but not its own token, so it must be flagged.
     const missing = await verifyPlanReferences(dir, undefined, {

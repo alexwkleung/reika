@@ -4,10 +4,12 @@ import { parsePlanSteps } from '../agent/plantrack.js';
 // Defined in types.ts (messages carry it) and re-exported here, where the mode machinery lives.
 export type { Mode };
 
-// Shift+Tab cycling order: the model-driven modes first (agent → plan → minimal → vibe), then the
-// isolated ones (chat → shell), wrapping back to agent. Minimal sits right after plan (#400): the
-// three single-turn modes are adjacent, and vibe — the plan→implement chain — closes the group.
-export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'minimal', 'vibe', 'chat', 'shell'];
+// Shift+Tab cycling order: the model-driven modes first (agent → plan → minimal → vibe → grind),
+// then the isolated ones (chat → shell), wrapping back to agent. Minimal sits right after plan
+// (#400): the three single-turn modes are adjacent, and vibe — the plan→implement chain — follows.
+// Grind (#556) closes the group: it is the slowest mode, so a stray Shift+Tab from agent should not
+// land on it first.
+export const MODE_CYCLE: Mode[] = ['agent', 'plan', 'minimal', 'vibe', 'grind', 'chat', 'shell'];
 
 export function nextMode(current: Mode): Mode {
   return MODE_CYCLE[(MODE_CYCLE.indexOf(current) + 1) % MODE_CYCLE.length];
@@ -29,10 +31,14 @@ export function turnMode(current: Mode, active: Mode): Mode {
 //
 // `vibe` maps to plan here because its first internal phase is a plan turn; its implement phase
 // submits with an explicit 'agent' override, the same way /implement does.
-export function turnTools<T>(mode: Mode, lists: { agent: T; plan: T; chat: T; minimal: T }): T {
+export function turnTools<T>(
+  mode: Mode,
+  lists: { agent: T; plan: T; chat: T; minimal: T; grind: T },
+): T {
   if (mode === 'chat') return lists.chat;
   if (mode === 'plan' || mode === 'vibe') return lists.plan;
   if (mode === 'minimal') return lists.minimal;
+  if (mode === 'grind') return lists.grind;
   return lists.agent;
 }
 
@@ -49,6 +55,12 @@ export function turnPromptMode(mode: Mode): 'agent' | 'plan' | 'chat' {
 // Whether a mode's turn uses the minimal (no upfront context, shell-only) system prompt.
 export function isMinimalPrompt(mode: Mode): boolean {
   return mode === 'minimal';
+}
+
+// Whether a mode's turn uses the grind (#556) system prompt. Same shape as minimal: an 'agent' turn
+// with a different prompt and tool list.
+export function isGrindPrompt(mode: Mode): boolean {
+  return mode === 'grind';
 }
 
 // Whether this turn may refine the plan above (#46). Vibe never refines: vibe's plan phase is a NEW
@@ -80,6 +92,10 @@ export const COMMANDS: CommandSpec[] = [
   {
     name: 'minimal',
     desc: 'enter minimal mode (shell only; no repo map, project summary, or AGENTS.md loaded)',
+  },
+  {
+    name: 'grind',
+    desc: 'enter grind mode (works through a verify-everything procedure; bash, read, edit)',
   },
   { name: 'agent', desc: 'return to agent mode' },
   { name: 'implement', desc: 'switch to agent mode and execute the plan above' },

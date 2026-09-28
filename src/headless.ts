@@ -112,6 +112,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   const { config, bundle } = session;
   if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
   if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
+  if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
   const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
   const input = await buildHeadlessInput(prompt, config, bundle, mode);
   for (const n of input.notices) io.stderr(`reika: ${n}\n`);

@@ -5,17 +5,27 @@ import {
   type ModelLimitsProbe,
 } from './provider/modellimits.js';
 import { bootstrap } from './context/bootstrap.js';
-import { chatTools, defaultTools, minimalTools, planTools } from './tools/index.js';
+import {
+  chatTools,
+  chooseSearchBackend,
+  defaultTools,
+  minimalTools,
+  grindTools,
+  planTools,
+  searchPrecedenceNotice,
+} from './tools/index.js';
 import { isOffline } from './tools/_net.js';
 import { PayloadStore } from './store/payloads.js';
 import { runTurn, type ShrinkCounts } from './agent/loop.js';
 import { PrefixTrace } from './agent/prefixtrace.js';
 import type { NativeImage } from './agent/attachments.js';
+import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
 import { kFormat } from './ui/format.js';
 import {
   buildImplementPrompt,
   isMinimalPrompt,
+  isGrindPrompt,
   planWritten,
   turnPromptMode,
   turnRefines,
@@ -71,7 +81,13 @@ export type SessionOptions = {
   events?: SessionEvents;
 };
 
-export type ToolLists = { agent: Tool[]; plan: Tool[]; chat: Tool[]; minimal: Tool[] };
+export type ToolLists = {
+  agent: Tool[];
+  plan: Tool[];
+  chat: Tool[];
+  minimal: Tool[];
+  grind: Tool[];
+};
 
 export type SubmitOptions = {
   mode: Mode;
@@ -121,6 +137,8 @@ export type Session = {
   readonly config: Config;
   readonly profile: string;
   readonly offline: boolean;
+  // Which search provider won when both are configured; undefined otherwise, or when offline.
+  readonly searchNotice: string | undefined;
   // What the startup probe learned, worded for the user; undefined when it found nothing.
   readonly limitsNotice: string | undefined;
   readonly lists: ToolLists;
@@ -191,6 +209,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     plan: filter(planTools()),
     chat: filter(chatTools(cfg, { offline })),
     minimal: filter(minimalTools()),
+    grind: filter(grindTools()),
   };
 
   const sessionEvents = opts.events ?? {};
@@ -206,6 +225,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   let calibration: number | undefined;
   let prefillRate: number | undefined;
   let decodeRate: number | undefined;
+  // Learned from what this model generates (#551), so it goes wherever the decode rate goes.
+  let genReserve = new GenReserve();
 
   const listeners = new Set<() => void>();
   let snapshot: SessionSnapshot = { config: cfg, profile, bundle };
@@ -264,6 +285,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         isUnattended: submit.isUnattended,
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
+        grindPrompt: isGrindPrompt(active),
         // Plan refinement (#46) is for plan-mode follow-ups only — a vibe-chain turn (recorded as
         // vibe) never refines, since its plan phase is a new task even when a plan sits right above.
         allowRefine: turnRefines(recorded),
@@ -307,6 +329,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
           events.onDecodeRate?.(r);
         },
         prefixTrace,
+        genReserve,
       });
     } catch (e) {
       if (!submit.onTurnError) throw e;
@@ -354,6 +377,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     // The tok/s chip describes the model that produced it (#204) — left standing, the previous
     // model's rate reads as the new one's until a round here measures one.
     decodeRate = undefined;
+    genReserve = new GenReserve();
     changed();
     if (!needsLimitsProbe(next)) return Promise.resolve(undefined);
     return probeModelLimits(next).then(probe => {
@@ -383,6 +407,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     // the old one would misprice every round until it re-learns.
     prefillRate = undefined;
     decodeRate = undefined;
+    genReserve = new GenReserve();
     if (profile !== 'default') {
       profile = 'default';
       changed();
@@ -393,13 +418,16 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     get bundle() {
       return bundle;
     },
+    // With the learned reserve applied, so the KV warm and the gauge budget with the number the
+    // next round will (#551).
     get config() {
-      return resolveProfile(cfg, profile);
+      return withGenReserve(resolveProfile(cfg, profile), genReserve);
     },
     get profile() {
       return profile;
     },
     offline,
+    searchNotice: offline ? undefined : searchPrecedenceNotice(chooseSearchBackend(cfg)),
     limitsNotice: probed && probedLimitsNotice(probed),
     lists,
     get history() {

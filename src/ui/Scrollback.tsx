@@ -4,7 +4,7 @@ import { Box, Static, Text } from 'ink';
 import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
-import type { Message } from '../types.js';
+import type { Message, PlanChecks } from '../types.js';
 import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
@@ -82,7 +82,10 @@ export function Scrollback({
     const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
-  const pool = region - (pendingTool ? 1 : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const { log: scrollback, held } = useScrollbackLog(messages);
+  const pendingGap = pendingTool ? pendingToolGap(pendingTool, scrollback.at(-1)) : 0;
+  const pool =
+    region - (pendingTool ? 1 + pendingGap : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
   const shares = allocateLiveRows(
     blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
     pool,
@@ -94,10 +97,12 @@ export function Scrollback({
           change — nothing shifts when the tool returns. A `bash` tail streams under it at
           COMMAND_MARGIN, which is where that output commits too, so the block stays put as well. */}
       {pendingTool ? (
-        <Text color={theme.secondary}>
-          <Text color={theme.tool}>{TOOL_MARKER}</Text>
-          {`${toolVerb(pendingTool)}…`}
-        </Text>
+        <Box marginTop={pendingGap}>
+          <Text color={theme.secondary}>
+            <Text color={theme.tool}>{TOOL_MARKER}</Text>
+            {`${toolVerb(pendingTool)}…`}
+          </Text>
+        </Box>
       ) : null}
       {blocks.map((b, i) =>
         b.kind === 'reasoning' ? (
@@ -127,7 +132,6 @@ export function Scrollback({
     </>
   );
 
-  const { log: scrollback, held } = useScrollbackLog(messages);
   return (
     <>
       <Static items={scrollback}>
@@ -333,11 +337,18 @@ function StreamingTail({
 // it — and wears no prose marker, which would make it read as the model's reply to the user.
 const NOTE_BAR = '▎ ';
 const NOTE_LABEL = 'Compaction note';
+const PLAN_CHECK_LABEL = 'Plan check';
 
-function NoteBarRow({ children }: { children?: ReactElement | string }) {
+function NoteBarRow({
+  children,
+  color = theme.info,
+}: {
+  children?: ReactElement | string;
+  color?: string;
+}) {
   return (
     <Box>
-      <Text color={theme.info}>{NOTE_BAR}</Text>
+      <Text color={color}>{NOTE_BAR}</Text>
       {typeof children === 'string' ? <Text>{children}</Text> : (children ?? null)}
     </Box>
   );
@@ -388,6 +399,61 @@ function CompactionNoteBlock({
         tail={{ text: noteBodyRows(note, contentWidth(indent)).join('\n'), marker: false }}
         joined={!!reasoning}
       />
+    </Box>
+  );
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+// The plan-commit grounding checks, drawn under the plan as the compaction note's barred block in
+// the caution color. The model reads the same findings as the note text cut off the prose above.
+function PlanChecksBlock({ checks, width }: { checks: PlanChecks; width: number }) {
+  const inner = width - NOTE_BAR.length;
+  const sections: { head: string; items: string; hint: string }[] = [];
+  if (checks.missing.length > 0) {
+    sections.push({
+      head: `${plural(checks.missing.length, 'reference')} not found in the codebase:`,
+      items: checks.missing.map(s => `\`${s}\``).join(', '),
+      hint: 'May be new code, or renamed or misremembered. The agent is told to confirm them against the real files before editing.',
+    });
+  }
+  if (checks.deadUrls.length > 0) {
+    sections.push({
+      head: `${plural(checks.deadUrls.length, 'link')} did not resolve:`,
+      items: checks.deadUrls.map(d => `\`${d.url}\` (${d.error})`).join(', '),
+      hint: 'Likely wrong or invented. The agent is told not to rely on them.',
+    });
+  }
+  const rows = (text: string) => displayRows(renderMarkdown(text, inner), inner);
+  return (
+    <Box flexDirection="column" marginTop={1} marginLeft={CALL_MARKER_WIDTH}>
+      <NoteBarRow color={theme.warning}>
+        <Text color={theme.warning} bold>
+          {PLAN_CHECK_LABEL}
+        </Text>
+      </NoteBarRow>
+      {sections.map((sec, si) => (
+        <Box key={si} flexDirection="column">
+          <NoteBarRow color={theme.warning} />
+          {rows(sec.head).map((row, i) => (
+            <NoteBarRow key={`h${i}`} color={theme.warning}>
+              <Text color={theme.secondary}>{row}</Text>
+            </NoteBarRow>
+          ))}
+          {rows(sec.items).map((row, i) => (
+            <NoteBarRow key={`i${i}`} color={theme.warning}>
+              {row}
+            </NoteBarRow>
+          ))}
+          {rows(sec.hint).map((row, i) => (
+            <NoteBarRow key={`t${i}`} color={theme.warning}>
+              <Text color={theme.muted}>{row}</Text>
+            </NoteBarRow>
+          ))}
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -496,6 +562,18 @@ function hasBlockUnderSummary(msg: Message): boolean {
   return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
 }
 
+// The in-flight row takes the committed row's spacing, or the gap MessageView gives the result
+// appears only when it lands. The result doesn't exist yet, so whether it will carry a block is
+// read off the tool: a `bash` always commits a command chip, an `edit`/`write` a diff (unless it
+// fails, a one-row shift at the swap).
+const TOOLS_WITH_BLOCK = new Set(['bash', 'edit', 'write']);
+
+function pendingToolGap(tool: string, prev: LogItem | undefined): number {
+  if (!prev || 'workedMs' in prev) return 0;
+  if (prev.role === 'system' || ('nested' in prev && prev.nested)) return 1;
+  return prev.role === 'tool' && (hasBlockUnderSummary(prev) || TOOLS_WITH_BLOCK.has(tool)) ? 1 : 0;
+}
+
 function renderMessage(
   msg: Message,
   indent = 0,
@@ -542,16 +620,23 @@ function renderMessage(
     // call; rendering that as a real line would add a blank row (with margins on
     // both sides) between the Thinking block and the tool calls, so treat it as
     // empty.
-    const hasContent = !!msg.content?.trim();
+    const prose = msg.planChecks ? msg.content.slice(0, msg.planChecks.at) : msg.content;
+    const hasContent = !!prose?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
         {msg.reasoning ? <ReasoningBlock lines={reasoningLines(msg.reasoning, indent)} /> : null}
         {hasContent ? (
           <Box marginTop={msg.reasoning ? 1 : 0}>
             <Text>
-              {markProse(renderMarkdown(msg.content!, contentWidth(indent) - CALL_MARKER_MEASURED))}
+              {markProse(renderMarkdown(prose, contentWidth(indent) - CALL_MARKER_MEASURED))}
             </Text>
           </Box>
+        ) : null}
+        {msg.planChecks ? (
+          <PlanChecksBlock
+            checks={msg.planChecks}
+            width={contentWidth(indent) - CALL_MARKER_MEASURED}
+          />
         ) : null}
         {msg.toolCalls && msg.toolCalls.length > 0 ? (
           // Gap above the tool calls only when reasoning/content sits above them

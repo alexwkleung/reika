@@ -133,7 +133,10 @@ function makeConfig(): Config {
   };
 }
 
-async function run(cwd: string): Promise<{ history: Message[]; messages: Message[] }> {
+async function run(
+  cwd: string,
+  promptMode: 'agent' | 'plan' = 'agent',
+): Promise<{ history: Message[]; messages: Message[] }> {
   const history: Message[] = [];
   const messages: Message[] = [];
   await runTurn({
@@ -143,7 +146,7 @@ async function run(cwd: string): Promise<{ history: Message[]; messages: Message
     config: makeConfig(),
     tools: [],
     payloads: new PayloadStore(),
-    promptMode: 'agent',
+    promptMode,
     onMessage: m => messages.push(m),
   });
   return { history, messages };
@@ -277,6 +280,62 @@ describe('truncation continuation (integration)', () => {
         m.role === 'user' && m.content.includes('repeating the same text'),
     );
     expect(recovery?.harness).toBe(true);
+  });
+
+  it('carries a plan-mode ceiling cut instead of forcing the plan write', async () => {
+    // Plan exploration already carried a cut at the token wall; the ceiling cut forced the plan
+    // write from findings instead, telling a coherent thought it was "repeating itself". Same
+    // ratio gate, same semantics, in both modes.
+    h.stream.push(healthy(600));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: 'the plan', toolCalls: undefined },
+    );
+    const { history, messages } = await run(cwd, 'plan');
+
+    expect(history.some(m => m.role === 'assistant' && m.continuationTail)).toBe(true);
+    const notices = messages.filter(
+      (m): m is Extract<Message, { role: 'system' }> => m.role === 'system',
+    );
+    expect(notices.some(m => m.content.includes('length ceiling'))).toBe(true);
+    expect(notices.some(m => m.content.includes('repeating itself'))).toBe(false);
+    expect(notices.some(m => m.content.includes('writing the plan'))).toBe(false);
+  });
+
+  it('still forces the plan write on a degenerate plan-mode ceiling cut', async () => {
+    h.stream.push(degenerate(600));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: 'the plan', toolCalls: undefined },
+    );
+    const { history, messages } = await run(cwd, 'plan');
+
+    expect(history.some(m => m.role === 'assistant' && m.continuationTail)).toBe(false);
+    expect(
+      messages.some(
+        m =>
+          m.role === 'system' &&
+          m.content === 'Reasoning was repeating itself — writing the plan from what was gathered.',
+      ),
+    ).toBe(true);
+  });
+
+  it('never carries a ceiling cut on the plan force-write round', async () => {
+    // The force-write's own ceiling (12000) is lower on purpose: a transform reasons a few hundred
+    // tokens, so a long one is spiraling even at a low ratio. Round 0 degenerates into the
+    // force-write; round 1 is healthy prose past that ceiling and must be cut, not continued.
+    h.stream.push(degenerate(600), healthy(120));
+    h.scripted.push(
+      { content: '', toolCalls: undefined },
+      { content: '', toolCalls: undefined },
+      { content: 'the plan', toolCalls: undefined },
+    );
+    const { history, messages } = await run(cwd, 'plan');
+
+    expect(history.some(m => m.role === 'assistant' && m.continuationTail)).toBe(false);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('length ceiling'))).toBe(
+      false,
+    );
   });
 
   it('carries a block that arrived in the CONTENT channel', async () => {

@@ -37,6 +37,7 @@ const ENV_KEYS = [
   'REIKA_PLAN_EXPERIMENT',
   'REIKA_AUTO_APPROVE',
   'REIKA_SKILL_AUTO',
+  'REIKA_CDP_SEARCH',
   'REIKA_VISION',
   'REIKA_KIMI_VISION',
   'REIKA_VISION_MODEL',
@@ -89,6 +90,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'http://localhost:8080/v1',
       apiKey: 'k',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -108,6 +110,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'https://moonshot.example/v1',
       apiKey: 'kimi-key',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -133,6 +136,7 @@ describe('loadConfig — profiles', () => {
       baseURL: 'http://default-base/v1',
       apiKey: 'default-key',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -240,6 +244,7 @@ describe('loadConfig — multi-model REIKA_MODEL', () => {
       baseURL: 'http://router/v1',
       apiKey: 'k',
       minGenTokens: 2048,
+      minGenAdaptive: true,
     });
   });
 
@@ -593,6 +598,27 @@ describe('minGenTokens', () => {
     const cfg = loadConfig();
     expect(resolveProfile(cfg, 'kimi').minGenTokens).toBe(6144);
   });
+
+  // #551: unset, the reserve is learned above the default; any explicit value pins it.
+  it('is adaptive only when no reserve is configured', () => {
+    process.env.REIKA_MODEL = 'm';
+    expect(loadConfig().minGenAdaptive).toBe(true);
+    process.env.REIKA_MIN_GEN_TOKENS = '6144';
+    expect(loadConfig().minGenAdaptive).toBe(false);
+    expect(loadConfig().profiles.default.minGenAdaptive).toBe(false);
+  });
+
+  it('a per-profile reserve pins that profile only', () => {
+    process.env.REIKA_MODEL = 'm';
+    process.env.REIKA_PROFILES = 'kimi,gpt4';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_KIMI_MIN_GEN_TOKENS = '8192';
+    process.env.REIKA_GPT4_MODEL = 'gpt-4o';
+    const cfg = loadConfig();
+    expect(resolveProfile(cfg, 'kimi').minGenAdaptive).toBe(false);
+    expect(resolveProfile(cfg, 'gpt4').minGenAdaptive).toBe(true);
+    expect(resolveProfile(cfg, 'default').minGenAdaptive).toBe(true);
+  });
 });
 
 describe('reasoningRounds', () => {
@@ -725,6 +751,28 @@ describe('REIKA_SKILL_AUTO (#425)', () => {
     for (const v of ['off', '0', 'false', 'aks']) {
       process.env.REIKA_SKILL_AUTO = v;
       expect(loadConfig().skillAuto, v).toBe('off');
+    }
+  });
+});
+
+describe('REIKA_CDP_SEARCH', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+  });
+
+  it('unset is auto — Chrome is used where one is found', () => {
+    expect(loadConfig().cdpSearch).toBe('auto');
+  });
+
+  it('1/true/on force it on, 0/off and any typo turn it off', () => {
+    for (const v of ['1', 'true', 'ON']) {
+      process.env.REIKA_CDP_SEARCH = v;
+      expect(loadConfig().cdpSearch, v).toBe('on');
+    }
+    // A typo must not be what starts a browser.
+    for (const v of ['0', 'off', 'false', 'yse']) {
+      process.env.REIKA_CDP_SEARCH = v;
+      expect(loadConfig().cdpSearch, v).toBe('off');
     }
   });
 });

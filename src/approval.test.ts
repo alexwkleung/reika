@@ -88,6 +88,13 @@ describe('declineSummary (#526)', () => {
 });
 
 describe('formatUnattendedDeclines (#526)', () => {
+  it('names a declined fetch by its URL, not its host (#548)', () => {
+    const out = formatUnattendedDeclines([
+      { tool: 'fetch_url', subject: 'evil.example', preview: 'https://evil.example/?d=x' },
+    ]);
+    expect(out).toContain('https://evil.example/?d=x');
+  });
+
   it('is null when nothing was declined', () => {
     expect(formatUnattendedDeclines([])).toBeNull();
   });

@@ -16,7 +16,7 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
-import { estimateRequestTokens } from '../provider/tokens.js';
+import { estimateRequestTokens, estimateTokens } from '../provider/tokens.js';
 import {
   computeMaxTokens,
   NATIVE_IMAGE_TOKEN_ALLOWANCE,
@@ -42,7 +42,8 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
-import { DecodeRate, decodeRate, formatRate } from './decoderate.js';
+import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
+import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
   selfRepeatRatio,
   repeatedSelfShingles,
@@ -59,6 +60,7 @@ import {
   buildGroundingNote,
   shouldSuppressGrounding,
 } from './groundcheck.js';
+import { collectSourcedUrls } from '../tools/_exfil.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
 import { isInspectionEscape } from '../tools/_readonly.js';
@@ -103,6 +105,7 @@ import {
   underPressure,
 } from './subagentpressure.js';
 import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
+import { planFill, planPressureFor, planPressureLine, type PlanPressure } from './planpressure.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -293,11 +296,11 @@ const REASONING_LOOP_STREAK = 2;
 const REASONING_LOOP_IMMEDIATE = 0.9;
 const REASONING_LOOP_BREAK = process.env.REIKA_REASONING_LOOP !== '0';
 // EXPERIMENT (Tier 2 logit recovery): one biased round before the rumination terminal stop, gently
-// down-weighting the loop's recurring tokens to nudge the model off the rut. Gated for A/B; strict
-// no-op when off, and self-gating on /tokenize being reachable (so non-llama.cpp backends just stop
-// honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
+// down-weighting the loop's recurring tokens to nudge the model off the rut. On by default since
+// 2026-09-26 (`REIKA_LOGIT_RECOVERY=0` is the baseline arm); strict no-op when off, and self-gating
+// on /tokenize being reachable (so non-llama.cpp backends just stop honestly). Only ever fires at the rumination dead-end, which is structurally non-edit-recovery —
 // the case where biased tokens are filler, not the work. See agent/logitrecovery.ts.
-const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY === '1';
+const LOGIT_RECOVERY = process.env.REIKA_LOGIT_RECOVERY !== '0';
 // EXPERIMENT (issue #134, measurement only): ask the engine for per-token logprobs so the drift
 // instrumentation can report the model's REAL predictive entropy instead of the empirical entropy of
 // its own output. Flag-gated because it is the one part of this that changes the request the engine
@@ -318,9 +321,10 @@ const PLAN_LOGIT_BIAS = -3;
 // actually exist in the codebase and append an advisory listing any that don't — the upstream cause
 // of the agent loops is plans referencing code that isn't there (0-match grep loops, edits whose
 // old_string is in no file). The note rides in the plan message, so it's visible to the user and
-// carried verbatim into the executing agent turn. Gated for A/B; strict no-op when off. See
+// carried verbatim into the executing agent turn. On by default since 2026-09-26
+// (`REIKA_PLAN_VERIFY=0` is the baseline arm); strict no-op when off. See
 // agent/groundcheck.ts and [[reika-reasoning-loop-break]].
-const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY === '1';
+const PLAN_VERIFY = process.env.REIKA_PLAN_VERIFY !== '0';
 // Recompute the live reasoning-spin hint at most every this many new reasoning chars — cheap, but no
 // need to re-scan a trailing window on every token. Display-only; see reasoningtrace.ts liveSpinSignal.
 const REASONING_SPIN_DEBOUNCE = 400;
@@ -331,8 +335,9 @@ const REASONING_SPIN_DEBOUNCE = 400;
 // to 0.25 as the block grows, so genuinely-long DISTINCT reasoning (low ratio) is left alone. The
 // bars sit far above every healthy block measured and far below the observed loop — the sample and
 // its margins are documented at the constants, and they are the argument for the numbers. The one place mid-stream abort is sound; without it the only backstop is the
-// max_tokens wall, ~17k+ tokens away on a near-empty context. Gated behind REIKA_VERBATIM_ABORT,
-// independent of the always-on soft hint. Bounded per turn so the abort→recover cycle can't loop.
+// max_tokens wall, ~17k+ tokens away on a near-empty context. On by default since 2026-09-26
+// (`REIKA_VERBATIM_ABORT=0` is the baseline arm), independent of the always-on soft hint. Bounded
+// per turn so the abort→recover cycle can't loop.
 // A positive integer from the environment, or the default. Rejects 0 and negatives: unlike the
 // continuation knobs, a ceiling of 0 would cut every block at the first delta, which is not an arm
 // anyone wants and would read as "the flag disabled it".
@@ -355,7 +360,7 @@ const MAX_VERBATIM_RECOVERIES = 2;
 // different builds. Default unchanged, so a run that does not set it behaves exactly as before.
 const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
-const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT === '1';
+const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT !== '0';
 // EXPERIMENT (#284): generation cut off mid-thought carries the model's own work forward instead of
 // discarding it and nudging a restart. The retry this replaces destroyed a measured 30,270-char
 // block that was cut ONE CLAUSE after solving its problem (selfRepeatRatio 0.014 — below the p90 of
@@ -384,9 +389,10 @@ const CONTINUE_NUDGE =
 // is cut fast — cheap-to-fail. Worst case is unchanged (the same honest stop fires once the budget is
 // spent); we just insert a best-effort push before it. Motivated by a manual finding: a third retry
 // with exactly this steer converged where two unsteered attempts (one logit-biased) spiraled — the
-// natural-language steer reaches the behavioral self-questioning spiral that token bias can't. Strict
-// no-op when off. See AGENTS.md "Loop breaking".
-const CONVERGE_RETRY = process.env.REIKA_CONVERGE_RETRY === '1';
+// natural-language steer reaches the behavioral self-questioning spiral that token bias can't. On by
+// default since 2026-09-26 (`REIKA_CONVERGE_RETRY=0` is the baseline arm); strict no-op when off. See
+// AGENTS.md "Loop breaking".
+const CONVERGE_RETRY = process.env.REIKA_CONVERGE_RETRY !== '0';
 const MAX_CONVERGE_RETRIES = 1; // one strong push; the user can retry fully after. Bump later if worth it.
 // Tighter reasoning ceil for a steered plan-mode retry than a normal force-write (12000): if the steer
 // is ignored and it re-spirals, cut it fast (~2k tokens) rather than burning the full force-write ceil.
@@ -402,8 +408,9 @@ const PLAN_HANDOFF_DISTILL = process.env.REIKA_PLAN_HANDOFF !== '0';
 // harness-tracked step checklist in the system suffix each round (buildPlanProgressLedger) and
 // bounce a turn that tries to finish with file-bearing steps unchecked (decidePlanGate, the plan
 // analogue of the typecheck gate). The *tracking* is always on and deterministic (it feeds the UI
-// checklist); this flag gates only the model-facing pressure, off by default for a clean A/B.
-const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN === '1';
+// checklist); this flag gates only the model-facing pressure. On by default since 2026-09-26
+// (`REIKA_PLAN_ALIGN=0` is the baseline arm).
+const PLAN_ALIGN = process.env.REIKA_PLAN_ALIGN !== '0';
 // EXPERIMENT (prefix-stable context, #69): keep consecutive requests append-only between shrink
 // events so the inference engine's prompt-prefix cache stays valid. Three per-round prefix
 // rewriters move to event-driven or tail-positioned equivalents: payload aging becomes sticky +
@@ -587,12 +594,13 @@ export function buildPlanTransformInput(
 
 // EXPERIMENT (plan mode): a deterministic exploration ledger appended to the system prompt
 // each round. It surfaces what the model has already examined (so it stops re-treading) and
-// applies escalating, round-count-driven pressure to stop exploring and write the plan — the
-// closure signal a read-only mode otherwise lacks. The model maintains none of this; it is
+// applies escalating pressure (agent/planpressure.ts — by window fill, or round count without a
+// window) to stop exploring and write the plan — the closure signal a read-only mode otherwise lacks. The model maintains none of this; it is
 // derived in code from this turn's tool calls, so it cannot drift or be hallucinated.
 function buildPlanLedger(
   history: Message[],
-  round: number,
+  pressure: PlanPressure,
+  basis: { fillPercent?: number; round: number },
   // The plan this turn is refining (#46), resolved once by the caller rather than recomputed here:
   // from round 1 on, this turn's OWN assistant messages sit after the plan, and a per-round
   // derivation would stop recognizing the refinement half-way through the turn. Defaulted for the
@@ -654,20 +662,23 @@ function buildPlanLedger(
       'Nothing examined yet — start by grepping the relevant symbol or reading the entry file.',
     );
   }
-  // Escalating convergence pressure, driven by round count rather than model judgement.
-  if (round >= 6) {
-    lines.push('STOP. Call no more tools. Write the numbered plan from what you already have.');
-  } else if (round >= 3) {
-    lines.push(
-      `You have explored across ${round} rounds and very likely have enough. Write the numbered ` +
-        'plan now unless one specific unknown truly blocks you.',
-    );
-  } else if (files.size > 0 || searches.size > 0 || commands.size > 0) {
-    lines.push(
-      'If you can already describe the steps, STOP exploring and write the numbered plan.',
-    );
-  }
+  const pressureLine = planPressureLine(pressure, basis);
+  if (pressureLine) lines.push(pressureLine);
   return lines.join('\n');
+}
+
+// Whether this turn's history holds any exploration call — the same fields the ledger lists.
+function planExamined(history: Message[]): boolean {
+  return history.some(
+    m =>
+      m.role === 'assistant' &&
+      (m.toolCalls ?? []).some(
+        tc =>
+          typeof tc.args.path === 'string' ||
+          typeof tc.args.pattern === 'string' ||
+          typeof tc.args.command === 'string',
+      ),
+  );
 }
 
 // Steady-state (prefix-stable OFF) system for round `round` — the base prompt plus the
@@ -683,6 +694,9 @@ export function buildSteadySystem(opts: {
   history: Message[];
   round: number;
   planSteps: PlanStep[] | null;
+  // Plan mode's convergence tier. Omitted means the windowless round-count schedule.
+  planPressure?: PlanPressure;
+  planFillPercent?: number;
   // The plan this plan-mode turn is refining (#46). Absent → buildPlanLedger derives it from
   // `history`, which is what the warm prefix wants; runTurn passes the value it resolved from the
   // pre-turn history, since deriving mid-turn would see the turn's own messages.
@@ -693,9 +707,19 @@ export function buildSteadySystem(opts: {
   const droppedLedger = droppedPayloadLedgerFor(opts.history, false);
   const dropped = droppedLedger ? '\n\n' + droppedLedger : '';
   if (opts.promptMode === 'plan') {
-    return (
-      opts.baseSystem + dropped + '\n\n' + buildPlanLedger(opts.history, opts.round, opts.refine)
+    const pressure =
+      opts.planPressure ??
+      planPressureFor({ round: opts.round, examined: planExamined(opts.history) });
+    const ledger = buildPlanLedger(
+      opts.history,
+      pressure,
+      {
+        round: opts.round,
+        fillPercent: opts.planFillPercent,
+      },
+      opts.refine,
     );
+    return opts.baseSystem + dropped + '\n\n' + ledger;
   }
   const planLedger =
     PLAN_ALIGN && opts.planSteps && opts.planSteps.some(s => !s.done)
@@ -757,6 +781,8 @@ export function buildRoundZeroPrefix(opts: {
   // an agent turn everywhere below the prompt — so the warm has to carry it too or it warms the
   // full-context prefix for a turn that will send the bare one.
   minimalPrompt?: boolean;
+  // Grind mode (#556): the same reason as minimal — a different prompt on an agent turn.
+  grindPrompt?: boolean;
   // Same gate as runTurn's `allowRefine` (#46): false for vibe's plan phase. The warm prefix must
   // match round 0 to the line, and the refine line rides exactly this composition (flag-off regime)
   // — one side gating and the other deriving would be a guaranteed cache miss.
@@ -775,6 +801,7 @@ export function buildRoundZeroPrefix(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
+    grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.sandbox, opts.unattended),
   });
   if (prefixStableActive(opts.contextWindow)) return baseSystem;
@@ -785,6 +812,12 @@ export function buildRoundZeroPrefix(opts: {
     history: opts.history,
     round: 0,
     planSteps,
+    // Must match runTurn's round 0, which has sent no request yet to measure fill from.
+    planPressure: planPressureFor({
+      round: 0,
+      examined: planExamined(opts.history),
+      contextWindow: opts.contextWindow,
+    }),
     // null = explicitly no refinement (vibe's plan phase); undefined = derive, like runTurn does.
     refine: opts.allowRefine === false ? null : undefined,
   });
@@ -1224,6 +1257,9 @@ export async function runTurn(opts: {
   // if the trace survives it; without one supplied, round 0 reads as `first-request` and the
   // boundary goes unmeasured. Not for subagents — their turns interleave with the parent's.
   prefixTrace?: PrefixTrace;
+  // Session-long learned generation reserve (#551), for the same reason as the rates above: a
+  // turn's round 0 needs what earlier turns observed. A subagent on the same engine shares it.
+  genReserve?: GenReserve;
   // `tool` names the call the chunk came from: the UI indents only a `bash` tail, since that is the
   // one that commits under a command chip (#461) — `search`'s bot-check line does not.
   onToolProgress?: (chunk: string, tool: string) => void;
@@ -1250,6 +1286,9 @@ export async function runTurn(opts: {
   // Minimal mode (#391): shell-only tools and a prompt with no project context. NOT a PromptMode —
   // a minimal turn runs as an agent turn everywhere else in this loop, which is the whole design.
   minimalPrompt?: boolean;
+  // Grind mode (#556): an agent turn with the grind procedure prompt and grindTools(). Same shape
+  // as minimalPrompt, for the same reason.
+  grindPrompt?: boolean;
   // Plan refinement (#46) is for plan-mode FOLLOW-UPS: the turn revises the plan the previous turn
   // wrote. False for vibe's plan phase — vibe chains its own implementation turn off the same
   // prompt, so the next vibe prompt is a NEW task whose plan merely happens to sit right after the
@@ -1290,6 +1329,7 @@ export async function runTurn(opts: {
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
+    grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.config.sandbox, opts.config.unattended),
   });
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
@@ -1406,6 +1446,8 @@ export async function runTurn(opts: {
   // Consecutive plan-mode rounds that surfaced no new information (seenReadOnly didn't grow). Drives
   // the adaptive force-write: a converged or looping model stalls here; a productive one resets it.
   let planStaleRounds = 0;
+  // Plan-mode convergence pressure (agent/planpressure.ts): the turn's peak fill (see planFill).
+  let planFillPeak: number | undefined;
   // Consecutive rounds an agent-mode read loop has stayed active (ledger showing). Once it crosses
   // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
   // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
@@ -1514,6 +1556,11 @@ export async function runTurn(opts: {
   // as prefillRate, but this one is displayed rather than logged, and decode-only for that reason.
   // See agent/decoderate.ts.
   const decodeThroughput = new DecodeRate(opts.priorDecodeRate);
+  // The reserve every budget in this turn reads (#551): learned from finished rounds unless
+  // REIKA_MIN_GEN_TOKENS pins it, and re-read at each use so a long turn adapts within itself —
+  // a long single turn is exactly where folds happen. See agent/genreserve.ts.
+  const genReserve = opts.genReserve ?? new GenReserve();
+  const minGen = (): number => resolveGenReserve(opts.config, genReserve).tokens;
   // Entropy/KL drift instrumentation (REIKA_DEBUG-only, issue #134): per-round uncertainty and how
   // far each round's output distribution has moved from the previous round and from the turn's
   // first. Turn-scoped for the same reason as prefixTrace — the baseline must be this request's own
@@ -1534,7 +1581,7 @@ export async function runTurn(opts: {
       contextWindow: window,
       calibration,
       reasoningRounds: opts.config.reasoningRounds,
-      minGenTokens: opts.config.minGenTokens,
+      minGenTokens: minGen(),
       prefixStable,
       latches: latchesFor(opts.config),
       trailingNote: roundSuffix,
@@ -1570,12 +1617,7 @@ export async function runTurn(opts: {
   // plan-final marker (every ordinary agent turn) and idempotent on re-runs. Runs before the
   // in-loop shouldCompact so that compaction sees the already-shrunk history.
   if (PLAN_HANDOFF_DISTILL && opts.promptMode === 'agent') {
-    const { folded, reason } = distillPlanHandoff(
-      opts.history,
-      window,
-      calibration,
-      opts.config.minGenTokens,
-    );
+    const { folded, reason } = distillPlanHandoff(opts.history, window, calibration, minGen());
     // Log every agent turn (debug-gated), including the no-op: a bare folded=0 is otherwise
     // indistinguishable from "feature never ran", which the A/B needs to tell apart.
     debugLog(`[reika:debug] plan-handoff folded=${folded} reason=${reason}\n`);
@@ -1636,6 +1678,34 @@ export async function runTurn(opts: {
         i >= PLAN_HARD_CEILING ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
+    let planPressure: PlanPressure = 'none';
+    let planPressureBasis: { fillPercent?: number; round: number } = { round: i };
+    if (opts.promptMode === 'plan') {
+      // This round's request, measured the way the compaction decision measures it — `system` still
+      // holds last round's ledger, a few dozen tokens off. The last request's usage lags a whole
+      // round of reads, which on a 24k window is 25–30% of the room (it read 76% for a 97% request).
+      // Round 0 stays unmeasured, as the warm prefix (buildRoundZeroPrefix) cannot measure it.
+      if (window && i > 0) {
+        const promptTokens = rawEstimate() * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR);
+        const fill = planFill(promptTokens, window, minGen());
+        planFillPeak = Math.max(planFillPeak ?? 0, fill);
+      }
+      planPressure = planPressureFor({
+        round: i,
+        examined: planExamined(opts.history),
+        contextWindow: window,
+        fill: planFillPeak,
+      });
+      const fill = planFillPeak;
+      planPressureBasis = {
+        round: i,
+        fillPercent: fill !== undefined ? Math.round(fill * 100) : undefined,
+      };
+      debugLog(
+        `[reika:debug] round=${i} plan-pressure=${planPressure} ` +
+          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} basis=${window ? 'fill' : 'rounds'}\n`,
+      );
+    }
     // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
     // plan force-write (no tools offered, in-band calls dropped) without the transform — the model
     // reports from its own history, aged payloads and all, because partial and grounded is the
@@ -1718,7 +1788,7 @@ export async function runTurn(opts: {
         roundSuffix = [
           droppedPayloadLedgerFor(opts.history, prefixStable),
           buildQuestionLedger(questionAnswers),
-          buildPlanLedger(opts.history, i, refinePlan),
+          buildPlanLedger(opts.history, planPressure, planPressureBasis, refinePlan),
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -1731,6 +1801,8 @@ export async function runTurn(opts: {
             history: opts.history,
             round: i,
             planSteps: null,
+            planPressure,
+            planFillPercent: planPressureBasis.fillPercent,
             refine: refinePlan,
           }) + prefixed(buildQuestionLedger(questionAnswers));
       }
@@ -1979,8 +2051,8 @@ export async function runTurn(opts: {
         `[reika:debug] round=${i} mode=${opts.promptMode ?? 'agent'} histLen=${opts.history.length} ` +
           `forceWrite=${planForceWrite} estimate=${e} calib=${calibration.toFixed(3)} ` +
           `adjusted=${Math.round(e * compactCalibration)} ` +
-          `threshold=${window ? Math.round(compactThreshold(window, opts.config.minGenTokens)) : 'n/a'} ` +
-          `willCompact=${window ? shouldCompact(e * compactCalibration, window, opts.config.minGenTokens) : false} ` +
+          `threshold=${window ? Math.round(compactThreshold(window, minGen())) : 'n/a'} ` +
+          `willCompact=${window ? shouldCompact(e * compactCalibration, window, minGen()) : false} ` +
           `sys≈${Math.round(system.length / 4)}t reasoning≈${Math.round(rsnChars / 4)}t ` +
           `summaries≈${Math.round(sumChars / 4)}t payloads≈${Math.round(payChars / 4)}t ` +
           `reasoningRounds=${opts.config.reasoningRounds}\n`,
@@ -2056,7 +2128,7 @@ export async function runTurn(opts: {
       !planForceWrite &&
       opts.promptMode !== 'plan' &&
       !opts.signal?.aborted &&
-      shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens);
+      shouldCompact(rawEstimate() * compactCalibration, window, minGen());
     if (
       ((manualRound && reportEnabled) || autoReport) &&
       !!window &&
@@ -2069,12 +2141,12 @@ export async function runTurn(opts: {
             h => rawEstimate(h) * compactCalibration,
             window,
             compactCalibration,
-            opts.config.minGenTokens,
+            minGen(),
             !latchesFor(opts.config).reasoningRoundtrip,
             // The manual trigger's only question is "would the fold remove anything" (#481).
             !manualRound,
           )
-        : wouldFold(opts.history, window, compactCalibration, opts.config.minGenTokens))
+        : wouldFold(opts.history, window, compactCalibration, minGen()))
     ) {
       const n = shrink.folds + 1;
       const directive = buildCompactionReportDirective(n);
@@ -2118,7 +2190,7 @@ export async function runTurn(opts: {
             // re-prefilled it again — two full prefills per fold, one of them for nothing.
             tools: callTools,
             toolChoice: 'none',
-            config: opts.config,
+            config: withGenReserve(opts.config, genReserve),
             onContentDelta: opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
             signal: opts.signal,
@@ -2248,7 +2320,7 @@ export async function runTurn(opts: {
         // what the floor exists to prevent.
         () => rawEstimate() * compactCalibration,
         window,
-        opts.config.minGenTokens,
+        minGen(),
         !latchesFor(opts.config).reasoningRoundtrip,
       );
       agedThisRound = aged.marked > 0;
@@ -2276,8 +2348,7 @@ export async function runTurn(opts: {
     const agedButAboveWatermark =
       agedThisRound &&
       !!window &&
-      rawEstimate() * compactCalibration >
-        compactThreshold(window, opts.config.minGenTokens) * AGE_LOW_FRACTION;
+      rawEstimate() * compactCalibration > compactThreshold(window, minGen()) * AGE_LOW_FRACTION;
     // Force-write sends the tiny synthetic context, not opts.history, so there is nothing to
     // compact — skip it. Otherwise collapse the oldest turns if the estimate crosses the threshold.
     // /compact folds even under the threshold: it is a user request, and `compactHistory` degrades
@@ -2287,16 +2358,10 @@ export async function runTurn(opts: {
       !planForceWrite &&
       window &&
       (manualRound ||
-        shouldCompact(rawEstimate() * compactCalibration, window, opts.config.minGenTokens) ||
+        shouldCompact(rawEstimate() * compactCalibration, window, minGen()) ||
         agedButAboveWatermark)
     ) {
-      const removed = compactHistory(
-        opts.history,
-        window,
-        compactCalibration,
-        opts.config.minGenTokens,
-        note,
-      );
+      const removed = compactHistory(opts.history, window, compactCalibration, minGen(), note);
       lastFoldRemoved = removed;
       // #247: log the recap TEXT, not just the count. A fold's recap is never persisted anywhere —
       // it is spliced into the model history per turn, while the saved transcript is written from
@@ -2431,7 +2496,7 @@ export async function runTurn(opts: {
       system,
       history: callHistory,
       tools: callTools,
-      config: opts.config,
+      config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
       signal: callAbort.signal,
@@ -2546,21 +2611,40 @@ export async function runTurn(opts: {
       );
       if (learned != null) opts.onPrefillRate?.(learned);
     }
-    // What that round decoded at (#204) — the status bar's tok/s chip. Both facts come off the
-    // response the engine just sent: `timing` splits prefill from decode, `usage` counts the tokens.
-    // The debug line quotes both the round's own sample and the value the chip actually shows, so
-    // the displayed number is checkable from the log alone — the smoothed one is a fold over the
-    // session's accepted samples, which nothing else records. `get()` rather than the observe
-    // result on purpose: a round too small to measure leaves the chip showing the last rate, and the
-    // log has to say the same thing the chip does.
-    const sample = decodeRate(response.usage, response.timing);
-    const learned = decodeThroughput.observe(response.usage, response.timing);
+    // What that round decoded at (#204, #536) — the status bar's tok/s chip. The facts come off the
+    // response the engine just sent: an engine that reports its own decode stats (llama.cpp) has
+    // them measured, everything else falls back to our `timing` split and the provider's `usage`
+    // count. The debug line quotes the round's own sample, the value the chip actually shows, and
+    // which of the two sources the sample came from — without that last field a reader cannot tell
+    // a rate the engine measured from one we estimated, which is the whole question #536 raised.
+    // `?` there pairs with `decode=?`: no sample carried this round. The smoothed value is a fold
+    // over the session's accepted samples, which nothing else records. `get()` rather than the
+    // observe result on purpose: a round too small to measure leaves the chip showing the last
+    // rate, and the log has to say the same thing the chip does.
+    const sample = decodeSample(response.usage, response.timing, response.engineTimings);
+    const learned = decodeThroughput.observe(sample);
     if (learned != null) opts.onDecodeRate?.(learned);
+    // A cut stream (verbatim abort, ctrl-c) is not a finished round, whatever it reports — except a
+    // ceiling cut the ratio gate passed, which is demand the reserve should cover. No usage arrives
+    // on a cut, so it is sized from the reasoning it produced, at the compaction floor's density.
+    let completion =
+      response.usage?.completionTokens != null ? `${response.usage.completionTokens}` : '?';
+    if (!callAbort.signal.aborted) {
+      genReserve.observe(response.usage?.completionTokens, response.finishReason);
+    } else if (verbatimAbortByLength && !planForceWrite && !opts.signal?.aborted) {
+      const cut = Math.round(
+        estimateTokens(roundReasoning) * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+      );
+      genReserve.observeCeilingCut(cut);
+      completion = `~${cut}`;
+    }
+    const reserve = resolveGenReserve(opts.config, genReserve);
     debugLog(
       `[reika:debug] round=${i} sentEstimate=${sentEstimate} ` +
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
-        `finishReason=${response.finishReason ?? '?'} ` +
-        `decode=${formatRate(sample)} smoothed=${formatRate(decodeThroughput.get())}\n`,
+        `completion=${completion} finishReason=${response.finishReason ?? '?'} ` +
+        `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
+        `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source}\n`,
     );
 
     if (opts.signal?.aborted) {
@@ -2589,9 +2673,11 @@ export async function runTurn(opts: {
       // (5.4%) short of this ceiling, so which cut landed first was near-arbitrary; two cuts that
       // close cannot carry opposite semantics. Both therefore route through the same ratio gate. A
       // RATIO-triggered abort is untouched below — that one is the genuine degenerate case, and
-      // re-feeding a spiral its own text is what makes it worse. Agent mode only for now: plan mode
-      // has its own converge/steer ladder below and is a follow-up.
-      if (CONTINUE && verbatimAbortByLength && opts.promptMode !== 'plan') {
+      // re-feeding a spiral its own text is what makes it worse. Plan exploration rounds take the
+      // same gate: they already carry a cut at the token wall, and discarding the ceiling cut forced
+      // the plan write on a thought that was still working. The force-write round does not: its
+      // tighter ceilings exist to catch a transform spiraling at a low ratio.
+      if (CONTINUE && verbatimAbortByLength && !planForceWrite) {
         // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
         // continuation, and judging/carrying only the new half would drop the first one from both
         // the tail and the trace while leaving its message outside `protect` to be shed.
@@ -2652,14 +2738,18 @@ export async function runTurn(opts: {
         !planForceWrite &&
         verbatimRecoveries < MAX_VERBATIM_RECOVERIES
       ) {
+        const spentOnLength = ladderStop === 'count';
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Reasoning was repeating itself — writing the plan from what was gathered.',
+          content: spentOnLength
+            ? 'Reasoning kept hitting the length limit — writing the plan from what was gathered.'
+            : 'Reasoning was repeating itself — writing the plan from what was gathered.',
         });
         // Capture the repeated span now — the degenerate block is discarded after this, but the plan
-        // force-write next round can bias off it (logit recovery). No-op if logit recovery is off.
-        verbatimRepeatedSpan = repeatedSelfShingles(roundReasoning);
+        // force-write next round can bias off it (logit recovery). A block the ratio gate passed has
+        // no rut, and its recurring words are the work, so there is nothing to bias off.
+        verbatimRepeatedSpan = spentOnLength ? [] : repeatedSelfShingles(roundReasoning);
         forceVerbatimPlanWrite = true;
         continue;
       }
@@ -2902,6 +2992,9 @@ export async function runTurn(opts: {
     // codebase and append an advisory for any that don't, so the executing agent (which inherits this
     // message) is warned up front rather than looping on phantom references. Runs once, at plan
     // commit. Strict no-op when the flag is off or the plan is clean. See agent/groundcheck.ts.
+    const planBodyEnd = assistantContent?.length ?? 0;
+    const planMissing: string[] = [];
+    let planDeadUrls: { url: string; error: string }[] = [];
     if (PLAN_VERIFY && opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
       const refs = extractPlanReferences(assistantContent);
       if (refs.symbols.length > 0 || refs.paths.length > 0) {
@@ -2914,7 +3007,10 @@ export async function runTurn(opts: {
           `[reika:debug] round=${i} plan-verify refs=${refs.symbols.length + refs.paths.length} ` +
             `missing=${missing.missingSymbols.length + missing.missingPaths.length} suppressed=${suppressed}\n`,
         );
-        if (note) assistantContent = (assistantContent ?? '') + note;
+        if (note) {
+          assistantContent = (assistantContent ?? '') + note;
+          planMissing.push(...missing.missingPaths, ...missing.missingSymbols);
+        }
       }
     }
 
@@ -2929,8 +3025,14 @@ export async function runTurn(opts: {
     // about the plan, not that read.
     let planUrlNotice: ToolResult['notice'];
     if (opts.promptMode === 'plan' && isFinal && assistantContent?.trim()) {
-      const url = await groundUrlsForPlan({ cwd: opts.bundle.cwd, groundedUrls }, assistantContent);
-      if (url.note) assistantContent = assistantContent + url.note;
+      const url = await groundUrlsForPlan(
+        { cwd: opts.bundle.cwd, groundedUrls, sourcedUrls: () => collectSourcedUrls(opts.history) },
+        assistantContent,
+      );
+      if (url.note) {
+        assistantContent = assistantContent + url.note;
+        planDeadUrls = url.dead ?? [];
+      }
       if (url.notice)
         debugLog(`[reika:debug] round=${i} url-grounding mode=plan ${url.notice.content}\n`);
       planUrlNotice = url.notice;
@@ -2950,6 +3052,9 @@ export async function runTurn(opts: {
       // the plan — whether the model self-terminated or was force-written — so mark on the mode,
       // not on planForceWrite (which would miss naturally-completed plans, the common case).
       ...(opts.promptMode === 'plan' && isFinal ? { planFinal: true } : {}),
+      ...(planMissing.length > 0 || planDeadUrls.length > 0
+        ? { planChecks: { at: planBodyEnd, missing: planMissing, deadUrls: planDeadUrls } }
+        : {}),
     };
     opts.history.push(assistantMsg);
     opts.onMessage(assistantMsg);
@@ -3239,11 +3344,12 @@ export async function runTurn(opts: {
             toolNames,
             resolvedDeps,
             groundedUrls,
+            sourcedUrls: () => collectSourcedUrls(opts.history),
             askedQuestions,
             requestApproval: opts.requestApproval,
             requestQuestion,
             onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
-            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput),
+            spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput, genReserve),
             bashTimeoutMs: opts.config.bashTimeoutMs,
             bashIdleMs: opts.config.bashIdleMs,
             sandbox: opts.config.sandbox,
@@ -3274,7 +3380,7 @@ export async function runTurn(opts: {
           ) {
             const files = filesInResult(call.name, payload);
             const estimateTokens = Math.round(rawEstimate() * compactCalibration);
-            const thresholdTokens = compactThreshold(window, opts.config.minGenTokens);
+            const thresholdTokens = compactThreshold(window, minGen());
             if (underPressure({ files, estimateTokens, thresholdTokens })) {
               payload = `${payload}\n\n${buildSubagentAffordance(files)}`;
               subagentAffordanceOffered = true;
@@ -3619,6 +3725,7 @@ function makeSpawnSubagent(
   parent: RunTurnOpts,
   budget: SubagentBudget,
   parentDecodeRate: DecodeRate,
+  parentGenReserve: GenReserve,
 ) {
   return async (sub: { task: string }): Promise<ToolResult> => {
     // `rounds` was advanced at dispatch for this round, so the cap reads as "more rounds than
@@ -3680,6 +3787,7 @@ function makeSpawnSubagent(
         isUnattended: parent.isUnattended,
         onUsage: parent.onUsage,
         priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
+        genReserve: sameEngine ? parentGenReserve : undefined,
         onDecodeRate: rate => {
           if (sameEngine && rate != null) parentDecodeRate.adopt(rate);
           parent.onDecodeRate?.(rate);

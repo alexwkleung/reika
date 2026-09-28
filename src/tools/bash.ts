@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
+import { remoteUrlRisk } from './_exfil.js';
 import { declineSummary } from '../approval.js';
 import {
   SANDBOX_EXEC_ERROR_PREFIX,
@@ -16,7 +17,7 @@ import {
   sandboxRefusedWrite,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
-import { READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
+import { GH_PLAN_READ_LIST, READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
 import { changesSince, snapshotTree } from './_treediff.js';
 
 // Two bounds, because "long-running" and "stuck" are different shapes (#408). A build or a test
@@ -64,6 +65,14 @@ export const bashTool: Tool = {
     // configuration this exists for. The signal was always computed one line before the prompt; this
     // is the same signal feeding both decisions, not a second classifier.
     const warnings = detectDangerousPatterns(command, ctx.cwd);
+    // A git/gh command keeps the network unprompted (`networkAllowedFor`), so a remote the model
+    // was never handed is the fetch guard's leak shape by another road (#550). Joining the warnings
+    // is the whole mechanism: it prompts under `safe`, and under `bypass` a flagged command never
+    // gets the network allow.
+    const remote = networkAllowedFor(command)
+      ? remoteUrlRisk(command, ctx.sourcedUrls?.())
+      : undefined;
+    if (remote) warnings.push(remote);
     if (ctx.requestApproval) {
       const ok = await ctx.requestApproval({
         tool: 'bash',
@@ -156,6 +165,17 @@ export const minimalBashTool: Tool = {
     'redirect), building, testing, and git — goes through it. Single string, run via /bin/sh.',
 };
 
+// Grind mode (#556). The default description steers toward grep/write/list, none of which grind
+// offers, and a steer at a missing tool is the #377 phantom pointer. Names what the shell is FOR
+// here — the verification steps the grind prompt asks for run through it.
+export const grindBashTool: Tool = {
+  ...bashTool,
+  description:
+    'Execute a shell command in the working directory. Use it for searching (grep, find), ' +
+    'building, running tests, running quick checks you write, git, and anything read and edit do ' +
+    'not cover. Single string, run via /bin/sh.',
+};
+
 const noRepoNoticed = new Set<string>();
 const NO_REPO_NOTICE =
   'Not a git repo — a shell edit here shows a diff only for files the command names directly ' +
@@ -176,9 +196,11 @@ export const readOnlyBashTool: Tool = {
   ...bashTool,
   description:
     'Execute a READ-ONLY shell command in the working directory. Only inspection commands run: ' +
-    `${READ_ONLY_COMMAND_LIST}, and pipelines of them. Anything that can write or run something ` +
-    'else is refused — redirection (>), command substitution ($(…)), sed/awk, and any command not ' +
-    'on that list. Use it for inspection the read/grep/glob/list tools cannot express.',
+    `${READ_ONLY_COMMAND_LIST}; GitHub reads: ${GH_PLAN_READ_LIST}; sed range prints ` +
+    "(sed -n '10,40p' f, sed -n '/start/,/end/p' f); and pipelines of them. Anything that can " +
+    'write or run something else is refused — redirection to a file (>), command substitution ' +
+    '($(…)), awk, any other sed script, and any command not on that list. Use it for inspection ' +
+    'the read/grep/glob/list tools cannot express.',
   async run(args, ctx) {
     const command = String(args.command ?? '').trim();
     if (!command) return { summary: 'Bash failed: empty command' };
@@ -187,6 +209,16 @@ export const readOnlyBashTool: Tool = {
         summary:
           `Bash refused (read-only mode): ${command}. It could write or run something off the ` +
           'read-only list. Use read/grep/glob/list, or rewrite it as a read-only pipeline.',
+      };
+    }
+    // Plan mode never prompts, so a `gh api` at a remote the model built is refused rather than
+    // asked about (#550) — the same leak shape agent mode stops to confirm.
+    const remote = networkAllowedFor(command)
+      ? remoteUrlRisk(command, ctx.sourcedUrls?.())
+      : undefined;
+    if (remote) {
+      return {
+        summary: `Bash refused (read-only mode): ${command}. ${remote}. Use a link you were given.`,
       };
     }
     // No approval prompt, deliberately. `off` is documented as "confirm every MUTATING action"

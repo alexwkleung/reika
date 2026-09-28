@@ -46,6 +46,9 @@ export const theme = {
   // Minimal: a desaturated slate, deliberately the quietest of the work-mode tags — the mode is
   // the harness doing LESS, and the chip should not read as louder than agent's.
   modeMinimal: '#9aa8b8',
+  // Grind (#556): dusty rose — warm like the effort the mode asks for, pinker than the coral
+  // auto-approve badge on the same line and well off the warning yellow.
+  modeGrind: '#d89aa8',
   modeChat: '#a892c4',
   modeShell: '#9fd49f', // soft green, tied to the $ prompt
   // URLs in the model's prose: bare ones and the `(href)` of a markdown link. They were

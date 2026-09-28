@@ -48,7 +48,7 @@ export class SearxngProvider implements SearchProvider {
           : rootMessage(e);
         throw new SearchUnavailableError(
           `SearXNG at ${this.baseUrl} could not be reached (${detail})`,
-          `SearXNG at ${this.baseUrl} did not answer (${detail}). Check that the instance is running and reachable, or set REIKA_CDP_SEARCH=1 to search through Chrome instead.`,
+          `SearXNG at ${this.baseUrl} did not answer (${detail}). Check that the instance is running and reachable, or set REIKA_CDP_SEARCH=1 (with Chrome installed) to search through Chrome instead.`,
         );
       }
       if (!res.ok) {
@@ -73,7 +73,7 @@ export class SearxngProvider implements SearchProvider {
       if (results.length === 0 && down) {
         throw new SearchUnavailableError(
           `every SearXNG engine was unavailable (${down})`,
-          'Every engine this SearXNG instance tried refused the request. REIKA_CDP_SEARCH=1 drives a real Chrome instead, which keeps being served where a bare HTTP client is blocked.',
+          'Every engine this SearXNG instance tried refused the request. REIKA_CDP_SEARCH=1 (with Chrome installed) drives a real Chrome instead, which keeps being served where a bare HTTP client is blocked.',
         );
       }
 

@@ -122,6 +122,15 @@ export type ChatCompletionChunk = {
     prompt_tokens_details?: { cached_tokens?: number | null } | null;
     prompt_cache_hit_tokens?: number | null;
   } | null;
+  // llama.cpp's own stats for the call, at the top level next to `usage` (not inside it) on the
+  // final chunk of a streaming response — and, under `timings_per_token`, on every chunk, where
+  // they are the running totals and the last one is the round's. Only the fields the tok/s chip
+  // reads are modeled here; the server's spelling is kept and normalized in client.ts (#536).
+  timings?: {
+    predicted_n?: number;
+    predicted_ms?: number;
+    predicted_per_second?: number;
+  } | null;
 };
 
 // Matches the openai SDK's old default (2 retries) so behavior is unchanged: a transient

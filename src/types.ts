@@ -7,6 +7,12 @@ export type ToolCall = {
   args: Record<string, unknown>;
 };
 
+export type PlanChecks = {
+  at: number;
+  missing: string[];
+  deadUrls: { url: string; error: string }[];
+};
+
 export type Message =
   // `meta` marks a UI-only echo of a slash command (e.g. `/model`, `/stats`): shown in the
   // scrollback as the user's input but never sent to the model — its system response is
@@ -55,6 +61,10 @@ export type Message =
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
       planFinal?: boolean;
+      // UI-only: what the plan-commit grounding checks flagged. The model reads them as the note
+      // text appended to `content` from `at` on; the scrollback cuts there and draws these as a
+      // block instead, so the note never renders as a `---` line of prose.
+      planChecks?: PlanChecks;
       // EXPERIMENT (REIKA_PREFIX_STABLE): reasoning dropped from requests by batch aging. Sticky
       // on the shared message object so the boundary — and the inference engine's prompt-cache
       // prefix — holds across rounds and turns. See agent/compaction.ts batchAgePayloads.
@@ -298,6 +308,10 @@ export type ToolContext = {
   // Same per-turn dedupe contract as resolvedDeps: each URL a write/edit introduces is fetched at
   // most once, so a follow-up edit to the same file doesn't re-fetch it.
   groundedUrls?: Set<string>;
+  // Every URL the model was handed this session — user messages and tool results (tools/_exfil.ts,
+  // #548). A thunk so only a fetch pays for the scan. Undefined means unknown, which the exfil
+  // check reads as unsourced.
+  sourcedUrls?: () => ReadonlySet<string>;
   requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
   // Put a question to the user and wait for their answer (tools/ask.ts). Resolves null when the
   // user dismisses it. Undefined when there is no one to ask — a subagent, a test, a non-interactive
@@ -369,6 +383,9 @@ export type Profile = {
   // backstop, the fit-to-window payload reserve, and the compaction trigger. Undefined =
   // use DEFAULT_MIN_GEN_TOKENS. See provider/budget.ts.
   minGenTokens?: number;
+  // No explicit reserve was configured for this profile, so the session learns one above
+  // minGenTokens (#551, agent/genreserve.ts). Undefined = pinned.
+  minGenAdaptive?: boolean;
   // How pasted images reach this profile's model. 'describe' (the default) reads the image into
   // text with the vision model or system OCR, so a text-only model still gets its content;
   // 'native' hands the bytes to the model itself as an image part, for a model that can see.
@@ -396,6 +413,12 @@ export type AutoApproveMode = 'off' | 'safe' | 'bypass';
 // (a human present is never a reason to inject silently), and headless applies a strong match
 // without asking, under the tighter 12-word gate.
 export type SkillAutoMode = 'off' | 'ask' | 'apply';
+// CDP web search. 'auto' (unset) uses Chrome when one is installed — on macOS only, where the
+// launch never takes focus; elsewhere it spawns a visible window, which is an opt-in cost. 'on'
+// uses it on any platform and fails loudly without a browser. 'off' leaves SearXNG or nothing.
+// Whichever way CDP is chosen it outranks SearXNG: a bare HTTP client is the shape engines
+// CAPTCHA, a browser on a persistent profile keeps being served.
+export type CdpSearchMode = 'auto' | 'on' | 'off';
 // Pasted-URL fetching (#448), the same three values with the same split. A URL that IS the
 // request (short prompt, link at the start or end or after a read verb) is fetched under 'ask' and
 // 'apply' alike; one that merely appears in the prompt — inside a pasted error, a log line — is
@@ -418,14 +441,14 @@ export type VisionRoute = 'describe' | 'native';
 // What the session is currently doing: which tools and system prompt a turn gets, or (shell)
 // whether a turn reaches the model at all. Lives here rather than in ui/commands.ts because
 // messages carry it (see Message['user'].mode); ui/commands.ts re-exports it.
-export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal';
+export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal' | 'grind';
 
 // Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
 // eligible — chat isolates history and shell bypasses the model entirely, so neither makes
 // sense as a launch default. `minimal` is eligible and is the one people are most likely to
 // LAUNCH in rather than switch to: its whole point is skipping the upfront context load, and a
 // session that starts in agent mode has already paid for it (#391).
-export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal'>;
+export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal' | 'grind'>;
 
 export type Config = {
   baseURL: string;
@@ -462,10 +485,9 @@ export type Config = {
   // back without restarting. See VisionRoute.
   vision?: VisionRoute;
   searxngUrl?: string;
-  // Drive a real Chrome over CDP for web search instead of SearXNG (REIKA_CDP_SEARCH=1, #235).
-  // Takes priority when both are configured: SearXNG reaches engines as a bare HTTP client, which
-  // is the shape they CAPTCHA — a browser with a persistent profile is the one that stays served.
-  cdpSearch?: boolean;
+  // Drive a real Chrome over CDP for web search (REIKA_CDP_SEARCH, #235). See CdpSearchMode.
+  // Optional, and undefined is 'off', so a hand-built test Config never probes for a browser.
+  cdpSearch?: CdpSearchMode;
   // Port for Chrome's remote debugging endpoint (REIKA_CDP_PORT). An instance already listening
   // here is reused rather than relaunched.
   cdpPort?: number;
@@ -478,6 +500,9 @@ export type Config = {
   // the per-turn max_tokens backstop, the fit-to-window payload reserve, and the
   // compaction trigger — one number, three call sites. See provider/budget.ts.
   minGenTokens: number;
+  // Set by loadConfig when REIKA_MIN_GEN_TOKENS is unset: minGenTokens is then the floor of a
+  // learned reserve (#551, agent/genreserve.ts). Undefined = pinned, so a hand-built Config is.
+  minGenAdaptive?: boolean;
   // How many recent tool-call rounds keep their reasoning_content in context. Older
   // reasoning is pruned. 1 = only the active roundtrip (leanest); higher keeps the
   // model's chain-of-thought so it doesn't re-derive across rounds, at a token cost.

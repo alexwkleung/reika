@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
   AutoApproveMode,
+  CdpSearchMode,
   Config,
   DefaultMode,
   PasteFetchMode,
@@ -47,10 +48,10 @@ export function loadConfig(): Config {
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
   const contextWindow = parseIntOrUndef(process.env.REIKA_CONTEXT_WINDOW);
   // Floor at 256 so a misconfigured tiny value can't starve generation entirely.
-  const minGenTokens = Math.max(
-    256,
-    parseIntOrUndef(process.env.REIKA_MIN_GEN_TOKENS) ?? DEFAULT_MIN_GEN_TOKENS,
-  );
+  const explicitMinGen = parseIntOrUndef(process.env.REIKA_MIN_GEN_TOKENS);
+  const minGenTokens = Math.max(256, explicitMinGen ?? DEFAULT_MIN_GEN_TOKENS);
+  // Unset, the reserve is learned from the session with the default as its floor (#551).
+  const minGenAdaptive = explicitMinGen == null;
   const visionBaseURL = emptyToUndefined(process.env.REIKA_VISION_BASE_URL);
   if (visionBaseURL) validateBaseURL(visionBaseURL, 'REIKA_VISION_BASE_URL');
   // The default profile's route. Profiles read it as their own fallback, so a per-profile
@@ -64,6 +65,7 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
+    minGenAdaptive,
     vision,
   };
   return {
@@ -74,6 +76,7 @@ export function loadConfig(): Config {
     maxTokens,
     contextWindow,
     minGenTokens,
+    minGenAdaptive,
     // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
     // cached round is nearly free on both local and API, so it is sized where a healthy complex
     // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
@@ -92,7 +95,7 @@ export function loadConfig(): Config {
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
     vision,
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
-    cdpSearch: process.env.REIKA_CDP_SEARCH === '1',
+    cdpSearch: parseCdpSearch(process.env.REIKA_CDP_SEARCH),
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
     profiles: loadProfiles(defaultProfile, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
@@ -168,6 +171,7 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
       maxTokens: profileMaxTokens ?? defaultProfile.maxTokens,
       contextWindow: profileContextWindow ?? defaultProfile.contextWindow,
       minGenTokens: profileMinGen ? Math.max(256, profileMinGen) : defaultProfile.minGenTokens,
+      minGenAdaptive: profileMinGen ? false : defaultProfile.minGenAdaptive,
       vision: parseVision(process.env[`REIKA_${upper}_VISION`]) ?? defaultProfile.vision,
     };
     for (const m of profileModels.slice(1)) {
@@ -229,6 +233,22 @@ function parseSkillAuto(raw: string | undefined): SkillAutoMode {
   }
 }
 
+// REIKA_CDP_SEARCH. Unset is 'auto' (see CdpSearchMode). Anything unrecognized is 'off', the
+// polarity parseSkillAuto uses: a typo should not be what starts a browser.
+function parseCdpSearch(raw: string | undefined): CdpSearchMode {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case '':
+    case 'auto':
+      return 'auto';
+    case '1':
+    case 'true':
+    case 'on':
+      return 'on';
+    default:
+      return 'off';
+  }
+}
+
 // REIKA_VISION (and per-profile REIKA_<NAME>_VISION) picks how a pasted image reaches the model:
 // 'describe' (default) reads it into text first, 'native' hands the bytes to the model itself. An
 // unrecognized value falls back to undefined — meaning "inherit", which lands on 'describe', the
@@ -263,8 +283,8 @@ function parsePasteFetch(raw: string | undefined): PasteFetchMode {
   }
 }
 
-// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe', or
-// 'minimal'.
+// REIKA_DEFAULT_MODE picks the mode a session starts in: 'agent' (default), 'plan', 'vibe',
+// 'minimal', or 'grind'.
 // An unrecognized value falls back to 'agent' — fail-open, since a startup warning would have
 // nowhere safe to go (stderr corrupts the Ink frame). REIKA_PLAN_EXPERIMENT=1 is the older,
 // narrower spelling of REIKA_DEFAULT_MODE=plan, kept as an alias; an explicit REIKA_DEFAULT_MODE
@@ -282,6 +302,8 @@ export function resolveDefaultMode(): DefaultMode {
       return 'vibe';
     case 'minimal':
       return 'minimal';
+    case 'grind':
+      return 'grind';
     default:
       return process.env.REIKA_PLAN_EXPERIMENT === '1' ? 'plan' : 'agent';
   }
@@ -358,6 +380,7 @@ export function resolveProfile(config: Config, profileName: string): Config {
     contextWindow: profile.contextWindow,
     maxOutputTokens: profile.maxOutputTokens,
     minGenTokens: profile.minGenTokens ?? config.minGenTokens,
+    minGenAdaptive: profile.minGenTokens != null ? profile.minGenAdaptive : config.minGenAdaptive,
     // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route is
     // dead weight: `...config` above would carry the *default* profile's value straight over it, so
     // a `/model <vl>` switch would keep describing while claiming to be native.

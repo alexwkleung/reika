@@ -80,7 +80,7 @@ const callNoop = { id: 'n1', name: 'noop', args: {} };
 const fullRound: ModelResponse = {
   content: 'done',
   toolCalls: undefined,
-  usage: { promptTokens: 5000, completionTokens: 600 },
+  usage: { promptTokens: 5000, completionTokens: 601 },
   timing: { ttftMs: 10_000, totalMs: 40_000 },
 };
 
@@ -181,6 +181,37 @@ describe('decode rate reporting (integration)', () => {
     expect(log).toContain('decode=20tok/s smoothed=20tok/s');
     expect(log).toContain('decode=? smoothed=20tok/s');
   });
+
+  // #536: the label on the sample is the difference between "the engine measured this" and "we
+  // estimated it", and a run where the derived number sat 1.5–2.5 tok/s above the engine's own was
+  // unreadable without it. `?` pairs with `decode=?`: no sample carried the round at all.
+  it('names the source the round sample came from', async () => {
+    h.scripted.push(fullRound);
+    await run();
+    const log = await readFile(join(dir, 'debug.log'), 'utf8');
+    expect(log).toContain('decode=20tok/s smoothed=20tok/s src=derived');
+  });
+
+  // The same round as the engine reported it: 600 tokens over the same 30 s window derive 20 tok/s,
+  // and the engine — whose quotient excludes the free first token — measured 18. Its number is the
+  // one the chip shows and the one the log labels `engine`, since a local engine is where the
+  // derived rate was reading high.
+  it('takes the engine number over our own derivation when there is one', async () => {
+    h.scripted.push({
+      ...fullRound,
+      engineTimings: { predictedN: 600, predictedMs: 30_000, perSecond: 18 },
+    });
+    expect(await run()).toEqual([18]);
+    const log = await readFile(join(dir, 'debug.log'), 'utf8');
+    expect(log).toContain('decode=18tok/s smoothed=18tok/s src=engine');
+  });
+
+  it('names no source on a round that offered no sample', async () => {
+    h.scripted.push({ ...fullRound, timing: undefined });
+    await run();
+    const log = await readFile(join(dir, 'debug.log'), 'utf8');
+    expect(log).toContain('decode=? smoothed=? src=?');
+  });
 });
 
 // The chip sits beside the token counts, and a subagent already reports its tokens through the
@@ -195,7 +226,7 @@ describe('decode rate across a subagent', () => {
   const subReport: ModelResponse = {
     content: 'report',
     toolCalls: undefined,
-    usage: { promptTokens: 3000, completionTokens: 600 },
+    usage: { promptTokens: 3000, completionTokens: 601 },
     timing: { ttftMs: 2_000, totalMs: 12_000 },
   };
 

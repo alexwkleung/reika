@@ -30,6 +30,8 @@ export type WarmContext = {
   // Minimal mode (#391). Separate from promptMode because a minimal turn sends promptMode 'agent'
   // with a very different system prompt — see loop.ts buildRoundZeroPrefix.
   minimalPrompt?: boolean;
+  // Grind mode (#556), for the same reason.
+  grindPrompt?: boolean;
   // Plan refinement gate (#46), same as loop.ts RunTurnOptions.allowRefine: false for vibe's plan
   // phase. Rides the key beside minimalPrompt for the same reason — vibe and plan BOTH send
   // promptMode 'plan', so without it the two share a warmable key and one serves the other's prefix.
@@ -61,13 +63,13 @@ export function warmKey(ctx: WarmContext): string {
         : 0;
   const fingerprint = last ? `${last.role}:${lastLen}` : 'empty';
   return [
-    // Minimal and norefine ride in the key beside promptMode, not folded into it: agent and minimal
-    // BOTH send promptMode 'agent', and plan and vibe's plan phase BOTH send 'plan', so without the
-    // tags the pairs would share a key and a mode switch would serve a warm built from the other
-    // one's prefix — a guaranteed miss, and a silent one.
+    // Minimal, grind and norefine ride in the key beside promptMode, not folded into it: agent,
+    // minimal and grind all send promptMode 'agent', and plan and vibe's plan phase BOTH send
+    // 'plan', so without the tags they would share a key and a mode switch would serve a warm built
+    // from the other one's prefix — a guaranteed miss, and a silent one.
     [
       ctx.promptMode,
-      ctx.minimalPrompt ? 'minimal' : '',
+      ctx.minimalPrompt ? 'minimal' : ctx.grindPrompt ? 'grind' : '',
       ctx.allowRefine === false ? 'norefine' : '',
     ]
       .filter(Boolean)
@@ -90,6 +92,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     bundle: ctx.bundle,
     promptMode: ctx.promptMode,
     minimalPrompt: ctx.minimalPrompt,
+    grindPrompt: ctx.grindPrompt,
     allowRefine: ctx.allowRefine,
     sandbox: ctx.config.sandbox,
     unattended: ctx.config.unattended,

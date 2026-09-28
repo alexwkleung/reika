@@ -128,9 +128,11 @@ describe('agent prompt subagent nudge (#273)', () => {
     expect(p).toContain('2. To find where something is defined');
     expect(p).toContain('3. When the request is to trace');
     expect(p).toContain('4. Before edit');
-    expect(p).toContain('8. Stopping to ask');
-    expect(p).not.toContain('9.');
-    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain('8.');
+    // 8 is the caller-check rule (#556, default on).
+    expect(p).toContain('8. After you change what a function accepts');
+    expect(p).toContain('9. Stopping to ask');
+    expect(p).not.toContain('10.');
+    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain('9.');
   });
 
   // Scoped to exploration: the value is N reads collapsing into one digest payload in the parent;
@@ -148,6 +150,39 @@ describe('agent prompt subagent nudge (#273)', () => {
     process.env.REIKA_SUBAGENT_NUDGE = '1';
     expect(planTools().map(t => t.name)).not.toContain('subagent');
     expect(buildSystemPrompt({ bundle, mode: 'plan', canAsk: true })).not.toContain('subagent');
+  });
+});
+
+describe('agent prompt caller-check rule (#556)', () => {
+  afterEach(() => {
+    delete process.env.REIKA_CALLER_CHECK;
+  });
+
+  it('is on by default, and =0 removes it', () => {
+    const on = buildSystemPrompt({ bundle, mode: 'agent', canAsk: true });
+    expect(on).toContain('find every place that calls it');
+    process.env.REIKA_CALLER_CHECK = '1';
+    expect(buildSystemPrompt({ bundle, mode: 'agent', canAsk: true })).toBe(on);
+    process.env.REIKA_CALLER_CHECK = '0';
+    expect(buildSystemPrompt({ bundle, mode: 'agent', canAsk: true })).not.toContain(
+      'find every place that calls it',
+    );
+  });
+
+  it('adds one numbered rule, ahead of the ask rule', () => {
+    const on = buildSystemPrompt({ bundle, mode: 'agent', canAsk: true });
+    expect(on).toContain('7. After you change what a function accepts, returns or throws');
+    expect(on).toContain('8. Stopping to ask');
+  });
+
+  it('touches only the agent prompt', () => {
+    for (const p of [
+      buildSystemPrompt({ bundle, mode: 'plan' }),
+      buildSystemPrompt({ bundle, minimal: true }),
+      buildSystemPrompt({ bundle, grind: true }),
+    ]) {
+      expect(p).not.toContain('find every place that calls it');
+    }
   });
 });
 

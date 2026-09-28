@@ -4,21 +4,25 @@
 
 The agent has these tools. Optional tools register only when their config is present:
 
-| Tool        | What                                                                  | Approval?               | Optional?                                          |
-| ----------- | --------------------------------------------------------------------- | ----------------------- | -------------------------------------------------- |
-| `read`      | Read lines from a file (line-ranged, default 200 lines)               | no                      | —                                                  |
-| `list`      | List files in a directory (depth-limited)                             | no                      | —                                                  |
-| `grep`      | JS regex over file contents (cap 100 matches)                         | no                      | —                                                  |
-| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading       | no                      | —                                                  |
-| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple    | yes                     | —                                                  |
-| `write`     | Create a new file; refuses to overwrite                               | yes                     | —                                                  |
-| `bash`      | Run a shell command (streamed output, danger-pattern warnings)        | yes                     | —                                                  |
-| `subagent`  | Spawn an isolated subagent for focused exploration                    | no (its own tools may)  | —                                                  |
-| `search`    | Web search (returns title + URL + snippet, up to 8)                   | no                      | requires `REIKA_SEARXNG_URL` or `REIKA_CDP_SEARCH` |
-| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)              | no                      | always registered while online                     |
-| `ask_user`  | Ask you ONE multiple-choice question mid-turn and wait for the answer | no (it _is_ the prompt) | `REIKA_ASK=0` removes it                           |
+| Tool        | What                                                                  | Approval?                    | Optional?                                                             |
+| ----------- | --------------------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------- |
+| `read`      | Read lines from a file (line-ranged, default 200 lines)               | no                           | —                                                                     |
+| `list`      | List files in a directory (depth-limited)                             | no                           | —                                                                     |
+| `grep`      | JS regex over file contents (cap 100 matches)                         | no                           | —                                                                     |
+| `glob`      | Find files by path pattern (e.g. `**/*.ts`); no content reading       | no                           | —                                                                     |
+| `edit`      | Strict find-and-replace; one-occurrence, fails on missing/multiple    | yes                          | —                                                                     |
+| `write`     | Create a new file; refuses to overwrite                               | yes                          | —                                                                     |
+| `bash`      | Run a shell command (streamed output, danger-pattern warnings)        | yes                          | —                                                                     |
+| `subagent`  | Spawn an isolated subagent for focused exploration                    | no (its own tools may)       | —                                                                     |
+| `search`    | Web search (returns title + URL + snippet, up to 8)                   | no                           | Chrome on macOS (auto), or `REIKA_CDP_SEARCH=1` / `REIKA_SEARXNG_URL` |
+| `fetch_url` | Fetch a URL, extract main content as markdown (defuddle)              | only a new URL carrying data | always registered while online                                        |
+| `ask_user`  | Ask you ONE multiple-choice question mid-turn and wait for the answer | no (it _is_ the prompt)      | `REIKA_ASK=0` removes it                                              |
 
 Offline, neither web tool registers: if no interface has a routable address at startup, `search` and `fetch_url` are left out for the session (a scrollback line says so; restart once you're back online). If the network drops mid-session, the first `fetch_url` that finds no route pauses both tools for the rest of that turn rather than letting the model retry against nothing.
+
+`fetch_url` asks before one kind of fetch: a URL that carries data (any query string, or a key- or hash-shaped path segment or host name) and that appears in nothing you or a tool gave the model. That is the shape of a model, steered by text on a page it read, sending something out in the URL. Links from your prompt, search results, fetched pages and files go through without asking, and so do plain URLs like docs pages. The prompt still appears under `REIKA_AUTO_APPROVE=safe`. Under `bypass` the fetch is refused, and in an unattended session it is declined.
+
+`bash` applies the same idea to `git` and `gh`, which keep network access inside the sandbox. A `git clone`, `fetch`, `pull`, `push`, `ls-remote` or `remote add` (or `gh api`) pointed at a host that no link from you or a tool mentioned asks first. The same goes for a known host with data added to the URL. In plan mode that command is refused instead.
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
 

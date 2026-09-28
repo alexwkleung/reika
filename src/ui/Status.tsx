@@ -46,8 +46,10 @@ export function Status({
   sheds?: number;
   folds?: number;
   cachedTokens?: number;
-  // Decode throughput of the last measurable round (#204), from agent/decoderate.ts. Absent until a
-  // round generated enough tokens to measure one, and whenever the provider reported no usage.
+  // Decode throughput of the last measurable round (#204), from agent/decoderate.ts — the engine's
+  // own number where the engine reports one (#536, llama.cpp), our derivation otherwise. Absent
+  // until a round generated enough tokens to measure one, and whenever the provider reported no
+  // usage and no stats.
   decodeRate?: number;
   pr?: number | null;
   autoApprove?: 'safe' | 'bypass';
@@ -190,6 +192,8 @@ function modeColor(mode: string): string {
       return theme.modeVibe;
     case 'minimal':
       return theme.modeMinimal;
+    case 'grind':
+      return theme.modeGrind;
     case 'chat':
       return theme.modeChat;
     case 'shell':
