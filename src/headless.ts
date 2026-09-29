@@ -8,7 +8,9 @@ import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
+import { toolLabel } from './ui/format.js';
 import { debugLog } from './debug.js';
+import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
 import type { ApprovalRequest, Config, ContextBundle, Message } from './types.js';
@@ -98,7 +100,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
         : (req: ApprovalRequest): Promise<boolean> => {
             if (autoApproves(loaded.autoApprove, req)) return Promise.resolve(true);
             io.stderr(
-              `reika: declined ${req.tool} (no prompt to ask at): ${firstLine(req.preview)}\n`,
+              `reika: declined ${toolLabel(req.tool)} (no prompt to ask at): ${firstLine(req.preview)}\n`,
             );
             return Promise.resolve(false);
           },
@@ -112,80 +114,116 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
       },
     },
   });
-  const { config, bundle } = session;
-  if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
-  if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
-  if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
-  if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
-  const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
-  const input = await buildHeadlessInput(prompt, config, bundle, mode);
-  for (const n of input.notices) io.stderr(`reika: ${n}\n`);
-
-  const controller = new AbortController();
-  const onSigint = () => controller.abort();
-  process.once('SIGINT', onSigint);
-
-  let failed: Error | null = null;
+  // MCP servers are this run's children: closed on every way out, so each gets its stdin EOF and a
+  // moment to exit before `process.exit` would kill it outright (#594).
   try {
-    await session.submit(input.modelText, {
-      mode,
-      display: prompt,
-      skill: input.skill,
-      signal: controller.signal,
-    });
-  } catch (e) {
-    failed = e as Error;
-  } finally {
-    process.off('SIGINT', onSigint);
-    stream?.finish();
-  }
-  const appended = session.transcript;
+    const { config, bundle } = session;
+    if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
+    if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
+    if (session.offline)
+      io.stderr('reika: no network — search and fetch_url are off for this run\n');
+    if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
+    for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);
 
-  if (args.save) {
-    try {
-      const { jsonlPath } = await saveTranscript(
-        join(homedir(), '.config', 'reika', 'history'),
-        appended,
-        {
-          version: TRANSCRIPT_VERSION,
-          savedAt: new Date().toISOString(),
-          model: config.model,
-          baseURL: config.baseURL,
-          cwd: bundle.cwd,
-          messageCount: appended.length,
-          mode,
-          usage: {
-            turns: appended.filter(m => m.role === 'assistant').length,
-            ...session.totals,
-            contextTokens: session.lastUsage?.promptTokens ?? null,
-            ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
-            ...(session.shrink.sheds > 0 || session.shrink.folds > 0 ? session.shrink : {}),
-          },
-        },
+    // An MCP tool typed as a slash command (#265): the same direct call the TUI makes, answered with
+    // the tool's own output instead of a model turn. There is no question for the model to answer —
+    // the user named the tool and its arguments — so this runs before any prompt is built.
+    const mcpCall = prompt.includes('\n')
+      ? undefined
+      : findMcpCommand(prompt, session.mcp.commands);
+    if (mcpCall) {
+      const parsed = parseMcpArgs(mcpCall.command, mcpCall.rest);
+      if ('error' in parsed) {
+        io.stderr(`reika: ${parsed.error}\n`);
+        return 1;
+      }
+      const { server, tool } = mcpCall.command;
+      const { result, failed } = await callMcpTool(
+        session.mcp.call,
+        `${server}:${tool}`,
+        server,
+        tool,
+        parsed.args,
       );
-      io.stderr(`reika: saved ${appended.length} messages → ${jsonlPath}\n`);
-    } catch (e) {
-      io.stderr(`reika: save failed: ${(e as Error).message}\n`);
+      io.stdout(`${result.payload ? `${result.payload}\n` : ''}`);
+      io.stderr(`reika: ${result.summary}\n`);
+      // A tool that failed is this run's error: the exit status is what a script reads, and the
+      // summary on stderr is not something it can parse.
+      return failed ? 1 : 0;
     }
-  }
 
-  if (failed) {
-    debugLog(`headless: turn failed: ${failed.message}`);
-    io.stderr(`reika: ${failed.message}\n`);
-    return controller.signal.aborted ? 130 : 1;
+    const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
+    const input = await buildHeadlessInput(prompt, config, bundle, mode);
+    for (const n of input.notices) io.stderr(`reika: ${n}\n`);
+
+    const controller = new AbortController();
+    const onSigint = () => controller.abort();
+    process.once('SIGINT', onSigint);
+
+    let failed: Error | null = null;
+    try {
+      await session.submit(input.modelText, {
+        mode,
+        display: prompt,
+        skill: input.skill,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      failed = e as Error;
+    } finally {
+      process.off('SIGINT', onSigint);
+      stream?.finish();
+    }
+    const appended = session.transcript;
+
+    if (args.save) {
+      try {
+        const { jsonlPath } = await saveTranscript(
+          join(homedir(), '.config', 'reika', 'history'),
+          appended,
+          {
+            version: TRANSCRIPT_VERSION,
+            savedAt: new Date().toISOString(),
+            model: config.model,
+            baseURL: config.baseURL,
+            cwd: bundle.cwd,
+            messageCount: appended.length,
+            mode,
+            usage: {
+              turns: appended.filter(m => m.role === 'assistant').length,
+              ...session.totals,
+              contextTokens: session.lastUsage?.promptTokens ?? null,
+              ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
+              ...(session.shrink.sheds > 0 || session.shrink.folds > 0 ? session.shrink : {}),
+            },
+          },
+        );
+        io.stderr(`reika: saved ${appended.length} messages → ${jsonlPath}\n`);
+      } catch (e) {
+        io.stderr(`reika: save failed: ${(e as Error).message}\n`);
+      }
+    }
+
+    if (failed) {
+      debugLog(`headless: turn failed: ${failed.message}`);
+      io.stderr(`reika: ${failed.message}\n`);
+      return controller.signal.aborted ? 130 : 1;
+    }
+    if (args.json && !args.stream) {
+      io.stdout(`${JSON.stringify(appended)}\n`);
+    }
+    // An interrupted turn commits an `(aborted)` assistant message so the history reads right; on
+    // a pipe that is not a reply, and the exit status already says what happened.
+    if (controller.signal.aborted) {
+      io.stderr('reika: interrupted\n');
+      return 130;
+    }
+    const reply = finalReply(appended);
+    if (!args.json && !args.stream && reply) io.stdout(`${reply}\n`);
+    return reply ? 0 : 1;
+  } finally {
+    await session.mcp.close();
   }
-  if (args.json && !args.stream) {
-    io.stdout(`${JSON.stringify(appended)}\n`);
-  }
-  // An interrupted turn commits an `(aborted)` assistant message so the history reads right; on
-  // a pipe that is not a reply, and the exit status already says what happened.
-  if (controller.signal.aborted) {
-    io.stderr('reika: interrupted\n');
-    return 130;
-  }
-  const reply = finalReply(appended);
-  if (!args.json && !args.stream && reply) io.stdout(`${reply}\n`);
-  return reply ? 0 : 1;
 }
 
 // --stream (#566). Text: the content channel goes to stdout as it arrives and each tool call's

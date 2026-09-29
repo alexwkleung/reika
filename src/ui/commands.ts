@@ -119,6 +119,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
   { name: 'skills', desc: 'list available skills (loaded from skills dirs)' },
+  {
+    name: 'mcp',
+    desc: 'list MCP servers and their tools (each tool is also a /<server>:<tool> command)',
+  },
   { name: 'stats', desc: 'show full session summary' },
   {
     name: 'save',

@@ -1,4 +1,5 @@
 import type { ApprovalRequest, AutoApproveMode, Config, ToolContext } from './types.js';
+import { toolLabel } from './ui/format.js';
 
 // Whether an approval request runs without asking. The one rule both front-ends share (#52):
 // `safe` approves anything the danger scan didn't flag, `off` approves nothing, and `bypass`
@@ -54,7 +55,9 @@ export function formatUnattendedDeclines(reqs: ApprovalRequest[]): string | null
     // A fetch's subject is its host; the URL is the preview, and the URL is what was declined.
     const what =
       r.tool === 'bash' || r.tool === 'fetch_url' ? (r.preview.split('\n')[0] ?? '') : r.subject;
-    return `  ${r.tool}: ${what}`;
+    // `toolLabel`, like the approval dialog: `r.tool` is a wire name (`mcp__srv__tool`), and this
+    // list is read by the user (#265).
+    return `  ${toolLabel(r.tool)}: ${what}`;
   });
   const n = reqs.length === 1 ? '1 action' : `${reqs.length} actions`;
   return [`Declined while unattended — ${n} left for you:`, ...lines].join('\n');

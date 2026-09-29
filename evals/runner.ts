@@ -54,6 +54,11 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 // value (not a .env one) opts an eval run back in.
 process.env.REIKA_CDP_SEARCH ??= '0';
 
+// MCP servers are machine-local for the same reason and a heavier one: a configured set would add
+// its tools to every fixture's round-0 prefix AND spawn child processes per run, so a run would
+// mean something different on the machine that measured it. Same pin, same escape hatch.
+process.env.REIKA_MCP ??= '0';
+
 // Every run's transcript and end state, outside the repo (a transcript holds whatever the model
 // read, and these accumulate). The first grind runs failed a check in a way nobody could diagnose:
 // the temp dir was gone and the messages were never written anywhere.

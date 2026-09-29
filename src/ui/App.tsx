@@ -108,6 +108,7 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
+import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
 import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
@@ -531,6 +532,22 @@ export function App() {
             { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
           ]);
         }
+        // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
+        // only line that is good news — the shape `connectNotices` emits — so everything else that
+        // reaches here (a server that did not start, a document that did not parse) is worth
+        // noticing. Keying on the failure wording instead would miss `REIKA_MCP_SERVERS: …`, which
+        // is the case where no server started at all.
+        for (const notice of s.mcpNotices) {
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'system',
+              content: notice,
+              tone: notice.startsWith('MCP: ') ? 'info' : 'warn',
+              skipAutosave: true,
+            },
+          ]);
+        }
         setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
@@ -542,6 +559,9 @@ export function App() {
   useEffect(
     () => () => {
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      // MCP servers are child processes: reika leaving is what should end them (#265). The module's
+      // own exit hook is the backstop for a crash; this is the orderly path.
+      void sessionRef.current?.mcp.close();
     },
     [],
   );
@@ -1091,7 +1111,16 @@ export function App() {
     const next = computeSuggestions(
       value,
       bundle.fileIndex,
-      bundle.skills,
+      // MCP tools complete like skills (#265): they are the same kind of thing to the user — a
+      // slash command that resolves to something other than a mode. Built-ins win on a name
+      // collision inside computeSuggestions; an MCP name carries a colon, so nothing collides.
+      [
+        ...bundle.skills,
+        ...(sessionRef.current?.mcp.commands ?? []).map(c => ({
+          name: c.name,
+          description: `MCP ${c.server}${c.description ? ` · ${c.description}` : ''}`,
+        })),
+      ],
       config ? buildModelTargets(config, activeProfileRef.current) : [],
     );
     setSuggestionState(next);
@@ -1168,6 +1197,38 @@ export function App() {
       return;
     }
     transitionMode(next, [echo, { role: 'system', content: banner }]);
+  };
+
+  // A slash-invoked MCP tool (#265): `/filesystem:read_file {"path":"src/index.ts"}`. No approval
+  // prompt — the user typed it, the same rule shell mode runs under. The result lands as a shell
+  // message, which is exactly what it is (a command and its output) and, like shell mode's, never
+  // enters the model history: this is the user reading the tool, not the model calling it.
+  const runMcpCommand = async (raw: string, command: McpCommand, args: string): Promise<void> => {
+    const session = sessionRef.current;
+    if (!session) return;
+    const parsed = parseMcpArgs(command, args);
+    if ('error' in parsed) {
+      setMessages(prev => [...prev, { role: 'system', content: parsed.error, tone: 'warn' }]);
+      return;
+    }
+    setStatus('busy');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const result = await invokeMcpTool(
+        session.mcp.call,
+        `${command.server}:${command.tool}`,
+        command.server,
+        command.tool,
+        parsed.args,
+        { signal: controller.signal },
+      );
+      const output = [result.summary, result.payload].filter(Boolean).join('\n');
+      setMessages(prev => [...prev, { role: 'shell', command: raw, output }]);
+    } finally {
+      abortRef.current = null;
+      setStatus('idle');
+    }
   };
 
   const handleCommand = async (raw: string, implementMode?: ImplementMode): Promise<void> => {
@@ -1448,6 +1509,8 @@ export function App() {
           '  /stats             show full session summary',
           '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
           '  /resume [root]     resume a saved session of this project (root: the /save files)',
+          '  /mcp               list MCP servers and their tools (REIKA_MCP_SERVERS)',
+          '  /<server>:<tool>   call an MCP tool directly (JSON args, or the bare string for a one-arg tool)',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
@@ -1615,7 +1678,17 @@ export function App() {
         }
         break;
       }
+      case 'mcp':
+        response = sessionRef.current?.mcp.list() ?? 'MCP is not available in this session.';
+        break;
       default: {
+        // An MCP tool (#265) before a skill: the two share one dispatch point, and a command name
+        // carries a colon, which no built-in or skill does — the shapes cannot collide.
+        const mcpCommand = sessionRef.current?.mcp.commands.find(c => c.name === name);
+        if (mcpCommand) {
+          await runMcpCommand(raw, mcpCommand, args);
+          return;
+        }
         const skill = bundle?.skills.find(s => s.name === name);
         if (skill) {
           // `raw` stays the display, so the bubble shows the marker while the model gets the text.

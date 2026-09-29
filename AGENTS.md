@@ -45,6 +45,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/provider/`  | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`)                                                    |
 | `src/tools/`     | One tool per file; register in `src/tools/index.ts`                                                                                            |
 | `src/context/`   | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore                                                             |
+| `src/mcp/`       | MCP client (`REIKA_MCP_SERVERS`): stdio JSON-RPC transport, tool/command bridge, per-session server manager (#265)                             |
 | `src/search/`    | Web search providers — `types.ts` (interface) + per-provider adapters                                                                          |
 | `src/store/`     | Addressable payload storage                                                                                                                    |
 | `src/ui/`        | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here                                                          |
@@ -92,6 +93,85 @@ Four decisions worth not re-litigating:
 Two details that follow from what the budget is for. A refused search is **refunded** (`budget.used--`): the cap exists to stop runaway loops hammering upstream engines, and a search that never reached an engine — a missing Chrome reaches nothing at all — is not that egress. And the error's optional `remedy` is surfaced through `ToolResult.notice` (user-facing, `warn`), never in the summary: the model cannot set an environment variable, so naming one in its context is noise it can only ignore, while the user is the one who can act. Emitted once, on the failure that sets the latch.
 
 **Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. **Harness-driven fetches count too:** URL grounding (`groundCandidates`) charges the same `fetches` counter, because a fetch the model never asked for is still egress — without it, N edits in a turn was up to 2N requests the runaway guard never saw. It differs only in how it declines: grounding takes whatever budget is left (possibly none) and stays silent, where a tool returns a refusal summary — nothing requested the grounding fetch, so there is nobody to report a refusal to, and the note would be context noise. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
+
+## MCP servers (#265)
+
+`REIKA_MCP_SERVERS` (the JSON itself, or a path to a JSON file) starts stdio MCP servers with the
+session. `src/mcp/config.ts` parses the document — the standard `mcpServers` shape, a bare map, or a
+list — and returns errors instead of throwing, because a typo in one entry must not cost a session.
+
+- `client.ts` is one connection and the transport: newline-framed JSON-RPC 2.0, **dual-era**.
+  `2026-07-28` removed the `initialize` handshake (version and capabilities ride every request's
+  `_meta`), and a handshake-only client cannot reach a server that speaks only that revision — so
+  `connect` follows the spec's stdio probe: `server/discover` first; a result or an error in the
+  spec's reserved range (`-32020`…`-32099`) is modern, anything else is legacy and gets
+  `initialize` (`2025-11-25`, accepting back to `2024-11-05`). The spec's legacy signal includes
+  silence, which a modern server behind a cold `npx` also produces, so after `PROBE_WAIT_MS`
+  `initialize` goes out _beside_ the pending probe and a modern-only server's rejection of it
+  defers to the probe's late answer. Then paginated `tools/list` and `tools/call` with a per-call
+  timeout. A modern `input_required` result carrying only `requestState` is retried (bounded); one
+  that asks for input fails, since reika declares no client capabilities. A message with a
+  `method` is always the server's — matched on `id` alone, a server `ping` numbered like a pending
+  call resolved that call with nothing. A legacy server→client request is answered (`ping`,
+  `roots/list` → no roots, anything else `-32601`) because an unanswered request is how a server
+  decides its peer is gone; an abandoned call (abort or timeout) sends `notifications/cancelled`;
+  a child that dies fails every in-flight request rather than leaving the turn hanging. A server
+  inherits only the SDKs' safe environment slice plus temp/locale (`serverEnv`), never reika's
+  API keys — third-party code from `npx` has no business with them. The handshake
+  carries its own bound (`connectTimeoutMs`, default 15s) rather than sharing the call's: it is paid
+  before the first frame, so a generous call timeout must not turn a startup hang into a stall, and
+  a server behind a cold `npx` install needs more than the default while its calls stay quick.
+  `close()` follows the stdio binding's shutdown (#594): end stdin, give the server
+  `CLOSE_GRACE_MS` to exit on EOF, then SIGTERM, then SIGKILL — EOF is the one portable graceful
+  signal, and an immediate kill cost a server its chance to flush. Headless awaits it; the TUI
+  doesn't need to, since the pending exit keeps the event loop alive. The process-exit hook stays
+  an immediate kill (no time to wait there). A stdout line past `MAX_STDOUT_LINE_CHARS` (8MB) is
+  dropped up to its newline rather than buffered, the same fail-open rule as an unparseable line.
+- `tools.ts` is the bridge: `mcp__<server>__<tool>` names (slugged, 64-char cap with a hash so
+  truncation stays unique), the server schema narrowed to the keys providers accept (`type`,
+  `properties`, `required`, plus the `$defs`/`definitions` a `$ref` points at — a reference whose
+  target was dropped is one nothing can resolve), content blocks flattened to text plus one-line
+  markers, and the `/<server>:<tool>` command with its argument parsing.
+  The model's copy of a result is held to 64K chars (`capMcpPayload`, the bash/fetch cap) with the
+  rest spilled; the slash command's is not, since it never enters history.
+  `formatMcpResult`/`invokeMcpTool` are shared so the model's call and the user's command read the
+  same. A block that is not an object — a `null` in the list, or a `content` that is not a list at
+  all — becomes a marker too: the declared type is a server's JSON, and reading it as typed is a
+  TypeError that takes the text blocks beside it down with it.
+- `manager.ts` connects every server in parallel, keeps a per-server status (a failed one becomes a
+  notice and contributes nothing), and formats `/mcp`.
+
+`createSession` awaits `connectMcpServers` alongside bootstrap and appends the tools to
+`lists.agent` **only**. Four of these are decisions, not details:
+
+- **Agent mode only.** An MCP tool is opaque to the harness, so a mode whose guarantee is structural
+  — plan cannot mutate the repo, chat has no filesystem, minimal/grind are a fixed work surface —
+  must not have one. For the same reason the tool list is fixed at session start (it is part of the
+  round-0 prefix, #69/#81): `notifications/tools/list_changed` is surfaced by `/mcp` and never acted
+  on mid-session.
+- **Through the approval gate, with no warnings.** No warnings means `safe` (the default) runs an
+  MCP call, `off` prompts, and `bypass` runs it with nobody to ask. The harness cannot classify a
+  tool it has never seen, and attaching a warning to every call would make the default mode prompt
+  on all of them.
+  The user can: `"approve": "always"` on a server entry (#593) attaches `MCP_ALWAYS_ASK_WARNING`
+  to every call from it — prompts under `safe`, refused under `bypass` (the out-of-project write
+  rule), declined unattended — because a server is unsandboxed and outside the exfil guards, so
+  the one who knows which servers send data out marks them. Tool annotations
+  (`destructiveHint`/`openWorldHint`) are deliberately NOT read: they are server-authored and
+  untrusted, so they could only add prompts, and a prompt on every open-world tool is the nag that
+  trains reflexive approving. An unknown `approve` value is a config error, never a silent default.
+- **A failed server is a notice, not a failure**, and a failed call is one round's summary, like a
+  failed `bash` command.
+- **Stdio only.** Remote HTTP/SSE servers are a different trust and auth question; adding one later
+  means a second transport behind the same `McpClient` surface, not a change to the bridge.
+
+Two details under the first decision. The eval runner pins `REIKA_MCP=0` for the reason
+`REIKA_CDP_SEARCH` is pinned — a fixture's round-0 prefix must not depend on the machine that ran
+it, and a configured set would also spawn child processes per run. And `/mcp` reads each server's
+`toolsChanged` and its liveness through to the client rather than copying them when the statuses are
+built, because both facts arrive later than the handshake — a copy only ever saw a change announced
+during `connect()`, so the "changed tool list" line could not appear for the case it exists for, and
+it would report a server that has since exited as a healthy one while every call to it failed.
 
 ## Adding a slash command
 

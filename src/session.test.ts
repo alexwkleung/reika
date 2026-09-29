@@ -482,3 +482,52 @@ describe('createSession', () => {
     });
   });
 });
+
+// A one-line MCP server, spawned for real: this is the wiring claim — that a configured server's
+// tools reach `lists.agent` (and only that list) and that a broken one is a notice, not a failure.
+const MINI_SERVER = [
+  "const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');let b='';",
+  "process.stdin.setEncoding('utf8');process.stdin.on('data',c=>{b+=c;let i;",
+  "while((i=b.indexOf('\\n'))!==-1){const l=b.slice(0,i);b=b.slice(i+1);if(!l.trim())continue;const m=JSON.parse(l);",
+  "if(m.method==='initialize')send({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'mini'}}});",
+  "else if(m.method==='tools/list')send({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'ping',description:'Ping',inputSchema:{type:'object',properties:{}}}]}});else if(m.id!==undefined)send({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});}});",
+].join('');
+
+describe('MCP servers (#265)', () => {
+  it("puts a configured server's tools in the agent list only, and reports the connection", async () => {
+    const s = await createSession({
+      cwd: '/repo',
+      config: {
+        ...CONFIG,
+        mcpServers: [{ name: 'mini', command: process.execPath, args: ['-e', MINI_SERVER] }],
+      },
+    });
+    try {
+      expect(s.lists.agent.map(t => t.name)).toContain('mcp__mini__ping');
+      // Opaque to the harness, so plan/chat/minimal/grind — whose guarantees are structural — do
+      // not get it.
+      for (const list of [s.lists.plan, s.lists.chat, s.lists.minimal, s.lists.grind]) {
+        expect(list.map(t => t.name)).not.toContain('mcp__mini__ping');
+      }
+      expect(s.mcpNotices).toEqual([
+        'MCP: mini (1 tool) — 1 tool added in agent mode. /mcp lists them.',
+      ]);
+    } finally {
+      s.mcp.close();
+    }
+  });
+
+  it('reports a config error and a server that will not start, and opens the session anyway', async () => {
+    const s = await createSession({
+      cwd: '/repo',
+      config: {
+        ...CONFIG,
+        mcpServers: [{ name: 'broken', command: 'reika-no-such-binary-xyz', args: [] }],
+        mcpErrors: ['REIKA_MCP_SERVERS: invalid JSON: unexpected token'],
+      },
+    });
+    expect(s.mcpNotices[0]).toBe('REIKA_MCP_SERVERS: invalid JSON: unexpected token');
+    expect(s.mcpNotices[1]).toContain('MCP server "broken" unavailable');
+    expect(s.lists.agent.map(t => t.name).some(n => n.startsWith('mcp__'))).toBe(false);
+  });
+});

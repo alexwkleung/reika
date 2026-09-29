@@ -12,6 +12,7 @@ import type {
   VisionRoute,
 } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
+import { parseMcpServers } from './mcp/config.js';
 
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
 // dotenv defaults to no-override, so loading cwd first then global gives the right order.
@@ -122,11 +123,27 @@ export function loadConfig(): Config {
     // "Working…" for anyone who finds it noise.
     workingWords: process.env.REIKA_WORKING_WORDS !== '0',
     skillAuto: parseSkillAuto(process.env.REIKA_SKILL_AUTO),
+    // MCP servers (#265). Off unless configured: `REIKA_MCP_SERVERS` carries the JSON (or a path to
+    // a JSON file), and `REIKA_MCP=0` is the one switch that turns a configured set off — the
+    // polarity `REIKA_ASK` uses, and the arm a session measuring behavior without MCP needs.
+    ...(process.env.REIKA_MCP === '0'
+      ? { mcpServers: [], mcpErrors: [] }
+      : mcpConfig(process.env.REIKA_MCP_SERVERS)),
     // Substitute the current user's git name/email and account slugs for <user>/<email> in the
     // scrollback and saved transcripts. Off by default: normally you want to see your own handle,
     // and the lookup costs three git subprocesses at startup that are pure waste when unused.
     anon: process.env.REIKA_ANON === '1',
   };
+}
+
+// The parsed servers plus the parse errors, under the two Config field names the session reads.
+// The env value is read at the call site so this stays a pure function of it.
+function mcpConfig(raw: string | undefined): {
+  mcpServers: Config['mcpServers'];
+  mcpErrors: string[];
+} {
+  const { servers, errors } = parseMcpServers(raw);
+  return { mcpServers: servers, mcpErrors: errors };
 }
 
 function loadProfiles(defaultProfile: Profile, models: string[]): Record<string, Profile> {
