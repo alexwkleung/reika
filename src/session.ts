@@ -211,7 +211,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     plan: filter(planTools(cfg, { offline })),
     chat: filter(chatTools(cfg, { offline })),
     minimal: filter(minimalTools()),
-    grind: filter(grindTools()),
+    grind: filter(grindTools(cfg, { offline })),
   };
 
   const sessionEvents = opts.events ?? {};
