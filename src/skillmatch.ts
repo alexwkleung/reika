@@ -148,7 +148,7 @@ function candidatePhrases(skill: Skill): string[] {
 
 function stripCourtesyLead(haystack: string): string {
   let rest = haystack;
-  for (let stripped = true; stripped; ) {
+  for (let stripped = true; stripped;) {
     stripped = false;
     for (const lead of COURTESY_LEADS) {
       if (rest.startsWith(` ${lead} `)) {
