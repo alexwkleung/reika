@@ -2,12 +2,33 @@
   "name": "reika",
   "version": "0.0.1",
   "description": "Coding agent CLI for small local models, tuned for low quantization.",
+  "license": "Apache-2.0",
+  "author": "Alex Leung",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexwkleung/reika.git"
+  },
+  "homepage": "https://github.com/alexwkleung/reika#readme",
+  "bugs": {
+    "url": "https://github.com/alexwkleung/reika/issues"
+  },
+  "keywords": [
+    "coding-agent",
+    "cli",
+    "llm",
+    "local-llm",
+    "llama-cpp",
+    "quantization",
+    "mlx",
+    "ai-agent"
+  ],
   "type": "module",
   "bin": {
     "reika": "./dist/cli.js"
   },
   "files": [
     "dist",
+    "NOTICE",
     "skills"
   ],
   "scripts": {
