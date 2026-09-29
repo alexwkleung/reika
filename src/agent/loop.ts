@@ -1734,6 +1734,7 @@ export async function runTurn(opts: {
             opts.onMessage({
               role: 'system',
               tone: 'info',
+              emphasis: 'lead',
               content: `Recovering: nudging the plan write off a repeated reasoning span.`,
             });
             opts.onRecovering?.(true); // live pulse; cleared after the call returns
@@ -1820,6 +1821,7 @@ export async function runTurn(opts: {
           opts.onMessage({
             role: 'system',
             tone: 'info',
+            emphasis: 'lead',
             content: `Recovering: re-grounding a repeated failed edit to ${lastEditFailure.path} on the file's exact text.`,
           });
           opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
@@ -1889,6 +1891,7 @@ export async function runTurn(opts: {
             opts.onMessage({
               role: 'system',
               tone: 'info',
+              emphasis: 'lead',
               content: `Recovering: nudging the model off a reasoning loop (one biased round before stopping).`,
             });
             opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
@@ -2117,6 +2120,7 @@ export async function runTurn(opts: {
       opts.onMessage({
         role: 'system',
         tone: 'info',
+        emphasis: 'line',
         content: manualRound
           ? `/compact — asking the model for a compaction note before fold ${n}.`
           : `Context is near the window — asking the model for a compaction note before fold ${n}.`,
@@ -2352,6 +2356,7 @@ export async function runTurn(opts: {
         opts.onMessage({
           role: 'system',
           tone: 'info',
+          emphasis: 'line',
           content: `Context compacted (fold ${shrink.folds}) — folded ${removed} earlier message${
             removed === 1 ? '' : 's'
           } into a ${(recapChars / 1000).toFixed(1)}k-char recap (older tool output still re-readable).`,

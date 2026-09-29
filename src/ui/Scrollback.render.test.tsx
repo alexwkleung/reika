@@ -6,7 +6,7 @@ import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
-import { Scrollback, markProse } from './Scrollback.js';
+import { Scrollback, markProse, noticeLead } from './Scrollback.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -104,6 +104,36 @@ describe('Scrollback system-message tone', () => {
       '❯ Context compacted.',
     );
     expect(frameFor({ role: 'system', content: 'plain note' })).toContain('❯ plain note');
+  });
+
+  it('takes a warn notice lead phrase up to the first dash or colon', () => {
+    expect(noticeLead('Still looping — one focused attempt.')).toBe('Still looping');
+    expect(noticeLead('Not sandboxed: sandbox-exec is unavailable.')).toBe('Not sandboxed:');
+    expect(noticeLead('Fetched https://example.com/a — ok')).toBe('Fetched https://example.com/a');
+    expect(noticeLead('No separator in this one.')).toBe('');
+    expect(noticeLead(`${'x'.repeat(41)} — too long to be a label`)).toBe('');
+    expect(noticeLead('first row wraps\nbefore: the colon')).toBe('');
+  });
+
+  it('colors a lead phrase or a whole line by emphasis, and leaves the rest muted', () => {
+    const prevLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      // Ink coalesces adjacent escapes, so match the open code in front of the text.
+      const open = (hex: string) => chalk.hex(hex)('x').split('x')[0];
+      const warn = frameFor({ role: 'system', tone: 'warn', content: 'Not sandboxed: no binary.' });
+      expect(warn).toContain(open(theme.warning) + '⟳ Not sandboxed:');
+      expect(warn).toContain(open(theme.muted) + ' no binary.');
+      // theme.info is a named color (cyan).
+      const info = (emphasis?: 'line' | 'lead') =>
+        frameFor({ role: 'system', tone: 'info', emphasis, content: 'Recovering: a round.' });
+      expect(info('line')).toContain('\u001b[36m❯ Recovering: a round.');
+      expect(info('lead')).toContain('\u001b[36m❯ Recovering:');
+      expect(info('lead')).toContain(open(theme.muted) + ' a round.');
+      expect(info()).toContain(open(theme.muted) + 'Recovering: a round.');
+    } finally {
+      chalk.level = prevLevel;
+    }
   });
 
   // #138: /save reported the transcript's absolute path, leaking the home directory

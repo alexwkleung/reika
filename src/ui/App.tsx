@@ -1298,7 +1298,7 @@ export function App() {
       setMessages(prev => [
         ...prev,
         echo,
-        { role: 'system', tone: 'info', content: 'Compacting context…' },
+        { role: 'system', tone: 'info', emphasis: 'line', content: 'Compacting context…' },
       ]);
       await submitToModel(
         'compact', // text: never reaches the loop — manualCompact drops the user message
