@@ -172,9 +172,10 @@ export function formatMcpList(statuses: McpServerStatus[]): string {
     `MCP: ${live.length} server${live.length === 1 ? '' : 's'}, ${total} tool${total === 1 ? '' : 's'} (agent mode; also the commands below)`,
   );
   for (const s of statuses) {
-    const who = s.info?.name
-      ? `${s.info.name}${s.info.version ? ` ${s.info.version}` : ''}`
-      : 'server';
+    const who = [
+      s.info?.name ? `${s.info.name}${s.info.version ? ` ${s.info.version}` : ''}` : 'server',
+      ...(s.info?.protocol ? [`MCP ${s.info.protocol}`] : []),
+    ].join(', ');
     if (s.error) {
       lines.push(`  ${s.name} — unavailable: ${s.error}`);
       continue;

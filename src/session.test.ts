@@ -478,7 +478,7 @@ const MINI_SERVER = [
   "process.stdin.setEncoding('utf8');process.stdin.on('data',c=>{b+=c;let i;",
   "while((i=b.indexOf('\\n'))!==-1){const l=b.slice(0,i);b=b.slice(i+1);if(!l.trim())continue;const m=JSON.parse(l);",
   "if(m.method==='initialize')send({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'mini'}}});",
-  "else if(m.method==='tools/list')send({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'ping',description:'Ping',inputSchema:{type:'object',properties:{}}}]}});}});",
+  "else if(m.method==='tools/list')send({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'ping',description:'Ping',inputSchema:{type:'object',properties:{}}}]}});else if(m.id!==undefined)send({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});}});",
 ].join('');
 
 describe('MCP servers (#265)', () => {

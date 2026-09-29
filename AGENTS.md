@@ -100,11 +100,24 @@ Two details that follow from what the budget is for. A refused search is **refun
 session. `src/mcp/config.ts` parses the document — the standard `mcpServers` shape, a bare map, or a
 list — and returns errors instead of throwing, because a typo in one entry must not cost a session.
 
-- `client.ts` is one connection and the transport: newline-framed JSON-RPC 2.0, `initialize`
-  (protocol `2025-06-18`) → `notifications/initialized` → paginated `tools/list`, then `tools/call`
-  with a per-call timeout. A server→client request is answered (`ping`, `roots/list` → no roots,
-  anything else `-32601`) because an unanswered request is how a server decides its peer is gone; a
-  child that dies fails every in-flight request rather than leaving the turn hanging. The handshake
+- `client.ts` is one connection and the transport: newline-framed JSON-RPC 2.0, **dual-era**.
+  `2026-07-28` removed the `initialize` handshake (version and capabilities ride every request's
+  `_meta`), and a handshake-only client cannot reach a server that speaks only that revision — so
+  `connect` follows the spec's stdio probe: `server/discover` first; a result or an error in the
+  spec's reserved range (`-32020`…`-32099`) is modern, anything else is legacy and gets
+  `initialize` (`2025-11-25`, accepting back to `2024-11-05`). The spec's legacy signal includes
+  silence, which a modern server behind a cold `npx` also produces, so after `PROBE_WAIT_MS`
+  `initialize` goes out _beside_ the pending probe and a modern-only server's rejection of it
+  defers to the probe's late answer. Then paginated `tools/list` and `tools/call` with a per-call
+  timeout. A modern `input_required` result carrying only `requestState` is retried (bounded); one
+  that asks for input fails, since reika declares no client capabilities. A message with a
+  `method` is always the server's — matched on `id` alone, a server `ping` numbered like a pending
+  call resolved that call with nothing. A legacy server→client request is answered (`ping`,
+  `roots/list` → no roots, anything else `-32601`) because an unanswered request is how a server
+  decides its peer is gone; an abandoned call (abort or timeout) sends `notifications/cancelled`;
+  a child that dies fails every in-flight request rather than leaving the turn hanging. A server
+  inherits only the SDKs' safe environment slice plus temp/locale (`serverEnv`), never reika's
+  API keys — third-party code from `npx` has no business with them. The handshake
   carries its own bound (`connectTimeoutMs`, default 15s) rather than sharing the call's: it is paid
   before the first frame, so a generous call timeout must not turn a startup hang into a stall, and
   a server behind a cold `npx` install needs more than the default while its calls stay quick.

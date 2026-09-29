@@ -17,7 +17,7 @@ const MINI_SERVER = [
   "else if(m.method==='tools/list')send({jsonrpc:'2.0',id:m.id,result:{tools:[",
   "{name:'ping',description:'Ping the server.',inputSchema:{type:'object',properties:{}}},",
   "{name:'echo',description:'Echo text.',inputSchema:{type:'object',properties:{text:{type:'string'}},required:['text']}}]}});",
-  "else if(m.method==='tools/call')send({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:m.params.name==='ping'?'pong':'echo: '+m.params.arguments.text}]}});}});",
+  "else if(m.method==='tools/call')send({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:m.params.name==='ping'?'pong':'echo: '+m.params.arguments.text}]}});else if(m.id!==undefined)send({jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});}});",
 ].join('');
 
 const CONFIG: Config = {
@@ -122,7 +122,7 @@ describe('MCP in the TUI', () => {
     await submit(app, '/mcp');
     const frame = await waitFor(app, '/mini:echo');
     expect(frame).toContain('MCP: 1 server, 2 tools');
-    expect(frame).toContain('mini — 2 tools (mini-server 1.0)');
+    expect(frame).toContain('mini — 2 tools (mini-server 1.0, MCP 2025-06-18)');
     expect(frame).toContain('/mini:ping');
     app.unmount();
   });

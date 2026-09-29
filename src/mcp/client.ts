@@ -3,17 +3,61 @@ import { debugLog } from '../debug.js';
 import { VERSION } from '../version.js';
 import { CONNECT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, type McpServerConfig } from './config.js';
 
-// The stdio half of MCP (protocol revision 2025-06-18), which is what "an MCP server" means for
-// almost everything shipped today: a child process speaking JSON-RPC 2.0 over stdin/stdout, one
-// message per line. The HTTP/SSE transports are deliberately not here — a remote server is a
-// different trust and auth question, and this module's job is the local case (#265).
+// The stdio half of MCP, which is what "an MCP server" means for almost everything shipped today:
+// a child process speaking JSON-RPC 2.0 over stdin/stdout, one message per line. The HTTP
+// transports are deliberately not here — a remote server is a different trust and auth question,
+// and this module's job is the local case (#265).
+//
+// Dual-era, per the spec's stdio backward-compatibility rule. 2026-07-28 ("modern") dropped the
+// `initialize` handshake for a version and capabilities in every request's `_meta`; everything up
+// to 2025-11-25 ("legacy") still opens with it, and a legacy-only client cannot reach a
+// modern-only server at all. So `connect` probes with `server/discover` and falls back to
+// `initialize` when the answer is not a modern one.
 //
 // Framing: the spec requires messages to be newline-delimited with no embedded newlines, so a
 // buffer split on '\n' is the whole parser. Anything that does not parse is dropped rather than
 // fatal: a server that prints a banner to stdout is out of spec but common, and losing the session
 // over it would be worse than ignoring the line.
-export const PROTOCOL_VERSION = '2025-06-18';
+export const MODERN_PROTOCOL_VERSION = '2026-07-28';
+export const LEGACY_PROTOCOL_VERSION = '2025-11-25';
+// What a legacy server may answer `initialize` with. Every revision here differs from the next in
+// things this client never uses (auth, elicitation, tasks), so tools/list and tools/call read the
+// same across all four.
+const LEGACY_VERSIONS = new Set(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']);
+// How long the probe gets before `initialize` is sent beside it. Both SDKs' legacy servers answer
+// an unknown method at once (-32601 / -32602), so this is only paid by a server that ignores one —
+// or a modern one still starting, which the late probe answer then rescues (see handshake).
+const PROBE_WAIT_MS = 2000;
+// The spec reserves this JSON-RPC range for its own errors, so any of them on the probe means the
+// server is modern and `initialize` must not be tried.
+const MODERN_ERROR_MIN = -32099;
+const MODERN_ERROR_MAX = -32020;
+const UNSUPPORTED_PROTOCOL_VERSION = -32022;
+// A modern tool may answer "call me again with this state" (input_required with requestState only).
+// Bounded so a server that always does cannot keep a turn waiting forever.
+const MAX_STATE_RETRIES = 3;
 const CLIENT_NAME = 'reika';
+// What a server inherits from reika's own environment: the set the official SDKs pass, plus temp
+// and locale. Everything else stays behind — reika's environment holds the model API keys, every
+// profile's keys and often a GH_TOKEN, and a server is third-party code from `npx`. A server that
+// needs a variable gets it through its config entry's `env`.
+const INHERITED_ENV =
+  process.platform === 'win32'
+    ? [
+        'APPDATA',
+        'HOMEDRIVE',
+        'HOMEPATH',
+        'LOCALAPPDATA',
+        'PATH',
+        'PROCESSOR_ARCHITECTURE',
+        'PROGRAMFILES',
+        'SYSTEMDRIVE',
+        'SYSTEMROOT',
+        'TEMP',
+        'USERNAME',
+        'USERPROFILE',
+      ]
+    : ['HOME', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'USER', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE'];
 // How much of a server's stderr is kept for the error message. A server that fails at startup
 // explains itself there and nowhere else; unbounded, a chatty server would eat the heap.
 const STDERR_TAIL_CHARS = 2000;
@@ -52,6 +96,27 @@ export type McpServerInfo = {
   // The server's own "instructions" text — a short note about how to use its tools. Kept for
   // `/mcp`, not injected into the prompt: it is server-authored prose of unknown length.
   instructions?: string;
+  // The protocol revision this connection speaks, for `/mcp`: which era a server turned out to be
+  // is the first question when one misbehaves.
+  protocol?: string;
+};
+
+// A JSON-RPC error from the server, with its code kept: the probe decides the server's era on it.
+class RpcError extends Error {
+  readonly code: number | undefined;
+  readonly data: unknown;
+  constructor(err: unknown) {
+    super(rpcErrorMessage(err));
+    this.code = isRecord(err) && typeof err.code === 'number' ? err.code : undefined;
+    this.data = isRecord(err) ? err.data : undefined;
+  }
+}
+
+type RequestOptions = {
+  signal?: AbortSignal;
+  // Whether abandoning this request tells the server so. Off for the handshake: legacy forbids
+  // cancelling `initialize`, and the probe is one a legacy server never recognized.
+  cancel?: boolean;
 };
 
 type Pending = {
@@ -68,6 +133,8 @@ export class McpClient {
   // prefix, so it cannot change mid-session; `/mcp` surfaces this instead.
   toolsChanged = false;
 
+  private era: 'modern' | 'legacy' | undefined;
+  private readonly probeWaitMs: number;
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -75,8 +142,9 @@ export class McpClient {
   private stderrTail = '';
   private exitError: Error | undefined;
 
-  constructor(config: McpServerConfig) {
+  constructor(config: McpServerConfig, opts: { probeWaitMs?: number } = {}) {
     this.config = config;
+    this.probeWaitMs = opts.probeWaitMs ?? PROBE_WAIT_MS;
   }
 
   get name(): string {
@@ -100,29 +168,101 @@ export class McpClient {
     return this.config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   }
 
-  // Spawn + handshake + tool discovery. Resolves only on a server that answered `initialize`
-  // AND `tools/list`: a server that started but says nothing is a failure the user has to see.
+  // Spawn + handshake + tool discovery. Resolves only on a server that answered the handshake AND
+  // `tools/list`: a server that started but says nothing is a failure the user has to see.
   async connect(): Promise<void> {
     await this.start();
     try {
-      const init = await this.request(
-        'initialize',
-        {
-          protocolVersion: PROTOCOL_VERSION,
-          // `roots` is declared empty rather than absent: the server may ask, and answering "no
-          // roots" is what keeps it from inventing a workspace of its own.
-          capabilities: { roots: { listChanged: false } },
-          clientInfo: { name: CLIENT_NAME, version: VERSION },
-        },
-        this.connectTimeoutMs,
-      );
-      this.server = readServerInfo(init);
-      this.notify('notifications/initialized', {});
+      await this.handshake();
       this.tools = await this.listTools();
     } catch (e) {
       this.close();
       throw new Error(this.explain(e));
     }
+  }
+
+  // The spec's stdio probe: `server/discover` first; a result or a spec-range error is a modern
+  // server, anything else (or silence) a legacy one. The spec's version of "silence" is a timeout,
+  // which a modern server behind a cold `npx` install would trip — so after a short wait
+  // `initialize` goes out beside the still-pending probe, and a modern-only server's rejection of it
+  // defers to whatever the probe answers.
+  private async handshake(): Promise<void> {
+    const probe = this.request(
+      'server/discover',
+      { _meta: this.requestMeta(MODERN_PROTOCOL_VERSION) },
+      this.connectTimeoutMs,
+      { cancel: false },
+    ).then(
+      result => ({ result }),
+      (error: Error) => ({ error }),
+    );
+    const early = await Promise.race([
+      probe,
+      delay(Math.min(this.probeWaitMs, this.connectTimeoutMs)),
+    ]);
+    if (early) {
+      if ('result' in early) return this.adoptModern(early.result);
+      if (isModernError(early.error)) throw modernVersionError(early.error);
+      if (this.exitError) throw this.exitError;
+      return this.initializeLegacy();
+    }
+    try {
+      await this.initializeLegacy();
+    } catch (e) {
+      if (this.exitError) throw e;
+      const late = await probe;
+      if ('result' in late) return this.adoptModern(late.result);
+      if (isModernError(late.error)) throw modernVersionError(late.error);
+      throw e;
+    }
+  }
+
+  private async adoptModern(result: unknown): Promise<void> {
+    const r = isRecord(result) ? result : {};
+    const versions = Array.isArray(r.supportedVersions)
+      ? r.supportedVersions.filter((v): v is string => typeof v === 'string')
+      : [];
+    if (!versions.includes(MODERN_PROTOCOL_VERSION)) {
+      // A server that discovers but lists only handshake revisions is asking for the handshake.
+      if (versions.some(v => LEGACY_VERSIONS.has(v))) return this.initializeLegacy();
+      throw new Error(unsupportedVersionsText(versions));
+    }
+    this.era = 'modern';
+    const meta = isRecord(r._meta) ? r._meta : {};
+    const info = isRecord(meta['io.modelcontextprotocol/serverInfo'])
+      ? meta['io.modelcontextprotocol/serverInfo']
+      : {};
+    this.server = {
+      name: typeof info.name === 'string' ? info.name : '',
+      ...(typeof info.version === 'string' ? { version: info.version } : {}),
+      ...(typeof r.instructions === 'string' ? { instructions: r.instructions } : {}),
+      protocol: MODERN_PROTOCOL_VERSION,
+    };
+  }
+
+  private async initializeLegacy(): Promise<void> {
+    const init = await this.request(
+      'initialize',
+      {
+        protocolVersion: LEGACY_PROTOCOL_VERSION,
+        // `roots` is declared empty rather than absent: the server may ask, and answering "no
+        // roots" is what keeps it from inventing a workspace of its own.
+        capabilities: { roots: { listChanged: false } },
+        clientInfo: { name: CLIENT_NAME, version: VERSION },
+      },
+      this.connectTimeoutMs,
+      { cancel: false },
+    );
+    // The spec's "the client SHOULD disconnect" for a revision it does not speak. A server that
+    // names none is taken at our word rather than refused over a missing field.
+    const answered =
+      isRecord(init) && typeof init.protocolVersion === 'string' ? init.protocolVersion : '';
+    if (answered && !LEGACY_VERSIONS.has(answered)) {
+      throw new Error(unsupportedVersionsText([answered]));
+    }
+    this.era = 'legacy';
+    this.server = { ...readServerInfo(init), protocol: answered || LEGACY_PROTOCOL_VERSION };
+    this.notify('notifications/initialized', {});
   }
 
   // `tools/list`, following the spec's cursor pagination. Capped so a server that always returns a
@@ -159,13 +299,31 @@ export class McpClient {
     opts: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<McpCallResult> {
     const timeoutMs = opts.timeoutMs ?? this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const res = (await this.request(
-      'tools/call',
-      { name, arguments: args },
-      timeoutMs,
-      opts.signal,
-    )) as McpCallResult | undefined;
-    return isRecord(res) ? (res as McpCallResult) : {};
+    let state: string | undefined;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.request(
+        'tools/call',
+        { name, arguments: args, ...(state !== undefined ? { requestState: state } : {}) },
+        timeoutMs,
+        { signal: opts.signal },
+      );
+      const r = isRecord(res) ? res : {};
+      // A missing resultType is "complete" by the spec's rule for pre-2026 servers.
+      if (r.resultType !== 'input_required') return r as McpCallResult;
+      // reika declares no client capabilities, so a server asking for input (elicitation, sampling,
+      // roots) is out of spec — but it is the server's call to fail, not something to retry.
+      const asks = isRecord(r.inputRequests) ? Object.values(r.inputRequests) : [];
+      if (asks.length > 0) {
+        const methods = asks.map(a =>
+          isRecord(a) && typeof a.method === 'string' ? a.method : '?',
+        );
+        throw new Error(`the tool asked for input reika cannot give (${methods.join(', ')})`);
+      }
+      if (attempt >= MAX_STATE_RETRIES) {
+        throw new Error(`the tool asked to be called again ${attempt + 1} times without an answer`);
+      }
+      state = typeof r.requestState === 'string' ? r.requestState : undefined;
+    }
   }
 
   close(): void {
@@ -189,7 +347,7 @@ export class McpClient {
       try {
         child = spawn(command, args, {
           ...(cwd ? { cwd } : {}),
-          env: { ...process.env, ...env },
+          env: serverEnv(env),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (e) {
@@ -252,20 +410,19 @@ export class McpClient {
 
   private onMessage(msg: Record<string, unknown>): void {
     const id = msg.id;
-    if (typeof id === 'number' && this.pending.has(id)) {
-      const entry = this.pending.get(id)!;
-      this.pending.delete(id);
-      clearTimeout(entry.timer);
-      const err = msg.error;
-      if (err !== undefined) entry.reject(new Error(rpcErrorMessage(err)));
-      else entry.resolve(msg.result);
-      return;
-    }
-    if (id !== undefined && typeof msg.method === 'string') {
-      // A request FROM the server. Answering is not optional — an unanswered request is how a
-      // server decides its peer is gone — and there is nothing here to sample or to root, so the
-      // honest answer is an error for anything beyond the spec's `ping`.
+    // A message with a method is the server's own request or notification, never our reply —
+    // checked first, because a server numbers its requests from small integers too, and matching on
+    // id alone let a server `ping` answer a pending `tools/call` of the same number.
+    if (typeof msg.method === 'string') {
       const method = msg.method;
+      if (id === undefined) {
+        if (method === 'notifications/tools/list_changed') this.toolsChanged = true;
+        return;
+      }
+      // A request FROM the server (legacy only; modern moved these into input_required results).
+      // Answering is not optional — an unanswered request is how a server decides its peer is gone
+      // — and there is nothing here to sample or to root, so the honest answer is an error for
+      // anything beyond `ping` and an empty root list.
       if (method === 'ping') this.send({ jsonrpc: '2.0', id, result: {} });
       else if (method === 'roots/list') this.send({ jsonrpc: '2.0', id, result: { roots: [] } });
       else
@@ -276,23 +433,38 @@ export class McpClient {
         });
       return;
     }
-    if (msg.method === 'notifications/tools/list_changed') this.toolsChanged = true;
+    if (typeof id !== 'number') return;
+    const entry = this.pending.get(id);
+    if (!entry) return; // a late answer to a request already timed out or cancelled
+    this.pending.delete(id);
+    clearTimeout(entry.timer);
+    if (msg.error !== undefined) entry.reject(new RpcError(msg.error));
+    else entry.resolve(msg.result);
   }
 
   private request(
     method: string,
-    params: unknown,
+    params: Record<string, unknown>,
     timeoutMs: number,
-    signal?: AbortSignal,
+    opts: RequestOptions = {},
   ): Promise<unknown> {
+    const { signal } = opts;
     if (this.exitError) return Promise.reject(this.exitError);
     if (signal?.aborted) return Promise.reject(new Error('aborted'));
     const id = this.nextId++;
+    const body = this.era === 'modern' ? { ...params, _meta: this.requestMeta() } : params;
+    // An abandoned request is also cancelled: the server stops work nobody is waiting for (a spec
+    // MUST on stdio since 2026-07-28, a SHOULD before), and a late answer is dropped by onMessage.
+    const cancel = (reason: string): void => {
+      if (opts.cancel !== false) this.notify('notifications/cancelled', { requestId: id, reason });
+    };
     return new Promise((resolve, reject) => {
       // One request's bound, not the connection's: a timed-out call leaves the server running and
       // later calls work, which is the recovery a slow tool needs.
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        signal?.removeEventListener('abort', onAbort);
+        cancel('timed out');
         reject(new Error(`no answer to ${method} after ${timeoutMs}ms`));
       }, timeoutMs);
       // An unref'd timer cannot hold the process open on its own; the child's pipes already do.
@@ -300,8 +472,7 @@ export class McpClient {
       const onAbort = (): void => {
         this.pending.delete(id);
         clearTimeout(timer);
-        // The request is abandoned, not cancelled: the spec's cancellation notification would
-        // need a reason and an answer we do not wait on, and the result is dropped either way.
+        cancel('aborted by the user');
         reject(new Error('aborted'));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -316,11 +487,19 @@ export class McpClient {
         },
         timer,
       });
-      this.send({ jsonrpc: '2.0', id, method, params });
+      this.send({ jsonrpc: '2.0', id, method, params: body });
     });
   }
 
-  private notify(method: string, params: unknown): void {
+  private requestMeta(version = MODERN_PROTOCOL_VERSION): Record<string, unknown> {
+    return {
+      'io.modelcontextprotocol/protocolVersion': version,
+      'io.modelcontextprotocol/clientCapabilities': {},
+      'io.modelcontextprotocol/clientInfo': { name: CLIENT_NAME, version: VERSION },
+    };
+  }
+
+  private notify(method: string, params: Record<string, unknown>): void {
     this.send({ jsonrpc: '2.0', method, params });
   }
 
@@ -359,6 +538,41 @@ function readServerInfo(init: unknown): McpServerInfo {
       ? { instructions: init.instructions }
       : {}),
   };
+}
+
+export function serverEnv(own: Record<string, string> | undefined): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_ENV) {
+    const value = process.env[key];
+    // A value starting `()` is an exported bash function, which the SDKs also leave behind.
+    if (value !== undefined && !value.startsWith('()')) env[key] = value;
+  }
+  return { ...env, ...own };
+}
+
+function isModernError(e: Error): e is RpcError {
+  return (
+    e instanceof RpcError &&
+    e.code !== undefined &&
+    e.code >= MODERN_ERROR_MIN &&
+    e.code <= MODERN_ERROR_MAX
+  );
+}
+
+function modernVersionError(e: RpcError): Error {
+  if (e.code !== UNSUPPORTED_PROTOCOL_VERSION) return e;
+  const supported = isRecord(e.data) && Array.isArray(e.data.supported) ? e.data.supported : [];
+  return new Error(
+    unsupportedVersionsText(supported.filter((v): v is string => typeof v === 'string')),
+  );
+}
+
+function unsupportedVersionsText(versions: string[]): string {
+  return `server speaks protocol ${versions.join(', ') || '(none listed)'}; reika speaks ${MODERN_PROTOCOL_VERSION} and ${[...LEGACY_VERSIONS].join(', ')}`;
+}
+
+function delay(ms: number): Promise<undefined> {
+  return new Promise(resolve => setTimeout(() => resolve(undefined), ms).unref());
 }
 
 function rpcErrorMessage(err: unknown): string {

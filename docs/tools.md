@@ -34,8 +34,13 @@ Approval prompts show a unified diff (or the command for `bash`), with `Approve 
 ## MCP servers
 
 With `REIKA_MCP_SERVERS` set, reika starts each configured MCP server as a child process and speaks
-MCP's stdio transport to it (JSON-RPC 2.0, newline-framed, protocol `2025-06-18`): `initialize`,
-`tools/list`, `tools/call`. Every tool a server offers is added to the **agent** tool list as
+MCP's stdio transport to it (JSON-RPC 2.0, newline-framed). Both protocol eras work: reika probes
+with `server/discover` and speaks `2026-07-28` to a server that answers it, and falls back to the
+`initialize` handshake (`2025-11-25`, accepting any revision back to `2024-11-05`) for one that
+does not; `/mcp` shows which each server ended up on. Then `tools/list` and `tools/call`. A server
+inherits only `HOME`, `PATH`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR` and the locale from
+reika's environment — never its API keys — so anything else it needs goes in its entry's `env`.
+Every tool a server offers is added to the **agent** tool list as
 `mcp__<server>__<tool>` and advertised with the server's own description and JSON Schema, so the
 model calls it like any other tool. What comes back is text: image, audio and binary-resource blocks
 are replaced by a one-line marker, since this pipeline has no reader for them.

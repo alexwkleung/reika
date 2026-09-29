@@ -37,7 +37,9 @@ const handle = msg => {
     // After the handshake and after the manager built its statuses: the timing a real server uses.
     if (process.env.FIXTURE_ANNOUNCE_LATE === '1') send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: {} });
     return;
-  }
+  }  // What both SDKs' legacy servers do with an unknown method — including reika's server/discover
+  // probe, which this answer is what makes fast.
+  if (msg.id !== undefined) send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
 };
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => {
@@ -76,7 +78,7 @@ describe('connectMcpServers', () => {
       ]);
       const list = runtime.list();
       expect(list).toContain('MCP: 1 server, 2 tools');
-      expect(list).toContain('gh — 2 tools (fixture-server 0.1)');
+      expect(list).toContain('gh — 2 tools (fixture-server 0.1, MCP 2025-06-18)');
       expect(list).toContain('/gh:echo');
     } finally {
       runtime.close();
