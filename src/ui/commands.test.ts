@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isImplementCommand,
   COMMANDS,
   MODE_CYCLE,
   buildImplementPrompt,
@@ -54,7 +55,15 @@ describe('COMMANDS — /implement', () => {
   it('is registered so it autocompletes and shows in suggestions', () => {
     const implement = COMMANDS.find(c => c.name === 'implement');
     expect(implement).toBeDefined();
-    expect(implement?.desc).toMatch(/agent mode/i);
+    expect(implement?.desc).toMatch(/agent, minimal, or grind/i);
+  });
+
+  it('isImplementCommand matches the whole word, with or without guidance', () => {
+    expect(isImplementCommand('/implement')).toBe(true);
+    expect(isImplementCommand('  /implement keep it small ')).toBe(true);
+    expect(isImplementCommand('/IMPLEMENT')).toBe(true);
+    expect(isImplementCommand('/implementation-notes')).toBe(false);
+    expect(isImplementCommand('implement the plan')).toBe(false);
   });
 });
 

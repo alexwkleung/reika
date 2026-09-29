@@ -37,7 +37,8 @@ export function requestTimeoutMs(): number {
 
 // The dispatcher is opaque to us — we only hand it straight back to `fetch`. Typed structurally
 // rather than as `RequestInit['dispatcher']` because the ambient `RequestInit` in this project is
-// the DOM one (jsdom's lib is in scope), which has no such field; Node honors it regardless.
+// the DOM one (no `lib` is set, so the default includes DOM), which has no such field; Node honors
+// it regardless.
 export type FetchDispatcher = { readonly dispatch: unknown };
 
 // Undici's default, used only to describe the failure honestly when we could NOT install our own

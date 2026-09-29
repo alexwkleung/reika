@@ -7,7 +7,7 @@ The full conventions — where things live, how to add a tool or slash command, 
 ## Scripts
 
 - `npm run dev` — run the CLI with `tsx`
-- `npm run build` — compile TS to `dist/`
+- `npm run build` — compile TS to a clean `dist/` (tests excluded, via `tsconfig.build.json`)
 - `npm run typecheck` — TypeScript only
 - `npm run lint` / `lint:fix`
 - `npm run format` / `format:check`

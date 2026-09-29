@@ -20,6 +20,7 @@ import {
   CONFIRM_DECLINE,
   Confirm,
   type ConfirmSpec,
+  implementModeConfirmSpec,
   pastedUrlConfirmSpec,
   skillConfirmSpec,
 } from './Confirm.js';
@@ -89,6 +90,8 @@ import {
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
+  IMPLEMENT_MODES,
+  isImplementCommand,
   isMinimalPrompt,
   isGrindPrompt,
   isSaveCommand,
@@ -97,6 +100,7 @@ import {
   turnPromptMode,
   turnRefines,
   turnTools,
+  type ImplementMode,
   type Mode,
 } from './commands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
@@ -216,13 +220,12 @@ export function App() {
   } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
-  // The harness asking before submit (#425 skill confirm, #448 pasted-link confirm): one modal
-  // slot like Approval, whatever is being asked about. Resolves true to accept (apply the skill,
-  // fetch the link), false for "send as typed", or 'abort' (ctrl-c: nothing is sent and the
-  // prompt stays in the box).
+  // The harness asking before submit (#425 skill confirm, #448 pasted-link confirm, #561
+  // /implement's mode): one modal slot like Approval, whatever is being asked about. Resolves the
+  // chosen row, or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
   const [confirm, setConfirm] = useState<{
     spec: ConfirmSpec;
-    resolve: (accept: boolean | 'abort') => void;
+    resolve: (choice: number | 'abort') => void;
   } | null>(null);
   const [confirmSelected, setConfirmSelected] = useState<number>(CONFIRM_DECLINE);
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
@@ -286,6 +289,8 @@ export function App() {
   const queuedSkillRouteRef = useRef<string | null | undefined>(undefined);
   // Same for the pasted-link confirm's answer (#448): fetch or not, decided at keypress.
   const queuedUrlFetchRef = useRef<boolean | undefined>(undefined);
+  // Same for /implement's mode picker (#561).
+  const queuedImplementModeRef = useRef<ImplementMode | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
@@ -494,6 +499,13 @@ export function App() {
             { role: 'system', content: limitsNotice, skipAutosave: true },
           ]);
         }
+        const windowNotice = s.windowNotice;
+        if (windowNotice) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: windowNotice, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         const warn = budgetWarning(b, runtime);
         if (warn) {
           setMessages(prev => [
@@ -608,8 +620,8 @@ export function App() {
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     // Not awaited: the switch is instant, and a turn submitted before the probe (#417) answers runs
     // without a window, as it would have anyway.
-    void s.setProfile(target).then(notice => {
-      if (notice) setMessages(prev => [...prev, { role: 'system', content: notice }]);
+    void s.setProfile(target).then(notices => {
+      if (notices.length > 0) setMessages(prev => [...prev, ...notices]);
     });
     // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
@@ -769,22 +781,29 @@ export function App() {
     if (cf) {
       // Digits and y/n only move the cursor, as in the question dialog: Enter is the one key that
       // answers, and y lands on the accepting row — the one Approval-trained fingers expect first.
+      const last = cf.spec.options.length - 1;
+      const digit = Number(input);
       if (key.upArrow) {
-        setConfirmSelected(i => Math.max(CONFIRM_DECLINE, i - 1));
+        setConfirmSelected(i => Math.max(0, i - 1));
       } else if (key.downArrow) {
-        setConfirmSelected(i => Math.min(CONFIRM_ACCEPT, i + 1));
-      } else if (input === '1' || input === 'n' || input === 'N') {
+        setConfirmSelected(i => Math.min(last, i + 1));
+      } else if (/^[1-9]$/.test(input) && digit - 1 <= last) {
+        setConfirmSelected(digit - 1);
+      } else if (cf.spec.accept && (input === 'n' || input === 'N')) {
         setConfirmSelected(CONFIRM_DECLINE);
-      } else if (input === '2' || input === 'y' || input === 'Y') {
+      } else if (cf.spec.accept && (input === 'y' || input === 'Y')) {
         setConfirmSelected(CONFIRM_ACCEPT);
       } else if (key.return) {
-        const accept = confirmSelectedRef.current === CONFIRM_ACCEPT;
         setConfirm(null);
-        cf.resolve(accept);
+        cf.resolve(confirmSelectedRef.current);
+      } else if (key.escape) {
+        // Unlike Approval and Question, escape is safe here: a split arrow sequence arriving as a
+        // bare escape only cancels — nothing is sent and the prompt stays in the box — the same
+        // cost the /model picker's escape carries. Approval's escape would decline for the user.
+        setConfirm(null);
+        cf.resolve('abort');
       }
-      // No escape, for the reason Approval and Question bind none: a split arrow sequence arrives
-      // as a bare escape on a loaded pty. Modal: the input is disabled, so nothing else has
-      // anywhere to go.
+      // Modal: the input is disabled, so nothing else has anywhere to go.
       return;
     }
     const rs = resumeSelectRef.current;
@@ -1151,7 +1170,7 @@ export function App() {
     transitionMode(next, [echo, { role: 'system', content: banner }]);
   };
 
-  const handleCommand = async (raw: string): Promise<void> => {
+  const handleCommand = async (raw: string, implementMode?: ImplementMode): Promise<void> => {
     const rest = raw.slice(1);
     const space = rest.indexOf(' ');
     const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
@@ -1239,23 +1258,27 @@ export function App() {
         ]);
         return;
       }
+      // From plan mode the picker chose the target (#561). Otherwise 'agent' for every mode but
+      // minimal and grind, which stay themselves — handing either the full tool list and agent
+      // prompt for one turn would undo the only thing the mode does, and silently.
+      const target: ImplementMode =
+        mode === 'plan'
+          ? (implementMode ?? 'agent')
+          : mode === 'minimal' || mode === 'grind'
+            ? mode
+            : 'agent';
       if (mode === 'plan') {
-        setMode('agent');
+        setMode(target);
+        const label = target.charAt(0).toUpperCase() + target.slice(1);
         setMessages(prev => [
           ...prev,
-          { role: 'system', content: 'Agent mode — implementing the plan above.' },
+          { role: 'system', content: `${label} mode — implementing the plan above.` },
         ]);
       }
       // The user bubble renders as `/implement` (displayOverride) while the model receives the
       // built prompt; the override forces this turn's tools + promptMode regardless of the
-      // not-yet-flushed mode state. 'agent' for every mode but minimal and grind, which stay
-      // themselves — handing either the full tool list and agent prompt for one turn would undo
-      // the only thing the mode does, and silently.
-      await submitToModel(
-        buildImplementPrompt(args),
-        raw,
-        mode === 'minimal' || mode === 'grind' ? mode : 'agent',
-      );
+      // not-yet-flushed mode state.
+      await submitToModel(buildImplementPrompt(args), raw, target);
       return;
     }
     if (name === 'compact') {
@@ -1278,7 +1301,7 @@ export function App() {
       setMessages(prev => [
         ...prev,
         echo,
-        { role: 'system', tone: 'info', content: 'Compacting context…' },
+        { role: 'system', tone: 'info', emphasis: 'line', content: 'Compacting context…' },
       ]);
       await submitToModel(
         'compact', // text: never reaches the loop — manualCompact drops the user message
@@ -1415,7 +1438,7 @@ export function App() {
           '  /minimal           enter minimal mode (shell only, no upfront project context)',
           '  /grind             enter grind mode (verify-everything procedure; slower, checks its work)',
           '  /agent             return to agent mode',
-          '  /implement         switch to agent mode and execute the plan above',
+          '  /implement         execute the plan above (from plan mode: pick the mode to run it in)',
           '  /compact           compact older context now (compaction note, then a fold)',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
           '  /anon              show/toggle anonymized display (on|off)',
@@ -1787,11 +1810,15 @@ export function App() {
   // Open the confirm dialog and wait for its answer. Deferred past the current keypress dispatch:
   // Ink hands the Enter that submitted to every useInput handler, and opening synchronously would
   // let the dialog's own handler see it and answer "send as typed" on the spot.
-  const askConfirm = (spec: ConfirmSpec): Promise<boolean | 'abort'> => {
-    setConfirmSelected(CONFIRM_DECLINE);
+  const askChoice = (spec: ConfirmSpec): Promise<number | 'abort'> => {
+    setConfirmSelected(0);
     return new Promise(resolve => {
       queueMicrotask(() => setConfirm({ spec, resolve }));
     });
+  };
+  const askConfirm = async (spec: ConfirmSpec): Promise<boolean | 'abort'> => {
+    const choice = await askChoice(spec);
+    return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
   };
 
   // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
@@ -1808,10 +1835,11 @@ export function App() {
       return decided;
     }
     if (config?.skillAuto === 'off' || !config || !bundle) return undefined;
-    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
-    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
-    // plan-mode prompt and the progress ledger. There it stays a suggestion.
-    if (modeRef.current !== 'agent' && modeRef.current !== 'vibe') return undefined;
+    // Every model mode but chat asks (#565): chat has no bash, and a shipped skill's first step is
+    // one. Plan mode asks too — its prompt already keeps an applied body from turning into edits.
+    if (prompt.startsWith('/') || modeRef.current === 'shell' || modeRef.current === 'chat') {
+      return undefined;
+    }
     const match = matchSkill(prompt, bundle.skills);
     const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
     if (!match || !shouldConfirmInject(match, window)) return undefined;
@@ -1836,6 +1864,26 @@ export function App() {
     const plan = planPastedUrls(prompt);
     if (plan.urls.length === 0 || plan.request) return undefined;
     return askConfirm(pastedUrlConfirmSpec(plan.urls));
+  };
+
+  // Which mode /implement hands the plan to (#561). Asked only from plan mode, where the old answer
+  // was always agent; elsewhere /implement stays in (or maps from) the current mode as before.
+  // Same placement as the confirms above: at keypress, so a /implement queued behind the plan turn
+  // carries its answer and the drain never opens a dialog with nobody at the desk.
+  const decideImplementMode = async (
+    prompt: string,
+  ): Promise<ImplementMode | 'abort' | undefined> => {
+    if (queuedImplementModeRef.current !== undefined) {
+      const decided = queuedImplementModeRef.current;
+      queuedImplementModeRef.current = undefined;
+      return decided;
+    }
+    if (modeRef.current !== 'plan' || !isImplementCommand(prompt)) return undefined;
+    // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
+    // up, it draws a second `/implement` under the dialog.
+    setSuggestionState(null);
+    const choice = await askChoice(implementModeConfirmSpec());
+    return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
   };
 
   // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
@@ -1896,6 +1944,7 @@ export function App() {
     imageAttachmentsRef.current = images;
     queuedSkillRouteRef.current = next.skill;
     queuedUrlFetchRef.current = next.fetchUrls;
+    queuedImplementModeRef.current = next.implementMode;
     const markers = images.map(img => img.marker).join(' ');
     void onSubmit(next.content + (markers ? ` ${markers}` : ''));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1955,11 +2004,14 @@ export function App() {
       if (route === 'abort') return;
       const fetchUrls = await decidePastedUrls(trimmed);
       if (fetchUrls === 'abort') return;
+      const implementMode = await decideImplementMode(trimmed);
+      if (implementMode === 'abort') return;
       const msg: QueuedMessage = {
         content: trimmed,
         images: images.length > 0 ? images : undefined,
         ...(route !== undefined ? { skill: route } : {}),
         ...(fetchUrls !== undefined ? { fetchUrls } : {}),
+        ...(implementMode !== undefined ? { implementMode } : {}),
       };
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
@@ -1982,13 +2034,15 @@ export function App() {
     if (route === 'abort') return;
     const fetchUrls = await decidePastedUrls(trimmed);
     if (fetchUrls === 'abort') return;
+    const implementMode = await decideImplementMode(trimmed);
+    if (implementMode === 'abort') return;
     setInputValue('');
     setSuggestionState(null);
     if (!trimmed) return;
     // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
     setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
     if (trimmed.startsWith('/')) {
-      await handleCommand(trimmed);
+      await handleCommand(trimmed, implementMode);
       return;
     }
     if (modeRef.current === 'shell') {

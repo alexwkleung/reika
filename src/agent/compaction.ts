@@ -896,6 +896,9 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   // agent turn would inherit a handoff claiming less was explored than actually was. See
   // buildPlanLedger in loop.ts, which goes blind the same way for the same reason.
   const commands = new Set<string>();
+  // Web lookups (#290) carry `query`/`url` instead. Same reason: the digest's index silently
+  // under-reports the plan phase, which is exactly what the agent turn reads it to find out.
+  const lookups = new Set<string>();
   const priorRecaps: string[] = [];
   for (const m of span) {
     if (m.role === 'compaction') {
@@ -906,23 +909,24 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
         if (typeof p === 'string') files.add(p);
         const c = tc.args.command;
         if (typeof c === 'string') commands.add(c);
+        const q = tc.args.query;
+        if (typeof q === 'string') lookups.add(q);
+        const u = tc.args.url;
+        if (typeof u === 'string') lookups.add(u);
       }
     }
   }
   const out: string[] = ['Plan-mode exploration (distilled at handoff).'];
-  if (files.size > 0) {
-    // Cap the file list the same way buildRecap does, so the index can't grow unbounded.
-    const sorted = [...files].sort();
+  // Cap each list the same way buildRecap does, so the index can't grow unbounded.
+  const indexLine = (label: string, set: Set<string>): void => {
+    if (set.size === 0) return;
+    const sorted = [...set].sort();
     const shown = sorted.slice(0, 25).join(', ');
-    const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
-    out.push(`Files examined: ${shown}${extra}`);
-  }
-  if (commands.size > 0) {
-    const sorted = [...commands].sort();
-    const shown = sorted.slice(0, 25).join(', ');
-    const extra = sorted.length > 25 ? `, +${sorted.length - 25} more` : '';
-    out.push(`Commands run: ${shown}${extra}`);
-  }
+    out.push(`${label}: ${shown}${sorted.length > 25 ? `, +${sorted.length - 25} more` : ''}`);
+  };
+  indexLine('Files examined', files);
+  indexLine('Commands run', commands);
+  indexLine('Web lookups', lookups);
   if (priorRecaps.length > 0) out.push(priorRecaps.join('\n\n'));
   const findings = gatherPlanFindings(span, findingsBudget);
   if (findings.trim()) out.push(`Findings:\n${findings}`);

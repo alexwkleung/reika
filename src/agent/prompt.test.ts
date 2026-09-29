@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { buildSystemPrompt, reikaSelfLine } from './prompt.js';
-import { promptGates } from './loop.js';
+import { buildPlanWritePrompt, promptGates } from './loop.js';
 import { defaultTools, planTools } from '../tools/index.js';
 import type { ContextBundle } from '../types.js';
 
@@ -48,6 +48,45 @@ describe('plan prompt tracks planTools (#109)', () => {
       else delete process.env.REIKA_PLAN_BASH;
       expect(planPromptFlat()).toMatch(/CANNOT edit/);
     }
+  });
+});
+
+// Plan mode's web pair (#290) is the one exception to "You can ONLY explore the codebase", and it
+// gets the same treatment as bash above: named only when the tool is in the list. `planTools()` with
+// no config has `fetch_url` (unconditional, as in agent mode) and no `search` (no provider), so the
+// two are asserted separately.
+describe('plan prompt tracks the web tools (#290)', () => {
+  const planPromptWeb = (o: { canFetch?: boolean; canSearch?: boolean }): string =>
+    buildSystemPrompt({ bundle, mode: 'plan', ...o }).replace(/\s+/g, ' ');
+
+  it('names the tools planTools actually registers, and only those', () => {
+    const names = planTools().map(t => t.name);
+    expect(names).toContain('fetch_url');
+    expect(names).not.toContain('search');
+    expect(planPromptWeb({ canFetch: true, canSearch: false })).toContain('may also use fetch_url');
+    expect(planPromptWeb({ canFetch: true, canSearch: false })).not.toContain('search');
+    expect(planPromptWeb({ canFetch: true, canSearch: true })).toContain(
+      'may also use search/fetch_url',
+    );
+  });
+
+  // Offline is the other arm that has neither tool; pointing at one there is the #377 phantom
+  // pointer, and with neither the prompt stays byte-identical to the pre-#290 text.
+  it('says nothing about the web when neither tool is present', () => {
+    const none = planPromptWeb({});
+    expect(none).not.toContain('may also use');
+    expect(buildSystemPrompt({ bundle, mode: 'plan', canFetch: false, canSearch: false })).toBe(
+      planPrompt(),
+    );
+  });
+
+  // The exception is scoped to what the codebase cannot answer, and the repo stays the tiebreaker:
+  // an unrestricted "you may search the web" is a new way to keep exploring instead of writing the
+  // plan, which every other line here pulls against.
+  it('scopes the lookup to what the codebase cannot answer', () => {
+    const plan = planPromptWeb({ canFetch: true, canSearch: true });
+    expect(plan).toContain('For what the codebase cannot answer');
+    expect(plan).toContain('it does not replace reading the code the plan changes');
   });
 });
 
@@ -344,5 +383,24 @@ describe('reika self line (#531)', () => {
     expect(line).not.toContain('.env');
     expect(line).not.toContain('chrome');
     expect(line).not.toMatch(/dist|cli\.js|reika -p/);
+  });
+});
+
+// The plan is the one output another turn executes, so the two ways plan mode can produce it must
+// agree on its shape: the converged path (this prompt) and the force-write (buildPlanWritePrompt)
+// both allow a quoted snippet, which is what plantrack's content match checks a step off by.
+describe('plan prompt asks for a specific plan, not a short one', () => {
+  it('scopes brevity to the messages between tool calls', () => {
+    const prompt = planPromptFlat();
+    expect(prompt).not.toContain('Be concise');
+    expect(prompt).toContain('Keep your messages between tool calls short');
+    expect(prompt).toContain('make it specific rather than short');
+  });
+
+  it('allows a quoted snippet, as the force-write prompt does', () => {
+    const prompt = planPromptFlat();
+    expect(prompt).not.toContain('Do not write any code');
+    expect(prompt).toContain('A short snippet quoting the code being changed is fine');
+    expect(buildPlanWritePrompt()).toContain('a short code snippet is fine');
   });
 });

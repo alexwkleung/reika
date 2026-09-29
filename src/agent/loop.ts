@@ -86,6 +86,7 @@ import {
 import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
+  SUBAGENT_REPORT_FRAME,
   SUBAGENT_HOLD_NOTE,
   MAX_SUBAGENTS_PER_TURN,
   MAX_SUBAGENTS_PER_ROUND,
@@ -105,7 +106,14 @@ import {
   underPressure,
 } from './subagentpressure.js';
 import { foldAfterShed, wouldFold, type CompactionNote } from './compaction.js';
-import { planFill, planPressureFor, planPressureLine, type PlanPressure } from './planpressure.js';
+import {
+  ceilingPressure,
+  planFill,
+  planPressureFor,
+  planPressureLine,
+  planRoundCeiling,
+  type PlanPressure,
+} from './planpressure.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import type { PayloadStore } from '../store/payloads.js';
 import {
@@ -120,6 +128,7 @@ import {
 // `ls` through it; its summary carries the output byte count, so a repeat only fires on
 // byte-identical output (a flaky/changed command differs and is left alone).
 const TRACKED_TOOLS = new Set(['read', 'grep', 'list', 'glob', 'bash']);
+const WEB_LOOKUP_ARG: Record<string, string> = { search: 'query', fetch_url: 'url' };
 // Tools whose whole purpose is mutation. They reset the repeat memory, since repo state may
 // have changed, so a legitimate read-after-edit is never mistaken for a loop. Deliberately
 // NOT including `bash`: it's used for read-only greps far more than mutation here, and letting
@@ -260,20 +269,33 @@ export function flagRepeatedCall(
 // information, force the write once it stops. Crucially this can't reintroduce spiraling — "no new
 // information" IS the spiral signature, so the same rule stops both a finished model and a stuck
 // one. A big/unfamiliar repo gets as many rounds as it keeps finding new files; a converged or
-// looping model is cut off PLAN_STALL_ROUNDS rounds after it stops making progress. PLAN_HARD_CEILING
-// is a backstop against a model that keeps finding trivially-new things forever.
+// looping model is cut off PLAN_STALL_ROUNDS rounds after it stops making progress. The round
+// ceiling (planRoundCeiling, agent/planpressure.ts) is a backstop against a model that keeps finding
+// trivially-new things forever.
 const PLAN_STALL_ROUNDS = 2;
-// 12 is right for ~16k: the model over-gathers vs the transform's findings budget well before then
-// (measured ~26k tokens read against a ~10k budget), so more rounds are wasted. On a larger window
-// this is too low — scale it with contextWindow, tuned by the gathered-payloads vs transform-budget
-// ratio (visible under REIKA_DEBUG). Don't add the scaling speculatively; pick the curve with data.
-const PLAN_HARD_CEILING = 12;
 // Generation room reserved for the plan at force-write — the rest of the window budgets the
 // transform's reference material. These models emit a few thousand tokens of reasoning *before*
 // the plan, so 2048 left them cut off mid-write (finishReason=length → a wasted retry); 4096 fits
 // reasoning+plan in one shot while still leaving ample window for grounding. The truncation-retry
 // remains the backstop for an unusually long generation.
 const PLAN_WRITE_RESERVE_TOKENS = 4096;
+
+// Char budget for the transform turn: the window minus the plan's generation reserve, in chars
+// (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
+// overflows the window on a large task — the real cause of the large-repo 400s.
+function planTransformBudgetChars(window: number): number {
+  return Math.floor((window - PLAN_WRITE_RESERVE_TOKENS) * 4 * 0.85);
+}
+
+// What the write's findings would cost at full size, measured as gatherPlanFindings charges it.
+function planGatheredChars(history: Message[]): number {
+  let chars = 0;
+  for (const m of history) {
+    const body = m.role === 'tool' ? m.payload?.trim() : undefined;
+    if (m.role === 'tool' && body) chars += m.summary.length + body.length + 8;
+  }
+  return chars;
+}
 // Reasoning-loop break (Layer 2, on by default since 2026-09-24; `=0` is the baseline arm): act when
 // the model's reasoning goes cross-round circular — re-deriving the same analysis instead of
 // converging. Plan mode force-writes; agent mode drives the ledger → withdrawal → terminal-stop
@@ -381,6 +403,17 @@ const CONTINUE_NUDGE =
   'ends mid-thought. continue from that exact point. any earlier part was trimmed to fit; what ' +
   'remains is your most recent working. do not start over, and do not re-run tools you have ' +
   'already called — their results are above.)';
+// The plan write's resume nudge: same four jobs, minus the tool clause (the write round has none)
+// and plus the deliverable, since a draft carried forward is reasoning and the plan is still owed.
+const PLAN_WRITE_CONTINUE_NUDGE =
+  '(your plan write was cut off at the reasoning length limit. the text above is your own work — ' +
+  'it ends mid-thought. continue from that exact point and then write the numbered plan. any ' +
+  'earlier part was trimmed to fit; what remains is your most recent working. do not start over.)';
+// The plan write's tighter ceiling exists to catch a transform spiraling at a LOW ratio (~0.3), so
+// the exploration gate (continuable below verbatimAbortThreshold, 0.35) would admit exactly that
+// case. Healthy blocks measured 0.000–0.063 (#285), and the cut that prompted this was 0.00, so the
+// bar sits between the two populations rather than at the abort curve.
+const PLAN_WRITE_CARRY_MAX_RATIO = 0.15;
 // EXPERIMENT (converge retry): instead of giving up the moment the model can't converge — a plan-mode
 // force-write that spiraled, or an agent reasoning loop that reached its terminal — spend ONE more
 // *steered* attempt first: a strong, failure-naming directive ("you looped and kept re-questioning
@@ -625,12 +658,18 @@ function buildPlanLedger(
   // round-1/2 "you can probably stop" nudge (which keys on having examined something) would never
   // fire. The convergence pressure is the whole point of the ledger, so it has to see them.
   const commands = new Set<string>();
+  // Web lookups (#290) explore through `query` (search) and `url` (fetch_url), which are the same
+  // blind spot as bash's `command`: without them the ledger tells a model that has just grounded a
+  // claim in the docs that it has examined nothing, and the early stop-exploring nudge never fires.
+  const lookups = new Set<string>();
   for (const m of history) {
     if (m.role !== 'assistant') continue;
     for (const tc of m.toolCalls ?? []) {
       if (typeof tc.args.path === 'string') files.add(tc.args.path);
       if (typeof tc.args.pattern === 'string') searches.add(tc.args.pattern);
       if (typeof tc.args.command === 'string') commands.add(tc.args.command);
+      if (typeof tc.args.query === 'string') lookups.add(tc.args.query);
+      if (typeof tc.args.url === 'string') lookups.add(tc.args.url);
     }
   }
   const cap = (s: Set<string>): string => {
@@ -664,7 +703,8 @@ function buildPlanLedger(
   if (files.size > 0) lines.push(`Files examined: ${cap(files)}`);
   if (searches.size > 0) lines.push(`Searches run: ${cap(searches)}`);
   if (commands.size > 0) lines.push(`Commands run: ${cap(commands)}`);
-  if (files.size === 0 && searches.size === 0 && commands.size === 0) {
+  if (lookups.size > 0) lines.push(`Web lookups: ${cap(lookups)}`);
+  if (files.size === 0 && searches.size === 0 && commands.size === 0 && lookups.size === 0) {
     lines.push(
       'Nothing examined yet — start by grepping the relevant symbol or reading the entry file.',
     );
@@ -683,7 +723,9 @@ function planExamined(history: Message[]): boolean {
         tc =>
           typeof tc.args.path === 'string' ||
           typeof tc.args.pattern === 'string' ||
-          typeof tc.args.command === 'string',
+          typeof tc.args.command === 'string' ||
+          typeof tc.args.query === 'string' ||
+          typeof tc.args.url === 'string',
       ),
   );
 }
@@ -1331,14 +1373,17 @@ export async function runTurn(opts: {
   }
 
   // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
-  // diverges from round 0.
-  const baseSystem = buildSystemPrompt({
+  // diverges from round 0. A subagent is never warmed, so its report frame can't cause that drift.
+  const promptForMode = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
     grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.config.sandbox, opts.config.unattended),
   });
+  const baseSystem = opts.reportAtCap
+    ? `${promptForMode}\n\n${SUBAGENT_REPORT_FRAME}`
+    : promptForMode;
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
@@ -1414,6 +1459,13 @@ export async function runTurn(opts: {
   // channel Layer-2 measures.
   let pendingContinuation = '';
   let pendingReasoning = '';
+  // A plan-write draft cut on length and carried forward. Kept out of opts.history on purpose: the
+  // write round's request is one synthetic message rebuilt from history, so a tail pushed there would
+  // land in "Your analysis" and change that message — a full re-prefill — where appending it after
+  // the unchanged message keeps the next request append-only. Its own ladder: the write round never
+  // makes progress until it lands, so it must not share a budget exploration can reset.
+  let planWriteCarried = '';
+  const planWriteContinuation = new ContinuationGate();
   // Carry a cut-off block forward: the trimmed tail rides in `content` (a Qwen-family template
   // renders prior-turn `reasoning_content` as nothing, which is why the old retry lost the work even
   // though the partial was in history), followed by the resume nudge as role 'user' — the only role
@@ -1499,6 +1551,9 @@ export async function runTurn(opts: {
   // ceil, and keeps the retry abort-protected so a re-spiral is still cut. See CONVERGE_RETRY.
   let convergeRetries = 0;
   let steerRetryActive = false;
+  // The harness ending exploration is a decision the user must see: without a line saying why, the
+  // first sign of it was a recovery notice on the write round, which read as the model spiraling.
+  let planForceWriteAnnounced = false;
   // Pre-edit baseline for the post-edit typecheck gate. Captured lazily, immediately before the
   // turn's FIRST mutating tool runs, so it reflects the project's type-error state *before* the
   // model's edits; the done-gate diffs the final state against it and surfaces only what the edits
@@ -1520,6 +1575,10 @@ export async function runTurn(opts: {
   // dispatch loop can flag a model that re-issues the same read/grep/list/glob and stalls.
   // Cleared by any mutating tool, since repo state may have changed. See READONLY_TOOLS.
   const seenReadOnly = new Map<string, RepeatEntry>();
+  // Web lookups (query / URL) that returned content this turn. Kept apart from seenReadOnly so the
+  // repeat nudge stays off the web tools; only plan mode's novelty watermark reads it (#290), or a
+  // docs-only exploration counts as a stall and force-writes before any code is read.
+  const seenWebLookups = new Set<string>();
   // REIKA_DEBUG-only instrumentation: classifies each read as unique / changed / narrowed /
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
@@ -1679,10 +1738,17 @@ export async function runTurn(opts: {
     // the novelty proxy misses: tool results that look new each round keep planStaleRounds reset while
     // the reasoning is identical (the observed crossSim=1.00 loop). reasoningLoopActive reflects round
     // i-1 here (set after that round's call), so a loop confirmed at i-1 force-writes at i.
+    const planCeiling =
+      opts.promptMode === 'plan'
+        ? planRoundCeiling({
+            transformBudgetChars: window ? planTransformBudgetChars(window) : undefined,
+            gatheredChars: planGatheredChars(opts.history),
+          })
+        : 0;
     const planForceWrite =
       opts.promptMode === 'plan' &&
       (planStaleRounds >= PLAN_STALL_ROUNDS ||
-        i >= PLAN_HARD_CEILING ||
+        i >= planCeiling ||
         (REASONING_LOOP_BREAK && reasoningLoopActive) ||
         forceVerbatimPlanWrite);
     let planPressure: PlanPressure = 'none';
@@ -1697,20 +1763,26 @@ export async function runTurn(opts: {
         const fill = planFill(promptTokens, window, minGen());
         planFillPeak = Math.max(planFillPeak ?? 0, fill);
       }
+      const ceiling = planCeiling;
       planPressure = planPressureFor({
         round: i,
         examined: planExamined(opts.history),
         contextWindow: window,
         fill: planFillPeak,
+        ceiling,
       });
       const fill = planFillPeak;
+      // Pressure raised by the approaching ceiling names rounds, not fill: "the context is 7% full
+      // and you very likely have enough" states a fact that argues the other way.
+      const byCeiling = planPressure !== 'none' && ceilingPressure(i, ceiling) === planPressure;
       planPressureBasis = {
         round: i,
-        fillPercent: fill !== undefined ? Math.round(fill * 100) : undefined,
+        fillPercent: fill !== undefined && !byCeiling ? Math.round(fill * 100) : undefined,
       };
       debugLog(
         `[reika:debug] round=${i} plan-pressure=${planPressure} ` +
-          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} basis=${window ? 'fill' : 'rounds'}\n`,
+          `fill=${fill !== undefined ? fill.toFixed(2) : 'n/a'} ` +
+          `basis=${window && !byCeiling ? 'fill' : 'rounds'} ceiling=${ceiling}\n`,
       );
     }
     // Subagent bounded return: the last budgeted round is the report round. Same mechanics as the
@@ -1750,6 +1822,20 @@ export async function runTurn(opts: {
         // explore. Dropped output is a reason the plan may be thin, not a reason to reopen the
         // exploration the force-write exists to end.
         system = buildPlanWritePrompt(steerRetryActive, refinePlan !== null);
+        // A verbatim abort already announced itself; every other trigger is silent otherwise.
+        if (!planForceWriteAnnounced && !forceVerbatimPlanWrite) {
+          planForceWriteAnnounced = true;
+          const looping = REASONING_LOOP_BREAK && reasoningLoopActive;
+          opts.onMessage({
+            role: 'system',
+            tone: looping ? 'warn' : 'info',
+            content: looping
+              ? 'Reasoning was going in circles — writing the plan from what was gathered.'
+              : planStaleRounds >= PLAN_STALL_ROUNDS
+                ? 'Exploration stopped turning up anything new — writing the plan from what was gathered.'
+                : `Explored for ${i} rounds — writing the plan from what was gathered.`,
+          });
+        }
         // Logit recovery, plan-mode host: the force-write IS plan mode's loop recovery, so bias that
         // round off the loop's recurring tokens — the same last-resort nudge as the agent terminal,
         // here on the round that writes the plan. Gated to a LOOP-triggered force-write
@@ -1778,6 +1864,7 @@ export async function runTurn(opts: {
             opts.onMessage({
               role: 'system',
               tone: 'info',
+              emphasis: 'lead',
               content: `Recovering: nudging the plan write off a repeated reasoning span.`,
             });
             opts.onRecovering?.(true); // live pulse; cleared after the call returns
@@ -1865,6 +1952,7 @@ export async function runTurn(opts: {
           opts.onMessage({
             role: 'system',
             tone: 'info',
+            emphasis: 'lead',
             content: `Recovering: re-grounding a repeated failed edit to ${lastEditFailure.path} on the file's exact text.`,
           });
           opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
@@ -1934,6 +2022,7 @@ export async function runTurn(opts: {
             opts.onMessage({
               role: 'system',
               tone: 'info',
+              emphasis: 'lead',
               content: `Recovering: nudging the model off a reasoning loop (one biased round before stopping).`,
             });
             opts.onRecovering?.(true); // live pulse for this one round; cleared after the call returns
@@ -2013,12 +2102,7 @@ export async function runTurn(opts: {
       : withdrawInspection
         ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
         : opts.tools;
-    // Char budget for the transform turn: the window minus the plan's generation reserve, in chars
-    // (calibration ≈1 here), with a safety margin. Without this, dumping every read into one turn
-    // overflows the window on a large task — the real cause of the large-repo 400s.
-    const planTransformBudget = window
-      ? Math.floor((window - PLAN_WRITE_RESERVE_TOKENS) * 4 * 0.85)
-      : Number.MAX_SAFE_INTEGER;
+    const planTransformBudget = window ? planTransformBudgetChars(window) : Number.MAX_SAFE_INTEGER;
     const callHistory = planForceWrite
       ? [
           {
@@ -2031,6 +2115,12 @@ export async function runTurn(opts: {
                 refinePlan,
               ) + nativeImageReminder(opts.nativeImages),
           } as Message,
+          ...(planWriteCarried
+            ? ([
+                { role: 'assistant', content: continuationTail(planWriteCarried).text },
+                { role: 'user', content: PLAN_WRITE_CONTINUE_NUDGE, harness: true },
+              ] as Message[])
+            : []),
         ]
       : opts.history;
 
@@ -2162,6 +2252,7 @@ export async function runTurn(opts: {
       opts.onMessage({
         role: 'system',
         tone: 'info',
+        emphasis: 'line',
         content: manualRound
           ? `/compact — asking the model for a compaction note before fold ${n}.`
           : `Context is near the window — asking the model for a compaction note before fold ${n}.`,
@@ -2397,6 +2488,7 @@ export async function runTurn(opts: {
         opts.onMessage({
           role: 'system',
           tone: 'info',
+          emphasis: 'line',
           content: `Context compacted (fold ${shrink.folds}) — folded ${removed} earlier message${
             removed === 1 ? '' : 's'
           } into a ${(recapChars / 1000).toFixed(1)}k-char recap (older tool output still re-readable).`,
@@ -2684,6 +2776,49 @@ export async function runTurn(opts: {
       // same gate: they already carry a cut at the token wall, and discarding the ceiling cut forced
       // the plan write on a thought that was still working. The force-write round does not: its
       // tighter ceilings exist to catch a transform spiraling at a low ratio.
+      // Only a CONVERGENCE write (ceiling, stall) carries: after a loop-triggered one the model just
+      // spiraled, and a long transform from it is suspect at any ratio. Never the steered retry:
+      // that is the last attempt, cheap-to-fail by design, and its ceiling cut is the stop.
+      if (
+        CONTINUE &&
+        verbatimAbortByLength &&
+        planForceWrite &&
+        !planForceWriteLoopTriggered &&
+        !steerRetryActive
+      ) {
+        const carried = planWriteCarried
+          ? `${planWriteCarried}\n${roundReasoning}`
+          : roundReasoning;
+        const ratio = selfRepeatRatio(carried);
+        const allow = planWriteContinuation.allow(roundReasoning);
+        const carry = ratio < PLAN_WRITE_CARRY_MAX_RATIO && allow.ok;
+        debugLog(
+          `[reika:debug] continuation round=${i} cut=plan-write continue=${carry} ` +
+            `ratio=${ratio.toFixed(3)} max=${PLAN_WRITE_CARRY_MAX_RATIO} allow=${allow.ok}` +
+            `${allow.reason ? ` stop=${allow.reason}` : ''} spent=${planWriteContinuation.spent} ` +
+            `chars=${carried.length}\n`,
+        );
+        if (ratio < PLAN_WRITE_CARRY_MAX_RATIO && !allow.ok) ladderStop = allow.reason;
+        if (carry) {
+          planWriteContinuation.noteContinuation(roundReasoning);
+          planWriteCarried = carried;
+          opts.onReasoningStatus?.(false);
+          // Committed for the transcript, as on the exploration path: the live preview is hidden
+          // above, and a carried draft that vanished from scrollback would read as discarded.
+          opts.onMessage({ role: 'assistant', content: '', reasoning: roundReasoning });
+          const { omitted } = continuationTail(carried);
+          opts.onMessage({
+            role: 'system',
+            tone: 'warn',
+            content: `Plan write hit the length ceiling — continuing from where it stopped${
+              omitted > 0 ? ` (${omitted} chars of earlier reasoning trimmed)` : ''
+            }.`,
+          });
+          continue;
+        }
+        // Not carried: whatever recovery follows starts the write over, so the draft goes with it.
+        planWriteCarried = '';
+      }
       if (CONTINUE && verbatimAbortByLength && !planForceWrite) {
         // Joined with anything already held: a ceiling cut can land on a round that is ITSELF a
         // continuation, and judging/carrying only the new half would drop the first one from both
@@ -2793,13 +2928,18 @@ export async function runTurn(opts: {
       // force-write with a strong "commit, stop re-questioning" directive (buildPlanWritePrompt(steer))
       // and a tighter reasoning ceil (cheap-to-fail). Capped at MAX_CONVERGE_RETRIES; falls through to
       // the stop once spent. forceVerbatimPlanWrite is already true, so the next round re-force-writes.
+      // The force-write round never carries a cut forward, so a length-only cut there reaches this
+      // point with no ladderStop — and would otherwise be reported as a loop the ratio says it isn't.
+      const forceWriteCutOnLength = planForceWrite && verbatimAbortByLength;
       if (CONVERGE_RETRY && opts.promptMode === 'plan' && convergeRetries < MAX_CONVERGE_RETRIES) {
         convergeRetries++;
         steerRetryActive = true;
         opts.onMessage({
           role: 'system',
           tone: 'warn',
-          content: 'Still looping — one more focused attempt with a tighter steer before stopping.',
+          content: forceWriteCutOnLength
+            ? 'The plan write hit the reasoning length limit — one more focused attempt with a tighter steer before stopping.'
+            : 'Still looping — one more focused attempt with a tighter steer before stopping.',
         });
         opts.onRecovering?.(true);
         debugLog(`[reika:debug] round=${i} converge-retry (plan) attempt=${convergeRetries}\n`);
@@ -2807,7 +2947,12 @@ export async function runTurn(opts: {
       }
       // The force-write spiraled (and any steered retry is spent), or the recovery budget is gone: stop
       // honestly rather than loop or commit spiral garbage as a "plan". This model is stuck; say so.
-      commitSpiralStop(opts, turnStart, fetchedUrls, ladderStop === 'count' ? 'length' : 'loop');
+      commitSpiralStop(
+        opts,
+        turnStart,
+        fetchedUrls,
+        ladderStop === 'count' || forceWriteCutOnLength ? 'length' : 'loop',
+      );
       return;
     }
 
@@ -3025,8 +3170,10 @@ export async function runTurn(opts: {
     // can recommend a URL that never reaches a write — a plan-only workflow, or a docs link in prose
     // — which the edit/write grounder would never see. So at plan commit, fetch the URLs the plan
     // names and append a flag-only note for any that don't resolve, inherited verbatim by the agent
-    // turn. Harness-driven (like the symbol walk above), so it needs none of plan mode's withheld web
-    // tools. Strict no-op when the flag is off.
+    // turn. Harness-driven (like the symbol walk above), so it still runs on a turn that never made
+    // the call itself — and plan mode HAS the web tools since #290, so this is now the backstop for
+    // a URL the plan wrote without fetching, not the only way one gets checked. Strict no-op when
+    // the flag is off.
     // Hold the receipt until after the plan message is pushed below, so it lands as a standalone
     // end-of-turn line — not tucked under the unrelated prior tool (a read/list). The grounding is
     // about the plan, not that read.
@@ -3194,6 +3341,7 @@ export async function runTurn(opts: {
     // Novelty watermark for the adaptive cap: seenReadOnly only gains a key on a first-time
     // (path, offset) / search, so growth across this round means the model learned something new.
     const seenBeforeRound = seenReadOnly.size;
+    const seenWebBeforeRound = seenWebLookups.size;
     // A subagent call is exclusive in its round (#346): sibling inspection calls are held, so the
     // report is the only fresh payload the next round has to fit. Decided over the whole round up
     // front — the siblings are held whichever side of the subagent call they were listed on. Not
@@ -3460,6 +3608,10 @@ export async function runTurn(opts: {
       // isn't flagged. Skipped for unknown tools (nothing produced).
       if (tool && !refused && !bouncedBlindEdit && !heldForSubagent)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
+      // A refusal (budget, offline, latch) carries no payload, so it is never novelty.
+      if (tool && !refused && payload && WEB_LOOKUP_ARG[call.name]) {
+        seenWebLookups.add(`${call.name}\0${String(call.args[WEB_LOOKUP_ARG[call.name]] ?? '')}`);
+      }
       // Mark that the model has acted, so loop-break withdrawal stops scoping to this turn — a
       // failed edit counts, since it's the attempt (and the failure) that puts us in edit-recovery.
       // A BOUNCED edit doesn't: the harness withheld it, nothing ran, and the directed read that
@@ -3597,7 +3749,9 @@ export async function runTurn(opts: {
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.
-    planStaleRounds = seenReadOnly.size > seenBeforeRound ? 0 : planStaleRounds + 1;
+    const roundLearned =
+      seenReadOnly.size > seenBeforeRound || seenWebLookups.size > seenWebBeforeRound;
+    planStaleRounds = roundLearned ? 0 : planStaleRounds + 1;
   }
 
   const exhausted: Message = {

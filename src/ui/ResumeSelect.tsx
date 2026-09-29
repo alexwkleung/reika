@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import type { SessionEntry } from '../store/sessions.js';
+import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 
 // A project can collect hundreds of sessions, and the picker lives in the dynamic frame, where a
@@ -30,7 +31,7 @@ export function ResumeSelect({
   const whenWidth = Math.max(0, ...entries.map(e => formatSavedAt(e.savedAt, now).length));
   return (
     <Box
-      borderStyle="round"
+      borderStyle={glyphs.border}
       borderBottom={false}
       flexDirection="column"
       paddingX={1}

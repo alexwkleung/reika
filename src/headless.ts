@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig, resolveDefaultMode } from './config.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
-import { createSession } from './session.js';
+import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
@@ -87,6 +87,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
   // Always unattended: nobody can answer a prompt here, so a decline must not read as the user's.
   const loaded = { ...loadConfig(), unattended: true };
+  const stream = args.stream ? createStreamPrinter(io, args.json) : null;
   const session = await createSession({
     cwd: process.cwd(),
     config: loaded,
@@ -102,15 +103,18 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
             return Promise.resolve(false);
           },
     events: {
+      ...stream?.events,
       // The persistent receipts App puts in the scrollback — a fold, a declined URL, the
       // typecheck gate bouncing the model — are the ones a human watching a pipe should see.
       onMessage: msg => {
         if (msg.role === 'system') io.stderr(`reika: ${msg.content}\n`);
+        stream?.onMessage(msg);
       },
     },
   });
   const { config, bundle } = session;
   if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
+  if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
   if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
   if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
   const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
@@ -133,6 +137,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     failed = e as Error;
   } finally {
     process.off('SIGINT', onSigint);
+    stream?.finish();
   }
   const appended = session.transcript;
 
@@ -169,7 +174,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     io.stderr(`reika: ${failed.message}\n`);
     return controller.signal.aborted ? 130 : 1;
   }
-  if (args.json) {
+  if (args.json && !args.stream) {
     io.stdout(`${JSON.stringify(appended)}\n`);
   }
   // An interrupted turn commits an `(aborted)` assistant message so the history reads right; on
@@ -179,8 +184,67 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     return 130;
   }
   const reply = finalReply(appended);
-  if (!args.json && reply) io.stdout(`${reply}\n`);
+  if (!args.json && !args.stream && reply) io.stdout(`${reply}\n`);
   return reply ? 0 : 1;
+}
+
+// --stream (#566). Text: the content channel goes to stdout as it arrives and each tool call's
+// summary to stderr, so a pipe reads like the TUI minus the reasoning. What streams can't be taken
+// back, so the two things the TUI streams and then replaces stay off stdout: a subagent's rounds
+// (its report reaches the parent as a tool result) and the compaction note (a digest for the
+// model, not a reply). JSON: each committed message is one NDJSON line — the objects --json
+// prints as an array at the end, so a consumer can switch between the two without a new schema.
+export function createStreamPrinter(
+  io: Pick<HeadlessIo, 'stdout' | 'stderr'>,
+  json: boolean,
+): { events: SessionEvents; onMessage: (msg: Message) => void; finish: () => void } {
+  if (json) {
+    return {
+      events: {},
+      onMessage: msg => io.stdout(`${JSON.stringify(msg)}\n`),
+      finish: () => {},
+    };
+  }
+  let wrote = false;
+  let lineOpen = false;
+  let roundStarted = false;
+  let subagent = false;
+  let note = false;
+  const endLine = (): void => {
+    if (lineOpen) io.stdout('\n');
+    lineOpen = false;
+  };
+  const endRound = (): void => {
+    endLine();
+    roundStarted = false;
+  };
+  return {
+    events: {
+      onPhase: endRound,
+      onSubagent: live => (subagent = live),
+      onCompactionNote: live => (note = live),
+      onContentDelta: delta => {
+        if (subagent || note) return;
+        if (!roundStarted) {
+          // A model often opens with blank lines; a round's first visible text starts the block.
+          delta = delta.trimStart();
+          if (!delta) return;
+          roundStarted = true;
+          if (wrote) io.stdout('\n');
+        }
+        io.stdout(delta);
+        wrote = true;
+        lineOpen = !delta.endsWith('\n');
+      },
+    },
+    onMessage: msg => {
+      if (msg.role === 'assistant') endRound();
+      if (msg.role === 'tool' && !subagent) {
+        io.stderr(`reika: ↳ ${firstLine(msg.summary)}\n`);
+      }
+    },
+    finish: endLine,
+  };
 }
 
 // The last assistant message with content is the answer. A turn that ended on a tool call or an

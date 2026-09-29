@@ -1632,6 +1632,17 @@ describe('messagesToChatParams prefix-stable', () => {
     expect(last).toEqual({ role: 'user', content: '--- reika status ---' });
   });
 
+  // qwen3.8-flash on a hosted router answered "the user hasn't asked anything" on ~1 in 3 round-0
+  // requests when the note followed the user's message as a second user turn.
+  it('joins the trailing note to a user message already at the tail, user text first', () => {
+    const history: Message[] = [{ role: 'user', content: 'plan issue 265' }];
+    const out = messagesToChatParams('sys', history, { trailingNote: '--- reika status ---' });
+    expect(out).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'plan issue 265\n\n--- reika status ---' },
+    ]);
+  });
+
   it('counts the trailing note as the user message a user-requiring template needs', () => {
     const out = messagesToChatParams('sys', [], { trailingNote: 'note' });
     expect(out.filter(m => m.role === 'user')).toHaveLength(1);

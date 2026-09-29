@@ -98,7 +98,10 @@ export const COMMANDS: CommandSpec[] = [
     desc: 'enter grind mode (works through a verify-everything procedure; bash, read, edit)',
   },
   { name: 'agent', desc: 'return to agent mode' },
-  { name: 'implement', desc: 'switch to agent mode and execute the plan above' },
+  {
+    name: 'implement',
+    desc: 'execute the plan above (from plan mode: pick agent, minimal, or grind to run it in)',
+  },
   { name: 'compact', desc: 'fold older context into a recap now (compaction note, then fold)' },
   {
     name: 'model',
@@ -129,6 +132,12 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'quit', desc: 'alias of /exit' },
 ];
 
+// The modes /implement can hand a plan to from plan mode (#561), in the picker's row order. Agent
+// first: it was the only target before the picker, so Enter alone keeps that. Vibe is absent — it
+// would plan again — and chat/shell cannot edit.
+export const IMPLEMENT_MODES = ['agent', 'minimal', 'grind'] as const;
+export type ImplementMode = (typeof IMPLEMENT_MODES)[number];
+
 // The model-facing prompt for /implement. Kept short and directive — the target is small local
 // models, and the plan it refers to ("the plan above") is already in history (kept verbatim by the
 // plan→agent handoff distillation), so this only has to point at it and set the working style.
@@ -158,6 +167,10 @@ export function planWritten(messages: Message[]): boolean {
 // Whether a submitted line is `/save` (with or without its `--raw` flag). App routes exactly this
 // command past the busy queue (#226); it is a whole-word match so `/saved` or a skill named
 // `/save-notes` still queue like anything else.
+export function isImplementCommand(input: string): boolean {
+  return /^\/implement(?:\s|$)/i.test(input.trim());
+}
+
 export function isSaveCommand(input: string): boolean {
   return /^\/save(?:\s|$)/i.test(input.trim());
 }

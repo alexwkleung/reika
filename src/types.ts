@@ -109,6 +109,11 @@ export type Message =
       role: 'system';
       content: string;
       tone?: 'info' | 'warn';
+      // How much of the text takes the marker's color instead of muted: 'line' for the compaction
+      // notices (a fold changes what the model can still see, so the user should not have to hunt
+      // for it), 'lead' for the label before the first ` — ` or `: ` (loop recovery). A warn
+      // notice gets 'lead' without asking.
+      emphasis?: 'line' | 'lead';
       nested?: boolean;
       // Set only on the plan done-gate's give-up notice: the step numbers waived after the model
       // was bounced once and finished anyway. The plan tracker recomputes from history each turn

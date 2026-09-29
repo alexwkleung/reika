@@ -41,7 +41,7 @@ export function buildSystemPrompt(opts: {
     return buildChatPrompt(opts.bundle);
   }
   if (mode === 'plan') {
-    return buildPlanPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
+    return buildPlanPrompt(opts.bundle, opts);
   }
   if (opts.minimal) {
     return buildMinimalPrompt(opts.bundle, opts.canAsk, opts.decideAlone);
@@ -122,7 +122,13 @@ function buildGrindPrompt(opts: {
   canAsk?: boolean;
   decideAlone?: boolean;
   sandbox?: boolean;
+  canFetch?: boolean;
+  canSearch?: boolean;
 }): string {
+  // Named only when present (#589), in the order grindTools registers them — the #377 rule.
+  const webTools = [opts.canSearch ? 'search' : '', opts.canFetch ? 'fetch_url' : '']
+    .filter(Boolean)
+    .join('/');
   const steps: string[] = [
     'Pin down the task. Before your first tool call, state in a sentence or two what "done" means and anything ambiguous about the request.',
     'Look before you act. Find the code involved (grep through bash), read it, find how this codebase already handles similar things, and find the tests that cover it. Never guess a path.',
@@ -149,7 +155,14 @@ function buildGrindPrompt(opts: {
     [
       'You are a coding assistant operating in a terminal, in GRIND MODE: the work is not done until you have checked it. Be concise in what you write and thorough in what you run.',
       'Your tools: bash for searching, building, testing and everything else; read to view a file; edit to change one.',
-      ...(opts.sandbox ? [sandboxSentence(false, false)] : []),
+      // Scoped like plan mode's line: step 2's exploration is of the repo, and an open "you may
+      // search the web" would be a way to keep exploring instead of running a check.
+      ...(webTools
+        ? [
+            `For what the repo cannot answer — a library's docs, an API's shape, a page the request links to — use ${webTools} rather than guessing or curl. Prefer the repo: it is what you are changing.`,
+          ]
+        : []),
+      ...(opts.sandbox ? [sandboxSentence(!!opts.canFetch, !!opts.canSearch)] : []),
       'Work through these steps, in order:',
       ...steps.map((s, i) => `${i + 1}. ${s}`),
       'Rules:',
@@ -168,14 +181,35 @@ function buildGrindPrompt(opts: {
 // stopping condition is stated explicitly — weak models in a read-only mode have no natural
 // closure signal (no edit to mark "done"), so the prompt has to supply one. The loop appends
 // a deterministic exploration ledger + escalating convergence nudge to this; see loop.ts.
-function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: boolean): string {
+function buildPlanPrompt(
+  bundle: ContextBundle,
+  gates: {
+    canAsk?: boolean;
+    decideAlone?: boolean;
+    // Which web tools this turn actually has (#290). Same coupling as `ask_user` and bash: a mode
+    // claim that leaves them out is a claim the model reads as a prohibition, and one that names a
+    // tool it does not have is the #377 phantom pointer. Both are in plan mode whenever they are in
+    // agent mode (see planTools), so the sentence is absent only offline or with no search provider.
+    canFetch?: boolean;
+    canSearch?: boolean;
+  } = {},
+): string {
+  const { canAsk, decideAlone, canFetch, canSearch } = gates;
   // Must track planTools(). Telling a model a tool "will fail" while it sits in the tool list is
   // worse than saying nothing — it won't reach for one it has been told is absent. The `=0` text
   // is the pre-#109 prompt byte-for-byte, so the baseline arm A/Bs against an unchanged prompt.
   const planBash = process.env.REIKA_PLAN_BASH !== '0';
+  // Named in the order planTools registers them, and only when present — the model sees the list.
+  const webTools = [canSearch ? 'search' : '', canFetch ? 'fetch_url' : '']
+    .filter(Boolean)
+    .join('/');
   const parts: string[] = [
     [
-      'You are a coding assistant in PLAN MODE, operating in a terminal. Be concise.',
+      // Not the other prompts' "Be concise": the plan is the one output here that another turn
+      // executes, and after the handoff fold it is the only place the exploration's findings
+      // survive. Brevity is scoped to the chatter; the plan is asked for precision, not length.
+      'You are a coding assistant in PLAN MODE, operating in a terminal.',
+      'Keep your messages between tool calls short. The plan itself is what gets executed: make it specific rather than short.',
       ...(planBash
         ? [
             'You can ONLY explore the codebase — read, list, grep, glob, and READ-ONLY shell',
@@ -186,13 +220,27 @@ function buildPlanPrompt(bundle: ContextBundle, canAsk?: boolean, decideAlone?: 
             'You can ONLY explore the codebase — read, list, grep, glob. You CANNOT edit, write,',
             'or run commands; those tools are not available and will fail.',
           ]),
+      // The mode claim above reads as a prohibition on anything but the repo, so the one exception
+      // is spelled out where it is claimed rather than as a sixth rule: the exploration ledger
+      // shapes every other line here toward converging on a written plan, and an unrestricted
+      // "you may search the web" would be a new way to keep exploring instead of writing one.
+      ...(webTools
+        ? [
+            'For what the codebase cannot answer — a library docs page, an API shape, an issue the',
+            `request links to — you may also use ${webTools}. Prefer the repo: that grounds a claim,`,
+            'it does not replace reading the code the plan changes.',
+          ]
+        : []),
       'Your job: explore just enough to understand the change, then STOP and write a plan.',
       'Rules:',
       `1. Use ${planBash ? 'grep/read/list/glob/bash' : 'grep/read/list/glob'} to ground every claim in the actual code. Never guess.`,
       '2. Explore only what you need. The moment you can describe the steps, STOP exploring.',
       '3. Do NOT re-read or re-grep something you already examined — act on what you have.',
       '4. End by writing a numbered, file-specific plan of the steps to make the change.',
-      '   Each step names the file and what changes. Do not write any code — just the plan.',
+      // A quoted snippet is what plantrack's content match checks a step off by, and what the
+      // force-write prompt already allows — "no code" here contradicted it on the converged path.
+      '   Each step names the file, the exact identifiers involved, and what changes.',
+      '   A short snippet quoting the code being changed is fine; do not write the implementation.',
       // Priced against what a wrong reading costs: the plan is handed to an implementation turn
       // (vibe chains straight into one; plan mode hands it to /implement), and although a refinement
       // turn exists (#46), it costs the user a round trip and a re-read of everything the model

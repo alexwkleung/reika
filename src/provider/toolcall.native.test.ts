@@ -117,9 +117,9 @@ describe('messagesToChatParams — native images', () => {
     expect(asParts(params[1])[0]).toEqual({ type: 'text', text: 'now [Image 1]' });
   });
 
-  // The trailing note is appended as a final user message every round; the images belong to the
-  // turn's real message, and the note must stay a plain string behind them.
-  it('does not attach to the trailing harness note', () => {
+  // On round 0 the trailing note joins the user's message (a last-user-message-is-the-query template
+  // would otherwise read the note as the request); the images still ride that message, text first.
+  it('keeps the images on the user message the round-0 note joins', () => {
     const original = userText(withImage('[Image 1]'));
     const params = users(
       messagesToChatParams('sys', withImage('[Image 1]'), {
@@ -127,8 +127,9 @@ describe('messagesToChatParams — native images', () => {
         trailingNote: 'LEDGER',
       }),
     );
-    expect(asParts(params[0])[0]).toEqual({ type: 'text', text: original });
-    expect(params[1].content).toBe('LEDGER');
+    expect(params).toHaveLength(1);
+    expect(asParts(params[0])[0]).toEqual({ type: 'text', text: `${original}\n\nLEDGER` });
+    expect(asParts(params[0]).length).toBeGreaterThan(1);
   });
 
   // A harness nudge (typecheck send-back, continuation, length/verbatim recovery) lands as a later

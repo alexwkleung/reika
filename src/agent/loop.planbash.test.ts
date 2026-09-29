@@ -5,7 +5,7 @@ import ignore from 'ignore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
 import { planTools } from '../tools/index.js';
 
 // Drive the real runTurn loop in PLAN mode with the real plan tool set, so #109's guarantee is
@@ -18,6 +18,7 @@ vi.mock('../provider/client.js', () => ({
 }));
 
 const { runTurn, buildSteadySystem } = await import('./loop.js');
+const { callModel } = await import('../provider/client.js');
 const { distillPlanHandoff } = await import('./compaction.js');
 const { seedPlanProgress } = await import('./plantrack.js');
 
@@ -174,6 +175,127 @@ describe('bash exploration is visible to plan-mode convergence (#109)', () => {
     expect(outcome.reason).toBe('folded');
     const digest = history.find(m => m.role === 'compaction')?.content ?? '';
     expect(digest).toContain('Commands run: grep -rn REIKA_PLAN src | head');
+  });
+});
+
+// The convergence machinery has to SEE web lookups, for the same reason it has to see bash (#109):
+// the ledger drives the stop-exploring pressure and the handoff digest is what the agent turn
+// inherits. A `search` carries `query` and a `fetch_url` carries `url`, neither of which the
+// `path`/`pattern` indexing saw — so plan mode went blind the moment it grounded a claim outside
+// the repo, which is exactly what #290 added the tools for.
+describe('web lookups are visible to plan-mode convergence (#290)', () => {
+  const call = (name: string, args: Record<string, string>): Message => ({
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ id: 'w1', name, args }],
+  });
+
+  const planLedgerFor = (history: Message[]): string =>
+    buildSteadySystem({
+      baseSystem: 'BASE',
+      promptMode: 'plan',
+      history,
+      round: 1,
+      planSteps: null,
+    });
+
+  it('lists the query and the URL in the plan ledger', () => {
+    expect(planLedgerFor([call('search', { query: 'zod discriminatedUnion' })])).toContain(
+      'Web lookups: zod discriminatedUnion',
+    );
+    expect(planLedgerFor([call('fetch_url', { url: 'https://zod.dev/api' })])).toContain(
+      'Web lookups: https://zod.dev/api',
+    );
+  });
+
+  it('does not claim nothing was examined after a web-only lookup', () => {
+    expect(planLedgerFor([call('fetch_url', { url: 'https://zod.dev/api' })])).not.toContain(
+      'Nothing examined yet',
+    );
+  });
+
+  // The early convergence nudge keys on having examined something, so a web-only round used to skip
+  // it — the mode losing its stop signal on the round the new tools were used.
+  it('fires the early stop-exploring nudge on a web-only round', () => {
+    expect(planLedgerFor([call('search', { query: 'zod v4 breaking changes' })])).toContain(
+      'STOP exploring',
+    );
+  });
+
+  it('carries web lookups into the plan→agent handoff digest', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'plan a zod v4 upgrade' },
+      call('fetch_url', { url: 'https://zod.dev/v4' }),
+      { role: 'tool', callId: 'w1', summary: 'Fetched https://zod.dev/v4' },
+      {
+        role: 'assistant',
+        content: '1. Edit `src/schema.ts` to use the new API.',
+        planFinal: true,
+      },
+    ];
+    const outcome = distillPlanHandoff(history, 16384);
+    expect(outcome.reason).toBe('folded');
+    const digest = history.find(m => m.role === 'compaction')?.content ?? '';
+    expect(digest).toContain('Web lookups: https://zod.dev/v4');
+  });
+});
+
+// A web-only round must count as progress, or two lookups in a row (search, then fetch the top hit)
+// trip the stall cap and the plan is force-written from docs before any code is read.
+describe('web lookups count as plan-mode novelty (#290)', () => {
+  const webTool = (name: string): Tool => ({
+    name,
+    description: name,
+    parameters: { type: 'object', properties: {} },
+    run: async () => ({ summary: `${name} ok`, payload: 'fresh content' }),
+  });
+  const webCall = (name: string, args: Record<string, string>): ModelResponse => ({
+    content: '',
+    toolCalls: [{ id: `${name}-${Object.values(args)[0]}`, name, args }],
+  });
+
+  async function toolsOfferedPerRound(responses: ModelResponse[]): Promise<number[]> {
+    h.scripted.length = 0;
+    h.scripted.push(...responses, { content: 'plan', toolCalls: undefined });
+    const mock = vi.mocked(callModel);
+    mock.mockClear();
+    await runTurn({
+      userInput: 'plan a zod v4 upgrade',
+      history: [],
+      bundle: {
+        projectSummary: '',
+        repoMap: '',
+        instructions: '',
+        cwd: tmpdir(),
+        hash: 'test',
+        fileIndex: [],
+        ignore: ignore(),
+        skills: [],
+      },
+      config: { ...makeConfig(), maxTurns: 6 },
+      tools: [webTool('search'), webTool('fetch_url')],
+      payloads: new PayloadStore(),
+      promptMode: 'plan',
+      onMessage: () => {},
+    });
+    return mock.mock.calls.map(([req]) => req.tools.length);
+  }
+
+  it('does not force-write after two fresh web rounds', async () => {
+    const offered = await toolsOfferedPerRound([
+      webCall('search', { query: 'zod v4 breaking changes' }),
+      webCall('fetch_url', { url: 'https://zod.dev/v4' }),
+    ]);
+    expect(offered[2]).toBeGreaterThan(0);
+  });
+
+  it('still stalls on repeated web lookups', async () => {
+    const offered = await toolsOfferedPerRound([
+      webCall('search', { query: 'zod v4' }),
+      webCall('search', { query: 'zod v4' }),
+      webCall('search', { query: 'zod v4' }),
+    ]);
+    expect(offered[3]).toBe(0);
   });
 });
 

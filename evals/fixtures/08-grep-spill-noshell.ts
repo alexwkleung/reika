@@ -2,8 +2,10 @@ import type { Fixture } from '../types.js';
 import { assertSpillFollowed, FLAG_PROMPT, flagModuleSetup } from './_flagmodules.js';
 
 // The same corpus and prompt as 06, with `planTools()` instead of the full set — read/list/grep/
-// glob, no bash. This is the A/B arm: 06 shows the model routing around the spill locator through
-// a pipe, and the corpus is shared byte-for-byte so the tool set is the only difference.
+// glob and `fetch_url` (offline it is dropped; `REIKA_CDP_SEARCH ??= '0'` in the runner keeps
+// web-`search` out of the list, so the arm does not depend on the machine's provider), no bash.
+// This is the A/B arm: 06 shows the model routing around the spill locator through a pipe, and the
+// corpus is shared byte-for-byte so the tool set is the only difference.
 //
 // Not an artificial constraint. It is what plan mode ships, and plan mode is where reika's
 // exploration loops live — so if a spill locator pays off anywhere, it is here. Note the escape

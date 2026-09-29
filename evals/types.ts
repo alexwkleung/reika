@@ -12,9 +12,9 @@ export type Fixture = {
   // assert sees the whole conversation, both turns included.
   followUp?: string;
   timeoutMs?: number;
-  // Which tool set the turn gets. 'plan' is planTools() — read/list/grep/glob, no bash — the
-  // configuration plan mode ships, and the only one where a capped result has no pipe to
-  // aggregate its way around. Defaults to the full set.
+  // Which tool set the turn gets. 'plan' is planTools() — read/list/grep/glob and the web tools
+  // (#290), no bash — the configuration plan mode ships, and the only one where a capped result has
+  // no pipe to aggregate its way around. Defaults to the full set.
   //
   // NOTE this is the tool set ONLY; it does not put the turn in plan mode. Use `mode` for that.
   tools?: 'default' | 'plan';
