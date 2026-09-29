@@ -1,37 +1,124 @@
 // Skill loading — markdown files in a directory become slash commands.
 // Files may have YAML frontmatter for metadata; falls back to first line as description.
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { access, constants, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, join } from 'node:path';
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type Skill = {
   name: string;
   description: string;
   body: string;
-  source: 'global' | 'project';
+  source: 'bundled' | 'global' | 'project';
   path: string;
   // Phrases that route a plain-English prompt to this skill (`triggers:` frontmatter).
   // Matching is deterministic and lives in skillmatch.ts — the model never picks a skill.
   triggers: string[];
+  // What the skill needs to do anything (`requires:` frontmatter): `gh` on PATH, a `github` remote.
+  // A skill whose requirement is missing is not loaded — see skillRequirementsMet.
+  requires?: string[];
 };
 
 const GLOBAL_DEFAULT = join(homedir(), '.config', 'reika', 'skills');
 const PROJECT_RELATIVE = '.reika/skills';
+// The skills that ship in the package (`issue`, `review`), beside `dist/` — one level up from this
+// module whether it runs as src/skills.ts or dist/skills.js.
+export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills');
 
-export async function loadSkills(cwd: string): Promise<Skill[]> {
+export async function loadSkills(cwd: string, bundledDir = BUNDLED_DIR): Promise<Skill[]> {
   const globalDir = process.env.REIKA_SKILLS_DIR
     ? expandHome(process.env.REIKA_SKILLS_DIR)
     : GLOBAL_DEFAULT;
   const projectDir = join(cwd, PROJECT_RELATIVE);
 
-  const globalSkills = await loadFromDir(globalDir, 'global');
-  const projectSkills = await loadFromDir(projectDir, 'project');
+  const [bundledSkills, globalSkills, projectSkills] = await Promise.all([
+    loadFromDir(bundledDir, 'bundled'),
+    loadFromDir(globalDir, 'global'),
+    loadFromDir(projectDir, 'project'),
+  ]);
 
-  // Project skills shadow global on name collision.
+  // The user's own copy wins: project over global over bundled, on name collision.
   const byName = new Map<string, Skill>();
-  for (const s of globalSkills) byName.set(s.name, s);
-  for (const s of projectSkills) byName.set(s.name, s);
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+  for (const s of [...bundledSkills, ...globalSkills, ...projectSkills]) byName.set(s.name, s);
+  const env = await skillEnvironment(cwd, [...byName.values()]);
+  return Array.from(byName.values())
+    .filter(s => skillRequirementsMet(s, env))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// --- requirements (`requires:` frontmatter) --------------------------------------------------
+// A skill that cannot run is left out rather than listed: `/issue` in a repo with no GitHub remote,
+// or on a machine with no `gh`, would spend a turn on a first call that fails, and its triggers
+// would still ask the routing question on every matching prompt. Both checks read files only —
+// nothing is executed at startup — and `/cd` re-runs them through bootstrap. A requirement this
+// version does not know is treated as unmet, so a skill written for a newer reika stays hidden
+// instead of running without what it asked for.
+export type SkillEnvironment = { gh: boolean; github: boolean };
+
+export function skillRequirementsMet(skill: Skill, env: SkillEnvironment): boolean {
+  return (skill.requires ?? []).every(r =>
+    r === 'gh' ? env.gh : r === 'github' ? env.github : false,
+  );
+}
+
+async function skillEnvironment(cwd: string, skills: Skill[]): Promise<SkillEnvironment> {
+  const needed = new Set(skills.flatMap(s => s.requires ?? []));
+  const [gh, github] = await Promise.all([
+    needed.has('gh') ? onPath('gh') : false,
+    needed.has('github') ? hasGitHubRemote(cwd) : false,
+  ]);
+  return { gh, github };
+}
+
+// Looked up, never run: `gh auth status` would cost a process (and possibly a network call) at every
+// startup, and a logged-out gh fails loudly on the skill's first call anyway.
+export async function onPath(bin: string, path = process.env.PATH ?? ''): Promise<boolean> {
+  for (const dir of path.split(delimiter)) {
+    if (!dir) continue;
+    try {
+      await access(join(dir, bin), constants.X_OK);
+      return true;
+    } catch {
+      // not in this directory
+    }
+  }
+  return false;
+}
+
+// Any remote on github.com, read from the repo's own config. Walks up from cwd (a monorepo
+// package), and follows a `.git` file to the real git dir and its `commondir`, which is where a
+// worktree's or submodule's config lives.
+export async function hasGitHubRemote(cwd: string): Promise<boolean> {
+  const gitDir = await findGitDir(resolve(cwd));
+  if (!gitDir) return false;
+  let configDir = gitDir;
+  try {
+    const common = (await readFile(join(gitDir, 'commondir'), 'utf8')).trim();
+    if (common) configDir = isAbsolute(common) ? common : resolve(gitDir, common);
+  } catch {
+    // an ordinary repo has no commondir
+  }
+  try {
+    const config = await readFile(join(configDir, 'config'), 'utf8');
+    return /^\s*url\s*=\s*\S*github\.com[:/]/m.test(config);
+  } catch {
+    return false;
+  }
+}
+
+async function findGitDir(start: string): Promise<string | null> {
+  for (let dir = start; ; dir = dirname(dir)) {
+    const dotGit = join(dir, '.git');
+    try {
+      const info = await stat(dotGit);
+      if (info.isDirectory()) return dotGit;
+      const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'));
+      if (pointer) return resolve(dir, pointer[1].trim());
+    } catch {
+      // no .git here
+    }
+    if (dirname(dir) === dir) return null;
+  }
 }
 
 async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[]> {
@@ -105,6 +192,7 @@ async function readSkill(
       source,
       path,
       triggers: parseTriggers(meta.triggers),
+      requires: parseRequires(meta.requires),
     };
   } catch {
     return null;
@@ -157,6 +245,16 @@ export function parseFrontmatter(text: string): { meta: Record<string, string>; 
 // `triggers: verify, smoke test` / `triggers: [verify, smoke test]` / a block list — all reach
 // here as one comma-joined string. Sub-3-char phrases are dropped: they carry no routing signal
 // and would fire on half the prompts in the language.
+// Not parseTriggers: that one drops entries under three characters, and `gh` is two.
+export function parseRequires(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .replace(/^\[(.*)\]$/, '$1')
+    .split(',')
+    .map(r => r.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export function parseTriggers(raw: string | undefined): string[] {
   if (!raw) return [];
   return [

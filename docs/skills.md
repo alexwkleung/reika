@@ -15,28 +15,22 @@ When both exist they are merged, global first, with the project file stated as w
 
 Drop a `*.md` file in a skills directory and it becomes a slash command. Useful for saved workflows (`/review`, `/deploy`, `/refactor`, etc.).
 
-**Locations (project shadows global on name collision):**
+**Locations (project shadows global, global shadows bundled, on name collision):**
 
+- Bundled: the skills that ship with Reika (below)
 - Global: `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
 - Project: `<cwd>/.reika/skills/`
 
 **Skills Reika ships with:**
-
-Two live in this repo, under `.reika/skills/`, so they load automatically when you run Reika on Reika — and so the workflows Reika's own development leans on are readable and reviewable rather than living only in someone's home directory:
 
 | Skill     | What it does                                                                                      |
 | --------- | ------------------------------------------------------------------------------------------------- |
 | `/issue`  | Reads a GitHub issue with `gh` (title + comments, since bodies are often empty), then works on it |
 | `/review` | Reads a PR and its linked issue with `gh`, pages the diff, and reviews it in the terminal         |
 
-They are project skills, so they only apply inside this checkout. To get them in every project:
+They only appear where they can work: `gh` must be on your `PATH`, and the current repo must have a `github.com` remote. Otherwise they are left out of the command list and never offered by plain-English routing. Reika only looks these up — it does not run `gh` at startup — so a `gh` that is installed but logged out shows the skills, and the first call says what is wrong. To change one, copy it into your global or project skills directory under the same name; your copy replaces the bundled one.
 
-```sh
-npm run skills:link              # symlinks each into ~/.config/reika/skills/ (or $REIKA_SKILLS_DIR)
-npm run skills:link -- --force   # also replace same-named files already there
-```
-
-Symlinks, not copies — `git pull` then updates them everywhere. Optional: nothing else in Reika depends on it, and a same-named skill of your own in the global dir is left alone unless you pass `--force`.
+A skill of your own can declare the same requirements with a `requires:` frontmatter line (`requires: gh, github`). A requirement Reika does not recognize hides the skill.
 
 **Layouts (both supported):**
 
