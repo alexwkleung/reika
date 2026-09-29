@@ -82,6 +82,21 @@ describe('grind system prompt', () => {
     expect(p).toContain('NNNNN│');
   });
 
+  it('names the web tools only when the turn has them (#589)', () => {
+    const both = buildSystemPrompt({
+      bundle: makeBundle(),
+      grind: true,
+      sandbox: true,
+      canFetch: true,
+      canSearch: true,
+    });
+    expect(both).toContain('use search/fetch_url rather than guessing or curl');
+    expect(both).toContain('use fetch_url for a web page');
+    const fetchOnly = buildSystemPrompt({ bundle: makeBundle(), grind: true, canFetch: true });
+    expect(fetchOnly).toContain('use fetch_url rather than guessing');
+    expect(fetchOnly).not.toContain('search/');
+  });
+
   it('gates the ask_user rule on the tool', () => {
     const withAsk = buildSystemPrompt({ bundle: makeBundle(), grind: true, canAsk: true });
     const without = buildSystemPrompt({ bundle: makeBundle(), grind: true, canAsk: false });
@@ -99,10 +114,12 @@ describe('grind system prompt', () => {
 });
 
 describe('grind tool list', () => {
-  it('offers bash, read and edit and nothing else that works', async () => {
+  it('offers bash, read and edit, plus the web tools (#589), and nothing else that works', async () => {
     const { grindTools } = await import('../tools/index.js');
-    const names = grindTools().map(t => t.name);
+    const names = grindTools(undefined, { offline: true }).map(t => t.name);
     expect(names.filter(n => n !== 'ask_user')).toEqual(['read', 'edit', 'bash']);
+    const online = grindTools().map(t => t.name);
+    expect(online.filter(n => n !== 'ask_user')).toEqual(['read', 'edit', 'bash', 'fetch_url']);
   });
 
   it('describes bash without steering at tools grind lacks', async () => {

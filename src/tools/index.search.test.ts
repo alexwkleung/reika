@@ -5,6 +5,7 @@ import {
   defaultTools,
   makeSearchProvider,
   planTools,
+  grindTools,
   searchPrecedenceNotice,
   type SearchProbe,
 } from './index.js';
@@ -178,5 +179,24 @@ describe('tool lists — plan mode web tools (#290)', () => {
     expect(list).not.toContain('edit');
     expect(list).not.toContain('write');
     expect(list).not.toContain('subagent');
+  });
+});
+
+// #589: grind gets the web pair on the same rule. Its only other road to a page is `curl`, which
+// prompts under `safe` and is denied the network under `bypass` or unattended.
+describe('tool lists — grind mode web tools (#589)', () => {
+  const cfg = config({ searxngUrl: SEARXNG });
+  const names = (tools: { name: string }[]) => tools.map(t => t.name);
+
+  it('gives grind both with a provider, and fetch_url alone without one', () => {
+    expect(names(grindTools(cfg))).toEqual(expect.arrayContaining(['search', 'fetch_url']));
+    expect(names(grindTools(config({})))).toContain('fetch_url');
+    expect(names(grindTools(config({})))).not.toContain('search');
+  });
+
+  it('drops both offline (#392)', () => {
+    const offline = names(grindTools(cfg, { offline: true }));
+    expect(offline).not.toContain('search');
+    expect(offline).not.toContain('fetch_url');
   });
 });
