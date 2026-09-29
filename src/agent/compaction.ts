@@ -26,6 +26,9 @@ const RECAP_FRACTION = 0.1;
 // freeing the window so the plan stays salient and the agent's own edit/verify loop has room. Raise
 // toward KEEP_FRACTION on larger (24k+) windows where re-reads cost more than the spare room saves.
 const HANDOFF_FINDINGS_FRACTION = 0.15;
+// A follow-up request carried into the handoff digest is the user's words, usually a line; the cap is
+// for a pasted wall of text, which the digest's own findings budget does not cover.
+const HANDOFF_FOLLOW_UP_CHARS = 1000;
 // Per-entry text budget inside the recap.
 const MAX_TEXT = 240;
 // Slack against estimate error: trigger compaction slightly before the prompt would
@@ -837,6 +840,22 @@ export type HandoffOutcome = {
   reason: 'folded' | 'no-marker' | 'empty-span' | 'already-distilled' | 'no-steps';
 };
 
+// The request that opened the plan's exchange: the user message of the turn that wrote it, walked
+// back over earlier plan-mode turns (a refinement, a question, an abandoned plan) to the first. The
+// loop stamps `mode: 'plan'` on plan-mode turns only, so an agent turn or vibe's plan phase stops the
+// walk. -1 when no user message survives before the plan (a fold took it), which folds from the top.
+function planRequestIndex(history: Message[], planIdx: number): number {
+  let request = -1;
+  for (let i = planIdx - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'user' || m.harness || m.meta) continue;
+    if (request >= 0 && m.mode !== 'plan') break;
+    request = i;
+    if (m.mode !== 'plan') break;
+  }
+  return request;
+}
+
 export function distillPlanHandoff(
   history: Message[],
   contextWindow: number | undefined,
@@ -858,10 +877,11 @@ export function distillPlanHandoff(
   if (marker.steps.length === 0) return { folded: 0, reason: 'no-steps' };
   const planIdx = marker.index;
 
-  // Pin the original request at index 0 exactly as compactHistory does; fold only what follows it,
-  // up to (but excluding) the plan message. A leading slash-command echo (meta) is not the task.
-  const first = history[0];
-  const spanStart = first && first.role === 'user' && !first.meta ? 1 : 0;
+  // Pin the plan's own request and fold only what follows it, up to (but excluding) the plan. Not
+  // history[0]: that is the session's first message, so a plan written late folded every earlier
+  // task into this digest, and a plan for a second task sat beside the first task's request.
+  const requestIdx = planRequestIndex(history, planIdx);
+  const spanStart = requestIdx + 1;
   // Plan written with no exploration in front of it — nothing to fold.
   if (planIdx <= spanStart) return { folded: 0, reason: 'empty-span' };
   const span = history.slice(spanStart, planIdx);
@@ -900,9 +920,18 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   // under-reports the plan phase, which is exactly what the agent turn reads it to find out.
   const lookups = new Set<string>();
   const priorRecaps: string[] = [];
+  // The later requests of the plan's exchange (a refinement, a question, a new task after an
+  // abandoned plan). The plan they produced is kept verbatim, but it cannot say which of them it
+  // answers, so they ride along rather than fold away unseen.
+  const followUps: string[] = [];
   for (const m of span) {
     if (m.role === 'compaction') {
       priorRecaps.push(m.content);
+    } else if (m.role === 'user' && !m.harness && !m.meta) {
+      const text = m.content.trim();
+      followUps.push(
+        text.length > HANDOFF_FOLLOW_UP_CHARS ? `${text.slice(0, HANDOFF_FOLLOW_UP_CHARS)}…` : text,
+      );
     } else if (m.role === 'assistant') {
       for (const tc of m.toolCalls ?? []) {
         const p = tc.args.path;
@@ -927,6 +956,9 @@ function buildHandoffDigest(span: Message[], findingsBudget: number): string {
   indexLine('Files examined', files);
   indexLine('Commands run', commands);
   indexLine('Web lookups', lookups);
+  if (followUps.length > 0) {
+    out.push(`Follow-up requests, oldest first:\n${followUps.map(f => `- ${f}`).join('\n')}`);
+  }
   if (priorRecaps.length > 0) out.push(priorRecaps.join('\n\n'));
   const findings = gatherPlanFindings(span, findingsBudget);
   if (findings.trim()) out.push(`Findings:\n${findings}`);
