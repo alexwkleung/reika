@@ -93,6 +93,7 @@ async function captureRoundZero(
   promptMode: PromptMode,
   config: Config,
   tools: Tool[] = [],
+  allowRefine?: boolean,
 ): Promise<{ system: string; history: Message[] }> {
   h.scripted.push({ content: 'final', toolCalls: undefined });
   await runTurn({
@@ -104,6 +105,7 @@ async function captureRoundZero(
     payloads: new PayloadStore(),
     onMessage: () => {},
     promptMode,
+    allowRefine,
   });
   return h.captured[0];
 }
@@ -141,6 +143,30 @@ describe('buildWarmPayload drift (warm prefix must match the real round-0 reques
       });
     });
   }
+
+  // The refinement gate (#46): vibe's plan phase sends allowRefine false, and with a written plan
+  // at the head of history the refine ledger line is exactly the one-line drift the warm must not
+  // have (one side gated, the other deriving). Window unknown so prefix-stable is off and the
+  // ledgers ride the system block — the regime where this composition exists at all.
+  it('matches round 0 with refinement gated off and a plan overhead (vibe plan phase)', async () => {
+    const config = makeConfig({ contextWindow: undefined });
+    const preTurn: Message[] = [
+      ...priorTurn(),
+      { role: 'assistant', content: '1. Edit `a.ts`.', planFinal: true },
+    ];
+    const warm = buildWarmPayload({
+      history: preTurn,
+      bundle: makeBundle(),
+      config,
+      tools: [],
+      promptMode: 'plan',
+      allowRefine: false,
+      calibration: 1,
+    });
+    const real = await captureRoundZero(preTurn.slice(), 'plan', config, [], false);
+    expect(warm.system).not.toContain('This turn follows up on it');
+    expect(warm.system).toBe(real.system);
+  });
 
   it('empty history: warms the system prompt (divergence starts at the user turn)', async () => {
     const config = makeConfig();
@@ -223,6 +249,15 @@ describe('warmKey', () => {
     const swapped = ctx().history;
     swapped[swapped.length - 1] = { role: 'assistant', content: 'a different final answer' };
     expect(warmKey({ ...ctx(), history: swapped })).not.toBe(base);
+  });
+
+  // Plan and vibe's plan phase both send promptMode 'plan'; only the refinement gate (#46) differs,
+  // so it must ride the key or one would serve the other's warmable prefix.
+  it('changes when refinement is gated off (plan turn vs vibe plan phase)', () => {
+    const base = warmKey({ ...ctx(), promptMode: 'plan' });
+    expect(warmKey({ ...ctx(), promptMode: 'plan', allowRefine: false })).not.toBe(base);
+    // Gating on is the plain key, not a new one.
+    expect(warmKey({ ...ctx(), promptMode: 'plan', allowRefine: true })).toBe(base);
   });
 });
 

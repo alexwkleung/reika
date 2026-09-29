@@ -6,7 +6,10 @@ import {
   buildPlanProgressLedger,
   decidePlanGate,
   MAX_PLAN_GATE_ROUNDS,
+  latestPlanMarker,
+  planChanged,
   parsePlanSteps,
+  refineTarget,
   seedPlanProgress,
   waiveUnchecked,
 } from './plantrack.js';
@@ -503,5 +506,129 @@ describe('decidePlanGate', () => {
     expect(decidePlanGate({ steps, gateRounds: 0, maxRounds: MAX_PLAN_GATE_ROUNDS })).toEqual({
       action: 'pass',
     });
+  });
+});
+
+// #46. The plan a plan-mode turn refines: the newest written plan, with no other kind of model turn
+// after it. Both halves matter — a step-less marker is a dead-ended plan turn (#126), and a plan with a
+// model turn after it belongs to an earlier exchange (vibe runs its implementation off the same
+// prompt, so that is what a later vibe prompt looks like).
+describe('latestPlanMarker / refineTarget', () => {
+  it('takes the newest plan marker and parses its steps', () => {
+    const marker = latestPlanMarker([
+      plan('1. Edit `old.ts`'),
+      { role: 'user', content: 'revise it' },
+      plan(PLAN),
+    ]);
+    expect(marker?.index).toBe(2);
+    expect(marker?.steps).toHaveLength(4);
+    expect(latestPlanMarker([{ role: 'user', content: 'hi' }])).toBeNull();
+  });
+
+  // The grounding/URL notes are appended to the plan message at commit; a refinement handed them as
+  // its own plan text would copy a stale advisory into the revision.
+  it('stops at the appended plan-check notes', () => {
+    const body = '1. Edit `src/config.ts`';
+    const withNotes = {
+      ...plan(body + '\n\n--- reika: plan grounding check (auto-generated) ---\n- `src/config.ts`'),
+      planChecks: { at: body.length, missing: ['src/config.ts'], deadUrls: [] },
+    };
+    const marker = latestPlanMarker([withNotes]);
+    expect(marker?.content).toBe(body);
+    expect(marker?.steps).toHaveLength(1);
+  });
+
+  it('keeps a step-less marker visible to latestPlanMarker but not as a refinement target', () => {
+    const marker = latestPlanMarker([plan('1. Edit `a.ts`'), plan('I could not determine that.')]);
+    expect(marker?.steps).toEqual([]);
+    expect(refineTarget([plan('1. Edit `a.ts`'), plan('I could not determine that.')])).toBeNull();
+  });
+
+  it('is a refinement target only while no other kind of turn followed the plan', () => {
+    const planned: Message[] = [plan(PLAN)];
+    expect(refineTarget(planned)?.content).toBe(PLAN);
+    // The follow-up prompt itself is a user message, so it doesn't disqualify.
+    expect(refineTarget([...planned, { role: 'user', content: 'also do X' }])).not.toBeNull();
+    // Another model turn after the plan does. The turn in progress is not the one after the plan.
+    expect(
+      refineTarget([
+        ...planned,
+        { role: 'user', content: 'implement the plan above' },
+        { role: 'assistant', content: 'Done.' },
+        { role: 'user', content: 'now do Y' },
+      ]),
+    ).toBeNull();
+  });
+});
+
+// #46 review. A plan-mode follow-up that wrote no new plan — aborted, spiral-stopped, or answered in
+// prose — changed nothing the plan is about, so the plan stays live across it. Any other turn in
+// between (an implementation, or a turn with no plan-mode stamp) still retires it.
+describe('the plan stays live across plan-mode turns that wrote no new plan', () => {
+  const followUp = (content: string): Message => ({ role: 'user', content, mode: 'plan' });
+
+  it('refines after an aborted or spiral-stopped follow-up', () => {
+    for (const stop of ['(aborted)', "I couldn't converge — the reasoning kept looping."]) {
+      const history: Message[] = [
+        plan(PLAN),
+        followUp('also cover X'),
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+        { role: 'assistant', content: stop },
+        followUp('also cover X, but only the settings screen'),
+      ];
+      expect(refineTarget(history)?.content).toBe(PLAN);
+    }
+  });
+
+  it('looks past a prose answer to a follow-up question', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'add dark mode' },
+      plan(PLAN),
+      followUp('why is step 3 needed?'),
+      plan('Because the palette is read at startup.'),
+    ];
+    expect(latestPlanMarker(history)?.content).toBe(PLAN);
+    expect(seedPlanProgress(history)).toHaveLength(4);
+    expect(refineTarget([...history, followUp('ok, drop step 3')])?.content).toBe(PLAN);
+  });
+
+  it('does not look past a step-less plan that followed another kind of turn', () => {
+    const history: Message[] = [
+      plan(PLAN),
+      { role: 'user', content: 'implement it', mode: 'agent' },
+      { role: 'assistant', content: 'Done.' },
+      followUp('now plan the export feature'),
+      plan('I could not determine which file handles export.'),
+    ];
+    expect(latestPlanMarker(history)?.steps).toEqual([]);
+    expect(seedPlanProgress(history)).toBeNull();
+    expect(refineTarget([...history, followUp('try again')])).toBeNull();
+    // A turn with no stamp at all is not a plan-mode turn either.
+    expect(
+      refineTarget([
+        plan(PLAN),
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: 'a' },
+      ]),
+    ).toBeNull();
+  });
+});
+
+// #46. Whether a refinement round actually landed: compared on the parsed steps, since a model that
+// re-emits the plan it already had will renumber or re-head it freely.
+describe('planChanged', () => {
+  it('reads a renumbering or reformat of the same steps as unchanged', () => {
+    expect(
+      planChanged('1. Edit `a.ts`\n2. Run `npm test`', '1) Edit `a.ts`\n2) Run `npm test`'),
+    ).toBe(false);
+    expect(planChanged('1. Edit `a.ts`', 'Here is the plan.\n\n**Step 1:** Edit `a.ts`')).toBe(
+      false,
+    );
+  });
+
+  it('reads a changed step, a changed count, or a step-less reply as changed', () => {
+    expect(planChanged('1. Edit `a.ts`', '1. Edit `b.ts`')).toBe(true);
+    expect(planChanged('1. Edit `a.ts`', '1. Edit `a.ts`\n2. Run `npm test`')).toBe(true);
+    expect(planChanged('1. Edit `a.ts`', 'I could not determine that.')).toBe(true);
   });
 });

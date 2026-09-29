@@ -192,10 +192,6 @@ describe('agent prompt subagent nudge (#273)', () => {
   });
 });
 
-// The plan prompt carries its own ask rule (#272): the plan is a one-shot handoff to an
-// implementation turn with no refinement round between (#46 is open), so a wrong reading of the
-// request costs the whole implementation turn. Same tool-list coupling as the agent prompt, but
-// deliberately NOT the same line — see the comment on rule 5 in prompt.ts.
 describe('agent prompt caller-check rule (#556)', () => {
   afterEach(() => {
     delete process.env.REIKA_CALLER_CHECK;
@@ -229,6 +225,10 @@ describe('agent prompt caller-check rule (#556)', () => {
   });
 });
 
+// The plan prompt carries its own ask rule (#272): a plan built on the wrong reading of the
+// request costs the user a refinement round trip (#46) or a whole implementation turn, since the
+// plan is what the next turn executes. Same tool-list coupling as the agent prompt, but deliberately
+// NOT the same line — see the comment on rule 5 in prompt.ts.
 describe('plan prompt tracks the ask_user tool (#272)', () => {
   afterEach(() => {
     delete process.env.REIKA_ASK;

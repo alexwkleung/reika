@@ -6,6 +6,7 @@ import {
   lastAssistantContent,
   readsSpill,
   spilledPath,
+  writtenPlans,
 } from './util.js';
 
 // These helpers decide whether a spill eval passes, so a wrong answer here is indistinguishable
@@ -114,5 +115,26 @@ describe('existing helpers', () => {
     expect(lastAssistantContent(messages)).toBe('first');
     expect(calledTool(messages, 'read')).toBe(true);
     expect(calledTool(messages, 'bash')).toBe(false);
+  });
+});
+
+describe('writtenPlans', () => {
+  it('collects the plans of both turns, oldest first, and skips a step-less dead end', () => {
+    const messages: Message[] = [
+      { role: 'user', content: 'make the accent configurable' },
+      { role: 'assistant', content: '1. Edit `src/palette.ts`', planFinal: true },
+      { role: 'user', content: 'also the easing curve' },
+      { role: 'assistant', content: 'I could not determine that.', planFinal: true },
+      {
+        role: 'assistant',
+        content: '1. Edit `src/palette.ts`\n2. Edit `src/easing.ts`',
+        planFinal: true,
+      },
+    ];
+    expect(writtenPlans(messages)).toEqual([
+      '1. Edit `src/palette.ts`',
+      '1. Edit `src/palette.ts`\n2. Edit `src/easing.ts`',
+    ]);
+    expect(writtenPlans([{ role: 'user', content: 'hi' }])).toEqual([]);
   });
 });

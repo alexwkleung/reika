@@ -28,6 +28,7 @@ import {
   isGrindPrompt,
   planWritten,
   turnPromptMode,
+  turnRefines,
   turnTools,
 } from './ui/commands.js';
 import type { Config, ContextBundle, Message, Mode, Profile, Tool, Usage } from './types.js';
@@ -296,6 +297,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         promptMode: turnPromptMode(active),
         minimalPrompt: isMinimalPrompt(active),
         grindPrompt: isGrindPrompt(active),
+        // Plan refinement (#46) is for plan-mode follow-ups only — a vibe-chain turn (recorded as
+        // vibe) never refines, since its plan phase is a new task even when a plan sits right above.
+        allowRefine: turnRefines(recorded),
         manualCompact: submit.manualCompact,
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.

@@ -32,6 +32,10 @@ export type WarmContext = {
   minimalPrompt?: boolean;
   // Grind mode (#556), for the same reason.
   grindPrompt?: boolean;
+  // Plan refinement gate (#46), same as loop.ts RunTurnOptions.allowRefine: false for vibe's plan
+  // phase. Rides the key beside minimalPrompt for the same reason — vibe and plan BOTH send
+  // promptMode 'plan', so without it the two share a warmable key and one serves the other's prefix.
+  allowRefine?: boolean;
   calibration: number;
 };
 
@@ -59,14 +63,17 @@ export function warmKey(ctx: WarmContext): string {
         : 0;
   const fingerprint = last ? `${last.role}:${lastLen}` : 'empty';
   return [
-    // Minimal rides in the key beside promptMode, not folded into it: agent and minimal BOTH send
-    // promptMode 'agent', so without this the two would share a key and a mode switch would serve
-    // a warm built from the other one's prefix — a guaranteed miss, and a silent one.
-    ctx.minimalPrompt
-      ? `${ctx.promptMode}+minimal`
-      : ctx.grindPrompt
-        ? `${ctx.promptMode}+grind`
-        : ctx.promptMode,
+    // Minimal, grind and norefine ride in the key beside promptMode, not folded into it: agent,
+    // minimal and grind all send promptMode 'agent', and plan and vibe's plan phase BOTH send
+    // 'plan', so without the tags they would share a key and a mode switch would serve a warm built
+    // from the other one's prefix — a guaranteed miss, and a silent one.
+    [
+      ctx.promptMode,
+      ctx.minimalPrompt ? 'minimal' : ctx.grindPrompt ? 'grind' : '',
+      ctx.allowRefine === false ? 'norefine' : '',
+    ]
+      .filter(Boolean)
+      .join('+'),
     ctx.config.model,
     ctx.config.baseURL,
     ctx.bundle.hash,
@@ -86,6 +93,7 @@ export function buildWarmPayload(ctx: WarmContext): { system: string; history: M
     promptMode: ctx.promptMode,
     minimalPrompt: ctx.minimalPrompt,
     grindPrompt: ctx.grindPrompt,
+    allowRefine: ctx.allowRefine,
     sandbox: ctx.config.sandbox,
     unattended: ctx.config.unattended,
     tools: ctx.tools,
