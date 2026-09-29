@@ -1,8 +1,0 @@
-dist
-node_modules
-package-lock.json
-.env
-.env.local
-*.gguf
-docs/.vitepress/cache
-docs/.vitepress/dist
