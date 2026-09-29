@@ -15,6 +15,7 @@ import {
   searchPrecedenceNotice,
 } from './tools/index.js';
 import { isOffline } from './tools/_net.js';
+import { connectMcpServers, type McpRuntime } from './mcp/manager.js';
 import { PayloadStore } from './store/payloads.js';
 import { runTurn, type ShrinkCounts } from './agent/loop.js';
 import { PrefixTrace } from './agent/prefixtrace.js';
@@ -140,6 +141,12 @@ export type Session = {
   readonly searchNotice: string | undefined;
   // What the startup probe learned, worded for the user; undefined when it found nothing.
   readonly limitsNotice: string | undefined;
+  // MCP servers' connections and what they offer (#265). Closed by the front end on exit; empty
+  // when nothing is configured.
+  readonly mcp: McpRuntime;
+  // Startup lines about MCP — what connected, what failed, and any config error — for the front end
+  // to print once. Not in the model's context: it describes the harness, not the task.
+  readonly mcpNotices: string[];
   readonly lists: ToolLists;
   // Model-facing history of the active side: the loop appends and folds it in place, and the fold
   // must survive to the next turn (#183).
@@ -180,7 +187,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   // loaded before any message can be rendered or saved; detection is best-effort, fail-open like
   // the other scrub layers. The window probe (#417) rides the same concurrency: a local server
   // answers in milliseconds, and it must land before anything reads the window.
-  const [booted, probed] = await Promise.all([
+  const [booted, probed, , mcp] = await Promise.all([
     bootstrap(opts.cwd, cfg.repoMapBudget),
     needsLimitsProbe(cfg.profiles[profile] ?? cfg.profiles.default)
       ? probeModelLimits(cfg.profiles[profile] ?? cfg.profiles.default)
@@ -190,6 +197,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
           .then(setIdentity)
           .catch(() => {})
       : Promise.resolve(),
+    // MCP servers start here, concurrently with everything else: they are subprocesses whose
+    // handshake takes as long as it takes, and the session cannot build its tool list without them.
+    // A server that fails comes back as a notice, not an exception (#265).
+    connectMcpServers(cfg.mcpServers ?? []),
   ]);
   let bundle = booted;
   if (probed) cfg = withProbedLimits(cfg, profile, probed);
@@ -204,7 +215,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const filter = (tools: Tool[]): Tool[] =>
     opts.canAsk === false ? tools.filter(t => t.name !== 'ask_user') : tools;
   const lists: ToolLists = {
-    agent: filter(defaultTools(cfg, { offline })),
+    // MCP tools ride the agent list only, by the rule that decides every other list: a mode's
+    // guarantee is structural, and an MCP tool is opaque to the harness — nothing here can prove a
+    // server's tool does not write files, so plan mode (which cannot mutate the repo) and chat
+    // (no filesystem or shell) cannot have one. Agent mode is where an added capability belongs.
+    agent: filter([...defaultTools(cfg, { offline }), ...mcp.tools]),
     plan: filter(planTools(cfg, { offline })),
     chat: filter(chatTools(cfg, { offline })),
     minimal: filter(minimalTools()),
@@ -425,6 +440,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     offline,
     searchNotice: offline ? undefined : searchPrecedenceNotice(chooseSearchBackend(cfg)),
     limitsNotice: probed && probedLimitsNotice(probed),
+    mcp,
+    // Config errors come first: they explain a server that never even started.
+    mcpNotices: [...(cfg.mcpErrors ?? []), ...mcp.notices],
     lists,
     get history() {
       return history;

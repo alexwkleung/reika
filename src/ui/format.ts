@@ -69,11 +69,23 @@ export function formatShrink(sheds: number, folds: number): string {
 // snake_case identifier. Only names needing an override are listed; everything else capitalizes.
 // Both the rendered label and the hanging-wrap width math go through this, so they cannot drift.
 const TOOL_LABELS: Record<string, string> = { ask_user: 'Ask', fetch_url: 'Fetch' };
+// The wire name an MCP tool carries (#265): `mcp__<server>__<tool>`. Shown as the command the user
+// would type to reach the same tool, since that spelling appears in /mcp and /help too.
+const MCP_TOOL_PREFIX = 'mcp__';
 
 export function toolLabel(name: string): string {
   const override = TOOL_LABELS[name];
   if (override) return override;
+  if (name.startsWith(MCP_TOOL_PREFIX)) return `Mcp ${mcpNameTail(name)}`;
   return name.length > 0 ? name[0].toUpperCase() + name.slice(1) : name;
+}
+
+// `fs__read_file` → `fs:read_file`. The first `__` after the prefix is the one the namespace
+// inserted; a later one belongs to the server's own tool name and is left alone.
+function mcpNameTail(name: string): string {
+  const rest = name.slice(MCP_TOOL_PREFIX.length);
+  const sep = rest.indexOf('__');
+  return sep === -1 ? rest : `${rest.slice(0, sep)}:${rest.slice(sep + 2)}`;
 }
 
 // The in-flight verb for a call the loop has just dispatched (#509), for the live `↳ Running…` row
@@ -99,8 +111,10 @@ const TOOL_VERBS: Record<string, string> = {
 };
 
 // Anything unlisted still gets an honest row rather than none: the label is ephemeral and carries
-// no claim beyond "this call is in flight".
+// no claim beyond "this call is in flight". MCP tools are unlisted by name on purpose — the set is
+// whatever the user configured — but the prefix is enough to name the verb (#265).
 export function toolVerb(name: string): string {
+  if (name.startsWith(MCP_TOOL_PREFIX)) return 'Calling';
   return TOOL_VERBS[name] ?? 'Working';
 }
 

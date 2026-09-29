@@ -90,6 +90,14 @@ describe('toolLabel', () => {
     expect(toolLabel('edit')).toBe('Edit');
   });
 
+  // MCP tools (#265) arrive as `mcp__server__tool`; the chip is read by a human, who types
+  // `/server:tool` to invoke the same tool.
+  it('spells an MCP tool the way its slash command does', () => {
+    expect(toolLabel('mcp__fs__read_file')).toBe('Mcp fs:read_file');
+    expect(toolLabel('mcp__fs__a__b')).toBe('Mcp fs:a__b');
+    expect(toolLabel('mcp__lonely')).toBe('Mcp lonely');
+  });
+
   it('leaves an empty name alone', () => {
     expect(toolLabel('')).toBe('');
   });
@@ -112,6 +120,10 @@ describe('toolVerb', () => {
     expect(toolVerb('search')).toBe('Searching');
     expect(toolVerb('ask_user')).toBe('Asking');
     expect(toolVerb('subagent')).toBe('Delegating');
+  });
+
+  it('gives an MCP call the verb its own summary starts with', () => {
+    expect(toolVerb('mcp__fs__read_file')).toBe('Calling');
   });
 
   // A local regex scan and an outbound query, both committing as "Found …": grep's matches, glob's

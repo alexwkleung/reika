@@ -9,6 +9,7 @@ import { matchSkill, shouldAutoInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { debugLog } from './debug.js';
+import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
 import type { ApprovalRequest, Config, ContextBundle, Message } from './types.js';
@@ -116,6 +117,33 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
   if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
   if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
+  for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);
+
+  // An MCP tool typed as a slash command (#265): the same direct call the TUI makes, answered with
+  // the tool's own output instead of a model turn. There is no question for the model to answer —
+  // the user named the tool and its arguments — so this runs before any prompt is built.
+  const mcpCall = prompt.includes('\n') ? undefined : findMcpCommand(prompt, session.mcp.commands);
+  if (mcpCall) {
+    const parsed = parseMcpArgs(mcpCall.command, mcpCall.rest);
+    if ('error' in parsed) {
+      io.stderr(`reika: ${parsed.error}\n`);
+      return 1;
+    }
+    const { server, tool } = mcpCall.command;
+    const { result, failed } = await callMcpTool(
+      session.mcp.call,
+      `${server}:${tool}`,
+      server,
+      tool,
+      parsed.args,
+    );
+    io.stdout(`${result.payload ? `${result.payload}\n` : ''}`);
+    io.stderr(`reika: ${result.summary}\n`);
+    // A tool that failed is this run's error: the exit status is what a script reads, and the
+    // summary on stderr is not something it can parse.
+    return failed ? 1 : 0;
+  }
+
   const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
   const input = await buildHeadlessInput(prompt, config, bundle, mode);
   for (const n of input.notices) io.stderr(`reika: ${n}\n`);

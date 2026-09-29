@@ -1,4 +1,5 @@
 import type { Ignore } from 'ignore';
+import type { McpServerConfig } from './mcp/config.js';
 import type { Skill } from './skills.js';
 
 export type ToolCall = {
@@ -542,6 +543,13 @@ export type Config = {
   workingWords?: boolean;
   // What a command-shaped skill match may do to the prompt (REIKA_SKILL_AUTO). See parseSkillAuto.
   skillAuto: SkillAutoMode;
+  // MCP servers to start with this session (REIKA_MCP_SERVERS, #265): stdio JSON-RPC servers whose
+  // tools join the agent tool list as `mcp__<server>__<tool>` and become `/<server>:<tool>`
+  // commands. Optional so a hand-built Config (tests) starts none.
+  mcpServers?: McpServerConfig[];
+  // Why a configured server did not load, worded for the user. Reported at startup and never fatal:
+  // a bad entry must not cost the session.
+  mcpErrors?: string[];
   // Replace the current user's git name/email and GitHub/HF account slugs with <user>/<email> in
   // the scrollback and saved transcripts (REIKA_ANON=1, default off). Display only — the model
   // still receives everything verbatim. See ui/identity.ts.

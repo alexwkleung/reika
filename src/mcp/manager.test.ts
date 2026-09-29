@@ -1,0 +1,120 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import type { McpServerConfig } from './config.js';
+import { connectMcpServers } from './manager.js';
+
+// A second real server, smaller than client.test.ts's: the manager's job is the wiring — namespaced
+// tools, command spellings, notices, call routing — and that wiring is only exercised end to end.
+const dir = mkdtempSync(join(tmpdir(), 'reika-mcp-manager-'));
+const serverPath = join(dir, 'server.mjs');
+writeFileSync(
+  serverPath,
+  `
+let buf = '';
+const send = msg => process.stdout.write(JSON.stringify(msg) + '\\n');
+const handle = msg => {
+  if (msg.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture-server', version: '0.1' } } });
+    return;
+  }
+  if (msg.method === 'notifications/initialized') {
+    if (process.env.FIXTURE_ANNOUNCE === '1') send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: {} });
+    return;
+  }
+  if (msg.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { tools: [
+      { name: 'echo', description: 'Echo text', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+      { name: 'Strange.Name', description: 'Odd name', inputSchema: { type: 'object', properties: {} } },
+    ] } });
+    return;
+  }
+  if (msg.method === 'tools/call') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok:' + (msg.params.arguments || {}).text }] } });
+    return;
+  }
+};
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  buf += chunk;
+  let nl;
+  while ((nl = buf.indexOf('\\n')) !== -1) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    if (line.trim()) handle(JSON.parse(line));
+  }
+});
+`,
+);
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+function server(name: string, env: Record<string, string> = {}): McpServerConfig {
+  return { name, command: process.execPath, args: [serverPath], env };
+}
+
+describe('connectMcpServers', () => {
+  it('says nothing at all when nothing is configured', async () => {
+    const runtime = await connectMcpServers([]);
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.notices).toEqual([]);
+    expect(runtime.list()).toContain('No MCP servers configured');
+    await expect(runtime.call('x', 'y', {})).rejects.toThrow('no MCP server "x"');
+  });
+
+  it('namespaces the tools, spells the commands, and reports what connected', async () => {
+    const runtime = await connectMcpServers([server('gh')]);
+    try {
+      expect(runtime.tools.map(t => t.name)).toEqual(['mcp__gh__echo', 'mcp__gh__Strange_Name']);
+      expect(runtime.commands.map(c => c.name)).toEqual(['gh:echo', 'gh:strange.name']);
+      expect(runtime.notices).toEqual([
+        'MCP: gh (2 tools) — 2 tools added in agent mode. /mcp lists them.',
+      ]);
+      const list = runtime.list();
+      expect(list).toContain('MCP: 1 server, 2 tools');
+      expect(list).toContain('gh — 2 tools (fixture-server 0.1)');
+      expect(list).toContain('/gh:echo');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('keeps a broken server out of the tool list and says why', async () => {
+    const runtime = await connectMcpServers([
+      server('good'),
+      { name: 'broken', command: 'reika-no-such-binary-xyz', args: [] },
+    ]);
+    try {
+      expect(runtime.tools.map(t => t.name)).toEqual([
+        'mcp__good__echo',
+        'mcp__good__Strange_Name',
+      ]);
+      expect(runtime.notices[0]).toContain('MCP: good (2 tools)');
+      expect(runtime.notices[1]).toContain('MCP server "broken" unavailable');
+      expect(runtime.notices[1]).toContain('could not start reika-no-such-binary-xyz');
+      expect(runtime.list()).toContain('broken — unavailable:');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('routes a call to the named server, and reports a changed tool list', async () => {
+    const runtime = await connectMcpServers([server('good', { FIXTURE_ANNOUNCE: '1' })]);
+    try {
+      const result = await runtime.call('good', 'echo', { text: 'hi' });
+      expect(result.content?.[0]).toEqual({ type: 'text', text: 'ok:hi' });
+      await expect(runtime.call('other', 'echo', {})).rejects.toThrow('no MCP server "other"');
+      expect(runtime.servers[0].changed).toBe(true);
+      expect(runtime.list()).toContain('restart reika to pick it up');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('closes every server it started', async () => {
+    const runtime = await connectMcpServers([server('one'), server('two')]);
+    runtime.close();
+    await expect(runtime.call('one', 'echo', {})).rejects.toThrow(/closed|server exited/);
+    await expect(runtime.call('two', 'echo', {})).rejects.toThrow(/closed|server exited/);
+  });
+});

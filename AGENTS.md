@@ -45,6 +45,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/provider/`  | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`)                                                    |
 | `src/tools/`     | One tool per file; register in `src/tools/index.ts`                                                                                            |
 | `src/context/`   | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore                                                             |
+| `src/mcp/`       | MCP client (`REIKA_MCP_SERVERS`): stdio JSON-RPC transport, tool/command bridge, per-session server manager (#265)                             |
 | `src/search/`    | Web search providers — `types.ts` (interface) + per-provider adapters                                                                          |
 | `src/store/`     | Addressable payload storage                                                                                                                    |
 | `src/ui/`        | Ink components (`.tsx`) + UI helpers (`.ts`) — helpers are UI-coupled, keep them here                                                          |
@@ -92,6 +93,42 @@ Four decisions worth not re-litigating:
 Two details that follow from what the budget is for. A refused search is **refunded** (`budget.used--`): the cap exists to stop runaway loops hammering upstream engines, and a search that never reached an engine — a missing Chrome reaches nothing at all — is not that egress. And the error's optional `remedy` is surfaced through `ToolResult.notice` (user-facing, `warn`), never in the summary: the model cannot set an environment variable, so naming one in its context is noise it can only ignore, while the user is the one who can act. Emitted once, on the failure that sets the latch.
 
 **Per-turn budget for web tools:** `runTurn` creates a `webBudget` object once per user turn and passes it through `ToolContext`. `search` and `fetch_url` increment their respective counter before running; if at max, return a budget-exceeded summary without actually calling the upstream. **Harness-driven fetches count too:** URL grounding (`groundCandidates`) charges the same `fetches` counter, because a fetch the model never asked for is still egress — without it, N edits in a turn was up to 2N requests the runaway guard never saw. It differs only in how it declines: grounding takes whatever budget is left (possibly none) and stays silent, where a tool returns a refusal summary — nothing requested the grounding fetch, so there is nobody to report a refusal to, and the note would be context noise. This prevents runaway model loops from hammering SearXNG (which proxies to Google/Bing — they rate-limit per IP, so a runaway agent can get your queries blocked at the upstream level). Caps are configurable via `REIKA_MAX_SEARCHES_PER_TURN` and `REIKA_MAX_FETCHES_PER_TURN`. Subagents get their own fresh budget (independent `runTurn` invocation).
+
+## MCP servers (#265)
+
+`REIKA_MCP_SERVERS` (the JSON itself, or a path to a JSON file) starts stdio MCP servers with the
+session. `src/mcp/config.ts` parses the document — the standard `mcpServers` shape, a bare map, or a
+list — and returns errors instead of throwing, because a typo in one entry must not cost a session.
+
+- `client.ts` is one connection and the transport: newline-framed JSON-RPC 2.0, `initialize`
+  (protocol `2025-06-18`) → `notifications/initialized` → paginated `tools/list`, then `tools/call`
+  with a per-call timeout. A server→client request is answered (`ping`, `roots/list` → no roots,
+  anything else `-32601`) because an unanswered request is how a server decides its peer is gone; a
+  child that dies fails every in-flight request rather than leaving the turn hanging.
+- `tools.ts` is the bridge: `mcp__<server>__<tool>` names (slugged, 64-char cap with a hash so
+  truncation stays unique), the server schema narrowed to the three keys providers accept, content
+  blocks flattened to text plus one-line markers, and the `/<server>:<tool>` command with its
+  argument parsing. `formatMcpResult`/`invokeMcpTool` are shared so the model's call and the user's
+  command read the same.
+- `manager.ts` connects every server in parallel, keeps a per-server status (a failed one becomes a
+  notice and contributes nothing), and formats `/mcp`.
+
+`createSession` awaits `connectMcpServers` alongside bootstrap and appends the tools to
+`lists.agent` **only**. Four of these are decisions, not details:
+
+- **Agent mode only.** An MCP tool is opaque to the harness, so a mode whose guarantee is structural
+  — plan cannot mutate the repo, chat has no filesystem, minimal/grind are a fixed work surface —
+  must not have one. For the same reason the tool list is fixed at session start (it is part of the
+  round-0 prefix, #69/#81): `notifications/tools/list_changed` is surfaced by `/mcp` and never acted
+  on mid-session.
+- **Through the approval gate, with no warnings.** No warnings means `safe` (the default) runs an
+  MCP call, `off` prompts, and `bypass` runs it with nobody to ask. The harness cannot classify a
+  tool it has never seen, and attaching a warning to every call would make the default mode prompt
+  on all of them.
+- **A failed server is a notice, not a failure**, and a failed call is one round's summary, like a
+  failed `bash` command.
+- **Stdio only.** Remote HTTP/SSE servers are a different trust and auth question; adding one later
+  means a second transport behind the same `McpClient` surface, not a change to the bridge.
 
 ## Adding a slash command
 

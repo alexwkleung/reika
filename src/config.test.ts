@@ -43,6 +43,8 @@ const ENV_KEYS = [
   'REIKA_VISION_MODEL',
   'REIKA_VISION_BASE_URL',
   'REIKA_VISION_API_KEY',
+  'REIKA_MCP_SERVERS',
+  'REIKA_MCP',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -818,6 +820,44 @@ describe('REIKA_UNATTENDED (#526)', () => {
     for (const v of ['0', 'true', 'yes', '']) {
       process.env.REIKA_UNATTENDED = v;
       expect(loadConfig().unattended, v).toBe(false);
+    }
+  });
+});
+
+describe('REIKA_MCP_SERVERS (#265)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'm';
+    delete process.env.REIKA_MCP;
+    delete process.env.REIKA_MCP_SERVERS;
+  });
+
+  it('is unset by default — no servers, no errors', () => {
+    const cfg = loadConfig();
+    expect(cfg.mcpServers).toEqual([]);
+    expect(cfg.mcpErrors).toEqual([]);
+  });
+
+  it('parses a configured set, and reports a broken document instead of failing the load', () => {
+    process.env.REIKA_MCP_SERVERS = '{"fs":{"command":"npx","args":["-y","server-fs","/tmp"]}}';
+    expect(loadConfig().mcpServers).toEqual([
+      { name: 'fs', command: 'npx', args: ['-y', 'server-fs', '/tmp'] },
+    ]);
+    process.env.REIKA_MCP_SERVERS = '{oops';
+    const cfg = loadConfig();
+    expect(cfg.mcpServers).toEqual([]);
+    expect(cfg.mcpErrors?.[0]).toContain('invalid JSON');
+  });
+
+  // `0` is the one value that turns them off, so the baseline arm of a run measuring behavior
+  // without MCP is a flag rather than an edit. Anything else — including a typo — leaves a
+  // configured set running: the servers are there because the user put them there.
+  it('turns a configured set off only for REIKA_MCP=0', () => {
+    process.env.REIKA_MCP_SERVERS = '{"fs":{"command":"npx"}}';
+    process.env.REIKA_MCP = '0';
+    expect(loadConfig().mcpServers).toEqual([]);
+    for (const v of ['1', 'true', 'off', '']) {
+      process.env.REIKA_MCP = v;
+      expect(loadConfig().mcpServers, v).toHaveLength(1);
     }
   });
 });
