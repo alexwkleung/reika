@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "chalk": "^5.6.2",
-    "defuddle": "^0.18.1",
+    "defuddle": "^0.19.4",
     "diff": "^9.0.0",
     "dotenv": "^16.4.5",
     "fdir": "^6.5.0",
