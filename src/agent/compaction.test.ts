@@ -409,6 +409,40 @@ describe('distillPlanHandoff', () => {
     expect(distillPlanHandoff(history, 16384, 1, 0)).toEqual({ folded: 0, reason: 'empty-span' });
   });
 
+  // The fold used to pin history[0] — the session's first message — and fold everything after it,
+  // so a plan written late in a session folded the earlier tasks into a "plan-mode exploration"
+  // digest, and a plan for a second task sat beside the first task's request with its own folded.
+  it("pins the plan's own request, leaving earlier turns alone", () => {
+    const earlier: Message[] = [
+      { role: 'user', content: 'rename the logger' },
+      { role: 'assistant', content: 'Renamed it.' },
+    ];
+    const history: Message[] = [
+      ...earlier,
+      ...planHistory().map(m => (m.role === 'user' ? { ...m, mode: 'plan' as const } : m)),
+    ];
+    const { reason } = distillPlanHandoff(history, 16384, 1, 0);
+    expect(reason).toBe('folded');
+    expect(history.slice(0, 2)).toEqual(earlier);
+    expect(history[2]).toMatchObject({ role: 'user', content: 'add a feature' });
+    expect(history[3].role).toBe('compaction');
+    expect(history).toHaveLength(5);
+  });
+
+  it('carries the follow-ups of a plan-mode run into the digest verbatim', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'plan the settings screen', mode: 'plan' },
+      { role: 'assistant', content: '1. edit settings.ts', planFinal: true },
+      { role: 'user', content: 'fix the export bug instead', mode: 'plan' },
+      ...planHistory().slice(1),
+    ];
+    distillPlanHandoff(history, 16384, 1, 0);
+    expect(history[0]).toMatchObject({ content: 'plan the settings screen' });
+    const digest = (history[1] as { content: string }).content;
+    expect(digest).toContain('fix the export bug instead');
+    expect(history).toHaveLength(3);
+  });
+
   it('is idempotent — a second pass over an already-distilled history does nothing', () => {
     const history = planHistory();
     expect(distillPlanHandoff(history, 16384, 1, 0).folded).toBeGreaterThan(0);

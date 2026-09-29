@@ -632,3 +632,38 @@ describe('planChanged', () => {
     expect(planChanged('1. Edit `a.ts`', 'I could not determine that.')).toBe(true);
   });
 });
+
+// A follow-up question answered with a numbered list parsed as steps and took over as the live plan:
+// /implement then checked off the explanation. An answer names no files or commands, which is what
+// separates it from a question-phrased request that produced a real plan.
+describe('a numbered answer to a follow-up question is not a plan', () => {
+  const followUp = (content: string): Message => ({ role: 'user', content, mode: 'plan' });
+  const answer = plan('1. The palette is read at startup.\n2. The toggle reads the palette.');
+
+  it('keeps the plan above live', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'add dark mode', mode: 'plan' },
+      plan(PLAN),
+      followUp('why this order?'),
+      answer,
+    ];
+    expect(latestPlanMarker(history)?.content).toBe(PLAN);
+    expect(seedPlanProgress(history)).toHaveLength(4);
+    expect(refineTarget([...history, followUp('ok, swap steps 1 and 2')])?.content).toBe(PLAN);
+  });
+
+  it('still takes a file-specific plan written for a question-phrased request', () => {
+    const newPlan = '1. Edit `src/export.ts` to stream rows';
+    const history: Message[] = [
+      plan(PLAN),
+      followUp('how should we fix the export bug instead?'),
+      plan(newPlan),
+    ];
+    expect(latestPlanMarker(history)?.content).toBe(newPlan);
+  });
+
+  it('takes a numbered answer when there is no plan above it', () => {
+    const history: Message[] = [followUp('how does the palette load?'), answer];
+    expect(latestPlanMarker(history)?.steps).toHaveLength(2);
+  });
+});

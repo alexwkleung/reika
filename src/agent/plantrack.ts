@@ -402,16 +402,31 @@ export function latestPlanMarker(history: Message[]): PlanMarker | null {
     // refinement handed them as its own plan text copies a stale advisory into the revision.
     const content = (m.content ?? '').slice(0, m.planChecks?.at);
     const marker = { index: i, message: m, content, steps: parsePlanSteps(content) };
+    const isPlan = marker.steps.length > 0 && !isAnswerToQuestion(history, i, marker.steps);
     if (!newest) {
-      if (marker.steps.length > 0) return marker;
+      if (isPlan) return marker;
       newest = marker;
     } else if (!onlyPlanTurnsBetween(history, i, newest.index)) {
       return newest;
-    } else if (marker.steps.length > 0) {
+    } else if (isPlan) {
       return marker;
     }
   }
   return newest;
+}
+
+// A numbered reply to a plan-mode question ("why this order?") parses as steps, and taking it as the
+// plan hands /implement a checklist of the explanation. It names no file and no command, which a
+// plan written for a question-phrased request ("how should we fix X instead?") does. Only ever a
+// reason to look further back: with no plan above it, the scan still returns it.
+function isAnswerToQuestion(history: Message[], at: number, steps: PlanStep[]): boolean {
+  if (steps.some(s => s.paths.length > 0 || s.commands.length > 0)) return false;
+  for (let i = at - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'user' || m.harness || m.meta) continue;
+    return m.mode === 'plan' && m.content.trim().endsWith('?');
+  }
+  return false;
 }
 
 // Is every model message in (from, to] part of a plan-mode turn? The opening user message carries
