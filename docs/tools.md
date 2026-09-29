@@ -66,6 +66,10 @@ startup and skipped; a call that fails costs one round, not the turn. A server t
 mid-session keeps its tools in the request's tool list (that list is fixed at session start), so
 `/mcp` says so — the calls that follow fail with the exit status rather than silently.
 
+A result over 64K characters reaches the model cut to that size, the same cap `bash` and
+`fetch_url` use, with the rest saved to a spill file it can page with `read`. When reika exits, each
+server's stdin is closed and it gets two seconds to exit on its own before it is signaled.
+
 ## `.gitignore` is respected
 
 `buildFileIndex`, `buildRepoMap`, `list`, `glob`, and `grep` all skip paths matched by your project's `.gitignore` (plus `.git/info/exclude` and any nested `.gitignore` files, scoped to their own directory as git does). Hardcoded skip dirs (`node_modules`, `dist`, `build`, `target`, `coverage`, `out`) apply on top — so even projects without a `.gitignore` get sensible exclusions.

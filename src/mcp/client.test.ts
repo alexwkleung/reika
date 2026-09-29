@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,9 @@ const serverPath = join(dir, 'server.mjs');
 writeFileSync(
   serverPath,
   `
+import { writeFileSync } from 'node:fs';
+// Records a natural exit (stdin EOF): a signal kill never runs 'exit' handlers (#594).
+if (process.env.FIXTURE_EXIT_MARK) process.on('exit', () => writeFileSync(process.env.FIXTURE_EXIT_MARK, 'clean'));
 let buf = '';
 const send = msg => process.stdout.write(JSON.stringify(msg) + '\\n');
 if (process.env.FIXTURE_BANNER === '1') process.stdout.write('starting up\\n');
@@ -72,6 +75,10 @@ const handle = msg => {
     if (name === 'slow') return;
     if (name === 'ask') { pendingCall = msg.id; send({ jsonrpc: '2.0', id: 'r1', method: 'roots/list', params: {} }); send({ jsonrpc: '2.0', id: 'r2', method: 'sampling/createMessage', params: {} }); return; }
     if (name === 'crash') { process.exit(3); }
+    // A blob that never ends: without a cap the client would buffer all of it (#594).
+    if (name === 'blobopen') { process.stdout.write('x'.repeat(9 * 1024 * 1024)); return; }
+    // An oversized newline-free blob, its newline, then the real answer (#594).
+    if (name === 'blob') { process.stdout.write('x'.repeat(9 * 1024 * 1024)); process.stdout.write('\\n'); send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'after blob' }] } }); return; }
     // The server's own request, numbered like the call it arrives during — what a server counting
     // its requests from 1 does. The call is answered only after reika answers the ping.
     if (name === 'collide') { collideCall = msg.id; send({ jsonrpc: '2.0', id: msg.id, method: 'ping' }); return; }
@@ -259,6 +266,30 @@ describe('McpClient', () => {
     await client.connect();
     await expect(client.callTool('crash', {})).rejects.toThrow(/server exited \(code 3\)/);
     await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow(/server exited/);
+  });
+
+  // #594: a server that exits on stdin EOF gets to, rather than taking an immediate SIGTERM.
+  it('closes by ending stdin and letting the server exit on its own', async () => {
+    const mark = join(dir, 'exit-mark');
+    const client = makeClient({ env: { FIXTURE_EXIT_MARK: mark } });
+    await client.connect();
+    await client.close();
+    expect(readFileSync(mark, 'utf8')).toBe('clean');
+  });
+
+  // #594: a newline-free blob is dropped instead of buffered without bound, and the stream recovers.
+  it('drops an oversized stdout line and still answers the call after it', async () => {
+    const client = makeClient();
+    await client.connect();
+    const result = await client.callTool('blob', {});
+    expect(result.content).toEqual([{ type: 'text', text: 'after blob' }]);
+  });
+
+  it('does not buffer a newline-free stream past the cap', async () => {
+    const client = makeClient();
+    await client.connect();
+    await expect(client.callTool('blobopen', {}, { timeoutMs: 1500 })).rejects.toThrow();
+    expect(client.bufferedStdoutChars).toBeLessThan(9 * 1024 * 1024);
   });
 
   it('reports a command that cannot start, and a server that exits during the handshake', async () => {

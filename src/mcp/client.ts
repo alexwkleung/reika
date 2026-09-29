@@ -61,6 +61,15 @@ const INHERITED_ENV =
 // How much of a server's stderr is kept for the error message. A server that fails at startup
 // explains itself there and nowhere else; unbounded, a chatty server would eat the heap.
 const STDERR_TAIL_CHARS = 2000;
+// A stdout line longer than this is dropped rather than buffered: a message is newline-framed, so a
+// server writing a blob with no newline (out of spec, but a buggy one can) grows the buffer until
+// the heap goes. Far above any real single message; a tool result this size is useless anyway.
+const MAX_STDOUT_LINE_CHARS = 8 * 1024 * 1024;
+// The stdio binding's shutdown: close stdin, let the server exit on EOF, and only then signal. EOF
+// is the one portable graceful signal, and a server that flushes state on it loses that to an
+// immediate SIGTERM. The process-exit hook below stays an immediate kill: there is no time to wait.
+const CLOSE_GRACE_MS = 2000;
+const TERM_GRACE_MS = 1000;
 
 // Every spawned server, killed when reika exits whatever route it leaves by. A stdio server's
 // parent dying closes its pipes — which most servers treat as EOF and exit on — but one mid-call
@@ -139,6 +148,8 @@ export class McpClient {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private stdoutBuffer = '';
+  // The rest of an oversized line is still arriving; drop it up to its newline.
+  private discardingLine = false;
   private stderrTail = '';
   private exitError: Error | undefined;
 
@@ -149,6 +160,11 @@ export class McpClient {
 
   get name(): string {
     return this.config.name;
+  }
+
+  // For the buffer-cap test: how much of an unterminated stdout line is held right now.
+  get bufferedStdoutChars(): number {
+    return this.stdoutBuffer.length;
   }
 
   get lastStderr(): string {
@@ -176,7 +192,7 @@ export class McpClient {
       await this.handshake();
       this.tools = await this.listTools();
     } catch (e) {
-      this.close();
+      void this.close();
       throw new Error(this.explain(e));
     }
   }
@@ -326,16 +342,29 @@ export class McpClient {
     }
   }
 
-  close(): void {
+  // Resolves once the child is gone. Callers that are leaving anyway need not await it: the
+  // pending exit keeps the event loop alive until the server has had its chance to exit on EOF.
+  close(): Promise<void> {
     this.rejectInFlight(new Error('closed'));
     const child = this.child;
     this.child = undefined;
     // A child that already exited needs nothing, and ending its stdin would be a write to a
     // destroyed stream — the one thing this must not do on the way out.
-    if (child && child.exitCode === null && child.signalCode === null) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise(resolve => {
+      const timers: NodeJS.Timeout[] = [];
+      child.once('exit', () => {
+        for (const t of timers) clearTimeout(t);
+        resolve();
+      });
       child.stdin.end();
-      child.kill();
-    }
+      timers.push(
+        setTimeout(() => {
+          child.kill('SIGTERM');
+          timers.push(setTimeout(() => child.kill('SIGKILL'), TERM_GRACE_MS));
+        }, CLOSE_GRACE_MS),
+      );
+    });
   }
 
   // --- transport ---------------------------------------------------------------------------
@@ -385,6 +414,24 @@ export class McpClient {
 
   private onStdout(chunk: string): void {
     this.stdoutBuffer += chunk;
+    // Only the unterminated tail can be oversized: whole lines are consumed below as they arrive.
+    if (this.stdoutBuffer.length > MAX_STDOUT_LINE_CHARS && !this.stdoutBuffer.includes('\n')) {
+      debugLog(
+        `[reika:debug] mcp ${this.name}: dropped a stdout line over ${MAX_STDOUT_LINE_CHARS} chars\n`,
+      );
+      this.stdoutBuffer = '';
+      this.discardingLine = true;
+      return;
+    }
+    if (this.discardingLine) {
+      const nl = this.stdoutBuffer.indexOf('\n');
+      if (nl === -1) {
+        this.stdoutBuffer = '';
+        return;
+      }
+      this.stdoutBuffer = this.stdoutBuffer.slice(nl + 1);
+      this.discardingLine = false;
+    }
     for (;;) {
       const nl = this.stdoutBuffer.indexOf('\n');
       if (nl === -1) break;

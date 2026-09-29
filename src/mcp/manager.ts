@@ -36,7 +36,8 @@ export type McpRuntime = {
     args: Record<string, unknown>,
     opts?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<McpCallResult>;
-  close(): void;
+  // Resolves once every server has exited (on stdin EOF, or signaled after a grace period).
+  close(): Promise<void>;
 };
 
 // Connect every configured server, in parallel: they are independent processes and the session's
@@ -52,7 +53,7 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       notices: [],
       list: () => unconfiguredNotice(),
       call: (server: string) => Promise.reject(new Error(`no MCP server "${server}"`)),
-      close: () => {},
+      close: () => Promise.resolve(),
     };
   }
   const clients = new Map<string, McpClient>();
@@ -64,7 +65,7 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
         await client.connect();
         return client;
       } catch (e) {
-        client.close();
+        void client.close();
         return {
           name: config.name,
           tools: 0,
@@ -128,8 +129,8 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       if (!target) return Promise.reject(new Error(`no MCP server "${server}"`));
       return target.callTool(tool, args, opts);
     },
-    close() {
-      for (const client of clients.values()) client.close();
+    async close() {
+      await Promise.all([...clients.values()].map(client => client.close()));
     },
   };
 }

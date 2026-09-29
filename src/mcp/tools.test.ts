@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../types.js';
 import type { McpContentBlock } from './client.js';
 import {
+  capMcpPayload,
   callMcpTool,
   findMcpCommand,
   formatMcpResult,
@@ -361,5 +362,22 @@ describe('callMcpTool', () => {
       result: { summary: 'mcp fs:read — 2 chars', payload: 'hi' },
       failed: false,
     });
+  });
+});
+
+// An MCP result is server-authored and unbounded; the model's copy is held to the bash/fetch cap,
+// with the rest saved where it can be paged.
+describe('capMcpPayload', () => {
+  it('passes a result under the cap through unchanged', async () => {
+    const result = { summary: 'mcp s:t — 2 chars', payload: 'ok' };
+    expect(await capMcpPayload(result)).toBe(result);
+  });
+
+  it('cuts an oversized payload and points at the saved rest', async () => {
+    const big = 'a'.repeat(64 * 1024) + 'TAIL';
+    const out = await capMcpPayload({ summary: 'mcp s:t', payload: big });
+    expect(out.payload).not.toContain('TAIL');
+    expect(out.payload).toMatch(/Showing 65536 of 65540 chars/);
+    expect(out.payload).toMatch(/Do not re-run this call/);
   });
 });

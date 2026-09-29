@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Tool, ToolContext, ToolParameters, ToolResult } from '../types.js';
 import { declineSummary } from '../approval.js';
 import { kFormat } from '../ui/format.js';
+import { buildCappedFooter, buildSpillFooter, spillResult } from '../tools/_spill.js';
 import type { McpCallResult, McpContentBlock, McpToolDef } from './client.js';
 import { MCP_TOOL_PREFIX } from './config.js';
 
@@ -15,6 +16,10 @@ const MAX_TOOL_NAME = 64;
 // can be a page of prose; the first lines say what the tool does, and the rest is a schema the
 // model already receives as `parameters`.
 const MAX_DESCRIPTION = 400;
+// A tool result the model receives inline, the same cap `bash` and `fetch_url` hold theirs to. An
+// MCP server can return anything (a whole file, a database dump), and the result lands in history,
+// where it is carried until it ages out. The rest is saved to a spill file the model can page.
+const MAX_PAYLOAD_CHARS = 64 * 1024;
 
 export type McpCallFn = (
   server: string,
@@ -82,9 +87,30 @@ export function mcpTool(server: string, def: McpToolDef, call: McpCallFn): Tool 
         });
         if (!ok) return { summary: declineSummary('Call', ` ${label}`, ctx) };
       }
-      return invokeMcpTool(call, label, server, def.name, args, { signal: ctx.signal });
+      const result = await invokeMcpTool(call, label, server, def.name, args, {
+        signal: ctx.signal,
+      });
+      return capMcpPayload(result);
     },
   };
+}
+
+// Only the model's path is capped: a slash command's output is the user reading the tool, and it
+// never enters history.
+export async function capMcpPayload(result: ToolResult): Promise<ToolResult> {
+  const payload = result.payload;
+  if (!payload || payload.length <= MAX_PAYLOAD_CHARS) return result;
+  const total = String(payload.length);
+  const ref = await spillResult('mcp', payload);
+  const footer = ref
+    ? buildSpillFooter({ shown: MAX_PAYLOAD_CHARS, total, unit: 'chars', ref, subject: 'call' })
+    : buildCappedFooter({
+        shown: MAX_PAYLOAD_CHARS,
+        total,
+        unit: 'chars',
+        advice: 'call the tool with narrower arguments to see the rest',
+      });
+  return { ...result, payload: payload.slice(0, MAX_PAYLOAD_CHARS) + footer };
 }
 
 // The one call path, shared by the model's tool and the user's slash command, so a formatted

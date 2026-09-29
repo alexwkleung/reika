@@ -561,7 +561,7 @@ export function App() {
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
       // MCP servers are child processes: reika leaving is what should end them (#265). The module's
       // own exit hook is the backstop for a crash; this is the orderly path.
-      sessionRef.current?.mcp.close();
+      void sessionRef.current?.mcp.close();
     },
     [],
   );

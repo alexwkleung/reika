@@ -121,11 +121,19 @@ list — and returns errors instead of throwing, because a typo in one entry mus
   carries its own bound (`connectTimeoutMs`, default 15s) rather than sharing the call's: it is paid
   before the first frame, so a generous call timeout must not turn a startup hang into a stall, and
   a server behind a cold `npx` install needs more than the default while its calls stay quick.
+  `close()` follows the stdio binding's shutdown (#594): end stdin, give the server
+  `CLOSE_GRACE_MS` to exit on EOF, then SIGTERM, then SIGKILL — EOF is the one portable graceful
+  signal, and an immediate kill cost a server its chance to flush. Headless awaits it; the TUI
+  doesn't need to, since the pending exit keeps the event loop alive. The process-exit hook stays
+  an immediate kill (no time to wait there). A stdout line past `MAX_STDOUT_LINE_CHARS` (8MB) is
+  dropped up to its newline rather than buffered, the same fail-open rule as an unparseable line.
 - `tools.ts` is the bridge: `mcp__<server>__<tool>` names (slugged, 64-char cap with a hash so
   truncation stays unique), the server schema narrowed to the keys providers accept (`type`,
   `properties`, `required`, plus the `$defs`/`definitions` a `$ref` points at — a reference whose
   target was dropped is one nothing can resolve), content blocks flattened to text plus one-line
   markers, and the `/<server>:<tool>` command with its argument parsing.
+  The model's copy of a result is held to 64K chars (`capMcpPayload`, the bash/fetch cap) with the
+  rest spilled; the slash command's is not, since it never enters history.
   `formatMcpResult`/`invokeMcpTool` are shared so the model's call and the user's command read the
   same. A block that is not an object — a `null` in the list, or a `content` that is not a list at
   all — becomes a marker too: the declared type is a server's JSON, and reading it as typed is a
