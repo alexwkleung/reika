@@ -22,7 +22,7 @@
 
 Most coding agents are built for frontier models. Reika is built first for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
 
-8/9B models hold their own; 14–35B is the sweet spot for small model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+8–9B models hold their own on everyday tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
 
 ## Highlights
 
@@ -31,12 +31,13 @@ Most coding agents are built for frontier models. Reika is built first for the m
 - **Guard rails a weak model needs.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
 - **Plan → implement.** A read-only plan mode that ends in a numbered, file-specific plan — refine it over as many turns as you like before executing — and a vibe mode that chains plan and implementation on every prompt.
 - **Safe by default.** Ordinary edits run, dangerous commands still prompt, and on macOS model-chosen shell commands run under a kernel sandbox (writes confined to the project, network denied).
-- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools, when a web tool is used or you paste a link, and a download of the public models.dev catalog to look up context limits, only for hosted endpoints and never with your data.
+- **Extensible.** Stdio MCP servers add tools, and each tool also becomes a slash command. Markdown skills become slash commands too; `/issue` and `/review` ship with Reika and appear wherever `gh` and a GitHub remote are.
+- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools, when a web tool is used or you paste a link, a download of the public models.dev catalog to look up context limits (only for hosted endpoints, and never with your data), and whatever the MCP servers you configure do on their own.
 - **Built for slow local engines.** Tolerates long prefills, handles tool-call dialects from models without a native template, and shows decode speed, context fill, and cache hit rate in the status bar.
 
 ## Requirements
 
-- Node.js 22 or newer (macOS 11+, glibc 2.28+ Linux, or Windows through WSL — see [Platforms](docs/platforms.md)).
+- Node.js 22 or newer (macOS 11+ or glibc 2.28+ Linux — see [Platforms](docs/platforms.md)).
 - An OpenAI-compatible model server: llama.cpp, MLX, vLLM, or a cloud API.
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR (set `REIKA_VISION_MODEL` to read pasted images with a vision model instead). Windows may work under WSL2.
 - A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
@@ -86,6 +87,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 | `plan`    | Read-only exploration that ends in a written plan; `/implement` runs it      |
 | `vibe`    | Plans first, then implements the plan, on every prompt                       |
 | `minimal` | Shell only, with no repo map or project context loaded upfront               |
+| `grind`   | Agent turns run a fixed, careful procedure: define done, test, review        |
 | `chat`    | Plain conversation with a separate history; web tools only                   |
 | `shell`   | Your input runs as a shell command, and the output joins the agent's context |
 
@@ -102,7 +104,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
 | [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
-| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, `.gitignore`                       |
+| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`          |
 | [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
 | [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
 | [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
