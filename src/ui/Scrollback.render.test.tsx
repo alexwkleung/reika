@@ -1071,7 +1071,7 @@ describe('Scrollback marker line wrapping', () => {
   const COLS = 60;
   // Long enough to wrap several times at 60 columns, and free of any token that would hard-split.
   const LONG =
-    'cd ~/Git/nori && echo "=== css files ===" && find web -iname css && ' +
+    'cd ~/Git/demo && echo "=== css files ===" && find web -iname css && ' +
     'grep -rn now-playing web/src | head && echo "=== how the bar is structured ==="';
 
   const frame = (messages: Message[]): string[] => {
