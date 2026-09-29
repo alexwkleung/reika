@@ -140,6 +140,8 @@ export type Session = {
   readonly searchNotice: string | undefined;
   // What the startup probe learned, worded for the user; undefined when it found nothing.
   readonly limitsNotice: string | undefined;
+  // A warning when the server answered and no window could be found anywhere.
+  readonly windowNotice: string | undefined;
   readonly lists: ToolLists;
   // Model-facing history of the active side: the loop appends and folds it in place, and the fold
   // must survive to the next turn (#183).
@@ -157,8 +159,8 @@ export type Session = {
   getSnapshot(): SessionSnapshot;
   subscribe(listener: () => void): () => void;
   // Switches the active profile. A profile with no window asks its endpoint (#417), not awaited by
-  // the switch itself; the promise carries the notice when the probe learned something.
-  setProfile(name: string): Promise<string | undefined>;
+  // the switch itself; the promise carries the notices for what the probe learned or failed to.
+  setProfile(name: string): Promise<Message[]>;
   addProfile(name: string, profile: Profile): void;
   updateBundle(update: (bundle: ContextBundle) => ContextBundle): void;
   // Chat keeps its own model history (isolated from agent/plan/shell); crossing the boundary stashes
@@ -192,6 +194,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       : Promise.resolve(),
   ]);
   let bundle = booted;
+  const startProfile = cfg.profiles[profile] ?? cfg.profiles.default;
   if (probed) cfg = withProbedLimits(cfg, profile, probed);
   // Profiles whose probe reached no server (llama-server still loading): asked again at the next
   // submit on that profile, awaited so the window governs that turn rather than the one after.
@@ -234,16 +237,25 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     for (const l of listeners) l();
   };
 
-  const retryWindowProbe = async (): Promise<Message | undefined> => {
+  const probeNotices = (name: string, before: Profile, probe: ModelLimitsProbe): Message[] => {
+    const notices: Message[] = [];
+    const notice = probedLimitsNotice(probe);
+    if (notice) {
+      cfg = withProbedLimits(cfg, name, probe);
+      changed();
+      notices.push({ role: 'system', content: notice });
+    }
+    const warn = noWindowNotice(probe, before);
+    if (warn) notices.push({ role: 'system', content: warn, tone: 'warn' });
+    return notices;
+  };
+
+  const retryWindowProbe = async (): Promise<Message[]> => {
     const current = cfg.profiles[profile];
-    if (!current || !retryWindow.has(profile) || current.contextWindow != null) return undefined;
+    if (!current || !retryWindow.has(profile) || current.contextWindow != null) return [];
     const probe = await probeModelLimits(current);
     if (probe.reached) retryWindow.delete(profile);
-    const notice = probedLimitsNotice(probe);
-    if (!notice) return undefined;
-    cfg = withProbedLimits(cfg, profile, probe);
-    changed();
-    return { role: 'system', content: notice };
+    return probeNotices(profile, current, probe);
   };
 
   const runOne = async (
@@ -265,8 +277,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     // try so the tail flush below can't drop it on a turn that emits no message at all.
     const pending: Message[] = [];
     try {
-      const retried = await retryWindowProbe();
-      if (retried) pending.push(retried);
+      pending.push(...(await retryWindowProbe()));
       await runTurn({
         ...events,
         userInput: text,
@@ -366,23 +377,19 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     return [...planned, ...implemented];
   };
 
-  const setProfile = (name: string): Promise<string | undefined> => {
+  const setProfile = (name: string): Promise<Message[]> => {
     const next = cfg.profiles[name];
-    if (!next) return Promise.resolve(undefined);
+    if (!next) return Promise.resolve([]);
     profile = name;
     // The tok/s chip describes the model that produced it (#204) — left standing, the previous
     // model's rate reads as the new one's until a round here measures one.
     decodeRate = undefined;
     genReserve = new GenReserve();
     changed();
-    if (!needsLimitsProbe(next)) return Promise.resolve(undefined);
+    if (!needsLimitsProbe(next)) return Promise.resolve([]);
     return probeModelLimits(next).then(probe => {
       if (!probe.reached) retryWindow.add(name);
-      const notice = probedLimitsNotice(probe);
-      if (!notice) return undefined;
-      cfg = withProbedLimits(cfg, name, probe);
-      changed();
-      return notice;
+      return probeNotices(name, next, probe);
     });
   };
 
@@ -425,6 +432,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     offline,
     searchNotice: offline ? undefined : searchPrecedenceNotice(chooseSearchBackend(cfg)),
     limitsNotice: probed && probedLimitsNotice(probed),
+    windowNotice: probed && noWindowNotice(probed, startProfile),
     lists,
     get history() {
       return history;
@@ -496,4 +504,15 @@ export function probedLimitsNotice(probe: ModelLimitsProbe): string | undefined 
     );
   }
   return parts.length > 0 ? parts.join(' ') : undefined;
+}
+
+// A server that answered without a window (Ollama, a router the catalog does not list) leaves the
+// session with no compaction and per-round payload aging, and nothing on screen would say why.
+// Not while the probe is unreached: the retry at the next submit may still find one.
+export function noWindowNotice(probe: ModelLimitsProbe, before: Profile): string | undefined {
+  if (before.contextWindow != null || !probe.reached || probe.window) return undefined;
+  return [
+    `No context window known for ${before.model}, so there is no compaction and older tool output`,
+    "is dropped from every request. Set REIKA_CONTEXT_WINDOW to the server's context size.",
+  ].join(' ');
 }

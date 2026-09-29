@@ -122,7 +122,7 @@ vi.mock('./agent/loop.js', async importActual => ({
   runTurn: (opts: TurnOpts) => runTurn(opts),
 }));
 
-const { createSession } = await import('./session.js');
+const { createSession, noWindowNotice } = await import('./session.js');
 
 const text = (m: Message | undefined): string | undefined =>
   m && 'content' in m ? (m.content ?? undefined) : undefined;
@@ -260,6 +260,25 @@ describe('createSession', () => {
       await s.submit('hi', { mode: 'agent' });
       expect(probeModelLimits).toHaveBeenCalledTimes(1);
       expect(s.limitsNotice).toBeUndefined();
+      expect(s.windowNotice).toMatch(/No context window known for test-model/);
+    });
+
+    it('warns after the retry when the server comes up without a window', async () => {
+      probes.push({ reached: false }, { reached: true });
+      const s = await createSession({ cwd: '/repo', config: CONFIG });
+      expect(s.windowNotice).toBeUndefined();
+      const out = await s.submit('hi', { mode: 'agent' });
+      const warn = out.find(m => m.role === 'system');
+      expect(text(warn)).toMatch(/Set REIKA_CONTEXT_WINDOW/);
+      expect(warn && 'tone' in warn ? warn.tone : undefined).toBe('warn');
+    });
+
+    it('warns only when a reached server left the window unknown', () => {
+      const p = { model: 'm', baseURL: 'x', apiKey: 'k' };
+      expect(noWindowNotice({ reached: true }, p)).toMatch(/No context window known for m/);
+      expect(noWindowNotice({ reached: false }, p)).toBeUndefined();
+      expect(noWindowNotice({ reached: true, window: 8000 }, p)).toBeUndefined();
+      expect(noWindowNotice({ reached: true }, { ...p, contextWindow: 8000 })).toBeUndefined();
     });
 
     it('reports what the startup probe found', async () => {
@@ -360,12 +379,14 @@ describe('createSession', () => {
     it('returns what the probe learned, and asks again at submit when it reached nothing', async () => {
       const s = await createSession({ cwd: '/repo', config: TWO });
       probes.push({ reached: true, window: 32000, windowSource: 'endpoint' });
-      expect(await s.setProfile('vl')).toMatch(/Context window of 32k tokens/);
+      expect((await s.setProfile('vl')).map(text)).toEqual([
+        expect.stringMatching(/Context window of 32k tokens/),
+      ]);
       expect(s.config.contextWindow).toBe(32000);
 
       const other = await createSession({ cwd: '/repo', config: TWO });
       probes.push({ reached: false }, { reached: true, window: 16000, windowSource: 'endpoint' });
-      expect(await other.setProfile('vl')).toBeUndefined();
+      expect(await other.setProfile('vl')).toEqual([]);
       await other.submit('hi', { mode: 'agent' });
       expect(calls.at(-1)?.config.contextWindow).toBe(16000);
     });
