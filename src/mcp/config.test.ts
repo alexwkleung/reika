@@ -113,4 +113,20 @@ describe('parseMcpServers', () => {
       B: 'true',
     });
   });
+
+  // #593. A typo must not quietly run a server the user meant to gate.
+  it('reads "approve": "always", and reports any other value', () => {
+    const { servers, errors } = parseMcpServers(
+      JSON.stringify({
+        hook: { command: 'x', approve: 'always' },
+        calc: { command: 'x', approve: 'auto' },
+        typo: { command: 'x', approve: 'alway' },
+      }),
+    );
+    expect(servers.map(s => [s.name, s.approve])).toEqual([
+      ['hook', 'always'],
+      ['calc', undefined],
+    ]);
+    expect(errors).toEqual(['MCP server "typo": "approve" must be "always" (or left out)']);
+  });
 });

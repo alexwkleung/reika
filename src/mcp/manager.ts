@@ -18,6 +18,8 @@ export type McpServerStatus = {
   // tools it did contribute stay in the request's tool list (that list is fixed at session start),
   // which makes this the one place those failures are explained rather than retried blind.
   dead: boolean;
+  // Every call asks first (`"approve": "always"`, #593).
+  alwaysAsk?: boolean;
 };
 
 export type McpRuntime = {
@@ -97,13 +99,15 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       return target.callTool(tool, args, opts);
     };
     const serverCommands = mcpCommands(entry.name, entry.tools);
-    for (const def of entry.tools) tools.push(mcpTool(entry.name, def, call));
+    const alwaysAsk = entry.config.approve === 'always';
+    for (const def of entry.tools) tools.push(mcpTool(entry.name, def, call, { alwaysAsk }));
     commands.push(...serverCommands);
     statuses.push({
       name: entry.name,
       tools: entry.tools.length,
       info: entry.server,
       commands: serverCommands,
+      alwaysAsk,
       // Read through to the client, not copied: a server announces a changed tool list when its
       // tools actually change, which is later than this snapshot — a copy would only ever see one
       // that happened to land during the handshake, and `/mcp` would never report the real case.
@@ -181,7 +185,9 @@ export function formatMcpList(statuses: McpServerStatus[]): string {
       lines.push(`  ${s.name} — unavailable: ${s.error}`);
       continue;
     }
-    lines.push(`  ${s.name} — ${s.tools} tool${s.tools === 1 ? '' : 's'} (${who})`);
+    lines.push(
+      `  ${s.name} — ${s.tools} tool${s.tools === 1 ? '' : 's'} (${who})${s.alwaysAsk ? ' — asks before every call' : ''}`,
+    );
     for (const c of s.commands) lines.push(`    /${c.name.padEnd(28)} ${c.description}`);
     if (s.dead)
       lines.push(

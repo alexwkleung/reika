@@ -59,7 +59,18 @@ remote HTTP/SSE servers are a different trust and auth question and are not supp
 Approval: an MCP call the **model** makes is put through the same gate as everything else, with no
 danger warnings attached — reika cannot classify a tool it has never seen. That means `safe` (the
 default) runs it, `off` prompts, and `bypass` runs it with nobody to ask. An unattended session
-records the decline like any other. The `/<server>:<tool>` command you type yourself is the
+records the decline like any other. An MCP server runs outside the sandbox and outside reika's
+egress checks, so for a server whose tools post, push or send data out, add `"approve": "always"`
+to its entry: every call from it then prompts even under `safe`, is refused under `bypass`, and is
+declined when unattended.
+
+```json
+{
+  "mcpServers": { "slack": { "command": "npx", "args": ["-y", "slack-mcp"], "approve": "always" } }
+}
+```
+
+The `/<server>:<tool>` command you type yourself is the
 exception: it is never gated, the same rule shell mode runs under — nothing prompts you for a
 command you just wrote. A server that fails to start, or answers with an error, is reported at
 startup and skipped; a call that fails costs one round, not the turn. A server that exits

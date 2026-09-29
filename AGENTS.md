@@ -153,6 +153,13 @@ list — and returns errors instead of throwing, because a typo in one entry mus
   MCP call, `off` prompts, and `bypass` runs it with nobody to ask. The harness cannot classify a
   tool it has never seen, and attaching a warning to every call would make the default mode prompt
   on all of them.
+  The user can: `"approve": "always"` on a server entry (#593) attaches `MCP_ALWAYS_ASK_WARNING`
+  to every call from it — prompts under `safe`, refused under `bypass` (the out-of-project write
+  rule), declined unattended — because a server is unsandboxed and outside the exfil guards, so
+  the one who knows which servers send data out marks them. Tool annotations
+  (`destructiveHint`/`openWorldHint`) are deliberately NOT read: they are server-authored and
+  untrusted, so they could only add prompts, and a prompt on every open-world tool is the nag that
+  trains reflexive approving. An unknown `approve` value is a config error, never a silent default.
 - **A failed server is a notice, not a failure**, and a failed call is one round's summary, like a
   failed `bash` command.
 - **Stdio only.** Remote HTTP/SSE servers are a different trust and auth question; adding one later

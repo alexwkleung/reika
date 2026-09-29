@@ -19,6 +19,11 @@ export type McpServerConfig = {
   // minutes-long stall before the first frame, and a server behind a cold `npx` install can need
   // more than the default connect bound while its calls are quick.
   connectTimeoutMs?: number;
+  // `"approve": "always"` (#593): every call from this server asks first, even under the default
+  // `safe`. A server is unsandboxed and outside the egress guards, and reika cannot tell a
+  // calculator from a tool that posts data, so the user who knows which servers send data out marks
+  // them. Undefined = the ordinary gate (runs under `safe`, prompts under `off`).
+  approve?: 'always';
 };
 
 // The namespace Reika puts on a server's tools when it hands them to the model: `mcp__<server>__
@@ -121,6 +126,8 @@ function readServer(key: string, value: unknown): McpServerConfig | string | und
   if (typeof timeoutMs === 'string') return timeoutMs;
   const connectTimeoutMs = readTimeout(value.connectTimeoutMs);
   if (typeof connectTimeoutMs === 'string') return connectTimeoutMs;
+  const approve = readApprove(value.approve);
+  if (approve === 'bad') return '"approve" must be "always" (or left out)';
   // `name` inside the entry overrides the map key, for the array shape where there is no key.
   const name = typeof value.name === 'string' ? value.name.trim() : '';
   return {
@@ -131,7 +138,15 @@ function readServer(key: string, value: unknown): McpServerConfig | string | und
     ...(cwd ? { cwd } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
     ...(connectTimeoutMs ? { connectTimeoutMs } : {}),
+    ...(approve ? { approve } : {}),
   };
+}
+
+// A value this key does not know is an error, not a default: silently running a server the user
+// meant to gate — a typo like "alway" — is the one misreading that must not happen quietly.
+function readApprove(raw: unknown): 'always' | undefined | 'bad' {
+  if (raw == null || raw === 'auto') return undefined;
+  return raw === 'always' ? 'always' : 'bad';
 }
 
 function readStringList(raw: unknown): string[] | string {

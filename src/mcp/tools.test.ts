@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ToolContext } from '../types.js';
+import type { ApprovalRequest, ToolContext } from '../types.js';
+import { autoApproves } from '../approval.js';
 import type { McpContentBlock } from './client.js';
 import {
   capMcpPayload,
@@ -11,6 +12,7 @@ import {
   mcpCommands,
   mcpTool,
   mcpToolName,
+  MCP_ALWAYS_ASK_WARNING,
   parseMcpArgs,
   schemaToParameters,
 } from './tools.js';
@@ -379,5 +381,31 @@ describe('capMcpPayload', () => {
     expect(out.payload).not.toContain('TAIL');
     expect(out.payload).toMatch(/Showing 65536 of 65540 chars/);
     expect(out.payload).toMatch(/Do not re-run this call/);
+  });
+});
+
+// #593: a server marked `"approve": "always"` asks before every call. The warning is what pierces
+// `safe`'s auto-approve, and with no modal at all (`bypass`) the call is refused rather than run.
+describe('a server set to ask before every call', () => {
+  const def = { name: 'post', inputSchema: { type: 'object', properties: {} } };
+  const ok = () => Promise.resolve({ content: [{ type: 'text', text: 'sent' }] });
+
+  it('carries a warning, so safe prompts for it and not for an unmarked server', async () => {
+    const seen: ApprovalRequest[] = [];
+    const requestApproval = (req: ApprovalRequest) => {
+      seen.push(req);
+      return Promise.resolve(true);
+    };
+    await mcpTool('hook', def, ok, { alwaysAsk: true }).run({}, ctx({ requestApproval }));
+    await mcpTool('calc', def, ok).run({}, ctx({ requestApproval }));
+    expect(seen[0].warnings).toEqual([MCP_ALWAYS_ASK_WARNING]);
+    expect(autoApproves('safe', seen[0])).toBe(false);
+    expect(seen[1].warnings).toBeUndefined();
+    expect(autoApproves('safe', seen[1])).toBe(true);
+  });
+
+  it('is refused under bypass without calling the server', async () => {
+    const result = await mcpTool('hook', def, never, { alwaysAsk: true }).run({}, ctx());
+    expect(result.summary).toMatch(/^Call refused: hook:post is set to ask before every call/);
   });
 });

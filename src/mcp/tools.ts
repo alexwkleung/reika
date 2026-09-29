@@ -67,7 +67,18 @@ export function mcpCommands(server: string, tools: McpToolDef[]): McpCommand[] {
   }));
 }
 
-export function mcpTool(server: string, def: McpToolDef, call: McpCallFn): Tool {
+// Rides every call from a server marked `"approve": "always"` (#593). A warning is the one thing
+// that makes an approval survive `safe`'s auto-approve, so this is what turns the marking into a
+// prompt; it also names the reason in the dialog.
+export const MCP_ALWAYS_ASK_WARNING =
+  'This MCP server is set to ask before every call ("approve": "always").';
+
+export function mcpTool(
+  server: string,
+  def: McpToolDef,
+  call: McpCallFn,
+  opts: { alwaysAsk?: boolean } = {},
+): Tool {
   const name = mcpToolName(server, def.name);
   const label = `${server}:${def.name}`;
   return {
@@ -79,11 +90,21 @@ export function mcpTool(server: string, def: McpToolDef, call: McpCallFn): Tool 
       // opaque — the harness cannot tell a calculator from something that writes files — so the
       // policy decides rather than the tool. No `warnings`, so under the default `safe` an ordinary
       // call runs unprompted; under `off` it prompts, and under `bypass` there is nobody to ask.
+      // Under `bypass` there is no modal to fall through to, so a call the user asked to confirm is
+      // refused outright — the rule an out-of-project write follows.
+      if (opts.alwaysAsk && !ctx.requestApproval) {
+        return {
+          summary:
+            `Call refused: ${label} is set to ask before every call, and approvals are bypassed so ` +
+            'it cannot be confirmed with the user. Do the work another way, or tell the user.',
+        };
+      }
       if (ctx.requestApproval) {
         const ok = await ctx.requestApproval({
           tool: name,
           subject: label,
           preview: previewArgs(args),
+          ...(opts.alwaysAsk ? { warnings: [MCP_ALWAYS_ASK_WARNING] } : {}),
         });
         if (!ok) return { summary: declineSummary('Call', ` ${label}`, ctx) };
       }
