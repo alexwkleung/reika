@@ -32,6 +32,8 @@ const handle = msg => {
   }
   if (msg.method === 'tools/call') {
     send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok:' + (msg.params.arguments || {}).text }] } });
+    // After the handshake and after the manager built its statuses: the timing a real server uses.
+    if (process.env.FIXTURE_ANNOUNCE_LATE === '1') send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: {} });
     return;
   }
 };
@@ -98,12 +100,32 @@ describe('connectMcpServers', () => {
     }
   });
 
-  it('routes a call to the named server, and reports a changed tool list', async () => {
+  it('routes a call to the named server, and reports a tool list changed during the handshake', async () => {
     const runtime = await connectMcpServers([server('good', { FIXTURE_ANNOUNCE: '1' })]);
     try {
       const result = await runtime.call('good', 'echo', { text: 'hi' });
       expect(result.content?.[0]).toEqual({ type: 'text', text: 'ok:hi' });
       await expect(runtime.call('other', 'echo', {})).rejects.toThrow('no MCP server "other"');
+      expect(runtime.servers[0].changed).toBe(true);
+      expect(runtime.list()).toContain('restart reika to pick it up');
+    } finally {
+      runtime.close();
+    }
+  });
+
+  // A server announces a changed tool list when its tools change, which is after startup — the
+  // handshake case above is inside `connect()` and passes on a status copy too, so this is the
+  // timing that pins the status reading through to the client.
+  it('reports a tool list changed after the session started', async () => {
+    const runtime = await connectMcpServers([server('good', { FIXTURE_ANNOUNCE_LATE: '1' })]);
+    try {
+      expect(runtime.servers[0].changed).toBe(false);
+      expect(runtime.list()).not.toContain('restart reika to pick it up');
+      await runtime.call('good', 'echo', { text: 'hi' });
+      // The notification rides the reply, so it reaches the client's stdout parser a tick later.
+      for (let i = 0; i < 100 && !runtime.servers[0].changed; i++) {
+        await new Promise(r => setTimeout(r, 10));
+      }
       expect(runtime.servers[0].changed).toBe(true);
       expect(runtime.list()).toContain('restart reika to pick it up');
     } finally {

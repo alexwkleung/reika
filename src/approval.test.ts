@@ -107,9 +107,19 @@ describe('formatUnattendedDeclines (#526)', () => {
     expect(out).toBe(
       [
         'Declined while unattended — 2 actions left for you:',
-        '  bash: npm install left-pad',
-        '  write: ~/.zshrc',
+        // `toolLabel`, so a name the user reads is the one the dialog and the chip print.
+        '  Bash: npm install left-pad',
+        '  Write: ~/.zshrc',
       ].join('\n'),
     );
+  });
+
+  // #265: the tool name here is the model-facing wire name, and this list is for the user.
+  it('spells an MCP decline as its command, not its wire name', () => {
+    const out = formatUnattendedDeclines([
+      { tool: 'mcp__filesystem__read_file', subject: 'filesystem:read_file', preview: '{"p":"a"}' },
+    ]);
+    expect(out).toContain('  Mcp filesystem:read_file: filesystem:read_file');
+    expect(out).not.toContain('mcp__filesystem__read_file');
   });
 });

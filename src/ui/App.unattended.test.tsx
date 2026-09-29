@@ -133,7 +133,8 @@ describe('REIKA_UNATTENDED (#526)', () => {
     for (let i = 0; i < 80 && !plain(app.lastFrame()).includes('Declined while'); i++)
       await tick(25);
     expect(plain(app.lastFrame())).toContain('Declined while unattended — 1 action left for you:');
-    expect(plain(app.lastFrame())).toContain('bash: npm install left-pad');
+    // `toolLabel`'s spelling, the one the approval dialog uses (#265).
+    expect(plain(app.lastFrame())).toContain('Bash: npm install left-pad');
     app.unmount();
   });
 

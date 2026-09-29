@@ -98,7 +98,12 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       tools: entry.tools.length,
       info: entry.server,
       commands: serverCommands,
-      changed: entry.toolsChanged,
+      // Read through to the client, not copied: a server announces a changed tool list when its
+      // tools actually change, which is later than this snapshot — a copy would only ever see one
+      // that happened to land during the handshake, and `/mcp` would never report the real case.
+      get changed() {
+        return entry.toolsChanged;
+      },
     });
   }
 

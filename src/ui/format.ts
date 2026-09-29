@@ -1,3 +1,5 @@
+import { MCP_TOOL_PREFIX } from '../mcp/config.js';
+
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback
 // lines, transcript exports, and /summary all render times identically (issue #74). Fields are
 // zero-padded because the status bar ticks every second and must not jitter in width.
@@ -69,9 +71,6 @@ export function formatShrink(sheds: number, folds: number): string {
 // snake_case identifier. Only names needing an override are listed; everything else capitalizes.
 // Both the rendered label and the hanging-wrap width math go through this, so they cannot drift.
 const TOOL_LABELS: Record<string, string> = { ask_user: 'Ask', fetch_url: 'Fetch' };
-// The wire name an MCP tool carries (#265): `mcp__<server>__<tool>`. Shown as the command the user
-// would type to reach the same tool, since that spelling appears in /mcp and /help too.
-const MCP_TOOL_PREFIX = 'mcp__';
 
 export function toolLabel(name: string): string {
   const override = TOOL_LABELS[name];

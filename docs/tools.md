@@ -51,11 +51,13 @@ can prove a server's tool does not write files — so plan mode (which cannot mu
 (no filesystem or shell) and minimal/grind (a fixed work surface) never get one. **Stdio only**:
 remote HTTP/SSE servers are a different trust and auth question and are not supported.
 
-Approval: an MCP call is put through the same gate as everything else, with no danger warnings
-attached — reika cannot classify a tool it has never seen. That means `safe` (the default) runs it,
-`off` prompts, and `bypass` runs it with nobody to ask. An unattended session records the decline
-like any other. A server that fails to start, or answers with an error, is reported at startup and
-skipped; a call that fails costs one round, not the turn.
+Approval: an MCP call the **model** makes is put through the same gate as everything else, with no
+danger warnings attached — reika cannot classify a tool it has never seen. That means `safe` (the
+default) runs it, `off` prompts, and `bypass` runs it with nobody to ask. An unattended session
+records the decline like any other. The `/<server>:<tool>` command you type yourself is the
+exception: it is never gated, the same rule shell mode runs under — nothing prompts you for a
+command you just wrote. A server that fails to start, or answers with an error, is reported at
+startup and skipped; a call that fails costs one round, not the turn.
 
 ## `.gitignore` is respected
 

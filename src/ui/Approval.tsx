@@ -7,6 +7,7 @@ import { DiffView } from './DiffView.js';
 import { highlightCode } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
 import { contentWidth } from './layout.js';
+import { toolLabel } from './format.js';
 
 // The dialog's own border (1 column each side) plus its paddingX={1}, on top of the App padding
 // contentWidth already accounts for. The diff has to wrap inside all of it or its rows push
@@ -76,7 +77,10 @@ export function Approval({
           a sibling boundary, which would clip a long subject. Mirrors the chat's
           tool-call line — `⏺︎ Bash` in tool grey, the subject receding in muted. */}
       <Text>
-        <Text color={theme.tool}>{`${DIALOG_MARKER} ${capitalize(request.tool)}`}</Text>
+        {/* `toolLabel`, not a bare capitalize: an MCP tool's wire name (`mcp__srv__tool`) is not
+            what the user typed or sees anywhere else, and the chip already spells it as the
+            command. One rule for both, so the dialog and the scrollback cannot drift (#265). */}
+        <Text color={theme.tool}>{`${DIALOG_MARKER} ${toolLabel(request.tool)}`}</Text>
         <Text color={theme.secondary}>{`  ${request.subject}`}</Text>
       </Text>
       <Box flexDirection="column" marginTop={1}>
@@ -185,8 +189,4 @@ export function fitCommandLines(
   let kept = 0;
   while (kept < lines.length && used + heights[kept] <= budget) used += heights[kept++];
   return { lines: lines.slice(0, kept), hidden: lines.length - kept };
-}
-
-function capitalize(s: string): string {
-  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
 }

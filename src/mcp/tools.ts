@@ -3,11 +3,11 @@ import type { Tool, ToolContext, ToolParameters, ToolResult } from '../types.js'
 import { declineSummary } from '../approval.js';
 import { kFormat } from '../ui/format.js';
 import type { McpCallResult, McpContentBlock, McpToolDef } from './client.js';
+import { MCP_TOOL_PREFIX } from './config.js';
 
 // The bridge from a server's tools to Reika's `Tool`. Namespacing (`mcp__server__tool`) is what
 // keeps two servers' identically-named tools apart in one request — the wire has one flat tool
 // namespace, and a later server silently shadowing an earlier one is the failure this prevents.
-export const MCP_TOOL_PREFIX = 'mcp__';
 // Providers validate tool names (`^[a-zA-Z0-9_-]{1,64}$` for OpenAI-compatible endpoints), and a
 // server may name a tool with dots or spaces, so both parts are slugged and the whole capped.
 const MAX_TOOL_NAME = 64;
@@ -38,6 +38,12 @@ export function mcpToolName(server: string, tool: string): string {
   if (full.length <= MAX_TOOL_NAME) return full;
   // Truncation has to stay unique: two long tool names from one server share a prefix, and a
   // collision would make one of them uncallable. A hash of the full name carries the difference.
+  //
+  // Slugging is lossy in the same direction and is NOT covered by this: a server offering both
+  // `read_file` and `read file` (or two servers named `a b` and `a-b`) produces one wire name, and
+  // dispatch resolves the first match, so the second is unreachable. Known and accepted — a name
+  // that already collides has to be legal for the endpoint anyway — but the hash is not what makes
+  // these names unique.
   const hash = createHash('sha1').update(full).digest('hex').slice(0, 8);
   return `${full.slice(0, MAX_TOOL_NAME - hash.length - 1)}_${hash}`;
 }

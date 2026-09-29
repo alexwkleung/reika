@@ -130,6 +130,13 @@ list — and returns errors instead of throwing, because a typo in one entry mus
 - **Stdio only.** Remote HTTP/SSE servers are a different trust and auth question; adding one later
   means a second transport behind the same `McpClient` surface, not a change to the bridge.
 
+Two details under the first decision. The eval runner pins `REIKA_MCP=0` for the reason
+`REIKA_CDP_SEARCH` is pinned — a fixture's round-0 prefix must not depend on the machine that ran
+it, and a configured set would also spawn child processes per run. And `/mcp` reads each server's
+`toolsChanged` through to the client rather than copying it when the statuses are built, because
+the realistic notification arrives after the handshake — a copy only ever saw one announced during
+`connect()`, so the "changed tool list" line could not appear for the case it exists for.
+
 ## Adding a slash command
 
 1. Add to `COMMANDS` in `src/ui/commands.ts` with `name` + `desc`

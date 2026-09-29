@@ -8,6 +8,7 @@ import { expandPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
+import { toolLabel } from './ui/format.js';
 import { debugLog } from './debug.js';
 import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
@@ -99,7 +100,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
         : (req: ApprovalRequest): Promise<boolean> => {
             if (autoApproves(loaded.autoApprove, req)) return Promise.resolve(true);
             io.stderr(
-              `reika: declined ${req.tool} (no prompt to ask at): ${firstLine(req.preview)}\n`,
+              `reika: declined ${toolLabel(req.tool)} (no prompt to ask at): ${firstLine(req.preview)}\n`,
             );
             return Promise.resolve(false);
           },
