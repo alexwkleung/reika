@@ -63,6 +63,15 @@ export function isGrindPrompt(mode: Mode): boolean {
   return mode === 'grind';
 }
 
+// Whether this turn may refine the plan above (#46). Vibe never refines: vibe's plan phase is a NEW
+// task — it chains its own implementation off the same prompt, so a revision framing would carry
+// the previous chain's steps into it. Keyed on the RECORDED mode because, as far as the loop is
+// concerned, vibe's plan phase is an ordinary plan turn (turnPromptMode maps it to 'plan') and
+// cannot tell the two apart itself — see RunTurnOptions.allowRefine in agent/loop.ts.
+export function turnRefines(mode: Mode): boolean {
+  return mode !== 'vibe';
+}
+
 export type CommandSpec = {
   name: string;
   desc: string;
@@ -75,7 +84,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'cd', desc: 'change cwd (re-indexes repo map)' },
   { name: 'shell', desc: 'enter shell mode (raw bash, no model)' },
   { name: 'chat', desc: 'enter chat mode (no filesystem/shell tools; isolated context)' },
-  { name: 'plan', desc: 'enter plan mode (read-only exploration; ends with a written plan)' },
+  {
+    name: 'plan',
+    desc: 'enter plan mode (read-only exploration; ends with a written plan — send another message to refine it)',
+  },
   { name: 'vibe', desc: 'enter vibe mode (every prompt plans first, then implements the plan)' },
   {
     name: 'minimal',
