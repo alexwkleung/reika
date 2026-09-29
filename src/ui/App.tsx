@@ -498,6 +498,13 @@ export function App() {
             { role: 'system', content: limitsNotice, skipAutosave: true },
           ]);
         }
+        const windowNotice = s.windowNotice;
+        if (windowNotice) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: windowNotice, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         const warn = budgetWarning(b, runtime);
         if (warn) {
           setMessages(prev => [
@@ -612,8 +619,8 @@ export function App() {
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
     // Not awaited: the switch is instant, and a turn submitted before the probe (#417) answers runs
     // without a window, as it would have anyway.
-    void s.setProfile(target).then(notice => {
-      if (notice) setMessages(prev => [...prev, { role: 'system', content: notice }]);
+    void s.setProfile(target).then(notices => {
+      if (notices.length > 0) setMessages(prev => [...prev, ...notices]);
     });
     // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
