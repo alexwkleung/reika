@@ -1,0 +1,3 @@
+# gitleaks findings reviewed and cleared. One fingerprint per line; `gitleaks git` skips them.
+# A fake key in the test that pins a secret-carrying URL is never fetched.
+3637f6d92f71655ea60b94c09018754a6b18306b:src/tools/_urls.test.ts:generic-api-key:386
