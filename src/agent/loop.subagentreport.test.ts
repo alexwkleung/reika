@@ -15,6 +15,7 @@ import {
   MAX_SUBAGENTS_PER_TURN,
   SUBAGENT_HOLD_NOTE,
   SUBAGENT_REPORT_DIRECTIVE,
+  SUBAGENT_REPORT_FRAME,
 } from './subagentreport.js';
 
 // Subagent bounded return (#340), driven through the real runTurn with a scripted model: the last
@@ -232,6 +233,11 @@ describe('subagent bounded return (#340)', () => {
       payloads: new PayloadStore(),
       onMessage: () => {},
     });
+    // The report frame rides a subagent's system prompt from its first round — an early finish
+    // never reaches the directive — and never the parent's.
+    expect(h.captured[0].system).not.toContain(SUBAGENT_REPORT_FRAME);
+    expect(h.captured[1].system).toContain(SUBAGENT_REPORT_FRAME);
+    expect(h.captured[4].system).not.toContain(SUBAGENT_REPORT_FRAME);
     // Subagent report round: calls forbidden + directive, in the nested run (4th model call overall).
     expect(h.captured[3].toolChoice).toBe('none');
     expect(h.captured[3].system + (h.captured[3].trailingNote ?? '')).toContain(

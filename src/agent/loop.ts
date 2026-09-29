@@ -83,6 +83,7 @@ import {
 import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
+  SUBAGENT_REPORT_FRAME,
   SUBAGENT_HOLD_NOTE,
   MAX_SUBAGENTS_PER_TURN,
   MAX_SUBAGENTS_PER_ROUND,
@@ -1260,14 +1261,17 @@ export async function runTurn(opts: {
   }
 
   // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
-  // diverges from round 0.
-  const baseSystem = buildSystemPrompt({
+  // diverges from round 0. A subagent is never warmed, so its report frame can't cause that drift.
+  const promptForMode = buildSystemPrompt({
     bundle: opts.bundle,
     mode: opts.promptMode,
     minimal: opts.minimalPrompt,
     grind: opts.grindPrompt,
     ...promptGates(opts.tools, opts.config.sandbox, opts.config.unattended),
   });
+  const baseSystem = opts.reportAtCap
+    ? `${promptForMode}\n\n${SUBAGENT_REPORT_FRAME}`
+    : promptForMode;
   // In plan mode the system is recomputed each round with a fresh, pinned exploration ledger
   // (never enters history, so compaction can't evict it). Other modes leave this untouched.
   let system = baseSystem;
