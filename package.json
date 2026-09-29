@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js',0o755)\"",
     "dev": "tsx src/cli.tsx",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.eval.json",
     "lint": "oxlint .",
@@ -24,7 +24,7 @@
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "npm --prefix docs run build",
     "skills:link": "sh scripts/link-skills.sh",
-    "install:global": "npm run build && npm install -g .",
+    "install:global": "npm run build && npm install -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but $(npm prefix -g)/bin is not on your PATH\"; fi",
     "uninstall:global": "npm uninstall -g reika",
     "reinstall:global": "npm run uninstall:global && npm run install:global",
     "prepack": "npm run build"
