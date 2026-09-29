@@ -6,8 +6,11 @@
   "bin": {
     "reika": "./dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.tsx",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.eval.json",
     "lint": "oxlint .",
@@ -23,7 +26,8 @@
     "skills:link": "sh scripts/link-skills.sh",
     "install:global": "npm run build && npm install -g .",
     "uninstall:global": "npm uninstall -g reika",
-    "reinstall:global": "npm run uninstall:global && npm run install:global"
+    "reinstall:global": "npm run uninstall:global && npm run install:global",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "chalk": "^5.6.2",
