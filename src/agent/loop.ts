@@ -490,6 +490,13 @@ const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
 // the cap we discard the exploration history (and its read-momentum) and feed the model only the
 // task + its own accumulated reasoning, with no tools, asking it to convert that into a plan.
 // "Summarize your analysis into a plan" is a task weak models do far better than "decide to stop".
+// A plan written and then abandoned leaves the next plan-mode prompt framed as its revision, and a
+// small model told to "keep the steps that still hold" carries the old task's steps into the new one.
+// Worded as a narrow exception, not a third branch: misreading a real revision as a new task silently
+// drops the settled decisions (the #46 failure), where the reverse shows up in the plan itself.
+const REFINE_NEW_TASK_EXCEPTION =
+  'Only if the latest message is a different task with nothing to do with that plan, plan it from scratch instead.';
+
 export function buildPlanWritePrompt(steer = false, refine = false): string {
   // Deliberately positive and permissive. Heavy negative constraints ("output ONLY … no preamble,
   // no code") make ruminating thinking models burn their whole generation budget litigating the
@@ -512,6 +519,7 @@ export function buildPlanWritePrompt(steer = false, refine = false): string {
       'A plan for this work was already written, and the next message includes it in full. Revise',
       'THAT plan: keep the steps that still hold, change only what the latest request from the user',
       'asks for, and write the whole updated numbered plan. Do not start over from a blank slate.',
+      REFINE_NEW_TASK_EXCEPTION,
     );
   }
   // Steered retry (CONVERGE_RETRY): the prior force-write looped. Name the failure mode the way that
@@ -618,7 +626,8 @@ export function buildPlanTransformInput(
       ? 'Exploration is over. Write the whole updated plan now — the plan above, revised for the ' +
         "user's latest message — grounded in the reference material: keep the steps that still hold, " +
         'change only what was asked for, and use the exact file paths and identifiers above. Do not ' +
-        'start over, and do not invent paths, filenames, or class names.'
+        'start over, and do not invent paths, filenames, or class names. ' +
+        REFINE_NEW_TASK_EXCEPTION
       : 'Exploration is over. Write the numbered, file-specific plan for the request now, grounded in ' +
         'the reference material above — use its exact file paths and identifiers, and do not invent ' +
         'paths, filenames, or class names.')
@@ -631,6 +640,7 @@ const REFINE_LEDGER_RULE = [
   'If the latest message asks for a change: keep the steps that still hold, change only what it',
   'asks for, and end by writing the whole revised plan (the newest plan replaces the older one).',
   'If it only asks about the plan: answer it, and do not re-emit the plan — it stays live as written.',
+  REFINE_NEW_TASK_EXCEPTION,
 ];
 
 // EXPERIMENT (plan mode): a deterministic exploration ledger appended to the system prompt
