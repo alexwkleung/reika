@@ -116,6 +116,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   });
   const { config, bundle } = session;
   if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
+  if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
   if (session.offline) io.stderr('reika: no network — search and fetch_url are off for this run\n');
   if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
   for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);

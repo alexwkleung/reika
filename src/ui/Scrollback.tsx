@@ -558,6 +558,19 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
   );
 }
 
+// A lead longer than this is a sentence, not a label, and tinting it is the blob again.
+const NOTICE_LEAD_MAX = 40;
+
+// The text before a notice's first ` — ` or `: ` on its first row, colon included. Empty when
+// there is none, or it is too long, or the first row wrapped before reaching it.
+export function noticeLead(wrapped: string): string {
+  const firstRow = wrapped.split('\n')[0];
+  const m = /^(.+?)(?: — |: )/.exec(firstRow);
+  if (!m) return '';
+  const lead = m[0].endsWith(': ') ? m[1] + ':' : m[1];
+  return lead.length <= NOTICE_LEAD_MAX ? lead : '';
+}
+
 function hasBlockUnderSummary(msg: Message): boolean {
   return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
 }
@@ -808,18 +821,25 @@ function renderMessage(
     const markerColor =
       msg.tone === 'warn' ? theme.warning : msg.tone === 'info' ? theme.info : theme.accent;
     const marker = `${msg.tone === 'warn' ? glyphs.noticeWarn : glyphs.notice} `;
+    // Harness notices quote absolute paths (/save's history files, /cd's target). Scrub them the
+    // same way tool lines are scrubbed so the home prefix doesn't leak into scrollback (and
+    // screenshots) — display only; the files are still written to, and the model still sees, the
+    // absolute path.
+    const body = hangingWrap(scrubDisplay(msg.content), contentWidth(indent), NOTICE_MARKER_WIDTH);
+    // A lead phrase ("Not sandboxed:", "Still looping") takes the marker's color and the
+    // rest stays muted — a whole yellow line read as a blob. Sliced off the wrapped text, which is
+    // safe because noticeLead only returns a lead short enough to sit on the first row.
+    const emphasis = msg.emphasis ?? (msg.tone === 'warn' ? 'lead' : undefined);
+    const lead = emphasis === 'lead' ? noticeLead(body) : '';
     // Color must be on the OUTER Text so wrapped continuation lines inherit it;
     // a colored inner Text loses its color on wrap because Ink falls back to the
     // outer's color. The marker overrides for its own segment.
     return (
       <Box marginTop={1}>
-        <Text color={theme.muted}>
+        <Text color={emphasis === 'line' ? markerColor : theme.muted}>
           <Text color={markerColor}>{marker}</Text>
-          {/* Harness notices quote absolute paths (/save's history files, /cd's target).
-              Scrub them the same way tool lines are scrubbed so the home prefix doesn't
-              leak into scrollback (and screenshots) — display only; the files are still
-              written to, and the model still sees, the absolute path. */}
-          {hangingWrap(scrubDisplay(msg.content), contentWidth(indent), NOTICE_MARKER_WIDTH)}
+          {lead && <Text color={markerColor}>{lead}</Text>}
+          {body.slice(lead.length)}
         </Text>
       </Box>
     );

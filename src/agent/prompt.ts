@@ -122,7 +122,13 @@ function buildGrindPrompt(opts: {
   canAsk?: boolean;
   decideAlone?: boolean;
   sandbox?: boolean;
+  canFetch?: boolean;
+  canSearch?: boolean;
 }): string {
+  // Named only when present (#589), in the order grindTools registers them — the #377 rule.
+  const webTools = [opts.canSearch ? 'search' : '', opts.canFetch ? 'fetch_url' : '']
+    .filter(Boolean)
+    .join('/');
   const steps: string[] = [
     'Pin down the task. Before your first tool call, state in a sentence or two what "done" means and anything ambiguous about the request.',
     'Look before you act. Find the code involved (grep through bash), read it, find how this codebase already handles similar things, and find the tests that cover it. Never guess a path.',
@@ -149,7 +155,14 @@ function buildGrindPrompt(opts: {
     [
       'You are a coding assistant operating in a terminal, in GRIND MODE: the work is not done until you have checked it. Be concise in what you write and thorough in what you run.',
       'Your tools: bash for searching, building, testing and everything else; read to view a file; edit to change one.',
-      ...(opts.sandbox ? [sandboxSentence(false, false)] : []),
+      // Scoped like plan mode's line: step 2's exploration is of the repo, and an open "you may
+      // search the web" would be a way to keep exploring instead of running a check.
+      ...(webTools
+        ? [
+            `For what the repo cannot answer — a library's docs, an API's shape, a page the request links to — use ${webTools} rather than guessing or curl. Prefer the repo: it is what you are changing.`,
+          ]
+        : []),
+      ...(opts.sandbox ? [sandboxSentence(!!opts.canFetch, !!opts.canSearch)] : []),
       'Work through these steps, in order:',
       ...steps.map((s, i) => `${i + 1}. ${s}`),
       'Rules:',
