@@ -1,6 +1,7 @@
 ---
 description: read a GitHub pull request with gh, then review the diff
 triggers: review pr, pr review, review the pull request, pull request, code review
+requires: gh, github
 ---
 
 Your first action is a `bash` tool call. Call the `bash` tool with this command:

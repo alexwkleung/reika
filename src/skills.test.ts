@@ -1,9 +1,16 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadSkills, parseFrontmatter, parseTriggers } from './skills.js';
+import {
+  BUNDLED_DIR,
+  hasGitHubRemote,
+  loadSkills,
+  onPath,
+  parseFrontmatter,
+  parseRequires,
+  parseTriggers,
+} from './skills.js';
 
 describe('parseFrontmatter', () => {
   it('returns empty meta + full body when there is no frontmatter', () => {
@@ -248,7 +255,7 @@ describe('loadSkills', () => {
     }
   });
 
-  it('loads a skill via a symlinked flat file (how `npm run skills:link` installs ours)', async () => {
+  it('loads a skill via a symlinked flat file (a skill kept elsewhere and linked in)', async () => {
     const sourceRoot = await mkdtemp(join(tmpdir(), 'reika-skills-source-'));
     try {
       await writeFile(join(sourceRoot, 'issue.md'), 'issue body', 'utf8');
@@ -265,45 +272,127 @@ describe('loadSkills', () => {
   });
 });
 
-// The skills Reika ships in .reika/skills/ load through the same path as a user's own, so a
-// frontmatter typo here ships a skill with no description or no plain-English routing — invisible
-// until someone types the prompt and nothing fires.
-describe('skills shipped in .reika/skills/', () => {
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-  let originalEnv: string | undefined;
+// The skills Reika ships in skills/ (bundled into the package). A frontmatter typo here ships a
+// skill with no description or no plain-English routing — invisible until someone types the prompt
+// and nothing fires — so they are read straight off disk, ungated.
+describe('skills shipped in skills/', () => {
+  const shipped = async () =>
+    Promise.all(
+      (await readdir(BUNDLED_DIR))
+        .filter(f => f.endsWith('.md'))
+        .map(async f => ({
+          name: f.slice(0, -3),
+          ...parseFrontmatter(await readFile(join(BUNDLED_DIR, f), 'utf8')),
+        })),
+    );
 
-  beforeEach(async () => {
-    originalEnv = process.env.REIKA_SKILLS_DIR;
-    // Isolate from the developer's own global skills — including symlinks back to these files.
-    process.env.REIKA_SKILLS_DIR = await mkdtemp(join(tmpdir(), 'reika-global-skills-'));
-  });
-
-  afterEach(async () => {
-    const dir = process.env.REIKA_SKILLS_DIR;
-    if (dir) await rm(dir, { recursive: true, force: true });
-    if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
-    else process.env.REIKA_SKILLS_DIR = originalEnv;
-  });
-
-  it('ships the issue and review skills, each with a description, triggers and a body', async () => {
-    const skills = await loadSkills(repoRoot);
-    expect(skills.map(s => s.name)).toEqual(expect.arrayContaining(['issue', 'review']));
-    for (const skill of skills) {
-      expect(skill.source).toBe('project');
-      expect(skill.description).not.toBe('(no description)');
-      expect(skill.triggers.length).toBeGreaterThan(0);
-      expect(skill.body.length).toBeGreaterThan(0);
+  it('ships issue and review, each with a description, triggers, requirements and a body', async () => {
+    const skills = await shipped();
+    expect(skills.map(s => s.name).sort()).toEqual(['issue', 'review']);
+    for (const { meta, body } of skills) {
+      expect(meta.description?.trim()).toBeTruthy();
+      expect(parseTriggers(meta.triggers).length).toBeGreaterThan(0);
+      expect(parseRequires(meta.requires)).toEqual(['gh', 'github']);
+      expect(body.trim().length).toBeGreaterThan(0);
     }
   });
 
   it('gives no two shipped skills the same trigger phrase', async () => {
     // matchSkill returns null on a tie, so a shared phrase routes to neither skill.
     const seen = new Map<string, string>();
-    for (const skill of await loadSkills(repoRoot)) {
-      for (const trigger of skill.triggers) {
-        expect(seen.get(trigger) ?? skill.name).toBe(skill.name);
-        seen.set(trigger, skill.name);
+    for (const { name, meta } of await shipped()) {
+      for (const trigger of parseTriggers(meta.triggers)) {
+        expect(seen.get(trigger) ?? name).toBe(name);
+        seen.set(trigger, name);
       }
     }
+  });
+});
+
+describe('bundled skills and requirements', () => {
+  let root: string;
+  let originalEnv: string | undefined;
+  let originalPath: string | undefined;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'reika-bundled-'));
+    originalEnv = process.env.REIKA_SKILLS_DIR;
+    originalPath = process.env.PATH;
+    process.env.REIKA_SKILLS_DIR = join(root, 'global');
+    await mkdir(join(root, 'bundled'), { recursive: true });
+    await mkdir(join(root, 'global'), { recursive: true });
+    await mkdir(join(root, 'repo/.reika/skills'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
+    else process.env.REIKA_SKILLS_DIR = originalEnv;
+    process.env.PATH = originalPath;
+  });
+
+  const fakeGh = async () => {
+    await mkdir(join(root, 'bin'), { recursive: true });
+    await writeFile(join(root, 'bin/gh'), '#!/bin/sh\n', { mode: 0o755 });
+    process.env.PATH = join(root, 'bin');
+  };
+  const remote = (url: string) =>
+    mkdir(join(root, 'repo/.git'), { recursive: true }).then(() =>
+      writeFile(join(root, 'repo/.git/config'), `[remote "origin"]\n\turl = ${url}\n`),
+    );
+  const needsGitHub = '---\ndescription: d\nrequires: gh, github\n---\nbody';
+
+  it('loads bundled skills, and a global or project copy of the same name wins', async () => {
+    await writeFile(join(root, 'bundled/a.md'), 'BUNDLED A');
+    await writeFile(join(root, 'bundled/b.md'), 'BUNDLED B');
+    await writeFile(join(root, 'bundled/c.md'), 'BUNDLED C');
+    await writeFile(join(root, 'global/b.md'), 'GLOBAL B');
+    await writeFile(join(root, 'global/c.md'), 'GLOBAL C');
+    await writeFile(join(root, 'repo/.reika/skills/c.md'), 'PROJECT C');
+    const skills = await loadSkills(join(root, 'repo'), join(root, 'bundled'));
+    expect(skills.map(s => [s.name, s.source, s.body])).toEqual([
+      ['a', 'bundled', 'BUNDLED A'],
+      ['b', 'global', 'GLOBAL B'],
+      ['c', 'project', 'PROJECT C'],
+    ]);
+  });
+
+  it('shows a gh skill only with gh on PATH and a github.com remote', async () => {
+    await writeFile(join(root, 'bundled/issue.md'), needsGitHub);
+    const load = async () =>
+      (await loadSkills(join(root, 'repo'), join(root, 'bundled'))).map(s => s.name);
+    process.env.PATH = join(root, 'nothing-here');
+    await remote('git@github.com:octocat/hello.git');
+    expect(await load()).toEqual([]);
+    await fakeGh();
+    expect(await load()).toEqual(['issue']);
+    await remote('https://gitlab.com/octocat/hello.git');
+    expect(await load()).toEqual([]);
+  });
+
+  it('hides a skill whose requirement this version does not know', async () => {
+    await writeFile(join(root, 'bundled/x.md'), '---\nrequires: jira\n---\nbody');
+    expect(await loadSkills(join(root, 'repo'), join(root, 'bundled'))).toEqual([]);
+  });
+
+  it('finds the remote from a subdirectory, and through a worktree .git file', async () => {
+    await remote('https://github.com/octocat/hello');
+    await mkdir(join(root, 'repo/packages/web'), { recursive: true });
+    expect(await hasGitHubRemote(join(root, 'repo/packages/web'))).toBe(true);
+
+    // A worktree: .git is a file naming the per-worktree dir, whose commondir holds the config.
+    await mkdir(join(root, 'repo/.git/worktrees/wt'), { recursive: true });
+    await writeFile(join(root, 'repo/.git/worktrees/wt/commondir'), '../..\n');
+    await mkdir(join(root, 'wt'), { recursive: true });
+    await writeFile(join(root, 'wt/.git'), `gitdir: ${join(root, 'repo/.git/worktrees/wt')}\n`);
+    expect(await hasGitHubRemote(join(root, 'wt'))).toBe(true);
+
+    expect(await hasGitHubRemote(root)).toBe(false);
+  });
+
+  it('looks gh up on PATH without running it', async () => {
+    expect(await onPath('gh', join(root, 'nothing-here'))).toBe(false);
+    await fakeGh();
+    expect(await onPath('gh')).toBe(true);
   });
 });

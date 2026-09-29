@@ -1,6 +1,7 @@
 ---
 description: read a GitHub issue with gh, then work on it
 triggers: work on issue, gh issue, fix issue, look at issue, issue number
+requires: gh, github
 ---
 
 Your first action is a `bash` tool call. Call the `bash` tool with this command:
