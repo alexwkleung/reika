@@ -13,6 +13,12 @@ export type McpServerConfig = {
   cwd?: string;
   // How long one request may go unanswered before the call fails, ms. Undefined = DEFAULT_TIMEOUT_MS.
   timeoutMs?: number;
+  // The same bound for the handshake (initialize + tools/list), which happens before first paint.
+  // Undefined = CONNECT_TIMEOUT_MS. Separate from `timeoutMs` because the two failure modes cost
+  // different things: a generous call timeout must not turn a server that hangs at startup into a
+  // minutes-long stall before the first frame, and a server behind a cold `npx` install can need
+  // more than the default connect bound while its calls are quick.
+  connectTimeoutMs?: number;
 };
 
 // The namespace Reika puts on a server's tools when it hands them to the model: `mcp__<server>__
@@ -113,6 +119,8 @@ function readServer(key: string, value: unknown): McpServerConfig | string | und
   const cwd = typeof value.cwd === 'string' && value.cwd.trim() ? value.cwd : undefined;
   const timeoutMs = readTimeout(value.timeoutMs ?? value.timeout);
   if (typeof timeoutMs === 'string') return timeoutMs;
+  const connectTimeoutMs = readTimeout(value.connectTimeoutMs);
+  if (typeof connectTimeoutMs === 'string') return connectTimeoutMs;
   // `name` inside the entry overrides the map key, for the array shape where there is no key.
   const name = typeof value.name === 'string' ? value.name.trim() : '';
   return {
@@ -122,6 +130,7 @@ function readServer(key: string, value: unknown): McpServerConfig | string | und
     ...(env ? { env } : {}),
     ...(cwd ? { cwd } : {}),
     ...(timeoutMs ? { timeoutMs } : {}),
+    ...(connectTimeoutMs ? { connectTimeoutMs } : {}),
   };
 }
 

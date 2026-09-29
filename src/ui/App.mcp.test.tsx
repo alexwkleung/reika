@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
+import { glyphs } from './glyphs.js';
 import type { Config, ContextBundle } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
@@ -153,5 +154,21 @@ describe('MCP in the TUI', () => {
     // The tool was not called: no result line for it anywhere in the frame.
     expect(frame).not.toContain('mcp mini:echo —');
     app.unmount();
+  });
+
+  // A document that did not parse is the case where *nothing* started, so it is worth the warning
+  // glyph rather than the quiet info line a healthy launch gets — keying on the failure wording
+  // instead missed this one, because it names no server (#265 review). The tone is the glyph.
+  it('warns about a config error, and leaves a healthy launch on the info glyph', async () => {
+    CONFIG.mcpErrors = ['REIKA_MCP_SERVERS: invalid JSON: unexpected token'];
+    try {
+      const app = await mountApp();
+      const frame = await waitFor(app, 'REIKA_MCP_SERVERS: invalid JSON: unexpected token');
+      expect(frame).toContain(`${glyphs.noticeWarn} REIKA_MCP_SERVERS: invalid JSON`);
+      expect(frame).toContain(`${glyphs.notice} MCP: mini (2 tools)`);
+      app.unmount();
+    } finally {
+      delete CONFIG.mcpErrors;
+    }
   });
 });

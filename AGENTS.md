@@ -104,12 +104,19 @@ list — and returns errors instead of throwing, because a typo in one entry mus
   (protocol `2025-06-18`) → `notifications/initialized` → paginated `tools/list`, then `tools/call`
   with a per-call timeout. A server→client request is answered (`ping`, `roots/list` → no roots,
   anything else `-32601`) because an unanswered request is how a server decides its peer is gone; a
-  child that dies fails every in-flight request rather than leaving the turn hanging.
+  child that dies fails every in-flight request rather than leaving the turn hanging. The handshake
+  carries its own bound (`connectTimeoutMs`, default 15s) rather than sharing the call's: it is paid
+  before the first frame, so a generous call timeout must not turn a startup hang into a stall, and
+  a server behind a cold `npx` install needs more than the default while its calls stay quick.
 - `tools.ts` is the bridge: `mcp__<server>__<tool>` names (slugged, 64-char cap with a hash so
-  truncation stays unique), the server schema narrowed to the three keys providers accept, content
-  blocks flattened to text plus one-line markers, and the `/<server>:<tool>` command with its
-  argument parsing. `formatMcpResult`/`invokeMcpTool` are shared so the model's call and the user's
-  command read the same.
+  truncation stays unique), the server schema narrowed to the keys providers accept (`type`,
+  `properties`, `required`, plus the `$defs`/`definitions` a `$ref` points at — a reference whose
+  target was dropped is one nothing can resolve), content blocks flattened to text plus one-line
+  markers, and the `/<server>:<tool>` command with its argument parsing.
+  `formatMcpResult`/`invokeMcpTool` are shared so the model's call and the user's command read the
+  same. A block that is not an object — a `null` in the list, or a `content` that is not a list at
+  all — becomes a marker too: the declared type is a server's JSON, and reading it as typed is a
+  TypeError that takes the text blocks beside it down with it.
 - `manager.ts` connects every server in parallel, keeps a per-server status (a failed one becomes a
   notice and contributes nothing), and formats `/mcp`.
 
@@ -133,9 +140,10 @@ list — and returns errors instead of throwing, because a typo in one entry mus
 Two details under the first decision. The eval runner pins `REIKA_MCP=0` for the reason
 `REIKA_CDP_SEARCH` is pinned — a fixture's round-0 prefix must not depend on the machine that ran
 it, and a configured set would also spawn child processes per run. And `/mcp` reads each server's
-`toolsChanged` through to the client rather than copying it when the statuses are built, because
-the realistic notification arrives after the handshake — a copy only ever saw one announced during
-`connect()`, so the "changed tool list" line could not appear for the case it exists for.
+`toolsChanged` and its liveness through to the client rather than copying them when the statuses are
+built, because both facts arrive later than the handshake — a copy only ever saw a change announced
+during `connect()`, so the "changed tool list" line could not appear for the case it exists for, and
+it would report a server that has since exited as a healthy one while every call to it failed.
 
 ## Adding a slash command
 

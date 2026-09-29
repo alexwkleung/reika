@@ -127,10 +127,33 @@ export async function callMcpTool(
 // passes through, and everything else becomes a marker line — an image has no reader here (the
 // vision pipeline is for images the *user* pasted), and dropping the block silently would leave
 // the model unaware that the call returned something it cannot see.
+//
+// The type says `content: McpContentBlock[]`, but the value is a server's own JSON, so the list and
+// each element are re-checked here the way `listTools` re-checks a tool. Reading a `null` or a bare
+// string as a block is a TypeError that takes the text blocks beside it down with it, reporting a
+// call that answered as a failure; a `content` that is not a list at all would be walked as its
+// characters, one bogus marker each.
+const MALFORMED_CONTENT = '[malformed content — not shown]';
+
 export function formatMcpResult(label: string, result: McpCallResult): ToolResult {
   const parts: string[] = [];
-  for (const block of result.content ?? []) parts.push(...blockLines(block));
-  const structured = structuredLine(result.structuredContent, parts.length === 0);
+  // Counted separately from `parts`: a malformed marker is not content a server read out, and the
+  // fall-back below is about whether the server gave us anything to read at all.
+  let read = 0;
+  if (Array.isArray(result.content)) {
+    for (const block of result.content) {
+      if (!isRecord(block)) {
+        parts.push(MALFORMED_CONTENT);
+        continue;
+      }
+      const lines = blockLines(block);
+      read += lines.length;
+      parts.push(...lines);
+    }
+  } else if (result.content != null) {
+    parts.push(MALFORMED_CONTENT);
+  }
+  const structured = structuredLine(result.structuredContent, read === 0);
   if (structured) parts.push(structured);
   const payload = parts.length > 0 ? parts.join('\n\n') : undefined;
   const first = parts.find(p => p.trim() !== '')?.split('\n')[0] ?? '';
@@ -195,7 +218,9 @@ function toolDescription(server: string, def: McpToolDef): string {
 
 // The capabilities a tool declares, narrowed to what every provider accepts. The MCP schema is
 // arbitrary JSON Schema — `$schema`, `$defs`, unions — and an endpoint that rejects one keyword
-// fails the whole request, so only the three keys a tool call actually needs pass through.
+// fails the whole request, so only the keys a tool call actually needs pass through. The two
+// definition maps are part of that set: a property can `$ref` into them, and narrowing the top
+// level away while keeping the reference leaves a schema nothing can resolve.
 export function schemaToParameters(schema: Record<string, unknown> | undefined): ToolParameters {
   const props = isRecord(schema?.properties) ? schema.properties : {};
   const required = Array.isArray(schema?.required)
@@ -204,6 +229,8 @@ export function schemaToParameters(schema: Record<string, unknown> | undefined):
   return {
     type: 'object',
     properties: props,
+    ...(isRecord(schema?.$defs) ? { $defs: schema.$defs } : {}),
+    ...(isRecord(schema?.definitions) ? { definitions: schema.definitions } : {}),
     ...(required && required.length > 0 ? { required } : {}),
   };
 }

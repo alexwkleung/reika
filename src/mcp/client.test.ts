@@ -35,7 +35,12 @@ const handle = msg => {
     return;
   }
   if (msg.method === 'initialize') {
-    send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'fixture', version: '1.2.3' }, instructions: 'fixture instructions' } });
+    const reply = () => send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'fixture', version: '1.2.3' }, instructions: 'fixture instructions' } });
+    // A server that takes its time introducing itself, which a cold \`npx\` install does: the bound
+    // under test is the handshake's own (McpServerConfig.connectTimeoutMs).
+    const delay = Number(process.env.FIXTURE_INIT_DELAY || 0) || 0;
+    if (delay > 0) setTimeout(reply, delay);
+    else reply();
     return;
   }
   if (msg.method === 'notifications/initialized') {
@@ -189,6 +194,18 @@ describe('McpClient', () => {
   it('rejects a call on a client whose server never started, naming the command', async () => {
     const client = makeClient({ command: process.execPath, args: [join(dir, 'not-a-server.mjs')] });
     await expect(client.connect()).rejects.toThrow(/server exited/);
+  });
+
+  // The handshake's bound is the server's own, not the per-call one and not a fixed 15s: a server
+  // behind a cold `npx` install can need longer to say hello while its calls are quick, and a
+  // generous call timeout has no business turning a startup hang into a minute of no first frame.
+  it('honours a per-server handshake bound, and the default rejects the same delay', async () => {
+    const impatient = makeClient({ env: { FIXTURE_INIT_DELAY: '400' }, connectTimeoutMs: 80 });
+    await expect(impatient.connect()).rejects.toThrow(/no answer to initialize after 80ms/);
+
+    const patient = makeClient({ env: { FIXTURE_INIT_DELAY: '400' }, connectTimeoutMs: 5000 });
+    await patient.connect();
+    expect(patient.tools.map(t => t.name)).toContain('echo');
   });
 
   it('aborts a call when the turn is aborted', async () => {

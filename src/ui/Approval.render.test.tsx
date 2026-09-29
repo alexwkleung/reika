@@ -226,8 +226,10 @@ describe('Approval dialog — fetch_url', () => {
     );
     const rows = stripAnsi(lastFrame() ?? '').split('\n');
     // The label the scrollback chip uses for the same tool (`toolLabel`) — the dialog and the chip
-    // spell a tool one way (#265), so this is `Fetch`, not the raw `fetch_url`.
-    expect(rows.some(r => r.includes('evil.example') && r.includes('Fetch'))).toBe(true);
+    // spell a tool one way (#265), so this is the marker plus `Fetch`, not the raw `fetch_url`.
+    expect(rows.some(r => r.includes('evil.example') && r.includes(`${DIALOG_MARKER} Fetch`))).toBe(
+      true,
+    );
     const urlRow = rows.find(r => r.includes(url));
     expect(urlRow).toBeDefined();
     expect(urlRow!.trimStart().startsWith(url)).toBe(true);

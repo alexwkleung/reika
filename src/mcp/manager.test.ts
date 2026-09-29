@@ -31,6 +31,8 @@ const handle = msg => {
     return;
   }
   if (msg.method === 'tools/call') {
+    // A server that dies mid-session, so the manager's liveness read-through has something to see.
+    if (msg.params.name === 'crash') process.exit(9);
     send({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok:' + (msg.params.arguments || {}).text }] } });
     // After the handshake and after the manager built its statuses: the timing a real server uses.
     if (process.env.FIXTURE_ANNOUNCE_LATE === '1') send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: {} });
@@ -138,5 +140,21 @@ describe('connectMcpServers', () => {
     runtime.close();
     await expect(runtime.call('one', 'echo', {})).rejects.toThrow(/closed|server exited/);
     await expect(runtime.call('two', 'echo', {})).rejects.toThrow(/closed|server exited/);
+  });
+
+  // The other staleness the startup snapshot cannot see: a server that exits after connecting. Its
+  // tools stay in the request's tool list (that list is fixed at session start), so `/mcp` is the
+  // only place a call that fails on every round gets explained (#265 review).
+  it('reports a server that exits after the session started', async () => {
+    const runtime = await connectMcpServers([server('good')]);
+    try {
+      expect(runtime.servers[0].dead).toBe(false);
+      expect(runtime.list()).not.toContain('has exited');
+      await expect(runtime.call('good', 'crash', {})).rejects.toThrow(/server exited \(code 9\)/);
+      expect(runtime.servers[0].dead).toBe(true);
+      expect(runtime.list()).toContain('this server has exited');
+    } finally {
+      runtime.close();
+    }
   });
 });

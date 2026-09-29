@@ -73,7 +73,7 @@ export class McpClient {
   private readonly pending = new Map<number, Pending>();
   private stdoutBuffer = '';
   private stderrTail = '';
-  private dead: Error | undefined;
+  private exitError: Error | undefined;
 
   constructor(config: McpServerConfig) {
     this.config = config;
@@ -85,6 +85,19 @@ export class McpClient {
 
   get lastStderr(): string {
     return this.stderrTail.trim();
+  }
+
+  // Whether the child is gone. Read through by `/mcp` rather than copied into a startup status: a
+  // server that dies mid-session is the same class of staleness as a changed tool list, and the
+  // status snapshot is only true at the moment it was built.
+  get dead(): boolean {
+    return this.exitError !== undefined;
+  }
+
+  // The handshake's own bound: a server that is slow to start costs a session's first paint, which
+  // a per-call timeout has no reason to govern (see McpServerConfig.connectTimeoutMs).
+  private get connectTimeoutMs(): number {
+    return this.config.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   }
 
   // Spawn + handshake + tool discovery. Resolves only on a server that answered `initialize`
@@ -101,7 +114,7 @@ export class McpClient {
           capabilities: { roots: { listChanged: false } },
           clientInfo: { name: CLIENT_NAME, version: VERSION },
         },
-        CONNECT_TIMEOUT_MS,
+        this.connectTimeoutMs,
       );
       this.server = readServerInfo(init);
       this.notify('notifications/initialized', {});
@@ -121,7 +134,7 @@ export class McpClient {
       const res = (await this.request(
         'tools/list',
         cursor ? { cursor } : {},
-        CONNECT_TIMEOUT_MS,
+        this.connectTimeoutMs,
       )) as { tools?: unknown; nextCursor?: unknown };
       const list = Array.isArray(res?.tools) ? res.tools : [];
       for (const t of list) {
@@ -196,16 +209,16 @@ export class McpClient {
       // A child that dies takes every in-flight request with it. The error surfaces here rather
       // than as a hang: a server that exits mid-call is exactly the bug the user must be told.
       child.on('error', (e: Error) => {
-        this.dead = new Error(`could not start ${command}: ${e.message}`);
-        this.rejectInFlight(this.dead);
-        reject(this.dead);
+        this.exitError = new Error(`could not start ${command}: ${e.message}`);
+        this.rejectInFlight(this.exitError);
+        reject(this.exitError);
       });
       child.on('exit', (code, signal) => {
         liveChildren.delete(child);
-        this.dead = new Error(
+        this.exitError = new Error(
           `server exited (${signal ? `signal ${signal}` : `code ${code}`})${this.stderrSuffix()}`,
         );
-        this.rejectInFlight(this.dead);
+        this.rejectInFlight(this.exitError);
       });
       liveChildren.add(child);
       resolve();
@@ -272,7 +285,7 @@ export class McpClient {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<unknown> {
-    if (this.dead) return Promise.reject(this.dead);
+    if (this.exitError) return Promise.reject(this.exitError);
     if (signal?.aborted) return Promise.reject(new Error('aborted'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {

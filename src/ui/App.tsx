@@ -524,15 +524,18 @@ export function App() {
             { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
           ]);
         }
-        // MCP: what connected, what failed, and any config error (#265). A broken server is worth
-        // noticing, so it gets the warn tone; a healthy one is a quiet info line.
+        // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
+        // only line that is good news — the shape `connectNotices` emits — so everything else that
+        // reaches here (a server that did not start, a document that did not parse) is worth
+        // noticing. Keying on the failure wording instead would miss `REIKA_MCP_SERVERS: …`, which
+        // is the case where no server started at all.
         for (const notice of s.mcpNotices) {
           setMessages(prev => [
             ...prev,
             {
               role: 'system',
               content: notice,
-              tone: notice.startsWith('MCP server') ? 'warn' : 'info',
+              tone: notice.startsWith('MCP: ') ? 'info' : 'warn',
               skipAutosave: true,
             },
           ]);

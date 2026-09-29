@@ -57,7 +57,9 @@ default) runs it, `off` prompts, and `bypass` runs it with nobody to ask. An una
 records the decline like any other. The `/<server>:<tool>` command you type yourself is the
 exception: it is never gated, the same rule shell mode runs under — nothing prompts you for a
 command you just wrote. A server that fails to start, or answers with an error, is reported at
-startup and skipped; a call that fails costs one round, not the turn.
+startup and skipped; a call that fails costs one round, not the turn. A server that exits
+mid-session keeps its tools in the request's tool list (that list is fixed at session start), so
+`/mcp` says so — the calls that follow fail with the exit status rather than silently.
 
 ## `.gitignore` is respected
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../types.js';
+import type { McpContentBlock } from './client.js';
 import {
   callMcpTool,
   findMcpCommand,
@@ -80,6 +81,25 @@ describe('schemaToParameters', () => {
     expect(schemaToParameters({ type: 'object', properties: {}, required: [] })).toEqual({
       type: 'object',
       properties: {},
+    });
+  });
+
+  // The properties can `$ref` into the definition maps, so narrowing the top level while dropping
+  // them leaves a reference nothing can resolve (#265 review). Both spellings travel.
+  it('carries the definition maps a $ref points at', () => {
+    expect(
+      schemaToParameters({
+        type: 'object',
+        properties: { p: { $ref: '#/$defs/P' } },
+        $defs: { P: { type: 'string' } },
+        definitions: { Q: { type: 'number' } },
+        additionalProperties: false,
+      }),
+    ).toEqual({
+      type: 'object',
+      properties: { p: { $ref: '#/$defs/P' } },
+      $defs: { P: { type: 'string' } },
+      definitions: { Q: { type: 'number' } },
     });
   });
 });
@@ -222,6 +242,34 @@ describe('formatMcpResult', () => {
   it('claims nothing when a call returns no content', () => {
     expect(formatMcpResult('s:t', {})).toEqual({ summary: 'mcp s:t — no content' });
     expect(formatMcpResult('s:t', { isError: true })).toEqual({ summary: 'mcp s:t failed' });
+  });
+
+  // The declared type is `McpContentBlock[]`, but the value is a server's own JSON. Reading a block
+  // that is not an object threw, which took the text blocks beside it down and reported a call that
+  // answered as a failure — and a `content` that is not a list at all was walked character by
+  // character, one marker each (#265 review).
+  it('reads past content that is not what the type promises', () => {
+    const mixed = formatMcpResult('s:t', {
+      content: [null, 42, { type: 'text', text: 'ok' }] as unknown as McpContentBlock[],
+    });
+    expect(mixed.payload).toBe(
+      ['[malformed content — not shown]', '[malformed content — not shown]', 'ok'].join('\n\n'),
+    );
+    expect(mixed.summary).not.toContain('failed');
+
+    const notAList = formatMcpResult('s:t', { content: 'oops' as unknown as McpContentBlock[] });
+    expect(notAList).toEqual({
+      summary: 'mcp s:t — 31 chars',
+      payload: '[malformed content — not shown]',
+    });
+
+    // A marker is not something the server read out, so the typed half still comes through: the
+    // fall-back is about whether there was any readable content at all.
+    const both = formatMcpResult('s:t', {
+      content: [null] as unknown as McpContentBlock[],
+      structuredContent: { total: 3 },
+    });
+    expect(both.payload).toBe('[malformed content — not shown]\n\n{\n  "total": 3\n}');
   });
 });
 

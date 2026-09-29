@@ -14,6 +14,10 @@ export type McpServerStatus = {
   // The server announced a changed tool list. The list is part of the request prefix, so it cannot
   // change mid-session — this is surfaced, not acted on.
   changed: boolean;
+  // The child process is gone — it exited, or it never started — so every call to it fails. Any
+  // tools it did contribute stay in the request's tool list (that list is fixed at session start),
+  // which makes this the one place those failures are explained rather than retried blind.
+  dead: boolean;
 };
 
 export type McpRuntime = {
@@ -67,6 +71,7 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
           error: (e as Error).message,
           commands: [],
           changed: false,
+          dead: true,
         };
       }
     }),
@@ -103,6 +108,11 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       // that happened to land during the handshake, and `/mcp` would never report the real case.
       get changed() {
         return entry.toolsChanged;
+      },
+      // Same reason, and it is why `/mcp` can answer "why is every call to this server failing":
+      // the process can exit at any point after this snapshot was taken.
+      get dead() {
+        return entry.dead;
       },
     });
   }
@@ -171,6 +181,10 @@ export function formatMcpList(statuses: McpServerStatus[]): string {
     }
     lines.push(`  ${s.name} — ${s.tools} tool${s.tools === 1 ? '' : 's'} (${who})`);
     for (const c of s.commands) lines.push(`    /${c.name.padEnd(28)} ${c.description}`);
+    if (s.dead)
+      lines.push(
+        `    (this server has exited — its tools are still in the tool list, so calls fail until reika restarts)`,
+      );
     if (s.changed)
       lines.push(
         `    (this server announced a changed tool list — restart reika to pick it up; the tool list is part of the cached request prefix)`,

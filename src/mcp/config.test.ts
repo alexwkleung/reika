@@ -73,6 +73,7 @@ describe('parseMcpServers', () => {
         noargs: { command: 'x', args: 'not-a-list' },
         badenv: { command: 'x', env: { K: { nested: true } } },
         badtimeout: { command: 'x', timeoutMs: -1 },
+        badconnect: { command: 'x', connectTimeoutMs: 0 },
         good: { command: 'x' },
       }),
     );
@@ -82,7 +83,20 @@ describe('parseMcpServers', () => {
       'MCP server "noargs": "args" must be a list of strings',
       'MCP server "badenv": "env" value for K must be a string',
       'MCP server "badtimeout": "timeoutMs" must be a positive number of ms',
+      'MCP server "badconnect": "timeoutMs" must be a positive number of ms',
     ]);
+  });
+
+  // Two bounds, because they cost different things: `timeoutMs` governs one call, `connectTimeoutMs`
+  // the handshake before first paint (a server behind a cold `npx` install needs more than the 15s
+  // default while its calls are quick).
+  it('reads a handshake bound separately from the per-call one', () => {
+    const { servers } = parseMcpServers(
+      '{"s":{"command":"x","timeoutMs":5000,"connectTimeoutMs":"45000"}}',
+    );
+    expect(servers[0].timeoutMs).toBe(5000);
+    expect(servers[0].connectTimeoutMs).toBe(45000);
+    expect(parseMcpServers('{"s":{"command":"x"}}').servers[0].connectTimeoutMs).toBeUndefined();
   });
 
   it('reports a duplicate name once and keeps the first', () => {

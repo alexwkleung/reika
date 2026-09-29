@@ -345,6 +345,11 @@ export type ToolParameters = {
   type: 'object';
   properties: Record<string, unknown>;
   required?: string[];
+  // JSON Schema's two definition maps. A property can `$ref` into them, so a schema narrowed to the
+  // keys above carries them: a reference whose target was dropped is one nothing can resolve
+  // (MCP tools, #265). Both spellings, because servers use both.
+  $defs?: Record<string, unknown>;
+  definitions?: Record<string, unknown>;
 };
 
 export type Tool = {
