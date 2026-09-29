@@ -426,6 +426,30 @@ describe('the force-write transform carries the refinement (#46)', () => {
   });
 });
 
+// An abandoned plan frames the next plan-mode prompt as its revision. Every refine surface carries
+// the same narrow way out, so the ledger and the force-write cannot disagree about it.
+describe('a new task after an abandoned plan', () => {
+  const exception = /different task with nothing to do with that plan, plan it from scratch/;
+
+  it('is named on every refine surface, and on no fresh pass', () => {
+    const history: Message[] = [
+      ...plannedHistory(),
+      { role: 'user', content: 'fix the export bug' },
+    ];
+    const ledger = buildSteadySystem({
+      baseSystem: 'BASE',
+      promptMode: 'plan',
+      history,
+      round: 0,
+      planSteps: null,
+    });
+    expect(ledger).toMatch(exception);
+    expect(buildPlanTransformInput(history, 100000, false)).toMatch(exception);
+    expect(buildPlanWritePrompt(false, true)).toMatch(exception);
+    expect(buildPlanWritePrompt(false, false)).not.toMatch(exception);
+  });
+});
+
 describe('buildPlanWritePrompt under refinement (#46)', () => {
   it('says to revise the plan it is given, and only then', () => {
     const p = buildPlanWritePrompt(false, true);
