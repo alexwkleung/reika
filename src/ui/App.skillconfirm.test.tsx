@@ -97,7 +97,8 @@ async function mountApp() {
 function inputLine(app: Harness): string {
   const rows = plain(app.lastFrame())
     .split('\n')
-    .filter(l => l.includes('│') && l.includes('> '));
+    // Chat mode's input prompt is `?`, every other mode's `>`.
+    .filter(l => l.includes('│') && /[>?] /.test(l));
   return rows[rows.length - 1] ?? '';
 }
 
@@ -186,6 +187,26 @@ describe('skill confirm (#425)', () => {
     await waitFor(app, /Skill \/review applied/);
     expect(turnInput(0)).toBe(`${REVIEW_BODY}\n\nreview pr 420`);
     expect(turnSkill(0)).toBe('review');
+    app.unmount();
+  });
+
+  // #565: the gate was an agent/vibe allowlist, so modes added after it only ever hinted.
+  it.each(['plan', 'minimal', 'grind'])('asks in %s mode too', async mode => {
+    const app = await mountApp();
+    await submit(app, `/${mode}`);
+    await submit(app, 'review pr 420');
+    await waitFor(app, DIALOG);
+    expect(runTurn).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it('only hints in chat mode, which has no bash for the skill to run', async () => {
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, 'review pr 420');
+    await waitFor(app, /Skill hint: \/review/);
+    expect(plain(app.lastFrame())).not.toMatch(DIALOG);
+    expect(turnInput(0)).toBe('review pr 420');
     app.unmount();
   });
 

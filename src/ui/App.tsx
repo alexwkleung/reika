@@ -1825,10 +1825,11 @@ export function App() {
       return decided;
     }
     if (config?.skillAuto === 'off' || !config || !bundle) return undefined;
-    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
-    // Plan mode is excluded on purpose: a skill body landing mid-exploration competes with the
-    // plan-mode prompt and the progress ledger. There it stays a suggestion.
-    if (modeRef.current !== 'agent' && modeRef.current !== 'vibe') return undefined;
+    // Every model mode but chat asks (#565): chat has no bash, and a shipped skill's first step is
+    // one. Plan mode asks too — its prompt already keeps an applied body from turning into edits.
+    if (prompt.startsWith('/') || modeRef.current === 'shell' || modeRef.current === 'chat') {
+      return undefined;
+    }
     const match = matchSkill(prompt, bundle.skills);
     const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
     if (!match || !shouldConfirmInject(match, window)) return undefined;
