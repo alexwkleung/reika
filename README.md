@@ -22,7 +22,7 @@
 
 Most coding agents are built for frontier models. Reika is built first for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
 
-8–9B models hold their own on everyday tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+8–9B models hold their own on simple tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
 
 ## Highlights
 
