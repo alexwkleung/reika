@@ -98,6 +98,8 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 - **Approvals** default to `safe`: ordinary edits and commands run on their own, but anything matching a dangerous pattern (`rm -rf`, force pushes, package installs, `curl`, …) and any write outside the project still asks you first. `bypass` can only be set at launch, never mid-session.
 - **Sandbox** (macOS, on by default): model-chosen shell commands can write only inside the project, temp, and cache directories, and have no network apart from loopback and read-only `git`/`gh`. A command you explicitly approve runs unsandboxed. `REIKA_SANDBOX=0` turns it off.
 
+Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY.md).
+
 ## Documentation
 
 | Doc                                              | Covers                                                                                    |
