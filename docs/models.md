@@ -6,8 +6,8 @@ Below are models that were tested in Reika. Local and API are used for testing, 
 
 ## Local
 
-- Qwen3.8 Flash Next (UD-IQ3_XXS; chat mode; via SSD streaming)
-- DeepSeek V4 Flash 0731 (UD-IQ3_XXS; chat mode; via SSD streaming)
+- Qwen3.8 Flash Next (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
+- DeepSeek V4 Flash 0731 (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
 - Muse Glimmer 30B (IQ3_XXS)
 - Qwen3.8 27B (UD-IQ3_XXS)
 - Qwen3.6 35B A3B (UD-IQ2_M)
@@ -30,9 +30,9 @@ Below are models that were tested in Reika. Local and API are used for testing, 
 - GLM 5.3 Flash (OpenCode Go)
 - DeepSeek V4.1 Flash (OpenCode Go)
 - GLM 5.2 (OpenRouter, OpenCode Go)
-- Kimi K3 (Moonshot)
-- Kimi K2.6 (Moonshot)
-- Kimi K2.5 (Moonshot, OpenRouter)
+- Kimi K3 (MoonshotAI)
+- Kimi K2.6 (MoonshotAI)
+- Kimi K2.5 (MoonshotAI, OpenRouter)
 - DeepSeek V4 Flash (OpenRouter)
 - Laguna XS 2.1 (OpenRouter)
 - Laguna M.1 (OpenRouter)
