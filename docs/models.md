@@ -30,6 +30,8 @@ Below are models that were tested in Reika. Local and API are used for testing, 
 - GLM 5.3 Flash (OpenCode Go)
 - DeepSeek V4.1 Flash (OpenCode Go)
 - GLM 5.2 (OpenRouter, OpenCode Go)
+- Kimi K3 (Moonshot)
+- Kimi K2.6 (Moonshot)
 - Kimi K2.5 (Moonshot, OpenRouter)
 - DeepSeek V4 Flash (OpenRouter)
 - Laguna XS 2.1 (OpenRouter)
