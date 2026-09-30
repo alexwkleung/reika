@@ -4,6 +4,7 @@ import { render } from 'ink-testing-library';
 import type { Config, ContextBundle, Message } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
+import type * as SessionModule from '../session.js';
 
 // App owns the whole frame layout and has historically regressed there (#112: the busy
 // spinner rendered between the completion list and the input, landing inside the merged
@@ -78,6 +79,20 @@ vi.mock('../laststate.js', async () => {
 // Shells out to git/gh — stubbed so the footer is deterministic and the test stays hermetic.
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 
+// createSession *is* bootstrap, so holding it open is what keeps App in its pre-session frame for
+// the "nothing is painted while it boots" test below. Everything else stays the real module.
+let sessionDelayMs = 0;
+vi.mock('../session.js', async () => {
+  const actual = await vi.importActual<typeof SessionModule>('../session.js');
+  return {
+    ...actual,
+    createSession: async (opts: Parameters<typeof actual.createSession>[0]) => {
+      if (sessionDelayMs > 0) await new Promise(r => setTimeout(r, sessionDelayMs));
+      return actual.createSession(opts);
+    },
+  };
+});
+
 // A turn that never settles: status stays 'busy' so the Working indicator is up while we
 // drive the input. Each test aborts it by unmounting.
 const runTurn = vi.fn(() => new Promise<void>(() => {}));
@@ -92,11 +107,12 @@ function plain(frame: string | undefined): string {
 
 const tick = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 
-/** Mount, wait out bootstrap, and return the harness once App is past 'Loading…'. */
+/** Mount, wait out bootstrap, and return the harness once App has drawn the input frame. Bootstrap
+ * itself paints nothing (no loading line), so the box's top border is the first sign it is up. */
 async function mountApp() {
   const app = render(<App />);
-  for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
-  if (plain(app.lastFrame()).includes('Loading…')) throw new Error('App never finished loading');
+  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes('╭'); i++) await tick(25);
+  if (!plain(app.lastFrame()).includes('╭')) throw new Error('App never finished loading');
   return app;
 }
 
@@ -168,10 +184,28 @@ describe('App layout', () => {
   it('renders the input and footer once bootstrap settles', async () => {
     const app = await mountApp();
     const frame = plain(app.lastFrame());
-    expect(frame).not.toContain('Loading…');
     expect(frame).toContain('Type / for commands');
     expect(frame).toContain('test-model');
     app.unmount();
+  });
+
+  it('paints nothing while the session is still booting', async () => {
+    sessionDelayMs = 400;
+    try {
+      const app = render(<App />);
+      // Sampled across the whole of bootstrap: every frame is blank — no loading line, no splash,
+      // no input box — and only then does the real frame arrive.
+      for (let i = 0; i < 12; i++) {
+        expect(plain(app.lastFrame()).trim()).toBe('');
+        await tick(25);
+      }
+      for (let i = 0; i < 40 && !plain(app.lastFrame()).includes('Type / for commands'); i++)
+        await tick(25);
+      expect(plain(app.lastFrame())).toContain('Type / for commands');
+      app.unmount();
+    } finally {
+      sessionDelayMs = 0;
+    }
   });
 
   it('draws the input frame one column outside the text it sits among', async () => {

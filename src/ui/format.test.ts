@@ -4,6 +4,7 @@ import {
   formatElapsed,
   formatDurationMs,
   formatTokensPerSecond,
+  mcpStartupLine,
   toolLabel,
   toolVerb,
 } from './format.js';
@@ -149,6 +150,31 @@ describe('changeLabel', () => {
     expect(changeLabel({ kind: 'binary', added: 0, removed: 0 })).toBe('(binary)');
     expect(changeLabel({ kind: 'rewritten', added: 3040, removed: 3000 })).toBe(
       '(rewritten, 3000 → 3040 lines)',
+    );
+  });
+});
+
+describe('mcpStartupLine', () => {
+  const s = (name: string) => ({ name, command: 'x', args: [] });
+
+  // The common launch: nothing configured, so the pre-session frame stays blank rather than
+  // printing a placeholder for work that takes ~100ms.
+  it('says nothing when no server is configured', () => {
+    expect(mcpStartupLine([])).toBeUndefined();
+  });
+
+  it('names the server it is waiting on', () => {
+    expect(mcpStartupLine([s('mini')])).toBe('Starting MCP: mini…');
+    expect(mcpStartupLine([s('mini'), s('files')])).toBe('Starting MCP: mini, files…');
+  });
+
+  // The cap keeps the line a "what am I waiting for" — the full list is /mcp's job — and it is cut
+  // from the end so the same launch always prints the same line.
+  it('caps the list and counts the rest', () => {
+    expect(mcpStartupLine([s('a'), s('b'), s('c')])).toBe('Starting MCP: a, b, c…');
+    expect(mcpStartupLine([s('a'), s('b'), s('c'), s('d')])).toBe('Starting MCP: a, b, c +1 more…');
+    expect(mcpStartupLine([s('a'), s('b'), s('c'), s('d'), s('e')])).toBe(
+      'Starting MCP: a, b, c +2 more…',
     );
   });
 });

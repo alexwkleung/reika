@@ -73,6 +73,7 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
+import { mcpStartupLine } from './format.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
   countRealTurns,
@@ -152,6 +153,10 @@ export function App() {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
+  // What the pre-session frame says while bootstrap runs, or undefined for the usual launch where
+  // there is nothing worth saying yet (#265). Only ever read in the `loading` frame: once the
+  // session lands, the splash and the scrollback describe the session itself.
+  const [loadingNote, setLoadingNote] = useState<string | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>('thinking');
   // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
   // verification is visible in the dispatch gap. Human-only — never part of model context.
@@ -443,6 +448,10 @@ export function App() {
         // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
         // the probe and the splash so both describe the model the session actually opens on.
         const profile = startProfile(cfg, loadLastState());
+        // Said before the await, because the wait is the point: a configured MCP server is the one
+        // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
+        // only one whose names are already known. No servers → nothing is painted at all (#265).
+        setLoadingNote(mcpStartupLine(cfg.mcpServers ?? []));
         // Bootstrap, the window probe (#417) and identity detection run concurrently inside.
         // Unattended (#526): ask_user would open a dialog nobody answers, so it is not offered.
         const s = await createSession({
@@ -2483,9 +2492,12 @@ export function App() {
           <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
         )}
       </Static>
-      {status === 'loading' ? (
-        <Text>Loading…</Text>
-      ) : (
+      {/* Bootstrap draws nothing but the MCP line: before the session comes up there is no mode, no
+          model and no input to describe, so a placeholder would only be noise on the way to the real
+          frame. Waiting on a server is the exception — there the frame names what it is waiting for
+          (#265). The splash lands here first (headerItems), then everything below it. */}
+      {status === 'loading' && loadingNote ? <Text color={theme.muted}>{loadingNote}</Text> : null}
+      {status === 'loading' ? null : (
         <>
           <Scrollback
             messages={messages}

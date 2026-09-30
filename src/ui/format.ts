@@ -1,4 +1,4 @@
-import { MCP_TOOL_PREFIX } from '../mcp/config.js';
+import { MCP_TOOL_PREFIX, type McpServerConfig } from '../mcp/config.js';
 
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback
 // lines, transcript exports, and /summary all render times identically (issue #74). Fields are
@@ -63,6 +63,24 @@ export function formatShrink(sheds: number, folds: number): string {
   if (sheds > 0) parts.push(`${sheds} shed${sheds === 1 ? '' : 's'}`);
   if (folds > 0) parts.push(`${folds} fold${folds === 1 ? '' : 's'}`);
   return parts.join(' · ');
+}
+
+// Names printed before the `+N more` tail; the line answers "what is it waiting for", not "what is
+// configured" — `/mcp` is the inventory.
+const STARTING_MCP_NAMES = 3;
+
+// The one thing the pre-session frame says (#265). Bootstrap is otherwise silent and fast — its
+// other legs are local and land in ~100ms — but an MCP server is a spawned subprocess whose
+// handshake can take CONNECT_TIMEOUT_MS, and it is the only leg whose names are known before it
+// finishes: `loadConfig` parses the server list synchronously, so the frame can say what it is
+// waiting on rather than spinning. Undefined when no server is configured, which is the common
+// launch — there the frame stays blank until the session lands, rather than printing a placeholder.
+// `Starting MCP: mini, files…` / `Starting MCP: a, b, c +2 more…`.
+export function mcpStartupLine(servers: readonly McpServerConfig[]): string | undefined {
+  if (servers.length === 0) return undefined;
+  const names = servers.slice(0, STARTING_MCP_NAMES).map(s => s.name);
+  const rest = servers.length - names.length;
+  return `Starting MCP: ${names.join(', ')}${rest > 0 ? ` +${rest} more` : ''}…`;
 }
 
 // Display name for a tool in the scrollback chip. Tool names are model-facing and picked for the

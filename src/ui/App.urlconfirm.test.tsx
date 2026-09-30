@@ -88,8 +88,8 @@ type Harness = { stdin: { write: (s: string) => void }; lastFrame: () => string 
 
 async function mountApp() {
   const app = render(<App />);
-  for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
-  if (plain(app.lastFrame()).includes('Loading…')) throw new Error('App never finished loading');
+  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes('╭'); i++) await tick(25);
+  if (!plain(app.lastFrame()).includes('╭')) throw new Error('App never finished loading');
   return app;
 }
 
