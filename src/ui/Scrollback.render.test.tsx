@@ -1647,3 +1647,135 @@ describe('Scrollback plan checks', () => {
     expect(frame({ role: 'assistant', content: PLAN + NOTE })).toContain('--- reika');
   });
 });
+
+// The live blocks are reused between renders whose inputs for that block are unchanged (a status
+// clock tick, a pending-call row appearing, a dialog opening). Reuse is only safe if a changed
+// input is a miss, so these pin the three inputs the builders read: the text, the width the block
+// wraps at, and the row bound it is trimmed by. A miss that did not happen showed the previous
+// frame's rows — a stale width, or a tail that never grew.
+describe('Scrollback live-block reuse', () => {
+  const withViewport = <T,>(rows: number, cols: number, fn: () => T): T => {
+    const prev = { rows: process.stdout.rows, columns: process.stdout.columns };
+    Object.defineProperty(process.stdout, 'rows', { value: rows, configurable: true });
+    Object.defineProperty(process.stdout, 'columns', { value: cols, configurable: true });
+    try {
+      return fn();
+    } finally {
+      Object.defineProperties(process.stdout, {
+        rows: { value: prev.rows, configurable: true },
+        columns: { value: prev.columns, configurable: true },
+      });
+    }
+  };
+
+  const live = (reasoning: string, streaming = '', streamingTool = '') => (
+    <Scrollback
+      messages={[]}
+      streaming={streaming}
+      streamingReasoning={reasoning}
+      streamingTool={streamingTool}
+    />
+  );
+
+  const rows = (frame: string | undefined): string[] =>
+    stripAnsi(frame ?? '')
+      .split('\n')
+      .map(l => l.trimEnd())
+      .filter(l => l.trim());
+
+  // The reasoning text object is the same one across the rerender — exactly the case the memo
+  // serves. Only the terminal got wider, and that alone has to re-wrap the block.
+  it('re-wraps an unchanged live block when the terminal width changes', () => {
+    const reasoning =
+      'I should look at the config loader on disk before touching any of the call sites at all.';
+    withViewport(24, 60, () => {
+      const { rerender, lastFrame } = render(live(reasoning));
+      const narrow = rows(lastFrame());
+      rerender(live(reasoning)); // same text, same element values
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      rerender(live(reasoning));
+      const wide = rows(lastFrame());
+      expect(narrow.length).toBeGreaterThan(wide.length);
+      for (const row of wide) expect(row.length).toBeLessThanOrEqual(100);
+    });
+  });
+
+  // The row bound comes from the viewport, and it decides how much of the tail is even built: the
+  // pre-trim is `bound * 4` lines. A block built under a short terminal therefore holds a shorter
+  // tail than a taller one can fill, so the bound has to be a miss, or a terminal that grows (or a
+  // frame-drawing `chromeRows` shrinking) keeps the small viewport's tail.
+  it('shows more of an unchanged tail when the viewport grows', () => {
+    const tail = Array.from({ length: 400 }, (_, i) => `line ${i} of the streamed answer`).join(
+      '\n',
+    );
+    withViewport(24, 80, () => {
+      const { rerender, lastFrame } = render(live('', tail));
+      const short = rows(lastFrame()).length;
+      Object.defineProperty(process.stdout, 'rows', { value: 100, configurable: true });
+      rerender(live('', tail));
+      const tall = rows(lastFrame()).length;
+      // A short viewport trims the tail to ~14 rows' worth (~56 lines); the taller one has room
+      // for far more than that, which it can only show if the block was rebuilt.
+      expect(short).toBeLessThan(20);
+      expect(tall).toBeGreaterThan(56);
+    });
+  });
+
+  // One block changing must not disturb the other: the Thinking block above is rebuilt for the
+  // frame it shares with the answer, and its rows stay the ones its own text renders to.
+  it('keeps the other block’s rows while one block streams', () => {
+    const reasoning = 'Checking the loader, then editing the call sites in order.';
+    withViewport(40, 80, () => {
+      const { rerender, lastFrame } = render(live(reasoning, 'First part of the answer.'));
+      const before = rows(lastFrame()).filter(l => l.includes('Checking the loader'));
+      rerender(live(reasoning, 'First part of the answer, and now the second part.'));
+      const after = rows(lastFrame()).filter(l => l.includes('Checking the loader'));
+      expect(after).toEqual(before);
+      expect(rows(lastFrame()).join('\n')).toContain('and now the second part');
+    });
+  });
+
+  // A tool block is trimmed and wrapped too, so it carries the same rule. Both frames are capped
+  // by the block's share of the region (the tail is pre-cut, so it always asks for more rows than
+  // it can get), so the width shows up in how long a row is rather than in how many there are.
+  it('re-wraps an unchanged tool tail when the terminal width changes', () => {
+    const output = Array.from(
+      { length: 40 },
+      (_, i) => `make[1]: entering directory ${i} and compiling the target now`,
+    ).join('\n');
+    const widest = (frame: string[]): number => Math.max(...frame.map(l => l.length));
+    withViewport(30, 60, () => {
+      const { rerender, lastFrame } = render(live('', '', output));
+      const narrow = rows(lastFrame());
+      Object.defineProperty(process.stdout, 'columns', { value: 120, configurable: true });
+      rerender(live('', '', output));
+      const wide = rows(lastFrame());
+      expect(widest(wide)).toBeGreaterThan(widest(narrow));
+      for (const row of wide) expect(row.length).toBeLessThanOrEqual(120);
+    });
+  });
+
+  // The one input with no argument of its own: the paint the builders bake into their rows
+  // (`markProse`'s marker, inline code, a highlighted fence — all `themeChalk`, which re-reads
+  // `chalk.level` per call). A block must not outlive the level it was painted under, so the same
+  // text under a new level is a miss. A one-shot render cannot see this: it needs the reuse path.
+  it('re-paints an unchanged block when the color level changes', () => {
+    const text = 'Here is `inline code` and a **bold** run in the streamed answer.';
+    const prevLevel = chalk.level;
+    try {
+      // #d5afee, theme.inlineCode, as truecolor — the paint the codespan takes at level 3 and
+      // that `chalk.hex` drops entirely at level 0.
+      const INLINE_CODE = '\u001b[38;2;213;175;238m';
+      chalk.level = 0;
+      const { rerender, lastFrame } = render(live('', text));
+      expect(lastFrame() ?? '').not.toContain(INLINE_CODE);
+      rerender(live('', text)); // same text: the previous render is reusable…
+      expect(lastFrame() ?? '').not.toContain(INLINE_CODE);
+      chalk.level = 3;
+      rerender(live('', text)); // …but not under a different paint level
+      expect(lastFrame() ?? '').toContain(INLINE_CODE);
+    } finally {
+      chalk.level = prevLevel;
+    }
+  });
+});
