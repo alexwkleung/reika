@@ -4,10 +4,10 @@ import {
   formatElapsed,
   formatDurationMs,
   formatTokensPerSecond,
-  LIVE_TIMER_AFTER_S,
   mcpStartupLine,
-  pendingToolTimer,
+  TIMER_AFTER_S,
   toolLabel,
+  toolTimer,
   toolVerb,
 } from './format.js';
 
@@ -144,27 +144,35 @@ describe('toolVerb', () => {
   });
 });
 
-describe('pendingToolTimer', () => {
-  // A real build or test suite runs for minutes (#408), and while it prints nothing the row above
-  // is the only thing saying the command is still going (#585).
+describe('toolTimer', () => {
+  // A real build or test suite runs for minutes (#408), so while it prints nothing the live row is
+  // the only thing saying the command is still going (#585) — and the same chip is what the row it
+  // commits as carries, so the swap at commit is a text-only change of verb.
   it('ages a long-running bash call', () => {
-    expect(pendingToolTimer('bash', 7)).toBe(' · 7s');
-    expect(pendingToolTimer('bash', 303)).toBe(' · 5m 03s');
-    expect(pendingToolTimer('bash', 4212)).toBe(' · 1h 10m 12s');
+    expect(toolTimer('bash', 7_000)).toBe(' · 7s');
+    expect(toolTimer('bash', 303_000)).toBe(' · 5m 03s');
+    expect(toolTimer('bash', 4_212_000)).toBe(' · 1h 10m 12s');
   });
 
-  // Below the threshold the row stays byte-identical to what #509 drew: a number ticking up over
-  // every `ls` is a flicker, and the question the timer answers has not been asked yet.
+  // Below the threshold the row stays byte-identical to what it was — live or committed: a number
+  // ticking up over every `ls` is a flicker, and the question the timer answers has not been asked
+  // yet. The comparison is on the raw ms, so a call at 4.99s is still under.
   it('says nothing until the call has been running a while', () => {
-    expect(pendingToolTimer('bash', LIVE_TIMER_AFTER_S - 1)).toBe('');
-    expect(pendingToolTimer('bash', 0)).toBe('');
-    expect(pendingToolTimer('bash', LIVE_TIMER_AFTER_S)).toBe(' · 5s');
+    expect(toolTimer('bash', TIMER_AFTER_S * 1000 - 1)).toBe('');
+    expect(toolTimer('bash', 0)).toBe('');
+    expect(toolTimer('bash', TIMER_AFTER_S * 1000)).toBe(' · 5s');
   });
 
   it('times bash only', () => {
-    expect(pendingToolTimer('edit', 60)).toBe('');
-    expect(pendingToolTimer('read', 60)).toBe('');
-    expect(pendingToolTimer('', 60)).toBe('');
+    expect(toolTimer('edit', 60_000)).toBe('');
+    expect(toolTimer('read', 60_000)).toBe('');
+    expect(toolTimer('subagent', 60_000)).toBe('');
+    expect(toolTimer('', 60_000)).toBe('');
+  });
+
+  // A call that never ran — refused, held, bounced — carries no duration, and must get no chip.
+  it('says nothing without a duration', () => {
+    expect(toolTimer('bash', undefined)).toBe('');
   });
 });
 

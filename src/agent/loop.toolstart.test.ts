@@ -2,7 +2,7 @@ import ignore from 'ignore';
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Tool } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
 
 // The live in-flight row (#509). `onToolStart` is the only signal that spans a call which emits
 // nothing while it runs — the UI's `↳ Running…` row — so what matters is its lifetime, not just that
@@ -123,5 +123,70 @@ describe('runTurn — onToolStart (#509)', () => {
       ],
     });
     expect(events).toEqual(['result:Unknown tool: nosuchtool']);
+  });
+});
+
+// The committed half of the same chip (#585). `App`/`Scrollback` draw ` · 2m 05s` on the `↳ Ran:`
+// row from `Message['tool'].durationMs` — and from nothing else. Where that number lives is the
+// whole design: the summary is model-facing (it is what an aged result serializes into the request,
+// what compaction counts and what `repeatKey` hashes to spot a repeated call), so a duration put in
+// the text would make two identical commands look like different calls and spend context on every
+// bash call forever.
+async function toolMessages(spec: {
+  tools: Tool[];
+  rounds: ModelResponse[];
+}): Promise<Array<Extract<Message, { role: 'tool' }>>> {
+  h.scripted.length = 0;
+  h.scripted.push(...spec.rounds);
+  const out: Array<Extract<Message, { role: 'tool' }>> = [];
+  await runTurn({
+    userInput: 'go',
+    history: [],
+    bundle: makeBundle(),
+    config: makeConfig(),
+    tools: spec.tools,
+    payloads: new PayloadStore(),
+    onMessage: m => {
+      if (m.role === 'tool') out.push(m);
+    },
+  });
+  return out;
+}
+
+describe('runTurn — the call’s duration rides the message (#585)', () => {
+  it('stamps the duration and leaves the summary bytes untouched', async () => {
+    const summary = 'Ran: build (12 bytes output)';
+    const tool: Tool = {
+      name: 'bash',
+      description: 'bash',
+      parameters: { type: 'object', properties: {} },
+      run: async () => {
+        await new Promise(r => setTimeout(r, 30));
+        return { summary };
+      },
+    };
+    const [msg] = await toolMessages({
+      tools: [tool],
+      rounds: [
+        { content: '', toolCalls: [{ id: 'b1', name: 'bash', args: { command: 'build' } }] },
+        { content: 'done', toolCalls: undefined },
+      ],
+    });
+    // Byte-identical: the timer is a field on the message, not text in the result.
+    expect(msg.summary).toBe(summary);
+    expect(msg.durationMs).toBeGreaterThanOrEqual(25);
+  });
+
+  // A call that never runs has no span to report — the same shape the in-flight row skips, so the
+  // committed row shows nothing there either.
+  it('stamps nothing on a call that runs nothing', async () => {
+    const [msg] = await toolMessages({
+      tools: [inert('probe')],
+      rounds: [
+        { content: '', toolCalls: [{ id: 'u1', name: 'nosuchtool', args: {} }] },
+        { content: 'done', toolCalls: undefined },
+      ],
+    });
+    expect(msg.durationMs).toBeUndefined();
   });
 });
