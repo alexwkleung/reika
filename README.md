@@ -13,7 +13,8 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#documentation">Docs</a> ·
-  <a href="docs/models.md">Tested models</a>
+  <a href="docs/models.md">Tested models</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 ![Reika fixing a retry helper and its test with a local model](docs/demo.gif)
