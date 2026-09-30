@@ -44,10 +44,10 @@ Most coding agents are built for frontier models. Reika is built first for the m
 
 ## Quick start
 
-Serve a model. With llama.cpp, `--jinja` enables the model's native tool-calling template, which is what makes tool calls reliable:
+Serve a model. Example below with llama.cpp:
 
 ```sh
-llama-server -m ~/models/your-model.gguf -c 24576 --jinja <other-launch-args>
+llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
 Then install and point Reika at it:
@@ -56,7 +56,7 @@ Then install and point Reika at it:
 npm install
 npm run install:global       # builds and installs the `reika` binary
 
-export REIKA_MODEL=your-model  # or put it in ~/.config/reika/.env
+export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
