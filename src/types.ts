@@ -99,6 +99,12 @@ export type Message =
       // (agent/plantrack.ts replays it) rather than re-parsed out of the summary text. Absent on
       // every non-bash result and on transcripts written before #200.
       exitCode?: number | null;
+      // How long the call took, stamped by the loop around `tool.run` (#585). UI-only and
+      // deliberately NOT in `summary`: that string is model-facing — it is what the request
+      // serializes for an aged result and what the repeat key hashes (loop.ts repeatKey), so a
+      // duration in it would make two identical commands look like different calls. Absent on a
+      // call that never ran (refused, held, bounced) and on transcripts written before #585.
+      durationMs?: number;
       nested?: boolean;
     }
   | { role: 'error'; content: string; nested?: boolean }
