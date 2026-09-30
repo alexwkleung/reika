@@ -5,6 +5,7 @@ import { glyphs } from './glyphs.js';
 import type { Config, ContextBundle } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
+import type * as ManagerModule from '../mcp/manager.js';
 
 // The TUI half of MCP (#265): a server configured in the session is announced at startup, listed by
 // /mcp, and callable as `/<server>:<tool>` — which is the whole point of exposing the tools as
@@ -68,6 +69,20 @@ vi.mock('../laststate.js', async () => {
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
 vi.mock('../agent/loop.js', () => ({ runTurn: async () => {} }));
 
+// The MCP handshake is the whole of what the pre-session frame waits on, so holding it open is what
+// lets the "says what it is waiting for" test below see that frame. Everything else stays real.
+let mcpDelayMs = 0;
+vi.mock('../mcp/manager.js', async () => {
+  const actual = await vi.importActual<typeof ManagerModule>('../mcp/manager.js');
+  return {
+    ...actual,
+    connectMcpServers: async (servers: Parameters<typeof actual.connectMcpServers>[0]) => {
+      if (mcpDelayMs > 0) await new Promise(r => setTimeout(r, mcpDelayMs));
+      return actual.connectMcpServers(servers);
+    },
+  };
+});
+
 const { App } = await import('./App.js');
 
 function plain(frame: string | undefined): string {
@@ -78,8 +93,8 @@ const tick = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 
 async function mountApp() {
   const app = render(<App />);
-  for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Loading…'); i++) await tick(25);
-  if (plain(app.lastFrame()).includes('Loading…')) throw new Error('App never finished loading');
+  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes('╭'); i++) await tick(25);
+  if (!plain(app.lastFrame()).includes('╭')) throw new Error('App never finished loading');
   return app;
 }
 
@@ -115,6 +130,26 @@ async function waitFor(
 }
 
 describe('MCP in the TUI', () => {
+  // #265: the handshake is the one leg of bootstrap that can hold the first frame for seconds, so
+  // that frame names what it is waiting on instead of sitting blank. It says nothing once the
+  // servers are up — the announcement below is the standing record.
+  it('names the servers it is starting while bootstrap waits on them, and then stops', async () => {
+    mcpDelayMs = 400;
+    try {
+      const app = render(<App />);
+      for (let i = 0; i < 12 && !plain(app.lastFrame()).includes('Starting MCP'); i++)
+        await tick(25);
+      expect(plain(app.lastFrame())).toContain('Starting MCP: mini…');
+
+      const frame = await waitFor(app, 'MCP: mini (2 tools)');
+      expect(frame).toContain(`${glyphs.notice} MCP: mini (2 tools)`);
+      expect(frame).not.toContain('Starting MCP');
+      app.unmount();
+    } finally {
+      mcpDelayMs = 0;
+    }
+  });
+
   it('announces a configured server at startup and lists its commands under /mcp', async () => {
     const app = await mountApp();
     await waitFor(app, 'MCP: mini (2 tools) — 2 tools added in agent mode. /mcp lists them.');
