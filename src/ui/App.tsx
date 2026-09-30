@@ -2525,9 +2525,7 @@ export function App() {
             // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
-            pendingToolSeconds={
-              pendingTool ? Math.floor((Date.now() - pendingToolAtRef.current) / 1000) : 0
-            }
+            pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the

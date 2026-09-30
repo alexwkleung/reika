@@ -3409,6 +3409,11 @@ export async function runTurn(opts: {
       let command: ToolResult['command'];
       let changes: ToolResult['changes'];
       let exitCode: ToolResult['exitCode'];
+      // How long `tool.run` took (#585), for the committed row's ` · 2m 05s`. Stamped here rather
+      // than returned by the tool because this is the span every tool shares — and the same span
+      // the in-flight row ages, which is what makes the two agree at the swap. Left undefined on a
+      // call that never runs, exactly like the in-flight row.
+      let callDurationMs: number | undefined;
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
@@ -3502,6 +3507,7 @@ export async function runTurn(opts: {
         // above — both harness work that happens before the command runs — so the row's lifetime is
         // exactly the call's.
         opts.onToolStart?.(call.name);
+        const callStart = Date.now();
         try {
           const result = await tool.run(call.args, {
             cwd: opts.bundle.cwd,
@@ -3561,6 +3567,9 @@ export async function runTurn(opts: {
         } catch (e) {
           summary = `Tool error: ${(e as Error).message}`;
         }
+        // Read after the catch, not inside the try: a tool that threw still ran for that long, and
+        // the row said so while it did.
+        callDurationMs = Date.now() - callStart;
       }
       // Ground an `absent` edit failure (#72 follow-up). An old_string that matches nothing — not even
       // ignoring whitespace — while the file's bytes are NOT in context is confabulation: the model
@@ -3735,6 +3744,7 @@ export async function runTurn(opts: {
         ...(command ? { command } : {}),
         ...(changes ? { changes } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(callDurationMs !== undefined ? { durationMs: callDurationMs } : {}),
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);

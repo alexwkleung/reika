@@ -7,7 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback, markProse, noticeLead } from './Scrollback.js';
-import { LIVE_TIMER_AFTER_S } from './format.js';
+import { TIMER_AFTER_S } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -599,7 +599,7 @@ describe('Scrollback pending tool row', () => {
     }
   };
 
-  const liveFrame = (pendingTool: string, streamingTool = '', pendingToolSeconds = 0): string =>
+  const liveFrame = (pendingTool: string, streamingTool = '', pendingToolMs = 0): string =>
     inApp(
       <Scrollback
         messages={[]}
@@ -608,7 +608,7 @@ describe('Scrollback pending tool row', () => {
         streamingTool={streamingTool}
         streamingCommand
         pendingTool={pendingTool}
-        pendingToolSeconds={pendingToolSeconds}
+        pendingToolMs={pendingToolMs}
       />,
     );
 
@@ -694,7 +694,7 @@ describe('Scrollback pending tool row', () => {
   // the one call that can legitimately take minutes (#408) — so it carries the call's age. Same row
   // as the verb, not a second one: the live frame's row budget is unchanged by the timer.
   it('ages a bash row that has been running a while', () => {
-    const frame = liveFrame('bash', '', 303);
+    const frame = liveFrame('bash', '', 303_000);
     expect(frame).toContain('↳ Running… · 5m 03s');
     expect(frame.split('\n').findIndex(l => l.includes('↳ Running…'))).toBe(
       frame.split('\n').findIndex(l => l.includes('5m 03s')),
@@ -704,15 +704,82 @@ describe('Scrollback pending tool row', () => {
   // Under the threshold the row is byte-identical to #509's, which is what keeps a quick command
   // from flashing a counter it never gets past 1.
   it('leaves the row as it was until the call has been running a while', () => {
-    expect(liveFrame('bash', '', LIVE_TIMER_AFTER_S - 1)).toContain('↳ Running…');
-    expect(liveFrame('bash', '', LIVE_TIMER_AFTER_S - 1)).not.toContain('· ');
+    expect(liveFrame('bash', '', TIMER_AFTER_S * 1000 - 1)).toContain('↳ Running…');
+    expect(liveFrame('bash', '', TIMER_AFTER_S * 1000 - 1)).not.toContain('· ');
   });
 
   // The other tools finish in seconds, so a timer on them would be noise — and the number would sit
   // on a row whose own claim (`Reading…`) is what the user is reading.
   it('times bash only', () => {
-    expect(liveFrame('read', '', 60)).toContain('↳ Reading…');
-    expect(liveFrame('read', '', 60)).not.toContain('· ');
+    expect(liveFrame('read', '', 60_000)).toContain('↳ Reading…');
+    expect(liveFrame('read', '', 60_000)).not.toContain('· ');
+  });
+
+  // The committed half of the same chip (#585): the `↳ Ran:` row carries the call's total, so the
+  // swap at commit is a text-only change of verb. The duration rides the message (`loop.ts` stamps
+  // it around `tool.run`) and NOT the summary — see types.ts Message['tool'].durationMs.
+  it('carries the call’s total on the row it commits as', () => {
+    const run: Message = {
+      role: 'tool',
+      callId: 't1',
+      summary: 'Ran: npm ci (12 bytes output)',
+      command: { text: 'npm ci', outputTail: 'ok', outputTruncated: false },
+      durationMs: 303_000,
+    };
+    expect(frameFor(run)).toContain('↳ Ran: npm ci (12 bytes output) · 5m 03s');
+    // Same row as the summary, not a second one.
+    const rows = frameFor(run).split('\n');
+    expect(rows.findIndex(l => l.includes('↳ Ran:'))).toBe(
+      rows.findIndex(l => l.includes('5m 03s')),
+    );
+  });
+
+  // Everything the rule excludes leaves the row exactly as it was before the chip existed: a quick
+  // command, a non-bash tool, and a call that never ran (no duration at all).
+  it('leaves the committed row alone otherwise', () => {
+    const base = {
+      role: 'tool',
+      callId: 't1',
+      summary: 'Ran: npm ci (12 bytes output)',
+      command: { text: 'npm ci', outputTail: 'ok', outputTruncated: false },
+    } satisfies Message;
+    expect(frameFor({ ...base, durationMs: 1_000 })).toContain('↳ Ran: npm ci (12 bytes output)');
+    expect(frameFor({ ...base, durationMs: 1_000 })).not.toContain('· ');
+    expect(
+      frameFor({ role: 'tool', callId: 't1', summary: 'Read src/a.ts', durationMs: 60_000 }),
+    ).not.toContain('· ');
+    expect(frameFor({ ...base, durationMs: undefined })).not.toContain('· ');
+  });
+
+  // The chip lands at the end of the summary's last wrapped row, and the wrap pays for it: a summary
+  // whose last row is full pushes the chip onto a row of its own, which reads as a stray
+  // ` · 5m 03s` sitting under the row. Measured — the text below renders exactly that without the
+  // reserved width.
+  it('keeps the chip on the summary’s last row when that row wraps', () => {
+    const summary = `Ran: ${'word '.repeat(20)}end`;
+    const rows = inApp(
+      <Scrollback
+        messages={[
+          {
+            role: 'tool',
+            callId: 't1',
+            summary,
+            command: { text: 'npm ci', outputTail: '', outputTruncated: false },
+            durationMs: 303_000,
+          },
+        ]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    )
+      .split('\n')
+      .filter(l => l.trim());
+    expect(rows.length).toBeGreaterThan(2); // it really wrapped
+    const chipRow = rows.findIndex(l => l.includes('5m 03s'));
+    expect(chipRow).toBeGreaterThan(0);
+    expect(rows[chipRow]).toContain('end');
+    expect(rows[chipRow]).toMatch(/end · 5m 03s/);
   });
 
   // The row is a live-region row like any other, so it has to come out of the same viewport budget
