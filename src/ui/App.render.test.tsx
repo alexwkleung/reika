@@ -265,6 +265,35 @@ describe('App layout', () => {
     app.unmount();
   });
 
+  // #585. The row's age is read off the status bar's one-second tick rather than a timer of its
+  // own — a second interval would repaint the live region twice a second — so what this covers is
+  // that coupling: the clock moves, the tick fires, and the row's number with it.
+  it('ages the running call’s row off the turn’s own clock', async () => {
+    const app = await mountApp();
+    await submit(app, 'hi');
+    const opts = (runTurn.mock.calls[0] as unknown as unknown[] | undefined)?.[0] as
+      | { onToolStart?: (tool: string) => void }
+      | undefined;
+    const startedAt = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+    try {
+      opts!.onToolStart!('bash');
+      await tick();
+      const runningRow = (): string => lines(app).find(l => l.includes('↳ Running…')) ?? '';
+      expect(runningRow()).not.toBe('');
+      // Nothing yet: under the threshold the row has to read exactly as #509 drew it.
+      expect(runningRow()).not.toMatch(/\d+s/);
+
+      now.mockReturnValue(startedAt + 65_000);
+      // One tick of the status-bar interval, plus slack for it to land in a frame.
+      await tick(1200);
+      expect(runningRow()).toMatch(/↳ Running… · 1m 05s/);
+    } finally {
+      now.mockRestore();
+      app.unmount();
+    }
+  });
+
   // The #112 regression. The completion list drops its bottom border and the input drops its
   // top one so the two read as one frame; anything rendered between them lands *inside* it.
   it('keeps the Working indicator outside the completion/input frame', async () => {

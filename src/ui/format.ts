@@ -135,6 +135,27 @@ export function toolVerb(name: string): string {
   return TOOL_VERBS[name] ?? 'Working';
 }
 
+// The elapsed chip on the in-flight row (#585) — the row #509 draws while a call runs, which for a
+// silent command is the whole of what the user has to go on. Held back until the call has been
+// running `LIVE_TIMER_AFTER_S`: under that the question the timer answers ("is this stuck?") has not
+// been asked yet, and a number counting up over every `ls` is a flicker rather than a signal.
+//
+// `bash` only. It is the one call that can legitimately run for minutes — #408 sized its bounds for
+// a real build or test suite — and the one whose silence says nothing: a `subagent` streams its
+// rounds into the same region (#342), `fetch_url`/`search` narrate what they are doing, and the file
+// tools finish inside a second. A set rather than `name !== 'bash'` so widening the scope is a
+// one-line change if a second tool ever earns it.
+const LIVE_TIMER_TOOLS = new Set(['bash']);
+export const LIVE_TIMER_AFTER_S = 5;
+
+// ` · 12s`, or '' for a call that is not one of the above or is still under the threshold. The
+// separator leads so the row reads as `${verb}…${timer}`, and '' leaves the row byte-identical to
+// the one already on screen — nothing shifts when the timer appears.
+export function pendingToolTimer(name: string, seconds: number): string {
+  if (!LIVE_TIMER_TOOLS.has(name) || seconds < LIVE_TIMER_AFTER_S) return '';
+  return ` · ${formatElapsed(seconds)}`;
+}
+
 // `(+3 -1)`, `(new, +12)`, `(deleted, -40)`, `(binary)` — the stat tag after a file a bash command
 // changed, in the scrollback and the saved transcript. Reads like the edit tool's `(+a -r)` so a
 // shell edit and a tool edit scan the same, with the kind named only when the counts don't say it.
