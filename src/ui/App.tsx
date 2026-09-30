@@ -181,6 +181,11 @@ export function App() {
   // under the call is drawn from. Set when the loop dispatches a call, cleared when that call's
   // result commits — so it spans exactly the gap the committed call row would otherwise leave.
   const [pendingTool, setPendingTool] = useState<string>('');
+  // When that call started (#585), for the elapsed chip on its live row. A ref, not state: the
+  // timestamp itself is never rendered, only `Date.now() - it`, and the render clock that ages it
+  // is the status bar's one-second tick (below) — a state of its own would repaint the live region
+  // a second time every second for a value that changes on no other edge.
+  const pendingToolAtRef = useRef<number>(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -2400,7 +2405,12 @@ export function App() {
           toolNameRef.current = tool;
           scheduleToolFlush();
         },
-        onToolStart: setPendingTool,
+        onToolStart: name => {
+          // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
+          // this is the call's own start — the same instant the row it ages appears (#585).
+          pendingToolAtRef.current = Date.now();
+          setPendingTool(name);
+        },
         onPhase: p => {
           // Leaving the thinking phase ends the reasoning block — clear any spin hint.
           if (p !== 'thinking') setReasoningSpin(false);
@@ -2511,6 +2521,12 @@ export function App() {
             // that has not been permitted yet. Same condition the spinner uses.
             pendingTool={
               status === 'busy' && pending === null && question === null ? pendingTool : ''
+            }
+            // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
+            // one-second `elapsed` interval re-renders this component for the whole of a call, so
+            // the row's timer advances off that instead of an interval of its own.
+            pendingToolSeconds={
+              pendingTool ? Math.floor((Date.now() - pendingToolAtRef.current) / 1000) : 0
             }
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}

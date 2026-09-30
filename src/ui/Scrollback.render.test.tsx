@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback, markProse, noticeLead } from './Scrollback.js';
+import { LIVE_TIMER_AFTER_S } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -598,7 +599,7 @@ describe('Scrollback pending tool row', () => {
     }
   };
 
-  const liveFrame = (pendingTool: string, streamingTool = ''): string =>
+  const liveFrame = (pendingTool: string, streamingTool = '', pendingToolSeconds = 0): string =>
     inApp(
       <Scrollback
         messages={[]}
@@ -607,6 +608,7 @@ describe('Scrollback pending tool row', () => {
         streamingTool={streamingTool}
         streamingCommand
         pendingTool={pendingTool}
+        pendingToolSeconds={pendingToolSeconds}
       />,
     );
 
@@ -686,6 +688,31 @@ describe('Scrollback pending tool row', () => {
 
   it('draws nothing when no call is running', () => {
     expect(liveFrame('')).not.toContain('↳ ');
+  });
+
+  // #585: the row is the user's only sign of life while a command prints nothing, and a `bash` is
+  // the one call that can legitimately take minutes (#408) — so it carries the call's age. Same row
+  // as the verb, not a second one: the live frame's row budget is unchanged by the timer.
+  it('ages a bash row that has been running a while', () => {
+    const frame = liveFrame('bash', '', 303);
+    expect(frame).toContain('↳ Running… · 5m 03s');
+    expect(frame.split('\n').findIndex(l => l.includes('↳ Running…'))).toBe(
+      frame.split('\n').findIndex(l => l.includes('5m 03s')),
+    );
+  });
+
+  // Under the threshold the row is byte-identical to #509's, which is what keeps a quick command
+  // from flashing a counter it never gets past 1.
+  it('leaves the row as it was until the call has been running a while', () => {
+    expect(liveFrame('bash', '', LIVE_TIMER_AFTER_S - 1)).toContain('↳ Running…');
+    expect(liveFrame('bash', '', LIVE_TIMER_AFTER_S - 1)).not.toContain('· ');
+  });
+
+  // The other tools finish in seconds, so a timer on them would be noise — and the number would sit
+  // on a row whose own claim (`Reading…`) is what the user is reading.
+  it('times bash only', () => {
+    expect(liveFrame('read', '', 60)).toContain('↳ Reading…');
+    expect(liveFrame('read', '', 60)).not.toContain('· ');
   });
 
   // The row is a live-region row like any other, so it has to come out of the same viewport budget
