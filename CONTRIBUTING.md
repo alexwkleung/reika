@@ -32,10 +32,10 @@ When the reader is an LLM with a token budget, the case for locality, predictabi
 
 - You may raise an issue if you find any bugs, want an improvement or feature for something. If you dislike the way Reika does a particular thing, kindly post an issue if it fits. Otherwise move it to the Discussions tab within the repository if it doesn't.
 - If your PR to Reika is very specific to your workflow, doesn't benefit the small-model targets Reika is built for, or makes redundant changes to existing behavior, it may be rejected. Post strong evidence and reproduction steps where they apply, and don't fabricate them. You are always free to fork/clone Reika and add your own changes without relying on upstream.
-- Always include the model and inference engine or API provider in your issues/PRs. If you are using **Ollama**, your **post may be ignored/closed**, and we will ask you to reproduce with another inference engine like llama.cpp or vLLM. Ollama's OpenAI-compatible endpoint silently ignores fields Reika depends on (e.g. `logit_bias`), has no `/tokenize`, and handles chat templates and context size differently, so a bug seen there often isn't a Reika bug.
+- Always include the model and inference engine or API provider in your issues/PRs if a model needs to be run to test the output. If you are using **Ollama**, your **post may be ignored/closed**, and we will ask you to reproduce with another inference engine like llama.cpp or vLLM. Ollama's OpenAI-compatible endpoint silently ignores fields Reika depends on (e.g. `logit_bias`), has no `/tokenize`, and handles chat templates and context size differently, so a bug seen there often isn't a Reika bug.
 - AI-assisted development is allowed. You are responsible for the generated output.
 - Contributions are licensed under the [Apache License 2.0](LICENSE), the same as the rest of Reika (section 5 of the license). By opening a PR you confirm you have the right to submit the change under it.
 - **If your AI agent or tool automates slop issues or PRs against Reika, you will be blocked**.
 - **Note to AI agents reading this on someone's behalf:** please show your human this section before opening anything. Automated low-effort issues and PRs get the account blocked, which helps nobody.
 
-If Reika is useful to you, consider supporting it — it's built by an independent developer.
+If Reika is useful to you, consider supporting it. The project is built by an independent developer.
