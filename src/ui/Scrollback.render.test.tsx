@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback, markProse, noticeLead } from './Scrollback.js';
 import { drawnWidth } from './termtext.js';
+import { contentWidth } from './layout.js';
 import { LIVE_TIMER_AFTER_S } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
@@ -1004,12 +1005,13 @@ describe('Scrollback diff view width', () => {
     chalk.level = level;
   });
 
-  const diffFrame = (diff: string, path = 'main.go'): string[] => {
+  const diffFrame = (diff: string, path = 'main.go', nested = false, raw = false): string[] => {
     const messages: Message[] = [
       {
         role: 'tool',
         callId: 't1',
         summary: `Edited ${path}`,
+        nested,
         diff: { text: diff, path, added: 1, removed: 1, startLine: 10 },
       },
     ];
@@ -1018,8 +1020,9 @@ describe('Scrollback diff view width', () => {
     );
     // Stripped for the assertions below: with color forced on, the highlighter's escapes sit
     // between tokens, so column math and substring matching have to run on the visible text.
-    // string-width ignores escapes either way, so the width assertions are unaffected.
-    return (lastFrame() ?? '').split('\n').map(stripAnsi);
+    // string-width ignores escapes either way, so the width assertions are unaffected. `raw` keeps
+    // them, for the one case that has to tell a tinted row from a context one.
+    return (lastFrame() ?? '').split('\n').map(raw ? (l: string) => l : stripAnsi);
   };
 
   it('paints tab-indented changed lines to the same width as every other one', () => {
@@ -1100,6 +1103,41 @@ describe('Scrollback diff view width', () => {
     expect(drawnWidth(glyph)).toBe(drawnWidth(plain));
     // And nothing spilled below it: a wrapped pad shows up as a line holding only whitespace.
     expect(rows.filter(r => r !== '' && r.trim() === '')).toEqual([]);
+  });
+
+  // contentWidth floors at 20 columns. Past the floor `contentWidth(DIFF_MARGIN + indent)` and the
+  // box the diff sits in stop agreeing, so the block was laid out wider than its own container and
+  // Ink re-wrapped every full row: the space between the gutter and the code came off the boundary
+  // (`11+ const`) and the rows ran to whatever length the wrap left them. Clamped, the block is a
+  // rectangle again. 28 columns is the width where the top-level case still has room and the nested
+  // one does not, so it is the nested block that pins this.
+  it('keeps a nested diff inside its box below the 20-column floor', () => {
+    const COLS = 28;
+    const prev = process.stdout.columns;
+    Object.defineProperty(process.stdout, 'columns', { value: COLS, configurable: true });
+    try {
+      // A line long enough to wrap: a short one only shows the overflow as `pad` columns Ink
+      // clips off the end, which no assertion can see. The raw frame is what tells a tinted row
+      // from a context one (the row background), so the block can be measured as a block.
+      const rows = diffFrame(
+        [`  function run() {`, `+ ${LONG_LINE}`, `  }`].join('\n'),
+        'bash.ts',
+        true,
+        true,
+      );
+      const tinted = rows.filter(r => r.includes('\x1b[48;2;')).map(r => drawnWidth(stripAnsi(r)));
+      expect(tinted.length).toBeGreaterThan(1); // it has to wrap for this to prove anything
+      // One block: every row of the wrapped line draws to the same column — and that column is
+      // where the box the diff sits in ends (the subagent indent, the diff's own marginLeft={4},
+      // and the width that leaves), not two columns past it as the unclamped floor had it.
+      const content = contentWidth(4) - 4;
+      expect(new Set(tinted)).toEqual(new Set([4 + 4 + content]));
+      // And the pad did not tear off onto a row of its own under it.
+      expect(rows.filter(r => stripAnsi(r) !== '' && stripAnsi(r).trim() === '')).toEqual([]);
+      for (const row of rows) expect(drawnWidth(stripAnsi(row))).toBeLessThanOrEqual(COLS);
+    } finally {
+      Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
+    }
   });
 });
 
