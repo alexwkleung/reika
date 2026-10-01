@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
+import stringWidth from 'string-width';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
 import {
@@ -342,6 +343,39 @@ describe('renderMarkdown tables', () => {
     const nested = `- item:\n\n  ${wide.split('\n').join('\n  ')}\n`;
     for (const line of stripAnsi(renderMarkdown(nested, 60)).split('\n')) {
       expect(line.length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  // A cell holding a bare `✔` measures two columns to string-width and draws in one, so padding
+  // it by the measurement left the row a column short of its own borders and the right edge
+  // stepped in — on the rows with a check mark in them, which is where a table of test results
+  // shows it. Cells are padded by `drawnWidth` now, and the columns that costs Ink come out of
+  // the fit budget.
+  const ticks = [
+    '| File | Result |',
+    '| --- | --- |',
+    '| src/ui/markdown.ts | borders square ✔ |',
+    '| src/ui/Scrollback.tsx | untouched |',
+  ].join('\n');
+
+  it('draws every row of a table the same width when a cell holds a one-cell ✔', () => {
+    for (const width of [30, 46, 60, 120]) {
+      const rows = stripAnsi(renderMarkdown(ticks, width))
+        .split('\n')
+        .filter(line => line.length > 0);
+      // `✔` is one column on a terminal, so code points ARE columns in these rows — and the
+      // border row drawn from the same `widths` has to come out the same length as the cell rows.
+      expect(new Set(rows.map(line => [...line].length)).size).toBe(1);
+    }
+  });
+
+  it('keeps the slack a padded cell costs Ink inside the block width', () => {
+    // Ink re-wraps any row that measures past the pane, which would tear the border it just lined
+    // up — the #439 failure. Every width here is also one the table has to shrink to fit.
+    for (let width = 24; width <= 80; width++) {
+      for (const line of renderMarkdown(ticks, width).split('\n')) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(width);
+      }
     }
   });
 });
