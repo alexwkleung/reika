@@ -8,6 +8,7 @@ import type { Message, PlanChecks } from '../types.js';
 import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
+import { scrubGeneration } from './identity.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, pendingToolTimer, toolLabel, toolVerb } from './format.js';
@@ -384,7 +385,15 @@ export function lastCall<A extends readonly unknown[], T>(
 // purpose. Of that check's inputs it is the only one a running process can change — the rest
 // (`isTTY`, `TERM`, `CI`, argv flags) are fixed at launch, which is why the one env var stands in
 // for the whole call rather than the call being made here for every block.
-const paintKey = (): string => `${chalk.level}:${process.env.FORCE_HYPERLINK ?? ''}`;
+//
+// The scrub rules (`scrubGeneration`, identity.ts), for the one block that bakes `scrubOutput`'s
+// substitutions into its rows: `/anon on|off` swaps the rule list mid-session, and a tool tail
+// built before the swap keeps showing the name the user just asked to anonymize until its text
+// next changes. The generation stands in for the rules themselves — the rows only carry which
+// rules they were scrubbed under. "Paint" only in the sense shared with the two above: display
+// settings baked into the rows at build time, with no argument of their own.
+const paintKey = (): string =>
+  `${chalk.level}:${process.env.FORCE_HYPERLINK ?? ''}:${scrubGeneration()}`;
 
 const liveReasoningRows = lastCall(streamingReasoningRows, paintKey);
 const liveContentRows = lastCall(streamingContentRows, paintKey);

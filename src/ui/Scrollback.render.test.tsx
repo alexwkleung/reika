@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback, markProse, noticeLead } from './Scrollback.js';
+import { clearIdentity, setIdentity } from './identity.js';
 import { LIVE_TIMER_AFTER_S } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
@@ -1650,9 +1651,10 @@ describe('Scrollback plan checks', () => {
 
 // The live blocks are reused between renders whose inputs for that block are unchanged (a status
 // clock tick, a pending-call row appearing, a dialog opening). Reuse is only safe if a changed
-// input is a miss, so these pin the three inputs the builders read: the text, the width the block
-// wraps at, and the row bound it is trimmed by. A miss that did not happen showed the previous
-// frame's rows — a stale width, or a tail that never grew.
+// input is a miss, so these pin the inputs the builders read: the text, the width the block wraps
+// at, the row bound it is trimmed by, and the scrub rules the tool block bakes in. A miss that did
+// not happen showed the previous frame's rows — a stale width, a tail that never grew, or a name
+// the anonymization rules have since rewritten.
 describe('Scrollback live-block reuse', () => {
   const withViewport = <T,>(rows: number, cols: number, fn: () => T): T => {
     const prev = { rows: process.stdout.rows, columns: process.stdout.columns };
@@ -1755,7 +1757,7 @@ describe('Scrollback live-block reuse', () => {
     });
   });
 
-  // The one input with no argument of its own: the paint the builders bake into their rows
+  // An input with no argument of its own: the paint the builders bake into their rows
   // (`markProse`'s marker, inline code, a highlighted fence — all `themeChalk`, which re-reads
   // `chalk.level` per call). A block must not outlive the level it was painted under, so the same
   // text under a new level is a miss. A one-shot render cannot see this: it needs the reuse path.
@@ -1777,5 +1779,26 @@ describe('Scrollback live-block reuse', () => {
     } finally {
       chalk.level = prevLevel;
     }
+  });
+
+  // The other input with no argument of its own: the anonymization rules `scrubOutput` applies
+  // inside the tool block (identity.ts). `/anon on|off` swaps them mid-session, and the tool tail
+  // bakes the substitutions in — so a tail built before the swap must not keep showing the name
+  // the user just asked to anonymize. Same text object across the rerender: only the rules moved.
+  it('re-scrubs an unchanged tool tail when the anonymization rules change', () => {
+    const output = 'pushed by octocat on the main branch just now';
+    withViewport(30, 80, () => {
+      try {
+        const { rerender, lastFrame } = render(live('', '', output));
+        expect(lastFrame() ?? '').toContain('octocat');
+        setIdentity({ names: ['octocat'], emails: [] }); // /anon on mid-stream
+        rerender(live('', '', output)); // same text: the previous render is reusable…
+        const frame = lastFrame() ?? '';
+        expect(frame).not.toContain('octocat'); // …but not under different rules
+        expect(frame).toContain('<user>');
+      } finally {
+        clearIdentity();
+      }
+    });
   });
 });
