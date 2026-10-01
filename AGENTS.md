@@ -227,11 +227,12 @@ a component holds.
 
 ### Ink wrapping pitfalls
 
-Three interactions to watch for when content can wrap:
+Four interactions to watch for when content can wrap:
 
 1. **`flexDirection="row"` + a wrappable Text mis-renders continuation lines** (blank lines appear between wrap breaks). Fix: drop the row layout and use a single Text with nested color segments for inline markers.
 2. **Color on a nested Text doesn't survive wrapping** — the outer Text's color (or default) wins on continuation lines. Fix: put the dominant color on the OUTER Text and let inner segments override (e.g., for accent markers).
 3. **A glyph can be one cell on the terminal and two to `string-width`** — a bare text-presentation pictograph (`✔`, `⚠`, `♦`) matches the emoji regex, so Ink spends two columns on a glyph the terminal draws in one (`⏺`, the same discrepancy, is why `syncframe.ts` restores the variation selector). Anything PADDING to a column must pad in `drawnWidth` (`ui/termtext.ts`); anything that must not be re-wrapped must budget with `string-width`, since that is what Ink wraps by. A table cell does both (`renderTable`): padded to the drawn column, with the difference paid out of its fit budget. So does a diff row (`DiffView.tsx`, `WrappedRow`): the pad runs to the drawn width, and the row box is handed the row's ink width as its budget, so the slack is laid out instead of re-wrapping onto a row of its own under the block.
+4. **A break leaves its space at the head of the continuation row** — the row (and the cursor block, in the prompt box) starts one column right of the text's left edge. Where there is a width to wrap by, wrap by hand and drop that whitespace: `hangingWrap` (`ui/layout.ts`) under a hanging indent, `dropWrapWhitespace` in `Approval.tsx`, `wrapBuffer` in `Input.tsx` for the prompt box. Each emits rows that already fit, so Ink's own re-wrap is a no-op, and each uses Ink's wrap-ansi options (`build/wrap-text.js`) so the break points match. The prompt box measures against **Ink's** stdout (`useStdout().stdout.columns`) minus its own chrome — under a test renderer `process.stdout` is a different terminal, and the wrap then disagrees with the frame Ink lays out.
 
 Combined pattern for "marker + body that may wrap":
 

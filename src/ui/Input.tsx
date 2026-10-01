@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput, useStdin } from 'ink';
+import { Box, Text, useInput, useStdin, useStdout } from 'ink';
+import wrapAnsi from 'wrap-ansi';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { isLargePaste } from './pastes.js';
@@ -80,6 +81,7 @@ export function Input({
   const [blinkOn, setBlinkOn] = useState(true);
   const lastValueRef = useRef(value);
   const windowFocused = useTerminalFocus();
+  const { stdout } = useStdout();
 
   // Blink the drawn cursor (~530ms, the classic terminal rate). We draw our own
   // block via inverse video rather than the real terminal cursor, so the
@@ -374,6 +376,7 @@ export function Input({
   const promptText = disabled ? '…  ' : idlePrompt;
   const showPlaceholder = !value && !!placeholder && !disabled;
   const view = clampToViewport(value, cursor, (process.stdout.rows || 24) - reservedRows);
+  const wrapped = wrapBuffer(view.text, view.cursor, bufferWidth(stdout.columns, promptText));
 
   // marginX={-1} pulls the frame out to the terminal's edge columns, past the App's paddingX={1}:
   // a box-drawing line runs down the centre of its cell, so a border sharing a column with the
@@ -408,7 +411,7 @@ export function Input({
           )}
         </Box>
       ) : (
-        <Text>{renderWithCursor(view.text, view.cursor, !disabled && blinkOn)}</Text>
+        <Text>{renderWithCursor(wrapped.text, wrapped.cursor, !disabled && blinkOn)}</Text>
       )}
     </Box>
   );
@@ -453,6 +456,59 @@ export function clampToViewport(
     text: above + lines.slice(start, start + max).join('\n') + below,
     cursor: cursor - offset + above.length,
   };
+}
+
+// The columns the buffer's <Text> is laid out in. The App pads everything by one column
+// (`contentWidth`, layout.ts), but this box pulls out past that padding (marginX={-1} against the
+// App's paddingX={1}), so it spans the frame and its chrome comes off the frame's width rather than
+// the parent's pad: the border (2), padding (1 left + 2 right) and the prompt. Measured against
+// Ink's own stdout (the width it lays the frame out in), not process.stdout, which under a test
+// renderer is a different terminal.
+function bufferWidth(columns: number | undefined, prompt: string): number {
+  return Math.max(1, (columns || 80) - 5 - prompt.length);
+}
+
+// Pre-wrap the buffer so Ink never has to wrap it itself. Yoga's word wrap leaves the space a break
+// landed on at the head of the continuation row, which starts that row — and the cursor block with
+// it — one column right of the text's left edge, so the second row of a wrapped message reads as
+// indented. Every other wrap in the UI is done by hand and drops exactly that whitespace
+// (layout.ts's hangingWrap, Approval.tsx's dropWrapWhitespace); Ink wraps this one for us, so the
+// drop has to happen here. Rows come out ≤ `width`, making Ink's own re-wrap of a row a no-op, and
+// the wrap-ansi options are Ink's own (build/wrap-text.js), so the break points are the ones it
+// would have chosen.
+export function wrapBuffer(
+  text: string,
+  cursor: number,
+  width: number,
+): { text: string; cursor: number } {
+  const w = Math.max(1, width);
+  const rows: string[] = [];
+  let out = 0; // index in the wrapped text where the next row starts (rows joined with \n)
+  let mapped = -1; // the cursor's index in the wrapped text, -1 until its row is found
+  let src = 0; // index into `text` of the current logical line's first character
+  for (const line of text.split('\n')) {
+    // trim:false keeps each row a slice of its line (the rows still join back to it), which is what
+    // lets a position inside a row here be mapped to a position inside the row it lands in.
+    const wrapped = wrapAnsi(line, w, { trim: false, hard: true }).split('\n');
+    let start = 0; // index within `line` of the current row's first character
+    wrapped.forEach((row, i) => {
+      // Only rows the wrap produced (i > 0): leading whitespace on a LOGICAL line is content —
+      // indented code, a tree listing — and dropping it would move the user's own text.
+      const body = i === 0 ? row : row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
+      const drop = row.length - body.length; // the whitespace, not any color codes ahead of it
+      if (mapped < 0 && cursor >= src + start && cursor <= src + start + row.length) {
+        // A cursor resting on the dropped whitespace (the break character itself) belongs at the
+        // head of this row: that is where the character it sits before went.
+        mapped = out + Math.max(0, cursor - src - start - drop);
+      }
+      rows.push(body);
+      out += body.length + 1;
+      start += row.length;
+    });
+    src += line.length + 1;
+  }
+  const joined = rows.join('\n');
+  return { text: joined, cursor: Math.min(mapped < 0 ? cursor : mapped, joined.length) };
 }
 
 // Wraps like a letter, not a space, so the cursor cell stays on the row of the word it ends.
