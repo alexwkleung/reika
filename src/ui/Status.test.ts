@@ -109,7 +109,7 @@ describe('formatShrink', () => {
   });
 });
 
-describe('formatPr', () => {
+describe('prChip', () => {
   const URL = 'https://github.com/o/r/pull/99';
   const text = (chip: Chip) => chip.map(s => s.text).join('');
 
@@ -121,24 +121,33 @@ describe('formatPr', () => {
   // link hue, and the underline that says it clicks. `links` is the terminal's answer.
   it('links the number, never the label, where the terminal takes hyperlinks', () => {
     expect(prChip({ number: 99, url: URL }, true)).toEqual([
-      { text: 'PR', color: theme.secondary },
-      { text: `\u001b]8;;${URL}\u0007 #99\u001b]8;;\u0007`, color: theme.link, underline: true },
+      { text: 'PR ', color: theme.secondary },
+      { text: `\u001b]8;;${URL}\u0007#99\u001b]8;;\u0007`, color: theme.link, underline: true },
     ]);
+  });
+
+  // An underline runs the width of the segment it is on, so the space separating the label from
+  // the number has to live on the label: inside the underlined run it draws a column of underline
+  // past the `#`, and opens a clickable gap ahead of it.
+  it('keeps the separating space out of the underlined run', () => {
+    const [label, number] = prChip({ number: 99, url: URL }, true)!;
+    expect(label).toEqual({ text: 'PR ', color: theme.secondary });
+    expect(number.text).toBe(`\u001b]8;;${URL}\u0007#99\u001b]8;;\u0007`);
   });
 
   // No click to deliver: the hue stays (it is what marks the badge as the PR's), the underline
   // does not — the same rule markdown.ts's renderLink follows.
   it('drops the underline and the escape where the terminal has no hyperlinks', () => {
     expect(prChip({ number: 99, url: URL }, false)).toEqual([
-      { text: 'PR', color: theme.secondary },
-      { text: ' #99', color: theme.link },
+      { text: 'PR ', color: theme.secondary },
+      { text: '#99', color: theme.link },
     ]);
   });
 
   it('keeps the number plain when there is no URL to open', () => {
     expect(prChip({ number: 99 }, true)).toEqual([
-      { text: 'PR', color: theme.secondary },
-      { text: ' #99', color: theme.secondary },
+      { text: 'PR ', color: theme.secondary },
+      { text: '#99', color: theme.secondary },
     ]);
   });
 

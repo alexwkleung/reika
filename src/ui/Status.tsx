@@ -240,8 +240,10 @@ export function formatCache(cachedTokens?: number, contextTokens?: number | null
 }
 
 // `PR #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell). The
-// number is the click target, the `PR` label is not, so the chip comes in two segments and the
-// space belongs to the number — that is what the underline covers.
+// number is the click target, the `PR` label is not, so the chip comes in two segments — and the
+// separating space rides on the *label*, not the number: a segment's underline runs the whole
+// width of the segment it is on, so a leading space inside the number would draw a column of
+// underline before the `#` and open a clickable gap ahead of it.
 //
 // `links` is the OSC 8 gate, injected so the plain-text branch is testable where stdout is a pipe
 // (the same function-form check markdown.ts's renderLink makes, and for the same reason: it re-reads
@@ -255,16 +257,14 @@ export function prChip(
 ): Chip | null {
   const number = pr?.number;
   if (number == null || number <= 0) return null;
-  const label = ` #${number}`;
+  const label: Segment = { text: 'PR ', color: theme.secondary };
+  const shown = `#${number}`;
   const url = pr?.url;
   if (url && links) {
     return [
-      { text: 'PR', color: theme.secondary },
-      { text: `\x1b]8;;${url}\x07${label}\x1b]8;;\x07`, color: theme.link, underline: true },
+      label,
+      { text: `\x1b]8;;${url}\x07${shown}\x1b]8;;\x07`, color: theme.link, underline: true },
     ];
   }
-  return [
-    { text: 'PR', color: theme.secondary },
-    { text: label, color: url ? theme.link : theme.secondary },
-  ];
+  return [label, { text: shown, color: url ? theme.link : theme.secondary }];
 }
