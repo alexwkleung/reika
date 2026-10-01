@@ -68,6 +68,41 @@ describe('scoreGrindSteps', () => {
     expect(s.tested).toBe(true);
   });
 
+  it('credits a test run through any package manager, not just npm', () => {
+    const commands = [
+      'npm test',
+      'npm run test',
+      'pnpm test',
+      'pnpm run test',
+      'pnpm -s test',
+      'pnpm --silent run test',
+      'pnpm exec vitest run',
+      'pnpm dlx vitest run',
+      'yarn test',
+      'yarn dlx vitest run',
+      'bun test',
+      'bunx vitest run',
+    ];
+    for (const cmd of commands) {
+      const s = scoreGrindSteps(
+        [bash("sed -i '' 's/a/b/' src/chunk.js"), bash(cmd)],
+        'src/chunk.js',
+      );
+      expect(s.tested, cmd).toBe(true);
+    }
+  });
+
+  it('does not credit a package-manager command that is not a test run', () => {
+    const messages: Message[] = [
+      bash("sed -i '' 's/a/b/' src/chunk.js"),
+      bash('pnpm build'),
+      bash('pnpm install'),
+      bash('pnpm run lint'),
+    ];
+    const s = scoreGrindSteps(messages, 'src/chunk.js');
+    expect(s.tested).toBe(false);
+  });
+
   it('scores nothing after the change when there was none', () => {
     const s = scoreGrindSteps([bash('npm test'), reply('Looks fine.')], 'src/chunk.js');
     expect(s.tested).toBe(false);
