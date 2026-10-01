@@ -315,6 +315,11 @@ export function App() {
   // Same idea for submit-time expansion, which blocks on the network when the prompt carries a
   // pasted link. Separate from `pasting` so a ctrl-v mid-submit can't clobber either label.
   const [expanding, setExpanding] = useState<string | null>(null);
+  // And for /resume: reading a long session is fast, but *rendering* it is not — the commit that
+  // hands a 2MB session's 460-odd messages to the scrollback blocks the event loop for ~2s (see
+  // the note on the label below), and without this the picker just vanished and the app sat on a
+  // stale frame until it landed.
+  const [resuming, setResuming] = useState<string | null>(null);
   // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
@@ -1038,10 +1043,15 @@ export function App() {
   };
 
   const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+    // Set before the first await, so the frame lands while the file is still being read: the
+    // commit below runs every message's markdown, syntax highlighting and wrap in one synchronous
+    // pass, and nothing the UI does after that point can paint until it finishes.
+    setResuming(`Resuming "${entry.title ?? 'untitled'}"`);
     let sides: SessionSides;
     try {
       sides = await loadSession(entry.path);
     } catch (e) {
+      setResuming(null);
       setMessages(prev => [
         ...prev,
         { role: 'error', content: `resume failed: ${(e as Error).message}` },
@@ -1073,6 +1083,9 @@ export function App() {
         content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
       },
     ]);
+    // Same commit as the messages, not a frame later: the spinner's rows are the ones the first
+    // resumed frame takes, so clearing it in a separate update would flash the live frame twice.
+    setResuming(null);
   };
 
   const requestExit = (): void => {
@@ -2569,11 +2582,12 @@ export function App() {
                       : undefined
               }
             />
-          ) : (pasting ?? expanding) ? (
-            // Same spinner while idle: a paste, or a submit that has to fetch a pasted link, is a
-            // harness action with a visible wait — it should read like the typecheck gate rather
-            // than like the app having stalled.
-            <Working label={pasting ?? expanding ?? undefined} accent={theme.info} />
+          ) : (pasting ?? expanding ?? resuming) ? (
+            // Same spinner while idle: a paste, a submit that has to fetch a pasted link, or a
+            // resume whose scrollback is still being built is a harness action with a visible
+            // wait — it should read like the typecheck gate rather than like the app having
+            // stalled.
+            <Working label={pasting ?? expanding ?? resuming ?? undefined} accent={theme.info} />
           ) : null}
           <QueuedList queue={queue} />
           {pending ? (

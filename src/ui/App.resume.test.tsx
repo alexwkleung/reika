@@ -196,6 +196,32 @@ describe('session auto-save and /resume', () => {
     app.unmount();
   });
 
+  it('shows the resuming label while the resumed scrollback is built', async () => {
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    await waitFor(async () => (await listSessions(projectDir)).length === 1, 'the first save');
+    // A second conversation, so the picker has something the current session isn't.
+    await submit(app, '/new');
+    await submit(app, 'something else');
+    await waitFor(async () => (await listSessions(projectDir)).length === 2, 'the second save');
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    // Only frames from the selection on: the label is its own frame, and the picker's must not
+    // count as one.
+    app.frames.length = 0;
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('Resumed "fix the parser"'), 'the resume');
+
+    // Reading the file is async and drawing the resumed scrollback is not, so the label is
+    // committed and written before the whole session lands in one synchronous pass — which is the
+    // entire reason it exists: nothing after that commit can paint until it finishes.
+    const label = app.frames.map(plain).find(f => f.includes('Resuming "fix the parser"'));
+    expect(label).toBeDefined();
+    expect(label).not.toContain('• Resume');
+    expect(label).toContain('Resuming "fix the parser"…');
+    app.unmount();
+  });
+
   it('says when there is nothing to resume', async () => {
     const app = await mountApp();
     await submit(app, '/resume');
