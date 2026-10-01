@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { sanitizeTerminalText } from './termtext.js';
+import { drawnWidth, sanitizeTerminalText } from './termtext.js';
 
 // Built from char codes so the test source itself stays free of raw control characters — an
 // escape or a carriage return pasted into a file is invisible in every diff that reviews it.
@@ -83,5 +83,38 @@ describe('sanitizeTerminalText', () => {
 
   it('keeps multi-byte characters intact', () => {
     expect(sanitizeTerminalText('日本語 ✓ café')).toBe('日本語 ✓ café');
+  });
+});
+
+describe('drawnWidth', () => {
+  // The counterpart of the tab above: here string-width spends MORE columns than the terminal.
+  // A bare text-presentation pictograph matches the emoji regex and is scored wide, but the
+  // terminal draws the one-cell text glyph. Padding a table cell by the wider number left the
+  // rows holding a `✔` a column short of their own borders.
+  it('counts a bare text-presentation glyph as the one cell the terminal draws', () => {
+    expect(stringWidth('✔')).toBe(2);
+    expect(drawnWidth('✔')).toBe(1);
+    expect(drawnWidth('done ✔')).toBe(stringWidth('done ') + 1);
+    expect(drawnWidth('⚠ ♦ ❤')).toBe(5); // three glyphs and their two spaces
+    expect(drawnWidth('\u23FA\uFE0E x')).toBe(3);
+    expect(drawnWidth('\u23FA x')).toBe(3);
+  });
+
+  it('leaves alone everything both agree on', () => {
+    expect(drawnWidth('漢')).toBe(2); // wide for both: not a pictograph, so not halved
+    expect(drawnWidth('😀')).toBe(2); // emoji presentation, two cells for real
+    expect(drawnWidth('✔\uFE0F')).toBe(2); // VS16 does ask for the emoji glyph
+    expect(drawnWidth('✓')).toBe(1); // U+2713 is not an emoji at all
+    expect(drawnWidth('plain ascii')).toBe(11);
+    expect(drawnWidth('café → 5')).toBe(stringWidth('café → 5'));
+  });
+
+  it('measures through the styling a cell may carry', () => {
+    expect(drawnWidth('\u001B[36m✔\u001B[39m')).toBe(1);
+    expect(drawnWidth('\u001B[1m✔✔\u001B[22m')).toBe(2);
+  });
+
+  it('is zero for nothing at all', () => {
+    expect(drawnWidth('')).toBe(0);
   });
 });

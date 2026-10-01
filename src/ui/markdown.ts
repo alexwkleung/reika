@@ -6,7 +6,7 @@ import { supportsHyperlink } from 'supports-hyperlinks';
 import wrapAnsi from 'wrap-ansi';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
-import { sanitizeTerminalText } from './termtext.js';
+import { drawnWidth, sanitizeTerminalText } from './termtext.js';
 import { contentWidth } from './layout.js';
 
 // marked only parses here: the terminal rendering is ours, a walk over its token tree. Each block
@@ -121,6 +121,12 @@ function renderBlockquote(quote: Tokens.Blockquote, ctx: Ctx): string {
 // left the rows ragged (#439). Header bold, never colored, so the only color inside a table is
 // inline code; muted borders; a rule between every row, since a wrapped cell otherwise runs into
 // the next row's.
+//
+// Cells are padded to the column in `drawnWidth` — the columns the TERMINAL spends, not the ones
+// string-width reports — so a cell holding a bare text-presentation glyph (`✔`, one cell on the
+// screen and two to Ink) no longer comes out a column short of its own borders, which stepped the
+// right edge in on exactly those rows. The slack that padding costs Ink is taken out of the fit
+// budget below, so a row still never measures past the block and gets re-wrapped by Ink (#439).
 function renderTable(table: Tokens.Table, ctx: Ctx): string {
   const cells = (row: Tokens.TableCell[]) => row.map(cell => renderInline(cell.tokens, ctx));
   const header = cells(table.header);
@@ -128,7 +134,7 @@ function renderTable(table: Tokens.Table, ctx: Ctx): string {
   const natural = header.map(
     (_, col) => Math.max(...[header, ...rows].map(row => maxLineWidth(row[col] ?? ''))) + 2, // padding
   );
-  const widths = fitTableWidths(natural, proseWidth(ctx)) ?? natural;
+  const widths = fitTableWidths(natural, proseWidth(ctx) - maxSlack([header, ...rows])) ?? natural;
   const border = themeChalk(theme.muted);
   const rule = (left: string, mid: string, right: string) =>
     border(left + widths.map(w => '─'.repeat(w)).join(mid) + right);
@@ -140,8 +146,12 @@ function renderTable(table: Tokens.Table, ctx: Ctx): string {
     const lines: string[] = [];
     for (let r = 0; r < height; r++) {
       const line = widths.map((w, col) => {
-        const text = wrapped[col][r] ?? '';
-        return ' ' + paint(align(text, w - 2, table.align[col])) + ' ';
+        // A column squeezed under its own two padding columns has no room left for text — the
+        // budget took it, and the cell draws as the padding alone, exactly `w` columns. Drawing
+        // the text anyway would put the cell past the border it sits in.
+        const area = w - 2;
+        if (area < 1) return ' '.repeat(w);
+        return ' ' + paint(align(wrapped[col][r] ?? '', area, table.align[col])) + ' ';
       });
       lines.push(border('│') + line.join(border('│')) + border('│'));
     }
@@ -161,8 +171,17 @@ function maxLineWidth(text: string): number {
   return Math.max(0, ...text.split('\n').map(line => stringWidth(line)));
 }
 
+// The most columns any ONE row measures wider to Ink than the terminal draws it — the price of
+// padding a row by `drawnWidth` instead of string-width. Every line a row wraps into holds no more
+// of those glyphs than its whole row does, so the row's total bounds what its tallest line spends.
+function maxSlack(rows: string[][]): number {
+  const slack = (row: string[]) =>
+    row.reduce((n, cell) => n + stringWidth(cell) - drawnWidth(cell), 0);
+  return Math.max(0, ...rows.map(slack));
+}
+
 function align(text: string, width: number, how: 'center' | 'left' | 'right' | null): string {
-  const gap = Math.max(0, width - stringWidth(text));
+  const gap = Math.max(0, width - drawnWidth(text));
   if (how === 'right') return ' '.repeat(gap) + text;
   if (how === 'center') {
     const left = Math.floor(gap / 2);

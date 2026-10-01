@@ -227,10 +227,11 @@ a component holds.
 
 ### Ink wrapping pitfalls
 
-Two interactions to watch for when content can wrap:
+Three interactions to watch for when content can wrap:
 
 1. **`flexDirection="row"` + a wrappable Text mis-renders continuation lines** (blank lines appear between wrap breaks). Fix: drop the row layout and use a single Text with nested color segments for inline markers.
 2. **Color on a nested Text doesn't survive wrapping** — the outer Text's color (or default) wins on continuation lines. Fix: put the dominant color on the OUTER Text and let inner segments override (e.g., for accent markers).
+3. **A glyph can be one cell on the terminal and two to `string-width`** — a bare text-presentation pictograph (`✔`, `⚠`, `♦`) matches the emoji regex, so Ink spends two columns on a glyph the terminal draws in one (`⏺`, the same discrepancy, is why `syncframe.ts` restores the variation selector). Anything PADDING to a column must pad in `drawnWidth` (`ui/termtext.ts`); anything that must not be re-wrapped must budget with `string-width`, since that is what Ink wraps by. A table cell does both (`renderTable`): padded to the drawn column, with the difference paid out of its fit budget. So does a diff row (`DiffView.tsx`, `WrappedRow`): the pad runs to the drawn width, and the row box is handed the row's ink width as its budget, so the slack is laid out instead of re-wrapping onto a row of its own under the block.
 
 Combined pattern for "marker + body that may wrap":
 

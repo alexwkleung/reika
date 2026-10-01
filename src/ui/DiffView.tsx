@@ -5,7 +5,7 @@ import wrapAnsi from 'wrap-ansi';
 import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
-import { sanitizeTerminalText } from './termtext.js';
+import { drawnWidth, sanitizeTerminalText } from './termtext.js';
 
 export function DiffView({
   diff,
@@ -300,19 +300,28 @@ function WrappedRow({
     trim: false,
     hard: true,
   }).split('\n');
+  // Columns the gutter holds: its digits plus the space between it and the code.
+  const gutterCells = gutter ? gutter.length + 1 : 0;
   return (
     <>
       {rows.map((row, i) => {
         const lead = i === 0 ? prefix : CONTINUATION;
+        const pad = bg ? padToWidth(lead + row, maxWidth) : '';
         return (
-          <Box key={i}>
+          // The box is given the INK width the row measures — its drawn columns plus what the pad
+          // added for glyphs the terminal draws in one cell and string-width spends two on (`✔`,
+          // `⚠`, `⏺`; `drawnWidth`, termtext.ts). Ink lays a row out by measurement and re-wraps
+          // whatever runs past the width it was handed, which put that slack on a row of its own
+          // under the block (#439), so the budget has to cover it. Nothing is DRAWN in the extra
+          // columns: the row's drawn width is still exactly `maxWidth` + the gutter.
+          <Box key={i} width={gutterCells + stringWidth(lead + row) + pad.length}>
             {/* Blanked, not dropped: the gutter still has to hold its columns or the
                 continuation slides left and the code column stops lining up. */}
             <Gutter gutter={i === 0 ? gutter : ' '.repeat(gutter.length)} bg={bg} side={side} />
             <Text backgroundColor={bg}>
               {side && i === 0 ? themeChalk(markerFg(side))(lead) : lead}
               {row}
-              {bg ? padToWidth(lead + row, maxWidth) : ''}
+              {pad}
             </Text>
           </Box>
         );
@@ -396,8 +405,15 @@ function PlainChangeLine({
 // Measured in COLUMNS, not characters: a CJK glyph or an emoji in a changed line is two columns
 // wide, so counting characters overshot the padding and pushed the background past the edge — the
 // same misalignment tabs used to cause, from the other direction.
+//
+// And measured as the TERMINAL draws them, not as string-width reports them (`drawnWidth`), which
+// is the same direction again: `✔`, `⚠`, `⏺` and the rest of the text-presentation pictographs
+// spend two columns to Ink and one on the screen, so padding by the measurement left the tint a
+// column short per glyph — the block's right edge stepped in on exactly the rows carrying a check
+// mark. A row that draws its full width then MEASURES wider than it draws, which is why WrappedRow
+// hands the row box that ink width as slack (#439).
 function padToWidth(text: string, maxWidth: number): string {
-  const visible = stringWidth(text);
+  const visible = drawnWidth(text);
   return visible < maxWidth ? ' '.repeat(maxWidth - visible) : '';
 }
 

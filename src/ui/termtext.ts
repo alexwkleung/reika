@@ -1,4 +1,5 @@
 import stripAnsi from 'strip-ansi';
+import stringWidth from 'string-width';
 
 // Program output is not display text. A command's stdout/stderr is a stream of terminal
 // INSTRUCTIONS — move the cursor here, jump to the next tab stop, clear the screen — that a
@@ -73,4 +74,41 @@ function renderLine(line: string, tabStop: number): string {
 function isControl(ch: string): boolean {
   const c = ch.codePointAt(0)!;
   return c < 0x20 || (c >= 0x7f && c <= 0x9f);
+}
+
+// The other direction from the tab above: a glyph the terminal draws in ONE column that Ink's
+// measurement spends TWO on. string-width asks the emoji regex, which holds the pictographs that
+// default to TEXT presentation too — `✔`, `⚠`, `♦`, `❤`, the record glyph `⏺` (syncframe.ts) —
+// and scores them wide, because the emoji font can draw them at double width. A terminal only does
+// that for a glyph that actually presents as an emoji: `✔` bare is East Asian Ambiguous, the
+// default is narrow, and CP437/WGL4 fonts carry it as a one-cell text glyph. So `✔️` (U+2714 +
+// VS16) really is two cells and `✔` is one; a CJK glyph or an emoji-presentation pictograph is two
+// for both, and `✓` (U+2713) is not an emoji at all.
+//
+// Callers that PAD to a column want this. Callers that BUDGET want string-width, since that is
+// what Ink re-wraps by: a table pads cells by `drawnWidth` and pays the difference out of its fit
+// budget (markdown.ts, `renderTable`).
+const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u;
+const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+// VS16 asks the terminal for the emoji glyph, VS15 for the text one; with neither, the code
+// point's own default presentation decides. string-width ignores both selectors and keeps the
+// emoji regex's verdict, so the pair has to be read here.
+const ASKS_FOR_EMOJI = /\uFE0F/;
+const ASKS_FOR_TEXT = /\uFE0E/;
+const segmenter = new Intl.Segmenter();
+
+export function drawnWidth(text: string): number {
+  let width = 0;
+  // Grapheme by grapheme, the way string-width counts: a ZWJ sequence is one glyph on screen and
+  // a combining mark spends no cell of its own.
+  for (const { segment } of segmenter.segment(stripAnsi(text))) {
+    const measured = stringWidth(segment);
+    const textPresentation =
+      measured === 2 &&
+      PICTOGRAPHIC.test(segment) &&
+      !ASKS_FOR_EMOJI.test(segment) &&
+      (ASKS_FOR_TEXT.test(segment) || !EMOJI_PRESENTATION.test(segment));
+    width += textPresentation ? 1 : measured;
+  }
+  return width;
 }

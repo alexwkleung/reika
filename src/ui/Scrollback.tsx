@@ -1092,7 +1092,17 @@ function truncate(s: string, max: number): string {
 // nesting indent when the tool ran inside a subagent.
 function diffViewWidth(indent = 0): number {
   // DIFF_MARGIN is the diff block's own marginLeft={4}; contentWidth pays for the App's paddingX.
-  return contentWidth(DIFF_MARGIN + indent);
+  // Clamped to the box the diff actually sits in — MessageView's `contentWidth(indent)` minus that
+  // margin. contentWidth floors at 20 columns, and past the floor `contentWidth(DIFF_MARGIN +
+  // indent)` and the container stop agreeing, so the block was laid out WIDER than the box it is
+  // in: Ink re-wrapped every full row, the space between the gutter and the code came off the
+  // boundary (`11+ const`), the rows went ragged, and Ink counted a row count the live region
+  // budget does not know about. Above the floor the two numbers are equal, so this only bites on a
+  // terminal narrow enough to reach it (26 columns; 30 for a block nested under a subagent).
+  return Math.max(
+    1,
+    Math.min(contentWidth(DIFF_MARGIN + indent), contentWidth(indent) - DIFF_MARGIN),
+  );
 }
 
 const DIFF_MARGIN = 4;
