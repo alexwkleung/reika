@@ -512,17 +512,29 @@ function stepLine(s: PlanStep): string {
 // plan stays salient however long the run gets.
 export function buildPlanProgressLedger(steps: PlanStep[]): string {
   const lines = ['--- plan progress (reika, auto-generated — not user input) ---'];
+  // The state is a checkmark, not a verdict. A step is checked the moment the harness sees its
+  // FIRST observable signal (an edit to one of the files it names, one of the commands it quotes),
+  // so a step that names one file while needing many edits — the common shape — is checked while
+  // the model is still inside it. The wording has to say so: the model reads its own tick, and the
+  // line this replaced ("Do not re-do checked steps") turned an early tick into permission to skip
+  // the rest of the step's own work, the exact confusion the checklist exists to prevent. Nothing
+  // about the tracker changes — only what the model is told the tick means (under-checking stays
+  // the safe direction, so the fix is here and not in applyEdit).
   lines.push(
-    'You are executing the written plan. [x] steps were observed done; [~] steps were reviewed:',
+    '[x] = the harness has seen evidence for that step (a file it names was edited, or a command it',
+    'quotes ran). That is not proof the step is finished: a step showing [x] can still have work left.',
+    '[~] = reviewed, not observed done:',
   );
   for (const s of steps.slice(0, MAX_LEDGER_STEPS)) lines.push(stepLine(s));
   if (steps.length > MAX_LEDGER_STEPS) lines.push(`… and ${steps.length - MAX_LEDGER_STEPS} more.`);
   lines.push(
     // Read-before-edit (#72): stated here, in the regenerated suffix, because the equivalent static
     // prompt rule decays — the deterministic backstop is the read-first gate (loop.ts READ_FIRST).
-    'Work the unchecked steps in plan order. Do not re-do checked steps. Read a file before your',
-    'first edit to it — old_string must match its current text exactly. Finish only when every',
-    'step is done or you have said specifically why a remaining step no longer applies.',
+    'Work the steps in plan order, and finish the step you are on before starting the next one —',
+    "the tick only means the harness saw evidence. Don't redo work you have already finished. Read",
+    'a file before your first edit to it — old_string must match its current text exactly. Finish',
+    'only when every step is really done, or you have said specifically why a remaining step no',
+    'longer applies.',
   );
   return lines.join('\n');
 }
