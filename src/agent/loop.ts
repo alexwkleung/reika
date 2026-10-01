@@ -70,6 +70,7 @@ import { READ_DEFAULT_LIMIT } from '../tools/read.js';
 import { recordFollowed, spillStatsEnabled } from '../tools/_spillstats.js';
 import {
   seedPlanProgress,
+  parsePlanSteps,
   planChanged,
   refineTarget,
   applyEdit as applyPlanEdit,
@@ -3231,7 +3232,8 @@ export async function runTurn(opts: {
     // it apart from one that absorbed the request. Compared on the PARSED steps, so renumbering or
     // reformatting the same plan still reads as unchanged, and the grounding notes appended above
     // can't mask it. User-facing only — the model is told to revise in the ledger, and repeating
-    // that here would just add a line to a prompt that already carries it.
+    // that here would just add a line to a prompt that already carries it. Says nothing about
+    // /implement: the handoff hint below is the one line that names it, and it always follows this.
     if (
       refinePlan &&
       isFinal &&
@@ -3246,7 +3248,7 @@ export async function runTurn(opts: {
         tone: 'warn',
         content:
           'Plan unchanged — every step matches the plan from before this request. Rephrase it if ' +
-          "that wasn't what you wanted, or /implement to execute the plan as it stands.",
+          "that wasn't what you wanted.",
       });
     }
 
@@ -3336,6 +3338,32 @@ export async function runTurn(opts: {
             planWaived: waived,
           });
         }
+      }
+      // The plan handoff hint (#614): a plan-mode turn ends with the plan, and nothing in it says
+      // what to do with one. Neither routing is visible from the text — /implement hands THIS plan
+      // to another mode as a fresh turn, keeping it verbatim (the plan→agent handoff), and a mode
+      // switch leaves plan mode with the same shared history. Emitted after the gates above, so it
+      // is the turn's closing line and nothing lands under it. Not for vibe's plan phase
+      // (allowRefine false): the harness implements that plan straight after, so naming /implement
+      // would point at a step already taken. Requires a parsed step — the same 0-steps-is-not-a-plan
+      // line planWritten draws (#126): a force-written spiral stop is a dead end, not a handoff.
+      // The three modes are spelled out because the mode switch is the second route, and /agent is
+      // not the only one it can take — keep them in step with IMPLEMENT_MODES (ui/commands.ts).
+      // `emphasis: 'lead'` tints "Plan ready" in the marker's own color, so the line reads as the
+      // turn's call to action rather than as one more muted notice.
+      if (
+        opts.promptMode === 'plan' &&
+        opts.allowRefine !== false &&
+        parsePlanSteps(assistantContent ?? '').length > 0
+      ) {
+        opts.onMessage({
+          role: 'system',
+          tone: 'info',
+          emphasis: 'lead',
+          content:
+            'Plan ready — /implement to execute it, or switch to /agent, /minimal or /grind and ' +
+            'start.',
+        });
       }
       if (readTrace.total() > 0) {
         debugLog(`[reika:debug] read-trace-summary ${readTrace.summary()}\n`);
