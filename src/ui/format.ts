@@ -135,25 +135,28 @@ export function toolVerb(name: string): string {
   return TOOL_VERBS[name] ?? 'Working';
 }
 
-// The elapsed chip on the in-flight row (#585) — the row #509 draws while a call runs, which for a
-// silent command is the whole of what the user has to go on. Held back until the call has been
-// running `LIVE_TIMER_AFTER_S`: under that the question the timer answers ("is this stuck?") has not
-// been asked yet, and a number counting up over every `ls` is a flicker rather than a signal.
+// The elapsed chip for a call (#585), on both rows it appears on: the in-flight `↳ Running…` row
+// #509 draws while it runs, and the `↳ Ran: …` row it commits as. One rule for the two, because the
+// chip has to be the same in both for the swap at commit to be a text-only change of verb.
+//
+// Held back until the call has been running `TIMER_AFTER_S`: under that the question the chip
+// answers ("is this stuck?") has not been asked yet, and a number counting up over every `ls` is a
+// flicker rather than a signal. An empty return is what keeps every short call's row — live and
+// committed — byte-identical to what it was before it existed.
 //
 // `bash` only. It is the one call that can legitimately run for minutes — #408 sized its bounds for
 // a real build or test suite — and the one whose silence says nothing: a `subagent` streams its
 // rounds into the same region (#342), `fetch_url`/`search` narrate what they are doing, and the file
 // tools finish inside a second. A set rather than `name !== 'bash'` so widening the scope is a
 // one-line change if a second tool ever earns it.
-const LIVE_TIMER_TOOLS = new Set(['bash']);
-export const LIVE_TIMER_AFTER_S = 5;
+const TIMED_TOOLS = new Set(['bash']);
+export const TIMER_AFTER_S = 5;
 
-// ` · 12s`, or '' for a call that is not one of the above or is still under the threshold. The
-// separator leads so the row reads as `${verb}…${timer}`, and '' leaves the row byte-identical to
-// the one already on screen — nothing shifts when the timer appears.
-export function pendingToolTimer(name: string, seconds: number): string {
-  if (!LIVE_TIMER_TOOLS.has(name) || seconds < LIVE_TIMER_AFTER_S) return '';
-  return ` · ${formatElapsed(seconds)}`;
+// ` · 12s`, or '' for a call that is not one of the above, has no duration yet, or is still under
+// the threshold. The separator leads so the text reads as `${verb}…${timer}`.
+export function toolTimer(name: string, ms: number | undefined): string {
+  if (ms === undefined || ms < TIMER_AFTER_S * 1000 || !TIMED_TOOLS.has(name)) return '';
+  return ` · ${formatDurationMs(ms)}`;
 }
 
 // `(+3 -1)`, `(new, +12)`, `(deleted, -40)`, `(binary)` — the stat tag after a file a bash command

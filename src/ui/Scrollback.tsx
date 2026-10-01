@@ -11,7 +11,7 @@ import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
-import { changeLabel, formatDurationMs, pendingToolTimer, toolLabel, toolVerb } from './format.js';
+import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 
 export function Scrollback({
@@ -23,7 +23,7 @@ export function Scrollback({
   streamingNote = false,
   streamingCommand = false,
   pendingTool = '',
-  pendingToolSeconds = 0,
+  pendingToolMs = 0,
   chromeRows = 0,
   showHeldWorked = true,
 }: {
@@ -49,10 +49,10 @@ export function Scrollback({
   // come, an `edit`/`read`/`grep` that never streams at all — is visibly in flight instead of
   // leaving the committed call row above it looking like the app stopped.
   pendingTool?: string;
-  // How long that call has been running, in seconds (#585) — appended to the row as ` · 12s` for
-  // the tools `pendingToolTimer` times, once it passes its threshold. The App reads it off the
-  // render clock the status bar's one-second tick already drives, so nothing here keeps a timer.
-  pendingToolSeconds?: number;
+  // How long that call has been running, in ms (#585) — appended to the row as ` · 12s` for the
+  // tools `toolTimer` times, once it passes its threshold. The App reads it off the render clock
+  // the status bar's one-second tick already drives, so nothing here keeps a timer.
+  pendingToolMs?: number;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -113,7 +113,7 @@ export function Scrollback({
             {/* The call's age (#585), muted so it reads as metadata on the row rather than as part
                 of the verb it follows. Same nested-Text shape as the marker above: sibling <Text>s
                 on one row lose the boundary char between them when the row wraps. */}
-            <Text color={theme.muted}>{pendingToolTimer(pendingTool, pendingToolSeconds)}</Text>
+            <Text color={theme.muted}>{toolTimer(pendingTool, pendingToolMs)}</Text>
           </Text>
         </Box>
       ) : null}
@@ -780,6 +780,13 @@ function renderMessage(
     );
   }
   if (msg.role === 'tool') {
+    // The committed half of the in-flight chip (#585): the same ` · 2m 05s`, from the duration the
+    // loop stamped around the call. `command` is the chip only a bash result carries — the marker
+    // this file already uses to treat a row as a command result — so the timer sits on exactly the
+    // rows `toolTimer` times. Its width comes off the summary's wrap rather than being appended past
+    // it: the chip lands at the end of the last wrapped row, and a wrap that didn't know about it
+    // would spill onto a row of its own, while the live row it replaces is one row tall.
+    const duration = msg.command ? toolTimer('bash', msg.durationMs) : '';
     return (
       <Box
         flexDirection="column"
@@ -798,10 +805,11 @@ function renderMessage(
           <Text color={theme.secondary}>
             {hangingWrap(
               scrubOutput((msg.summary ?? '').replace(/^Read /, '')),
-              contentWidth(indent),
+              contentWidth(indent) - duration.length,
               TOOL_MARKER.length,
             )}
           </Text>
+          <Text color={theme.muted}>{duration}</Text>
         </Text>
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
