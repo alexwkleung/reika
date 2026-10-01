@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { formatContext, formatCache, formatPr, packChips, type Chip } from './Status.js';
+import stringWidth from 'string-width';
+import { formatContext, formatCache, prChip, packChips, type Chip } from './Status.js';
+import { theme } from './theme.js';
 import { contextFill, formatShrink, kFormat } from './format.js';
 
 describe('kFormat', () => {
@@ -107,15 +109,58 @@ describe('formatShrink', () => {
   });
 });
 
-describe('formatPr', () => {
+describe('prChip', () => {
+  const URL = 'https://github.com/o/r/pull/99';
+  const text = (chip: Chip) => chip.map(s => s.text).join('');
+
   it('shows the PR the branch is attached to', () => {
-    expect(formatPr(99)).toBe('PR: #99');
+    expect(text(prChip({ number: 99 })!)).toBe('PR #99');
+  });
+
+  // The label is a plain chip segment and the number is the link: an OSC 8 opener around it, the
+  // link hue, and the underline that says it clicks. `links` is the terminal's answer.
+  it('links the number, never the label, where the terminal takes hyperlinks', () => {
+    expect(prChip({ number: 99, url: URL }, true)).toEqual([
+      { text: 'PR ', color: theme.secondary },
+      { text: `\u001b]8;;${URL}\u0007#99\u001b]8;;\u0007`, color: theme.link, underline: true },
+    ]);
+  });
+
+  // An underline runs the width of the segment it is on, so the space separating the label from
+  // the number has to live on the label: inside the underlined run it draws a column of underline
+  // past the `#`, and opens a clickable gap ahead of it.
+  it('keeps the separating space out of the underlined run', () => {
+    const [label, number] = prChip({ number: 99, url: URL }, true)!;
+    expect(label).toEqual({ text: 'PR ', color: theme.secondary });
+    expect(number.text).toBe(`\u001b]8;;${URL}\u0007#99\u001b]8;;\u0007`);
+  });
+
+  // No click to deliver: the hue stays (it is what marks the badge as the PR's), the underline
+  // does not — the same rule markdown.ts's renderLink follows.
+  it('drops the underline and the escape where the terminal has no hyperlinks', () => {
+    expect(prChip({ number: 99, url: URL }, false)).toEqual([
+      { text: 'PR ', color: theme.secondary },
+      { text: '#99', color: theme.link },
+    ]);
+  });
+
+  it('keeps the number plain when there is no URL to open', () => {
+    expect(prChip({ number: 99 }, true)).toEqual([
+      { text: 'PR ', color: theme.secondary },
+      { text: '#99', color: theme.secondary },
+    ]);
+  });
+
+  // The escapes are control codes, not columns: a linked number must not be laid out as a URL.
+  it('measures the linked number as its visible width', () => {
+    const chip = prChip({ number: 99, url: URL }, true)!;
+    expect(chip.reduce((n, s) => n + stringWidth(s.text), 0)).toBe(6);
   });
 
   it('renders nothing when the branch has no PR', () => {
-    expect(formatPr(null)).toBe('');
-    expect(formatPr(undefined)).toBe('');
-    expect(formatPr(0)).toBe('');
+    expect(prChip(null)).toBeNull();
+    expect(prChip(undefined)).toBeNull();
+    expect(prChip({ number: 0 })).toBeNull();
   });
 });
 

@@ -11,7 +11,7 @@ import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status } from './Status.js';
 import { createSession, type Session } from '../session.js';
-import { resolvePr } from './pr.js';
+import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
@@ -275,7 +275,7 @@ export function App() {
   const unattended = sessionUnattended ?? config?.unattended === true;
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
-  const [pr, setPr] = useState<number | null>(null);
+  const [pr, setPr] = useState<PrRef | null>(null);
   // Text extracted from images pasted this turn, keyed by the `[Image N]` marker sitting in the
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
@@ -629,8 +629,9 @@ export function App() {
 
   // Branch↔PR badge. The poll only shells out to git (cheap, local); the `gh` lookup behind
   // it is cached per branch, so a branch switch made in another terminal shows up within a
-  // tick without hammering the network. State only changes when the number does, so the
-  // steady-state tick costs no re-render.
+  // tick without hammering the network. The cache hands back the same object while it's fresh,
+  // so an unchanged PR is the same reference and React bails out of the re-render — the
+  // steady-state tick costs nothing.
   useEffect(() => {
     let cancelled = false;
     const check = async (): Promise<void> => {
