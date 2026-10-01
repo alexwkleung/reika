@@ -143,7 +143,9 @@ describe('plan progress tracking (integration)', () => {
       m => m.role === 'tool' && m.summary.startsWith('Wrote src/app.ts'),
     );
     const receiptIdx = messages.findIndex(
-      m => m.role === 'system' && m.content.includes('Plan step 1 checked off (1/3)'),
+      m =>
+        m.role === 'system' &&
+        m.content.includes('Plan step 1: a file it names was edited (1/3 with evidence)'),
     );
     expect(toolIdx).toBeGreaterThanOrEqual(0);
     expect(receiptIdx).toBeGreaterThan(toolIdx);
@@ -191,11 +193,16 @@ describe('plan progress tracking (integration)', () => {
     expect(
       messages.some(
         m =>
-          m.role === 'system' && m.content.includes('checked off (1/2) — matched by edit content'),
+          m.role === 'system' &&
+          m.content.includes(
+            'an edit matched its quoted code (1/2 with evidence) — the plan names another file',
+          ),
       ),
     ).toBe(true);
     expect(
-      messages.some(m => m.role === 'system' && m.content.includes('Plan complete — all 2 steps')),
+      messages.some(
+        m => m.role === 'system' && m.content.includes('Plan: all 2 steps have observed evidence'),
+      ),
     ).toBe(true);
     // No bounce happened: everything was observed done.
     expect(messages.some(m => m.role === 'system' && m.content.includes('Plan gate'))).toBe(false);
@@ -224,7 +231,9 @@ describe('plan progress tracking (integration)', () => {
     expect(snapshots.at(-1)?.map(s => s.done)).toEqual([true, true, false]);
     expect(
       messages.some(
-        m => m.role === 'system' && m.content.includes('Plan step 1 checked off (1/3)'),
+        m =>
+          m.role === 'system' &&
+          m.content.includes('Plan step 1: a file it names was edited (1/3 with evidence)'),
       ),
     ).toBe(true);
     // The early finish was bounced — which only happens because the shell write set editingStarted.

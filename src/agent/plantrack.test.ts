@@ -474,6 +474,20 @@ describe('buildPlanProgressLedger', () => {
     expect(ledger).toContain('not user input');
     expect(ledger).toContain('plan order');
   });
+
+  it('frames a tick as evidence, never as a finished step', () => {
+    // The tick lands on the FIRST edit to a file the step names, so a single-file step that needs
+    // many edits is ticked while the model is still inside it. The ledger must not let that read as
+    // licence to move on — the model obeys its own checklist.
+    const steps = parsePlanSteps(PLAN);
+    applyEdit(steps, 'src/agent/thing.ts');
+    const ledger = buildPlanProgressLedger(steps);
+    expect(ledger).toContain('has seen evidence');
+    expect(ledger).toContain('not proof the step is finished');
+    expect(ledger).toContain('finish the step you are on');
+    expect(ledger).toContain("Don't redo work you have already finished");
+    expect(ledger).not.toContain('Do not re-do checked steps');
+  });
 });
 
 describe('decidePlanGate', () => {

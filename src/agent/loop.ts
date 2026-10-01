@@ -3668,14 +3668,20 @@ export async function runTurn(opts: {
             if (match) {
               opts.onPlanProgress?.(planSteps);
               const done = planSteps.filter(s => s.done).length;
-              const via =
+              const via = match.by === 'content' ? ' — the plan names another file' : '';
+              // Wording, not semantics (see buildPlanProgressLedger): the receipt reports the
+              // evidence the harness saw, never that the step is finished — a step naming one file
+              // ticks here on its first edit while more of its work is still to come. The `what`
+              // phrase differs by signal, since a content match deliberately means the plan named
+              // the WRONG file and the edited one is not a file the step names.
+              const what =
                 match.by === 'content'
-                  ? ' — matched by edit content; the plan names another file'
-                  : '';
+                  ? 'an edit matched its quoted code'
+                  : 'a file it names was edited';
               planCheckoff =
                 done === planSteps.length
-                  ? `Plan complete — all ${planSteps.length} steps checked off.`
-                  : `Plan step ${planSteps[match.index].n} checked off (${done}/${planSteps.length})${via}.`;
+                  ? `Plan: all ${planSteps.length} steps have observed evidence (checklist complete).`
+                  : `Plan step ${planSteps[match.index].n}: ${what} (${done}/${planSteps.length} with evidence)${via}.`;
             }
           }
         } else if (summary.startsWith('Edit failed')) {
@@ -3704,12 +3710,15 @@ export async function runTurn(opts: {
         if (match) {
           opts.onPlanProgress?.(planSteps);
           const done = planSteps.filter(s => s.done).length;
-          const via =
-            match.by === 'content' ? ' — matched by edit content; the plan names another file' : '';
+          const via = match.by === 'content' ? ' — the plan names another file' : '';
+          const what =
+            match.by === 'content'
+              ? 'an edit matched its quoted code'
+              : 'a file it names was edited';
           planCheckoff =
             done === planSteps.length
-              ? `Plan complete — all ${planSteps.length} steps checked off.`
-              : `Plan step ${planSteps[match.index].n} checked off (${done}/${planSteps.length})${via}.`;
+              ? `Plan: all ${planSteps.length} steps have observed evidence (checklist complete).`
+              : `Plan step ${planSteps[match.index].n}: ${what} (${done}/${planSteps.length} with evidence)${via}.`;
         }
       }
       // Command steps ("run typecheck/tests"): a successful bash run whose command contains the
@@ -3729,8 +3738,8 @@ export async function runTurn(opts: {
           const done = planSteps.filter(s => s.done).length;
           planCheckoff =
             done === planSteps.length
-              ? `Plan complete — all ${planSteps.length} steps checked off.`
-              : `Plan step ${planSteps[idx].n} checked off (${done}/${planSteps.length}) — command ran.`;
+              ? `Plan: all ${planSteps.length} steps have observed evidence (checklist complete).`
+              : `Plan step ${planSteps[idx].n}: a command it quotes ran (${done}/${planSteps.length} with evidence).`;
         }
       }
       const payloadId = payload ? opts.payloads.put(payload) : undefined;
