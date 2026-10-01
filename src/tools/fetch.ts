@@ -14,7 +14,7 @@ import {
   spillResult,
   type SpillRef,
 } from './_spill.js';
-import { recordCapped } from './_spillstats.js';
+import { recordCapped, recordFollowed } from './_spillstats.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -53,10 +53,23 @@ export function resetSavedPages(): void {
 // Without a `path` — a model that cannot follow one (#377) — the locator clause is left off and
 // the summary is the unsaved shape, which `parseSavedPage` rejects: the recap has no business
 // listing a file for a model that has no way to open it either.
-function savedSummary(url: string, total: number, cached: boolean, path?: string): string {
+function savedSummary(
+  url: string,
+  total: number,
+  cached: boolean,
+  path?: string,
+  window?: { start: number; end: number },
+): string {
   const how = cached ? ' — already fetched this session, served from the saved copy' : '';
   const where = path ? `; full page saved to ${path}` : '';
-  return `Fetched ${url} (${total} chars extracted${how}${where})`;
+  // A paged result says which window it is holding, in the same place the whole-page result says
+  // how much there was. Kept to the summary as well as the footer for the reason the locator is
+  // (#139): the summary is the only part of the result that survives a starved window, and a model
+  // that has forgotten where it was can read it back off its own history.
+  const count = window
+    ? `chars ${window.start}-${window.end} of ${total} extracted`
+    : `${total} chars extracted`;
+  return `Fetched ${url} (${count}${how}${where})`;
 }
 
 // Whether the model can follow a spill locator. The footer names `read` (and `grep`; bash works
@@ -290,6 +303,18 @@ export const fetchUrlTool: Tool = {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'Absolute URL to fetch (http/https).' },
+      // #379. Offsets are char offsets into the extracted text, not line numbers: the extraction is
+      // markdown with no stable line numbering a caller could rely on, and the counts the footers
+      // print are chars. Served from the saved copy of a page this session already fetched, so
+      // paging costs no request and no fetch budget — which is the whole point in a tool list with
+      // no `read` (chat), where the file on disk is otherwise unreachable.
+      offset: {
+        type: 'integer',
+        description:
+          'Char offset into the extracted text to start from, for paging a long page. Served ' +
+          'from the copy already saved this session — no new request, no fetch budget. Use the ' +
+          'offset a previous result told you to continue from.',
+      },
     },
     required: ['url'],
   },
@@ -299,6 +324,10 @@ export const fetchUrlTool: Tool = {
     if (!/^https?:\/\//i.test(url)) {
       return { summary: `Fetch failed: not an http(s) URL — ${url}` };
     }
+    // Where in the page the window starts (#379). Anything unusable — absent, 0, negative, NaN,
+    // a string a model quoted — reads as "from the top", which is what every pre-#379 call meant.
+    const asked = Number(args.offset ?? 0);
+    const from = Number.isFinite(asked) && asked > 0 ? Math.floor(asked) : 0;
     // Read once per call, like bash: the cap below must match the extraction it is applied to.
     const spilling = spillEnabled();
     // A page already saved this session is served from the file, ahead of the budget check: the
@@ -309,9 +338,25 @@ export const fetchUrlTool: Tool = {
       const full = await readFile(hit.ref.path, 'utf8').catch(() => undefined);
       if (full !== undefined) {
         ctx.fetchedUrls?.add(url);
-        return presentSaved(url, full, hit.total, hit.ref, true, canFollowLocator(ctx));
+        // The payoff half of the spill ledger for a list that has no `read`: a paged fetch opens
+        // the saved artifact without ever naming its path, so the loop's path-matching check
+        // (`referencesSpill`) cannot see it.
+        if (from > 0) recordFollowed({ by: 'fetch_url', how: 'offset' });
+        return presentSaved(url, full, hit.total, hit.ref, true, canFollowLocator(ctx), from);
       }
       savedPages.delete(url);
+    }
+    // Nothing on disk to page through. Refused rather than answered with a fetch: the file is the
+    // only thing an offset can be taken from — a fresh extraction is not in hand to slice, and the
+    // request that would produce it returns the head, which is not what the model asked for. Costs
+    // no request and no budget slot, and sits before the egress checks because it makes no egress.
+    if (from > 0) {
+      return {
+        summary:
+          `Fetch skipped: no saved copy of ${url} to page through at offset ${from}` +
+          `${spilling ? '' : ' (REIKA_SPILL=0 — pages are not saved)'}. ` +
+          'Call fetch_url with the url alone to start from the beginning.',
+      };
     }
     // The network went down earlier this turn (#392): every URL fails the same way, so say so
     // without a request or a budget slot. After the saved-page check, which needs no network.
@@ -408,6 +453,7 @@ export const fetchUrlTool: Tool = {
       };
     }
     savedPages.set(url, { ref, total });
+    // The head: a nonzero offset never reaches here (there was nothing saved to page through).
     return presentSaved(url, full, total, ref, false, canFollowLocator(ctx));
   },
 };
@@ -422,11 +468,18 @@ export const fetchUrlTool: Tool = {
 // both of those places the locator is the re-fetch avoided, not stale advice.
 //
 // `locate` false (#377) keeps the file — the repeat-fetch cache above is served from it and needs
-// no help from the model — but says nothing about it: the summary is the unsaved shape, an
-// under-cap page gets no footer, and an over-cap page gets a footer that owns the cut without
-// naming a remedy. Not `buildCappedFooter`: its "could not be saved" is the wrong lie in the other
-// direction. What the model gets is the pre-spill result for the tool cap, which is the right
-// floor for a mode that never had a way past it, plus the one sentence that stops the re-fetch.
+// no help from the model — but says nothing about it: no path, no `read`. Until #379 that left an
+// over-cap page with a footer owning the cut and naming no remedy, which was honest and a dead end
+// (the pre-spill floor: the 64KB head, the rest unreachable); now the remedy is this tool's own
+// `offset`, so the same footer says which window is shown and spells out the next call.
+// `offset` (#379) is where in the page the window starts — the one remedy a read-less tool list
+// can actually follow. Chat has no `read` and no `grep`, so the file this page is saved to is
+// unreachable to it, and a plain re-fetch returns the head however many times it is issued: saying
+// "not reachable in this mode" (what #377 could honestly say) left the model with no second move
+// at all. The window is served from the file, so paging costs no request and no fetch budget, and
+// the footer spells out the next call the way `read` spells out `offset=N` — weak models do not
+// infer the arithmetic. A window that reaches the end of the page gets no footer: there is nothing
+// left to continue to.
 function presentSaved(
   url: string,
   full: string,
@@ -434,32 +487,54 @@ function presentSaved(
   ref: SpillRef,
   cached: boolean,
   locate: boolean,
+  offset = 0,
 ): ToolResult {
-  const overCap = total > MAX_PAYLOAD_BYTES;
-  const shown = overCap ? full.slice(0, MAX_PAYLOAD_BYTES) : full;
+  const start = Math.min(offset, full.length);
+  const end = Math.min(start + MAX_PAYLOAD_BYTES, full.length);
+  const shown = full.slice(start, end);
+  // Something below this window. `full.length === total` on every call (the spill holds the uncut
+  // extraction, and the file is handed to the same code the fresh page is), so this is the page's
+  // end and not the file's — the footer below promises as much.
+  const more = end < total;
+  // An offset the page does not have: a stated correction, the shape `read` uses past EOF, rather
+  // than an empty payload a model has to work out for itself.
+  if (offset > 0 && start >= total) {
+    return {
+      summary: `Fetched ${url}: offset ${offset} past end of page (${total} chars)`,
+      payload:
+        `(offset ${offset} is past the end of ${url}, which is ${total} chars — re-call ` +
+        `fetch_url with a smaller offset, or with none for the start of the page.)`,
+    };
+  }
+  const window = offset > 0 ? { start, end } : undefined;
   if (!locate) {
-    const footer = overCap
-      ? `\n\n(Showing ${MAX_PAYLOAD_BYTES} of ${total} chars. The rest is not reachable in this ` +
-        `mode — work from the head shown above. Do not re-run this fetch to see it.)`
+    const footer = more
+      ? `\n\n(Showing chars ${start}-${end} of ${total}. Call fetch_url again with the same url ` +
+        `and offset: ${end} to continue.)`
       : '';
     return {
-      summary: savedSummary(url, total, cached),
+      summary: savedSummary(url, total, cached, undefined, window),
       payload: UNTRUSTED_PAGE_HEADER + shown + footer,
     };
   }
-  const footer = overCap
-    ? buildSpillFooter({
-        shown: MAX_PAYLOAD_BYTES,
+  const footer = !more
+    ? offset > 0
+      ? ''
+      : `\n\n(Full page saved to ${ref.path} — if this output is cut to fit the context window, ` +
+        `read that path with offset/limit instead of fetching the URL again.)`
+    : buildSpillFooter({
+        shown: end - start,
         total: String(total),
         unit: 'chars',
+        // Where the window sits, because the model cannot tell a middle window from the head by
+        // looking at it (the same reason `note` exists for a sampled page).
+        ...(offset > 0 ? { note: `Chars ${start}-${end}. ` } : {}),
         ref,
         saved: 'Full page',
         subject: 'fetch',
-      })
-    : `\n\n(Full page saved to ${ref.path} — if this output is cut to fit the context window, ` +
-      `read that path with offset/limit instead of fetching the URL again.)`;
+      });
   return {
-    summary: savedSummary(url, total, cached, ref.path),
+    summary: savedSummary(url, total, cached, ref.path, window),
     payload: UNTRUSTED_PAGE_HEADER + shown + footer,
   };
 }

@@ -25,6 +25,8 @@ The two web tools are registered in **plan** and **grind** mode as well as agent
 
 `fetch_url` asks before one kind of fetch: a URL that carries data (any query string, or a key- or hash-shaped path segment or host name) and that appears in nothing you or a tool gave the model. That is the shape of a model, steered by text on a page it read, sending something out in the URL. Links from your prompt, search results, fetched pages and files go through without asking, and so do plain URLs like docs pages. The prompt still appears under `REIKA_AUTO_APPROVE=safe`. Under `bypass` the fetch is refused, and in an unattended session it is declined.
 
+A page over 2KB is kept on disk for the session, and `fetch_url` reads it back: the same URL fetched twice is served from that copy with no request and no fetch budget, and an `offset` pages through it — `offset: 65536` returns the next window. That is how chat, which has no `read` and no `grep`, reaches past the head of a long page: the footer of a cut result names the exact call to continue with. Paging costs nothing, so it is not rationed by `REIKA_MAX_FETCHES_PER_TURN`; an `offset` for a URL that was never fetched is refused, since only the saved copy can be paged.
+
 `bash` applies the same idea to `git` and `gh`, which keep network access inside the sandbox. A `git clone`, `fetch`, `pull`, `push`, `ls-remote` or `remote add` (or `gh api`) pointed at a host that no link from you or a tool mentioned asks first. The same goes for a known host with data added to the URL. In plan mode that command is refused instead.
 
 Approval prompts show a unified diff (or the command for `bash`), with `Approve / Decline / Always (this session)` selectable by `↑↓` + `Enter` or by direct `y`/`n` shortcut.
