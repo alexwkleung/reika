@@ -33,6 +33,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 - **Linter**: oxlint (`.oxlintrc.json`) with the typescript + react-hooks rules. Unused imports are auto-removed by `pnpm run lint:fix` — leave that cleanup to the tool rather than manual pruning.
 - **Tests**: vitest, colocated `*.test.ts` files (e.g. `client.test.ts` next to `client.ts`)
 - **Pre-commit**: run `pnpm run check` (typecheck + lint + format:check + test)
+- **Package manager**: pnpm 12, named in `packageManager`. `pnpm install --filter reika` for app-only dependencies; a plain root install also adds the `docs/` workspace member
 - **Style**: functions over classes when state is minimal; classes only for things with real lifecycle (e.g. `PayloadStore`)
 - **Comments**: only when explaining _why_ (constraints, non-obvious choices). Never explain _what_ — well-named identifiers do that. Never multi-paragraph.
 - **Dependencies**: minimal. Adding one needs a clear reason.
