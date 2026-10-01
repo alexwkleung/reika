@@ -54,8 +54,8 @@ llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 然后安装 Reika 并把它指向该服务器：
 
 ```sh
-npm install
-npm run install:global       # 构建并安装 `reika` 可执行文件
+pnpm install
+pnpm run install:global      # 构建并安装 `reika` 可执行文件
 
 export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
@@ -63,7 +63,7 @@ cd your-project && reika
 
 `REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取；对于不上报的服务器（部分推理引擎、多数云端 API），请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
 
-想直接从检出目录运行而不安装：`cp .env.example .env`，编辑它，然后 `npm run dev`。`npm run uninstall:global` 会移除全局可执行文件。
+想直接从检出目录运行而不安装：`cp .env.example .env`，编辑它，然后 `pnpm run dev`。`pnpm run uninstall:global` 会移除全局可执行文件。
 
 ## 常用配置
 

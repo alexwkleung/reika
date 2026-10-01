@@ -2,7 +2,7 @@ import type { Fixture } from '../types.js';
 import { formatGrindSteps, scoreGrindSteps } from '../_grindsteps.js';
 import { gradeHiddenChecks, type HiddenCheck } from '../_hiddenchecks.js';
 
-// Grind mode (#556): one task, run under each mode (`npm run eval -- grind-chunk --mode=grind`, then
+// Grind mode (#556): one task, run under each mode (`pnpm run eval grind-chunk --mode=grind`, then
 // `--mode=agent` and `--mode=minimal`), graded on two axes that are reported separately:
 //
 //  - the OUTCOME, by hidden asserts the visible tests do not cover. The report says "reject sizes

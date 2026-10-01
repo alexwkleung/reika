@@ -9,7 +9,7 @@
   "ignorePatterns": [
     "dist",
     "node_modules",
-    "package-lock.json",
+    "pnpm-lock.yaml",
     ".env",
     ".env.local",
     "*.gguf",

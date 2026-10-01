@@ -14,7 +14,7 @@ import { gradeHiddenChecks, type HiddenCheck } from '../_hiddenchecks.js';
 //    looking at the input makes `assign([], n)` throw. Only a model that reads the caller and asks
 //    what it passes in finds this one — step 6 in grind's procedure.
 //
-// Run it next to 16: `npm run eval -- grind-chunk --mode=<m>` matches both.
+// Run it next to 16: `pnpm run eval grind-chunk --mode=<m>` matches both.
 
 const TARGET = 'src/chunk.js';
 

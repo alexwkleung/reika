@@ -41,14 +41,14 @@
     "format:check": "oxfmt --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "eval": "tsx evals/runner.ts",
-    "docs:dev": "npm --prefix docs run dev",
-    "docs:build": "npm --prefix docs run build",
-    "install:global": "npm run build && npm install -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but $(npm prefix -g)/bin is not on your PATH\"; fi",
-    "uninstall:global": "npm uninstall -g reika",
-    "reinstall:global": "npm run uninstall:global && npm run install:global",
-    "prepack": "npm run build"
+    "docs:dev": "pnpm --dir docs run dev",
+    "docs:build": "pnpm --dir docs run build",
+    "install:global": "pnpm run build && pnpm add -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but pnpm's global bin dir is not on your PATH (run: pnpm setup)\"; fi",
+    "uninstall:global": "pnpm remove -g reika",
+    "reinstall:global": "pnpm run uninstall:global && pnpm run install:global",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "chalk": "^5.6.2",
@@ -86,5 +86,6 @@
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "packageManager": "pnpm@12.8.1"
 }

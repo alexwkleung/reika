@@ -54,8 +54,8 @@ llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 Then install and point Reika at it:
 
 ```sh
-npm install
-npm run install:global       # builds and installs the `reika` binary
+pnpm install
+pnpm run install:global      # builds and installs the `reika` binary
 
 export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
@@ -63,7 +63,7 @@ cd your-project && reika
 
 `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (some inference engines, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
-To run from a checkout without installing: `cp .env.example .env`, edit it, then `npm run dev`. `npm run uninstall:global` removes the global binary.
+To run from a checkout without installing: `cp .env.example .env`, edit it, then `pnpm run dev`. `pnpm run uninstall:global` removes the global binary.
 
 ## Common configuration
 

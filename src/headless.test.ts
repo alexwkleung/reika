@@ -47,7 +47,8 @@ describe('parseHeadlessArgs', () => {
     expect(() => parseHeadlessArgs(['-p', 'x', 'y'])).toThrow(/unexpected argument y/);
   });
 
-  it('points a -p-less prompt at the npm -- separator (npm eats -p itself)', () => {
+  it('points a -p-less prompt at pnpm -p, and at the npm -- npm eats itself', () => {
+    expect(() => parseHeadlessArgs(['hi'])).toThrow(/pnpm run dev -p/);
     expect(() => parseHeadlessArgs(['hi'])).toThrow(/npm run dev -- -p/);
   });
 
