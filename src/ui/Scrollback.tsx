@@ -1,12 +1,14 @@
 import type { ReactElement } from 'react';
 import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
+import chalk from 'chalk';
 import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message, PlanChecks } from '../types.js';
 import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
+import { scrubGeneration } from './identity.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, pendingToolTimer, toolLabel, toolVerb } from './format.js';
@@ -67,24 +69,26 @@ export function Scrollback({
   const indent = streamingNested ? NESTED_INDENT : 0;
   const toolOffset = streamingCommand ? COMMAND_MARGIN : 0;
   const region = liveRegionRows(chromeRows);
-  // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label.
+  // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label. The block
+  // builders are the memoized ones: a render where this block's text (or width, or the terminal's
+  // columns) is unchanged reuses the rows it built last time instead of re-parsing the same text.
   const blocks: { kind: 'reasoning' | 'content' | 'tool'; live: LiveRows; fixed: number }[] = [];
   if (streamingReasoning) {
     blocks.push({
       kind: 'reasoning',
-      live: streamingReasoningRows(streamingReasoning, indent, region),
+      live: liveReasoningRows(streamingReasoning, indent, region, process.stdout.columns || 80),
       fixed: 2,
     });
   }
   if (streaming.trim()) {
     const live = streamingNote
-      ? streamingNoteRows(streaming, liveContentWidth(indent), region)
-      : streamingContentRows(streaming, liveContentWidth(indent), region);
+      ? liveNoteRows(streaming, liveContentWidth(indent), region)
+      : liveContentRows(streaming, liveContentWidth(indent), region);
     // The note pays its label row and the bar row under it on top of the gap above it.
     blocks.push({ kind: 'content', live, fixed: streamingNote ? 3 : 1 });
   }
   if (streamingTool) {
-    const live = streamingToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
+    const live = liveToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
   const { log: scrollback, held } = useScrollbackLog(messages);
@@ -321,6 +325,80 @@ function streamingToolRows(text: string, width: number, bound: number): LiveRows
     cut: pre.truncated,
   };
 }
+
+// A single-entry memo over a pure computation's arguments. One entry, so it can only ever hold the
+// previous render's result — there is nothing here that grows with the session.
+//
+// Why the live blocks need it: this component re-renders the whole region on EVERY render, and only
+// one of those is the stream. The status bar's one-second `elapsed` clock re-renders the App for the
+// whole of a turn, and `Scrollback` is not memoized, so a long stream repaints the region untouched
+// once a second; a `pendingTool` appearing, its timer ticking over, the queue or a plan checklist
+// growing `chromeRows`, a dialog opening or closing — each re-renders every block. Only the block
+// that is actually streaming differs between those renders, and the others pay a full markdown
+// parse, syntax highlight and wrap-ansi pass to rebuild rows byte-identical to the ones already on
+// screen: a 3.7KB Thinking block's builders measure ~4.5ms of markdown and ~3.9ms of wrap-ansi on
+// their own. A turn that thinks before it answers streams its reply with the Thinking block still
+// live, so that re-render happens on every 50ms flush of the answer — 15.3ms per flush through the
+// component with the block rebuilt, 7.3ms with its rows reused (medians over 200 flushes).
+//
+// Keyed on every argument the computation reads — including the terminal columns `reasoningLines`
+// measures for itself, so a resize is a miss rather than a stale width — plus `ambient`, the inputs
+// a block reads that have no argument of their own (below), so a block cannot outlive the display
+// settings it was painted under. A miss just recomputes. The rows are
+// read-only downstream (`fitTail` slices, `ReasoningBlock` maps), so sharing the same array across
+// renders is not observable. An unchanged argument is the same string object (React state holds
+// it), so the comparison is identity, not a re-scan of the text.
+const nothingAmbient = (): unknown => null;
+
+// Exported for unit tests.
+export function lastCall<A extends readonly unknown[], T>(
+  compute: (...args: A) => T,
+  ambient: () => unknown = nothingAmbient,
+) {
+  let cache: { args: A; ambient: unknown; value: T } | null = null;
+  return (...args: A): T => {
+    const around = ambient();
+    if (
+      cache &&
+      cache.ambient === around &&
+      cache.args.length === args.length &&
+      cache.args.every((a, i) => a === args[i])
+    ) {
+      return cache.value;
+    }
+    cache = { args, ambient: around, value: compute(...args) };
+    return cache.value;
+  };
+}
+
+// The inputs a live block reads that are not arguments.
+//
+// `chalk.level`, not `theme`: theme.ts picks its palette at import, but `themeChalk` — the prose
+// marker `markProse` draws and every inline-code run — and highlight.ts both re-read the level on
+// each call, so a block's rows are painted for the level in force when it was built. Read for all
+// four blocks rather than only the two that keep their escapes (reasoning rows are `stripAnsi`-ed,
+// tool rows are sanitized): one number compared, against the alternative of a rule about which
+// block paints.
+//
+// `FORCE_HYPERLINK`, because `renderLink` (markdown.ts) turns a `[text](url)` into an OSC 8 link or
+// a `text (url)` pair depending on `supportsHyperlink`, and re-reads the environment per render on
+// purpose. Of that check's inputs it is the only one a running process can change — the rest
+// (`isTTY`, `TERM`, `CI`, argv flags) are fixed at launch, which is why the one env var stands in
+// for the whole call rather than the call being made here for every block.
+//
+// The scrub rules (`scrubGeneration`, identity.ts), for the one block that bakes `scrubOutput`'s
+// substitutions into its rows: `/anon on|off` swaps the rule list mid-session, and a tool tail
+// built before the swap keeps showing the name the user just asked to anonymize until its text
+// next changes. The generation stands in for the rules themselves — the rows only carry which
+// rules they were scrubbed under. "Paint" only in the sense shared with the two above: display
+// settings baked into the rows at build time, with no argument of their own.
+const paintKey = (): string =>
+  `${chalk.level}:${process.env.FORCE_HYPERLINK ?? ''}:${scrubGeneration()}`;
+
+const liveReasoningRows = lastCall(streamingReasoningRows, paintKey);
+const liveContentRows = lastCall(streamingContentRows, paintKey);
+const liveNoteRows = lastCall(streamingNoteRows, paintKey);
+const liveToolRows = lastCall(streamingToolRows, paintKey);
 
 // `offset` is how far inside the live wrapper the committed row will sit (the command chip's
 // margin), so the tail doesn't jump sideways when it commits (#461).
@@ -860,9 +938,12 @@ function renderMessage(
 // label on top. Shares the user bubble's left-bar visual language but stays
 // understated — colored bar, muted text, no background, and dimmer than the
 // user bar's accent — so it reads as a subordinate aside, not a user message.
-function reasoningLines(text: string, indent: number): string[] {
-  const term = process.stdout.columns || 80;
-  const avail = Math.max(20, term - 2 - indent); // App applies paddingX={1} on each side.
+function reasoningLines(
+  text: string,
+  indent: number,
+  columns = process.stdout.columns || 80,
+): string[] {
+  const avail = Math.max(20, columns - 2 - indent); // App applies paddingX={1} on each side.
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
@@ -873,10 +954,21 @@ function reasoningLines(text: string, indent: number): string[] {
 }
 
 // The live Thinking tail. Pre-trimmed like the reply's stream, since every flush re-parses it; the
-// committed block renders the whole text.
-function streamingReasoningRows(text: string, indent: number, bound: number): LiveRows {
+// committed block renders the whole text. `columns` is a parameter rather than a read inside
+// `reasoningLines` so the live-block memo can key on the width it actually measured with — a
+// resize has to be a miss, or the block keeps the old width until the text changes. Required here
+// for the same reason: there is one caller, and it has the width in hand.
+function streamingReasoningRows(
+  text: string,
+  indent: number,
+  bound: number,
+  columns: number,
+): LiveRows {
   const pre = tailText(text, bound * 4);
-  return { rows: reasoningLines(hideDanglingMarkers(pre.text), indent), cut: pre.truncated };
+  return {
+    rows: reasoningLines(hideDanglingMarkers(pre.text), indent, columns),
+    cut: pre.truncated,
+  };
 }
 
 // `lines` arrives already bounded: the live region passes its tail, a committed message all of it.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allocateLiveRows, displayRows, fitTail, tailText } from './Scrollback.js';
+import { allocateLiveRows, displayRows, fitTail, lastCall, tailText } from './Scrollback.js';
 
 describe('tailText', () => {
   it('returns text unchanged when within the line budget', () => {
@@ -83,5 +83,80 @@ describe('allocateLiveRows', () => {
       expect(total).toBeGreaterThanOrEqual(prev);
       prev = total;
     }
+  });
+});
+
+describe('lastCall', () => {
+  const counted = () => {
+    let calls = 0;
+    const run = lastCall((text: string, width: number) => {
+      calls++;
+      return `${text}@${width}`;
+    });
+    return { run, calls: () => calls };
+  };
+
+  it('computes once while every argument is identical', () => {
+    const { run, calls } = counted();
+    expect(run('hello', 80)).toBe('hello@80');
+    expect(run('hello', 80)).toBe('hello@80');
+    expect(run('hello', 80)).toBe('hello@80');
+    expect(calls()).toBe(1);
+  });
+
+  // The invalidation rule the live blocks depend on: a block whose text did not change but whose
+  // width did (a resize) has to be rebuilt, or it keeps rows wrapped for the old terminal.
+  it('recomputes when any argument changes, width as much as text', () => {
+    const { run, calls } = counted();
+    run('hello', 80);
+    run('hello', 100);
+    expect(calls()).toBe(2);
+    run('hello!', 100);
+    expect(calls()).toBe(3);
+    run('hello!', 100);
+    expect(calls()).toBe(3);
+  });
+
+  // An empty string and a same-length one are different arguments; identity is what is compared.
+  it('treats an equal-length but different string as a miss', () => {
+    const { run, calls } = counted();
+    run('abc', 80);
+    run('xyz', 80);
+    expect(calls()).toBe(2);
+  });
+
+  // One entry, so the cache cannot grow with the session — and alternating between two inputs
+  // thrashes rather than accumulating. Both are the intended shape: the live region computes each
+  // block in turn, and only the block that is streaming changes between renders.
+  it('holds one entry: alternating inputs recompute every time', () => {
+    const { run, calls } = counted();
+    run('a', 10);
+    run('b', 10);
+    run('a', 10);
+    run('b', 10);
+    expect(calls()).toBe(4);
+  });
+
+  // The live blocks pass `() => chalk.level` here: the paint is baked into the rows (the prose
+  // marker, inline code, a highlighted fence), and the level is not an argument. Unchanged
+  // ambient value → a hit; a changed one → a miss, so a block cannot keep the paint it was built
+  // under after the level moves.
+  it('recomputes when the ambient input changes, and not otherwise', () => {
+    let calls = 0;
+    let level = 0;
+    const run = lastCall(
+      (text: string) => {
+        calls++;
+        return `${level}:${text}`;
+      },
+      () => level,
+    );
+    expect(run('a')).toBe('0:a');
+    expect(run('a')).toBe('0:a');
+    expect(calls).toBe(1);
+    level = 3;
+    expect(run('a')).toBe('3:a');
+    expect(run('a')).toBe('3:a');
+    expect(calls).toBe(2);
   });
 });
