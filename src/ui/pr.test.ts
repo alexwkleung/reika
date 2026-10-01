@@ -3,7 +3,18 @@ import { isFresh, parsePrView, currentBranch, resolvePr, resetPrCache } from './
 
 describe('parsePrView', () => {
   it('takes the number of an open PR', () => {
-    expect(parsePrView('{"number":99,"state":"OPEN"}')).toBe(99);
+    expect(parsePrView('{"number":99,"state":"OPEN"}')).toEqual({ number: 99 });
+  });
+
+  it('carries the web URL the status bar links the number to', () => {
+    expect(
+      parsePrView('{"number":99,"state":"OPEN","url":"https://github.com/o/r/pull/99"}'),
+    ).toEqual({ number: 99, url: 'https://github.com/o/r/pull/99' });
+  });
+
+  it('shows the badge without a link when gh reports no URL', () => {
+    expect(parsePrView('{"number":99,"state":"OPEN","url":""}')).toEqual({ number: 99 });
+    expect(parsePrView('{"number":99,"state":"OPEN","url":7}')).toEqual({ number: 99 });
   });
 
   it('ignores closed and merged PRs — a landed number is stale info', () => {
@@ -12,7 +23,7 @@ describe('parsePrView', () => {
   });
 
   it('accepts a number when gh reports no state field', () => {
-    expect(parsePrView('{"number":12}')).toBe(12);
+    expect(parsePrView('{"number":12}')).toEqual({ number: 12 });
   });
 
   it('returns null on anything unparseable', () => {
@@ -24,13 +35,13 @@ describe('parsePrView', () => {
 
 describe('isFresh', () => {
   it('keeps a hit for five minutes', () => {
-    expect(isFresh({ number: 7, at: 0 }, 299_000)).toBe(true);
-    expect(isFresh({ number: 7, at: 0 }, 301_000)).toBe(false);
+    expect(isFresh({ pr: { number: 7 }, at: 0 }, 299_000)).toBe(true);
+    expect(isFresh({ pr: { number: 7 }, at: 0 }, 301_000)).toBe(false);
   });
 
   it('re-checks a miss after a minute so a new PR appears without a restart', () => {
-    expect(isFresh({ number: null, at: 0 }, 59_000)).toBe(true);
-    expect(isFresh({ number: null, at: 0 }, 61_000)).toBe(false);
+    expect(isFresh({ pr: null, at: 0 }, 59_000)).toBe(true);
+    expect(isFresh({ pr: null, at: 0 }, 61_000)).toBe(false);
   });
 });
 

@@ -13,13 +13,13 @@ const BASE = {
 
 describe('Status', () => {
   it('shows the PR badge when the branch is attached to one', () => {
-    const { lastFrame } = render(<Status {...BASE} pr={99} />);
-    expect(lastFrame()).toContain('PR: #99');
+    const { lastFrame } = render(<Status {...BASE} pr={{ number: 99 }} />);
+    expect(lastFrame()).toContain('PR #99');
   });
 
   it('leaves the badge off when there is no PR', () => {
     const { lastFrame } = render(<Status {...BASE} pr={null} />);
-    expect(lastFrame()).not.toContain('PR:');
+    expect(lastFrame()).not.toContain('PR');
   });
 
   it('shows shrink chips after the gauge once something has shrunk', () => {
@@ -107,7 +107,7 @@ describe('Status wrap', () => {
     folds: 1,
     cachedTokens: 9000,
     decodeRate: 21.4,
-    pr: 99,
+    pr: { number: 99 },
     modeTag: 'agent',
     autoApprove: 'safe' as const,
   };
@@ -133,7 +133,7 @@ describe('Status wrap', () => {
       'idle · 123k↑ 4.6k↓ · 21 tok/s',
       'ctx 11k/24k (70% of 16k)',
       '3 sheds · 1 fold · 80% cached (9.0k)',
-      'PR: #99 · ctrl-c to exit',
+      'PR #99 · ctrl-c to exit',
     ]);
     // The App's paddingX={1} takes two columns off the terminal's 40.
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(38);
@@ -142,8 +142,10 @@ describe('Status wrap', () => {
   it('stays on one line when it fits', () => {
     // ink-testing-library's stdout is 100 columns, so the full status can't be tested unwrapped;
     // a short one can.
-    const rows = withColumns(100, () => lines(render(<Status {...BASE} pr={99} />).lastFrame()));
-    expect(rows).toEqual(['Qwen2.5-Coder · turn 2 · idle · PR: #99 · ctrl-c to exit']);
+    const rows = withColumns(100, () =>
+      lines(render(<Status {...BASE} pr={{ number: 99 }} />).lastFrame()),
+    );
+    expect(rows).toEqual(['Qwen2.5-Coder · turn 2 · idle · PR #99 · ctrl-c to exit']);
   });
 
   it('re-packs when the terminal is resized, without anything else re-rendering', async () => {

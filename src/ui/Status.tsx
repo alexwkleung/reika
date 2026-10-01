@@ -1,7 +1,9 @@
 import { Fragment } from 'react';
 import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
+import { supportsHyperlink } from 'supports-hyperlinks';
 import type { Usage } from '../types.js';
+import type { PrRef } from './pr.js';
 import { theme } from './theme.js';
 import {
   contextFill,
@@ -51,7 +53,9 @@ export function Status({
   // until a round generated enough tokens to measure one, and whenever the provider reported no
   // usage and no stats.
   decodeRate?: number;
-  pr?: number | null;
+  // Which PR the checked-out branch is attached to (ui/pr.ts), with its web URL when `gh`
+  // reported one. Null until resolved, and whenever there is no open PR to show.
+  pr?: PrRef | null;
   autoApprove?: 'safe' | 'bypass';
   // REIKA_UNATTENDED (#526). A standing chip because the mode silently declines: left on by
   // accident during the day, it refuses a command the user would have approved.
@@ -80,8 +84,8 @@ export function Status({
   // engine, not a warning about anything the user should act on.
   const rate = formatTokensPerSecond(decodeRate);
   const shrink = formatShrink(sheds ?? 0, folds ?? 0);
-  // Which PR the checked-out branch is attached to, when one exists.
-  const prBadge = formatPr(pr);
+  // Which PR the checked-out branch is attached to, when one exists — the number links out.
+  const prChipSegments = prChip(pr);
 
   // The line as a list of chips, each an unbreakable run of colored segments; the separator goes
   // in between at layout time.
@@ -113,7 +117,7 @@ export function Status({
   if (ctx) chips.push([{ text: ctx, color: ctxColor }]);
   if (shrink) chips.push(muted(shrink));
   if (cache) chips.push(muted(cache));
-  if (prBadge) chips.push([{ text: prBadge, color: theme.secondary }]);
+  if (prChipSegments) chips.push(prChipSegments);
   chips.push(
     exitArmed
       ? [{ text: 'press ctrl-c again to exit', color: theme.tool }]
@@ -133,7 +137,7 @@ export function Status({
             <Fragment key={j}>
               {j > 0 ? <Text color={theme.muted}>{SEP}</Text> : null}
               {chip.map((seg, k) => (
-                <Text key={k} color={seg.color}>
+                <Text key={k} color={seg.color} underline={seg.underline}>
                   {seg.text}
                 </Text>
               ))}
@@ -145,7 +149,9 @@ export function Status({
   );
 }
 
-type Segment = { text: string; color: string };
+// `underline` is the one attribute a segment carries beyond its hue — the link underline, which
+// promises a click and so is set only where the terminal can deliver one (see prChip).
+type Segment = { text: string; color: string; underline?: boolean };
 // A chip is the unit the status wraps at — never split across lines.
 export type Chip = Segment[];
 
@@ -233,7 +239,32 @@ export function formatCache(cachedTokens?: number, contextTokens?: number | null
   return cachedTokens > 0 ? `${pct}% cached (${kFormat(cachedTokens)})` : `${pct}% cached`;
 }
 
-// `PR: #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell).
-export function formatPr(pr?: number | null): string {
-  return pr == null || pr <= 0 ? '' : `PR: #${pr}`;
+// `PR #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell). The
+// number is the click target, the `PR` label is not, so the chip comes in two segments and the
+// space belongs to the number — that is what the underline covers.
+//
+// `links` is the OSC 8 gate, injected so the plain-text branch is testable where stdout is a pipe
+// (the same function-form check markdown.ts's renderLink makes, and for the same reason: it re-reads
+// the environment, so FORCE_HYPERLINK reaches it). Where the terminal takes hyperlinks the number
+// is an underlined `theme.link` run that opens the PR; where it doesn't, or where `gh` never gave
+// us a URL, the plain number keeps a link hue and no underline — the underline is the one cue that
+// says "this clicks", and it stays off exactly when there is nothing to click.
+export function prChip(
+  pr?: PrRef | null,
+  links: boolean = supportsHyperlink(process.stdout),
+): Chip | null {
+  const number = pr?.number;
+  if (number == null || number <= 0) return null;
+  const label = ` #${number}`;
+  const url = pr?.url;
+  if (url && links) {
+    return [
+      { text: 'PR', color: theme.secondary },
+      { text: `\x1b]8;;${url}\x07${label}\x1b]8;;\x07`, color: theme.link, underline: true },
+    ];
+  }
+  return [
+    { text: 'PR', color: theme.secondary },
+    { text: label, color: url ? theme.link : theme.secondary },
+  ];
 }
