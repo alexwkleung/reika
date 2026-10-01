@@ -7,6 +7,7 @@ import stringWidth from 'string-width';
 import chalk from 'chalk';
 import stripAnsi from 'strip-ansi';
 import { Scrollback, markProse, noticeLead } from './Scrollback.js';
+import { drawnWidth } from './termtext.js';
 import { LIVE_TIMER_AFTER_S } from './format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
@@ -1080,6 +1081,25 @@ describe('Scrollback diff view width', () => {
     const changed = rows.filter(r => r.includes('label:'));
     expect(changed).toHaveLength(2);
     expect(new Set(changed.map(r => stringWidth(r))).size).toBe(1);
+  });
+
+  // A changed line holding a glyph the terminal draws in ONE cell while string-width spends TWO on
+  // (`✔`, `⚠`, `⏺` — `drawnWidth`, termtext.ts) is padded by the drawn width, which makes the row
+  // MEASURE wider than it draws. Ink re-wraps whatever runs past the width it was handed, so that
+  // slack landed on a row of its own under the block (#439): the row box is given it as budget
+  // instead. Both halves are pinned here, since this is the path with a width-bounded block around
+  // the diff — a bare DiffView render lays the row out too loosely to reproduce the tear.
+  it('keeps a row holding a one-cell pictograph padded and untorn', () => {
+    const rows = diffFrame(
+      [`  const x = 1;`, `- label: "old"`, `+ done ✔ ok`, `  }`].join('\n'),
+      'ui.ts',
+    );
+    const plain = rows.find(r => r.includes('label: "old"'))!;
+    const glyph = rows.find(r => r.includes('done ✔ ok'))!;
+    // One block, so the same drawn width — a `✔` used to leave this row a column short.
+    expect(drawnWidth(glyph)).toBe(drawnWidth(plain));
+    // And nothing spilled below it: a wrapped pad shows up as a line holding only whitespace.
+    expect(rows.filter(r => r !== '' && r.trim() === '')).toEqual([]);
   });
 });
 
