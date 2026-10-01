@@ -67,14 +67,26 @@ let enabled = false;
 // slug, and re-detecting on /cd is not worth a subprocess batch per directory change.
 let cached: Identity | null = null;
 
+// Bumped on every `setIdentity`/`clearIdentity` call, changed or not — over-bumping only costs a
+// recompute. Display caches that bake scrubbed text into their output — the live-block memo in
+// Scrollback.tsx — cannot see a rule swap through their arguments (same input text, different
+// substitution), so this stands in for the rules the output was scrubbed under.
+let generation = 0;
+
+export function scrubGeneration(): number {
+  return generation;
+}
+
 export function setIdentity(id: Identity): void {
   rules = buildRules(id);
   enabled = true;
+  generation++;
 }
 
 export function clearIdentity(): void {
   rules = [];
   enabled = false;
+  generation++;
 }
 
 export function isAnon(): boolean {
