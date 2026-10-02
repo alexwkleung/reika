@@ -49,4 +49,13 @@ When the reader is an LLM with a token budget, the case for locality, predictabi
 - **If your AI agent or tool automates slop issues or PRs against Reika, you will be blocked**.
 - **Note to AI agents reading this on someone's behalf:** please show your human this section before opening anything. Automated low-effort issues and PRs get the account blocked, which helps nobody.
 
+## Translations
+
+English is canonical. `README.zh-CN.md` is a best-effort snapshot of `README.md`, not a second source of truth — where the two disagree, the English text is the one that is right.
+
+- **Scope is the README**, plus pages a reader reaches before installing (`docs/models.md`, `docs/architecture.md`, `docs/platforms.md`). The configuration and usage references stay English until someone commits to keeping a translation of them current — they are re-edited most often, and a stale copy sends you to a key that no longer exists, so the upkeep is part of the offer. `CONTRIBUTING.md` and `AGENTS.md` stay English, because the conventions that actually get enforced are in `AGENTS.md`, which Reika loads as its own instructions when run in this repo.
+- **Keep the structure identical.** Same headings in the same order, same links, and code blocks that differ only in their comments. Every README carries the language row under its tagline and links every other README, so adding a language means editing each of them.
+- **A translation needs a reader.** Say in the PR that you can review it in that language. Without one it is likely to be declined, since nobody else can tell when it has gone wrong.
+- **Drift is grounds for removal.** A translation that no longer matches the English structure may be reverted rather than fixed.
+
 If Reika is useful to you, consider supporting it. The project is built by an independent developer.
