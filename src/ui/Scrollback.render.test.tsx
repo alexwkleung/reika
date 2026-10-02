@@ -1541,14 +1541,40 @@ describe('Scrollback stacked read labels', () => {
     expect(linesOf([readResult('t1', 'Read src/a.ts lines 1-80 of 402')])).not.toContain('Read:');
   });
 
-  // Two results from different rounds — a delivered result followed by a later turn's — are
-  // adjacent rows with no call of their own in between. The bar is the rows, so they group.
-  it('groups by adjacent rows, not by round identity', () => {
+  // Two results from different rounds — a delivered result followed by a later turn's — land as
+  // adjacent rows with no call of their own in between. The second scans the row above and is
+  // labelled; the first is frozen before the second exists, so it keeps the bare path. Both the
+  // live frame and a replayed one read the same way, which is the bar (#631).
+  it('labels a read under a read row above it, round or no round', () => {
     const rows = resultRows([
       readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
       readResult('t2', 'Read src/b.ts lines 1-30 of 96'),
     ]);
-    expect(rows.every(l => l.startsWith('↳ Read '))).toBe(true);
+    expect(rows).toEqual(['↳ src/a.ts lines 1-80 of 402', '↳ Read src/b.ts lines 1-30 of 96']);
+  });
+
+  // The regression the one-shot renders above cannot see (#631): `<Static>` freezes each row as
+  // it lands and a round's results commit one at a time, so the FIRST row of a stack must carry
+  // its verb from what is knowable at that moment — the round's call list — or it stays bare on
+  // screen forever while its siblings are labelled. Commit the results one render apart.
+  it('labels the first row of a stack before its sibling results land', () => {
+    const round: Message = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [readCall('t1', 'src/a.ts'), readCall('t2', 'src/b.ts')],
+    };
+    const r1 = readResult('t1', 'Read src/a.ts lines 1-80 of 402');
+    const r2 = readResult('t2', 'Read src/b.ts lines 1-30 of 96');
+    const sb = (messages: Message[]) => (
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+    );
+    const { rerender, frames } = render(sb([round, r1]));
+    const first = stripAnsi(frames.at(-1) ?? '');
+    expect(first).toContain('↳ Read src/a.ts lines 1-80 of 402');
+    rerender(sb([round, r1, r2]));
+    const last = stripAnsi(frames.at(-1) ?? '');
+    expect(last).toContain('↳ Read src/a.ts lines 1-80 of 402');
+    expect(last).toContain('↳ Read src/b.ts lines 1-30 of 96');
   });
 
   // A result whose neighbour carries a block is separated from it by a blank row (#492), so it is
@@ -1593,6 +1619,47 @@ describe('Scrollback stacked read labels', () => {
       '↳ Listed 12 entries in src',
       '↳ Ran: npm ci',
     ]);
+  });
+
+  // A subagent's reads stack at the nested indent, and every message in the block is nested — the
+  // sibling check once rejected any nested neighbour, so these rows could never group and kept the
+  // bare form the issue complains about. Same level groups now.
+  it('labels stacked reads inside a subagent block', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        nested: true,
+        toolCalls: [readCall('n1', 'src/a.ts'), readCall('n2', 'src/b.ts')],
+      },
+      { ...readResult('n1', 'Read src/a.ts lines 1-80 of 402'), nested: true },
+      { ...readResult('n2', 'Read src/b.ts lines 1-30 of 96'), nested: true },
+    ]);
+    expect(rows.map(l => l.replace(/^↳ /, ''))).toEqual([
+      'Read src/a.ts lines 1-80 of 402',
+      'Read src/b.ts lines 1-30 of 96',
+    ]);
+  });
+
+  // The boundary is where the indent changes: a top-level row must not scan into a subagent block
+  // or vice versa, and each side alone keeps the bare path the lone-call rule wants.
+  it('does not group across the subagent boundary', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        nested: true,
+        toolCalls: [readCall('n1', 'src/a.ts')],
+      },
+      { ...readResult('n1', 'Read src/a.ts lines 1-80 of 402'), nested: true },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [readCall('t1', 'src/b.ts')],
+      },
+      readResult('t1', 'Read src/b.ts lines 1-30 of 96'),
+    ]);
+    expect(rows).toEqual(['↳ src/a.ts lines 1-80 of 402', '↳ src/b.ts lines 1-30 of 96']);
   });
 });
 

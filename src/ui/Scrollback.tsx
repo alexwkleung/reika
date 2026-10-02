@@ -149,7 +149,7 @@ export function Scrollback({
     <>
       <Static items={scrollback}>
         {(item, i) => (
-          <LogItemView key={i} item={item} prev={scrollback[i - 1]} next={scrollback[i + 1]} />
+          <LogItemView key={i} item={item} prev={scrollback[i - 1]} log={scrollback} index={i} />
         )}
       </Static>
       {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
@@ -641,13 +641,24 @@ function WorkedRow({ durationMs }: { durationMs: number }) {
   );
 }
 
-function LogItemView({ item, prev, next }: { item: LogItem; prev?: LogItem; next?: LogItem }) {
+function LogItemView({
+  item,
+  prev,
+  log,
+  index,
+}: {
+  item: LogItem;
+  prev?: LogItem;
+  log: LogItem[];
+  index: number;
+}) {
   if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
   return (
     <MessageView
       msg={item}
       prev={prev && 'workedMs' in prev ? undefined : prev}
-      next={next && 'workedMs' in next ? undefined : next}
+      log={log}
+      index={index}
     />
   );
 }
@@ -657,20 +668,64 @@ function LogItemView({ item, prev, next }: { item: LogItem; prev?: LogItem; next
 // holds only while that call is alone. With siblings, every result row is `  ↳ path …` and the
 // marker names none of them, so the label goes back on the rows that lost it.
 //
-// Read off the sibling ROWS rather than the `toolCalls` array: it is the stacked rows that read
-// wrong, it needs no round counter threaded through the loop, and it is exact — the call array is
-// also wrong for a round whose other results never committed (a held sibling, a withdrawn
-// inspection call). The gap here is the tight one `afterToolBlock` gives summary-only rows: a
-// read whose neighbour carries a diff or a command chip is separated by a blank row, so it is
-// never scanned as part of that block and keeps the bare path.
-function groupedReads(msg: Message, prev?: Message, next?: Message): boolean {
+// Both arms read only what is knowable the moment the row prints. `<Static>` freezes a row as it
+// lands, and a round's results commit one at a time (the loop runs its calls sequentially), so a
+// rule that waits for the rows BELOW this one labels the first row of every stack wrong on screen
+// and frozen — the very stack #627 is about. The row above is already frozen when this one prints,
+// and the round's call list committed with the `⏺︎` call rows before any result ran, so those two
+// decide. Cost: a read whose sibling call never commits (held for a subagent #346, withdrawn by
+// the ladder) gets a label with no stack under it — a rare, stable over-label instead of a wrong
+// frozen frame.
+//
+// The row arm keeps the gap `afterToolBlock` gives summary-only rows: a read whose neighbour
+// carries a diff or a command chip is separated by a blank row, so it is not scanned as part of
+// that block and keeps the bare path.
+function groupedReads(
+  msg: Message,
+  prev: Message | undefined,
+  log: LogItem[],
+  index: number,
+): boolean {
   if (msg.role !== 'tool' || !/^Read /.test(msg.summary)) return false;
+  const nested = 'nested' in msg && !!msg.nested;
+  // Same nesting level, not merely "not nested": a subagent's reads stack at the nested indent and
+  // group with each other, never with a top-level row across the block boundary.
   const sibling = (m?: Message): boolean =>
-    m?.role === 'tool' && !hasBlockUnderSummary(m) && !m.nested;
-  return sibling(prev) || sibling(next);
+    m?.role === 'tool' && !hasBlockUnderSummary(m) && !!m.nested === nested;
+  return sibling(prev) || readCallFollows(msg, log, index, nested);
 }
 
-function MessageView({ msg, prev, next }: { msg: Message; prev?: Message; next?: Message }) {
+// Whether another `read` call in this row's round is still owed a result row (#627). `at` is this
+// row's own call, found by `callId` — a round can deliver notices and rows of earlier rounds
+// between two of its results, so position in the log is not position in the round. The walk skips
+// what a call can leave behind (its own result rows, the harness notices that trail a chip).
+function readCallFollows(msg: Message, log: LogItem[], index: number, nested: boolean): boolean {
+  if (msg.role !== 'tool') return false;
+  for (let j = index - 1; j >= 0; j--) {
+    const m = log[j];
+    if ('workedMs' in m) continue;
+    if (m.role === 'user') return false;
+    if (m.role !== 'assistant') continue;
+    if (!!m.nested !== nested) return false;
+    const calls = m.toolCalls ?? [];
+    const at = calls.findIndex(c => c.id === msg.callId);
+    if (at < 0) return false;
+    return calls.slice(at + 1).some(c => c.name === 'read');
+  }
+  return false;
+}
+
+function MessageView({
+  msg,
+  prev,
+  log,
+  index,
+}: {
+  msg: Message;
+  prev?: Message;
+  log: LogItem[];
+  index: number;
+}) {
   const nested = 'nested' in msg && !!msg.nested;
   const indent = nested ? NESTED_INDENT : 0;
   // A top-level row that follows a nested one closes out a subagent block. Tool rows
@@ -696,7 +751,7 @@ function MessageView({ msg, prev, next }: { msg: Message; prev?: Message; next?:
     afterNotice,
     afterToolBlock,
     // Only a read result row has the verb to put back; skip the neighbours of everything else.
-    groupedReads: msg.role === 'tool' && groupedReads(msg, prev, next),
+    groupedReads: msg.role === 'tool' && groupedReads(msg, prev, log, index),
   });
   if (inner === null) return null;
   // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
@@ -750,7 +805,8 @@ function renderMessage(
     afterNotice?: boolean;
     afterToolBlock?: boolean;
     // This read result is stacked under a sibling (#627), so its row keeps the `Read` verb the
-    // lone-call case drops. Computed in MessageView, which is the only place with the neighbours.
+    // lone-call case drops. Computed in MessageView, which is the only place with the log and the
+    // neighbours.
     groupedReads?: boolean;
   } = {},
 ): ReactElement | null {
