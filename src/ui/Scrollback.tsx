@@ -383,10 +383,16 @@ export function lastCall<A extends readonly unknown[], T>(
 // Restoring it means *un-dropping* it, not inventing a separator: a success summary in this
 // codebase is `Verb rest` (`Listed 12 entries in src`, `Found 3 matches for /x/`, `Fetched <url>
 // (…)`, `Wrote src/a.ts (+3)`), and the colon-bearing shapes are failure lines (`Edit failed:`,
-// `List failed:`) or `Ran:` (tools/bash.ts), which needed one because a shell command line can
-// open with anything. A read's summary opens with the path itself, so there is nothing to
-// disambiguate, and a display colon would make read the only success verb carrying a separator the
-// wire format didn't.
+// `List failed:`) or `Ran:` (tools/bash.ts). A read's summary opens with the path itself, so there
+// is nothing to disambiguate, and a display colon would make read the only success verb carrying a
+// separator the wire format didn't.
+//
+// `Ran:` is the one success verb with a separator, and it is NOT a style choice to copy or undo:
+// its colon is in the wire summary, where `plantrack.ts` (ranSuccessfully) parses `Ran: ` back out
+// of history to re-derive plan progress for results written before `exitCode` existed. Bash is also
+// the one payload that is arbitrary shell text, so the colon is what keeps `Ran: npm test` from
+// reading as a command named `Ran`. Neither applies here — this row's separator would be invented
+// at render time and parsed by nothing.
 //
 // Two of the read tool's shapes keep their verb even when lone, because for those the verb IS the
 // label rather than a repetition of the call above: `Read failed: …` (an edit-style failure line)
