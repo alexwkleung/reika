@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasExecutableSubstitution,
+  hasRawSubstitution,
   isInspectionEscape,
   isProvablyReadOnly,
   maskSingleQuotedData,
@@ -385,6 +386,16 @@ describe('substitution quoting contexts', () => {
     expect(maskSingleQuotedData("echo don't")).toBeUndefined();
     expect(hasExecutableSubstitution("echo don't")).toBe(false);
     expect(hasExecutableSubstitution("echo don't && gh pr view $(cat n.txt)")).toBe(true);
+  });
+
+  // The same text, two questions, and the difference is real rather than pedantic: on a command line
+  // that `$(id)` sits inside single quotes and never runs, while in a heredoc body the shell does not
+  // parse quotes at all — so the body is taken raw, and the mask must not be trusted with it.
+  it('takes a heredoc body raw, where no quoting is parsed', () => {
+    expect(hasExecutableSubstitution("it's $(id) don't")).toBe(false);
+    expect(hasRawSubstitution("it's $(id) don't")).toBe(true);
+    expect(hasRawSubstitution('solely prose here')).toBe(false);
+    expect(hasRawSubstitution('\\$(id) is literal in an expanding body')).toBe(false);
   });
 });
 

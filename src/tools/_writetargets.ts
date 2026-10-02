@@ -112,3 +112,29 @@ export function stripHeredocs(command: string): string {
   }
   return s;
 }
+
+// The heredoc bodies the shell EXPANDS, which `stripHeredocs` deliberately cuts away with the rest:
+// `$…` and a backtick in a body are only data when the DELIMITER was quoted, so `<<EOF` runs what
+// `<<'EOF'` pastes. Dropping them answers the verb question correctly ("what commands does this
+// line run" — a body's prose runs nothing) and the substitution question wrongly, because a `$(…)`
+// in an expanding body DOES run, with whatever network the line's `git`/`gh` verb was granted.
+// Walked exactly like `stripHeredocs` — each body cut before the next match — so prose inside one
+// can never be read as a heredoc operator of its own.
+export function expandingHeredocBodies(command: string): string[] {
+  const bodies: string[] = [];
+  let s = command;
+  for (let m = HEREDOC_RE.exec(s); m; m = HEREDOC_RE.exec(s)) {
+    const quoted = m[1] !== '';
+    const bodyStart = s.indexOf('\n', m.index);
+    if (bodyStart === -1) break;
+    const endRe = new RegExp(`^\\s*${m[2]}\\s*$`, 'm');
+    const rest = s.slice(bodyStart + 1);
+    const end = endRe.exec(rest);
+    const bodyEnd = end ? bodyStart + 1 + end.index + end[0].length : s.length;
+    // An unterminated heredoc swallows the rest, which is what the shell does with it too. The
+    // newline before the delimiter line terminates the body rather than belonging to it.
+    if (!quoted) bodies.push(rest.slice(0, end ? end.index : rest.length).replace(/\n$/, ''));
+    s = s.slice(0, m.index) + s.slice(bodyEnd);
+  }
+  return bodies;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { writeTargets } from './_writetargets.js';
+import { expandingHeredocBodies, writeTargets } from './_writetargets.js';
 
 const cwd = '/proj';
 const t = (cmd: string): string[] => writeTargets(cmd, cwd);
@@ -41,5 +41,31 @@ describe('writeTargets', () => {
   it('sees nothing in a command that writes wherever it likes', () => {
     expect(t('npm run fix')).toEqual([]);
     expect(t('prettier --write .')).toEqual([]);
+  });
+});
+
+// The complement of `stripHeredocs`, and the distinction is the delimiter's quoting: `<<'EOF'` pastes
+// its body literally, `<<EOF` expands what is in it.
+describe('expandingHeredocBodies', () => {
+  it('returns the bodies a quoted delimiter would have made literal', () => {
+    expect(expandingHeredocBodies("git apply - <<'EOF'\n$(id)\nEOF")).toEqual([]);
+    expect(expandingHeredocBodies('git apply - <<EOF\n$(id)\nEOF')).toEqual(['$(id)']);
+    expect(expandingHeredocBodies('git apply - <<-"EOF"\n$(id)\nEOF')).toEqual([]);
+  });
+
+  it('takes both bodies when one heredoc is quoted and the next is not', () => {
+    const cmd = "cat <<'EOF'\nliteral\nEOF\ngit apply - <<EOF\n$(id)\nEOF";
+    expect(expandingHeredocBodies(cmd)).toEqual(['$(id)']);
+  });
+
+  it('does not re-read a body as a heredoc operator of its own', () => {
+    // The inner `<<EOF` is inside the outer body, so it opens nothing — the bug a naive scan has.
+    const cmd = 'git apply - <<EOF\nexample: cat <<EOF\nmore\ndone\nEOF';
+    expect(expandingHeredocBodies(cmd)).toEqual(['example: cat <<EOF\nmore\ndone']);
+  });
+
+  it('swallows the rest of the command when the delimiter never closes, as the shell does', () => {
+    expect(expandingHeredocBodies('git apply - <<EOF\n$(id)')).toEqual(['$(id)']);
+    expect(expandingHeredocBodies('git apply - <<EOF')).toEqual([]);
   });
 });
