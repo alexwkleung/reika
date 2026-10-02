@@ -217,6 +217,38 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor("gh issue view 621 --json body | grep -c '`'")).toBe(true);
   });
 
+  // A heredoc body is cut before the verb read (its prose runs nothing), but an UNQUOTED delimiter's
+  // body is expanded by the shell when the line runs, so a `$(…)` in it executes on whatever network
+  // the line's `git` verb was granted. The two shapes a model writes — `gh issue comment -F -` and
+  // `git commit -F -` — are flagged, so they never reach this allow; `git apply -`/`--stdin` reads are
+  // not, and those are what this pins.
+  it('sees a substitution in a heredoc body the shell will expand', () => {
+    expect(networkAllowedFor('git apply - <<EOF\n$(python3 -c "import urllib.request")\nEOF')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git hash-object --stdin <<EOF\n`id`\nEOF')).toBe(false);
+    expect(networkAllowedFor('git fetch && cat <<EOF\n$(id)\nEOF')).toBe(false);
+    // A body is not quote-parsed, so an apostrophe in it must not mask a real substitution.
+    expect(networkAllowedFor("git stripspace <<EOF\nit's $(id) don't\nEOF")).toBe(false);
+  });
+
+  it('keeps the allow for a body that is literal, or carries nothing that runs', () => {
+    // The `#163` case: a QUOTED delimiter pastes its body, expansion and all.
+    expect(networkAllowedFor("git stripspace <<'EOF'\n$(id)\nEOF")).toBe(true);
+    expect(
+      networkAllowedFor(
+        "gh issue comment 1 --body-file - <<'EOF'\nLooks good.\n\nOne question.\nEOF",
+      ),
+    ).toBe(true);
+    // Unquoted, but nothing in the body runs: prose must not deny the line (that is why the body is
+    // cut for the verb read in the first place).
+    expect(networkAllowedFor('git fetch && cat <<EOF\nplain prose, no substitution\nEOF')).toBe(
+      true,
+    );
+    expect(networkAllowedFor('git apply - <<EOF\n$(id) is \\$(not-expanded)\nEOF')).toBe(false);
+    expect(networkAllowedFor('git apply - <<EOF\n\\$(id)\nEOF')).toBe(true);
+  });
+
   it('is not fooled by a net verb in an argument or a quoted separator', () => {
     expect(networkAllowedFor('echo gh')).toBe(false);
     expect(networkAllowedFor('grep -rn "git fetch" src/')).toBe(false);

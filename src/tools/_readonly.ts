@@ -184,11 +184,19 @@ export function maskSingleQuotedData(command: string): string | undefined {
   return out;
 }
 
-// The one call both readers make. `dropEscapedSubstitutionChars` first (a `\$(` is a literal), then
-// the single-quote mask when it can be built; an unmaskable command keeps the raw test.
+// The one call a command line makes. `dropEscapedSubstitutionChars` first (a `\$(` is a literal),
+// then the single-quote mask when it can be built; an unmaskable command keeps the raw test.
 export function hasExecutableSubstitution(command: string): boolean {
   const escaped = dropEscapedSubstitutionChars(command);
   return SUBSTITUTION_RE.test(maskSingleQuotedData(escaped) ?? escaped);
+}
+
+// The same question about text whose quoting context is NOT a command line, so there is no mask to
+// trust: the body of a heredoc the shell expands. Nothing there is quote-parsed — `it's` in a body is
+// literal data, and pairing that apostrophe with the next one would blank a `$(…)` that really runs.
+// The escape rule does apply: `\$(` in a body produces a literal `$`.
+export function hasRawSubstitution(text: string): boolean {
+  return SUBSTITUTION_RE.test(dropEscapedSubstitutionChars(text));
 }
 
 // Redirection is the one metacharacter that is routinely DATA (`grep ">" f`), so it alone is tested

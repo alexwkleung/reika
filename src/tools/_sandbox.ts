@@ -5,12 +5,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   dropCarriers,
   hasExecutableSubstitution,
+  hasRawSubstitution,
   maskQuoted,
   splitSegments,
   words,
   INSPECTION_COMMANDS,
 } from './_readonly.js';
-import { stripHeredocs } from './_writetargets.js';
+import { expandingHeredocBodies, stripHeredocs } from './_writetargets.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
 // only: bubblewrap has no port-level network filtering, so a sandboxed process gets its own
@@ -256,9 +257,15 @@ export function networkAllowedFor(command: string): boolean {
 export function networkDecision(command: string): { allowed: boolean; blockedBy?: string } {
   // A heredoc body is data: its lines would otherwise split into segments whose "verb" is prose,
   // and `gh issue comment 1 --body-file - <<'EOF' …` — the standard way a model writes a multi-line
-  // comment — would be denied every time.
+  // comment — would be denied every time. That is true of the VERB question only, though: a body
+  // whose delimiter was NOT quoted is expanded by the shell, so a `$(…)` in it runs on whatever
+  // network the line's `git`/`gh` verb was granted, and the verb split cannot see it there. Dropped
+  // bodies answer the verb question and are then re-read for the substitution one.
   const c = stripHeredocs(command).trim();
-  if (!c || hasExecutableSubstitution(c)) return { allowed: false };
+  const expanding = expandingHeredocBodies(command);
+  if (!c || hasExecutableSubstitution(c) || expanding.some(hasRawSubstitution)) {
+    return { allowed: false };
+  }
   const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
   const segments = splitSegments(c, masked)
     .map(s => s.trim())
