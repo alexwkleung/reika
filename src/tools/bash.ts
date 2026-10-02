@@ -68,7 +68,8 @@ export const bashTool: Tool = {
     // A git/gh command keeps the network unprompted (`networkAllowedFor`), so a remote the model
     // was never handed is the fetch guard's leak shape by another road (#550). Joining the warnings
     // is the whole mechanism: it prompts under `safe`, and under `bypass` a flagged command never
-    // gets the network allow.
+    // gets the network allow. `hf` is in the allow list too, but it names a repo id rather than a
+    // URL, so the extraction below (`_exfil.ts`'s NETWORK_SEGMENT_RE) has nothing to read there.
     const remote = networkAllowedFor(command)
       ? remoteUrlRisk(command, ctx.sourcedUrls?.())
       : undefined;
@@ -126,11 +127,12 @@ export const bashTool: Tool = {
  * not what the script it runs will do, and the sandbox costs it nothing it was cleared for. Under
  * `bypass` `requestApproval` is undefined and everything is sandboxed, which is the point.
  *
- * Network is decided per command (`networkAllowedFor`): an UNFLAGGED `gh`/`git` read pipeline keeps
- * it, the rest is denied past loopback. Unflagged matters under `bypass`, where a flagged `git push`
- * or `gh pr create` reaches this sandboxed: it is outward-facing with nobody looking, so it keeps the
- * deny and the footer tells the model to ask. `ctx.sandbox === false` is REIKA_SANDBOX=0, the escape
- * hatch for a run that is measuring something about bash behavior and needs the old world back.
+ * Network is decided per command (`networkAllowedFor`): an UNFLAGGED `gh`/`git`/`hf` read pipeline
+ * keeps it, the rest is denied past loopback. Unflagged matters under `bypass`, where a flagged `git
+ * push` or `gh pr create` reaches this sandboxed: it is outward-facing with nobody looking, so it
+ * keeps the deny and the footer tells the model to ask. `ctx.sandbox === false` is REIKA_SANDBOX=0,
+ * the escape hatch for a run that is measuring something about bash behavior and needs the old world
+ * back.
  */
 export function decideSandbox(
   command: string,

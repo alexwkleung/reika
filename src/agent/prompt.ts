@@ -280,7 +280,7 @@ function sandboxSentence(canFetch: boolean, canSearch: boolean): string {
   ].filter(Boolean);
   return (
     'Some shell commands run in a local sandbox: writes are confined to the working directory, temp ' +
-    'and cache dirs, and network access is denied except for git and gh. If a command fails with a ' +
+    'and cache dirs, and network access is denied except for git, gh and hf. If a command fails with a ' +
     'connection or permission error it may be the sandbox rather than your command — ' +
     (route.length > 0 ? `${route.join(' and ')}, and ` : '') +
     'tell the user when a command genuinely needs the network.'

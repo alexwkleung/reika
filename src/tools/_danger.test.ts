@@ -97,6 +97,10 @@ describe('detectDangerousPatterns — remote deletions (destructive)', () => {
     expect(detectDangerousPatterns('hf repo delete my/repo')).toContain(
       'Delete Hugging Face repo (irreversible remote)',
     );
+    // The live spelling: the CLI's noun is `repos`, with `repo` as its alias.
+    expect(detectDangerousPatterns('hf repos delete my/repo')).toContain(
+      'Delete Hugging Face repo (irreversible remote)',
+    );
   });
 });
 
@@ -1128,6 +1132,91 @@ describe('detectDangerousPatterns — gh read allowlist', () => {
     ]);
     expect(detectDangerousPatterns('gh repo delete o/r --yes')).toEqual([
       'Delete GitHub repo (irreversible remote)',
+    ]);
+  });
+});
+
+describe('detectDangerousPatterns — hf read allowlist', () => {
+  it('leaves the reads alone — the download and the inspection a user asks for by name', () => {
+    for (const cmd of [
+      'hf download meta-llama/Llama-3.2-1B-Instruct',
+      'hf download gpt2 --local-dir ./model',
+      'hf models info meta-llama/Llama-3.2-1B-Instruct',
+      'hf models ls --sort downloads --limit 10',
+      'hf datasets info HuggingFaceFW/fineweb',
+      'hf datasets parquet cfahlgren1/hub-stats',
+      'hf spaces info enzostvs/deepsite',
+      'hf papers read 2601.15621',
+      'hf jobs ps',
+      'hf cache ls',
+      'hf env',
+      'hf version',
+      'hf --help',
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  // This is the half that lets `hf` keep the network in the sandbox: every one of these would
+  // otherwise run unprompted AND networked, the combination the `gh` allowlist closed (#265).
+  it('flags the hub writes, the local cache deletions and the code runners', () => {
+    for (const cmd of [
+      'hf repos create my-model',
+      'hf repos delete-files my-model file.txt',
+      'hf repos move old/my-model new/my-model',
+      'hf repos settings my-model --private',
+      'hf repos branch delete my-model dev',
+      'hf repos tag create my-model v1.0',
+      'hf collections create "My Models"',
+      'hf discussions comment user/model 5 --body "thanks"',
+      'hf webhooks delete abc123',
+      'hf endpoints delete my-endpoint',
+      'hf jobs run python:3.12 python -c "print(1)"',
+      'hf jobs cancel 9',
+      'hf buckets remove user/my-bucket/file.txt',
+      'hf sync ./data hf://buckets/user/my-bucket',
+      'hf skills add',
+      'hf cache rm model/gpt2',
+      'hf cache prune',
+    ]) {
+      expect(detectDangerousPatterns(cmd).join(), cmd).toMatch(/^Hugging Face CLI action/);
+    }
+  });
+
+  it('flags the third-party code paths and the token printer', () => {
+    expect(detectDangerousPatterns('hf extensions install hf-claude')).toEqual([
+      'Hugging Face CLI action (hf extensions install — not a known read)',
+    ]);
+    expect(detectDangerousPatterns('hf extensions exec claude -- --help')).toEqual([
+      'Hugging Face CLI action (hf extensions exec — not a known read)',
+    ]);
+    // Prints stored tokens into the transcript, so it is not a read however harmless it looks.
+    expect(detectDangerousPatterns('hf auth list')).toEqual([
+      'Hugging Face CLI action (hf auth list — not a known read)',
+    ]);
+    expect(detectDangerousPatterns('hf auth login')).toEqual([
+      'Hugging Face CLI action (hf auth login — not a known read)',
+    ]);
+    // DuckDB is handed a program: arbitrary egress (`read_csv('https://…')`) and arbitrary writes.
+    expect(detectDangerousPatterns("hf datasets sql 'SELECT 1'")).toEqual([
+      'Hugging Face CLI action (hf datasets sql — not a known read)',
+    ]);
+  });
+
+  it('does not stack a second label on verbs that already have one', () => {
+    expect(detectDangerousPatterns('hf upload my/repo ./model')).toEqual([
+      'Hugging Face upload (publishes to hub)',
+    ]);
+    expect(detectDangerousPatterns('hf upload-large-folder user/model ./dir')).toEqual([
+      'Hugging Face upload (publishes to hub)',
+    ]);
+    expect(detectDangerousPatterns('hf repos delete my/repo --yes')).toEqual([
+      'Delete Hugging Face repo (irreversible remote)',
+    ]);
+    // `delete-files` removes files from a repo, not the repo: it gets the generic label, not the
+    // irreversible one a trailing `\b` would have given it.
+    expect(detectDangerousPatterns('hf repos delete-files my/repo file.txt')).toEqual([
+      'Hugging Face CLI action (hf repos delete-files — not a known read)',
     ]);
   });
 });
