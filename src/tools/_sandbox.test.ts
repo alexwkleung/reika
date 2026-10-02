@@ -111,9 +111,10 @@ describe('sandboxProfile', () => {
   });
 });
 
-// The network half is per command: `gh`/`git` reads keep it (the shipped skills open with them and
-// their mutating forms are flagged → prompted → unsandboxed anyway), everything else is denied past
-// loopback. An allowlist — a wrong `false` costs a footer, a wrong `true` costs the guarantee.
+// The network half is per command: `gh`/`git`/`hf` reads keep it (the shipped skills open with the
+// first two and the third downloads models the user names, and their mutating forms are flagged →
+// prompted → unsandboxed anyway), everything else is denied past loopback. An allowlist — a wrong
+// `false` costs a footer, a wrong `true` costs the guarantee.
 describe('networkAllowedFor', () => {
   it('allows the unflagged gh/git reads the shipped skills open with', () => {
     expect(networkAllowedFor('gh pr view 436 --json title,body')).toBe(true);
@@ -121,6 +122,25 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git fetch origin && git log --oneline main..origin/main')).toBe(true);
     expect(networkAllowedFor('git ls-remote origin')).toBe(true);
     expect(networkAllowedFor('glab mr view 12')).toBe(true);
+  });
+
+  // The user's own words: "download this model" / "what's in that repo". `hf` is in NET_VERBS for
+  // these, and _danger.ts holds it to HF_READ_VERBS so the mutating verbs cannot arrive unflagged —
+  // which is what makes the allow safe to make (see the `hf` note on NET_VERBS).
+  it('allows the unflagged hf reads a download or an inspection is made of', () => {
+    expect(networkAllowedFor('hf download meta-llama/Llama-3.2-1B-Instruct')).toBe(true);
+    expect(networkAllowedFor('hf download gpt2 --local-dir ./model 2>&1 | tail -20')).toBe(true);
+    expect(networkAllowedFor('hf models info meta-llama/Llama-3.2-1B-Instruct')).toBe(true);
+    expect(networkAllowedFor('hf datasets info HuggingFaceFW/fineweb')).toBe(true);
+    expect(networkAllowedFor('hf spaces info user/space')).toBe(true);
+  });
+
+  // `HF_HUB_ENABLE_HF_TRANSFER=1 hf download …` is the documented speedup, so the prefix must not
+  // cost the allow. A credential assigned inline does not keep it, the line `GH_TOKEN` sits on.
+  it('keeps the allow through a harmless hf env prefix, not a credential', () => {
+    expect(networkAllowedFor('HF_HUB_ENABLE_HF_TRANSFER=1 hf download gpt2')).toBe(true);
+    expect(networkAllowedFor('HF_HUB_DISABLE_PROGRESS_BARS=1 hf models ls --limit 10')).toBe(true);
+    expect(networkAllowedFor('HF_TOKEN=hf_xxx hf download gpt2')).toBe(false);
   });
 
   it('keeps the allow through the inspection pipeline a model pages with', () => {

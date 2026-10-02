@@ -132,7 +132,17 @@ export function sandboxProfile(opts: { network: boolean }): string {
 // and run unsandboxed; what is left when one of these arrives unflagged is a read plus a fetch.
 // Nothing else is here on purpose: `curl`/`wget`/`ssh`/`nc` are flagged, and an interpreter
 // (`python -c 'urlopen…'`, `node -e 'fetch…'`) is exactly the unbounded shape the deny is for.
-const NET_VERBS = new Set(['gh', 'git', 'glab']);
+//
+// `hf` is the fourth, and `hf download <repo>` is why: downloading a model is a read a user hands
+// the model by name, and without this the download ran sandboxed with no network at all — surfacing
+// as a connect error the model reads as a bad repo id or a missing token. It is only safe to add
+// here because `_danger.ts` holds `hf` to a read-verb allowlist the way it has always held `gh`
+// (`HF_READ_VERBS`): the mutating verbs (`repos create`, `jobs run`, `cache rm`, `upload`) are
+// flagged, so they prompt rather than arriving unflagged — the invariant this set relies on. NOT
+// added: the legacy `huggingface-cli` spelling, the same tool under an older name with its own verb
+// set, which would reopen exactly the hole the `gh` allowlist closed (#265) unless it came with a
+// table of its own.
+const NET_VERBS = new Set(['gh', 'git', 'glab', 'hf']);
 
 // Inspection commands that may sit in a network-allowed pipeline, plus the two other kinds of segment
 // that cannot touch the network or run anything of their own:
@@ -167,6 +177,26 @@ const HARMLESS_ENV = new Set([
   'GH_FORCE_TTY',
   'GH_REPO',
   'GH_HOST',
+  // Hugging Face's own settings prefixes. A model writes `HF_HUB_ENABLE_HF_TRANSFER=1 hf download …`
+  // because that is the documented speedup, and without these the download would lose the allow to
+  // its own prefix — a denial with no `blockedBy` to explain it. Each value is a switch, a directory
+  // or a host, none of which can name a program, which is the test this list applies. `HF_ENDPOINT`
+  // is the host one, kept on the same footing as `GH_HOST` above: both redirect a CLI that is
+  // already being given the network, and neither runs what the network returns.
+  // `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` are deliberately absent, on the same line that keeps
+  // `GH_TOKEN` out: a credential assigned inline is worth a beat, and a logged-in machine has the
+  // token in `~/.cache/huggingface/token` anyway.
+  'HF_ENDPOINT',
+  'HF_HOME',
+  'HF_HUB_CACHE',
+  'HF_HUB_DISABLE_PROGRESS_BARS',
+  'HF_HUB_DISABLE_SYMLINKS_WARNING',
+  'HF_HUB_DISABLE_TELEMETRY',
+  'HF_HUB_DISABLE_XET',
+  'HF_HUB_ENABLE_HF_TRANSFER',
+  'HF_HUB_OFFLINE',
+  'HF_HUB_VERBOSITY',
+  'HF_XET_HIGH_PERFORMANCE',
   'NO_COLOR',
   'CLICOLOR',
   'CLICOLOR_FORCE',
@@ -445,7 +475,7 @@ export function broadWorkdirNotice(cwd: string, home = homedir()): string {
 export function sandboxNotice(cwd: string, home = homedir()): string {
   return (
     `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')}, temp and cache ` +
-    'dirs; network denied except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
+    'dirs; network denied except loopback and git/gh/hf. A command you approve at a prompt runs unsandboxed.'
   );
 }
 
@@ -540,12 +570,12 @@ export function sandboxFooter(
   }
   const curlDenied = CURL_RE.test(command) && (code === 6 || code === 7);
   if (failed && !opts.network && (NET_DENIAL_RE.test(output) || curlDenied)) {
-    // A gh/git pipeline denied because of a sibling command has a remedy the model can apply
+    // A gh/git/hf pipeline denied because of a sibling command has a remedy the model can apply
     // itself, and "ask the user" would be the wrong one.
     const { blockedBy } = networkDecision(command);
     lines.push(
       blockedBy
-        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git and gh keep the network only when run on their own (pipes into grep/head/sed/wc, a \`timeout N\` wrapper, a \`sleep N &&\` wait and a \`for …; do …; done\` loop all keep it). Run the git/gh command as its own bash call.`
+        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git, gh and hf keep the network only when run on their own (pipes into grep/head/sed/wc, a \`timeout N\` wrapper, a \`sleep N &&\` wait and a \`for …; do …; done\` loop all keep it). Run the git/gh/hf command as its own bash call.`
         : 'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
             'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
             'credential. ' +

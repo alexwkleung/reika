@@ -140,7 +140,10 @@ function hostOf(url: string): string | undefined {
 // purpose: a remote whose HOST the model was never handed is flagged whatever it carries — a model
 // inventing a remote is unusual where a model recalling a docs page is not, and a clone or a fetch
 // is heavy enough that one keystroke is cheap next to it. A configured remote name (`origin`)
-// names no URL and never reaches here. Returns the warning, or undefined.
+// names no URL and never reaches here. Two verbs keep the network without passing through this:
+// `hf` (which names a repo id, so NETWORK_SEGMENT_RE has no URL to read — its own redirect surface
+// is `HF_ENDPOINT`, admitted in `_sandbox.ts` on `GH_HOST`'s footing) and `glab` (unmodeled).
+// Returns the warning, or undefined.
 export function remoteUrlRisk(
   command: string,
   sourced: ReadonlySet<string> | undefined,

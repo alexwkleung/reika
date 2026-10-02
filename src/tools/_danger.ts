@@ -23,12 +23,15 @@ const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgit\s+commit\b/, label: 'Git commit (records to version history)' },
   // Bare push; force push is also flagged separately below as a destructive pattern.
   { re: /\bgit\s+push\b/, label: 'Git push (publishes commits to remote)' },
-  // Outward-facing GitHub/HF actions. Scoped to the publishing subcommands so read-only
-  // invocations (gh pr view, gh run list, hf download) don't trip the gate — blanket gh/hf
-  // matching would fire on reads and erode the signal. Remote *deletions* are destructive,
-  // not policy, so they live in DANGER_PATTERNS below.
+  // Outward-facing GitHub/HF actions. Scoped to the publishing subcommands here because they are
+  // the ones whose label the user needs to see in these words — the rest of the coverage is the
+  // read-verb allowlists (`GH_READ_VERBS`, `HF_READ_VERBS`), which flag every verb that is not a
+  // read, so a blanket `gh`/`hf` match here would double-label. Remote *deletions* are
+  // destructive, not policy, so they live in DANGER_PATTERNS below.
   { re: /\bgh\s+pr\s+(?:create|merge)\b/, label: 'GitHub PR create/merge (outward-facing)' },
   { re: /\bgh\s+release\s+create\b/, label: 'GitHub release create (publishes)' },
+  // Also matches `hf upload-large-folder` (`\b` before the hyphen), which is the same act; both
+  // spellings are in HF_VERBS_COVERED_ELSEWHERE so the generic label stays off them.
   { re: /\bhf\s+upload\b/, label: 'Hugging Face upload (publishes to hub)' },
   // Registry publishes. Same category and same irreversibility as `gh release create` above —
   // a published version is visible immediately and most registries refuse to reuse the version
@@ -400,6 +403,76 @@ function ghApiLabel(args: string[]): string | undefined {
   return m === 'GET' || m === 'HEAD' ? undefined : `GitHub API write (gh api ${m})`;
 }
 
+// `hf` takes `gh`'s polarity, and the sandbox is what makes it load-bearing: an unflagged `hf`
+// command now keeps the network (`_sandbox.ts`'s NET_VERBS), so a write verb on an unrestricted
+// tail would run unprompted AND networked — the combination #265 fixed for `gh`, arrived at from
+// the other end. The reads are the ones a user hands the model by name ("download this model",
+// "what's in this repo", "does that Space build"): `download`, `models`/`datasets`/`spaces` `info`
+// and `list`. Everything that acts on the Hub as the user is a prompt — `repos
+// create|delete|delete-files|duplicate|move|settings`, `repos branch|tag`, `collections …`,
+// `discussions comment|merge|close|create`, `jobs run|uv|cancel|scheduled`, `endpoints
+// deploy|delete|pause|resume`, `webhooks …`, `buckets …`, `sync`, `auth login|logout|switch`,
+// `skills add`, `extensions install|exec` — and so are the LOCAL mutations, which are just as much
+// the user's call and just as invisible: `cache rm`/`cache prune` delete the downloads the session
+// may be about to reuse. `*` admits every verb of a read-only noun, like GH_READ_VERBS.
+//
+// Two reads are deliberately absent. `auth list` prints stored tokens into the transcript, the same
+// line that keeps `gh auth token` out (only `auth status`/`whoami` is a read). `datasets sql` hands
+// its argument to DuckDB as a program: `read_csv('https://…')` is arbitrary egress and `COPY … TO`
+// a write, which is why `awk` is out of the network pipe allowlist on the same reasoning.
+const HF_READ_VERBS: Record<string, readonly string[]> = {
+  download: ['*'],
+  models: ['info', 'list', 'ls'],
+  datasets: ['info', 'list', 'ls', 'parquet'],
+  spaces: ['info', 'list', 'ls'],
+  papers: ['info', 'list', 'ls', 'read', 'search'],
+  collections: ['info', 'list', 'ls'],
+  discussions: ['info', 'diff', 'list', 'ls'],
+  webhooks: ['info', 'list', 'ls'],
+  endpoints: ['list', 'ls', 'describe', 'catalog'],
+  jobs: ['ps', 'logs', 'inspect', 'stats', 'hardware'],
+  cache: ['list', 'ls', 'verify'],
+  buckets: ['info', 'list', 'ls'],
+  auth: ['whoami'],
+  skills: ['preview'],
+  extensions: ['list', 'ls', 'search'],
+  env: ['*'],
+  version: ['*'],
+};
+// The two documented aliases, spelled as the CLI spells them: `hf ext …`.
+HF_READ_VERBS.ext = HF_READ_VERBS.extensions;
+
+// Verbs that already carry their own, more specific label, so the generic one stays quiet instead
+// of stacking on the same command. `upload` is a noun as well as the publishing verb, so it is
+// matched on the noun alone; `repos delete` (and its `repo` alias) is the pair the destructive
+// pattern above names.
+const HF_VERBS_COVERED_ELSEWHERE = ['upload', 'upload-large-folder', 'repos delete', 'repo delete'];
+
+function hfLabel(segment: string): string | undefined {
+  const tokens = segment.split(/\s+/);
+  if (tokens[0] !== 'hf') return undefined;
+  const sub: string[] = [];
+  for (let i = 1; i < tokens.length && sub.length < 2; i++) {
+    const t = tokens[i];
+    if (t.startsWith('-')) {
+      // Unlike `gh`'s `-R owner/repo`, `hf`'s global flags take no value, so there is no noun
+      // displacement to correct here and no flag table to keep.
+      if (t === '--version' || t === '--help' || t === '-h') return undefined;
+      continue;
+    }
+    sub.push(t);
+  }
+  const [noun, verb] = sub;
+  if (!noun) return undefined;
+  const reads = HF_READ_VERBS[noun];
+  if (reads?.includes('*') || HF_VERBS_COVERED_ELSEWHERE.includes(noun)) return undefined;
+  if (!verb) return reads ? undefined : `Hugging Face CLI action (hf ${noun} — not a known read)`;
+  if (reads?.includes(verb) || HF_VERBS_COVERED_ELSEWHERE.includes(`${noun} ${verb}`)) {
+    return undefined;
+  }
+  return `Hugging Face CLI action (hf ${noun} ${verb} — not a known read)`;
+}
+
 // Commands whose danger lives in the *verb* position, so they are matched per shell segment
 // rather than anywhere in the string: both words are perfectly ordinary as arguments (`grep -rn
 // curl src/`, `git log --grep pkill`), and blanket matching would fire on reads and erode the
@@ -541,7 +614,7 @@ function verbLabels(command: string): string[] {
     for (const { re, label } of VERB_PATTERNS) {
       if (re.test(seg) && !hits.includes(label)) hits.push(label);
     }
-    const cluster = clusterLabel(seg) ?? ghLabel(seg);
+    const cluster = clusterLabel(seg) ?? ghLabel(seg) ?? hfLabel(seg);
     if (cluster && !hits.includes(cluster)) hits.push(cluster);
   }
   return hits;
@@ -647,7 +720,13 @@ const DANGER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Not destructive on its own, but it silently changes where every later push lands.
   { re: /\bgit\s+remote\s+(?:set-url|add)\b/, label: 'Change git remote (redirects pushes)' },
   { re: /\bgh\s+repo\s+delete\b/, label: 'Delete GitHub repo (irreversible remote)' },
-  { re: /\bhf\s+repo\s+delete\b/, label: 'Delete Hugging Face repo (irreversible remote)' },
+  // `repos?` because the CLI's noun is `repos` and `repo` is its alias; `(?![\w./-])` so
+  // `delete-files` — which removes files from a repo, not the repo — is not labelled as the
+  // irreversible one (a trailing `\b` matches before its hyphen).
+  {
+    re: /\bhf\s+repos?\s+delete(?![\w./-])/,
+    label: 'Delete Hugging Face repo (irreversible remote)',
+  },
   { re: /\bchmod\s+[0-7]*777\b/, label: 'Open permissions (chmod 777)' },
   { re: /\brm\s+[^&;|]*\.env\b/, label: 'Deleting environment file (.env)' },
   { re: />\s*\/dev\/sd[a-z]\b/, label: 'Writing to raw disk device' },
