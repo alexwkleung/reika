@@ -278,8 +278,21 @@ describe('isProvablyReadOnly — gh reads', () => {
     ['api method override', 'gh api -H "X-HTTP-Method-Override: DELETE" repos/o/r'],
     ['env prefix', 'GH_HOST=example.com gh issue view 1'],
     ['redirect', 'gh pr diff 420 > pr.diff'],
+    // The carrier is read through, so the command INSIDE it is what has to be read-only (#621).
+    ['carrier around a write', 'timeout 30 rm -rf src'],
+    ['carrier around a sed write', "timeout 30 sed 's/a/b/w src/b.ts' src/a.ts"],
+    ['carrier with nothing after it', 'timeout 30'],
   ])('refuses (%s): %s', (_why, cmd) => {
     expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
+  // #621: `timeout 120 gh issue view 621 --json title,body` — the bound a model puts on a read when
+  // GitHub is slow. A carrier changes nothing about what runs, so the read inside it is the read.
+  it('reads through a `timeout` carrier', () => {
+    expect(isProvablyReadOnly('timeout 120 gh issue view 621 --json title,body')).toBe(true);
+    expect(isProvablyReadOnly('timeout 120 gh pr view 620 --json state')).toBe(true);
+    expect(isProvablyReadOnly("timeout 30 sed -n '1,40p' src/a.ts")).toBe(true);
+    expect(isProvablyReadOnly('timeout 30 grep -n foo src/a.ts | head -5')).toBe(true);
   });
 
   // Plan mode's set must stay inside what agent mode already runs unprompted; a verb admitted here
