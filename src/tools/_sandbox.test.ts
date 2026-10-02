@@ -136,11 +136,14 @@ describe('networkAllowedFor', () => {
   });
 
   // `HF_HUB_ENABLE_HF_TRANSFER=1 hf download …` is the documented speedup, so the prefix must not
-  // cost the allow. A credential assigned inline does not keep it, the line `GH_TOKEN` sits on.
+  // cost the allow. A credential assigned inline does not keep it, the line `GH_TOKEN` sits on —
+  // authentication does not need it (`hf` reads the saved token either way), and a token that is not
+  // the saved one goes in by flag, `hf download --token …`, which keeps the allow.
   it('keeps the allow through a harmless hf env prefix, not a credential', () => {
     expect(networkAllowedFor('HF_HUB_ENABLE_HF_TRANSFER=1 hf download gpt2')).toBe(true);
     expect(networkAllowedFor('HF_HUB_DISABLE_PROGRESS_BARS=1 hf models ls --limit 10')).toBe(true);
     expect(networkAllowedFor('HF_TOKEN=hf_xxx hf download gpt2')).toBe(false);
+    expect(networkAllowedFor('hf download --token hf_xxx gated/repo')).toBe(true);
   });
 
   it('keeps the allow through the inspection pipeline a model pages with', () => {

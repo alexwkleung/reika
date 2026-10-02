@@ -184,8 +184,12 @@ const HARMLESS_ENV = new Set([
   // is the host one, kept on the same footing as `GH_HOST` above: both redirect a CLI that is
   // already being given the network, and neither runs what the network returns.
   // `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` are deliberately absent, on the same line that keeps
-  // `GH_TOKEN` out: a credential assigned inline is worth a beat, and a logged-in machine has the
-  // token in `~/.cache/huggingface/token` anyway.
+  // `GH_TOKEN` out: a credential assigned inline is worth a beat. Nothing about authentication needs
+  // it — reads are open here, so `hf` finds the saved token in `~/.cache/huggingface/token` exactly
+  // as it does outside the sandbox — and a token that is NOT the saved one has two routes around
+  // this list: the `--token` flag (`hf download --token … gated/repo` is a `download` read, so it
+  // keeps the allow) and `hf auth login`, which is flagged, prompts, and writes the token into that
+  // same cache dir.
   'HF_ENDPOINT',
   'HF_HOME',
   'HF_HUB_CACHE',
