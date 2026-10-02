@@ -33,6 +33,6 @@ Below are models that were tested in Reika. Local and API are used for testing, 
 - Kimi K3 (MoonshotAI)
 - Kimi K2.6 (MoonshotAI)
 - Kimi K2.5 (MoonshotAI, OpenRouter)
-- DeepSeek V4 Flash (OpenRouter)
+- DeepSeek V4 Flash (OpenRouter, OpenCode Go)
 - Laguna XS 2.1 (OpenRouter)
 - Laguna M.1 (OpenRouter)
