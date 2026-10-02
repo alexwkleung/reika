@@ -196,7 +196,7 @@ async function runFixture(
 }
 
 async function main(): Promise<void> {
-  // `npm run eval -- spill` runs only matching fixtures. A local quantized model takes minutes
+  // `pnpm run eval spill` runs only matching fixtures. A local quantized model takes minutes
   // per fixture, so re-running one under test shouldn't cost the whole suite.
   const filters = process.argv.slice(2).filter(a => !a.startsWith('-'));
   const modeArg = process.argv.find(a => a.startsWith('--mode='))?.slice('--mode='.length);

@@ -30,9 +30,10 @@ Most of these are also just good hygiene for humans. What's different is the cos
 ## Code conventions
 
 - **Formatter**: oxfmt (Prettier-compatible; `.oxfmtrc.json`) — single quotes, semicolons, trailing commas, 100-col width, 2-space indent
-- **Linter**: oxlint (`.oxlintrc.json`) with the typescript + react-hooks rules. Unused imports are auto-removed by `npm run lint:fix` — leave that cleanup to the tool rather than manual pruning.
+- **Linter**: oxlint (`.oxlintrc.json`) with the typescript + react-hooks rules. Unused imports are auto-removed by `pnpm run lint:fix` — leave that cleanup to the tool rather than manual pruning.
 - **Tests**: vitest, colocated `*.test.ts` files (e.g. `client.test.ts` next to `client.ts`)
-- **Pre-commit**: run `npm run check` (typecheck + lint + format:check + test)
+- **Pre-commit**: run `pnpm run check` (typecheck + lint + format:check + test)
+- **Package manager**: pnpm 12, named in `packageManager`. `pnpm install --filter reika` for app-only dependencies; a plain root install also adds the `docs/` workspace member
 - **Style**: functions over classes when state is minimal; classes only for things with real lifecycle (e.g. `PayloadStore`)
 - **Comments**: only when explaining _why_ (constraints, non-obvious choices). Never explain _what_ — well-named identifiers do that. Never multi-paragraph.
 - **Dependencies**: minimal. Adding one needs a clear reason.
@@ -54,7 +55,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 | `src/session.ts` | `createSession`: boot, config/profile/bundle, model history and everything a turn threads to the next (#403); App, headless and evals drive it |
 | `docs/`          | User-facing reference; the README is only a landing page, so new keys, commands and tools are documented here                                  |
 
-The docs site is VitePress (`docs/.vitepress/`, its own `package.json`; #521). Write links GitHub-relative, add a new page to the sidebar in `config.ts`, and run `npm run docs:build`, which fails on a broken link or anchor.
+The docs site is VitePress (`docs/.vitepress/`, its own `package.json`; #521). Write links GitHub-relative, add a new page to the sidebar in `config.ts`, and run `pnpm run docs:build`, which fails on a broken link or anchor.
 
 ## Adding a new tool
 
@@ -337,7 +338,7 @@ If the tool ran a shell command (e.g., `bash`), include `command: { text, output
 
 **Local sandbox (#163).** `REIKA_SANDBOX` (default on) runs model-chosen `bash` commands under Seatbelt — the system's own `sandbox-exec`, so nothing is bundled and there is no dependency that can change under us. `tools/_sandbox.ts` owns the profile, the network classifier and the two strings that describe it; `bash.ts` owns the decision (`decideSandbox`).
 
-**The rule is one sentence: a flagged command a human just cleared runs unsandboxed; everything else runs sandboxed.** `detectDangerousPatterns` is the same signal that already decides whether to prompt, so the composition needs no second classifier for _whether_ to sandbox: the flagged-and-cleared shape is the only one that needs unbounded network and writes (`npm install`, `git push`, `curl | sh` are all in the patterns) and is exactly the one somebody looked at. That is why there is no HTTP/SOCKS5 proxy layer here, which is the ~80% of `sandbox-runtime` this deletes. "A human cleared it" is `flagged && requestApproval defined` — a flagged command forces the prompt in every mode that has one, so if the gate existed and the tool got past it, a human answered. The tool cannot tell a click from an auto-approval otherwise, which is why a **clean command confirmed under `off` still runs sandboxed**: the human saw the command's text, not what the script it runs will do, and the sandbox costs it nothing it was cleared for.
+**The rule is one sentence: a flagged command a human just cleared runs unsandboxed; everything else runs sandboxed.** `detectDangerousPatterns` is the same signal that already decides whether to prompt, so the composition needs no second classifier for _whether_ to sandbox: the flagged-and-cleared shape is the only one that needs unbounded network and writes (`npm install`, `pnpm install`, `git push`, `curl | sh` are all in the patterns) and is exactly the one somebody looked at. That is why there is no HTTP/SOCKS5 proxy layer here, which is the ~80% of `sandbox-runtime` this deletes. "A human cleared it" is `flagged && requestApproval defined` — a flagged command forces the prompt in every mode that has one, so if the gate existed and the tool got past it, a human answered. The tool cannot tell a click from an auto-approval otherwise, which is why a **clean command confirmed under `off` still runs sandboxed**: the human saw the command's text, not what the script it runs will do, and the sandbox costs it nothing it was cleared for.
 
 | `REIKA_AUTO_APPROVE` | clean command          | flagged command      |
 | -------------------- | ---------------------- | -------------------- |
@@ -910,7 +911,7 @@ Issue #49. The terminal never delivers image bytes — a paste is always text �
 
 Both funnel into an `OcrProvider` (`src/ocr/types.ts`) and come out as a text `<image>` block, structurally identical to the `<file>` block a mention produces. **This is why the feature is model-agnostic:** the model only ever sees text, so a text-only local model handles a pasted screenshot exactly as well as a vision one — and `Message.content` stays a `string` end-to-end. A vision fallback would instead need multimodal content parts threaded through `messagesToChatParams`, compaction, the payload store, and the prefix-stable `rendered` bytes; the `OcrProvider` indirection exists so that can slot in later without touching the call sites.
 
-`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and npm silently skips the non-matching platform packages. It goes in `optionalDependencies`, so a failed binary fetch never breaks `npm i -g reika`.
+`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and the package manager silently skips the non-matching platform packages. It goes in `optionalDependencies`, so a failed binary fetch never breaks `pnpm add -g reika`.
 
 ### Why recognition runs in a child process
 
@@ -967,7 +968,7 @@ repetition tells you the _rate_ — so if the question is "does X happen", instr
 | Instrument                                               | Answers                                                             | Cost                       | Picking it wrong looks like                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------ |
 | **Vitest unit / render test**                            | Given this input, does the module or component do the right thing?  | milliseconds, runs in CI   | Spending a model run to check a string, a slice boundary, or JSX order   |
-| **Eval fixture** (`npm run eval`)                        | Does a real model _use_ the affordance — follow a locator, recover? | minutes per run, needs 3+  | An n=1 conclusion; or evaluating logic that has one deterministic answer |
+| **Eval fixture** (`pnpm run eval`)                       | Does a real model _use_ the affordance — follow a locator, recover? | minutes per run, needs 3+  | An n=1 conclusion; or evaluating logic that has one deterministic answer |
 | **pty drive** (`.agents/skills/verify`)                  | Does the whole app render and behave this way in a real terminal?   | a few minutes of setup     | Substituting a render test for keyboard, modal, or abort flows           |
 | **Instrumentation** (`REIKA_DEBUG`, `REIKA_SPILL_STATS`) | How often, and how big, in _real_ use?                              | days of passive collection | Trying to infer a rate from a fixture — a corpus you built cannot        |
 
@@ -990,7 +991,7 @@ The boundaries that actually bite:
 
 ## Tests (Vitest)
 
-`npm test` runs the unit suite (~5s, ~1000 tests across ~78 files). What earns a test: pure logic
+`pnpm test` runs the unit suite (~5s, ~1000 tests across ~78 files). What earns a test: pure logic
 with edge cases (parsers, matchers, path math, aging/dedup rules), a bug you just fixed, and any
 _rendered_ output whose shape matters (Ink components have render tests via `ink-testing-library`
 — see `Scrollback.render.test.tsx` for the pattern, including how to pin viewport width).
@@ -1016,7 +1017,7 @@ else in `tools/` has one, because the moment a wrapper grows a cap, a window, or
 being thin (`bash.ts` is the worked example: shallow until it had a payload cap, a tail window and
 a spill footer to get wrong).
 
-**When editing a covered module, run `npm test` before declaring done** — and prefer `npm run check`,
+**When editing a covered module, run `pnpm test` before declaring done** — and prefer `pnpm run check`,
 which adds typecheck, lint, and format. Tests catch regressions evals can't: an eval only exercises
 a path when a real model chooses to invoke it, so a broken branch can pass an eval by never
 running.
@@ -1093,9 +1094,9 @@ This is why `fetch_url` now registers unconditionally in `defaultTools`/`chatToo
 
 ## Eval workflow
 
-`npm run eval` runs all fixtures sequentially against the configured model; `npm run eval -- <substring>`
+`pnpm run eval` runs all fixtures sequentially against the configured model; `pnpm run eval <substring>`
 runs only matching ones, which is what you want while iterating — a local quantized model takes
-minutes per fixture. `REIKA_MODEL=<id> npm run eval -- <name>` pins the model, and comparing against
+minutes per fixture. `REIKA_MODEL=<id> pnpm run eval <name>` pins the model, and comparing against
 a recorded result means pinning the same one (the spill fixtures were measured on `kat-coder-qq2`).
 `--profile=<name>` runs against a named profile instead (its own base URL and key — the runner never
 reads the TUI's saved state, so without it every run is `default`), and `--mode=<m>` overrides every

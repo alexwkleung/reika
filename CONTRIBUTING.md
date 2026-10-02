@@ -2,18 +2,29 @@
 
 [← README](README.md)
 
-The full conventions — where things live, how to add a tool or slash command, and why each subsystem is shaped the way it is — are in [`AGENTS.md`](AGENTS.md), which Reika also loads as its own instructions when run in this repo. Run `npm run check` before committing.
+The full conventions — where things live, how to add a tool or slash command, and why each subsystem is shaped the way it is — are in [`AGENTS.md`](AGENTS.md), which Reika also loads as its own instructions when run in this repo. Run `pnpm run check` before committing.
+
+## Setting up
+
+Node ≥ 22, and pnpm — `npm i -g pnpm`, or the standalone installer at [pnpm.io/installation](https://pnpm.io/installation). The repo names the pnpm version it runs in `packageManager`, so pnpm uses that one whenever it can fetch it.
+
+```sh
+pnpm install --filter reika   # app dependencies only: no VitePress, no docs/
+pnpm run check                # typecheck + lint + format:check + test
+```
+
+The docs site is a workspace member, so a plain `pnpm install` at the root installs its dependencies as well and `pnpm run docs:dev` then serves it. `--filter reika` is for a checkout that never touches `docs/`; a full install later fills the rest in.
 
 ## Scripts
 
-- `npm run dev` — run the CLI with `tsx`
-- `npm run build` — compile TS to a clean `dist/` (tests excluded, via `tsconfig.build.json`)
-- `npm run typecheck` — TypeScript only
-- `npm run lint` / `lint:fix`
-- `npm run format` / `format:check`
-- `npm test` / `test:watch` — vitest unit tests
-- `npm run check` — typecheck + lint + format:check + test (use before committing)
-- `npm run eval` — run the eval suite against the configured model
+- `pnpm run dev` — run the CLI with `tsx`
+- `pnpm run build` — compile TS to a clean `dist/` (tests excluded, via `tsconfig.build.json`)
+- `pnpm run typecheck` — TypeScript only
+- `pnpm run lint` / `lint:fix`
+- `pnpm run format` / `format:check`
+- `pnpm test` / `test:watch` — vitest unit tests
+- `pnpm run check` — typecheck + lint + format:check + test (use before committing)
+- `pnpm run eval` — run the eval suite against the configured model
 
 ## Design philosophy
 
