@@ -20,9 +20,13 @@ import {
   CONFIRM_DECLINE,
   Confirm,
   type ConfirmSpec,
+  TOGGLE_CANCEL,
+  TOGGLE_OFF,
+  TOGGLE_ON,
   implementModeConfirmSpec,
   pastedUrlConfirmSpec,
   skillConfirmSpec,
+  toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { inheritProfile, loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
@@ -1530,8 +1534,8 @@ export function App() {
           '  /implement         execute the plan above (from plan mode: pick the mode to run it in)',
           '  /compact           compact older context now (compaction note, then a fold)',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
-          '  /anon              show/toggle anonymized display (on|off)',
-          '  /unattended        show/toggle unattended: decline instead of prompting (on|off)',
+          '  /anon              show/toggle anonymized display (on|off; bare command opens the picker)',
+          '  /unattended        show/toggle unattended: decline instead of prompting (on|off; bare command opens the picker)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -1611,34 +1615,44 @@ export function App() {
           response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
           break;
         }
-        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'; unset is 'safe'.
-        const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
-        const source = envOn
-          ? `REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`
-          : sessionAutoApprove !== null
-            ? 'session toggle'
-            : config?.autoApproveExplicit
-              ? 'REIKA_AUTO_APPROVE=off (env)'
-              : 'default (REIKA_AUTO_APPROVE unset)';
+        if (!envOn) {
+          // Bare /approvals (#625): the dialog replaces the status line below — a user typing the
+          // command without on/off is reaching for the toggle, not for a status page. On/off apply
+          // like the explicit forms; cancel closes and changes nothing (the command echo above is
+          // the only record, like a dismissed /model picker).
+          const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
+          const choice = await askToggle(
+            'Approvals',
+            `session auto-approve: ${effectiveMode} — toggle on or off?`,
+            effectiveMode === 'safe',
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          const wantOn = choice === TOGGLE_ON;
+          setSessionAutoApprove(wantOn);
+          response = `Session auto-approve: ${wantOn ? 'on' : 'off'}`;
+          break;
+        }
+        // Env-forced sessions keep the status line: the toggle is shadowed there, so there is
+        // nothing for a dialog to pick.
+        const effectiveMode = config?.autoApprove ?? 'safe';
         const desc =
           effectiveMode === 'bypass'
             ? 'bypass — everything runs without confirmation, including dangerous commands'
-            : effectiveMode === 'safe'
-              ? 'safe — ordinary actions auto-run; dangerous commands still prompt'
-              : 'off — every action asks first';
+            : 'safe — ordinary actions auto-run; dangerous commands still prompt';
         response = [
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
-          `  source: ${source}`,
+          `  source: REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`,
           ...(unattended
             ? [
                 '  unattended: on — anything that would prompt is declined instead (/unattended off)',
               ]
             : []),
           '',
-          envOn
-            ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
-            : 'toggle with /approvals on or /approvals off',
+          'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed',
         ].join('\n');
         break;
       }
@@ -1648,8 +1662,26 @@ export function App() {
           response = `Unknown argument: ${arg}. Use /unattended on or /unattended off.`;
           break;
         }
-        const next = arg === '' ? unattended : arg === 'on';
-        if (arg !== '') setSessionUnattended(next);
+        let next: boolean;
+        if (arg === '') {
+          // Bare /unattended (#625): ask instead of the arg-less toggle it used to be — "turn it
+          // off" is a real action, and the blind flip surprised the user who typed the bare
+          // command to check. Cancel closes and changes nothing.
+          const current = unattended;
+          const choice = await askToggle(
+            'Unattended',
+            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
+            current,
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          next = choice === TOGGLE_ON;
+        } else {
+          next = arg === 'on';
+        }
+        setSessionUnattended(next);
         // ask_user is fixed at launch (the tool list is the cached prefix), so an attended-start
         // session keeps it; while unattended, its questions resolve as "no user available".
         response = next
@@ -1664,7 +1696,31 @@ export function App() {
       // costs nothing.
       case 'anon': {
         const arg = args.trim().toLowerCase();
-        const want = arg === 'on' ? true : arg === 'off' ? false : !isAnon();
+        let want: boolean;
+        if (arg === 'on') {
+          want = true;
+        } else if (arg === 'off') {
+          want = false;
+        } else if (arg) {
+          // A stray argument used to fall through to the arg-less toggle; with the dialog (#625)
+          // owning the bare form, a typo should say so like the sibling commands do.
+          response = `Unknown argument: ${arg}. Use /anon on or /anon off.`;
+          break;
+        } else {
+          // Bare /anon (#625): ask instead of the arg-less toggle. Same shape as the two toggle
+          // commands above: current state preselected, cancel closes and changes nothing.
+          const current = isAnon();
+          const choice = await askToggle(
+            'Anonymize',
+            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
+            current,
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          want = choice === TOGGLE_ON;
+        }
         if (!want) {
           clearIdentity();
           response = 'anonymize: off — names, emails and account slugs render verbatim again';
@@ -1910,9 +1966,11 @@ export function App() {
 
   // Open the confirm dialog and wait for its answer. Deferred past the current keypress dispatch:
   // Ink hands the Enter that submitted to every useInput handler, and opening synchronously would
-  // let the dialog's own handler see it and answer "send as typed" on the spot.
-  const askChoice = (spec: ConfirmSpec): Promise<number | 'abort'> => {
-    setConfirmSelected(0);
+  // let the dialog's own handler see it and answer "send as typed" on the spot. `initial` is the
+  // row that starts selected — the /implement picker's default row 0, or the current state's row
+  // for the toggle dialogs (#625), so Enter alone changes nothing there.
+  const askChoice = (spec: ConfirmSpec, initial = 0): Promise<number | 'abort'> => {
+    setConfirmSelected(Math.max(0, Math.min(initial, spec.options.length - 1)));
     return new Promise(resolve => {
       queueMicrotask(() => setConfirm({ spec, resolve }));
     });
@@ -1921,6 +1979,14 @@ export function App() {
     const choice = await askChoice(spec);
     return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
   };
+  // The toggle dialogs for /approvals, /unattended, /anon (#625): the user who typed the bare
+  // command picks on/off/cancel. `currentlyOn` preselects the row matching the state.
+  const askToggle = (
+    title: string,
+    subtitle: string,
+    currentlyOn: boolean,
+  ): Promise<number | 'abort'> =>
+    askChoice(toggleConfirmSpec({ title, subtitle }), currentlyOn ? TOGGLE_ON : TOGGLE_OFF);
 
   // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
   // a strong match opens the confirm dialog rather than injecting — the user is the classifier,

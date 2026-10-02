@@ -58,6 +58,24 @@ const IMPLEMENT_MODE_LABELS: Record<ImplementMode, string> = {
   grind: 'Grind — fixed procedure, proves the change by running checks',
 };
 
+// The toggle dialogs for /approvals, /unattended and /anon (#625): a bare command without on/off
+// asks instead of printing the arg-less default. Row 0 is 'on', row 1 'off', row 2 'Cancel',
+// fixed across opens so the digits stay stable; which row starts selected follows the current
+// state, so a bare Enter (or the digit for the current state) changes nothing — the same
+// default-as-least-action rule as the other picks.
+export const TOGGLE_ON = 0;
+export const TOGGLE_OFF = 1;
+export const TOGGLE_CANCEL = 2;
+
+export function toggleConfirmSpec(opts: { title: string; subtitle: string }): ConfirmSpec {
+  return {
+    title: opts.title,
+    subtitle: opts.subtitle,
+    details: [],
+    options: ['on', 'off', 'Cancel'],
+  };
+}
+
 // Agent is row 0, so Enter alone keeps the one-keystroke /implement it always was.
 export function implementModeConfirmSpec(): ConfirmSpec {
   return {
