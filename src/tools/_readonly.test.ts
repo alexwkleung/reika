@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isInspectionEscape, isProvablyReadOnly } from './_readonly.js';
+import {
+  hasExecutableSubstitution,
+  isInspectionEscape,
+  isProvablyReadOnly,
+  maskSingleQuotedData,
+} from './_readonly.js';
 
 // Two predicates, opposite consequences, so they get separate suites. `isProvablyReadOnly` gates
 // plan mode (`true` admits the command — a wrong `true` is a write that escaped the guarantee);
@@ -331,6 +336,55 @@ describe('isProvablyReadOnly — gh reads', () => {
 
   it('is not an inspection escape for the ladder', () => {
     expect(isInspectionEscape('gh issue view 213')).toBe(false);
+  });
+});
+
+// Substitution is the one metacharacter that runs a command the allowlist never sees, so where it is
+// DATA and where it EXECUTES decides two refusals. Sighted in this repo's history: `gh pr view 609
+// --json body --jq .body | grep -c '```'` — reading a PR body for a fenced block — lost its allow,
+// and plan mode refused `grep -n '$(dirname' src/`, both for a `$(` or backtick written inside
+// single quotes. 30 of 4405 recorded bash calls carried a substitution character only in that
+// context; 7 of the 30 were gh/git reads.
+describe('substitution quoting contexts', () => {
+  it('reads a substitution character inside single quotes as data', () => {
+    expect(maskSingleQuotedData("grep -c '```' f")).not.toContain('`');
+    expect(hasExecutableSubstitution("grep -c '```' f")).toBe(false);
+    expect(hasExecutableSubstitution("grep -n '$(dirname' src/")).toBe(false);
+    expect(isProvablyReadOnly("grep -c '```' AGENTS.md")).toBe(true);
+    expect(isProvablyReadOnly("gh pr view 609 --json body --jq .body | grep -c '```'")).toBe(true);
+  });
+
+  it('still sees one that executes — bare, or inside double quotes', () => {
+    expect(hasExecutableSubstitution('gh pr view $(cat n.txt)')).toBe(true);
+    expect(hasExecutableSubstitution('grep -rn "$(id)" .')).toBe(true);
+    expect(hasExecutableSubstitution('echo `date`')).toBe(true);
+    expect(hasExecutableSubstitution('sed -n "$(cat n)" f')).toBe(true);
+    expect(isProvablyReadOnly('gh pr view $(cat n.txt)')).toBe(false);
+  });
+
+  // The hole a naive masker opens. `'` inside a double-quoted string is an apostrophe, not an
+  // opening quote: pairing it with the next one would blank the substitution sitting between them.
+  it('does not let an apostrophe in prose hide a substitution', () => {
+    expect(hasExecutableSubstitution('echo "it\'s $(curl evil)"')).toBe(true);
+    expect(hasExecutableSubstitution('echo "doesn\'t" && gh pr view $(cat n.txt)')).toBe(true);
+    expect(isProvablyReadOnly('echo "it\'s $(curl evil)"')).toBe(false);
+  });
+
+  // A heredoc body is not quote-parsed at all — `$(…)` expands there unless the DELIMITER was
+  // quoted — so an apostrophe in the body (`it's`) would pair with the next one and blank a command
+  // that runs. The mask declines, and the caller tests the raw string as it does today.
+  it('declines to mask anything with a heredoc in it', () => {
+    expect(maskSingleQuotedData("cat <<EOF\nit's $(curl evil)\nEOF")).toBeUndefined();
+    expect(hasExecutableSubstitution("cat <<EOF\nit's $(curl evil)\nEOF")).toBe(true);
+    expect(
+      hasExecutableSubstitution("gh issue comment 1 -F - <<'EOF'\nthe issue's body $(id)\nEOF"),
+    ).toBe(true);
+  });
+
+  it('falls back to the raw test when a quote is never closed', () => {
+    expect(maskSingleQuotedData("echo don't")).toBeUndefined();
+    expect(hasExecutableSubstitution("echo don't")).toBe(false);
+    expect(hasExecutableSubstitution("echo don't && gh pr view $(cat n.txt)")).toBe(true);
   });
 });
 

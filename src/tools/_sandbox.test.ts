@@ -203,6 +203,18 @@ describe('networkAllowedFor', () => {
   it('denies when a substitution could smuggle a second command', () => {
     expect(networkAllowedFor('gh pr view $(cat n.txt)')).toBe(false);
     expect(networkAllowedFor('git log `curl -s x`')).toBe(false);
+    // Double quotes still execute a substitution, so this one is not data.
+    expect(networkAllowedFor('gh pr view 1 --json body | sed -n "$(cat n)"')).toBe(false);
+    expect(networkAllowedFor("gh pr view $(cat n.txt) | grep -c '```'")).toBe(false);
+  });
+
+  // Sighted: `gh pr view 609 --json body --jq .body | grep -c '```'` — reading a PR body for a
+  // fenced block — was denied the network and blamed on `grep`. Inside single quotes the backtick
+  // is a character the model is searching for, not a command; the same rule plan mode uses.
+  it('keeps the allow when the substitution character is data', () => {
+    expect(networkAllowedFor("gh pr view 609 --json body --jq .body | grep -c '```'")).toBe(true);
+    expect(networkAllowedFor("gh pr view 1 --json body | grep -n '$(dirname'")).toBe(true);
+    expect(networkAllowedFor("gh issue view 621 --json body | grep -c '`'")).toBe(true);
   });
 
   it('is not fooled by a net verb in an argument or a quoted separator', () => {
