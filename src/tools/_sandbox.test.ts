@@ -143,6 +143,47 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('echo x | xargs -I {} curl {}')).toBe(false);
   });
 
+  // #621: the reads the shipped skills open with, in the clothes a model actually writes them in.
+  // Sighted in this repo's session history — `timeout 120 gh pr view 620 --json …`, the wrapper a
+  // model adds when GitHub is slow, and `sleep 5 && gh pr view 609 --json mergeable`, the poll that
+  // wants the state GitHub has not finished computing — each ran with the network denied while the
+  // bare read went through: the same read, blocked by its wrapper.
+  it('reads the verb through a `timeout` carrier', () => {
+    expect(networkAllowedFor('timeout 120 gh pr view 620 --json title,state')).toBe(true);
+    expect(
+      networkAllowedFor('cd /repo && timeout 120 gh pr view 620 --json body 2>&1 | tail -12'),
+    ).toBe(true);
+    expect(networkAllowedFor('timeout -k 5 30 gh issue view 1 --json body')).toBe(true);
+    expect(networkAllowedFor('timeout --signal=KILL 30 git ls-remote origin')).toBe(true);
+    // The carrier is not a way past the allow: what it bounds is still what gets read.
+    expect(networkAllowedFor('timeout 30 curl https://x.example')).toBe(false);
+    expect(networkAllowedFor("timeout 30 node -e 'fetch(1)'")).toBe(false);
+    expect(networkDecision('timeout 30 npm test && gh pr view 1')).toEqual({
+      allowed: false,
+      blockedBy: 'npm',
+    });
+    // A carrier with nothing after it runs nothing, and is not a read.
+    expect(networkAllowedFor('timeout 5')).toBe(false);
+    expect(networkAllowedFor('timeout -k 5')).toBe(false);
+  });
+
+  it('keeps the allow through the wait a poll needs and the loop a multi-read needs', () => {
+    expect(networkAllowedFor('sleep 5 && gh pr view 609 --json mergeable,mergeStateStatus')).toBe(
+      true,
+    );
+    expect(networkAllowedFor('sleep 0.5; gh pr view 609 --json state')).toBe(true);
+    // Still an allowlist: `sleep` alone is not a read, and it does not lend one to a sibling.
+    expect(networkAllowedFor('sleep 5')).toBe(false);
+    expect(networkAllowedFor('sleep 5 && npm test')).toBe(false);
+    // The loop's head and `do`/`done` are grammar; the body's commands are each read on their own.
+    expect(networkAllowedFor('for n in 610 608; do gh pr view $n --json title; done')).toBe(true);
+    expect(networkAllowedFor('for n in 610 608; do\ngh pr view $n --json title\ndone')).toBe(true);
+    expect(networkAllowedFor('for f in *; do rm -f $f; done')).toBe(false);
+    expect(networkAllowedFor('for f in *; do curl https://x.example/$f; done')).toBe(false);
+    // `while`'s condition is a command, and an unbounded poll is what the idle bound exists to kill.
+    expect(networkAllowedFor('while true; do sleep 5; gh pr view 1; done')).toBe(false);
+  });
+
   it('denies a pipeline with an unrecognized verb in it', () => {
     expect(
       networkAllowedFor('gh pr diff 436 | python3 -c "import sys; print(sys.stdin.read())"'),

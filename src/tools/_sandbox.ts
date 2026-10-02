@@ -2,7 +2,13 @@ import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
+import {
+  dropCarriers,
+  maskQuoted,
+  splitSegments,
+  words,
+  INSPECTION_COMMANDS,
+} from './_readonly.js';
 import { stripHeredocs } from './_writetargets.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
@@ -126,10 +132,21 @@ export function sandboxProfile(opts: { network: boolean }): string {
 // (`python -c 'urlopen…'`, `node -e 'fetch…'`) is exactly the unbounded shape the deny is for.
 const NET_VERBS = new Set(['gh', 'git', 'glab']);
 
-// Inspection commands that may sit in a network-allowed pipeline. `awk` is out: its program argument
-// can `system("curl …")`, which is the shape the deny exists for. `sed`/`tree` stay — BSD sed has no
-// shell-out, and a `w file` lands inside the write confinement either way.
-const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS].filter(c => c !== 'awk'));
+// Inspection commands that may sit in a network-allowed pipeline, plus the two other kinds of segment
+// that cannot touch the network or run anything of their own:
+//
+// - `sleep` is inert — it neither connects nor writes nor names a program — and the read it precedes
+//   is a POLL: `sleep 5 && gh pr view 609 --json mergeable,mergeStateStatus` asks GitHub to recompute
+//   a state it has not finished computing, so running the read on its own reports `UNKNOWN`. Bounded
+//   by the tool's own idle and ceiling timeouts, which is what stops a long one.
+// - `awk` is out: its program argument can `system("curl …")`, which is the shape the deny exists for.
+//   `sed`/`tree` stay — BSD sed has no shell-out, and a `w file` lands inside the write confinement
+//   either way.
+//
+// An unlisted filter in the pipeline still denies it (`| python3 -c`, `| jq`, `| base64 -d`): that is
+// the allowlist's own rule, and the model's remedy — gh's built-in `--jq`, or running the read alone —
+// is one call away.
+const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS, 'sleep'].filter(c => c !== 'awk'));
 // `find`'s exec family runs an arbitrary command per match. `git -c <key>=<value>` can name one
 // through more keys than are worth enumerating — `alias.x='!cmd'`, `core.sshCommand`, `core.pager`,
 // `credential.helper`, `diff.external`, `core.hooksPath` — so `-c` (and `--config-env`) is refused
@@ -194,17 +211,28 @@ const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 // verb as `gh`, not `{}`. `-I{}` attached is one word and drops with the flag.
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J', '-R', '-S']);
 
+// Shell grammar that runs no program of its own, dropped before the verb check: a `for VAR in WORDS`
+// head, whose words are the DATA the loop walks, and the bare `do`/`done` a newline split leaves
+// standing alone (`for n in 610 608; do`, `gh pr view $n`, `done` on separate lines is four segments).
+// Reading several PRs in one call is exactly this shape (#621), and every command inside the loop
+// still has to pass on its own. `while`/`until` are NOT here: their condition is a command, so it
+// stays checked — which also keeps the unbounded poll (`while true; do sleep 5; gh pr view …; done`)
+// out of the allow.
+const SHELL_STRUCTURE_RE = /^(?:do|done)$|^for\s+\w+\s+in(?:\s|$)/;
+
 function effectiveVerb(segment: string): string | undefined {
-  const ws = words(segment.trim().replace(VERB_PREFIX_RE, ''));
-  let i = 0;
-  if (ws[i] === 'xargs') {
-    i++;
+  // `timeout` and `xargs` each name the command they run rather than being it, so both are skipped to
+  // reach it — a carrier inside the command xargs runs included.
+  let ws = dropCarriers(words(segment.trim().replace(VERB_PREFIX_RE, '')));
+  if (ws[0] === 'xargs') {
+    let i = 1;
     while (i < ws.length && ws[i].startsWith('-')) {
       if (XARGS_VALUE_FLAGS.has(ws[i])) i++;
       i++;
     }
+    ws = dropCarriers(ws.slice(i));
   }
-  return ws[i];
+  return ws[0];
 }
 
 /**
@@ -233,7 +261,8 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
   const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
   const segments = splitSegments(c, masked)
     .map(s => s.trim())
-    .filter(s => s && !/^cd(?:\s|$)/.test(s));
+    // `cd` carries no read of its own, and the shell grammar around a loop carries no command at all.
+    .filter(s => s && !/^cd(?:\s|$)/.test(s) && !SHELL_STRUCTURE_RE.test(s));
   if (segments.length === 0) return { allowed: false };
   let net = false;
   let blockedBy: string | undefined;
@@ -508,7 +537,7 @@ export function sandboxFooter(
     const { blockedBy } = networkDecision(command);
     lines.push(
       blockedBy
-        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git and gh keep the network only when run on their own (pipes into grep/head/sed/wc are fine). Run the git/gh command as its own bash call.`
+        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git and gh keep the network only when run on their own (pipes into grep/head/sed/wc, a \`timeout N\` wrapper, a \`sleep N &&\` wait and a \`for …; do …; done\` loop all keep it). Run the git/gh command as its own bash call.`
         : 'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
             'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
             'credential. ' +

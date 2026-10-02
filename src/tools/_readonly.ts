@@ -207,6 +207,30 @@ export function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
+// The carrier that bounds ONE command and changes nothing else about it, skipped so both readers see
+// the command itself. `timeout 120 gh issue view 621 --json title,body` is the shape a model writes
+// when GitHub is slow, and without this both readers answered about the wrapper: `timeout` is not a
+// recognized command name, so the sandbox denied the read its network and plan mode refused it
+// (#621) — while `_danger.ts`, which matches a command's own patterns through an unlisted carrier
+// (`timeout 5 rm` still gates), saw the gh read and did not flag it. (`xargs` is the other carrier,
+// read in `_sandbox.ts`'s verb reader, where the command it runs is known to be the argument.)
+// Flags and the DURATION operand are skipped; `-s`/`-k` take the next word as their value,
+// `--signal=KILL` does not.
+const CARRIER_VALUE_FLAGS = new Set(['-s', '--signal', '-k', '--kill-after']);
+
+export function dropCarriers(wordList: string[]): string[] {
+  let i = 0;
+  while (wordList[i] === 'timeout') {
+    i++;
+    while (wordList[i]?.startsWith('-')) {
+      if (CARRIER_VALUE_FLAGS.has(wordList[i])) i++;
+      i++;
+    }
+    i++; // the DURATION operand
+  }
+  return wordList.slice(i);
+}
+
 // Plan mode's sed: a line-range or pattern-range print (`sed -n '120,180p' f`,
 // `sed -n '/## A/,/## B/p' f`) — the read models reach for most, refused before at a round's cost.
 // An ALLOWLIST of script shapes, never a scan for writes: every command is `p`, `=` or `q` behind
@@ -244,7 +268,7 @@ function sedSegmentIsReadOnly(args: string[]): boolean {
 }
 
 function segmentIsReadOnly(segment: string, recognized: Set<string>, planReads: boolean): boolean {
-  const [name, ...args] = words(segment);
+  const [name, ...args] = dropCarriers(words(segment));
   if (name === 'gh' && planReads) return ghSegmentIsReadOnly(args);
   if (name === 'sed' && planReads) return sedSegmentIsReadOnly(args);
   if (!name || !recognized.has(name)) return false;
