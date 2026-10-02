@@ -107,14 +107,17 @@ export const COMMANDS: CommandSpec[] = [
     name: 'model',
     desc: 'pick a model/profile interactively (/model <name> switches directly, even to a model not in your config)',
   },
-  { name: 'approvals', desc: 'show/toggle session auto-approve (on|off)' },
+  {
+    name: 'approvals',
+    desc: 'toggle session auto-approve (on|off; bare command opens the picker)',
+  },
   {
     name: 'unattended',
-    desc: 'show/toggle unattended — decline instead of prompting while you are away (on|off)',
+    desc: 'toggle unattended — decline instead of prompting while you are away (on|off; bare command opens the picker)',
   },
   {
     name: 'anon',
-    desc: 'show/toggle anonymized display — hides your name, email, and account slugs (on|off)',
+    desc: 'toggle anonymized display — hides your name, email, and account slugs (on|off; bare command opens the picker)',
   },
   { name: 'cwd', desc: 'show working directory' },
   { name: 'tokens', desc: 'show token usage this session' },
