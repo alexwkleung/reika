@@ -373,25 +373,32 @@ export function lastCall<A extends readonly unknown[], T>(
   };
 }
 
-// `Read src/a.ts lines 1-10 of 40` → `Read: src/a.ts lines 1-10 of 40` (#627).
+// The display form of a tool result's summary (#567, #627).
 //
-// The exact inverse of the `Replace(/^Read /, '')` this row has run since #567, and deliberately
-// scoped to that one verb: every other summary already opens with a word that identifies it on its
-// own (`Ran:`, `Found`, `Listed`, `Edited`, `Fetched`), so it would only be reformatted with no
-// gain. Two of the read tool's shapes are left alone rather than made into `Read:`.
+// A read result drops its leading verb when it is alone: the `⏺︎ Read(path=…)` call directly above
+// carries it, and the path follows immediately, so the row reads cleanly without it. Stacked under
+// a sibling call that argument fails — every row is `  ↳ <path> …`, the marker names none of them —
+// so the verb comes back.
 //
-//   `Read a.ts: offset 99 past end of file (10 lines)`
-//   `Read failed: …`
+// Restoring it means *un-dropping* it, not inventing a separator: a success summary in this
+// codebase is `Verb rest` (`Listed 12 entries in src`, `Found 3 matches for /x/`, `Fetched <url>
+// (…)`, `Wrote src/a.ts (+3)`), and the colon-bearing shapes are failure lines (`Edit failed:`,
+// `List failed:`) or `Ran:` (tools/bash.ts), which needed one because a shell command line can
+// open with anything. A read's summary opens with the path itself, so there is nothing to
+// disambiguate, and a display colon would make read the only success verb carrying a separator the
+// wire format didn't.
 //
-// Both already carry their own separator, and prefixing either would give the row two
-// (`Read: a.ts: offset …`, `Read: failed: …`), which is the one thing worse than no label: it
-// reads as a parse of the path. Matched on the summary's own shape, not on the fact that a
-// colon follows, so a path that simply contains one (`Read a:b.ts lines 1-2 of 3`) still gets
-// its label back.
-export function unelideReadVerb(summary: string): string {
-  if (!summary.startsWith('Read ')) return summary;
-  const rest = summary.slice('Read'.length);
-  return /^\s+[^:]*:\s|^\s+failed:/.test(rest) ? summary : `Read:${rest}`;
+// Two of the read tool's shapes keep their verb even when lone, because for those the verb IS the
+// label rather than a repetition of the call above: `Read failed: …` (an edit-style failure line)
+// and `Read a.ts: offset 99 past end of file (10 lines)` (which already carries its own separator).
+// Stripping either leaves `failed: …` / `a.ts: offset …`, a row that lost its only label. Matched
+// on the summary's own `Verb …: detail` form, not on the mere presence of a colon, so a path that
+// simply contains one (`Read a:b.ts lines 1-2 of 3`) still elides.
+export function elidedReadSummary(summary: string, grouped: boolean): string {
+  if (grouped || !summary.startsWith('Read ')) return summary;
+  return /^\s+[^:]*:\s|^\s+failed:/.test(summary.slice('Read'.length))
+    ? summary
+    : summary.replace(/^Read /, '');
 }
 
 // The inputs a live block reads that are not arguments.
@@ -736,7 +743,7 @@ function renderMessage(
     afterNested?: boolean;
     afterNotice?: boolean;
     afterToolBlock?: boolean;
-    // This read result is stacked under a sibling (#627), so its row keeps the `Read:` verb the
+    // This read result is stacked under a sibling (#627), so its row keeps the `Read` verb the
     // lone-call case drops. Computed in MessageView, which is the only place with the neighbours.
     groupedReads?: boolean;
   } = {},
@@ -844,17 +851,12 @@ function renderMessage(
     // it: the chip lands at the end of the last wrapped row, and a wrap that didn't know about it
     // would spill onto a row of its own, while the live row it replaces is one row tall.
     const duration = msg.command ? toolTimer('bash', msg.durationMs) : '';
-    // A read result's verb, put back only where dropping it stopped paying (#627). It rides the
-    // call row above, so under a lone call the path reads cleanly on its own — the shape a Read has
-    // had since #567. Stacked under two or more of them the marker stops being a label: every row is
-    // `  ↳ path …`, so nothing says which rows are reads and the paths are the only thing left to
-    // scan. `Read:` restores it for the stack that caused the ambiguity, and only there — a lone
-    // read's row stays byte-identical to what it was.
-    const summary = scrubOutput(
-      ctx.groupedReads
-        ? unelideReadVerb(msg.summary ?? '')
-        : (msg.summary ?? '').replace(/^Read /, ''),
-    );
+    // The call row above carries the verb, so under a lone call the path reads cleanly on its own
+    // — the shape a Read has had since #567. Stacked under two or more of them the marker stops
+    // being a label: every row is `  ↳ path …`, so nothing says which rows are reads and the paths
+    // are the only thing left to scan. The verb comes back for the stack that caused the ambiguity,
+    // and only there — a lone read's row stays byte-identical to what it was.
+    const summary = scrubOutput(elidedReadSummary(msg.summary ?? '', !!ctx.groupedReads));
     return (
       <Box
         flexDirection="column"

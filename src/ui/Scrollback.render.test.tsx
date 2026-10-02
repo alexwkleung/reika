@@ -1520,9 +1520,9 @@ describe('Scrollback stacked read labels', () => {
       readResult('t3', 'Read src/c.ts lines 5-12 of 20'),
     ]);
     expect(rows.map(l => l.replace(/^↳ /, ''))).toEqual([
-      'Read: src/a.ts lines 1-80 of 402',
-      'Read: src/b.ts lines 1-30 of 96',
-      'Read: src/c.ts lines 5-12 of 20',
+      'Read src/a.ts lines 1-80 of 402',
+      'Read src/b.ts lines 1-30 of 96',
+      'Read src/c.ts lines 5-12 of 20',
     ]);
   });
 
@@ -1548,7 +1548,7 @@ describe('Scrollback stacked read labels', () => {
       readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
       readResult('t2', 'Read src/b.ts lines 1-30 of 96'),
     ]);
-    expect(rows.every(l => l.includes('Read: '))).toBe(true);
+    expect(rows.every(l => l.startsWith('↳ Read '))).toBe(true);
   });
 
   // A result whose neighbour carries a block is separated from it by a blank row (#492), so it is
@@ -1567,17 +1567,17 @@ describe('Scrollback stacked read labels', () => {
     expect(rows[1]).toContain('Ran: npm test');
   });
 
-  // The label is not "any Read row with a colon" — the two shapes that already carry their own
-  // separator would come out with two (`Read: a.ts: offset …`), which reads as a parse of the path.
-  it('never doubles the separator the summary already has', () => {
+  // The elision is not "any Read row" — the two shapes whose verb is their only label keep it even
+  // when lone (`Read failed: …`, `Read a.ts: offset …`), since stripping those gives `failed: …`.
+  it('keeps the verb on the shapes where it is the only label', () => {
     const merged = linesOf([
       readResult('t1', 'Read a.ts: offset 99 past end of file (10 lines)'),
       readResult('t2', 'Read failed: no such file'),
     ]);
     expect(merged.join('\n')).toContain('↳ Read a.ts: offset 99 past end of file');
     expect(merged.join('\n')).toContain('↳ Read failed: no such file');
-    expect(merged.join('\n')).not.toContain('Read: a.ts:');
-    expect(merged.join('\n')).not.toContain('Read: failed:');
+    expect(merged.join('\n')).not.toContain('↳ a.ts: offset');
+    expect(merged.join('\n')).not.toContain('↳ failed:');
   });
 
   // Sole purpose is to prove the branch is read-only for every other tool: `Ran:`/`Found` already
@@ -1834,9 +1834,10 @@ describe('Scrollback tool rows after an output block', () => {
 
   it('keeps summary-only rows tight among themselves', () => {
     const ls = lines([read('r1', 'src/a.ts'), read('r2', 'src/c.ts')]);
-    // Stacked, these two are exactly the case #627 labels (#627's `Read:` on both rows), so the
-    // needle is the labelled form — the point of this test is the row's *spacing*, not its text.
-    expect(rowAbove(ls, '↳ Read: src/c.ts')).not.toBe('');
+    // Stacked, these two are exactly the case #627 labels (#627 keeps the `Read` verb on both
+    // rows), so the needle is the labelled form — the point of this test is the row's *spacing*,
+    // not its text.
+    expect(rowAbove(ls, '↳ Read src/c.ts')).not.toBe('');
   });
 
   it('keeps the first result tight under its tool call', () => {
