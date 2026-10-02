@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   dropCarriers,
+  hasExecutableSubstitution,
   maskQuoted,
   splitSegments,
   words,
@@ -203,10 +204,10 @@ const REDIRECT_AMP_RE = /\d*>&\d*|&>>?/g;
 const VERB_PREFIX_RE =
   /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
 
-// Substitution runs a nested command the verb check never sees — tested on the RAW string, since
-// `$(…)` executes inside double quotes. Same rule and same trade as `_readonly.ts`.
-const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
-
+// Substitution runs a nested command the verb check never sees; `_readonly.ts` owns that test
+// (`hasExecutableSubstitution`) so the sandbox and the plan gate cannot drift on which contexts are
+// DATA.
+//
 // `xargs` flags that take the next word as their value, so `xargs -I {} gh issue view {}` reads its
 // verb as `gh`, not `{}`. `-I{}` attached is one word and drops with the flag.
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J', '-R', '-S']);
@@ -257,7 +258,7 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
   // and `gh issue comment 1 --body-file - <<'EOF' …` — the standard way a model writes a multi-line
   // comment — would be denied every time.
   const c = stripHeredocs(command).trim();
-  if (!c || SUBSTITUTION_RE.test(c)) return { allowed: false };
+  if (!c || hasExecutableSubstitution(c)) return { allowed: false };
   const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
   const segments = splitSegments(c, masked)
     .map(s => s.trim())

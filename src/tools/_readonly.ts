@@ -129,9 +129,11 @@ function ghApiIsGet(args: string[]): boolean {
   return !!endpoint && endpoint !== 'graphql';
 }
 
-// Substitution runs a nested command the allowlist would never see. Tested against the RAW string,
-// not the quote-masked view, because `$(…)` inside double quotes still executes. Costs a false
-// negative on a single-quoted literal `$(` in a search pattern — cheap, and it errs safe.
+// Substitution runs a nested command the allowlist would never see. `$(…)` and a backtick execute
+// inside DOUBLE quotes as well as bare, so those stay tested; inside single quotes every character is
+// literal, and blanking that region first is what stops `grep -c '```'` and `grep -n '$(dirname' src/`
+// reading as substitutions the model never wrote. That retires the blanket trade this rule used to
+// make — the context is answerable now, in `maskSingleQuotedData` below.
 const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 
 // A backslash-escaped `` ` `` or `$` is a literal character in every quoting context (single quotes
@@ -140,6 +142,53 @@ const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 // markdown-table grep (`"^| \`REIKA"`) refused, a plan round lost.
 function dropEscapedSubstitutionChars(raw: string): string {
   return raw.replace(/\\\\/g, '').replace(/\\[`$]/g, '');
+}
+
+// What a substitution check should actually read: the command with the regions where a `$(` or a
+// backtick is DATA blanked out, length-preserving so any offset taken against it still lines up.
+// Two contexts blank, one refuses to answer:
+//
+//   - inside SINGLE quotes (a `'` opens the run, the next `'` closes it): `grep -c '```'` is a
+//     pattern, not a command. Double-quoted runs are skipped over rather than blanked, so an
+//     apostrophe in prose (`echo "it's $(curl evil)"`) cannot be mistaken for an opening quote and
+//     swallow the substitution beside it.
+//   - NOTHING when a `<<` is in the text. A heredoc body is not quote-parsed at all — its `$(…)`
+//     expands unless the delimiter was quoted — so an apostrophe inside one (`it's`) would pair with
+//     the next and blank a command that runs. The delimiter's own quoting is what decides, and that
+//     is `stripHeredocs`' question, not this one: an unclear heredoc means no blanking, which the
+//     caller reads as "test the raw string" and denies as it does today.
+//
+// Returns undefined when quoting cannot be closed (`echo don't` leaves a `'` open) — the same
+// fallback, because a mask that guesses where a quote ends is how a substitution gets hidden.
+export function maskSingleQuotedData(command: string): string | undefined {
+  if (command.includes('<<')) return undefined;
+  let out = '';
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === '"') {
+      const end = command.indexOf('"', i + 1);
+      if (end === -1) return undefined;
+      out += command.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      if (end === -1) return undefined;
+      out += ' '.repeat(end + 1 - i);
+      i = end + 1;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+// The one call both readers make. `dropEscapedSubstitutionChars` first (a `\$(` is a literal), then
+// the single-quote mask when it can be built; an unmaskable command keeps the raw test.
+export function hasExecutableSubstitution(command: string): boolean {
+  const escaped = dropEscapedSubstitutionChars(command);
+  return SUBSTITUTION_RE.test(maskSingleQuotedData(escaped) ?? escaped);
 }
 
 // Redirection is the one metacharacter that is routinely DATA (`grep ">" f`), so it alone is tested
@@ -317,7 +366,7 @@ export function splitSegments(command: string, masked: string): string[] {
 // ladder side. Pure.
 function classify(command: string, recognized: Set<string>, planReads = false): boolean {
   const trimmed = command.trim();
-  if (!trimmed || SUBSTITUTION_RE.test(dropEscapedSubstitutionChars(trimmed))) return false;
+  if (!trimmed || hasExecutableSubstitution(trimmed)) return false;
   const { raw: c, masked } = blankHarmlessRedirects(trimmed, maskQuoted(trimmed));
   if (REDIRECT_RE.test(masked)) return false;
   const segments = splitSegments(c, masked);
