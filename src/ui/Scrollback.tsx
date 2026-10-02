@@ -148,7 +148,9 @@ export function Scrollback({
   return (
     <>
       <Static items={scrollback}>
-        {(item, i) => <LogItemView key={i} item={item} prev={scrollback[i - 1]} />}
+        {(item, i) => (
+          <LogItemView key={i} item={item} prev={scrollback[i - 1]} log={scrollback} index={i} />
+        )}
       </Static>
       {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
       {indent ? (
@@ -369,6 +371,40 @@ export function lastCall<A extends readonly unknown[], T>(
     cache = { args, ambient: around, value: compute(...args) };
     return cache.value;
   };
+}
+
+// The display form of a tool result's summary (#567, #627).
+//
+// A read result drops its leading verb when it is alone: the `⏺︎ Read(path=…)` call directly above
+// carries it, and the path follows immediately, so the row reads cleanly without it. Stacked under
+// a sibling call that argument fails — every row is `  ↳ <path> …`, the marker names none of them —
+// so the verb comes back.
+//
+// Restoring it means *un-dropping* it, not inventing a separator: a success summary in this
+// codebase is `Verb rest` (`Listed 12 entries in src`, `Found 3 matches for /x/`, `Fetched <url>
+// (…)`, `Wrote src/a.ts (+3)`), and the colon-bearing shapes are failure lines (`Edit failed:`,
+// `List failed:`) or `Ran:` (tools/bash.ts). A read's summary opens with the path itself, so there
+// is nothing to disambiguate, and a display colon would make read the only success verb carrying a
+// separator the wire format didn't.
+//
+// `Ran:` is the one success verb with a separator, and it is NOT a style choice to copy or undo:
+// its colon is in the wire summary, where `plantrack.ts` (ranSuccessfully) parses `Ran: ` back out
+// of history to re-derive plan progress for results written before `exitCode` existed. Bash is also
+// the one payload that is arbitrary shell text, so the colon is what keeps `Ran: npm test` from
+// reading as a command named `Ran`. Neither applies here — this row's separator would be invented
+// at render time and parsed by nothing.
+//
+// Two of the read tool's shapes keep their verb even when lone, because for those the verb IS the
+// label rather than a repetition of the call above: `Read failed: …` (an edit-style failure line)
+// and `Read a.ts: offset 99 past end of file (10 lines)` (which already carries its own separator).
+// Stripping either leaves `failed: …` / `a.ts: offset …`, a row that lost its only label. Matched
+// on the summary's own `Verb …: detail` form, not on the mere presence of a colon, so a path that
+// simply contains one (`Read a:b.ts lines 1-2 of 3`) still elides.
+export function elidedReadSummary(summary: string, grouped: boolean): string {
+  if (grouped || !summary.startsWith('Read ')) return summary;
+  return /^\s+[^:]*:\s|^\s+failed:/.test(summary.slice('Read'.length))
+    ? summary
+    : summary.replace(/^Read /, '');
 }
 
 // The inputs a live block reads that are not arguments.
@@ -605,12 +641,95 @@ function WorkedRow({ durationMs }: { durationMs: number }) {
   );
 }
 
-function LogItemView({ item, prev }: { item: LogItem; prev?: LogItem }) {
+function LogItemView({
+  item,
+  prev,
+  log,
+  index,
+}: {
+  item: LogItem;
+  prev?: LogItem;
+  log: LogItem[];
+  index: number;
+}) {
   if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
-  return <MessageView msg={item} prev={prev && 'workedMs' in prev ? undefined : prev} />;
+  return (
+    <MessageView
+      msg={item}
+      prev={prev && 'workedMs' in prev ? undefined : prev}
+      log={log}
+      index={index}
+    />
+  );
 }
 
-function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
+// Whether a read result is one of several under the same call round (#627). Its verb was dropped
+// from the row on the argument that the call directly above carries it (#567) — an argument that
+// holds only while that call is alone. With siblings, every result row is `  ↳ path …` and the
+// marker names none of them, so the label goes back on the rows that lost it.
+//
+// Both arms read only what is knowable the moment the row prints. `<Static>` freezes a row as it
+// lands, and a round's results commit one at a time (the loop runs its calls sequentially), so a
+// rule that waits for the rows BELOW this one labels the first row of every stack wrong on screen
+// and frozen — the very stack #627 is about. The row above is already frozen when this one prints,
+// and the round's call list committed with the `⏺︎` call rows before any result ran, so those two
+// decide. Cost: a read whose sibling call never commits (held for a subagent #346, withdrawn by
+// the ladder) gets a label with no stack under it — a rare, stable over-label instead of a wrong
+// frozen frame.
+//
+// The row arm keeps the gap `afterToolBlock` gives summary-only rows: a read whose neighbour
+// carries a diff or a command chip is separated by a blank row, so it is not scanned as part of
+// that block and keeps the bare path. The round arm is gap-proof by design: a round's results
+// print in call order, so [read, bash, read] separates the two read rows with the command's block —
+// the label is round-scoped ("this round read more than one file"), so no interleaving of other
+// calls can strip it from a read row in a multi-read round.
+function groupedReads(
+  msg: Message,
+  prev: Message | undefined,
+  log: LogItem[],
+  index: number,
+): boolean {
+  if (msg.role !== 'tool' || !/^Read /.test(msg.summary)) return false;
+  const nested = 'nested' in msg && !!msg.nested;
+  // Same nesting level, not merely "not nested": a subagent's reads stack at the nested indent and
+  // group with each other, never with a top-level row across the block boundary.
+  const sibling = (m?: Message): boolean =>
+    m?.role === 'tool' && !hasBlockUnderSummary(m) && !!m.nested === nested;
+  return sibling(prev) || multiReadRound(msg, log, index, nested);
+}
+
+// Whether this row's round reads more than one file (#627) — the call list decides, counting every
+// `read` in the round rather than looking for one after this row's call: interleaved siblings
+// ([read, bash, read]) put a block between two of the read rows, and both rows deserve the label.
+// The walk to the round's assistant message skips what a call can leave behind (its own result
+// rows, the harness notices that trail a chip) and stops at the first same-level assistant, which
+// owns these results — `callId` confirms it before the count is trusted.
+function multiReadRound(msg: Message, log: LogItem[], index: number, nested: boolean): boolean {
+  if (msg.role !== 'tool') return false;
+  for (let j = index - 1; j >= 0; j--) {
+    const m = log[j];
+    if ('workedMs' in m) continue;
+    if (m.role === 'user') return false;
+    if (m.role !== 'assistant') continue;
+    if (!!m.nested !== nested) return false;
+    const calls = m.toolCalls ?? [];
+    if (!calls.some(c => c.id === msg.callId)) return false;
+    return calls.filter(c => c.name === 'read').length >= 2;
+  }
+  return false;
+}
+
+function MessageView({
+  msg,
+  prev,
+  log,
+  index,
+}: {
+  msg: Message;
+  prev?: Message;
+  log: LogItem[];
+  index: number;
+}) {
   const nested = 'nested' in msg && !!msg.nested;
   const indent = nested ? NESTED_INDENT : 0;
   // A top-level row that follows a nested one closes out a subagent block. Tool rows
@@ -630,7 +749,14 @@ function MessageView({ msg, prev }: { msg: Message; prev?: Message }) {
     msg.role === 'tool' &&
     prev?.role === 'tool' &&
     (hasBlockUnderSummary(prev) || hasBlockUnderSummary(msg));
-  const inner = renderMessage(msg, indent, { nested, afterNested, afterNotice, afterToolBlock });
+  const inner = renderMessage(msg, indent, {
+    nested,
+    afterNested,
+    afterNotice,
+    afterToolBlock,
+    // Only a read result row has the verb to put back; skip the neighbours of everything else.
+    groupedReads: msg.role === 'tool' && groupedReads(msg, prev, log, index),
+  });
   if (inner === null) return null;
   // Explicit width, on every scrollback row: <Static> is laid out in its own pass that does NOT
   // inherit the App's paddingX={1}, so a plain <Text> here wraps at the FULL terminal width and is
@@ -682,6 +808,10 @@ function renderMessage(
     afterNested?: boolean;
     afterNotice?: boolean;
     afterToolBlock?: boolean;
+    // This read result is stacked under a sibling (#627), so its row keeps the `Read` verb the
+    // lone-call case drops. Computed in MessageView, which is the only place with the log and the
+    // neighbours.
+    groupedReads?: boolean;
   } = {},
 ): ReactElement | null {
   if (msg.role === 'user') {
@@ -787,6 +917,12 @@ function renderMessage(
     // it: the chip lands at the end of the last wrapped row, and a wrap that didn't know about it
     // would spill onto a row of its own, while the live row it replaces is one row tall.
     const duration = msg.command ? toolTimer('bash', msg.durationMs) : '';
+    // The call row above carries the verb, so under a lone call the path reads cleanly on its own
+    // — the shape a Read has had since #567. Stacked under two or more of them the marker stops
+    // being a label: every row is `  ↳ path …`, so nothing says which rows are reads and the paths
+    // are the only thing left to scan. The verb comes back for the stack that caused the ambiguity,
+    // and only there — a lone read's row stays byte-identical to what it was.
+    const summary = scrubOutput(elidedReadSummary(msg.summary ?? '', !!ctx.groupedReads));
     return (
       <Box
         flexDirection="column"
@@ -794,20 +930,11 @@ function renderMessage(
       >
         <Text>
           <Text color={theme.tool}>{TOOL_MARKER}</Text>
-          {/* Drop the redundant leading "Read " for display only: the `↳` already
-              marks this as a child of the Read tool call, and the path follows
-              immediately so it reads cleanly. The model-facing summary
-              (loop.ts) keeps the verb as grounding. Scoped to Read because other
-              tools' verbs ("Found", "Ran:", "Edited") carry meaning. */}
           {/* scrubOutput, not scrubDisplay: a summary quotes what the tool was given — a bash
               command, an edit's non-matching line — so it can carry the same tabs and control
               characters raw output does, on a row that must stay one row. */}
           <Text color={theme.secondary}>
-            {hangingWrap(
-              scrubOutput((msg.summary ?? '').replace(/^Read /, '')),
-              contentWidth(indent) - duration.length,
-              TOOL_MARKER.length,
-            )}
+            {hangingWrap(summary, contentWidth(indent) - duration.length, TOOL_MARKER.length)}
           </Text>
           <Text color={theme.muted}>{duration}</Text>
         </Text>
