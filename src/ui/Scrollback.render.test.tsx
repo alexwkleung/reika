@@ -1578,7 +1578,8 @@ describe('Scrollback stacked read labels', () => {
   });
 
   // A result whose neighbour carries a block is separated from it by a blank row (#492), so it is
-  // never scanned as part of that block and keeps the bare path.
+  // never scanned as part of that block and keeps the bare path. Row-adjacency arm only — the
+  // round arm below is gap-proof on purpose.
   it('does not group a read across the gap a block puts under its neighbour', () => {
     const rows = resultRows([
       readResult('t1', 'Read a.ts lines 1-10 of 10'),
@@ -1591,6 +1592,34 @@ describe('Scrollback stacked read labels', () => {
     ]);
     expect(rows[0]).toBe('↳ a.ts lines 1-10 of 10');
     expect(rows[1]).toContain('Ran: npm test');
+  });
+
+  // A round's results print in call order, so [read, bash, read] separates the two read rows with
+  // the command's block between them. The label is round-scoped ("this round read more than one
+  // file"), so no interleaving of other calls strips it from either read row (#631).
+  it('labels every read of a multi-read round even when other results interleave', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          readCall('t1', 'src/a.ts'),
+          { id: 't2', name: 'bash', args: { command: 'npm test' } },
+          readCall('t3', 'src/b.ts'),
+        ],
+      },
+      readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
+      {
+        role: 'tool',
+        callId: 't2',
+        summary: 'Ran: npm test',
+        command: { text: 'npm test', outputTail: 'ok', outputTruncated: false },
+      },
+      readResult('t3', 'Read src/b.ts lines 1-30 of 96'),
+    ]);
+    expect(rows[0]).toBe('↳ Read src/a.ts lines 1-80 of 402');
+    expect(rows[1]).toContain('Ran: npm test');
+    expect(rows[2]).toBe('↳ Read src/b.ts lines 1-30 of 96');
   });
 
   // The elision is not "any Read row" — the two shapes whose verb is their only label keep it even

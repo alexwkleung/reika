@@ -679,7 +679,10 @@ function LogItemView({
 //
 // The row arm keeps the gap `afterToolBlock` gives summary-only rows: a read whose neighbour
 // carries a diff or a command chip is separated by a blank row, so it is not scanned as part of
-// that block and keeps the bare path.
+// that block and keeps the bare path. The round arm is gap-proof by design: a round's results
+// print in call order, so [read, bash, read] separates the two read rows with the command's block —
+// the label is round-scoped ("this round read more than one file"), so no interleaving of other
+// calls can strip it from a read row in a multi-read round.
 function groupedReads(
   msg: Message,
   prev: Message | undefined,
@@ -692,14 +695,16 @@ function groupedReads(
   // group with each other, never with a top-level row across the block boundary.
   const sibling = (m?: Message): boolean =>
     m?.role === 'tool' && !hasBlockUnderSummary(m) && !!m.nested === nested;
-  return sibling(prev) || readCallFollows(msg, log, index, nested);
+  return sibling(prev) || multiReadRound(msg, log, index, nested);
 }
 
-// Whether another `read` call in this row's round is still owed a result row (#627). `at` is this
-// row's own call, found by `callId` — a round can deliver notices and rows of earlier rounds
-// between two of its results, so position in the log is not position in the round. The walk skips
-// what a call can leave behind (its own result rows, the harness notices that trail a chip).
-function readCallFollows(msg: Message, log: LogItem[], index: number, nested: boolean): boolean {
+// Whether this row's round reads more than one file (#627) — the call list decides, counting every
+// `read` in the round rather than looking for one after this row's call: interleaved siblings
+// ([read, bash, read]) put a block between two of the read rows, and both rows deserve the label.
+// The walk to the round's assistant message skips what a call can leave behind (its own result
+// rows, the harness notices that trail a chip) and stops at the first same-level assistant, which
+// owns these results — `callId` confirms it before the count is trusted.
+function multiReadRound(msg: Message, log: LogItem[], index: number, nested: boolean): boolean {
   if (msg.role !== 'tool') return false;
   for (let j = index - 1; j >= 0; j--) {
     const m = log[j];
@@ -708,9 +713,8 @@ function readCallFollows(msg: Message, log: LogItem[], index: number, nested: bo
     if (m.role !== 'assistant') continue;
     if (!!m.nested !== nested) return false;
     const calls = m.toolCalls ?? [];
-    const at = calls.findIndex(c => c.id === msg.callId);
-    if (at < 0) return false;
-    return calls.slice(at + 1).some(c => c.name === 'read');
+    if (!calls.some(c => c.id === msg.callId)) return false;
+    return calls.filter(c => c.name === 'read').length >= 2;
   }
   return false;
 }
