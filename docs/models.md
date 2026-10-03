@@ -2,7 +2,12 @@
 
 [← README](../README.md)
 
-Below are models that were tested in Reika. Local and API are used for testing, both in daily workflows and evaluations. Local is emphasized for usability and behavioral purposes at the absolute scale which is what Reika optimizes for in the majority.
+Models Reika has been run against, in daily use and in evaluations. Local is the emphasis: it is what
+Reika is built for, and where the behaviour work happens. API models are used alongside it for
+comparison and for tasks a local quant cannot hold.
+
+Quantization is the one in parentheses. Where a note names modes, that is where the model was used
+rather than the only thing it can do.
 
 ## Local
 

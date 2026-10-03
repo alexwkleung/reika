@@ -9,35 +9,49 @@ Standing guidance for the model, loaded into the system prompt once at startup:
 - Global: `~/.config/reika/AGENTS.md` — your personal preferences, applied in every project.
 - Project: `<cwd>/AGENTS.md` — the repo's conventions.
 
-When both exist they are merged, global first, with the project file stated as winning where they disagree — so a personal "terse replies, no emoji" rides along without displacing the repo's build/test rules. `CLAUDE.md` is accepted as a fallback name in either location. Each file is capped at 12KB (≈3k tokens); over that it is replaced by its heading outline plus a pointer to read the relevant section, so an oversized file never crowds a small context window.
+When both exist they are merged, global first, with the project file named as the winner where they
+disagree — so a personal "terse replies, no emoji" rides along without displacing the repo's build and
+test rules. `CLAUDE.md` is accepted as a fallback name in either location.
+
+Each file is capped at 12KB (≈3k tokens). An oversized file is replaced by its heading outline plus a
+pointer to read the relevant section, so it can never crowd a small context window.
 
 ## Skills (reusable prompt templates)
 
-Drop a `*.md` file in a skills directory and it becomes a slash command. Useful for saved workflows (`/review`, `/deploy`, `/refactor`, etc.).
+A `*.md` file dropped in a skills directory becomes a slash command — useful for saved workflows
+(`/review`, `/deploy`, `/refactor`). Project shadows global, which shadows bundled, on a name collision:
 
-**Locations (project shadows global, global shadows bundled, on name collision):**
+- **Bundled:** the skills that ship with Reika (below)
+- **Global:** `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
+- **Project:** `<cwd>/.reika/skills/`
 
-- Bundled: the skills that ship with Reika (below)
-- Global: `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
-- Project: `<cwd>/.reika/skills/`
-
-**Skills Reika ships with:**
+### Skills Reika ships with
 
 | Skill     | What it does                                                                                      |
 | --------- | ------------------------------------------------------------------------------------------------- |
 | `/issue`  | Reads a GitHub issue with `gh` (title + comments, since bodies are often empty), then works on it |
 | `/review` | Reads a PR and its linked issue with `gh`, pages the diff, and reviews it in the terminal         |
 
-They only appear where they can work: `gh` must be on your `PATH`, and the current repo must have a `github.com` remote. Otherwise they are left out of the command list and never offered by plain-English routing. Reika only looks these up — it does not run `gh` at startup — so a `gh` that is installed but logged out shows the skills, and the first call says what is wrong. To change one, copy it into your global or project skills directory under the same name; your copy replaces the bundled one.
+They only appear where they can work: `gh` must be on your `PATH`, and the current repo must have a
+`github.com` remote. Otherwise they are left out of the command list and never offered by plain-English
+routing. Reika only looks these up — it does not run `gh` at startup — so a `gh` that is installed but
+logged out still shows the skills, and the first call says what is wrong.
 
-A skill of your own can declare the same requirements with a `requires:` frontmatter line (`requires: gh, github`). A requirement Reika does not recognize hides the skill.
+To change one, copy it into your global or project skills directory under the same name; your copy
+replaces the bundled one. A skill of your own can declare the same requirements with a `requires:`
+frontmatter line (`requires: gh, github`). A requirement Reika does not recognize hides the skill.
 
-**Layouts (both supported):**
+### Layouts
 
 - **Flat file:** `~/.config/reika/skills/review.md` → `/review`
-- **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in verbatim.
+- **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry
+  supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files
+  are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in
+  verbatim.
 
-**File format** — plain markdown with optional YAML frontmatter. Example below:
+### File format
+
+Plain markdown with optional YAML frontmatter:
 
 ```md
 ---
@@ -53,7 +67,8 @@ Review the changes on this branch:
    Report a punch list.
 ```
 
-Without frontmatter, the first non-empty line becomes the autocomplete description; the whole file is the prompt body.
+Without frontmatter, the first non-empty line becomes the autocomplete description and the whole file is
+the prompt body.
 
 **Invocation:**
 
@@ -63,9 +78,14 @@ Without frontmatter, the first non-empty line becomes the autocomplete descripti
 
 ### Plain-English routing (`triggers`)
 
-You don't have to remember the slash command. `triggers:` lists phrases that route an ordinary prompt to the skill — matched **deterministically in the harness**, never by the model. Writing "review the branch for me" gets you a one-line hint that `/review` exists and that the prompt was sent unchanged; the turn runs normally either way.
+You don't have to remember the slash command. `triggers:` lists phrases that route an ordinary prompt to
+the skill — matched **deterministically in the harness**, never by the model. Writing "review the branch
+for me" gets you a one-line hint that `/review` exists and that the prompt was sent unchanged; the turn
+runs normally either way.
 
-The frontmatter accepts any YAML list shape (`triggers: a, b`, `triggers: [a, b]`, or a `- ` block list). The skill's own name is always an implicit trigger, so a skill called `verify` routes "verify my changes" with no `triggers:` at all.
+The frontmatter accepts any YAML list shape (`triggers: a, b`, `triggers: [a, b]`, or a `- ` block
+list). The skill's own name is always an implicit trigger, so a skill called `verify` routes "verify my
+changes" with no `triggers:` at all.
 
 Matching rules, in short:
 
@@ -75,17 +95,48 @@ Matching rules, in short:
 - Continuations (`yes`, `ok`, `continue`, `do it`, …) never route
 - A skill is suggested at most once per session — decline it once and it stops asking
 
-**Confirm-to-apply (`REIKA_SKILL_AUTO`, default `ask`):** on a strong match a two-row dialog opens over the input before anything is sent — `1. Send as typed` (selected) and `2. Apply /review` — with the prompt still in the box underneath. ↑↓, the digits and `y`/`n` move the cursor (`y` lands on Apply), Enter answers, ctrl-c drops the submit and leaves the prompt to edit. Applying prepends the skill body to your prompt with a scrollback receipt naming which phrases matched; declining sends it as typed with no hint line. Strong means the prompt has the shape of a command, not just its keywords — two distinct triggers or one multi-word phrase, and a matched phrase opening the prompt (a `please` / `can you` lead is fine) — so `review pr 420 but first explain how the recap is built` asks while `there is an issue with the pr review flow` only suggests. Refused when the body would take more than ~15% of the context window, and never in chat mode, which has no `bash` for a skill's first step; plan mode asks like the others, and its own prompt keeps an applied body to planning. A prompt submitted while a turn is running is asked about right then, and the queued entry carries your answer to the replay. It is on by default because a wrong pick now costs one keystroke rather than a turn. Headless runs have nobody to ask, so `ask` sends the prompt as typed there; `REIKA_SKILL_AUTO=apply` (or `1`) lets `-p` apply a strong match without asking — and only when the prompt is 12 words or fewer, the cap that prices a wrong pick with no one to catch it. The TUI still asks under `apply`: a human present is never a reason to inject silently. `off` leaves only the hint line.
+### Confirm-to-apply
+
+`REIKA_SKILL_AUTO` (default `ask`) controls it. On a strong match a two-row dialog opens over the input
+before anything is sent — `1. Send as typed` (selected) and `2. Apply /review` — with your prompt still
+in the box underneath. ↑↓, the digits and `y`/`n` move the cursor (`y` lands on Apply), Enter answers,
+and ctrl-c drops the submit and leaves the prompt for you to edit.
+
+- **Applying** prepends the skill body to your prompt, with a scrollback receipt naming which phrases
+  matched. **Declining** sends it as typed, with no hint line.
+- **Strong** means the prompt has the shape of a command, not just its keywords: two distinct triggers,
+  or one multi-word phrase opening the prompt (a `please` / `can you` lead is fine). So `review pr 420
+but first explain how the recap is built` asks, while `there is an issue with the pr review flow` only
+  suggests.
+- It is **refused** when the body would take more than ~15% of the context window, and never offered in
+  chat mode, which has no `bash` for a skill's first step. Plan mode asks like the others, and its own
+  prompt keeps an applied body to planning.
+- A prompt submitted while a turn is running is asked about right then, and the queued entry carries
+  your answer to the replay.
+- **Headless has nobody to ask,** so `ask` sends the prompt as typed there. `REIKA_SKILL_AUTO=apply` (or
+  `1`) lets `-p` apply a strong match without asking, and only when the prompt is 12 words or fewer —
+  the cap that prices a wrong pick with nobody to catch it. The TUI still asks under `apply`: a human
+  present is never a reason to inject silently. `off` leaves only the hint line.
+
+It is on by default because a wrong pick now costs one keystroke rather than a turn.
 
 ### Pasted URLs
 
-Paste an `http(s)` link into a prompt and Reika fetches it before the turn starts, prepending the extracted content as a `<url href="…">` block — the same mechanism as `@file` mentions, so the model reads the page instead of guessing at it. Up to 2 URLs per prompt, truncated to 8k characters each (`fetch_url` gets the rest). Every fetch leaves a scrollback line, and a dead link is reported as one rather than silently dropped. Set `REIKA_PASTE_FETCH=0` to turn it off — worth doing on an airgapped machine.
+Paste an `http(s)` link into a prompt and Reika fetches it before the turn starts, prepending the
+extracted content as a `<url href="…">` block — the same mechanism as `@file` mentions, so the model
+reads the page instead of guessing at it. Up to 2 URLs per prompt, truncated to 8k characters each
+(`fetch_url` gets the rest). Every fetch leaves a scrollback line, and a dead link is reported as one
+rather than silently dropped. Set `REIKA_PASTE_FETCH=0` to turn it off — worth doing on an airgapped
+machine.
 
-Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file content, and links the model writes are handled separately by URL grounding (`REIKA_URL_GROUNDING`).
+Only URLs _you_ type are fetched. Links inside an `@`-mentioned file are file content, and links the
+model writes are handled separately by URL grounding (`REIKA_URL_GROUNDING`).
 
-**Rules:**
+### Rules
 
 - Built-in commands always win over skills with the same name — you can't shadow `/help` or `/exit`
 - Skill names are lowercased filenames; only `[a-z0-9_-]` are accepted (skip files with weird names)
 - Skills load at bootstrap and on `/cd` — edit a file mid-session, then `/cd .` to refresh
-- Files under `<cwd>/.reika/` (including `.reika/skills/`, `.reika/handoff/`, etc.) appear in `@` autocomplete — handy for inlining a project-local handoff doc, an in-repo skill file, or any other Reika-scratch content. Other dot-dirs (`.git/`, `.vscode/`, etc.) stay hidden.
+- Files under `<cwd>/.reika/` (including `.reika/skills/`, `.reika/handoff/`, etc.) appear in `@`
+  autocomplete — handy for inlining a project-local handoff doc, an in-repo skill file, or any other
+  Reika-scratch content. Other dot-dirs (`.git/`, `.vscode/`, etc.) stay hidden.
