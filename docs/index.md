@@ -4,20 +4,34 @@ layout: home
 
 hero:
   name: Reika
-  tagline: Coding agent CLI for small, heavily quantized local models.
+  text: A coding agent CLI for small local models
+  tagline: Built for 8–35B models at Q2–Q4 on a 16–32k window. The harness cannot raise a model's ceiling, but it can stop it wasting its window, looping on the same read, or quietly losing its task.
   actions:
     - theme: brand
       text: Get started
       link: /usage
+    - theme: alt
+      text: Findings
+      link: /findings
     - theme: alt
       text: Configuration
       link: /configuration
 
 features:
   - title: Context discipline
-    details: Placeholder — summarize once the README pass is done.
-  - title: Loop breaking
-    details: Placeholder — summarize from the findings write-up.
-  - title: Local first
-    details: Placeholder.
+    details: Old tool output collapses to one-line summaries, and requests stay append-only between shrink events so the engine's prompt cache survives. When the window fills, the model writes its own findings note before older turns fold into a recap.
+  - title: Loop and spiral breaking
+    details: Repeated reads, re-derived reasoning and runaway thinking blocks are detected from their statistics and answered with an escalating ladder — nudge, pinned ledger, tool withdrawal, honest stop — rather than a 30-minute spiral.
+  - title: Guard rails a weak model needs
+    details: Blind edits are bounced to a read first, edits are typechecked against a pre-edit baseline, and a written plan is tracked from what the harness observes rather than what the model claims.
+  - title: Plan, then implement
+    details: A read-only plan mode that ends in a numbered, file-specific plan you can refine over as many turns as you like, and a vibe mode that chains planning and implementation on every prompt.
+  - title: Safe and local by default
+    details: Approvals stay on for dangerous commands and out-of-project writes, on macOS model-chosen shell commands run under a kernel sandbox, and nothing leaves the model server you configured.
+  - title: Measured, not asserted
+    details: Every default-on feature leaves a baseline arm behind it, and the record of what broke and what held — with the numbers — is published in the findings.
 ---
+
+![Reika fixing a retry helper and its test with a local model](./demo.gif)
+
+<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error. The measurements behind the features above are in [Findings](/findings).</sup>
