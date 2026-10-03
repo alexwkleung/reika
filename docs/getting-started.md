@@ -18,9 +18,19 @@ on another machine — the model never has to run where Reika runs (see
 
 ## Install
 
+Either package manager works — the published package has no install-time script, so only the location
+of the binary differs.
+
 ```sh
-npm i -g reika
+pnpm add -g reika    # what Reika's own checkout uses
+npm i -g reika       # npm ships with Node
 ```
+
+pnpm needs installing first (`npm i -g pnpm`, or the standalone installer at
+[pnpm.io/installation](https://pnpm.io/installation)), and its global bin directory has to be on your
+`PATH` — `pnpm setup` puts it there and prints the line to add to your shell config (on macOS that is
+`~/Library/pnpm/bin`). npm's global bin is on `PATH` already, so npm is the shorter route if you do
+not otherwise use pnpm.
 
 The first npm publish is `0.1.0`, a research and developer release: expect behavior and config to
 change between minor versions. Until that release is up, install from a checkout (below).

@@ -64,10 +64,10 @@ Reika 建立在一个可以被测量的判断之上，所以这些记录是公�
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-然后安装 Reika 并把它指向该服务器（需要 Node ≥ 22）：
+然后安装 Reika 并把它指向该服务器（需要 Node ≥ 22，以及 pnpm —— `npm i -g pnpm`）：
 
 ```sh
-npm i -g reika
+pnpm add -g reika        # 也可以 npm i -g reika
 
 export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
