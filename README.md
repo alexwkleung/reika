@@ -117,6 +117,7 @@ Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY
 
 | Doc                                              | Covers                                                                                    |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| [Install and first run](docs/getting-started.md) | Requirements, installing, serving a model, and the first run                              |
 | [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
 | [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
 | [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`          |
