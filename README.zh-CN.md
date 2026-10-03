@@ -114,13 +114,13 @@ cd your-project && reika
 | [架构与注意事项](docs/architecture.md) | 框架如何工作，以及已知限制                                       |
 | [贡献](CONTRIBUTING.md)                | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
 
-## 许可
-
-Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
-
 ## 灵感来自
 
 Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
+
+## 许可
+
+Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
 ## 支持我们的工作
 
