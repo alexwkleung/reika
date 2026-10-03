@@ -22,6 +22,7 @@ export default defineConfig({
           { text: 'Models', link: '/models' },
           { text: 'Platforms', link: '/platforms' },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'Findings', link: '/findings' },
         ],
       },
     ],

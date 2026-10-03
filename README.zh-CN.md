@@ -11,6 +11,10 @@
 </p>
 
 <p align="center">
+  <em>0.x：研究与开发者版本。行为与配置可能在小版本之间发生变化。</em>
+</p>
+
+<p align="center">
   <a href="#快速开始">快速开始</a> ·
   <a href="#文档">文档</a> ·
   <a href="docs/models.md">测试过的模型</a> ·
@@ -24,6 +28,15 @@
 大多数编码代理是为主流前沿模型打造的。Reika 首先面向你自己能跑起来的模型：8B–35B，通常处于 Q2–Q4，跑在 16–32k 上下文窗口的笔记本上。目标是让这些模型变得**可用**，而不是更聪明。框架抬不高模型的上限，但可以阻止它浪费窗口、在同一个读取上反复打转，或者悄悄弄丢自己的任务。
 
 8–9B 模型在简单任务上能站得住；14–35B 是小模型做代理编码的甜点区。7B 以下只适合范围明确、边界清晰的窄任务。任何 OpenAI 兼容的服务端都能用，所以需要时同一套配置可以直接放大到云端模型。
+
+## 测量结果
+
+Reika 建立在一个可以被测量的判断之上，所以这些记录是公开的，而不是只靠断言。简短版本如下，完整的运行记录与数字见 [docs/findings.md](docs/findings.md)：
+
+- **框架自己的上下文管理，代价比模型本身更大。** 一次发生在上下文中段的改写重新预填充了 8,453 个 token —— 7.9 分钟；而同一会话里的一次追加只花 25 个 token、3.5 秒。
+- **折叠之前先向模型要它的发现。** 支撑这一点的 A/B 中，发现被丢弃的那一臂折叠了五次，反复重读已经读过的文件，始终没有作答；被问过的那一臂直接从笔记里给出了答案。
+- **提示词措辞是最弱的杠杆。** 在 Q2 下面对含糊任务，模型收敛与打转大约各占一半，框架改变不了这个比例 —— 只能改变失败那一半的代价。
+- **循环检测器的区分度很干净。** 健康的推理轮次在跨轮相似度上测得 0.2–0.3；锁死的循环停在 1.00，而一个跑了 38 轮的有效轮次从未触发检测。
 
 ## 亮点
 
@@ -51,11 +64,10 @@
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-然后安装 Reika 并把它指向该服务器：
+然后安装 Reika 并把它指向该服务器（需要 Node ≥ 22）：
 
 ```sh
-pnpm install
-pnpm run install:global      # 构建并安装 `reika` 可执行文件
+npm i -g reika
 
 export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
@@ -63,7 +75,7 @@ cd your-project && reika
 
 `REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取；对于不上报的服务器（部分推理引擎、多数云端 API），请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
 
-想直接从检出目录运行而不安装：`cp .env.example .env`，编辑它，然后 `pnpm run dev`。`pnpm run uninstall:global` 会移除全局可执行文件。
+想改从检出目录运行：`git clone https://github.com/alexwkleung/reika.git && cd reika`，然后 `pnpm install`（npm 用户先 `npm i -g pnpm`）并用 `pnpm run install:global` 构建安装 `reika` 可执行文件；或者 `cp .env.example .env`、编辑它，再 `pnpm run dev` 直接运行而不安装。`pnpm run uninstall:global` 会移除全局可执行文件。
 
 ## 常用配置
 
@@ -110,6 +122,7 @@ cd your-project && reika
 | [工具](docs/tools.md)                  | 模型可用的工具、审批提示、网络搜索设置、MCP 服务器、`.gitignore` |
 | [指令与技能](docs/skills.md)           | `AGENTS.md`、作为斜杠命令的技能、自然语言路由、粘贴的链接        |
 | [测试过的模型](docs/models.md)         | Reika 实际跑过的本地量化版本和 API                               |
+| [测量结果](docs/findings.md)           | 实测记录：什么坏了、什么撑住了，以及每个数字是怎么得到的         |
 | [平台](docs/platforms.md)              | 运行要求、在弱机器上运行、Linux 和 Windows 上的差异              |
 | [架构与注意事项](docs/architecture.md) | 框架如何工作，以及已知限制                                       |
 | [贡献](CONTRIBUTING.md)                | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
