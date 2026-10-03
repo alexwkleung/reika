@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   inheritProfile,
+  isModelMode,
   loadConfig,
+  MODEL_MODES,
+  modeSwitchProfile,
   resolveDefaultMode,
   resolveProfile,
   withProbedLimits,
@@ -45,6 +48,7 @@ const ENV_KEYS = [
   'REIKA_VISION_API_KEY',
   'REIKA_MCP_SERVERS',
   'REIKA_MCP',
+  'REIKA_MODE_MODELS',
 ];
 
 let saved: Record<string, string | undefined>;
@@ -859,5 +863,110 @@ describe('REIKA_MCP_SERVERS (#265)', () => {
       process.env.REIKA_MCP = v;
       expect(loadConfig().mcpServers, v).toHaveLength(1);
     }
+  });
+});
+
+describe('REIKA_MODE_MODELS (#616)', () => {
+  beforeEach(() => {
+    process.env.REIKA_MODEL = 'local';
+  });
+
+  it('is empty when unset', () => {
+    const cfg = loadConfig();
+    expect(cfg.modeProfiles).toEqual({});
+    expect(cfg.modeModelErrors).toEqual([]);
+  });
+
+  it('maps a mode to a named profile', () => {
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_MODE_MODELS = 'plan=kimi';
+    const cfg = loadConfig();
+    expect(cfg.modeProfiles).toEqual({ plan: 'kimi' });
+    expect(cfg.modeModelErrors).toEqual([]);
+  });
+
+  it('maps a mode to a listed model through the profile that serves it', () => {
+    process.env.REIKA_MODEL = 'a,b';
+    process.env.REIKA_MODE_MODELS = 'plan=b';
+    // Two models register an auto-profile each, so the model name IS the profile key.
+    expect(loadConfig().modeProfiles).toEqual({ plan: 'b' });
+
+    // One model registers nothing, and its switch target is the default profile — the same rule
+    // /model applies.
+    process.env.REIKA_MODEL = 'only';
+    process.env.REIKA_MODE_MODELS = 'grind=ONLY';
+    expect(loadConfig().modeProfiles).toEqual({ grind: 'default' });
+  });
+
+  it('reads several entries, case-insensitively and with spaces', () => {
+    process.env.REIKA_PROFILES = 'kimi,go';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_GO_MODEL = 'flash';
+    process.env.REIKA_MODE_MODELS = ' PLAN = Kimi , chat=go, ';
+    expect(loadConfig().modeProfiles).toEqual({ plan: 'kimi', chat: 'go' });
+  });
+
+  it('reports an entry naming a mode no turn reaches the model in', () => {
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_MODE_MODELS = 'shell=kimi';
+    const cfg = loadConfig();
+    expect(cfg.modeProfiles).toEqual({});
+    expect(cfg.modeModelErrors).toHaveLength(1);
+    expect(cfg.modeModelErrors?.[0]).toContain("ignoring 'shell=kimi'");
+  });
+
+  it('reports an entry naming nothing the config has, rather than switching ad-hoc', () => {
+    process.env.REIKA_MODE_MODELS = 'plan=kimi-k2';
+    const cfg = loadConfig();
+    expect(cfg.modeProfiles).toEqual({});
+    expect(cfg.modeModelErrors).toHaveLength(1);
+    expect(cfg.modeModelErrors?.[0]).toContain("no profile or model named 'kimi-k2'");
+  });
+
+  it('reports a malformed or model-less entry', () => {
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    for (const raw of ['plan', 'plan=', '=kimi', 'plan:kimi']) {
+      process.env.REIKA_MODE_MODELS = raw;
+      const cfg = loadConfig();
+      expect(cfg.modeProfiles, raw).toEqual({});
+      expect(cfg.modeModelErrors, raw).toHaveLength(1);
+    }
+  });
+
+  it('keeps the entries it can use beside the ones it cannot', () => {
+    process.env.REIKA_PROFILES = 'kimi';
+    process.env.REIKA_KIMI_MODEL = 'kimi-k2';
+    process.env.REIKA_MODE_MODELS = 'plan=kimi,minimal=nope';
+    const cfg = loadConfig();
+    expect(cfg.modeProfiles).toEqual({ plan: 'kimi' });
+    expect(cfg.modeModelErrors).toHaveLength(1);
+  });
+});
+
+describe('modeSwitchProfile (#616)', () => {
+  const config = { modeProfiles: { plan: 'kimi' } };
+
+  it("runs the mode's own model where it has one", () => {
+    expect(modeSwitchProfile(config, 'plan', 'default')).toBe('kimi');
+  });
+
+  it("falls back to the session's own profile for a mode without one", () => {
+    expect(modeSwitchProfile(config, 'agent', 'go')).toBe('go');
+    expect(modeSwitchProfile(config, 'chat', 'go')).toBe('go');
+    expect(modeSwitchProfile({}, 'plan', 'go')).toBe('go');
+  });
+
+  it('leaves the model alone in shell, which reaches no model', () => {
+    expect(modeSwitchProfile(config, 'shell', 'go')).toBeUndefined();
+  });
+
+  it('counts chat as a model mode and shell as the only one that is not', () => {
+    expect(isModelMode('chat')).toBe(true);
+    expect(isModelMode('shell')).toBe(false);
+    expect(isModelMode('plna')).toBe(false);
+    expect(MODEL_MODES).toEqual(['agent', 'plan', 'vibe', 'minimal', 'grind', 'chat']);
   });
 });

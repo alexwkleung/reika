@@ -10,6 +10,7 @@ import {
   saveLastState,
   startMode,
   startProfile,
+  startProfiles,
 } from './laststate.js';
 
 const PROFILE = { model: 'm', baseURL: 'http://127.0.0.1:1/v1', apiKey: 'k' };
@@ -149,5 +150,40 @@ describe('setAtLaunch', () => {
     } finally {
       delete process.env.REIKA_LAST_STATE_TEST_KEY;
     }
+  });
+});
+
+describe('startProfiles (#616)', () => {
+  const MODES = { ...CONFIG, modeProfiles: { plan: 'kimi' } } as unknown as Config;
+
+  it("opens on the start mode's own model, and keeps the saved profile as the session's own", () => {
+    expect(startProfiles(MODES, 'plan', { mode: 'plan', profile: 'kimi' }, none)).toEqual({
+      profile: 'kimi',
+      own: 'kimi',
+    });
+  });
+
+  it('beats the profile the last session saved', () => {
+    // The saved profile is 'kimi' here too, so the mapped mode is read off a state that disagrees
+    // with it: plan's model is 'kimi' while the session was left on 'default'.
+    expect(startProfiles(MODES, 'plan', { profile: 'default' }, none)).toEqual({
+      profile: 'kimi',
+      own: 'default',
+    });
+  });
+
+  it("opens on the session's own profile for a mode with no model of its own", () => {
+    expect(startProfiles(MODES, 'agent', { profile: 'kimi' }, none)).toEqual({
+      profile: 'kimi',
+      own: 'kimi',
+    });
+    expect(startProfiles(CONFIG, 'plan', {}, none)).toEqual({ profile: 'default', own: 'default' });
+  });
+
+  it('lets REIKA_MODEL given at launch beat the mode model too', () => {
+    expect(startProfiles(MODES, 'plan', { profile: 'kimi' }, only('REIKA_MODEL'))).toEqual({
+      profile: 'default',
+      own: 'default',
+    });
   });
 });

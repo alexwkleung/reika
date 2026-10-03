@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { resolveDefaultMode, setAtLaunch } from './config.js';
+import { modeSwitchProfile, resolveDefaultMode, setAtLaunch } from './config.js';
 import type { Config, DefaultMode, Mode } from './types.js';
 
 // The last session's mode and profile (#365), so a restart lands where the user left off. A launch
@@ -74,4 +74,30 @@ export function startProfile(
   if (launched('REIKA_MODEL')) return 'default';
   const name = state.profile?.toLowerCase();
   return name && config.profiles[name] ? name : 'default';
+}
+
+// Where a session opens, and the profile it falls back to when a mode has no model of its own.
+export type StartProfiles = {
+  // The profile the session opens on: the start mode's own model where REIKA_MODE_MODELS gives it
+  // one, else `own`.
+  profile: string;
+  // The session's own model — the last session's profile (or a launch REIKA_MODEL's default). Held
+  // for the session so that leaving a mode with a model of its own comes back here (#616) instead
+  // of stranding the session on that mode's model.
+  own: string;
+};
+
+// The per-mode map (#616) outranks the saved profile: a mode configured to run a given model is
+// what that mode IS, and the saved profile is only where the last session happened to be. A
+// REIKA_MODEL given at launch still wins over both — it redefines the default profile, which is
+// the launch env saying what THIS session should be (see startProfile).
+export function startProfiles(
+  config: Config,
+  mode: Mode,
+  state: LastState,
+  launched: (name: string) => boolean = setAtLaunch,
+): StartProfiles {
+  const own = startProfile(config, state, launched);
+  if (launched('REIKA_MODEL')) return { profile: own, own };
+  return { profile: modeSwitchProfile(config, mode, own) ?? own, own };
 }
