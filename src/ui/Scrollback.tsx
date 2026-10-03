@@ -13,6 +13,7 @@ import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
+import { foldSpilledReasoning, foldedAssistantFields } from './reasoningfold.js';
 
 export function Scrollback({
   messages,
@@ -69,21 +70,29 @@ export function Scrollback({
   const indent = streamingNested ? NESTED_INDENT : 0;
   const toolOffset = streamingCommand ? COMMAND_MARGIN : 0;
   const region = liveRegionRows(chromeRows);
+  // Same display-only fold as the committed message (ui/reasoningfold.ts), so a thought the
+  // endpoint cut at a tag the model wrote in its own prose stays in its block while it streams
+  // instead of landing in the content area and jumping up to the Thinking block on commit.
+  // Skipped for the compaction note, whose content is a harness aside rather than model reasoning
+  // and whose block is sized for that aside's shape.
+  const folded = streamingNote
+    ? { reasoning: streamingReasoning, content: streaming }
+    : foldSpilledReasoning(streamingReasoning, streaming);
   // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label. The block
   // builders are the memoized ones: a render where this block's text (or width, or the terminal's
   // columns) is unchanged reuses the rows it built last time instead of re-parsing the same text.
   const blocks: { kind: 'reasoning' | 'content' | 'tool'; live: LiveRows; fixed: number }[] = [];
-  if (streamingReasoning) {
+  if (folded.reasoning) {
     blocks.push({
       kind: 'reasoning',
-      live: liveReasoningRows(streamingReasoning, indent, region, process.stdout.columns || 80),
+      live: liveReasoningRows(folded.reasoning, indent, region, process.stdout.columns || 80),
       fixed: 2,
     });
   }
-  if (streaming.trim()) {
+  if (folded.content.trim()) {
     const live = streamingNote
-      ? liveNoteRows(streaming, liveContentWidth(indent), region)
-      : liveContentRows(streaming, liveContentWidth(indent), region);
+      ? liveNoteRows(folded.content, liveContentWidth(indent), region)
+      : liveContentRows(folded.content, liveContentWidth(indent), region);
     // The note pays its label row and the bar row under it on top of the gap above it.
     blocks.push({ kind: 'content', live, fixed: streamingNote ? 3 : 1 });
   }
@@ -846,17 +855,25 @@ function renderMessage(
     );
   }
   if (msg.role === 'assistant') {
+    // Display-only fold for a reasoning block the endpoint cut at a tag the model wrote in its own
+    // prose (ui/reasoningfold.ts). Skipped for a plan-checks message: that offset indexes into
+    // `content`, and the fold would move the bytes it counts.
+    const folded = msg.planChecks
+      ? { reasoning: msg.reasoning, content: msg.content }
+      : foldedAssistantFields(msg);
     // Models sometimes emit whitespace-only content alongside reasoning + a tool
     // call; rendering that as a real line would add a blank row (with margins on
     // both sides) between the Thinking block and the tool calls, so treat it as
     // empty.
-    const prose = msg.planChecks ? msg.content.slice(0, msg.planChecks.at) : msg.content;
+    const prose = msg.planChecks ? folded.content.slice(0, msg.planChecks.at) : folded.content;
     const hasContent = !!prose?.trim();
     return (
       <Box flexDirection="column" marginTop={1}>
-        {msg.reasoning ? <ReasoningBlock lines={reasoningLines(msg.reasoning, indent)} /> : null}
+        {folded.reasoning ? (
+          <ReasoningBlock lines={reasoningLines(folded.reasoning, indent)} />
+        ) : null}
         {hasContent ? (
-          <Box marginTop={msg.reasoning ? 1 : 0}>
+          <Box marginTop={folded.reasoning ? 1 : 0}>
             <Text>
               {markProse(renderMarkdown(prose, contentWidth(indent) - CALL_MARKER_MEASURED))}
             </Text>
@@ -872,7 +889,7 @@ function renderMessage(
           // Gap above the tool calls only when reasoning/content sits above them
           // in this message; otherwise the message's own marginTop is the gap and
           // a second one would double up between back-to-back tool calls.
-          <Box flexDirection="column" marginTop={msg.reasoning || hasContent ? 1 : 0}>
+          <Box flexDirection="column" marginTop={folded.reasoning || hasContent ? 1 : 0}>
             {msg.toolCalls.map(tc => (
               // One Text with nested colored runs, not two sibling <Text> in a row:
               // when the line wraps (long edit args), Ink drops the boundary char

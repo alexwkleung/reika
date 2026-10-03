@@ -258,6 +258,27 @@ describe('Scrollback nested (subagent) messages', () => {
     }
   });
 
+  it('folds a thinking tail the endpoint cut at a tag the model wrote in its own prose', () => {
+    // The parser ends the reasoning channel at a literal tag in the model's prose, so the rest of
+    // the thought arrives as `content` (ui/reasoningfold.ts). It belongs behind the bar, with no
+    // prose row under it.
+    const frame = framePlusApp([
+      {
+        role: 'assistant',
+        content: '` the model wrote inside its own reasoning.',
+        reasoning: 'the parser cut the think block at a literal `',
+        nested: true,
+      },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+    // The tail wraps across rows, so join the bar-stripped bodies before matching.
+    const body = rows.map(r => stripAnsi(r).replace(/^\s*▎\s?/, '')).join(' ');
+    expect(body).toContain('the model wrote inside its own reasoning.');
+  });
+
   // #431: markdown wrapped to the top-level width and then landed in a box four columns
   // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
   // bullet, on a row of its own and flush left, under no hanging indent. The compaction note

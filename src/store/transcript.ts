@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Message, Mode, ToolCall } from '../types.js';
 import { scrubDisplay } from '../ui/scrub.js';
 import { changeLabel, contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
+import { foldedAssistantFields } from '../ui/reasoningfold.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
@@ -299,9 +300,12 @@ function renderMessageTxt(msg: Message): string | null {
     case 'user':
       return labelled(msg.mode ? `You [${msg.mode}]` : 'You', msg.display ?? msg.content);
     case 'assistant': {
+      // Display-only fold for a reasoning block the endpoint cut at a tag the model wrote in prose
+      // (ui/reasoningfold.ts): the tail belongs under "Thinking", not under "Reika".
+      const folded = foldedAssistantFields(msg);
       const parts: string[] = [];
-      if (msg.reasoning?.trim()) parts.push(labelled('Thinking', msg.reasoning.trim()));
-      if (msg.content?.trim()) parts.push(labelled('Reika', msg.content.trim()));
+      if (folded.reasoning?.trim()) parts.push(labelled('Thinking', folded.reasoning.trim()));
+      if (folded.content?.trim()) parts.push(labelled('Reika', folded.content.trim()));
       if (msg.toolCalls && msg.toolCalls.length > 0) {
         parts.push(msg.toolCalls.map(formatToolCall).join('\n'));
       }
@@ -381,14 +385,19 @@ function redactMessage(msg: Message, cwd: string): Message {
         content: red(msg.content),
         ...(msg.display ? { display: red(msg.display) } : {}),
       };
-    case 'assistant':
+    case 'assistant': {
+      // Folded before redacting so the JSONL and the .txt agree with each other and with
+      // scrollback (ui/reasoningfold.ts). Folding only on this path keeps /save --raw the
+      // verbatim copy its contract promises.
+      const folded = foldedAssistantFields(msg);
       return {
         ...msg,
-        content: red(msg.content),
-        ...(msg.reasoning ? { reasoning: red(msg.reasoning) } : {}),
+        content: red(folded.content),
+        ...(folded.reasoning ? { reasoning: red(folded.reasoning) } : {}),
         ...(msg.toolCalls ? { toolCalls: msg.toolCalls.map(tc => redactToolCall(tc, cwd)) } : {}),
         ...(msg.sources ? { sources: msg.sources.map(red) } : {}),
       };
+    }
     case 'tool':
       return {
         ...msg,
