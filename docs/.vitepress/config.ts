@@ -15,6 +15,7 @@ export default defineConfig({
       {
         text: 'Guide',
         items: [
+          { text: 'Install', link: '/getting-started' },
           { text: 'Usage', link: '/usage' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Tools', link: '/tools' },
