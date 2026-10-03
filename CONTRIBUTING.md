@@ -60,4 +60,6 @@ English is canonical. `README.zh-CN.md` is a best-effort snapshot of `README.md`
 - **A translation needs a reader.** Say in the PR that you can review it in that language. Without one it is likely to be declined, since nobody else can tell when it has gone wrong.
 - **Drift is grounds for removal.** A translation that no longer matches the English structure may be reverted rather than fixed.
 
+## Thank you
+
 If Reika is useful to you, consider supporting it. The project is built by an independent developer.
