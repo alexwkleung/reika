@@ -64,10 +64,10 @@ Serve a model. Example below with llama.cpp:
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-Then install and point Reika at it (Node ≥ 22):
+Then install and point Reika at it (Node ≥ 22, and pnpm — `npm i -g pnpm`):
 
 ```sh
-npm i -g reika
+pnpm add -g reika        # or: npm i -g reika
 
 export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
