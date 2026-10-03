@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions
+    url: https://github.com/alexwkleung/reika/discussions
+    about: Anything that isn't a bug or a change to Reika — questions, ideas, how you run it.
