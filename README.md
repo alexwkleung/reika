@@ -11,6 +11,10 @@
 </p>
 
 <p align="center">
+  <em>0.x: a research and developer release. Expect behavior and config to change between minor versions.</em>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#documentation">Docs</a> ·
   <a href="docs/models.md">Tested models</a> ·
@@ -24,6 +28,15 @@
 Most coding agents are built for frontier models. Reika is built first for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
 
 8–9B models hold their own on simple tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+
+## What the measurements say
+
+Reika is built on a claim that can be measured, so the record is published rather than asserted. The short version, with the runs and the numbers behind it in [docs/findings.md](docs/findings.md):
+
+- **The harness's own context management cost more than the model did.** One mid-context rewrite re-processed 8,453 tokens of prompt — 7.9 minutes of prefill — where an append in the same session cost 25 tokens and 3.5 seconds.
+- **Ask the model for its findings before a fold drops them.** In the A/B behind this, the arm whose findings were dropped folded five times, re-read files it had already read, and never answered; the arm that was asked answered from the digest.
+- **Prompt wording is the weakest lever.** On a vague task at Q2 a model converges or spirals about 50/50, and the harness cannot move that rate — only what the failing half costs.
+- **The loop detectors separate cleanly.** Healthy reasoning rounds measure 0.2–0.3 on cross-round similarity; locked loops sit at 1.00, and a 38-round productive turn never fired the detector.
 
 ## Highlights
 
@@ -51,11 +64,10 @@ Serve a model. Example below with llama.cpp:
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-Then install and point Reika at it (Node ≥ 22, and pnpm — `npm i -g pnpm`):
+Then install and point Reika at it (Node ≥ 22):
 
 ```sh
-pnpm install
-pnpm run install:global      # builds and installs the `reika` binary
+npm i -g reika
 
 export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
@@ -63,7 +75,7 @@ cd your-project && reika
 
 `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (some inference engines, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
-To run from a checkout without installing: `cp .env.example .env`, edit it, then `pnpm run dev`. `pnpm run uninstall:global` removes the global binary.
+To run from a checkout instead — `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm`) and `pnpm run install:global` to build and install the `reika` binary, or `cp .env.example .env` and `pnpm run dev` to run without installing. `pnpm run uninstall:global` removes the global binary.
 
 ## Common configuration
 
@@ -110,6 +122,7 @@ Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY
 | [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`          |
 | [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
 | [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
+| [Findings](docs/findings.md)                     | The measured record: what broke, what held, and how each number was obtained              |
 | [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
