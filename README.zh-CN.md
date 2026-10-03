@@ -124,4 +124,4 @@ Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
 ## 支持我们的工作
 
-如果 Reika 对你有用，可以考虑通过 [GitHub Sponsors](https://github.com/sponsors/alexwkleung)、[Ko-fi](https://ko-fi.com/alexwkleung) 或 [Buy Me A Coffee](https://buymeacoffee.com/alexwkleung) 支持这个项目。
+如果 Reika 对你有用，可以考虑通过 [GitHub Sponsors](https://github.com/sponsors/alexwkleung)、[Ko-fi](https://ko-fi.com/alexwkleung) 或 [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung) 支持这个项目。
