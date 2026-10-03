@@ -163,6 +163,29 @@ describe('renderTxt', () => {
     expect(txt).toContain('Sources: https://example.com');
   });
 
+  it('renders the tail of a tag-cut thinking block under Thinking, not Reika', () => {
+    // The endpoint's reasoning parser ends the thinking channel at a literal tag the model wrote
+    // in its own prose; the rest of the thought arrives as `content`. Both the .txt and the .jsonl
+    // carry the fold so a saved transcript reads the way scrollback does.
+    const msg: Message = {
+      role: 'assistant',
+      reasoning: 'the parser cut the think block at a literal `',
+      content: '` the model wrote inside its own reasoning.',
+      toolCalls: [{ id: 't1', name: 'bash', args: { command: 'ls' } }],
+    };
+    const txt = renderTxt([msg], META);
+    expect(txt).toContain('Thinking:');
+    expect(txt).not.toContain('Reika:');
+    expect(txt).toContain('` the model wrote inside its own reasoning.');
+
+    const record = JSON.parse(serializeJsonl([msg], META).trimEnd().split('\n')[1]) as Message & {
+      content: string;
+      reasoning?: string;
+    };
+    expect(record.content).toBe('');
+    expect(record.reasoning).toContain('` the model wrote inside its own reasoning.');
+  });
+
   it('redacts secrets by default and honors redact:false', () => {
     const msg: Message = { role: 'system', content: 'appleId=me@x.com' };
     expect(renderTxt([msg], META)).not.toContain('me@x.com');
