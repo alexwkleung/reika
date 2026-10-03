@@ -98,15 +98,6 @@ function buildCodeTheme(): Record<string, Paint> {
   };
 }
 
-// `hljs-title function_ invoke__` → `title.function.invoke`: highlight.js writes the first scope
-// part prefixed and each further part with one more trailing underscore than the last.
-function scopeOf(classAttr: string): string {
-  return classAttr
-    .split(' ')
-    .map(part => part.replace(/^hljs-/, '').replace(/_+$/, ''))
-    .join('.');
-}
-
 function paintFor(scope: string, theme: Record<string, Paint>): Paint | undefined {
   for (let s = scope; s; s = s.slice(0, Math.max(0, s.lastIndexOf('.')))) {
     if (theme[s]) return theme[s];
@@ -114,32 +105,87 @@ function paintFor(scope: string, theme: Record<string, Paint>): Paint | undefine
   return undefined;
 }
 
-const ENTITIES: Record<string, string> = {
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#x27;': "'",
-};
+// highlight.js' documented-but-private `__emitter` hook (HLJSOptions.__emitter). Driving it
+// directly gets the two things its HTML route throws away: `openNode` receives the raw dotted
+// scope (`title.function.invoke` — literally the vocabulary buildCodeTheme() is keyed by), and
+// `addText` receives the unescaped text, because escaping is the renderer's job. So the theme
+// speaks highlight.js' own language, and neither a scope decoder nor the five entity decodings
+// exist to go stale (#634).
+//
+// The exported `Emitter` type is partial: it declares startScope/endScope, but the hot path calls
+// openNode/closeNode (core.js) and highlight.js bridges the two itself, so `implements Emitter`
+// would not catch a missing method. Both sets are implemented below.
+// Exported for unit tests: highlight.js instantiates it through configure(), below.
+export type ScopeNode = { scope?: string; children: (ScopeNode | string)[] };
 
-// highlight.js escapes every text run and emits nothing but `<span class="…">` and `</span>`
-// around them, so its HTML is regular enough to walk with one regex — no HTML parser. Each span
-// paints its already-painted children, so an outer color resumes after a nested one closes.
-function htmlToAnsi(html: string): string {
-  const theme = codeTheme();
-  const stack: { paint?: Paint; out: string }[] = [{ out: '' }];
-  const token = /<span class="([^"]*)">|<\/span>|[^<]+/g;
-  for (const [piece, classAttr] of html.matchAll(token)) {
-    if (classAttr !== undefined) {
-      stack.push({ paint: paintFor(scopeOf(classAttr), theme), out: '' });
-    } else if (piece === '</span>') {
-      const span = stack.pop()!;
-      stack[stack.length - 1].out += span.paint ? span.paint(span.out) : span.out;
-    } else {
-      stack[stack.length - 1].out += piece.replace(/&(?:amp|lt|gt|quot|#x27);/g, e => ENTITIES[e]);
-    }
+export class ScopeEmitter {
+  readonly root: ScopeNode = { children: [] };
+  private stack: ScopeNode[] = [this.root];
+
+  private get top(): ScopeNode {
+    return this.stack[this.stack.length - 1];
   }
-  return stack[0].out;
+
+  // core.js' hot path.
+  openNode(scope?: string): void {
+    const node: ScopeNode = { children: [] };
+    if (scope) node.scope = scope;
+    this.top.children.push(node);
+    this.stack.push(node);
+  }
+
+  closeNode(): void {
+    if (this.stack.length > 1) this.stack.pop();
+  }
+
+  // emitKeyword() goes through the Emitter interface's names instead.
+  startScope(scope: string): void {
+    this.openNode(scope);
+  }
+
+  endScope(): void {
+    this.closeNode();
+  }
+
+  addText(text: string): void {
+    if (text) this.top.children.push(text);
+  }
+
+  // A nested language's own highlight tree, spliced in under the `language:javascript` scope that
+  // the HTML route rewrites to `language-javascript` (scopeToCSSClass). Unpainted either way:
+  // nothing in the theme matches it and it has no parent scope to fall back to.
+  __addSublanguage(emitter: ScopeEmitter, name?: string): void {
+    if (name) this.openNode(`language:${name}`);
+    this.top.children.push(...emitter.root.children);
+    if (name) this.closeNode();
+  }
+
+  finalize(): void {
+    // Called once the walk is done; drop whatever scopes a malformed match left open.
+    this.stack = [this.root];
+  }
+
+  // The Emitter interface's name for "give me the accumulated output"; reika's is ANSI, not HTML.
+  toHTML(): string {
+    return paintTree(this.root, codeTheme());
+  }
+}
+
+// Each scoped node paints its already-painted children, so an outer color resumes after a nested
+// one closes. `configure()` merges and cannot be undone, so the emitter is set once, at module
+// load, never per highlight.
+hljs.configure({ __emitter: ScopeEmitter });
+
+function paintTree(node: ScopeNode, theme: Record<string, Paint>): string {
+  let out = '';
+  for (const child of node.children) {
+    out += typeof child === 'string' ? child : paintTree(child, theme);
+  }
+  if (node.scope) {
+    const paint = paintFor(node.scope, theme);
+    if (paint) return paint(out);
+  }
+  return out;
 }
 
 // highlight.js console.error()s a "Could not find the language" warning *before*
@@ -160,7 +206,10 @@ export function highlightCode(code: string, language: string): string {
   const lang = resolveLanguage(language);
   if (!code.trim() || chalk.level === 0 || lang === 'plaintext') return code;
   try {
-    return htmlToAnsi(hljs.highlight(code, { language: lang, ignoreIllegals: true }).value);
+    const result = hljs.highlight(code, { language: lang, ignoreIllegals: true });
+    // A scan that fails does not throw: highlight.js returns the HTML-escaped source in `value`
+    // instead of the emitter's output, so hand back the source rather than its escapes.
+    return result.illegal || result.errorRaised ? code : result.value;
   } catch {
     return code;
   }
