@@ -5,6 +5,7 @@ export default defineConfig({
   title: 'Reika',
   description: 'Coding agent CLI for small local models, tuned for low quantization.',
   cleanUrls: true,
+  appearance: 'force-dark',
   srcExclude: ['demo/**', 'node_modules/**'],
   markdown: {
     anchor: { slugify: githubSlugify },
