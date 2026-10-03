@@ -29,13 +29,19 @@ import {
   toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
-import { inheritProfile, loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  modeSwitchProfile,
+  resolveDefaultMode,
+  resolveProfile,
+} from '../config.js';
 import {
   loadLastState,
   persistableMode,
   saveLastState,
   startMode,
-  startProfile,
+  startProfiles,
 } from '../laststate.js';
 import {
   autoApproveForced,
@@ -379,6 +385,14 @@ export function App() {
   modeRef.current = mode;
   const activeProfileRef = useRef('default');
   activeProfileRef.current = activeProfile;
+  // The model a mode switch comes back to when the new mode has none of its own (#616): the
+  // profile the session opened on, or 'default' after /new. A ref, not state: it is read at a mode
+  // switch, never rendered.
+  const ownProfileRef = useRef('default');
+  // Set by /model (command or picker): the user said which model THIS session runs, which outranks
+  // the per-mode map for the rest of it (#616) — a mode switch must not undo a deliberate choice.
+  // Cleared by /new, where the session starts over.
+  const modelPinnedRef = useRef(false);
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
   const suggestionStateRef = useRef<SuggestionState | null>(null);
@@ -459,9 +473,13 @@ export function App() {
     (async () => {
       try {
         const cfg = loadConfig();
-        // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
-        // the probe and the splash so both describe the model the session actually opens on.
-        const profile = startProfile(cfg, loadLastState());
+        // Where this session opens: the last session's mode and profile (#365), unless a launch
+        // REIKA_MODEL pinned the profile, with the start mode's own model (#616) on top. Resolved
+        // before the probe and the splash so both describe the model the session actually opens
+        // on; `own` is kept for the mode switches below.
+        const started = startProfiles(cfg, modeRef.current, loadLastState());
+        const profile = started.profile;
+        ownProfileRef.current = started.own;
         // Said before the await, because the wait is the point: a configured MCP server is the one
         // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
         // only one whose names are already known. No servers → nothing is painted at all (#265).
@@ -555,6 +573,15 @@ export function App() {
             { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
           ]);
         }
+        // A REIKA_MODE_MODELS entry that named nothing the config has (#616). The mode keeps the
+        // session's model, which from the user's side is indistinguishable from the feature not
+        // working — so the typo says so instead of going unmentioned.
+        for (const problem of cfg.modeModelErrors ?? []) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: problem, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
         // only line that is good news — the shape `connectNotices` emits — so everything else that
         // reaches here (a server that did not start, a document that did not parse) is worth
@@ -590,8 +617,10 @@ export function App() {
   );
 
   // Every route to a new mode (slash command, Shift+Tab, /implement, /clear) lands here, so the
-  // saved state can't miss one. The mount run is skipped: the start mode is already on disk, or is
-  // a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it pinned.
+  // saved state can't miss one — and so the new mode's own model (#616) is applied on every one of
+  // them without a call at each site. The mount run is skipped: the start mode is already on disk,
+  // or is a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it
+  // pinned, and the start mode's model was resolved before the session was created.
   const modeMountedRef = useRef(false);
   useEffect(() => {
     if (!modeMountedRef.current) {
@@ -600,6 +629,10 @@ export function App() {
     }
     const persisted = persistableMode(mode);
     if (persisted) saveLastState({ mode: persisted });
+    applyModeModel(mode);
+    // applyModeModel reads the session and the per-mode policy through refs and the live session
+    // snapshot, so only the mode itself is a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   useEffect(() => {
@@ -655,7 +688,10 @@ export function App() {
   // the command line that triggered it (the picker already echoed on open).
   // Reads the session, not the `config` closure: an ad-hoc profile registered in the same tick is
   // already there.
-  const applyModelSwitch = (target: string, echo?: Message): void => {
+  // `persist` is false for the switch a mode change makes on its own (#616): that model comes from
+  // REIKA_MODE_MODELS and is re-derived every launch, so it is not a choice to remember — and
+  // saving it would strand the next session on a mode's model after the map changed or went away.
+  const applyModelSwitch = (target: string, echo?: Message, persist = true): void => {
     const s = sessionRef.current;
     const cfg = s?.getSnapshot().config;
     if (!s || !cfg) return;
@@ -669,7 +705,12 @@ export function App() {
     });
     // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
-    saveLastState({ profile: target });
+    // A hand-picked model is the choice that pins the session to it (#616): from here on, mode
+    // switches leave the model alone.
+    if (persist) {
+      modelPinnedRef.current = true;
+      saveLastState({ profile: target });
+    }
     // The tok/s chip describes the model that produced it (#204).
     setDecodeRate(undefined);
     setMessages(prev => [
@@ -682,6 +723,20 @@ export function App() {
           : `Switched to ${kind} '${target}' (${next.model})`,
       },
     ]);
+  };
+
+  // The model a mode runs on (#616). REIKA_MODE_MODELS gives each mode its own; a mode without one
+  // comes back to the session's own profile, so plan → agent is a round trip rather than a one-way
+  // switch onto the plan model. A hand-picked /model outranks the map for the rest of the session,
+  // and shell has no model to choose — both cases are the undefined/no-op path. The switch itself
+  // lands in scrollback as the ordinary `Switched to …` line, so the model change is never silent.
+  const applyModeModel = (next: Mode): void => {
+    const s = sessionRef.current;
+    const cfg = s?.getSnapshot().config;
+    if (!s || !cfg || modelPinnedRef.current) return;
+    const target = modeSwitchProfile(cfg, next, ownProfileRef.current);
+    if (!target || target === s.profile || !cfg.profiles[target]) return;
+    applyModelSwitch(target, undefined, false);
   };
 
   useInput((input, key) => {
@@ -1290,7 +1345,13 @@ export function App() {
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
+      // A new session un-pins the model (#616): a /model choice belonged to the conversation that
+      // just went away, and the map applies again from here. `own` is what resetConversation just
+      // put the session on, so agent mode's own model — if it has one — can land on top of it.
+      modelPinnedRef.current = false;
+      ownProfileRef.current = 'default';
       setMode('agent');
+      applyModeModel('agent');
       return;
     }
     if (name === 'exit' || name === 'quit') {
