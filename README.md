@@ -118,6 +118,8 @@ Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
+If Reika is useful to you, consider supporting it via [GitHub Sponsors](https://github.com/sponsors/alexwkleung) or [Ko-fi](https://ko-fi.com/alexwkleung). The project is built by an independent developer.
+
 ## Inspired by
 
 Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.

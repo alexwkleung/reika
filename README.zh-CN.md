@@ -118,6 +118,8 @@ cd your-project && reika
 
 Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
+如果 Reika 对你有用，可以考虑通过 [GitHub Sponsors](https://github.com/sponsors/alexwkleung) 或 [Ko-fi](https://ko-fi.com/alexwkleung) 支持这个项目。它由独立开发者维护。
+
 ## 灵感来自
 
 Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。

@@ -12,6 +12,16 @@
   "bugs": {
     "url": "https://github.com/alexwkleung/reika/issues"
   },
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/alexwkleung"
+    },
+    {
+      "type": "ko-fi",
+      "url": "https://ko-fi.com/alexwkleung"
+    }
+  ],
   "keywords": [
     "coding-agent",
     "cli",
