@@ -75,9 +75,10 @@ interface Region {
 // downstream (`stripHeredocs`, `segmentsWithDir`, the segment splits) still sees the same shape.
 export function maskMarkdownData(command: string): string {
   const regions = [...heredocRegions(command), ...argumentRegions(command)];
-  // Outer first, so a nested heredoc's own verdict — which is the more precise one — is the one
-  // that lands: `--body "$(cat <<'EOF' … EOF)"` is a text region (expands) with a quoted heredoc
-  // inside it (does not), and the body must end up blanked.
+  // Outer first, and this ordering is load-bearing only because blanking is monotone: a later pass
+  // can blank more but never restore, so regions must not over-claim. `--body "$(cat <<'EOF' …
+  // EOF)"` is a value region (expands) whose kept `$(…)` still contains the quoted heredoc's body —
+  // the body region lands after it and blanks exactly that.
   regions.sort((a, b) => a.start - b.start || b.end - a.end);
   let masked = command;
   for (const r of regions) {
@@ -95,9 +96,10 @@ function heredocRegions(command: string): Region[] {
   // forced: `gh pr create --body "$(cat <<'EOF' … EOF)"` puts the operator INSIDE the double-quoted
   // value, and the mask blanks the whole value — reading operators off the mask finds nothing and
   // turns this rule off for the most common shape there is (measured: that exact command stopped
-  // being recognised the moment the operator scan switched to the mask). A `<<` inside a quoted
-  // string that IS a heredoc's own body is skipped by the containment check below; a `<<` in some
-  // other quoted string is a miss, in the direction that leaves a label on.
+  // being recognised the moment the operator scan switched to the mask). Liveness is decided by
+  // `heredocOperatorIsLive` below, because a raw scan also finds `<<` inside quoted PROSE, which
+  // the shell reads as literal text (`gh pr create --title 'use <<EOF'` mentions a heredoc, it
+  // does not start one).
   const view = maskQuoted(command);
   // Compute every operator's body first, then cut them out together — back to front, so each cut
   // leaves the offsets of everything before it alone. `stripHeredocs` walks a shrinking tail instead,
@@ -107,6 +109,12 @@ function heredocRegions(command: string): Region[] {
   // resumes — measured, and it silently turned the rule off for everything after the first heredoc).
   const spans: Array<{ start: number; end: number; opAt: number; quoted: boolean }> = [];
   for (const m of command.matchAll(HEREDOC_OP_RE)) {
+    // A `<<` the shell treats as literal text is not an operator — never in a plain quoted string
+    // (`echo 'see <<EOF here' > NOTES.md` writes a sentence) and never in a single-quoted run at
+    // all. Only inside a `$( )` or backtick substitution does a quoted `<<` start a real heredoc.
+    // Reading a literal one as an operator manufactures a body that swallows real commands on the
+    // following lines — measured: `echo 'docs say <<EOF' > NOTES.md\nrm -rf /x` went unflagged.
+    if (!heredocOperatorIsLive(command, m.index)) continue;
     const bodyStart = command.indexOf('\n', m.index);
     if (bodyStart === -1) break;
     const endRe = new RegExp(`^\\s*${m[2]}\\s*$`, 'm');
@@ -156,15 +164,19 @@ function argumentRegions(command: string): Region[] {
         const eq = words[i].text.indexOf('=');
         const flag = unquote(eq === -1 ? words[i].text : words[i].text.slice(0, eq));
         if (!GH_TEXT_FLAGS.has(flag)) continue;
-        if (eq !== -1) {
-          out.push({ start: start + words[i].at + eq + 1, end: segEnd, expands: true });
-        } else if (words[i + 1]) {
-          out.push({
-            start: start + words[i + 1].at,
-            end: segEnd,
-            expands: words[i + 1].text[0] !== "'",
-          });
-        }
+        // The region is the VALUE word and nothing else. It used to run to the end of the segment,
+        // and an earlier single-quoted flag (`--title 'Fix'`) then blanked a later double-quoted
+        // flag's value wholesale — including an executed `$(…)` the scan must still answer for
+        // (measured). `expands` comes from the value's own quoting, so `--body '…'` and
+        // `--body='…'` — one shell word each — get the same verdict.
+        const value = eq === -1 ? words[i + 1] : words[i];
+        const valueAt = eq === -1 ? 0 : eq + 1;
+        if (!value) continue;
+        out.push({
+          start: start + value.at + valueAt,
+          end: start + value.at + value.text.length,
+          expands: value.text[valueAt] !== "'",
+        });
       }
       continue;
     }
@@ -259,6 +271,64 @@ function isMarkdownSegment(seg: string): boolean {
 
 function unquote(word: string): string {
   return word.replace(/['"]/g, '');
+}
+
+// The quoted runs of the command, paired EXACTLY as `maskQuoted` pairs them (same regex), so the
+// question "is this offset inside a quoted string?" has one answer across this file.
+const QUOTED_RUN_RE = /"[^"]*"|'[^']*'/g;
+
+function quotedRunAt(command: string, at: number): { start: number; end: number } | undefined {
+  for (const m of command.matchAll(QUOTED_RUN_RE)) {
+    const start = m.index ?? 0;
+    if (at >= start && at < start + m[0].length) return { start, end: start + m[0].length };
+  }
+  return undefined;
+}
+
+// Whether the shell parses the `<<` at `at` as a heredoc operator. Outside quotes it always does.
+// A single-quoted run is literal all the way through — even `$( )` in it does not expand. Inside a
+// double-quoted run the `<<` is literal text UNLESS it sits in a `$( )` or backtick substitution,
+// where the substituted text is parsed as a command again (`--body "$(cat <<'EOF' …)"` is the
+// common shape). An unterminated `$(`/backtick still counts as live: either the whole command is a
+// parse error (nothing runs, so blanking the body costs nothing) or the closer is past a heredoc
+// body's unbalanced quote — and there the body is real data that SHOULD be blanked.
+function heredocOperatorIsLive(command: string, at: number): boolean {
+  const run = quotedRunAt(command, at);
+  if (!run) return true;
+  if (command[run.start] === "'") return false;
+  let inSub = 0;
+  let inSingle = false;
+  let inBacktick = false;
+  for (let i = run.start + 1; i < at; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (inBacktick) {
+      if (ch === '`') inBacktick = false;
+      continue;
+    }
+    if (ch === '\\') {
+      i++;
+      continue;
+    }
+    if (inSub > 0 && ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '`') {
+      inBacktick = true;
+      continue;
+    }
+    if (ch === '$' && command[i + 1] === '(') {
+      inSub++;
+      i++;
+      continue;
+    }
+    if (ch === ')' && inSub > 0) inSub--;
+  }
+  return inSub > 0 || inBacktick;
 }
 
 // Blank a stretch of data, keeping the newlines (so line-based parsers downstream see the same

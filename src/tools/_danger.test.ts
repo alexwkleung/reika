@@ -1433,4 +1433,30 @@ describe('detectDangerousPatterns — Markdown the command is only writing (#644
       'Git commit (records to version history)',
     );
   });
+
+  it('does not read a quoted <<mention as a heredoc, nor blank past its value word', () => {
+    // A `<<EOF` inside quoted prose is literal text: there is no heredoc, and the command on the
+    // next line RUNS. Manufacturing a body for it swallowed exactly that command.
+    expect(
+      detectDangerousPatterns(`gh pr create --title 'use <<EOF here'\nrm -rf /tmp/x`),
+    ).toContain('Recursive force delete (rm -rf)');
+    expect(
+      detectDangerousPatterns(`echo 'docs say <<EOF starts a heredoc' > NOTES.md\nrm -rf /tmp/x`),
+    ).toContain('Recursive force delete (rm -rf)');
+    // An earlier single-quoted flag's value must not reach a later flag's executed substitution.
+    expect(
+      detectDangerousPatterns(`gh pr create --title 'Fix' --body "text $(rm -rf /tmp/x)"`),
+    ).toContain('Recursive force delete (rm -rf)');
+    // The `=` spelling gets the same verdict as the separate-word one: single-quoted is literal.
+    expect(detectDangerousPatterns(`gh pr create --body='$(rm -rf /tmp/x)'`)).toEqual([
+      'GitHub PR create/merge (outward-facing)',
+    ]);
+    // And the shape the fixes rest on stays quiet: a real quoted heredoc under a single-quoted
+    // flag, with the operator alive only inside the substitution.
+    expect(
+      detectDangerousPatterns(
+        `gh pr create --title 'x' --body "$(cat <<'EOF'\nrm -rf /\nEOF\n)" && echo done`,
+      ),
+    ).toEqual(['GitHub PR create/merge (outward-facing)']);
+  });
 });

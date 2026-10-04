@@ -51,4 +51,18 @@ describe('maskMarkdownData', () => {
     expect(masked).toContain('rm -rf /tmp/x');
     expect(masked).toContain(`bash <<'X'`);
   });
+
+  it('reads a quoted <<mention as prose, not as an operator', () => {
+    // No heredoc starts here — the shell runs the next line as its own command, so it must stay.
+    const cmd = `echo 'docs say <<EOF starts a heredoc' > NOTES.md\nrm -rf /tmp/x`;
+    const masked = maskMarkdownData(cmd);
+    expect(masked).toContain('rm -rf /tmp/x');
+    expect(masked).not.toContain('docs say');
+    // The same `<<` inside a substitution IS an operator, and its body is data.
+    const sub = `gh pr create --body "$(cat <<'EOF'\nrm -rf /\nEOF\n)"`;
+    expect(maskMarkdownData(sub)).not.toContain('rm -rf');
+    // A single-quoted flag's value ends at its word: a later executed substitution survives.
+    const mixed = `gh pr create --title 'Fix' --body "text $(rm -rf /tmp/x)"`;
+    expect(maskMarkdownData(mixed)).toContain('$(rm -rf /tmp/x)');
+  });
 });
