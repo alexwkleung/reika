@@ -8,14 +8,11 @@ Config sources, in precedence order (higher wins):
 2. **Project `.env`** (cwd where you run `reika`) — per-project overrides.
 3. **Global `~/.config/reika/.env`** — defaults for a global install.
 
-`.env` keys. The **Default** column is what Reika uses when the key is unset;
+The keys are grouped by area below. In each table, the **Default** column is what Reika uses when the key is unset;
 [`.env.example`](../.env.example) is a tuned starting point, not a copy of those defaults, and
 deliberately ships larger values for a few keys — `REIKA_REPO_MAP_BUDGET=6000` — sized for a
 reasoning-on local model with room to work rather than for the smallest safe fallback. Trim them
 for a tiny model or a tight window.
-
-| Key | Default | What |
-| --- | ------- | ---- |
 
 ## Endpoint, models and profiles
 
