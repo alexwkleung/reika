@@ -11,10 +11,7 @@
 </p>
 
 <p align="center">
-  <em>0.x: a research and developer release. Expect behavior and config to change between minor versions.</em>
-</p>
-
-<p align="center">
+  <a href="https://reikacode.com">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#documentation">Docs</a> ·
   <a href="docs/models.md">Tested models</a> ·
@@ -28,6 +25,8 @@
 Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
 
 Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and below 7B rarely got far.
+
+Reika is pre-1.0, so commands, settings and behavior can still change between releases.
 
 ## What the measurements say
 
@@ -121,6 +120,8 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY.md).
 
 ## Documentation
+
+The same pages are on the website, [reikacode.com](https://reikacode.com).
 
 | Doc                                              | Covers                                                                                    |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
