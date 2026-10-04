@@ -52,7 +52,10 @@ vi.mock('../config.js', async () => {
   return { ...actual, loadConfig: () => CONFIG, resolveDefaultMode: () => 'agent' };
 });
 
-vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+vi.mock('../context/bootstrap.js', async importActual => ({
+  ...(await importActual<object>()),
+  bootstrap: async () => BUNDLE,
+}));
 
 // The real module reads and writes ~/.config/reika/state.json (#365); the test must neither start
 // in whoever ran it last's mode nor leave its own behind.

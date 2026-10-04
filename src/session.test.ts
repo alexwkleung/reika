@@ -37,7 +37,12 @@ const BUNDLE: ContextBundle = {
   skills: [],
 };
 
-vi.mock('./context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+// A test that needs a map to repack hands its bundle over here; everything else boots BUNDLE.
+let bootBundle: ContextBundle | undefined;
+vi.mock('./context/bootstrap.js', async importActual => ({
+  ...(await importActual<object>()),
+  bootstrap: async () => bootBundle ?? BUNDLE,
+}));
 vi.mock('./tools/_net.js', async importActual => ({
   ...(await importActual<object>()),
   isOffline: () => false,
@@ -298,6 +303,72 @@ describe('createSession', () => {
       const s = await createSession({ cwd: '/repo', config: CONFIG });
       expect(s.config.contextWindow).toBe(32000);
       expect(s.limitsNotice).toMatch(/from the models.dev catalog/);
+    });
+  });
+
+  describe('repo map budget', () => {
+    // 60 lines of 100 chars: 3200 fits 32, a 24k window's 4800 fits 48, a 64k one's cap fits all.
+    const RANKED = Array.from(
+      { length: 60 },
+      (_, i) => `src/f${String(i).padStart(2, '0')}.ts: ${'x'.repeat(87)}`,
+    );
+    const mapLines = (b: ContextBundle): number =>
+      b.repoMap.split('\n').filter(l => l.startsWith('src/')).length;
+    const ranked = (): ContextBundle => ({
+      ...BUNDLE,
+      repoMap: '',
+      repoMapRanked: RANKED,
+      repoMapBudget: 3200,
+    });
+    const UNPINNED: Config = { ...CONFIG, repoMapBudget: undefined };
+
+    it('packs the map to the window the startup probe reports', async () => {
+      bootBundle = ranked();
+      probes.push({ reached: true, window: 24000, windowSource: 'endpoint' });
+      const s = await createSession({ cwd: '/repo', config: UNPINNED });
+      expect(s.bundle.repoMapBudget).toBe(4800);
+      expect(mapLines(s.bundle)).toBe(48);
+      expect(s.bundle.hash).not.toBe(BUNDLE.hash);
+      bootBundle = undefined;
+    });
+
+    it('keeps the default without a window, and an explicit budget pins it', async () => {
+      bootBundle = ranked();
+      probes.push({ reached: true });
+      const none = await createSession({ cwd: '/repo', config: UNPINNED });
+      expect(none.bundle.repoMapBudget).toBe(3200);
+      probes.push({ reached: true, window: 64000, windowSource: 'endpoint' });
+      const pinned = await createSession({
+        cwd: '/repo',
+        config: { ...CONFIG, repoMapBudget: 2000 },
+      });
+      expect(pinned.bundle.repoMapBudget).toBe(2000);
+      bootBundle = undefined;
+    });
+
+    it('repacks when a /model switch moves the window, and not when it does not', async () => {
+      bootBundle = ranked();
+      const TWO: Config = {
+        ...UNPINNED,
+        profiles: {
+          default: { ...CONFIG.profiles.default, contextWindow: 16000 },
+          same: {
+            model: 'm2',
+            baseURL: 'http://127.0.0.1:2/v1',
+            apiKey: 'k',
+            contextWindow: 16000,
+          },
+          big: { model: 'm3', baseURL: 'http://127.0.0.1:3/v1', apiKey: 'k', contextWindow: 64000 },
+        },
+      };
+      const s = await createSession({ cwd: '/repo', config: TWO });
+      const start = s.bundle;
+      await s.setProfile('same');
+      expect(s.bundle).toBe(start);
+      await s.setProfile('big');
+      expect(s.bundle.repoMapBudget).toBe(12000);
+      expect(mapLines(s.bundle)).toBe(60);
+      bootBundle = undefined;
     });
   });
 

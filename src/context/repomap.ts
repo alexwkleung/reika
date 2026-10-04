@@ -8,7 +8,21 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage'
 // and would crowd the map with names nothing references.
 const SKIP_FILES = [/_test\.go$/];
 const MAX_FILE_BYTES = 200_000;
-const DEFAULT_BUDGET = 3200;
+export const DEFAULT_BUDGET = 3200;
+// With a known window the budget scales with it. The share puts a 16k window at about the old
+// fixed default and a 24k one near the 6000 .env.example ships; the cap is there because a map's
+// use flattens out long before a 262k window's share does, while every request still carries it.
+// Picked by proportion, not measured: nothing reports a map that was too small.
+const REPO_MAP_WINDOW_SHARE = 0.05;
+const REPO_MAP_MAX_BUDGET = 12_000;
+
+export function repoMapBudgetFor(contextWindow?: number, pinned?: number): number {
+  if (pinned != null) return pinned;
+  if (!contextWindow) return DEFAULT_BUDGET;
+  const scaled = Math.round((contextWindow * 4 * REPO_MAP_WINDOW_SHARE) / 100) * 100;
+  return Math.min(REPO_MAP_MAX_BUDGET, Math.max(DEFAULT_BUDGET, scaled));
+}
+
 // A C header or Java class can carry hundreds of definitions; one such line would eat the whole
 // budget and the map would name five files instead of thirty.
 const MAX_SYMBOLS_PER_FILE = 24;
@@ -157,6 +171,16 @@ export async function buildRepoMap(
   budget: number = DEFAULT_BUDGET,
   limits: CrawlLimits = DEFAULT_CRAWL_LIMITS,
 ): Promise<string> {
+  return packRepoMap(await rankRepoMap(cwd, ig, limits), budget);
+}
+
+// The crawl and the ranking don't depend on the budget, so the session ranks once and packs again
+// when it learns the window (the probe lands concurrently with bootstrap) or a /model switch moves it.
+export async function rankRepoMap(
+  cwd: string,
+  ig: Ignore,
+  limits: CrawlLimits = DEFAULT_CRAWL_LIMITS,
+): Promise<string[]> {
   const files: FileEntry[] = [];
   await walk(cwd, ig, files, limits);
 
@@ -206,13 +230,18 @@ export async function buildRepoMap(
       return a.path.localeCompare(b.path);
     });
 
+  return ranked.map(f => {
+    const shown = f.symbols.slice(0, MAX_SYMBOLS_PER_FILE);
+    const more = f.symbols.length - shown.length;
+    return `${f.path}: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`;
+  });
+}
+
+export function packRepoMap(ranked: string[], budget: number): string {
   const lines: string[] = [];
   let used = 0;
   let omitted = 0;
-  for (const f of ranked) {
-    const shown = f.symbols.slice(0, MAX_SYMBOLS_PER_FILE);
-    const more = f.symbols.length - shown.length;
-    const line = `${f.path}: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`;
+  for (const line of ranked) {
     if (used + line.length + 1 > budget) {
       omitted++;
       continue;

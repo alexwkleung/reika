@@ -89,14 +89,14 @@ To run from a checkout instead — `git clone https://github.com/alexwkleung/rei
 
 Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that order of precedence). The full list, experimental flags, and multi-model profiles are in [docs/configuration.md](docs/configuration.md).
 
-| Key                    | Default                    | What                                                                        |
-| ---------------------- | -------------------------- | --------------------------------------------------------------------------- |
-| `REIKA_MODEL`          | _required_                 | Model name, or a comma-separated list served by the same endpoint           |
-| `REIKA_BASE_URL`       | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                  |
-| `REIKA_API_KEY`        | `no-key`                   | API key (any non-empty value for local servers)                             |
-| `REIKA_CONTEXT_WINDOW` | _probed from the server_   | Context window in tokens; drives compaction and the context gauge           |
-| `REIKA_MIN_GEN_TOKENS` | _learned_ (from `2048`)    | Room reserved for the reply; learned from the model's rounds, set it to pin |
-| `REIKA_AUTO_APPROVE`   | `safe`                     | `off` confirms every edit and command; `bypass` confirms nothing            |
+| Key                    | Default                    | What                                                                                  |
+| ---------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| `REIKA_MODEL`          | _required_                 | Model name, or a comma-separated list served by the same endpoint                     |
+| `REIKA_BASE_URL`       | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                            |
+| `REIKA_API_KEY`        | `no-key`                   | API key (any non-empty value for local servers)                                       |
+| `REIKA_CONTEXT_WINDOW` | _probed from the server_   | Context window in tokens; drives compaction, the context gauge, and the repo map size |
+| `REIKA_MIN_GEN_TOKENS` | _learned_ (from `2048`)    | Room reserved for the reply; learned from the model's rounds, set it to pin           |
+| `REIKA_AUTO_APPROVE`   | `safe`                     | `off` confirms every edit and command; `bypass` confirms nothing                      |
 
 ## Modes
 

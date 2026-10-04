@@ -1,10 +1,11 @@
 import { loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { repoMapBudgetFor } from './context/repomap.js';
 import {
   needsLimitsProbe,
   probeModelLimits,
   type ModelLimitsProbe,
 } from './provider/modellimits.js';
-import { bootstrap } from './context/bootstrap.js';
+import { bootstrap, refitRepoMap } from './context/bootstrap.js';
 import {
   chatTools,
   chooseSearchBackend,
@@ -191,7 +192,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   // the other scrub layers. The window probe (#417) rides the same concurrency: a local server
   // answers in milliseconds, and it must land before anything reads the window.
   const [booted, probed, , mcp] = await Promise.all([
-    bootstrap(opts.cwd, cfg.repoMapBudget),
+    bootstrap(opts.cwd),
     needsLimitsProbe(cfg.profiles[profile] ?? cfg.profiles.default)
       ? probeModelLimits(cfg.profiles[profile] ?? cfg.profiles.default)
       : Promise.resolve(undefined),
@@ -205,9 +206,17 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     // A server that fails comes back as a notice, not an exception (#265).
     connectMcpServers(cfg.mcpServers ?? []),
   ]);
-  let bundle = booted;
   const startProfile = cfg.profiles[profile] ?? cfg.profiles.default;
   if (probed) cfg = withProbedLimits(cfg, profile, probed);
+  // The map is packed to the window's budget, which the probe above only now supplies. Re-fit on
+  // every change below too: a /model switch or a late probe can move the window, and a /cd brings
+  // a bundle packed to the default.
+  const fitRepoMap = (b: ContextBundle): ContextBundle =>
+    refitRepoMap(
+      b,
+      repoMapBudgetFor(resolveProfile(cfg, profile).contextWindow, cfg.repoMapBudget),
+    );
+  let bundle = fitRepoMap(booted);
   // Profiles whose probe reached no server (llama-server still loading): asked again at the next
   // submit on that profile, awaited so the window governs that turn rather than the one after.
   const retryWindow = new Set<string>();
@@ -249,6 +258,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const listeners = new Set<() => void>();
   let snapshot: SessionSnapshot = { config: cfg, profile, bundle };
   const changed = (): void => {
+    bundle = fitRepoMap(bundle);
     snapshot = { config: cfg, profile, bundle };
     for (const l of listeners) l();
   };

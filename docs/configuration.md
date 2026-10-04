@@ -10,9 +10,8 @@ Config sources, in precedence order (higher wins):
 
 The keys are grouped by area below. In each table, the **Default** column is what Reika uses when the key is unset;
 [`.env.example`](../.env.example) is a tuned starting point, not a copy of those defaults, and
-deliberately ships larger values for a few keys — `REIKA_REPO_MAP_BUDGET=6000` — sized for a
-reasoning-on local model with room to work rather than for the smallest safe fallback. Trim them
-for a tiny model or a tight window.
+deliberately ships larger values for a few keys, sized for a reasoning-on local model with room
+to work rather than for the smallest safe fallback. Trim them for a tiny model or a tight window.
 
 ## Endpoint, models and profiles
 
@@ -45,7 +44,7 @@ for a tiny model or a tight window.
 | `REIKA_MIN_GEN_TOKENS`   | _learned_ (from `2048`) | Generation room reserved from the window.                                                                                                                                                                                    |
 | `REIKA_MAX_TOKENS`       | _unset_                 | Cap response tokens per call (cloud cost/latency control).                                                                                                                                                                   |
 | `REIKA_REASONING_ROUNDS` | `2`                     | Recent tool-call rounds that keep their reasoning in context (rest pruned). 1 = leanest; higher avoids re-derivation on thinking models, at a token cost                                                                     |
-| `REIKA_REPO_MAP_BUDGET`  | `3200`                  | Chars allotted to repo map in system prompt                                                                                                                                                                                  |
+| `REIKA_REPO_MAP_BUDGET`  | scales with the window  | Chars allotted to repo map in system prompt. Unset, 5% of the context window, between 3200 and 12000 (3200 when no window is known); set, it pins the value                                                                  |
 | `REIKA_MAX_TURNS`        | `200`                   | Tool-call iterations per user turn. A termination backstop for loops the detectors miss, not a cost cap — sized so a healthy complex turn never hits it; in the TUI ctrl-c is the real cap, in headless this is the only one |
 
 - **`REIKA_CONTEXT_WINDOW`** — Per-profile override available. Unset asks the endpoint

@@ -373,6 +373,10 @@ export type Tool = {
 export type ContextBundle = {
   projectSummary: string;
   repoMap: string;
+  // Every map line in rank order, and the budget repoMap was packed to — what the session repacks
+  // from when the window becomes known or moves. Absent on a hand-built bundle.
+  repoMapRanked?: string[];
+  repoMapBudget?: number;
   instructions: string;
   cwd: string;
   hash: string;
@@ -481,7 +485,8 @@ export type Config = {
   // auto-profile keyed by its lowercased name so /model <name> can switch between them.
   models: string[];
   maxTurns: number;
-  repoMapBudget: number;
+  // REIKA_REPO_MAP_BUDGET, a pin. Unset, the budget scales with the window (repoMapBudgetFor).
+  repoMapBudget?: number;
   autoApprove: AutoApproveMode;
   // True when REIKA_AUTO_APPROVE was set: `safe` is the default when it isn't, and the session
   // toggle (/approvals) has to know whether a `safe` came from the env or from that default.
