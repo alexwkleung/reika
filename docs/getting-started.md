@@ -35,8 +35,7 @@ pnpm needs installing first (`npm i -g pnpm`, or the standalone installer at
 `~/Library/pnpm/bin`). npm's global bin is on `PATH` already, so npm is the shorter route if you do
 not otherwise use pnpm.
 
-`0.x` is a research and developer release: expect behavior and config to change between minor
-versions.
+Reika is pre-1.0, so commands, settings and behavior can still change between releases.
 
 ## Serve a model
 
