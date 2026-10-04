@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
 import { stripHeredocs } from './_writetargets.js';
+import { maskMarkdownData } from './_markdown.js';
 
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is
 // recoverable), but they record or publish work, and the user generally wants to stay in the
@@ -1010,7 +1011,13 @@ export function detectDangerousPatterns(command: string, cwd?: string): string[]
   return detectAtDepth(command, 0, cwd);
 }
 
-function detectAtDepth(command: string, depth: number, cwd: string | undefined): string[] {
+function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefined): string[] {
+  // Every pattern below matches the literal command text, which is what makes them hard to fool —
+  // and why they fire on prose that is only ever going to be read. Markdown the command is writing
+  // (`cat > CHANGELOG.md`, a `gh pr create --body`) is blanked first, length- and newline-preserving,
+  // so the scan runs unchanged on everything that could still execute (#644). What it keeps is the
+  // substitutions inside that text, which the shell does run.
+  const command = maskMarkdownData(rawCommand);
   const hits: string[] = [];
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
