@@ -1,6 +1,7 @@
 ---
 name: Issue
 about: A bug, a change you want, or something to do later
+labels: [triage]
 ---
 
 <!--
