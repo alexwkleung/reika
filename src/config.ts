@@ -86,7 +86,7 @@ export function loadConfig(): Config {
     // cached round is nearly free on both local and API, so it is sized where a healthy complex
     // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
-    repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
+    repoMapBudget: parseIntOrUndef(process.env.REIKA_REPO_MAP_BUDGET),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     unattended: process.env.REIKA_UNATTENDED === '1',

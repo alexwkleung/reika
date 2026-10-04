@@ -5,32 +5,33 @@ import { createHash } from 'node:crypto';
 import type { ContextBundle } from '../types.js';
 import { debugLog, formatExperimentFlags } from '../debug.js';
 import { formatBundleSize } from './bundlesize.js';
-import { buildRepoMap } from './repomap.js';
+import { DEFAULT_BUDGET, packRepoMap, rankRepoMap } from './repomap.js';
 import { buildFileIndex } from './files.js';
 import { loadGitignore } from './gitignore.js';
 import { loadSkills } from '../skills.js';
 
-export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<ContextBundle> {
+export async function bootstrap(
+  cwd: string,
+  repoMapBudget: number = DEFAULT_BUDGET,
+): Promise<ContextBundle> {
   const ig = await loadGitignore(cwd);
-  const [projectSummary, instructions, repoMap, fileIndex, skills] = await Promise.all([
+  const [projectSummary, instructions, repoMapRanked, fileIndex, skills] = await Promise.all([
     summarizeProject(cwd),
     loadInstructions(cwd),
-    buildRepoMap(cwd, ig, repoMapBudget),
+    rankRepoMap(cwd, ig),
     buildFileIndex(cwd, ig),
     loadSkills(cwd),
   ]);
-
-  const hash = createHash('sha256')
-    .update(`${projectSummary}\n${instructions}\n${repoMap}`)
-    .digest('hex')
-    .slice(0, 16);
+  const repoMap = packRepoMap(repoMapRanked, repoMapBudget);
 
   const bundle: ContextBundle = {
     projectSummary,
     repoMap,
+    repoMapRanked,
+    repoMapBudget,
     instructions,
     cwd,
-    hash,
+    hash: bundleHash(projectSummary, instructions, repoMap),
     fileIndex,
     ignore: ig,
     skills,
@@ -39,6 +40,27 @@ export async function bootstrap(cwd: string, repoMapBudget?: number): Promise<Co
   debugLog(formatExperimentFlags());
   debugLog(formatBundleSize(bundle));
   return bundle;
+}
+
+// Same bundle, map packed to a new budget. Returns the bundle itself when nothing would change, so
+// a caller comparing identity rewrites the system prompt (and loses the prefix cache) only on a
+// real move. A hand-built bundle with no ranked lines has nothing to repack.
+export function refitRepoMap(bundle: ContextBundle, budget: number): ContextBundle {
+  if (!bundle.repoMapRanked || bundle.repoMapBudget === budget) return bundle;
+  const repoMap = packRepoMap(bundle.repoMapRanked, budget);
+  const next = { ...bundle, repoMapBudget: budget };
+  if (repoMap === bundle.repoMap) return next;
+  next.repoMap = repoMap;
+  next.hash = bundleHash(bundle.projectSummary, bundle.instructions, repoMap);
+  debugLog(formatBundleSize(next));
+  return next;
+}
+
+function bundleHash(projectSummary: string, instructions: string, repoMap: string): string {
+  return createHash('sha256')
+    .update(`${projectSummary}\n${instructions}\n${repoMap}`)
+    .digest('hex')
+    .slice(0, 16);
 }
 
 async function summarizeProject(cwd: string): Promise<string> {

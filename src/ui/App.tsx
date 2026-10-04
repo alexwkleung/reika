@@ -1478,7 +1478,7 @@ export function App() {
       setStatus('busy');
       setMessages(prev => [...prev, echo, { role: 'system', content: `Re-indexing ${newCwd}…` }]);
       try {
-        const newBundle = await bootstrap(newCwd, config.repoMapBudget);
+        const newBundle = await bootstrap(newCwd, sessionRef.current?.bundle.repoMapBudget);
         sessionRef.current?.updateBundle(() => newBundle);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {

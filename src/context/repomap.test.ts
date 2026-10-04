@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import ignore from 'ignore';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildRepoMap, extractSymbols } from './repomap.js';
+import { buildRepoMap, extractSymbols, packRepoMap, repoMapBudgetFor } from './repomap.js';
 
 describe('extractSymbols', () => {
   it('ts/js: exported declarations only, plus CommonJS exports', () => {
@@ -332,5 +332,28 @@ describe('buildRepoMap', () => {
     });
     const map = await buildRepoMap(dir, ignore(), undefined, { dirs: 2, files: 3000 });
     expect(map.split('\n').sort()).toEqual(['a/mid.rs: mid', 'top.rs: top']);
+  });
+});
+
+describe('repoMapBudgetFor', () => {
+  it('scales with the window between the old default and a cap', () => {
+    expect(repoMapBudgetFor(undefined)).toBe(3200);
+    expect(repoMapBudgetFor(8000)).toBe(3200);
+    expect(repoMapBudgetFor(16000)).toBe(3200);
+    expect(repoMapBudgetFor(24000)).toBe(4800);
+    expect(repoMapBudgetFor(32000)).toBe(6400);
+    expect(repoMapBudgetFor(262000)).toBe(12000);
+  });
+
+  it('an explicit budget wins over any window', () => {
+    expect(repoMapBudgetFor(262000, 2000)).toBe(2000);
+    expect(repoMapBudgetFor(undefined, 9000)).toBe(9000);
+  });
+});
+
+describe('packRepoMap', () => {
+  it('fills in rank order, skipping a line that does not fit for a shorter one below it', () => {
+    const out = packRepoMap(['a.ts: one', `b.ts: ${'x'.repeat(40)}`, 'c.ts: three'], 30);
+    expect(out.split('\n')).toEqual(['a.ts: one', 'c.ts: three', '(1 more files omitted)']);
   });
 });
