@@ -144,15 +144,19 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_MAX_FETCHES_PER_TURN`  | `5`     | Cap `fetch_url` calls per user turn                                                                       |
 
 - **`REIKA_SEARXNG_URL`** — `fetch_url` registers regardless
-- **`REIKA_CDP_SEARCH`** — Unset is **auto**: on macOS, used whenever Chrome or Chromium is
-  installed; elsewhere off, because the launch opens a visible window that takes focus — `1` opts in
-  on any platform (and fails loudly without a browser), `0` turns it off. **Takes priority over
-  `REIKA_SEARXNG_URL` whenever it is in use**, and a startup line names the winner when both are
-  configured — SearXNG reaches engines as a bare HTTP client, which is the shape they CAPTCHA; a
-  browser on a persistent profile keeps being served. Detection only checks for the binary; nothing
-  launches until the first search. Launches a separate backgrounded instance (never focused on
-  macOS, never headless — a fresh headless profile is what gets challenged) on its own profile at
-  `~/.config/reika/chrome`, reattaches across searches, and shuts it down after 10 idle minutes
+- **`REIKA_CDP_SEARCH`** — drives a real Chrome over CDP for `search`; unset is **auto**. Three
+  things to know:
+  - **When it is on** — on macOS it is used whenever Chrome or Chromium is installed; elsewhere off,
+    because the launch opens a visible window that takes focus. `1` opts in on any platform (and
+    fails loudly without a browser), `0` turns it off.
+  - **Which provider wins** — this **takes priority over `REIKA_SEARXNG_URL` whenever it is in use**,
+    and a startup line names the winner when both are configured: SearXNG reaches engines as a bare
+    HTTP client, which is the shape they CAPTCHA, where a browser on a persistent profile keeps
+    being served.
+  - **What it launches** — nothing until the first search, since detection only checks for the
+    binary. Then a separate backgrounded instance on its own profile at `~/.config/reika/chrome`,
+    never focused on macOS and never headless (a fresh headless profile is what gets challenged); it
+    reattaches across searches and shuts down after 10 idle minutes
 - **`REIKA_CDP_PORT`** — An instance already listening here is reused rather than relaunched
 - **`REIKA_PASTE_FETCH`** — `0` disables — an outbound request per pasted link
 
