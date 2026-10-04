@@ -12,6 +12,11 @@ export default defineConfig({
     config: md => md.use(githubLinks),
   },
   themeConfig: {
+    nav: [
+      { text: 'Install', link: '/getting-started' },
+      { text: 'Usage', link: '/usage' },
+      { text: 'Configuration', link: '/configuration' },
+    ],
     sidebar: [
       {
         text: 'Guide',
@@ -29,6 +34,10 @@ export default defineConfig({
       },
     ],
     socialLinks: [{ icon: 'github', link: 'https://github.com/alexwkleung/reika' }],
+    footer: {
+      message: 'Released under the Apache-2.0 license.',
+      copyright: 'Copyright 2026 Alex Leung',
+    },
   },
   buildEnd() {
     if (brokenLinks.size > 0) {
