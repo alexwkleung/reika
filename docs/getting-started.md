@@ -2,8 +2,8 @@
 
 [← README](../README.md)
 
-Reika is one CLI that talks to an OpenAI-compatible model server. That server can be on your laptop or
-on another machine — the model never has to run where Reika runs (see
+Reika is one CLI that talks to a model over the standard chat-completions API. The model can run on
+your laptop, on another machine, or at a hosted provider — it never has to run where Reika runs (see
 [Platforms](platforms.md#running-on-a-weak-machine)).
 
 ## Requirements
@@ -11,8 +11,8 @@ on another machine — the model never has to run where Reika runs (see
 - **Node.js 22 or newer** — Node sets the operating-system floor: macOS 11+, Linux with glibc 2.28+,
   or Windows 10 through WSL. See [Platforms](platforms.md) for the details and for what differs per
   platform.
-- **A model server** speaking `/v1/chat/completions`: llama.cpp, MLX, vLLM, or a cloud API. llama.cpp
-  is the engine Reika is developed and measured against — other engines implement different amounts of
+- **A model** behind a `/v1/chat/completions` endpoint: a local server (llama.cpp, MLX, vLLM) or a
+  hosted API. llama.cpp is the local engine Reika is developed and measured against — other engines implement different amounts of
   that surface, so a bug seen on one may not reproduce on another.
 - **A modern terminal** (iTerm2, Ghostty, Kitty, …) for correct TUI rendering.
 
@@ -37,7 +37,9 @@ not otherwise use pnpm.
 
 Reika is pre-1.0, so commands, settings and behavior can still change between releases.
 
-## Serve a model
+## Pick a model
+
+### Local
 
 Any OpenAI-compatible server works. With llama.cpp:
 
@@ -49,6 +51,21 @@ llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 template, which is what makes tool calling reliable. Sizing this is the model server's question, not
 Reika's; [Models](models.md) lists what Reika has been run against.
 
+### Hosted
+
+Any provider with an OpenAI-compatible endpoint works — a provider's own API, or a router such as
+OpenRouter:
+
+```sh
+export REIKA_BASE_URL=https://api.example.com/v1   # the provider's endpoint
+export REIKA_API_KEY=<your key>
+export REIKA_MODEL=<model id>                      # as the provider names it
+```
+
+For a hosted endpoint the context window and output limit come from the models.dev catalog when the
+provider is listed there; set `REIKA_CONTEXT_WINDOW` when it is not. Your code goes to that provider,
+since it is the one running the model.
+
 ## Point Reika at it
 
 ```sh
@@ -56,9 +73,10 @@ export REIKA_MODEL=model          # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
-- `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default.
-- The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for
-  servers that do not (some inference engines, most cloud APIs).
+- `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default; a hosted API sets
+  its own (above).
+- The context window is read from the server when it reports one, and for hosted endpoints from the
+  models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it, and a startup line says so.
 - `REIKA_MODEL` is required, and takes a comma-separated list for models served by one endpoint —
   `/model <name>` switches between them.
 - Reika sends no sampling parameters of its own, so your server's flags are what apply.
