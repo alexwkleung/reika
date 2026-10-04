@@ -70,6 +70,12 @@ const docs = (frontmatter.value.docs ?? []) as Item[];
   }
 }
 
+/* The markdown body's headings would get the doc pages' hover `#` link, which the sections drawn
+   below have none of. */
+.LandingBody :deep(.header-anchor) {
+  display: none;
+}
+
 .LandingSection {
   margin-top: 72px;
 }
