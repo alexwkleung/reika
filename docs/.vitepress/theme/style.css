@@ -1,6 +1,6 @@
 /* The site keeps the default theme's layout and type, and changes only what carries the brand: the
-   orchid ramp from the CLI's splash (#edc4e8 → #a13d93), used as a thin bar the way the TUI draws
-   it, and monospace where the CLI's own name appears. Everything else is left plain on purpose. */
+   orchid ramp from the CLI's splash (#edc4e8 → #a13d93), used as one thin bar the way the TUI draws
+   it, and the logo's orchid as the accent. Everything else is left plain on purpose. */
 
 :root {
   --reika-ramp: linear-gradient(180deg, #edc4e8 0%, #a13d93 100%);
@@ -17,26 +17,48 @@
   --vp-c-bg-elv: #1d1a20;
   --vp-c-bg-soft: #1f1c22;
 
-  --vp-home-hero-name-color: var(--vp-c-text-1);
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
   --vp-button-brand-bg: #a13d93;
   --vp-button-brand-hover-bg: #b04ea2;
   --vp-button-brand-active-bg: #8e3482;
 }
 
-.VPNavBarTitle .title {
-  font-family: var(--reika-mono);
-  font-weight: 500;
-  letter-spacing: -0.01em;
+/* Hero: the name is the accent and the headline sits under it, both smaller than the default
+   theme's 56px so the block reads as a heading and a line, not two headlines stacked. */
+.Landing .VPHero .name {
+  font-size: 22px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
-/* Hero: the name in the CLI's monospace, and the ramp as a bar beside the copy, as the splash draws
-   it beside `✿ Reika`. No gradient-filled wordmark: the bar is the one place the ramp appears. */
-.VPHero .name {
-  font-family: var(--reika-mono);
-  font-weight: 500;
+.Landing .VPHero .text {
+  margin-top: 6px;
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
+.Landing .VPHero .tagline {
+  padding-top: 16px;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+@media (min-width: 768px) {
+  .Landing .VPHero .text {
+    font-size: 40px;
+  }
+
+  .Landing .VPHero .tagline {
+    font-size: 18px;
+  }
+}
+
+/* The ramp as a bar beside the hero copy, as the splash draws it beside `✿ Reika`. The one place
+   the ramp appears on the page. */
 @media (min-width: 640px) {
   .Landing .VPHero .main {
     position: relative;
@@ -47,34 +69,42 @@
     content: '';
     position: absolute;
     left: 0;
-    top: 10px;
-    bottom: 10px;
-    width: 4px;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
     border-radius: 2px;
     background: var(--reika-ramp);
   }
 }
 
-/* Feature cards: the same bar on the left edge in place of a full outline. */
-.Landing .VPFeature {
-  position: relative;
-  border: none;
-  border-radius: 0 10px 10px 0;
-  background: var(--vp-c-bg-soft);
+.Landing .VPHero .actions {
+  padding-top: 28px;
 }
 
-.Landing .VPFeature::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--reika-ramp);
-  opacity: 0.7;
+/* The default theme's button rule is scoped, so this needs the hero in the selector to win. */
+.Landing .VPHero .VPButton.medium {
+  border-radius: 8px;
+  padding: 0 18px;
+  line-height: 38px;
+  font-size: 14px;
 }
 
-.Landing .VPFeature .title {
+.Landing .VPHero .VPButton.alt {
+  border-color: var(--vp-c-divider);
+  background: transparent;
+}
+
+.Landing .VPHero .VPButton.alt:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+/* Landing body: section headings match the component's own, without the doc pages' top rule. */
+.Landing .vp-doc h2 {
+  margin: 72px 0 20px;
+  padding-top: 0;
+  border-top: none;
+  font-size: 22px;
   font-weight: 600;
 }
 
@@ -86,16 +116,21 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
-.vp-doc code {
-  font-family: var(--reika-mono);
-}
-
 /* The demo caption is a `<sup>` so GitHub renders it small; as superscript it also inherits a raised
    baseline that spreads its wrapped lines apart, so on the site it is set as a plain small line. */
 .Landing .vp-doc sup {
   display: block;
+  margin-top: 12px;
   font-size: 13px;
   line-height: 1.6;
   vertical-align: baseline;
-  color: var(--vp-c-text-2);
+  color: var(--vp-c-text-3);
+}
+
+.VPNavBarTitle .title {
+  font-weight: 600;
+}
+
+.vp-doc code {
+  font-family: var(--reika-mono);
 }
