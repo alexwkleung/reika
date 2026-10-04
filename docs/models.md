@@ -3,7 +3,7 @@
 [← README](../README.md)
 
 Models Reika has been run against, in daily use and in evaluations. Local models are what Reika was
-designed around, and where the behaviour work is tested. Day-to-day use is mostly on API models,
+designed around, and where the behavior work is tested. Day-to-day use is mostly on API models,
 which also serve as the comparison for what a local quant can and cannot hold.
 
 Quantization is the one in parentheses. Where a note names modes, that is where the model was used

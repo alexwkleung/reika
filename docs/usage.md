@@ -253,7 +253,7 @@ Type `/` in the input to see suggestions. Highlights:
 
 A saved transcript is titled by the first prompt you typed (`title` on the JSONL meta line, `# title:`
 atop the `.txt`), so a directory of saves reads as a list of sessions rather than timestamps. It also
-records the mode alongside the conversation: each turn is labelled with the mode it ran in
+records the mode alongside the conversation: each turn is labeled with the mode it ran in
 (`You [plan]:`, and `mode` on the JSONL record), and the header carries the mode at save time plus the
 whole arc — `# modes: agent (turns 1-3) → plan (turn 4) → agent (turn 5)`. A vibe turn is recorded as
 `vibe`, not as the plan and agent phases it runs as internally. So a transcript says how the work was
