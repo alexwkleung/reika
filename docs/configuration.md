@@ -182,26 +182,32 @@ for a tiny model or a tight window.
 | `REIKA_MCP`         | `1`     | `0` turns configured MCP servers off for the session — the baseline arm for a run measuring behavior without them |
 
 - **`REIKA_MCP_SERVERS`** — Three document shapes are accepted: the standard `{"mcpServers":
-{"name": {"command": …}}}`, that map without the wrapper, and a list of `{"name": …, "command":
-…}`. Each entry is `command` plus optional `args`, `env`, `cwd`, `timeoutMs` (per call, default
-
-60000. and `connectTimeoutMs` (the handshake — `server/discover` or `initialize`, and `tools/list`
-       — default 15000, because it is paid before the first frame: a server that hangs at startup must
-       not hold the session, and one behind a cold `npx` install can need longer than the default to say
-       hello). Reika speaks MCP's **stdio** transport (JSON-RPC 2.0, newline-framed) in both protocol
-       eras: `2026-07-28` to a server that answers `server/discover`, the `initialize` handshake
-       (`2025-11-25` back to `2024-11-05`) otherwise; then `tools/list` (paginated) and `tools/call`. A
-       server inherits only `HOME`, `PATH`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR` and the locale
-       from reika's environment — not its API keys — so give it anything else through `env`. Every tool
-       it finds joins the **agent** tool list as `mcp__<server>__<tool>`, and becomes a
-       `/<server>:<tool>` slash command; `/mcp` lists them. Agent mode only — an MCP tool is opaque to
-       the harness, so plan/chat/minimal/grind (whose guarantees are structural) never get one. A tool
-       call goes through the approval gate with no danger warnings: under `safe` it runs, under `off` it
-       prompts, under `bypass` it runs unprompted. Set `"approve": "always"` on a server whose tools send
-       data somewhere, and every call from it prompts even under `safe` (and is refused under `bypass`,
-       declined when unattended); any other value is reported as a config error. A server that fails to
-       start is reported at startup and skipped — the session opens anyway. Stdio only; remote HTTP/SSE
-       servers are not supported
+{"name": {"command": …}}}`, that map without the wrapper, and a list of `{"name": …,
+"command": …}`. Each entry is `command` plus optional `args`, `env`, `cwd`, `timeoutMs` (per
+  call, default `60000`) and `connectTimeoutMs`
+- **Handshake timeout** — `connectTimeoutMs` bounds the handshake — `server/discover` or
+  `initialize`, and `tools/list` — and defaults to 15000, because it is paid before the first
+  frame: a server that hangs at startup must not hold the session, and one behind a cold `npx`
+  install can need longer than the default to say hello
+- **Transport** — Reika speaks MCP's **stdio** transport (JSON-RPC 2.0, newline-framed) in both
+  protocol eras: `2026-07-28` to a server that answers `server/discover`, the `initialize`
+  handshake (`2025-11-25` back to `2024-11-05`) otherwise; then `tools/list` (paginated) and
+  `tools/call`
+- **Environment** — A server inherits only `HOME`, `PATH`, `SHELL`, `TERM`, `USER`, `LOGNAME`,
+  `TMPDIR` and the locale from reika's environment — not its API keys — so give it anything else
+  through `env`
+- **Tools** — Every tool it finds joins the **agent** tool list as `mcp__<server>__<tool>`, and
+  becomes a `/<server>:<tool>` slash command; `/mcp` lists them. Agent mode only — an MCP tool is
+  opaque to the harness, so plan/chat/minimal/grind (whose guarantees are structural) never get
+  one
+- **Approval** — A tool call goes through the approval gate with no danger warnings: under `safe`
+  it runs, under `off` it prompts, under `bypass` it runs unprompted. Set `"approve": "always"` on
+  a server whose tools send data somewhere, and every call from it prompts even under `safe` (and
+  is refused under `bypass`, declined when unattended). Leaving `approve` out — or spelling the
+  ordinary gate as `"auto"` — is what it does otherwise; any other value, a typo like `"alway"`, is
+  reported as a config error
+- **Failure** — A server that fails to start is reported at startup and skipped — the session
+  opens anyway. Stdio only; remote HTTP/SSE servers are not supported
 
 ## Diagnostics
 
