@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
 
@@ -53,9 +54,18 @@ export default defineConfig({
       copyright: 'Copyright 2026 Alex Leung',
     },
   },
-  buildEnd() {
+  buildEnd(siteConfig) {
     if (brokenLinks.size > 0) {
       throw new Error(`Broken links:\n  ${[...brokenLinks].join('\n  ')}`);
+    }
+    // llms.txt is written by hand, so a page added to the sidebar has to be added there too.
+    const llms = readFileSync(new URL('../public/llms.txt', import.meta.url), 'utf8');
+    const sidebar = siteConfig.site.themeConfig.sidebar as { items: { link: string }[] }[];
+    const missing = sidebar
+      .flatMap(group => group.items.map(item => `docs${item.link}.md`))
+      .filter(path => !llms.includes(`/main/${path})`));
+    if (missing.length > 0) {
+      throw new Error(`Pages missing from docs/public/llms.txt:\n  ${missing.join('\n  ')}`);
     }
   },
 });
