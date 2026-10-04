@@ -79,7 +79,9 @@ export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
 ```
 
-`REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取；对于不上报的服务器（部分推理引擎、多数云端 API），请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
+改用托管 API？跳过启动服务器这一步，把 `REIKA_BASE_URL`、`REIKA_API_KEY` 和 `REIKA_MODEL` 设为服务商的端点、你的密钥和它的模型 ID；详见 [安装与首次运行](docs/getting-started.md#hosted)。
+
+`REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取，托管端点则从 models.dev 目录中读取；两者都没有时，请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
 
 想改从检出目录运行：`git clone https://github.com/alexwkleung/reika.git && cd reika`，然后 `pnpm install`（npm 用户先 `npm i -g pnpm`）并用 `pnpm run install:global` 构建安装 `reika` 可执行文件；或者 `cp .env.example .env`、编辑它，再 `pnpm run dev` 直接运行而不安装。`pnpm run uninstall:global` 会移除全局可执行文件。
 
