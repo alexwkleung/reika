@@ -1,6 +1,9 @@
 ---
 # Site-only page: GitHub renders this frontmatter as a table. The repo's landing page is the README.
-layout: home
+# `Landing` is the site's own layout (theme/Landing.vue); it reads this frontmatter and the body
+# below in this order: hero, body, features, next. `sidebar: false` because this page has no sidebar.
+layout: Landing
+sidebar: false
 
 hero:
   name: Reika
@@ -30,8 +33,45 @@ features:
     details: Approvals stay on for dangerous commands and out-of-project writes, on macOS model-chosen shell commands run under a kernel sandbox, and nothing leaves the model server you configured.
   - title: Measured, not asserted
     details: Every default-on feature leaves a baseline arm behind it, and the record of what broke and what held — with the numbers — is published in the findings.
+
+next:
+  - title: Tools
+    details: The tools the agent has, which ones register only when their config is present, and how a call reads in the transcript.
+    link: /tools
+    linkText: Read
+  - title: Instructions and skills
+    details: The `AGENTS.md` and skills files that steer the agent, and the plain-English routing that picks a skill for a prompt.
+    link: /skills
+    linkText: Read
+  - title: Models
+    details: What Reika has been run against in daily use and in evals, local first, with the API models it is compared against.
+    link: /models
+    linkText: Read
+  - title: Platforms
+    details: Requirements per platform, and what differs on macOS, Linux and Windows, including running the model on another machine.
+    link: /platforms
+    linkText: Read
+  - title: Architecture
+    details: How a turn is put together, what the harness does at each step, and the caveats that come with it.
+    link: /architecture
+    linkText: Read
+  - title: Findings
+    details: The measurements behind the claims on this page — what broke, what held, and the numbers for both.
+    link: /findings
+    linkText: Read
 ---
 
 ![Reika fixing a retry helper and its test with a local model](./demo.gif)
 
-<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error. The measurements behind the features above are in [Findings](/findings).</sup>
+<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error. The measurements behind the features below are in [Findings](findings.md).</sup>
+
+Install it, then point it at a model server:
+
+```sh
+pnpm add -g reika                             # or: npm i -g reika
+llama-server -m <model.gguf> -c 24576 --jinja # any OpenAI-compatible server will do
+cd your-project && reika
+```
+
+[Install and first run](getting-started.md) takes it from there, [Usage](usage.md) walks through the
+modes and commands, and [Configuration](configuration.md) is the full key list.
