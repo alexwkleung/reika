@@ -35,6 +35,7 @@ Reika is built on a claim that can be measured, so the record is published rathe
 
 - **The harness's own context management cost more than the model did.** One mid-context rewrite re-processed 8,453 tokens of prompt — 7.9 minutes of prefill — where an append in the same session cost 25 tokens and 3.5 seconds.
 - **Ask the model for its findings before a fold drops them.** In the A/B behind this, the arm whose findings were dropped folded five times, re-read files it had already read, and never answered; the arm that was asked answered from the digest.
+- **A small model takes tool output literally.** A grep that said "0 matches" for a call it couldn't serve sent a model rewording a correct pattern for five rounds; a loop blamed on a 35B at Q2 was reika feeding the model its own tool-call markup back.
 - **Prompt wording is the weakest lever.** On a vague task at Q2 a model converges or spirals about 50/50, and the harness cannot move that rate — only what the failing half costs.
 - **The loop detectors separate cleanly.** Healthy reasoning rounds measure 0.2–0.3 on cross-round similarity; locked loops sit at 1.00, and a 38-round productive turn never fired the detector.
 

@@ -11,6 +11,16 @@ lines and with A/B arms behind environment flags. [`AGENTS.md`](../AGENTS.md) ho
 the form the agent editing this repo reads it, with file paths, flag names and issue numbers; this page
 is the shorter version for people. [How these were measured](#how-these-were-measured) is at the end.
 
+**Setup.** Most local runs are on an M2 MacBook with 16GB of unified memory, through llama.cpp, on the
+quants in [Tested models](models.md) — mostly Qwen3.6 35B A3B at IQ2 and Qwen3.8 27B at IQ3. A few
+results come from API-hosted models, and those are labeled where they appear: an API model behaves
+like a small one in some ways, but it does not reproduce Q2 quantization loss.
+
+**Three words used throughout.** When the request nears the context window, the harness first
+_sheds_ old tool output, collapsing each payload to a one-line summary, down to a _watermark_ (a target
+fill, 70% of the window). If that is not enough it _folds_: the oldest turns are replaced by one recap
+message.
+
 ## The harness's own context management cost more than anything the model did
 
 Every layer that buys window room — collapsing old tool payloads to one-line summaries, dropping older
@@ -41,8 +51,9 @@ Two follow-on findings came out of the same accounting:
 
 - **Write the compaction note before the shed.** Written after it, one event paid two full re-prefills —
   measured at the first live fold, 9k + 9.3k tokens, 416 s + 431 s on a 24k window. Written first, the
-  note round is a pure append on the previous round, and the shed and the fold land together on the real
-  request that was going to diverge from the top anyway.
+  note round should be a pure append on the previous round, with the shed and the fold landing together
+  on the real request that was going to diverge from the top anyway. That reordering shipped on the
+  arithmetic; the live fold that confirms it is still to be logged.
 - **A tool list is part of the prefix.** The note round first shipped with `tools: []`, on the reasoning
   that it forbids tool calls anyway. A Qwen-family template renders the tool list into the system turn —
   the same prompt with and without tools shared 228 bytes — so the note round re-prefilled the entire
@@ -50,6 +61,13 @@ Two follow-on findings came out of the same accounting:
   tools with `tool_choice: 'none'` keeps the rendered prompt byte-identical and forbids the call at the
   sampler instead. Neither re-prefill showed up in the cache trace, because the trace compared messages
   while the tool list lives in the rendering.
+- **chars ÷ 4 is not a token count.** It is the usual estimate, and it is close on prose. On SVG path
+  data, CSS and code it was 2.5× low — about 1.6 characters per token. One run estimated ~10k prompt
+  tokens and sent 25,389 to a 24,576-token window, and the server rejected it. Worse, the correction
+  factor learned from earlier prose turns (0.888) had pushed the estimate further down, so compaction
+  never fired. The fix splits the two jobs: anything the request adds for the first time is priced at
+  the pessimistic 1.6, which makes the size cap a real guarantee, and the compaction decision never
+  assumes content sparser than chars ÷ 4.
 
 ## A fold should ask for the model's findings before it drops them
 
@@ -67,6 +85,37 @@ the unfolded history, and the recap leads with it. The note never enters history
 message — the reasoning that wrote it must not carry over — and it supersedes the previous fold's
 narrative, so recaps never stack. The round is gated on the fold actually removing something, since a
 fold that keeps everything has nothing to replace. The cost is one generation per fold.
+
+## A small model takes tool output literally
+
+A frontier model reading an odd tool result often notices that it is odd. A Q2 model takes it at its
+word and acts on it, so any tool output that _can_ be misread will be, and the loop that follows looks
+like a capability problem when it is a wording problem in the harness.
+
+- **"0 matches" meant two different things.** grep answered `Found 0 matches` both when nothing matched
+  and when it could not serve the call at all — a glob-style `include="*.css"` against a filter that
+  expected a suffix, or a `~/…` path taken literally. The model read both as "the pattern is wrong" and
+  spent five rounds rewording a search that should have hit on the first call. The fix was two rules:
+  accept the dialect the models actually emit (glob includes, tilde paths), and make a call the tool
+  cannot serve say so, distinctly from an empty result.
+- **A summary read as "already handled".** Old tool output collapses to its one-line summary, and the
+  oldest goes first. `/issue` opens by fetching the issue, so the task definition was the _first_ thing
+  dropped, leaving `Ran: gh issue view 213 (505 bytes output)`. The model read that as a result it had
+  already dealt with, said it would re-read the issue, made no tool call, and quoted issue text that does
+  not exist. The fix pins the turn's opening tool result, and states once per request that earlier
+  results were dropped and can be re-run.
+- **A cut-off result read as a failed command.** When output is truncated to fit the window, models
+  re-ran the same command with different flags, trying to repair a command that had worked. The
+  truncation marker now says it is a context limit, not a command error.
+- **The model was reading its own tool calls back.** A 35B at Q2 kept re-reading the same file in a loop,
+  with its reasoning repeating verbatim. The model was not the cause. It sometimes writes a tool call
+  inside its reasoning, and reika recovered the call but fed the reasoning back with the raw
+  `<function=read>…` markup still in it — so every round the model read its own call intent and fired
+  it again. Stripping the markup ended the loop, and the same model went on to find the real bug and
+  edit it. The loop detectors that had been built against that loop stayed on as a net for real ones.
+
+The rule this left behind: before adding an intervention for "the model is stuck", check what the model
+is actually being shown. Several of these failures were harness bugs, not capability.
 
 ## Prompt wording is the weakest lever, and the one hardest to bound
 
@@ -105,14 +154,18 @@ bounce log (`would-land=yes|no`), which is what will decide whether the default 
 Two exceptions worth keeping. A natural-language meta-instruction _does_ reach a spiral where a
 token-level nudge does not: on a plan-mode spiral, two unsteered attempts — one of them carrying a
 `logit_bias` — gave up, and a third with a failure-naming steer ("do not overcomplicate… do not repeat or
-question yourself") converged in ~500 reasoning tokens where the others had reached 18k characters. And
-a prompt-only procedure can work as procedure: [grind mode](usage.md) is one fixed seven-step prompt, and
-it is the mode that reliably reviews its own diff — at about 3× the wall clock of agent mode on the
-measured fixtures.
+question yourself") converged in ~500 reasoning tokens where the others had reached 18k characters.
 
-The general rule this left behind: prefer fixing the plumbing over adding intervention. Several "the
-model is stuck" symptoms turned out to be harness bugs — reasoning-channel markup leaking into the wrong
-field — not capability.
+And one prompt rule measured as a clear win, which shows both where wording works and where it stops.
+On two fixtures where a change has to reach the callers of a function, one of them behind an alias, an
+API-hosted DeepSeek V4.1 Flash in agent mode passed 4 of 10 runs, and none of the six failures had
+opened a single caller. [Grind mode](usage.md), a fixed seven-step procedure prompt, passed 8 of 10,
+and its gain traced to one step: review the diff and check the callers. That step alone, added to agent
+mode as a rule, passed 10 of 10 and cost nothing on the other fixtures, so it is now on by default. On
+a local Qwen3.8 27B the rule changed behavior but not much of the outcome. On the direct-call fixture
+it searched for callers in 2 of 3 runs against 0 of 3, and passed 1 of 3 against 0. On the alias
+fixture it searched by the literal name, stopped at the alias, and passed 0 of 3 with or without the
+rule. A small model follows "find the callers" exactly as far as a name search reaches.
 
 ## Reasoning loops separate cleanly from healthy work
 
@@ -148,6 +201,30 @@ honestly. With the flag on, five of six runs followed the pointer to the saved a
 one-shot runs read it as the very next call. With the flag off, the tasks still got answered: one model
 recomputed the verdict with `wc -l`, another re-ran its checker more narrowly. So what the feature buys
 is a re-execution avoided, not a question that could not be answered — a smaller claim, and the true one.
+
+## What didn't work
+
+- **A coherence anchor.** The idea: weak quants burn capability re-deriving where they are, so pin a
+  short state block — the goal plus the last five distinct actions — into every agent request. Benched
+  on two real tasks, about three runs per arm, it was null on the easy one and directionally worse on the
+  hard one (2 of 3 completed without it, 1 of 3 with it). The state the model loses is fine-grained —
+  a helper's signature, which state field, a CSS class — and an action list cannot carry that. It was
+  removed rather than tuned, since the problem was granularity, not wording.
+- **Removing a tool to forbid it.** Covered above: a report round sent with `tools: []` forbade tool
+  calls and silently re-prefilled the whole request, because the template renders the tool list.
+  `tool_choice: 'none'` forbids the call without touching the prompt.
+- **Routing to a subagent by forecast.** A prompt rule that said "when answering needs more than ~3
+  files, delegate" had 0 of 2 uptake: the model never predicts, it takes the obvious next step and
+  greps. Keyed on the request's shape it fired, but too eagerly, and lost its A/B to the compaction
+  note. It is off.
+- **N-gram speculative decoding.** A net loss on the 16GB M2, though it is a real win on hardware with
+  more headroom. That is the general warning: a serving optimization measured on a bigger machine has to
+  be re-measured on the one you run.
+- **Recall tools, not built.** A `history_search`-style tool for reaching dropped context was
+  considered and rejected without a bench, on the reasoning that an untrained model under-uses a tool it
+  has never seen. Saved tool output is reachable instead through a file path in the result, which the
+  model opens with the `read` it already uses constantly — and in the fixtures it did, usually as the
+  very next call.
 
 ## How these were measured
 
