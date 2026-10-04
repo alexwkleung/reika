@@ -8,15 +8,15 @@
 session in are the ones the next session opens in (see
 [Last session state](configuration.md#last-session-state)).
 
-| Mode      | What it does                                                                 |
-| --------- | ---------------------------------------------------------------------------- |
-| `agent`   | The default: the model reads, edits, and runs commands                       |
-| `plan`    | Read-only exploration that ends in a written plan; `/implement` runs it      |
-| `vibe`    | Plans first, then implements the plan, on every prompt                       |
-| `minimal` | Shell only, with no repo map or project context loaded upfront               |
-| `grind`   | Agent turns run a fixed, careful procedure: define done, test, review        |
-| `chat`    | Plain conversation with a separate history; web tools only                   |
-| `shell`   | Your input runs as a shell command, and the output joins the agent's context |
+| Mode      | What it does                                                                 | Pick it when                                                                                   |
+| --------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `agent`   | The default: the model reads, edits, and runs commands                       | Most tasks, on any model                                                                       |
+| `plan`    | Read-only exploration that ends in a written plan; `/implement` runs it      | You want to agree on the approach before anything changes: unfamiliar code, multi-file changes |
+| `vibe`    | Plans first, then implements the plan, on every prompt                       | You want to watch a model take a task end to end on its own; not the mode for best quality     |
+| `minimal` | Shell only, with no repo map or project context loaded upfront               | The context window is small and you want as much of it as possible left for the task           |
+| `grind`   | Agent turns run a fixed, careful procedure: define done, test, review        | A harder change where checking the work is worth about 3× the time; a larger window helps      |
+| `chat`    | Plain conversation with a separate history; web tools only                   | A question that doesn't need the repo                                                          |
+| `shell`   | Your input runs as a shell command, and the output joins the agent's context | You want to run something yourself and have the model see the result                           |
 
 Each mode also shows a tag in the status bar while it is active.
 
