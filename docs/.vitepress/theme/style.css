@@ -146,3 +146,9 @@
 body:has(.Landing) {
   --vp-c-gutter: transparent;
 }
+
+/* The footer's two lines share a 24px line box with no gap, so the copyright reads as a wrap of the
+   licence line; a small gap makes them two lines. The container class out-ranks the scoped rule. */
+.VPFooter .container .copyright {
+  margin-top: 8px;
+}
