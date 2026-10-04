@@ -71,9 +71,10 @@ docs:
 ## Install
 
 ```sh
-pnpm add -g reika                             # or: npm i -g reika
-llama-server -m <model.gguf> -c 24576 --jinja # or any OpenAI-compatible server
-cd your-project && reika
+npm i -g reika
+pnpm add -g reika
+brew install alexwkleung/tap/reika
 ```
 
-[Install and first run](getting-started.md) covers requirements and configuration from there.
+Then point it at a model server and run `reika` in a project. [Install and first run](getting-started.md)
+covers requirements and setup.

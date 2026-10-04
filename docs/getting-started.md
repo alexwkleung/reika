@@ -18,13 +18,16 @@ on another machine — the model never has to run where Reika runs (see
 
 ## Install
 
-Either package manager works — the published package has no install-time script, so only the location
-of the binary differs.
+Any of these installs the same published package:
 
 ```sh
-pnpm add -g reika    # what Reika's own checkout uses
-npm i -g reika       # npm ships with Node
+npm i -g reika                       # npm ships with Node
+pnpm add -g reika                    # what Reika's own checkout uses
+brew install alexwkleung/tap/reika   # macOS and Linux; pulls in Node if needed
 ```
+
+The Homebrew formula wraps the npm package, so the version is the same either way. It lives in a tap
+rather than in Homebrew's core list, which is why the name carries `alexwkleung/tap/`.
 
 pnpm needs installing first (`npm i -g pnpm`, or the standalone installer at
 [pnpm.io/installation](https://pnpm.io/installation)), and its global bin directory has to be on your
@@ -32,8 +35,8 @@ pnpm needs installing first (`npm i -g pnpm`, or the standalone installer at
 `~/Library/pnpm/bin`). npm's global bin is on `PATH` already, so npm is the shorter route if you do
 not otherwise use pnpm.
 
-The first npm publish is `0.1.0`, a research and developer release: expect behavior and config to
-change between minor versions. Until that release is up, install from a checkout (below).
+`0.x` is a research and developer release: expect behavior and config to change between minor
+versions.
 
 ## Serve a model
 

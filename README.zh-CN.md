@@ -59,17 +59,23 @@ Reika 是一个适用于本地与托管模型的编码代理 CLI。它首先围�
 
 ## 快速开始
 
-先启动一个模型。下面以 llama.cpp 为例：
+用以下任一方式安装（npm 和 pnpm 需要 Node ≥ 22；Homebrew 会自动装好 Node）：
+
+```sh
+npm i -g reika
+pnpm add -g reika
+brew install alexwkleung/tap/reika
+```
+
+启动一个模型。下面以 llama.cpp 为例：
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-然后安装 Reika 并把它指向该服务器（需要 Node ≥ 22，以及 pnpm —— `npm i -g pnpm`）：
+然后把 Reika 指向它：
 
 ```sh
-pnpm add -g reika        # 也可以 npm i -g reika
-
 export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
 ```
