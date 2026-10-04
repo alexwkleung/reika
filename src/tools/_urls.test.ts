@@ -29,6 +29,10 @@ describe('extractUrls', () => {
     expect(extractUrls('(see https://example.com/x), ok')).toEqual(['https://example.com/x']);
   });
 
+  it('skips a match that names no host', () => {
+    expect(extractUrls('a link like https://… goes here')).toEqual([]);
+  });
+
   it('ignores non-http schemes and bare prose', () => {
     expect(extractUrls('file:///etc/passwd and just some words')).toEqual([]);
     expect(extractUrls('ftp://example.com/file')).toEqual([]);
@@ -72,7 +76,10 @@ describe('buildUrlGroundingNote', () => {
 
   it('flags a non-resolving URL as an instruction to fix', () => {
     const note = buildUrlGroundingNote([
-      { url: 'https://nope.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
+      {
+        url: 'https://nope.example/x',
+        res: { ok: false, reached: true, error: '404 Not Found', status: 404 },
+      },
     ]);
     expect(note).toContain('✗ https://nope.example/x — did NOT resolve (404 Not Found)');
     expect(note).toMatch(/do not assume it works/i);
@@ -95,7 +102,10 @@ describe('buildUrlGroundingNotice', () => {
   it('warns and names the unreachable URL(s)', () => {
     const notice = buildUrlGroundingNotice([
       { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
-      { url: 'https://bad.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
+      {
+        url: 'https://bad.example/x',
+        res: { ok: false, reached: true, error: '404 Not Found', status: 404 },
+      },
     ]);
     expect(notice?.tone).toBe('warn');
     expect(notice?.content).toBe(
@@ -116,10 +126,54 @@ describe('buildUrlGroundingNotice', () => {
   it('treats a no-response link as dead when the batch proves connectivity', () => {
     const notice = buildUrlGroundingNotice([
       { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
-      { url: 'https://invented.host', res: { ok: false, reached: false, error: 'ENOTFOUND' } },
+      {
+        url: 'https://invented.host',
+        res: { ok: false, reached: false, error: 'ENOTFOUND', code: 'ENOTFOUND' },
+      },
     ]);
     expect(notice?.tone).toBe('warn');
     expect(notice?.content).toContain('https://invented.host (ENOTFOUND)');
+  });
+
+  // Every ✗ receipt found in saved sessions was one of these, and none was a real dead link.
+  it.each([
+    ['https://github.com/octocat/private-repo', 404, 'Not Found'],
+    ['https://ko-fi.com/octocat', 403, 'Forbidden'],
+    ['https://search.example.com/search?q=', 429, 'Too Many Requests'],
+    ['https://api.example.com/zen/go/v1', 404, 'Not Found'],
+    ['https://example.com/api/thing', 404, 'Not Found'],
+    ['https://example.com/page', 503, 'Service Unavailable'],
+  ])('leaves %s (%i) unverified rather than dead', (url, status, text) => {
+    const results = [
+      { url, res: { ok: false as const, reached: true, error: `${status} ${text}`, status } },
+    ];
+    expect(buildUrlGroundingNotice(results)).toEqual({
+      tone: 'info',
+      content: "Grounded 1 link — couldn't verify 1 (the server did not confirm the page).",
+    });
+    expect(buildUrlGroundingNote(results)).toContain(`? ${url} — the server answered ${status}`);
+    expect(buildPlanUrlNote(results)).toBe('');
+  });
+
+  it('still flags a 410 on an ordinary page path', () => {
+    const notice = buildUrlGroundingNotice([
+      {
+        url: 'https://cdn.example.com/lib/r999/lib.min.js',
+        res: { ok: false, reached: true, error: '410 Gone', status: 410 },
+      },
+    ]);
+    expect(notice?.tone).toBe('warn');
+  });
+
+  it('leaves a timeout unverified even when the batch proves connectivity', () => {
+    const notice = buildUrlGroundingNotice([
+      { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
+      {
+        url: 'https://slow.example.com',
+        res: { ok: false, reached: false, error: 'timeout', code: 'UND_ERR_CONNECT_TIMEOUT' },
+      },
+    ]);
+    expect(notice?.tone).toBe('info');
   });
 });
 
@@ -236,7 +290,10 @@ describe('buildPlanUrlNote', () => {
   it('lists only the unreachable URLs, backticked', () => {
     const note = buildPlanUrlNote([
       { url: 'https://ok.example', res: { ok: true, content: 'x', extractedChars: 1 } },
-      { url: 'https://bad.example/x', res: { ok: false, reached: true, error: '404 Not Found' } },
+      {
+        url: 'https://bad.example/x',
+        res: { ok: false, reached: true, error: '404 Not Found', status: 404 },
+      },
     ]);
     expect(note).toContain('plan URL check');
     expect(note).toContain('`https://bad.example/x` (404 Not Found)');
