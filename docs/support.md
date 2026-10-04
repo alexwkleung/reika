@@ -15,7 +15,7 @@ recurring:
 - [Ko-fi](https://ko-fi.com/alexwkleung)
 - [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung)
 
-Sponsorship pays for time spent on Reika. It comes with no obligations either way.
+Sponsorship pays for time spent on Reika and local hardware upgrades. It comes with no obligations either way.
 
 ## Using Reika at work
 
