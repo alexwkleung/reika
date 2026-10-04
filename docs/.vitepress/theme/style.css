@@ -1,0 +1,101 @@
+/* The site keeps the default theme's layout and type, and changes only what carries the brand: the
+   orchid ramp from the CLI's splash (#edc4e8 → #a13d93), used as a thin bar the way the TUI draws
+   it, and monospace where the CLI's own name appears. Everything else is left plain on purpose. */
+
+:root {
+  --reika-ramp: linear-gradient(180deg, #edc4e8 0%, #a13d93 100%);
+  --reika-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+
+  --vp-c-brand-1: #d68cd6;
+  --vp-c-brand-2: #c77bc6;
+  --vp-c-brand-3: #a13d93;
+  --vp-c-brand-soft: rgba(214, 140, 214, 0.14);
+
+  /* The near-black leans a few degrees toward plum so the orchid sits on it rather than on grey. */
+  --vp-c-bg: #17151a;
+  --vp-c-bg-alt: #121014;
+  --vp-c-bg-elv: #1d1a20;
+  --vp-c-bg-soft: #1f1c22;
+
+  --vp-home-hero-name-color: var(--vp-c-text-1);
+  --vp-button-brand-bg: #a13d93;
+  --vp-button-brand-hover-bg: #b04ea2;
+  --vp-button-brand-active-bg: #8e3482;
+}
+
+.VPNavBarTitle .title {
+  font-family: var(--reika-mono);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* Hero: the name in the CLI's monospace, and the ramp as a bar beside the copy, as the splash draws
+   it beside `✿ Reika`. No gradient-filled wordmark: the bar is the one place the ramp appears. */
+.VPHero .name {
+  font-family: var(--reika-mono);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+@media (min-width: 640px) {
+  .Landing .VPHero .main {
+    position: relative;
+    padding-left: 28px;
+  }
+
+  .Landing .VPHero .main::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 4px;
+    border-radius: 2px;
+    background: var(--reika-ramp);
+  }
+}
+
+/* Feature cards: the same bar on the left edge in place of a full outline. */
+.Landing .VPFeature {
+  position: relative;
+  border: none;
+  border-radius: 0 10px 10px 0;
+  background: var(--vp-c-bg-soft);
+}
+
+.Landing .VPFeature::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--reika-ramp);
+  opacity: 0.7;
+}
+
+.Landing .VPFeature .title {
+  font-weight: 600;
+}
+
+/* The demo is a terminal recording, so it sits in a quiet frame rather than floating on the page. */
+.vp-doc img[src*='demo'] {
+  display: block;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.vp-doc code {
+  font-family: var(--reika-mono);
+}
+
+/* The demo caption is a `<sup>` so GitHub renders it small; as superscript it also inherits a raised
+   baseline that spreads its wrapped lines apart, so on the site it is set as a plain small line. */
+.Landing .vp-doc sup {
+  display: block;
+  font-size: 13px;
+  line-height: 1.6;
+  vertical-align: baseline;
+  color: var(--vp-c-text-2);
+}
