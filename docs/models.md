@@ -42,3 +42,5 @@ rather than the only thing it can do.
 - DeepSeek V4 Flash (OpenRouter, OpenCode Go)
 - Laguna XS 2.1 (OpenRouter)
 - Laguna M.1 (OpenRouter)
+- StepFun 3.5 Flash (OpenRouter, NVIDIA NIM)
+- StepFun 3.7 Flash (NVIDIA NIM)
