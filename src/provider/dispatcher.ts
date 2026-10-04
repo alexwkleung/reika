@@ -15,7 +15,11 @@ import { debugLog } from '../debug.js';
 // dependency and no version skew. If any of it is missing (a future Node, another runtime), we
 // fall open to bare fetch: the old 300 s behavior, never a crash.
 
-const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
+// undici 8 (Node 26) parks its Agent on `.2` and leaves a `Dispatcher1Wrapper` on `.1` for
+// pre-8 callers; earlier Nodes have only `.1`. Reading `.1` alone on Node 26 found the wrapper,
+// fell open, and silently brought back the 300 s abort and dropped the #544 connect-time pin.
+const GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.2');
+const LEGACY_GLOBAL_DISPATCHER = Symbol.for('undici.globalDispatcher.1');
 
 // No timeout by default (issue #382). Any finite cap is a guess about the user's hardware: 30 min
 // covered a 24k re-prefill at 23 tok/s, but a model streamed off SSD can sit silent for far longer
@@ -59,11 +63,18 @@ export async function agentConstructor<O = object>(): Promise<
   (new (opts: O) => FetchDispatcher) | null
 > {
   const g = globalThis as unknown as Record<symbol, { constructor?: unknown } | undefined>;
-  if (!g[GLOBAL_DISPATCHER]) await nativeFetch('data:text/plain,').catch(() => {});
+  if (!g[GLOBAL_DISPATCHER] && !g[LEGACY_GLOBAL_DISPATCHER]) {
+    await nativeFetch('data:text/plain,').catch(() => {});
+  }
   // A plain `Agent` only. If someone installed a ProxyAgent/MockAgent globally, cloning its class
   // with our options would silently drop their proxy or mock config — leave that setup alone and
-  // fall open instead.
-  const ctor = g[GLOBAL_DISPATCHER]?.constructor;
+  // fall open instead. That holds for a pre-8 `setGlobalDispatcher` too, which writes `.1` only.
+  const legacy = g[LEGACY_GLOBAL_DISPATCHER]?.constructor;
+  const current = g[GLOBAL_DISPATCHER]?.constructor;
+  if (typeof current === 'function' && typeof legacy === 'function') {
+    if (legacy.name !== 'Agent' && legacy.name !== 'Dispatcher1Wrapper') return null;
+  }
+  const ctor = current ?? legacy;
   if (typeof ctor !== 'function' || ctor.name !== 'Agent') return null;
   return ctor as new (opts: O) => FetchDispatcher;
 }
