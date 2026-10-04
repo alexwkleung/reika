@@ -148,12 +148,12 @@ body:has(.Landing) {
 }
 
 /* The footer's two lines share a 24px line box with no gap, so the copyright reads as a wrap of the
-   licence line; a small gap makes them two lines. The container class out-ranks the scoped rule. */
+   license line; a small gap makes them two lines. The container class out-ranks the scoped rule. */
 .VPFooter .container .copyright {
   margin-top: 8px;
 }
 
-/* The repo button carries the GitHub mark, drawn as a mask so it takes the button's text colour. */
+/* The repo button carries the GitHub mark, drawn as a mask so it takes the button's text color. */
 .Landing .VPHero .VPButton[href*='github.com'] {
   display: inline-flex;
   align-items: center;
