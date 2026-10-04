@@ -153,6 +153,18 @@ body:has(.Landing) {
   margin-top: 8px;
 }
 
+/* The footer's link is the raw HTML the config inlines into the message, so it sits outside `.vp-doc`
+   and gets none of the document link rules — it inherited the footer's near-white text instead. Give
+   it the same pair a link on a docs page has. */
+.VPFooter .message a {
+  color: var(--vp-c-brand-1);
+  transition: color 0.25s;
+}
+
+.VPFooter .message a:hover {
+  color: var(--vp-c-brand-2);
+}
+
 /* The repo button carries the GitHub mark, drawn as a mask so it takes the button's text color. */
 .Landing .VPHero .VPButton[href*='github.com'] {
   display: inline-flex;
