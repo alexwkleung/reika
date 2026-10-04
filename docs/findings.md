@@ -2,9 +2,11 @@
 
 [← README](../README.md)
 
-Reika exists to test one claim: most of what makes a small, heavily quantized local model usable as a
-coding agent is not the model. This page is the measured part of that claim — what broke, what was
-tried, and what held, running 8–35B models at Q2–Q4 on a 16–32k window.
+Reika was designed around small, heavily quantized local models, and this page records what that
+taught: what broke, what was tried, and what held, running 8–35B models at Q2–Q4 on a 16–32k window.
+It measures the harness, not the models. None of it makes a small model smarter. The result that keeps
+recurring is that a harness does little for how often a small model succeeds, and a lot for how much
+its failures cost and how clearly they show.
 
 The numbers come from real sessions and from the eval fixtures, instrumented with `REIKA_DEBUG` log
 lines and with A/B arms behind environment flags. [`AGENTS.md`](../AGENTS.md) holds the same record in

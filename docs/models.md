@@ -2,9 +2,9 @@
 
 [← README](../README.md)
 
-Models Reika has been run against, in daily use and in evaluations. Local is the emphasis: it is what
-Reika is built for, and where the behaviour work happens. API models are used alongside it for
-comparison and for tasks a local quant cannot hold.
+Models Reika has been run against, in daily use and in evaluations. Local models are what Reika was
+designed around, and where the behaviour work is tested. Day-to-day use is mostly on API models,
+which also serve as the comparison for what a local quant can and cannot hold.
 
 Quantization is the one in parentheses. Where a note names modes, that is where the model was used
 rather than the only thing it can do.

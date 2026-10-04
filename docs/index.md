@@ -7,8 +7,8 @@ sidebar: false
 
 hero:
   name: Reika
-  text: A coding agent CLI for small local models
-  tagline: Built for 8–35B models at Q2–Q4 on a 16–32k window. The harness cannot raise a model's ceiling, but it can stop it wasting its window, looping on the same read, or quietly losing its task.
+  text: A coding agent CLI for local and hosted models
+  tagline: Designed around small local models first, so it is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating.
   actions:
     - theme: brand
       text: Get started
@@ -25,7 +25,7 @@ features:
     details: Old tool output collapses to one-line summaries, and requests stay append-only between shrink events so the engine's prompt cache survives. When the window fills, the model writes its own findings note before older turns fold into a recap.
   - title: Loop and spiral breaking
     details: Repeated reads, re-derived reasoning and runaway thinking blocks are detected from their statistics and answered with an escalating ladder — nudge, pinned ledger, tool withdrawal, honest stop — rather than a 30-minute spiral.
-  - title: Guard rails a weak model needs
+  - title: Checks on what the model does
     details: Blind edits are bounced to a read first, edits are typechecked against a pre-edit baseline, and a written plan is tracked from what the harness observes rather than what the model claims.
   - title: Plan, then implement
     details: A read-only plan mode that ends in a numbered, file-specific plan you can refine over as many turns as you like, and a vibe mode that chains planning and implementation on every prompt.
