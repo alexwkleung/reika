@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  A coding agent CLI for small local models, tuned for low quantization,<br>
-  with a focus on context discipline and capability alignment.
+  A coding agent CLI for local and hosted models,<br>
+  designed around small local models first.
 </p>
 
 <p align="center">
@@ -25,13 +25,13 @@
 
 <sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 
-Most coding agents are built for frontier models. Reika is built first for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
+Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
 
-8–9B models hold their own on simple tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and below 7B rarely got far.
 
 ## What the measurements say
 
-Reika is built on a claim that can be measured, so the record is published rather than asserted. The short version, with the runs and the numbers behind it in [docs/findings.md](docs/findings.md):
+The harness's design choices were measured rather than assumed, and the record is published. It measures what a harness can and can't do about the problems small models run into, not how good the models become. The short version, with the runs and the numbers behind it in [docs/findings.md](docs/findings.md):
 
 - **The harness's own context management cost more than the model did.** One mid-context rewrite re-processed 8,453 tokens of prompt — 7.9 minutes of prefill — where an append in the same session cost 25 tokens and 3.5 seconds.
 - **Ask the model for its findings before a fold drops them.** In the A/B behind this, the arm whose findings were dropped folded five times, re-read files it had already read, and never answered; the arm that was asked answered from the digest.
@@ -43,7 +43,7 @@ Reika is built on a claim that can be measured, so the record is published rathe
 
 - **Context discipline.** Old tool output collapses to one-line summaries, requests stay append-only between shrink events so the engine's prompt cache survives, and when the window fills the model writes its own findings note before older turns fold into a recap.
 - **Loop and spiral breaking.** Repeated reads, re-derived reasoning, and runaway thinking blocks are detected and answered with an escalating ladder (nudge, pinned ledger, tool withdrawal, honest stop) rather than a 30-minute spiral.
-- **Guard rails a weak model needs.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
+- **Checks on what the model does.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
 - **Plan → implement.** A read-only plan mode that ends in a numbered, file-specific plan — refine it over as many turns as you like before executing — and a vibe mode that chains plan and implementation on every prompt.
 - **Safe by default.** Ordinary edits run, dangerous commands still prompt, and on macOS model-chosen shell commands run under a kernel sandbox (writes confined to the project, network denied).
 - **Extensible.** Stdio MCP servers add tools, and each tool also becomes a slash command. Markdown skills become slash commands too; `/issue` and `/review` ship with Reika and appear wherever `gh` and a GitHub remote are.

@@ -1,7 +1,7 @@
 {
   "name": "reika",
   "version": "0.0.1",
-  "description": "Coding agent CLI for small local models, tuned for low quantization.",
+  "description": "Coding agent CLI for local and hosted models, designed around small local models first.",
   "license": "Apache-2.0",
   "author": "Alex Leung",
   "repository": {

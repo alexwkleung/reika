@@ -3,7 +3,8 @@ import { brokenLinks, githubLinks, githubSlugify } from './links';
 
 export default defineConfig({
   title: 'Reika',
-  description: 'Coding agent CLI for small local models, tuned for low quantization.',
+  description:
+    'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
   appearance: 'force-dark',
   srcExclude: ['demo/**', 'node_modules/**'],
