@@ -25,6 +25,19 @@ The docs site is a workspace member, so a plain `pnpm install` at the root insta
 - `pnpm test` / `test:watch` — vitest unit tests
 - `pnpm run check` — typecheck + lint + format:check + test (use before committing)
 - `pnpm run eval` — run the eval suite against the configured model
+- `pnpm run docs:dev` / `docs:build` — serve or build the docs site (the build fails on a broken link, or a sidebar page missing from `llms.txt`)
+- `pnpm run release:check` — pack, install and smoke-test the npm tarball before a publish
+
+## Docs site deploy
+
+The site at reikacode.com is a Cloudflare Worker serving the VitePress build as static assets, configured in `wrangler.jsonc`. Deploys go through Workers Builds, Cloudflare's Git integration: a push to `main` that touches the site builds it and deploys it, with no workflow or API token in this repo. The settings that live in the Cloudflare dashboard rather than in the file:
+
+- **Root directory:** the repo root. The site resolves its dependencies from the root workspace lockfile.
+- **Build command:** `pnpm install --frozen-lockfile && pnpm run docs:build`
+- **Deploy command:** `npx wrangler deploy`
+- **Build watch paths:** `docs/**`, `wrangler.jsonc`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `package.json`. The lockfile is in the list because a dependency bump changes the build without touching `docs/`.
+
+The Worker has no `*.workers.dev` address and no per-branch preview URLs (`workers_dev` and `preview_urls` are off), so the only public copy is the one on `main`. To check a change before it merges, run `pnpm run docs:build` and then `npx wrangler dev`, which serves the build the same way the Worker does: clean URLs, the 404 page, and the files in `docs/public`.
 
 ## Design philosophy
 
