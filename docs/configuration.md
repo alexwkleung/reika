@@ -367,7 +367,9 @@ low-value (and a couple cost a little).
   tool and its own trigger text are unchanged. Off, the prompt is byte-identical, so it A/Bs cleanly
 - **`REIKA_URL_GROUNDING`** — Mirrors the dep grounder: capped (2/call), per-turn deduped,
   offline-safe (a no-response URL is called dead only when another URL in the batch proved
-  connectivity). Never fetches a URL carrying a secret (userinfo, a token/key/signature query
+  connectivity). Only a 404/410 or an unresolvable name counts as a dead link; a refusal
+  (401/403/429), a server error, and a 404 from a code host (a private repo) or an API path are
+  reported as unverified instead. Never fetches a URL carrying a secret (userinfo, a token/key/signature query
   parameter, a webhook), an internal or reserved name, or a host that resolves to a private address,
   and leaves the last two fetch slots of each turn to the model
 - **`REIKA_WARM`** — Fail-open; skipped when the next turn would compact. Best on slow-prefill
