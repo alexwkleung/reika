@@ -27,8 +27,8 @@ features:
     details: Repeated reads and runaway reasoning are detected and stopped, ending in an honest stop instead of a long spiral.
   - title: Checks on the model's work
     details: Blind edits go back for a read first, TypeScript edits are typechecked, and plan progress is tracked from what actually happened.
-  - title: Plan, then implement
-    details: A read-only plan mode ends in a file-specific plan you can refine before anything changes.
+  - title: A mode for the job
+    details: Plan before anything changes, put a harder change through a test-and-review procedure, keep a small window lean, or just chat. Shift+Tab switches.
   - title: Safe by default
     details: Dangerous commands still prompt, and on macOS shell commands run in a kernel sandbox. No telemetry.
   - title: Measured
