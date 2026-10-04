@@ -1,45 +1,153 @@
 <script setup lang="ts">
-import { useData } from 'vitepress';
-import { VPFeatures, VPHomeContent, VPHomeFeatures, VPHomeHero } from 'vitepress/theme';
+import { useData, withBase } from 'vitepress';
+import { VPHomeHero } from 'vitepress/theme';
 
-// The landing page's sections, top to bottom: hero, then the markdown body (demo and quickstart),
-// then the feature grid, then the doc links. index.md carries the copy; this file sets the order,
-// out of the components the default theme exports, so the page keeps the default theme's look.
-const { frontmatter, theme } = useData();
+// The landing page, top to bottom: the default theme's hero, then the markdown body (demo and
+// install), then two plain sections drawn from the frontmatter — `features` as a short grid and
+// `docs` as a link list. Those two are rendered here rather than with the default theme's feature
+// cards, which made the page read as a wall of boxes.
+type Item = { title: string; details: string; link?: string };
+const { frontmatter } = useData();
+const features = (frontmatter.value.features ?? []) as Item[];
+const docs = (frontmatter.value.docs ?? []) as Item[];
 </script>
 
 <template>
-  <div class="Landing" :class="{ 'external-link-icon-enabled': theme.externalLinkIcon }">
+  <div class="Landing">
     <VPHomeHero />
-    <VPHomeContent>
-      <Content />
-    </VPHomeContent>
-    <VPHomeFeatures />
-    <VPFeatures v-if="frontmatter.next" class="LandingNext" :features="frontmatter.next" />
+
+    <div class="LandingBody">
+      <div class="vp-doc">
+        <Content />
+      </div>
+
+      <section v-if="features.length" class="LandingSection">
+        <h2>What it does</h2>
+        <div class="LandingFeatures">
+          <div v-for="item in features" :key="item.title" class="LandingFeature">
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.details }}</p>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="docs.length" class="LandingSection">
+        <h2>Documentation</h2>
+        <div class="LandingDocs">
+          <a v-for="item in docs" :key="item.title" class="LandingDoc" :href="withBase(item.link!)">
+            <span class="title">{{ item.title }}</span>
+            <span class="details">{{ item.details }}</span>
+          </a>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* The default theme puts this gap on its own home layout; carried over so the last section does not
-   run into the footer. Styling of the page itself is still the default theme's. */
 .Landing {
   margin-bottom: 96px;
 }
 
-@media (min-width: 768px) {
-  .Landing {
-    margin-bottom: 128px;
-  }
-}
-
-/* The hero's text column is centred as a block; the text inside it stays left-aligned. With no hero
-   image the default hero grows that column to the whole 1152px container (its `flex-grow` overrides
-   the two-thirds width), so the copy starts at the container's left edge. 576px is the width the
-   theme itself caps the hero's copy at, so the column is exactly the text's measure. */
+/* The hero's column is the body's content width (960px less its 48px gutters), so the hero bar and
+   every section below share one left edge. */
 @media (min-width: 960px) {
   .Landing :deep(.VPHero .main) {
     margin: 0 auto;
-    max-width: 576px;
+    max-width: 864px;
   }
+}
+
+.LandingBody {
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 0 24px;
+}
+
+@media (min-width: 768px) {
+  .LandingBody {
+    padding: 0 48px;
+  }
+}
+
+.LandingSection {
+  margin-top: 72px;
+}
+
+.LandingSection h2 {
+  margin: 0 0 24px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--vp-c-text-1);
+}
+
+.LandingFeatures {
+  display: grid;
+  gap: 28px 40px;
+}
+
+@media (min-width: 640px) {
+  .LandingFeatures {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 900px) {
+  .LandingFeatures {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.LandingFeature h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.LandingFeature p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+.LandingDocs {
+  display: grid;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+@media (min-width: 640px) {
+  .LandingDocs {
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 40px;
+  }
+}
+
+.LandingDoc {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--vp-c-divider);
+  text-decoration: none;
+}
+
+.LandingDoc .title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vp-c-text-1);
+  transition: color 0.2s;
+}
+
+.LandingDoc .details {
+  font-size: 13px;
+  color: var(--vp-c-text-3);
+  text-align: right;
+}
+
+.LandingDoc:hover .title {
+  color: var(--vp-c-brand-1);
 }
 </style>

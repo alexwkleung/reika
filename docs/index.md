@@ -1,7 +1,7 @@
 ---
 # Site-only page: GitHub renders this frontmatter as a table. The repo's landing page is the README.
 # `Landing` is the site's own layout (theme/Landing.vue); it reads this frontmatter and the body
-# below in this order: hero, body, features, next. `sidebar: false` because this page has no sidebar.
+# below in this order: hero, body, features, docs. `sidebar: false` because this page has no sidebar.
 layout: Landing
 sidebar: false
 
@@ -14,64 +14,70 @@ hero:
       text: Get started
       link: /getting-started
     - theme: alt
-      text: Findings
-      link: /findings
+      text: GitHub
+      link: https://github.com/alexwkleung/reika
     - theme: alt
-      text: Configuration
-      link: /configuration
+      text: Read the findings
+      link: /findings
 
 features:
   - title: Context discipline
-    details: Old tool output collapses to one-line summaries, and requests stay append-only between shrink events so the engine's prompt cache survives. When the window fills, the model writes its own findings note before older turns fold into a recap.
-  - title: Loop and spiral breaking
-    details: Repeated reads, re-derived reasoning and runaway thinking blocks are detected from their statistics and answered with an escalating ladder — nudge, pinned ledger, tool withdrawal, honest stop — rather than a 30-minute spiral.
-  - title: Checks on what the model does
-    details: Blind edits are bounced to a read first, edits are typechecked against a pre-edit baseline, and a written plan is tracked from what the harness observes rather than what the model claims.
+    details: Old tool output collapses to short summaries and requests stay append-only, so a slow local engine's prompt cache survives.
+  - title: Loop breaking
+    details: Repeated reads and runaway reasoning are detected and stopped, ending in an honest stop instead of a long spiral.
+  - title: Checks on the model's work
+    details: Blind edits go back for a read first, TypeScript edits are typechecked, and plan progress is tracked from what actually happened.
   - title: Plan, then implement
-    details: A read-only plan mode that ends in a numbered, file-specific plan you can refine over as many turns as you like, and a vibe mode that chains planning and implementation on every prompt.
-  - title: Safe and local by default
-    details: Approvals stay on for dangerous commands and out-of-project writes, on macOS model-chosen shell commands run under a kernel sandbox, and nothing leaves the model server you configured.
-  - title: Measured, not asserted
-    details: Every default-on feature leaves a baseline arm behind it, and the record of what broke and what held — with the numbers — is published in the findings.
+    details: A read-only plan mode ends in a file-specific plan you can refine before anything changes.
+  - title: Safe by default
+    details: Dangerous commands still prompt, and on macOS shell commands run in a kernel sandbox. No telemetry.
+  - title: Measured
+    details: Default-on features keep an off switch for A/B runs, and what they did and didn't fix is published.
 
-next:
+docs:
+  - title: Install
+    details: Requirements and first run
+    link: /getting-started
+  - title: Usage
+    details: Modes, commands and keys
+    link: /usage
+  - title: Configuration
+    details: Every setting
+    link: /configuration
   - title: Tools
-    details: The tools the agent has, which ones register only when their config is present, and how a call reads in the transcript.
+    details: What the agent can call
     link: /tools
-    linkText: Read
   - title: Instructions and skills
-    details: The `AGENTS.md` and skills files that steer the agent, and the plain-English routing that picks a skill for a prompt.
+    details: AGENTS.md and slash commands
     link: /skills
-    linkText: Read
   - title: Models
-    details: What Reika has been run against in daily use and in evals, local first, with the API models it is compared against.
+    details: What it has been run against
     link: /models
-    linkText: Read
   - title: Platforms
-    details: Requirements per platform, and what differs on macOS, Linux and Windows, including running the model on another machine.
+    details: macOS, Linux and Windows
     link: /platforms
-    linkText: Read
   - title: Architecture
-    details: How a turn is put together, what the harness does at each step, and the caveats that come with it.
+    details: How a turn is put together
     link: /architecture
-    linkText: Read
   - title: Findings
-    details: The measurements behind the claims on this page — what broke, what held, and the numbers for both.
+    details: What broke and what held
     link: /findings
-    linkText: Read
+  - title: Support
+    details: Funding and other ways to help
+    link: /support
 ---
 
 ![Reika fixing a retry helper and its test with a local model](./demo.gif)
 
-<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error. The measurements behind the features below are in [Findings](findings.md).</sup>
+<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 
-Install it, then point it at a model server:
+## Install
 
 ```sh
-pnpm add -g reika                             # or: npm i -g reika
-llama-server -m <model.gguf> -c 24576 --jinja # any OpenAI-compatible server will do
-cd your-project && reika
+npm i -g reika
+pnpm add -g reika
+brew install alexwkleung/tap/reika
 ```
 
-[Install and first run](getting-started.md) takes it from there, [Usage](usage.md) walks through the
-modes and commands, and [Configuration](configuration.md) is the full key list.
+Then point it at a model server and run `reika` in a project. [Install and first run](getting-started.md)
+covers requirements and setup.

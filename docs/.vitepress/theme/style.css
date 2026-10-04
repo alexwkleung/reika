@@ -1,0 +1,170 @@
+/* The site keeps the default theme's layout and type, and changes only what carries the brand: the
+   orchid ramp from the CLI's splash (#edc4e8 → #a13d93), used as one thin bar the way the TUI draws
+   it, and the logo's orchid as the accent. Everything else is left plain on purpose. */
+
+:root {
+  --reika-ramp: linear-gradient(180deg, #edc4e8 0%, #a13d93 100%);
+  --reika-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+
+  --vp-c-brand-1: #d68cd6;
+  --vp-c-brand-2: #c77bc6;
+  --vp-c-brand-3: #a13d93;
+  --vp-c-brand-soft: rgba(214, 140, 214, 0.14);
+
+  /* The near-black leans a few degrees toward plum so the orchid sits on it rather than on grey. */
+  --vp-c-bg: #17151a;
+  --vp-c-bg-alt: #121014;
+  --vp-c-bg-elv: #1d1a20;
+  --vp-c-bg-soft: #1f1c22;
+
+  /* The default dark theme draws its nav, footer and local-nav rules in pure black, which reads as a
+     heavy band on a tinted background; the soft divider makes them hairlines. */
+  --vp-c-gutter: var(--vp-c-divider);
+
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-button-brand-bg: #a13d93;
+  --vp-button-brand-hover-bg: #b04ea2;
+  --vp-button-brand-active-bg: #8e3482;
+}
+
+/* Hero: the name is the accent and the headline sits under it, both smaller than the default
+   theme's 56px so the block reads as a heading and a line, not two headlines stacked. */
+.Landing .VPHero .name {
+  font-size: 28px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.Landing .VPHero .text {
+  margin-top: 6px;
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.Landing .VPHero .tagline {
+  padding-top: 16px;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+@media (min-width: 768px) {
+  .Landing .VPHero .text {
+    font-size: 40px;
+  }
+
+  .Landing .VPHero .tagline {
+    font-size: 18px;
+  }
+}
+
+/* The ramp as a bar beside the hero copy, as the splash draws it beside `✿ Reika`. The one place
+   the ramp appears on the page. */
+@media (min-width: 640px) {
+  .Landing .VPHero .main {
+    position: relative;
+    padding-left: 28px;
+  }
+
+  .Landing .VPHero .main::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--reika-ramp);
+  }
+}
+
+/* The default row hangs 6px below the column on a negative margin, past where the hero bar ends. */
+.Landing .VPHero .actions {
+  margin: 0 -6px;
+  padding-top: 18px;
+}
+
+/* The default theme's button rule is scoped, so this needs the hero in the selector to win. */
+.Landing .VPHero .VPButton.medium {
+  border-radius: 8px;
+  padding: 0 18px;
+  line-height: 38px;
+  font-size: 14px;
+}
+
+.Landing .VPHero .VPButton.alt {
+  border-color: var(--vp-c-divider);
+  background: transparent;
+}
+
+.Landing .VPHero .VPButton.alt:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+/* Landing body: section headings match the component's own, without the doc pages' top rule. */
+.Landing .vp-doc h2 {
+  margin: 72px 0 20px;
+  padding-top: 0;
+  border-top: none;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+/* The demo is a terminal recording, so it sits in a quiet frame rather than floating on the page. */
+.vp-doc img[src*='demo'] {
+  display: block;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+/* The demo caption is a `<sup>` so GitHub renders it small; as superscript it also inherits a raised
+   baseline that spreads its wrapped lines apart, so on the site it is set as a plain small line. */
+.Landing .vp-doc sup {
+  display: block;
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  vertical-align: baseline;
+  color: var(--vp-c-text-3);
+}
+
+.VPNavBarTitle .title {
+  font-weight: 600;
+}
+
+.vp-doc code {
+  font-family: var(--reika-mono);
+}
+
+/* The landing page has no sidebar for a rule to separate, so its nav and footer carry none. Set on
+   the variable rather than on the elements: the nav's own rules out-rank any selector here. */
+body:has(.Landing) {
+  --vp-c-gutter: transparent;
+}
+
+/* The footer's two lines share a 24px line box with no gap, so the copyright reads as a wrap of the
+   licence line; a small gap makes them two lines. The container class out-ranks the scoped rule. */
+.VPFooter .container .copyright {
+  margin-top: 8px;
+}
+
+/* The repo button carries the GitHub mark, drawn as a mask so it takes the button's text colour. */
+.Landing .VPHero .VPButton[href*='github.com'] {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.Landing .VPHero .VPButton[href*='github.com']::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}

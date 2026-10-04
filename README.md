@@ -59,17 +59,23 @@ The harness's design choices were measured rather than assumed, and the record i
 
 ## Quick start
 
+Install it with any of these (npm and pnpm need Node ≥ 22; Homebrew pulls Node in):
+
+```sh
+npm i -g reika
+pnpm add -g reika
+brew install alexwkleung/tap/reika
+```
+
 Serve a model. Example below with llama.cpp:
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-Then install and point Reika at it (Node ≥ 22, and pnpm — `npm i -g pnpm`):
+Then point Reika at it:
 
 ```sh
-pnpm add -g reika        # or: npm i -g reika
-
 export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
