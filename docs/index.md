@@ -14,6 +14,9 @@ hero:
       text: Get started
       link: /getting-started
     - theme: alt
+      text: GitHub
+      link: https://github.com/alexwkleung/reika
+    - theme: alt
       text: Read the findings
       link: /findings
 
