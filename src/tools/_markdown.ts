@@ -18,9 +18,10 @@
 //
 // What it deliberately does NOT blank is anything the shell still EXECUTES inside that text: a
 // substitution runs in a body whose delimiter was unquoted (`<<EOF`) and in any double-quoted or
-// bare argument, so `$(…)` and backticks inside those are kept verbatim and the ordinary scan still
-// answers for them. That is the same rule `_sandbox.ts` applies to heredoc bodies (data for the verb
-// question, re-read for the substitution one), narrowed here to text we can name as Markdown.
+// bare argument, so `$(…)`, backticks and process substitution (`<(…)`/`>(…)`) inside those are kept
+// verbatim and the ordinary scan still answers for them. That is the same rule `_sandbox.ts` applies
+// to heredoc bodies (data for the verb question, re-read for the substitution one), narrowed here to
+// text we can name as Markdown.
 import { maskQuoted } from './_readonly.js';
 
 // Matched exactly as `_writetargets.ts` matches it: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
@@ -339,12 +340,18 @@ function blankData(text: string, expands: boolean): string {
   const chars = [...blank];
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (ch !== '$' && ch !== '`') continue;
+    // The three constructs the shell still runs inside otherwise-literal text: command
+    // substitution (`$(…)`), backticks, and process substitution (`<(…)`/`>(…)`, which runs its
+    // command no matter where `cat`'s output goes). Everything else is data. Process substitution
+    // only runs UNQUOTED, which is exactly where this `expands` branch lands — a `<(` inside a
+    // double-quoted `--body` is literal text and was blanked by the quote handling already.
     let end = -1;
     if (ch === '`') end = text.indexOf('`', i + 1);
-    else if (text[i + 1] === '(') end = matchParen(text, i + 1);
+    else if ((ch === '$' || ch === '<' || ch === '>') && text[i + 1] === '(')
+      end = matchParen(text, i + 1);
+    else continue;
     if (end === -1) continue;
-    // Keep the substitution, spaces elsewhere: it is the one part of this text that runs.
+    // Keep the substitution, spaces elsewhere: it is the part of this text that runs.
     for (let k = i; k <= end; k++) chars[k] = text[k];
     i = end;
   }

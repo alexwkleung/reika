@@ -1382,6 +1382,15 @@ describe('detectDangerousPatterns — Markdown the command is only writing (#644
     expect(detectDangerousPatterns(`gh pr create --body '$(rm -rf /tmp/x)'`)).toEqual([
       'GitHub PR create/merge (outward-facing)',
     ]);
+    // Process substitution runs its command regardless of where the write goes, so it is kept the
+    // same as `$(…)` — never blanked as part of the Markdown operand (unquoted is the only form
+    // that runs; a `<(…)` inside a double-quoted `--body` is literal and stays blanked).
+    expect(detectDangerousPatterns('cat > NOTES.md <(rm -rf /tmp/x)')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns('tee NOTES.md <(rm -rf /tmp/x)')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
   });
 
   it('excuses only Markdown, and only the words that write it', () => {

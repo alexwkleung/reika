@@ -33,6 +33,15 @@ describe('maskMarkdownData', () => {
     expect(masked).not.toContain('more prose');
   });
 
+  it('keeps a process substitution the shell runs beside the Markdown it writes', () => {
+    // `<(…)`/`>(…)` run their command no matter where the write lands, so the mask must leave them
+    // for the scan the way it leaves `$(…)`.
+    const cmd = `cat > NOTES.md <(rm -rf /tmp/x)`;
+    const masked = maskMarkdownData(cmd);
+    expect(masked).toContain('<(rm -rf /tmp/x)');
+    expect(masked).not.toContain('NOTES.md');
+  });
+
   it('leaves a quoted heredoc body blank even when a substitution is spelled inside it', () => {
     const cmd = `cat > CHANGELOG.md <<'EOF'\n$(rm -rf /tmp/x)\nEOF`;
     expect(maskMarkdownData(cmd)).not.toContain('rm -rf');
