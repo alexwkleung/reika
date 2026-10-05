@@ -101,12 +101,12 @@ the file and re-issue the edit from its actual bytes: reading first, instead of 
 
 On by default; `REIKA_PLAN_BASH=0` removes it. It is registered in plan (and vibe) mode for the
 inspection a pipeline expresses that `read`/`grep`/`glob`/`list` cannot — `grep … | head`, `find`,
-`wc -l`. A strict allowlist classifier (`tools/_readonly.ts`) decides:
+`wc -l`. A strict allowlist classifier decides:
 
 - Only listed inspection commands and pipelines of them run, plus a fixed set of GitHub reads
   (`gh issue|pr view/list/diff/checks/status`, `gh repo|run|workflow|release view/list`, `gh search`,
   and `gh api` as a GET that isn't `graphql`) — so a plan can be grounded in the issue or PR it answers.
-  A `timeout N` carrier in front of one is read through to the command it bounds (#621).
+  A `timeout N` carrier in front of one is read through to the command it bounds.
 - `pr checkout`, clones, downloads, `--web` and `--watch` stay out.
 - Redirection, command substitution, `sed`/`awk` and anything unlisted are refused, with the rule and the
   way out stated in the result.
@@ -176,7 +176,7 @@ scrollback.
 
 ## Headless mode
 
-`reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout (#52) — for scripts, other
+`reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout — for scripts, other
 harnesses, and letting an agent run Reika itself against a model server. Same config, same turn: the
 loop, tools, compaction and skills are the ones the TUI runs, so a headless run is a faithful stand-in
 when debugging.

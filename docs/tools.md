@@ -113,7 +113,7 @@ exits, each server's stdin is closed and it gets two seconds to exit on its own 
 
 ## `.gitignore` is respected
 
-`buildFileIndex`, `buildRepoMap`, `list`, `glob` and `grep` all skip paths matched by your project's
+The file index, the repo map, `list`, `glob` and `grep` all skip paths matched by your project's
 `.gitignore` (plus `.git/info/exclude` and any nested `.gitignore` files, scoped to their own directory
 as git does). Hardcoded skip dirs (`node_modules`, `dist`, `build`, `target`, `coverage`, `out`) apply
 on top, so even projects without a `.gitignore` get sensible exclusions.
