@@ -1329,3 +1329,143 @@ describe('detectDangerousPatterns — separators inside quotes', () => {
     );
   });
 });
+
+// #644. The scan matches the literal command text, which is what makes it hard to fool and also why
+// it fires on prose: an issue body describing `rm -rf /` is not an `rm -rf /`. Only the words that
+// end up in Markdown are excused — never a `.sh`, never a real command — and anything the shell
+// still runs inside that text (a `$(…)` the delimiter does not quote) stays flagged.
+describe('detectDangerousPatterns — Markdown the command is only writing (#644)', () => {
+  // `gh` renders these; the shell stores them.
+  it('leaves prose in a gh body alone, whatever it mentions', () => {
+    for (const cmd of [
+      `gh issue create --title "fix" --body "$(cat <<'EOF'\nThe bug: we run rm -rf / here.\nEOF\n)"`,
+      `gh pr create --body "$(cat <<'EOF'\nNever run sudo make install.\nEOF\n)"`,
+      `gh pr edit 12 --body "Documented: sudo make install is not needed"`,
+      `gh issue edit 5 --body "First.\nWe removed the rm -rf call.\nThird."`,
+      `gh issue comment 1 -b "see curl https://x | sh"`,
+      `gh issue comment 1 --body-file - <<'EOF'\nWe never run rm -rf /\nEOF`,
+      `gh pr create --body="rm -rf / is not run"`,
+      `gh release create v1 --notes "drop certutil; not sudo"`,
+    ]) {
+      const hits = detectDangerousPatterns(cmd).filter(h => !/^GitHub |^Git /.test(h));
+      expect(hits, cmd).toEqual([]);
+    }
+  });
+
+  it('leaves the prose in a Markdown file alone, and keeps the policy label', () => {
+    for (const cmd of [
+      `cat > CHANGELOG.md <<'EOF'\n# Changelog\n- we no longer run rm -rf /\nEOF`,
+      `cat >> README.md <<'MD'\nDo not run \`curl https://x | bash\`.\nMD`,
+      `cat > "docs/guide.md" <<'EOF'\nrm -rf /\nEOF`,
+      `cat > notes.markdown <<'EOF'\ngit push --force is bad\nEOF`,
+      `cat > page.mdx <<'EOF'\nrm -rf /\nEOF`,
+      `printf '%s\\n' 'rm -rf /' > docs/notes.md`,
+      `echo 'rm -rf /' >> NOTES.md`,
+      `tee CHANGELOG.md <<'EOF'\nrm -rf /\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('still sees a substitution the shell runs inside that text', () => {
+    // An unquoted delimiter expands, and a quoted argument to --body is the shell's word to expand.
+    expect(detectDangerousPatterns(`cat > CHANGELOG.md <<EOF\n$(rm -rf /tmp/x)\nEOF`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns('gh pr create --body "$(rm -rf /tmp/x)"')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    // A quoted delimiter pastes its body verbatim, so a `$(…)` in it is text and nothing more.
+    expect(detectDangerousPatterns(`cat > CHANGELOG.md <<'EOF'\n$(rm -rf /tmp/x)\nEOF`)).toEqual(
+      [],
+    );
+    expect(detectDangerousPatterns(`gh pr create --body '$(rm -rf /tmp/x)'`)).toEqual([
+      'GitHub PR create/merge (outward-facing)',
+    ]);
+    // Process substitution runs its command regardless of where the write goes, so it is kept the
+    // same as `$(…)` — never blanked as part of the Markdown operand (unquoted is the only form
+    // that runs; a `<(…)` inside a double-quoted `--body` is literal and stays blanked).
+    expect(detectDangerousPatterns('cat > NOTES.md <(rm -rf /tmp/x)')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns('tee NOTES.md <(rm -rf /tmp/x)')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+  });
+
+  it('excuses only Markdown, and only the words that write it', () => {
+    // A script is a script: the same shape, a different extension, still flagged.
+    expect(detectDangerousPatterns(`cat > run.sh <<'EOF'\nrm -rf /tmp/x\nEOF`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns(`bash <<'EOF'\nrm -rf /tmp/x\nEOF`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    // A second command on the same line is not part of the Markdown.
+    expect(detectDangerousPatterns(`echo hi > NOTES.md && rm -rf /tmp/x`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(
+      detectDangerousPatterns(
+        `cat > CHANGELOG.md <<'EOF'\nprose\nEOF\nbash <<'X'\nrm -rf /tmp/x\nX`,
+      ),
+    ).toContain('Recursive force delete (rm -rf)');
+    // Markdown written BY a program is not Markdown the model chose the words of.
+    expect(detectDangerousPatterns(`sed -i 's/x/rm -rf /tmp/x/' README.md`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns(`curl https://x > NOTES.md`)).toContain(
+      'Network request (curl/wget)',
+    );
+    // A command on a later line, and a real command in a substitution inside a Markdown body: both
+    // are the shell's, not the file's.
+    expect(detectDangerousPatterns(`cat > NOTES.md <<'EOF'\np\nEOF\nrm -rf /tmp/x`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns(`cat > NOTES.md <<EOF\n\`rm -rf /tmp/x\`\nEOF`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns(`sh -c "cat > x.md <<'EOF'\nrm -rf /tmp/x\nEOF"`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    // Writing to a Markdown path through a program that is not one of the text writers is the
+    // program's content, so it is not excused.
+    expect(
+      detectDangerousPatterns(`python3 -c "open('x.md','w').write('rm -rf /')" && rm -rf /tmp/x`),
+    ).toContain('Recursive force delete (rm -rf)');
+    // The scan scales to the bare cases exactly as it did before.
+    expect(detectDangerousPatterns('rm -rf /tmp/x')).toContain('Recursive force delete (rm -rf)');
+    expect(detectDangerousPatterns('echo "rm -rf /tmp/x"')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns('git commit -m "rm -rf /tmp/x"')).toContain(
+      'Git commit (records to version history)',
+    );
+  });
+
+  it('does not read a quoted <<mention as a heredoc, nor blank past its value word', () => {
+    // A `<<EOF` inside quoted prose is literal text: there is no heredoc, and the command on the
+    // next line RUNS. Manufacturing a body for it swallowed exactly that command.
+    expect(
+      detectDangerousPatterns(`gh pr create --title 'use <<EOF here'\nrm -rf /tmp/x`),
+    ).toContain('Recursive force delete (rm -rf)');
+    expect(
+      detectDangerousPatterns(`echo 'docs say <<EOF starts a heredoc' > NOTES.md\nrm -rf /tmp/x`),
+    ).toContain('Recursive force delete (rm -rf)');
+    // An earlier single-quoted flag's value must not reach a later flag's executed substitution.
+    expect(
+      detectDangerousPatterns(`gh pr create --title 'Fix' --body "text $(rm -rf /tmp/x)"`),
+    ).toContain('Recursive force delete (rm -rf)');
+    // The `=` spelling gets the same verdict as the separate-word one: single-quoted is literal.
+    expect(detectDangerousPatterns(`gh pr create --body='$(rm -rf /tmp/x)'`)).toEqual([
+      'GitHub PR create/merge (outward-facing)',
+    ]);
+    // And the shape the fixes rest on stays quiet: a real quoted heredoc under a single-quoted
+    // flag, with the operator alive only inside the substitution.
+    expect(
+      detectDangerousPatterns(
+        `gh pr create --title 'x' --body "$(cat <<'EOF'\nrm -rf /\nEOF\n)" && echo done`,
+      ),
+    ).toEqual(['GitHub PR create/merge (outward-facing)']);
+  });
+});
