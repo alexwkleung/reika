@@ -61,8 +61,8 @@ The harness's design choices were measured rather than assumed, and the record i
 Install it with any of these (npm and pnpm need Node ≥ 22; Homebrew pulls Node in):
 
 ```sh
-npm i -g reika
-pnpm add -g reika
+npm i -g @alexwkleung/reika
+pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
