@@ -74,8 +74,8 @@ docs:
 ## Install
 
 ```sh
-npm i -g reika
-pnpm add -g reika
+npm i -g @alexwkleung/reika
+pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
