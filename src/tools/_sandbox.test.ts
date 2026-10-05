@@ -317,6 +317,23 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('NO_COLOR=1 GH_NO_UPDATE_NOTIFIER=1 gh issue list')).toBe(true);
   });
 
+  // Sighted in this repo's session history: `git ls-remote …; git grep -c '^<<<<<<<' FETCH_HEAD` ran
+  // with the network denied, so the ls-remote failed with an ssh refusal the model read as a flaky
+  // remote. The `-c` there is `git grep`'s count flag; only git's global prefix makes it a config
+  // flag. The refusal above is unchanged — this is about where the flag sits, not whether it counts.
+  it('reads -c as a config flag only in git’s global prefix, not a subcommand flag', () => {
+    expect(
+      networkAllowedFor("git ls-remote origin refs/heads/main; git grep -c '^<<<<<<<' FETCH_HEAD"),
+    ).toBe(true);
+    expect(networkAllowedFor('git grep -c TODO -- src | head -5')).toBe(true);
+    expect(networkAllowedFor('git log -c -1')).toBe(true);
+    expect(networkAllowedFor('git diff -c FETCH_HEAD HEAD')).toBe(true);
+    // A wrapper does not move the flag out of the prefix, and `-C <path>` takes a separate value.
+    expect(networkAllowedFor('timeout 30 git -c core.sshCommand=./x.sh fetch origin')).toBe(false);
+    expect(networkAllowedFor('git -C /repo -c core.pager=cat log')).toBe(false);
+    expect(networkAllowedFor('git -C /repo log -1')).toBe(true);
+  });
+
   // A heredoc body is data. Its lines split into segments whose "verb" was prose, and the standard
   // way a model writes a multi-line comment was denied every time.
   it('ignores heredoc bodies when reading verbs', () => {

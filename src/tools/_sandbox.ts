@@ -162,12 +162,32 @@ const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS, 'sleep'].filter(c => 
 // `find`'s exec family runs an arbitrary command per match. `git -c <key>=<value>` can name one
 // through more keys than are worth enumerating — `alias.x='!cmd'`, `core.sshCommand`, `core.pager`,
 // `credential.helper`, `diff.external`, `core.hooksPath` — so `-c` (and `--config-env`) is refused
-// the allow outright: a `git log -c core.pager=cat` loses nothing, since only fetch/pull/clone/
+// the allow outright: a `git -c core.pager=cat log` loses nothing, since only fetch/pull/clone/
 // ls-remote need the network. Same class through the environment (`GIT_SSH_COMMAND=./x.sh git
 // fetch`, `PAGER=./x.sh gh pr view`), so an env-assignment prefix keeps the allow only when its name
 // is on a short list of settings that cannot name a program.
 const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/;
 const GIT_CONFIG_FLAG_RE = /^(?:-c|--config-env(?:=.*)?)$/;
+
+// ...but only in `git`'s GLOBAL flag prefix: the words between the verb and the subcommand, which is
+// where `git -c core.pager=cat log` puts it. Past the subcommand a `-c` belongs to the subcommand,
+// and none of those can name a program — `git grep -c` counts matches, `git log -c`/`git diff -c`
+// are the combined-diff format, `git commit -c <commit>` reuses a message. Scanning every argument
+// instead cost a whole bash call its network the first time a model ran
+// `git ls-remote …; git grep -c '^<<<<<<<'`: the count flag read as `git -c`, the deny took the
+// `git ls-remote` sharing the call down with it, and the ssh refusal read as a flaky remote rather
+// than a classifier false positive. `-C <path>` takes a separate value and is skipped like one.
+function gitConfigFlag(args: string[]): boolean {
+  const g = args.indexOf('git');
+  if (g < 0) return false;
+  for (let i = g + 1; i < args.length; i++) {
+    const a = args[i];
+    if (GIT_CONFIG_FLAG_RE.test(a)) return true;
+    if (!a.startsWith('-')) return false; // the subcommand: the global flags are behind us
+    if (a === '-C') i++;
+  }
+  return false;
+}
 const HARMLESS_ENV = new Set([
   'GIT_TERMINAL_PROMPT',
   'GIT_OPTIONAL_LOCKS',
@@ -314,7 +334,7 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
     const args = words(seg);
     if (NET_VERBS.has(verb)) {
       if (!envPrefixHarmless(seg)) return { allowed: false };
-      if (verb === 'git' && args.some(a => GIT_CONFIG_FLAG_RE.test(a))) return { allowed: false };
+      if (verb === 'git' && gitConfigFlag(args)) return { allowed: false };
       net = true;
     } else if (!NET_PIPE_COMMANDS.has(verb)) {
       blockedBy ??= verb;
