@@ -63,10 +63,11 @@
     "docs:dev": "pnpm --dir docs run dev",
     "docs:build": "pnpm --dir docs run build",
     "install:global": "pnpm run build && pnpm add -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but pnpm's global bin dir is not on your PATH (run: pnpm setup)\"; fi",
-    "uninstall:global": "pnpm remove -g reika",
+    "uninstall:global": "pnpm remove -g @alexwkleung/reika || pnpm remove -g reika",
     "reinstall:global": "pnpm run uninstall:global && pnpm run install:global",
     "prepack": "pnpm run build",
-    "release:check": "scripts/release-check.sh"
+    "release:check": "scripts/release-check.sh",
+    "release:verify": "tsx scripts/release-verify.ts"
   },
   "dependencies": {
     "chalk": "^5.6.2",
