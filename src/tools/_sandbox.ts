@@ -176,18 +176,36 @@ const GIT_CONFIG_FLAG_RE = /^(?:-c|--config-env(?:=.*)?)$/;
 // instead cost a whole bash call its network the first time a model ran
 // `git ls-remote …; git grep -c '^<<<<<<<'`: the count flag read as `git -c`, the deny took the
 // `git ls-remote` sharing the call down with it, and the ssh refusal read as a flaky remote rather
-// than a classifier false positive. `-C <path>` takes a separate value and is skipped like one.
+// than a classifier false positive. A global option that takes a value has that value as the NEXT
+// word (`-C <path>`, `--git-dir <path>` — git accepts the space form), and that word is not the
+// subcommand: skipping it is what keeps `git --git-dir /x -c core.sshCommand=./x.sh fetch` refused,
+// the `-c` behind the value word still global. The skip only takes a value that does not look like
+// a flag, so `git -C -c k=v log` keeps scanning and stays refused. Called with the git segment's
+// OWN words (the effective list — verb, `timeout`/`xargs` carrier and xargs flags already dropped),
+// so a carrier's data cannot pose as the verb's arguments: `xargs -I git git -c k=v fetch` would
+// otherwise find the `-I` placeholder where it looks for `git`.
 function gitConfigFlag(args: string[]): boolean {
-  const g = args.indexOf('git');
-  if (g < 0) return false;
-  for (let i = g + 1; i < args.length; i++) {
+  for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (GIT_CONFIG_FLAG_RE.test(a)) return true;
     if (!a.startsWith('-')) return false; // the subcommand: the global flags are behind us
-    if (a === '-C') i++;
+    if (
+      GIT_GLOBAL_VALUE_FLAGS.has(a) &&
+      args[i + 1] !== undefined &&
+      !args[i + 1].startsWith('-')
+    ) {
+      i++;
+    }
   }
   return false;
 }
+const GIT_GLOBAL_VALUE_FLAGS = new Set([
+  '-C',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--super-prefix',
+]);
 const HARMLESS_ENV = new Set([
   'GIT_TERMINAL_PROMPT',
   'GIT_OPTIONAL_LOCKS',
@@ -276,7 +294,7 @@ const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J
 // out of the allow.
 const SHELL_STRUCTURE_RE = /^(?:do|done)$|^for\s+\w+\s+in(?:\s|$)/;
 
-function effectiveVerb(segment: string): string | undefined {
+function effectiveWords(segment: string): string[] {
   // `timeout` and `xargs` each name the command they run rather than being it, so both are skipped to
   // reach it — a carrier inside the command xargs runs included.
   let ws = dropCarriers(words(segment.trim().replace(VERB_PREFIX_RE, '')));
@@ -288,7 +306,7 @@ function effectiveVerb(segment: string): string | undefined {
     }
     ws = dropCarriers(ws.slice(i));
   }
-  return ws[0];
+  return ws;
 }
 
 /**
@@ -329,9 +347,10 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
   let net = false;
   let blockedBy: string | undefined;
   for (const seg of segments) {
-    const verb = effectiveVerb(seg);
+    const ws = effectiveWords(seg);
+    const verb = ws[0];
     if (!verb) return { allowed: false };
-    const args = words(seg);
+    const args = ws.slice(1);
     if (NET_VERBS.has(verb)) {
       if (!envPrefixHarmless(seg)) return { allowed: false };
       if (verb === 'git' && gitConfigFlag(args)) return { allowed: false };

@@ -328,10 +328,26 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git grep -c TODO -- src | head -5')).toBe(true);
     expect(networkAllowedFor('git log -c -1')).toBe(true);
     expect(networkAllowedFor('git diff -c FETCH_HEAD HEAD')).toBe(true);
+    expect(networkAllowedFor('git commit -c HEAD~1')).toBe(true);
     // A wrapper does not move the flag out of the prefix, and `-C <path>` takes a separate value.
     expect(networkAllowedFor('timeout 30 git -c core.sshCommand=./x.sh fetch origin')).toBe(false);
     expect(networkAllowedFor('git -C /repo -c core.pager=cat log')).toBe(false);
     expect(networkAllowedFor('git -C /repo log -1')).toBe(true);
+    // A global option's VALUE word is not the subcommand either: git takes `--git-dir <path>` in the
+    // space form, and the `-c` behind the value is still global (`git --git-dir <repo> -c
+    // alias.z='!echo ZED' z` runs the aliased program). Skipping only `-C`'s value let that keep the
+    // allow. The skip takes only a non-flag value, so `git -C -c k=v log` keeps scanning.
+    expect(networkAllowedFor('git --git-dir /x -c core.sshCommand=./x.sh fetch origin')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git --namespace /ns -c core.hooksPath=/x init')).toBe(false);
+    expect(networkAllowedFor('git --work-tree /x -c core.pager=./x.sh log')).toBe(false);
+    expect(networkAllowedFor('git --git-dir /x log -1')).toBe(true);
+    expect(networkAllowedFor('git -C -c core.pager=cat log')).toBe(false);
+    // A carrier's own words must not pose as the verb's: the `-I` placeholder below is not the git,
+    // and the real one's `-c` is global.
+    expect(networkAllowedFor('xargs -I git git -c core.sshCommand=./x.sh fetch')).toBe(false);
+    expect(networkAllowedFor('xargs -I git git grep -c TODO')).toBe(true);
   });
 
   // A heredoc body is data. Its lines split into segments whose "verb" was prose, and the standard
