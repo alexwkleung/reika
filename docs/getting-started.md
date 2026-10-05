@@ -21,12 +21,12 @@ your laptop, on another machine, or at a hosted provider — it never has to run
 Any of these installs the same published package:
 
 ```sh
-npm i -g reika                       # npm ships with Node
-pnpm add -g reika                    # what Reika's own checkout uses
+npm i -g @alexwkleung/reika          # npm ships with Node
+pnpm add -g @alexwkleung/reika       # what Reika's own checkout uses
 brew install alexwkleung/tap/reika   # macOS and Linux; pulls in Node if needed
 ```
 
-The Homebrew formula wraps the npm package, so the version is the same either way. It lives in a tap
+The npm package is scoped, but the command it installs is `reika`. The Homebrew formula wraps the npm package, so the version is the same either way. It lives in a tap
 rather than in Homebrew's core list, which is why the name carries `alexwkleung/tap/`.
 
 pnpm needs installing first (`npm i -g pnpm`, or the standalone installer at

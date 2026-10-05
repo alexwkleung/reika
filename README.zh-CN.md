@@ -61,8 +61,8 @@ Reika 还处于 1.0 之前，命令、设置和行为在不同版本之间仍可
 用以下任一方式安装（npm 和 pnpm 需要 Node ≥ 22；Homebrew 会自动装好 Node）：
 
 ```sh
-npm i -g reika
-pnpm add -g reika
+npm i -g @alexwkleung/reika
+pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 

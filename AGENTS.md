@@ -915,7 +915,7 @@ Issue #49. The terminal never delivers image bytes — a paste is always text �
 
 Both funnel into an `OcrProvider` (`src/ocr/types.ts`) and come out as a text `<image>` block, structurally identical to the `<file>` block a mention produces. **This is why the feature is model-agnostic:** the model only ever sees text, so a text-only local model handles a pasted screenshot exactly as well as a vision one — and `Message.content` stays a `string` end-to-end. A vision fallback would instead need multimodal content parts threaded through `messagesToChatParams`, compaction, the payload store, and the prefix-stable `rendered` bytes; the `OcrProvider` indirection exists so that can slot in later without touching the call sites.
 
-`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and the package manager silently skips the non-matching platform packages. It goes in `optionalDependencies`, so a failed binary fetch never breaks `pnpm add -g reika`.
+`@napi-rs/system-ocr` is an **optional** dependency: it ships prebuilt N-API binaries for macOS and Windows only (no node-gyp, no compile step), and the package manager silently skips the non-matching platform packages. It goes in `optionalDependencies`, so a failed binary fetch never breaks `pnpm add -g @alexwkleung/reika`.
 
 ### Why recognition runs in a child process
 

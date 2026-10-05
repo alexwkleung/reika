@@ -16,10 +16,12 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { echo; echo "== $*"; }
 
 version="$(node -p "require('$repo/package.json').version")"
+name="$(node -p "require('$repo/package.json').name")"
 
-step "pack reika@$version (prepack builds dist/)"
+step "pack $name@$version (prepack builds dist/)"
 (cd "$repo" && pnpm pack --pack-destination "$work" >/dev/null)
-tgz="$work/reika-$version.tgz"
+# A scoped name packs as `scope-name-<version>.tgz`: `@a/b` -> `a-b`.
+tgz="$work/$(echo "$name" | sed 's/^@//; s/\//-/')-$version.tgz"
 [ -f "$tgz" ] || fail "expected $tgz"
 
 step "tarball contents"
@@ -36,7 +38,7 @@ step "npm install -g into a throwaway prefix"
 prefix="$work/prefix"
 npm install -g --prefix "$prefix" --no-audit --no-fund --loglevel=error "$tgz" >/dev/null
 bin="$prefix/bin/reika"
-pkg="$prefix/lib/node_modules/reika"
+pkg="$prefix/lib/node_modules/$name"
 [ -x "$bin" ] || fail "no executable at $bin"
 
 # Run from an empty cwd under an empty HOME so neither a project .env nor

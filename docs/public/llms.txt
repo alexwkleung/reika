@@ -2,7 +2,7 @@
 
 > A coding agent CLI for local and hosted models, designed around small local models first. It talks to any OpenAI-compatible server (llama.cpp, MLX, vLLM or a cloud API), is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter; it makes working with one less frustrating.
 
-Install with `npm i -g reika`, `pnpm add -g reika` or `brew install alexwkleung/tap/reika` (Node 22 or newer). Configuration is environment variables (`REIKA_*`), read from the shell, `./.env` or `~/.config/reika/.env`; `REIKA_MODEL` is the only required one, and `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`. Each page below is the Markdown source of the corresponding page on reikacode.com.
+Install with `npm i -g @alexwkleung/reika`, `pnpm add -g @alexwkleung/reika` or `brew install alexwkleung/tap/reika` (Node 22 or newer). Configuration is environment variables (`REIKA_*`), read from the shell, `./.env` or `~/.config/reika/.env`; `REIKA_MODEL` is the only required one, and `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`. Each page below is the Markdown source of the corresponding page on reikacode.com.
 
 ## Docs
 
