@@ -27,6 +27,7 @@ The docs site is a workspace member, so a plain `pnpm install` at the root insta
 - `pnpm run eval` — run the eval suite against the configured model
 - `pnpm run docs:dev` / `docs:build` — serve or build the docs site (the build fails on a broken link, or a sidebar page missing from `llms.txt`)
 - `pnpm run release:check` — pack, install and smoke-test the npm tarball before a publish
+- `pnpm run release:verify` — after a release, check that npm, the Homebrew tap and the GitHub release all serve the same tarball (see [RELEASING.md](RELEASING.md))
 
 ## Docs site deploy
 
