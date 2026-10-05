@@ -11,3 +11,6 @@ reika-debug.log
 # docs site (VitePress)
 docs/.vitepress/cache
 docs/.vitepress/dist
+
+# wrangler dev state (docs site)
+.wrangler/

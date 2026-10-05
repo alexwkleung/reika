@@ -2,8 +2,16 @@ import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { maskQuoted, splitSegments, words, INSPECTION_COMMANDS } from './_readonly.js';
-import { stripHeredocs } from './_writetargets.js';
+import {
+  dropCarriers,
+  hasExecutableSubstitution,
+  hasRawSubstitution,
+  maskQuoted,
+  splitSegments,
+  words,
+  INSPECTION_COMMANDS,
+} from './_readonly.js';
+import { expandingHeredocBodies, stripHeredocs } from './_writetargets.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
 // only: bubblewrap has no port-level network filtering, so a sandboxed process gets its own
@@ -124,12 +132,33 @@ export function sandboxProfile(opts: { network: boolean }): string {
 // and run unsandboxed; what is left when one of these arrives unflagged is a read plus a fetch.
 // Nothing else is here on purpose: `curl`/`wget`/`ssh`/`nc` are flagged, and an interpreter
 // (`python -c 'urlopen…'`, `node -e 'fetch…'`) is exactly the unbounded shape the deny is for.
-const NET_VERBS = new Set(['gh', 'git', 'glab']);
+//
+// `hf` is the fourth, and `hf download <repo>` is why: downloading a model is a read a user hands
+// the model by name, and without this the download ran sandboxed with no network at all — surfacing
+// as a connect error the model reads as a bad repo id or a missing token. It is only safe to add
+// here because `_danger.ts` holds `hf` to a read-verb allowlist the way it has always held `gh`
+// (`HF_READ_VERBS`): the mutating verbs (`repos create`, `jobs run`, `cache rm`, `upload`) are
+// flagged, so they prompt rather than arriving unflagged — the invariant this set relies on. NOT
+// added: the legacy `huggingface-cli` spelling, the same tool under an older name with its own verb
+// set, which would reopen exactly the hole the `gh` allowlist closed (#265) unless it came with a
+// table of its own.
+const NET_VERBS = new Set(['gh', 'git', 'glab', 'hf']);
 
-// Inspection commands that may sit in a network-allowed pipeline. `awk` is out: its program argument
-// can `system("curl …")`, which is the shape the deny exists for. `sed`/`tree` stay — BSD sed has no
-// shell-out, and a `w file` lands inside the write confinement either way.
-const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS].filter(c => c !== 'awk'));
+// Inspection commands that may sit in a network-allowed pipeline, plus the two other kinds of segment
+// that cannot touch the network or run anything of their own:
+//
+// - `sleep` is inert — it neither connects nor writes nor names a program — and the read it precedes
+//   is a POLL: `sleep 5 && gh pr view 609 --json mergeable,mergeStateStatus` asks GitHub to recompute
+//   a state it has not finished computing, so running the read on its own reports `UNKNOWN`. Bounded
+//   by the tool's own idle and ceiling timeouts, which is what stops a long one.
+// - `awk` is out: its program argument can `system("curl …")`, which is the shape the deny exists for.
+//   `sed`/`tree` stay — BSD sed has no shell-out, and a `w file` lands inside the write confinement
+//   either way.
+//
+// An unlisted filter in the pipeline still denies it (`| python3 -c`, `| jq`, `| base64 -d`): that is
+// the allowlist's own rule, and the model's remedy — gh's built-in `--jq`, or running the read alone —
+// is one call away.
+const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS, 'sleep'].filter(c => c !== 'awk'));
 // `find`'s exec family runs an arbitrary command per match. `git -c <key>=<value>` can name one
 // through more keys than are worth enumerating — `alias.x='!cmd'`, `core.sshCommand`, `core.pager`,
 // `credential.helper`, `diff.external`, `core.hooksPath` — so `-c` (and `--config-env`) is refused
@@ -148,6 +177,30 @@ const HARMLESS_ENV = new Set([
   'GH_FORCE_TTY',
   'GH_REPO',
   'GH_HOST',
+  // Hugging Face's own settings prefixes. A model writes `HF_HUB_ENABLE_HF_TRANSFER=1 hf download …`
+  // because that is the documented speedup, and without these the download would lose the allow to
+  // its own prefix — a denial with no `blockedBy` to explain it. Each value is a switch, a directory
+  // or a host, none of which can name a program, which is the test this list applies. `HF_ENDPOINT`
+  // is the host one, kept on the same footing as `GH_HOST` above: both redirect a CLI that is
+  // already being given the network, and neither runs what the network returns.
+  // `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN` are deliberately absent, on the same line that keeps
+  // `GH_TOKEN` out: a credential assigned inline is worth a beat. Nothing about authentication needs
+  // it — reads are open here, so `hf` finds the saved token in `~/.cache/huggingface/token` exactly
+  // as it does outside the sandbox — and a token that is NOT the saved one has two routes around
+  // this list: the `--token` flag (`hf download --token … gated/repo` is a `download` read, so it
+  // keeps the allow) and `hf auth login`, which is flagged, prompts, and writes the token into that
+  // same cache dir.
+  'HF_ENDPOINT',
+  'HF_HOME',
+  'HF_HUB_CACHE',
+  'HF_HUB_DISABLE_PROGRESS_BARS',
+  'HF_HUB_DISABLE_SYMLINKS_WARNING',
+  'HF_HUB_DISABLE_TELEMETRY',
+  'HF_HUB_DISABLE_XET',
+  'HF_HUB_ENABLE_HF_TRANSFER',
+  'HF_HUB_OFFLINE',
+  'HF_HUB_VERBOSITY',
+  'HF_XET_HIGH_PERFORMANCE',
   'NO_COLOR',
   'CLICOLOR',
   'CLICOLOR_FORCE',
@@ -186,25 +239,36 @@ const REDIRECT_AMP_RE = /\d*>&\d*|&>>?/g;
 const VERB_PREFIX_RE =
   /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
 
-// Substitution runs a nested command the verb check never sees — tested on the RAW string, since
-// `$(…)` executes inside double quotes. Same rule and same trade as `_readonly.ts`.
-const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
-
+// Substitution runs a nested command the verb check never sees; `_readonly.ts` owns that test
+// (`hasExecutableSubstitution`) so the sandbox and the plan gate cannot drift on which contexts are
+// DATA.
+//
 // `xargs` flags that take the next word as their value, so `xargs -I {} gh issue view {}` reads its
 // verb as `gh`, not `{}`. `-I{}` attached is one word and drops with the flag.
 const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J', '-R', '-S']);
 
+// Shell grammar that runs no program of its own, dropped before the verb check: a `for VAR in WORDS`
+// head, whose words are the DATA the loop walks, and the bare `do`/`done` a newline split leaves
+// standing alone (`for n in 610 608; do`, `gh pr view $n`, `done` on separate lines is four segments).
+// Reading several PRs in one call is exactly this shape (#621), and every command inside the loop
+// still has to pass on its own. `while`/`until` are NOT here: their condition is a command, so it
+// stays checked — which also keeps the unbounded poll (`while true; do sleep 5; gh pr view …; done`)
+// out of the allow.
+const SHELL_STRUCTURE_RE = /^(?:do|done)$|^for\s+\w+\s+in(?:\s|$)/;
+
 function effectiveVerb(segment: string): string | undefined {
-  const ws = words(segment.trim().replace(VERB_PREFIX_RE, ''));
-  let i = 0;
-  if (ws[i] === 'xargs') {
-    i++;
+  // `timeout` and `xargs` each name the command they run rather than being it, so both are skipped to
+  // reach it — a carrier inside the command xargs runs included.
+  let ws = dropCarriers(words(segment.trim().replace(VERB_PREFIX_RE, '')));
+  if (ws[0] === 'xargs') {
+    let i = 1;
     while (i < ws.length && ws[i].startsWith('-')) {
       if (XARGS_VALUE_FLAGS.has(ws[i])) i++;
       i++;
     }
+    ws = dropCarriers(ws.slice(i));
   }
-  return ws[i];
+  return ws[0];
 }
 
 /**
@@ -227,13 +291,20 @@ export function networkAllowedFor(command: string): boolean {
 export function networkDecision(command: string): { allowed: boolean; blockedBy?: string } {
   // A heredoc body is data: its lines would otherwise split into segments whose "verb" is prose,
   // and `gh issue comment 1 --body-file - <<'EOF' …` — the standard way a model writes a multi-line
-  // comment — would be denied every time.
+  // comment — would be denied every time. That is true of the VERB question only, though: a body
+  // whose delimiter was NOT quoted is expanded by the shell, so a `$(…)` in it runs on whatever
+  // network the line's `git`/`gh` verb was granted, and the verb split cannot see it there. Dropped
+  // bodies answer the verb question and are then re-read for the substitution one.
   const c = stripHeredocs(command).trim();
-  if (!c || SUBSTITUTION_RE.test(c)) return { allowed: false };
+  const expanding = expandingHeredocBodies(command);
+  if (!c || hasExecutableSubstitution(c) || expanding.some(hasRawSubstitution)) {
+    return { allowed: false };
+  }
   const masked = maskQuoted(c).replace(REDIRECT_AMP_RE, m => ' '.repeat(m.length));
   const segments = splitSegments(c, masked)
     .map(s => s.trim())
-    .filter(s => s && !/^cd(?:\s|$)/.test(s));
+    // `cd` carries no read of its own, and the shell grammar around a loop carries no command at all.
+    .filter(s => s && !/^cd(?:\s|$)/.test(s) && !SHELL_STRUCTURE_RE.test(s));
   if (segments.length === 0) return { allowed: false };
   let net = false;
   let blockedBy: string | undefined;
@@ -408,7 +479,7 @@ export function broadWorkdirNotice(cwd: string, home = homedir()): string {
 export function sandboxNotice(cwd: string, home = homedir()): string {
   return (
     `Shell commands run sandboxed: writes confined to ${cwd.replace(home, '~')}, temp and cache ` +
-    'dirs; network denied except loopback and git/gh. A command you approve at a prompt runs unsandboxed.'
+    'dirs; network denied except loopback and git/gh/hf. A command you approve at a prompt runs unsandboxed.'
   );
 }
 
@@ -503,12 +574,12 @@ export function sandboxFooter(
   }
   const curlDenied = CURL_RE.test(command) && (code === 6 || code === 7);
   if (failed && !opts.network && (NET_DENIAL_RE.test(output) || curlDenied)) {
-    // A gh/git pipeline denied because of a sibling command has a remedy the model can apply
+    // A gh/git/hf pipeline denied because of a sibling command has a remedy the model can apply
     // itself, and "ask the user" would be the wrong one.
     const { blockedBy } = networkDecision(command);
     lines.push(
       blockedBy
-        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git and gh keep the network only when run on their own (pipes into grep/head/sed/wc are fine). Run the git/gh command as its own bash call.`
+        ? `Network access is denied — this pipeline ran without it because it also contained \`${blockedBy}\`; git, gh and hf keep the network only when run on their own (pipes into grep/head/sed/wc, a \`timeout N\` wrapper, a \`sleep N &&\` wait and a \`for …; do …; done\` loop all keep it). Run the git/gh/hf command as its own bash call.`
         : 'Network access is denied — a DNS or host error, a silent empty result, or an auth/proxy ' +
             'complaint from curl/git/npm is most likely the sandbox, not a wrong URL or a missing ' +
             'credential. ' +

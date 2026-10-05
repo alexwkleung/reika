@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig, resolveDefaultMode } from './config.js';
+import { startProfiles } from './laststate.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
 import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
@@ -89,10 +90,16 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
   // Always unattended: nobody can answer a prompt here, so a decline must not read as the user's.
   const loaded = { ...loadConfig(), unattended: true };
+  // The mode is settled before the session is created, because it decides the model (#616): a mode
+  // with its own model in REIKA_MODE_MODELS runs that one, `--mode` or not. Headless has no /model
+  // and no saved state — its env is the whole answer — so an empty state is the whole of #365 here.
+  const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
+  const profile = startProfiles(loaded, mode, {}).profile;
   const stream = args.stream ? createStreamPrinter(io, args.json) : null;
   const session = await createSession({
     cwd: process.cwd(),
     config: loaded,
+    profile,
     canAsk: false,
     requestApproval:
       loaded.autoApprove === 'bypass'
@@ -124,6 +131,8 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
       io.stderr('reika: no network — search and fetch_url are off for this run\n');
     if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
     for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);
+    // The same startup line the TUI shows for a REIKA_MODE_MODELS entry it could not use (#616).
+    for (const problem of config.modeModelErrors ?? []) io.stderr(`reika: ${problem}\n`);
 
     // An MCP tool typed as a slash command (#265): the same direct call the TUI makes, answered with
     // the tool's own output instead of a model turn. There is no question for the model to answer —
@@ -152,7 +161,6 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
       return failed ? 1 : 0;
     }
 
-    const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
     const input = await buildHeadlessInput(prompt, config, bundle, mode);
     for (const n of input.notices) io.stderr(`reika: ${n}\n`);
 

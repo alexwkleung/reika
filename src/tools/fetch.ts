@@ -174,8 +174,9 @@ export type UrlExtraction =
   // might just be an offline machine, so it must not be reported as an invented URL on its own.
   // `code` is the socket-level error code when the failure had one (ENOTFOUND, ECONNREFUSED…),
   // dug out of undici's `cause` chain. It is what separates "this host" from "no network" for the
-  // tool's offline latch; the grounders read only `reached`.
-  | { ok: false; reached: boolean; error: string; code?: string };
+  // tool's offline latch. `status` is the HTTP status when the server answered with one, which is
+  // what lets a grounder tell a 404 from a 403 without parsing `error`.
+  | { ok: false; reached: boolean; error: string; code?: string; status?: number };
 
 export type ExtractOptions = {
   // Allow addresses that only resolve on this machine or this LAN (loopback, RFC1918, link-local).
@@ -255,7 +256,14 @@ export async function extractUrl(url: string, opts: ExtractOptions = {}): Promis
         }
         continue;
       }
-      if (!res.ok) return { ok: false, reached: true, error: `${res.status} ${res.statusText}` };
+      if (!res.ok) {
+        return {
+          ok: false,
+          reached: true,
+          error: `${res.status} ${res.statusText}`,
+          status: res.status,
+        };
+      }
       const type = res.headers?.get?.('content-type') ?? '';
       if (type && !TEXT_CONTENT_TYPE.test(type)) {
         await res.body?.cancel().catch(() => {});

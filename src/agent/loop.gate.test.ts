@@ -185,7 +185,8 @@ describe('post-edit typecheck gate (integration)', () => {
     h.scripted.push(
       bashResponse('mkdir -p src && cat > src/app.ts <<\'EOF\'\nexport const n = "BREAKME";\nEOF'),
       finalResponse('all done'),
-      bashResponse("sed -i '' 's/\"BREAKME\"/0/' src/app.ts"),
+      // A rewrite rather than `sed -i ''`, which is BSD-only: GNU sed reads `''` as the script.
+      bashResponse("cat > src/app.ts <<'EOF'\nexport const n = 0;\nEOF"),
       finalResponse('fixed and done'),
     );
 

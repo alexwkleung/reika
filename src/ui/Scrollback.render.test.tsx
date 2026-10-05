@@ -258,6 +258,27 @@ describe('Scrollback nested (subagent) messages', () => {
     }
   });
 
+  it('folds a thinking tail the endpoint cut at a tag the model wrote in its own prose', () => {
+    // The parser ends the reasoning channel at a literal tag in the model's prose, so the rest of
+    // the thought arrives as `content` (ui/reasoningfold.ts). It belongs behind the bar, with no
+    // prose row under it.
+    const frame = framePlusApp([
+      {
+        role: 'assistant',
+        content: '` the model wrote inside its own reasoning.',
+        reasoning: 'the parser cut the think block at a literal `',
+        nested: true,
+      },
+    ]);
+    const rows = frame.split('\n').filter(l => l.trim());
+
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(row).toMatch(new RegExp(`^ {${1 + INDENT}}▎`));
+    // The tail wraps across rows, so join the bar-stripped bodies before matching.
+    const body = rows.map(r => stripAnsi(r).replace(/^\s*▎\s?/, '')).join(' ');
+    expect(body).toContain('the model wrote inside its own reasoning.');
+  });
+
   // #431: markdown wrapped to the top-level width and then landed in a box four columns
   // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
   // bullet, on a row of its own and flush left, under no hanging indent. The compaction note
@@ -1478,6 +1499,220 @@ describe('Scrollback subagent block spacing', () => {
   });
 });
 
+// #627. #567 dropped the leading "Read " from a result row on the argument that the call directly
+// above it already says which tool this is — an argument that holds only while that call is alone.
+// Stacked, every row was `  ↳ <path> …` and the marker named none of them, so which of the rows
+// were reads had to be re-derived from the paths themselves.
+describe('Scrollback stacked read labels', () => {
+  const readCall = (id: string, path: string) => ({
+    id,
+    name: 'read',
+    args: { path },
+  });
+  const readResult = (id: string, summary: string): Message => ({
+    role: 'tool',
+    callId: id,
+    summary,
+  });
+  const linesOf = (messages: Message[]): string[] => {
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return stripAnsi(lastFrame() ?? '').split('\n');
+  };
+  const resultRows = (messages: Message[]): string[] =>
+    linesOf(messages)
+      .filter(l => l.includes('↳'))
+      .map(l => l.trim());
+
+  it('puts the verb back on every row of a stacked round', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          readCall('t1', 'src/a.ts'),
+          readCall('t2', 'src/b.ts'),
+          readCall('t3', 'src/c.ts'),
+        ],
+      },
+      readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
+      readResult('t2', 'Read src/b.ts lines 1-30 of 96'),
+      readResult('t3', 'Read src/c.ts lines 5-12 of 20'),
+    ]);
+    expect(rows.map(l => l.replace(/^↳ /, ''))).toEqual([
+      'Read src/a.ts lines 1-80 of 402',
+      'Read src/b.ts lines 1-30 of 96',
+      'Read src/c.ts lines 5-12 of 20',
+    ]);
+  });
+
+  // The issue's own carve-out: a single read is where the verb was redundant, and its row must not
+  // move. Byte-identical to what #567 left, which is also what the reverse-direction arm compares.
+  it('leaves a lone read exactly as it was', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [readCall('t1', 'src/a.ts')],
+      },
+      readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
+    ]);
+    expect(rows).toEqual(['↳ src/a.ts lines 1-80 of 402']);
+    expect(linesOf([readResult('t1', 'Read src/a.ts lines 1-80 of 402')])).not.toContain('Read:');
+  });
+
+  // Two results from different rounds — a delivered result followed by a later turn's — land as
+  // adjacent rows with no call of their own in between. The second scans the row above and is
+  // labelled; the first is frozen before the second exists, so it keeps the bare path. Both the
+  // live frame and a replayed one read the same way, which is the bar (#631).
+  it('labels a read under a read row above it, round or no round', () => {
+    const rows = resultRows([
+      readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
+      readResult('t2', 'Read src/b.ts lines 1-30 of 96'),
+    ]);
+    expect(rows).toEqual(['↳ src/a.ts lines 1-80 of 402', '↳ Read src/b.ts lines 1-30 of 96']);
+  });
+
+  // The regression the one-shot renders above cannot see (#631): `<Static>` freezes each row as
+  // it lands and a round's results commit one at a time, so the FIRST row of a stack must carry
+  // its verb from what is knowable at that moment — the round's call list — or it stays bare on
+  // screen forever while its siblings are labelled. Commit the results one render apart.
+  it('labels the first row of a stack before its sibling results land', () => {
+    const round: Message = {
+      role: 'assistant',
+      content: '',
+      toolCalls: [readCall('t1', 'src/a.ts'), readCall('t2', 'src/b.ts')],
+    };
+    const r1 = readResult('t1', 'Read src/a.ts lines 1-80 of 402');
+    const r2 = readResult('t2', 'Read src/b.ts lines 1-30 of 96');
+    const sb = (messages: Message[]) => (
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />
+    );
+    const { rerender, frames } = render(sb([round, r1]));
+    const first = stripAnsi(frames.at(-1) ?? '');
+    expect(first).toContain('↳ Read src/a.ts lines 1-80 of 402');
+    rerender(sb([round, r1, r2]));
+    const last = stripAnsi(frames.at(-1) ?? '');
+    expect(last).toContain('↳ Read src/a.ts lines 1-80 of 402');
+    expect(last).toContain('↳ Read src/b.ts lines 1-30 of 96');
+  });
+
+  // A result whose neighbour carries a block is separated from it by a blank row (#492), so it is
+  // never scanned as part of that block and keeps the bare path. Row-adjacency arm only — the
+  // round arm below is gap-proof on purpose.
+  it('does not group a read across the gap a block puts under its neighbour', () => {
+    const rows = resultRows([
+      readResult('t1', 'Read a.ts lines 1-10 of 10'),
+      {
+        role: 'tool',
+        callId: 't2',
+        summary: 'Ran: npm test',
+        command: { text: 'npm test', outputTail: 'ok', outputTruncated: false },
+      },
+    ]);
+    expect(rows[0]).toBe('↳ a.ts lines 1-10 of 10');
+    expect(rows[1]).toContain('Ran: npm test');
+  });
+
+  // A round's results print in call order, so [read, bash, read] separates the two read rows with
+  // the command's block between them. The label is round-scoped ("this round read more than one
+  // file"), so no interleaving of other calls strips it from either read row (#631).
+  it('labels every read of a multi-read round even when other results interleave', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          readCall('t1', 'src/a.ts'),
+          { id: 't2', name: 'bash', args: { command: 'npm test' } },
+          readCall('t3', 'src/b.ts'),
+        ],
+      },
+      readResult('t1', 'Read src/a.ts lines 1-80 of 402'),
+      {
+        role: 'tool',
+        callId: 't2',
+        summary: 'Ran: npm test',
+        command: { text: 'npm test', outputTail: 'ok', outputTruncated: false },
+      },
+      readResult('t3', 'Read src/b.ts lines 1-30 of 96'),
+    ]);
+    expect(rows[0]).toBe('↳ Read src/a.ts lines 1-80 of 402');
+    expect(rows[1]).toContain('Ran: npm test');
+    expect(rows[2]).toBe('↳ Read src/b.ts lines 1-30 of 96');
+  });
+
+  // The elision is not "any Read row" — the two shapes whose verb is their only label keep it even
+  // when lone (`Read failed: …`, `Read a.ts: offset …`), since stripping those gives `failed: …`.
+  it('keeps the verb on the shapes where it is the only label', () => {
+    const merged = linesOf([
+      readResult('t1', 'Read a.ts: offset 99 past end of file (10 lines)'),
+      readResult('t2', 'Read failed: no such file'),
+    ]);
+    expect(merged.join('\n')).toContain('↳ Read a.ts: offset 99 past end of file');
+    expect(merged.join('\n')).toContain('↳ Read failed: no such file');
+    expect(merged.join('\n')).not.toContain('↳ a.ts: offset');
+    expect(merged.join('\n')).not.toContain('↳ failed:');
+  });
+
+  // Sole purpose is to prove the branch is read-only for every other tool: `Ran:`/`Found` already
+  // name themselves, so a stacked grep must not be reformatted into `Found:`.
+  it('does not touch the verb of any other tool', () => {
+    const rows = resultRows([
+      readResult('t1', 'Found 3 matches for /kana/ — showing 3'),
+      readResult('t2', 'Listed 12 entries in src'),
+      readResult('t3', 'Ran: npm ci'),
+    ]);
+    expect(rows).toEqual([
+      '↳ Found 3 matches for /kana/ — showing 3',
+      '↳ Listed 12 entries in src',
+      '↳ Ran: npm ci',
+    ]);
+  });
+
+  // A subagent's reads stack at the nested indent, and every message in the block is nested — the
+  // sibling check once rejected any nested neighbour, so these rows could never group and kept the
+  // bare form the issue complains about. Same level groups now.
+  it('labels stacked reads inside a subagent block', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        nested: true,
+        toolCalls: [readCall('n1', 'src/a.ts'), readCall('n2', 'src/b.ts')],
+      },
+      { ...readResult('n1', 'Read src/a.ts lines 1-80 of 402'), nested: true },
+      { ...readResult('n2', 'Read src/b.ts lines 1-30 of 96'), nested: true },
+    ]);
+    expect(rows.map(l => l.replace(/^↳ /, ''))).toEqual([
+      'Read src/a.ts lines 1-80 of 402',
+      'Read src/b.ts lines 1-30 of 96',
+    ]);
+  });
+
+  // The boundary is where the indent changes: a top-level row must not scan into a subagent block
+  // or vice versa, and each side alone keeps the bare path the lone-call rule wants.
+  it('does not group across the subagent boundary', () => {
+    const rows = resultRows([
+      {
+        role: 'assistant',
+        content: '',
+        nested: true,
+        toolCalls: [readCall('n1', 'src/a.ts')],
+      },
+      { ...readResult('n1', 'Read src/a.ts lines 1-80 of 402'), nested: true },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [readCall('t1', 'src/b.ts')],
+      },
+      readResult('t1', 'Read src/b.ts lines 1-30 of 96'),
+    ]);
+    expect(rows).toEqual(['↳ src/a.ts lines 1-80 of 402', '↳ src/b.ts lines 1-30 of 96']);
+  });
+});
+
 // Regression (#385): <Static> prints `items.slice(n)` where n is the length it saw last render,
 // so a mode switch that swaps `messages` for the other side's stash — or /new replacing it with a
 // two-line receipt — printed nothing when the new array was no longer than the old one, and
@@ -1716,7 +1951,10 @@ describe('Scrollback tool rows after an output block', () => {
 
   it('keeps summary-only rows tight among themselves', () => {
     const ls = lines([read('r1', 'src/a.ts'), read('r2', 'src/c.ts')]);
-    expect(rowAbove(ls, '↳ src/c.ts')).not.toBe('');
+    // Stacked, these two are exactly the case #627 labels (#627 keeps the `Read` verb on both
+    // rows), so the needle is the labelled form — the point of this test is the row's *spacing*,
+    // not its text.
+    expect(rowAbove(ls, '↳ Read src/c.ts')).not.toBe('');
   });
 
   it('keeps the first result tight under its tool call', () => {

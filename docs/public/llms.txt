@@ -1,0 +1,25 @@
+# Reika
+
+> A coding agent CLI for local and hosted models, designed around small local models first. It talks to any OpenAI-compatible server (llama.cpp, MLX, vLLM or a cloud API), is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter; it makes working with one less frustrating.
+
+Install with `npm i -g @alexwkleung/reika`, `pnpm add -g @alexwkleung/reika` or `brew install alexwkleung/tap/reika` (Node 22 or newer). Configuration is environment variables (`REIKA_*`), read from the shell, `./.env` or `~/.config/reika/.env`; `REIKA_MODEL` is the only required one, and `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`. Each page below is the Markdown source of the corresponding page on reikacode.com.
+
+## Docs
+
+- [Install and first run](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/getting-started.md): requirements, the three install routes, serving a model and pointing Reika at it
+- [Usage](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/usage.md): modes, headless mode, slash commands and session transcripts
+- [Configuration](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/configuration.md): every `REIKA_*` key, profiles, approvals and the sandbox
+- [Tools](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/tools.md): the tools the agent can call and when each one registers
+- [Instructions and skills](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/skills.md): AGENTS.md loading, skills as slash commands, and plain-English skill routing
+- [Models](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/models.md): local quants and API models Reika has been run against
+- [Platforms](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/platforms.md): requirements and differences on macOS, Linux and Windows
+
+## Background
+
+- [Architecture](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/architecture.md): how a turn is put together and what the harness does at each step
+- [Findings](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/findings.md): what broke, what was tried and what held, with the measurements
+
+## Optional
+
+- [README](https://raw.githubusercontent.com/alexwkleung/reika/main/README.md): the repository's landing page
+- [Support](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/support.md): funding and other ways to help

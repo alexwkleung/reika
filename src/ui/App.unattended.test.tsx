@@ -48,7 +48,10 @@ vi.mock('../config.js', async () => {
   const actual = await vi.importActual<typeof ConfigModule>('../config.js');
   return { ...actual, loadConfig: () => ({ ...CONFIG }) };
 });
-vi.mock('../context/bootstrap.js', () => ({ bootstrap: async () => BUNDLE }));
+vi.mock('../context/bootstrap.js', async importActual => ({
+  ...(await importActual<object>()),
+  bootstrap: async () => BUNDLE,
+}));
 vi.mock('../laststate.js', async () => {
   const actual = await vi.importActual<typeof LastStateModule>('../laststate.js');
   return { ...actual, loadLastState: () => ({}), saveLastState: () => {} };

@@ -1,7 +1,7 @@
 {
-  "name": "reika",
-  "version": "0.0.1",
-  "description": "Coding agent CLI for small local models, tuned for low quantization.",
+  "name": "@alexwkleung/reika",
+  "version": "0.1.0",
+  "description": "Coding agent CLI for local and hosted models, designed around small local models first.",
   "license": "Apache-2.0",
   "author": "Alex Leung",
   "repository": {
@@ -12,6 +12,20 @@
   "bugs": {
     "url": "https://github.com/alexwkleung/reika/issues"
   },
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/alexwkleung"
+    },
+    {
+      "type": "ko-fi",
+      "url": "https://ko-fi.com/alexwkleung"
+    },
+    {
+      "type": "buymeacoffee",
+      "url": "https://buymeacoffee.com/alexwkleung"
+    }
+  ],
   "keywords": [
     "coding-agent",
     "cli",
@@ -31,6 +45,9 @@
     "NOTICE",
     "skills"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/cli.js',0o755)\"",
     "dev": "tsx src/cli.tsx",
@@ -41,14 +58,16 @@
     "format:check": "oxfmt --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "eval": "tsx evals/runner.ts",
-    "docs:dev": "npm --prefix docs run dev",
-    "docs:build": "npm --prefix docs run build",
-    "install:global": "npm run build && npm install -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but $(npm prefix -g)/bin is not on your PATH\"; fi",
-    "uninstall:global": "npm uninstall -g reika",
-    "reinstall:global": "npm run uninstall:global && npm run install:global",
-    "prepack": "npm run build"
+    "docs:dev": "pnpm --dir docs run dev",
+    "docs:build": "pnpm --dir docs run build",
+    "install:global": "pnpm run build && pnpm add -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but pnpm's global bin dir is not on your PATH (run: pnpm setup)\"; fi",
+    "uninstall:global": "pnpm remove -g @alexwkleung/reika || pnpm remove -g reika",
+    "reinstall:global": "pnpm run uninstall:global && pnpm run install:global",
+    "prepack": "pnpm run build",
+    "release:check": "scripts/release-check.sh",
+    "release:verify": "tsx scripts/release-verify.ts"
   },
   "dependencies": {
     "chalk": "^5.6.2",
@@ -86,5 +105,6 @@
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "packageManager": "pnpm@12.8.1"
 }

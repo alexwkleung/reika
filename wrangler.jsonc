@@ -1,0 +1,17 @@
+// Deploys the docs site (reikacode.com) as a Worker serving static assets. Workers Builds runs the
+// build from the repo root on pushes to main; see the deploy notes in CONTRIBUTING.md.
+{
+  "name": "reika-docs",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./docs/.vitepress/dist",
+    // VitePress builds `findings.html` and links `/findings` (cleanUrls); this serves one for the other.
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+  },
+  "routes": [{ "pattern": "reikacode.com", "custom_domain": true }],
+  // The site is served at reikacode.com only: no public *.workers.dev copy, and no public preview URL
+  // per branch, which would publish unmerged docs.
+  "workers_dev": false,
+  "preview_urls": false,
+}

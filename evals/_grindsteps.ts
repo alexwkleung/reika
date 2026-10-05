@@ -16,7 +16,12 @@ export type GrindSteps = {
   reported: boolean; // 7: final reply says what was and was not verified
 };
 
-const TEST_RUNNER_RE = /\b(npm (run )?test|npx vitest|node --test)\b/;
+// Every way a fixture project's suite gets invoked: the package managers' own `test` script, the
+// "run a vitest from wherever" verbs, and node's runner. Loose on purpose, like the rest of this
+// file — `npx`/`dlx` fetch when the binary is absent, so they are credited even though the run may
+// have failed to start, which is the same treatment `npx vitest` already had.
+const TEST_RUNNER_RE =
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:-{1,2}[\w-]+\s+)*(?:run\s+)?test\b|\b(?:npx|bunx|pnpm exec|pnpm dlx|yarn dlx)\s+vitest\b|\bnode --test\b/;
 const OWN_CHECK_RE = /\bnode\b|mktemp|\/tmp\//;
 
 function command(tc: ToolCall): string {

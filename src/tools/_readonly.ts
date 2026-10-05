@@ -129,9 +129,11 @@ function ghApiIsGet(args: string[]): boolean {
   return !!endpoint && endpoint !== 'graphql';
 }
 
-// Substitution runs a nested command the allowlist would never see. Tested against the RAW string,
-// not the quote-masked view, because `$(…)` inside double quotes still executes. Costs a false
-// negative on a single-quoted literal `$(` in a search pattern — cheap, and it errs safe.
+// Substitution runs a nested command the allowlist would never see. `$(…)` and a backtick execute
+// inside DOUBLE quotes as well as bare, so those stay tested; inside single quotes every character is
+// literal, and blanking that region first is what stops `grep -c '```'` and `grep -n '$(dirname' src/`
+// reading as substitutions the model never wrote. That retires the blanket trade this rule used to
+// make — the context is answerable now, in `maskSingleQuotedData` below.
 const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 
 // A backslash-escaped `` ` `` or `$` is a literal character in every quoting context (single quotes
@@ -140,6 +142,61 @@ const SUBSTITUTION_RE = /\$\(|`|<\(|>\(/;
 // markdown-table grep (`"^| \`REIKA"`) refused, a plan round lost.
 function dropEscapedSubstitutionChars(raw: string): string {
   return raw.replace(/\\\\/g, '').replace(/\\[`$]/g, '');
+}
+
+// What a substitution check should actually read: the command with the regions where a `$(` or a
+// backtick is DATA blanked out, length-preserving so any offset taken against it still lines up.
+// Two contexts blank, one refuses to answer:
+//
+//   - inside SINGLE quotes (a `'` opens the run, the next `'` closes it): `grep -c '```'` is a
+//     pattern, not a command. Double-quoted runs are skipped over rather than blanked, so an
+//     apostrophe in prose (`echo "it's $(curl evil)"`) cannot be mistaken for an opening quote and
+//     swallow the substitution beside it.
+//   - NOTHING when a `<<` is in the text. A heredoc body is not quote-parsed at all — its `$(…)`
+//     expands unless the delimiter was quoted — so an apostrophe inside one (`it's`) would pair with
+//     the next and blank a command that runs. The delimiter's own quoting is what decides, and that
+//     is `stripHeredocs`' question, not this one: an unclear heredoc means no blanking, which the
+//     caller reads as "test the raw string" and denies as it does today.
+//
+// Returns undefined when quoting cannot be closed (`echo don't` leaves a `'` open) — the same
+// fallback, because a mask that guesses where a quote ends is how a substitution gets hidden.
+export function maskSingleQuotedData(command: string): string | undefined {
+  if (command.includes('<<')) return undefined;
+  let out = '';
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === '"') {
+      const end = command.indexOf('"', i + 1);
+      if (end === -1) return undefined;
+      out += command.slice(i, end + 1);
+      i = end + 1;
+    } else if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      if (end === -1) return undefined;
+      out += ' '.repeat(end + 1 - i);
+      i = end + 1;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+// The one call a command line makes. `dropEscapedSubstitutionChars` first (a `\$(` is a literal),
+// then the single-quote mask when it can be built; an unmaskable command keeps the raw test.
+export function hasExecutableSubstitution(command: string): boolean {
+  const escaped = dropEscapedSubstitutionChars(command);
+  return SUBSTITUTION_RE.test(maskSingleQuotedData(escaped) ?? escaped);
+}
+
+// The same question about text whose quoting context is NOT a command line, so there is no mask to
+// trust: the body of a heredoc the shell expands. Nothing there is quote-parsed — `it's` in a body is
+// literal data, and pairing that apostrophe with the next one would blank a `$(…)` that really runs.
+// The escape rule does apply: `\$(` in a body produces a literal `$`.
+export function hasRawSubstitution(text: string): boolean {
+  return SUBSTITUTION_RE.test(dropEscapedSubstitutionChars(text));
 }
 
 // Redirection is the one metacharacter that is routinely DATA (`grep ">" f`), so it alone is tested
@@ -207,6 +264,30 @@ export function words(segment: string): string[] {
   return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
 }
 
+// The carrier that bounds ONE command and changes nothing else about it, skipped so both readers see
+// the command itself. `timeout 120 gh issue view 621 --json title,body` is the shape a model writes
+// when GitHub is slow, and without this both readers answered about the wrapper: `timeout` is not a
+// recognized command name, so the sandbox denied the read its network and plan mode refused it
+// (#621) — while `_danger.ts`, which matches a command's own patterns through an unlisted carrier
+// (`timeout 5 rm` still gates), saw the gh read and did not flag it. (`xargs` is the other carrier,
+// read in `_sandbox.ts`'s verb reader, where the command it runs is known to be the argument.)
+// Flags and the DURATION operand are skipped; `-s`/`-k` take the next word as their value,
+// `--signal=KILL` does not.
+const CARRIER_VALUE_FLAGS = new Set(['-s', '--signal', '-k', '--kill-after']);
+
+export function dropCarriers(wordList: string[]): string[] {
+  let i = 0;
+  while (wordList[i] === 'timeout') {
+    i++;
+    while (wordList[i]?.startsWith('-')) {
+      if (CARRIER_VALUE_FLAGS.has(wordList[i])) i++;
+      i++;
+    }
+    i++; // the DURATION operand
+  }
+  return wordList.slice(i);
+}
+
 // Plan mode's sed: a line-range or pattern-range print (`sed -n '120,180p' f`,
 // `sed -n '/## A/,/## B/p' f`) — the read models reach for most, refused before at a round's cost.
 // An ALLOWLIST of script shapes, never a scan for writes: every command is `p`, `=` or `q` behind
@@ -244,7 +325,7 @@ function sedSegmentIsReadOnly(args: string[]): boolean {
 }
 
 function segmentIsReadOnly(segment: string, recognized: Set<string>, planReads: boolean): boolean {
-  const [name, ...args] = words(segment);
+  const [name, ...args] = dropCarriers(words(segment));
   if (name === 'gh' && planReads) return ghSegmentIsReadOnly(args);
   if (name === 'sed' && planReads) return sedSegmentIsReadOnly(args);
   if (!name || !recognized.has(name)) return false;
@@ -293,7 +374,7 @@ export function splitSegments(command: string, masked: string): string[] {
 // ladder side. Pure.
 function classify(command: string, recognized: Set<string>, planReads = false): boolean {
   const trimmed = command.trim();
-  if (!trimmed || SUBSTITUTION_RE.test(dropEscapedSubstitutionChars(trimmed))) return false;
+  if (!trimmed || hasExecutableSubstitution(trimmed)) return false;
   const { raw: c, masked } = blankHarmlessRedirects(trimmed, maskQuoted(trimmed));
   if (REDIRECT_RE.test(masked)) return false;
   const segments = splitSegments(c, masked);

@@ -373,6 +373,10 @@ export type Tool = {
 export type ContextBundle = {
   projectSummary: string;
   repoMap: string;
+  // Every map line in rank order, and the budget repoMap was packed to — what the session repacks
+  // from when the window becomes known or moves. Absent on a hand-built bundle.
+  repoMapRanked?: string[];
+  repoMapBudget?: number;
   instructions: string;
   cwd: string;
   hash: string;
@@ -467,6 +471,11 @@ export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal' | 'g
 // session that starts in agent mode has already paid for it (#391).
 export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal' | 'grind'>;
 
+// The modes whose turns reach the model: every mode but shell, which runs the command itself.
+// Per-mode models (REIKA_MODE_MODELS, #616) cover these and only these — a model for shell would be
+// dead weight, and moving the session's model on the way into a mode that never calls one is churn.
+export type ModelMode = Exclude<Mode, 'shell'>;
+
 export type Config = {
   baseURL: string;
   apiKey: string;
@@ -476,7 +485,8 @@ export type Config = {
   // auto-profile keyed by its lowercased name so /model <name> can switch between them.
   models: string[];
   maxTurns: number;
-  repoMapBudget: number;
+  // REIKA_REPO_MAP_BUDGET, a pin. Unset, the budget scales with the window (repoMapBudgetFor).
+  repoMapBudget?: number;
   autoApprove: AutoApproveMode;
   // True when REIKA_AUTO_APPROVE was set: `safe` is the default when it isn't, and the session
   // toggle (/approvals) has to know whether a `safe` came from the env or from that default.
@@ -509,6 +519,15 @@ export type Config = {
   // here is reused rather than relaunched.
   cdpPort?: number;
   profiles: Record<string, Profile>;
+  // Per-mode models (#616), from REIKA_MODE_MODELS=plan=kimi,grind=go: the profile each mode's
+  // turns run on. Already resolved to profile keys at load (a listed model with no auto-profile of
+  // its own resolves to 'default'), so a consumer only has to ask for the mode. A mode with no
+  // entry runs the session's own model — the map overrides that profile rather than replacing it.
+  modeProfiles?: Partial<Record<ModelMode, string>>;
+  // REIKA_MODE_MODELS entries that named no mode the model runs in, or no profile/model the config
+  // has, worded for the startup scrollback. Fail-open: the entry is dropped and the mode keeps the
+  // session's model — this line is what keeps that from being invisible.
+  modeModelErrors?: string[];
   maxTokens?: number;
   contextWindow?: number;
   // The active profile's maxOutputTokens, overlaid by resolveProfile.

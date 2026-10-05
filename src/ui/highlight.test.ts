@@ -1,7 +1,8 @@
 import chalk from 'chalk';
+import hljs from 'highlight.js/lib/common';
 import stripAnsi from 'strip-ansi';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { highlightCode } from './highlight.js';
+import { highlightCode, ScopeEmitter, type ScopeNode } from './highlight.js';
 import { renderMarkdown } from './markdown.js';
 
 // Colors are off under vitest (non-TTY), and highlighting is skipped entirely there.
@@ -54,6 +55,86 @@ describe('highlightCode', () => {
   it('leaves code alone with colors off', () => {
     chalk.level = 0;
     expect(highlightCode('const x = 1;', 'ts')).toBe('const x = 1;');
+  });
+});
+
+// highlight.js drives its emitter through a private-but-stable hook (HLJSOptions.__emitter), and
+// reika's theme is keyed by the scopes that hook hands over. The HTML format it replaced is no
+// longer parsed, so this pins the tree's half of the contract instead: raw dotted scopes, not the
+// `hljs-title function_ invoke__` CSS classes its HTML route writes, and text that arrives
+// unescaped, so the five entity decodings have nothing left to undo.
+describe('the highlight.js scope tree ScopeEmitter consumes', () => {
+  // Rust is where a multi-part scope is reachable: `foo(` is `title.function.invoke`, which the
+  // HTML route serializes as `hljs-title function_ invoke__`.
+  const emitterFor = (language: string, code: string): ScopeEmitter =>
+    hljs.highlight(code, { language, ignoreIllegals: true })._emitter as ScopeEmitter;
+
+  const scopes = (node: ScopeNode): string[] =>
+    node.children.flatMap(c =>
+      typeof c === 'string' ? [] : [...(c.scope ? [c.scope] : []), ...scopes(c)],
+    );
+  const texts = (node: ScopeNode): string =>
+    node.children.map(c => (typeof c === 'string' ? c : texts(c))).join('');
+
+  it('is reika’s emitter, handed raw dotted scopes', () => {
+    const emitter = emitterFor('rust', 'foo(x)');
+    expect(emitter).toBeInstanceOf(ScopeEmitter);
+    const found = scopes(emitter.root);
+    expect(found).toContain('title.function.invoke');
+    expect(found.some(s => s.startsWith('hljs-') || s.includes('_'))).toBe(false);
+  });
+
+  it('hands over text the renderer has not escaped', () => {
+    const code = 'const a = 1 < 2 && "q" !== \'r\'; // <tag> & done';
+    const all = texts(emitterFor('ts', code).root);
+    expect(all).toContain('1 < 2 && "q" !== \'r\'');
+    expect(all).toContain('// <tag> & done');
+  });
+
+  it('keeps the raw `language:` sublanguage scope, which the HTML route rewrites', () => {
+    const html = '<script>let y = 1;</script>';
+    expect(scopes(emitterFor('html', html).root)).toContain('language:javascript');
+    // No theme entry and no parent scope to fall back to, so it adds no color of its own.
+    expect(stripAnsi(highlightCode(html, 'html'))).toBe(html);
+  });
+});
+
+// highlight.js calls openNode/closeNode on its hot path and startScope/endScope through its
+// keyword helper, so both families have to build the same tree (its `Emitter` type declares only
+// the second pair). Driven directly here, with no grammar in between.
+describe('ScopeEmitter', () => {
+  it('paints nested scopes through either method family', () => {
+    const emitter = new ScopeEmitter();
+    emitter.openNode('keyword');
+    emitter.addText('const');
+    emitter.startScope('string');
+    emitter.addText('"x"');
+    emitter.endScope();
+    emitter.closeNode();
+    expect(emitter.toHTML()).toBe(KEYWORD(`const${STRING('"x"')}`));
+  });
+
+  it('splices a nested language in unpainted', () => {
+    const emitter = new ScopeEmitter();
+    const sub = new ScopeEmitter();
+    sub.openNode('keyword');
+    sub.addText('let');
+    sub.closeNode();
+    emitter.addText('a ');
+    emitter.__addSublanguage(sub, 'javascript');
+    emitter.addText(' b');
+    expect(emitter.toHTML()).toBe(`a ${KEYWORD('let')} b`);
+  });
+
+  it('leaves an unpainted scope transparent, and finalize drops scopes left open', () => {
+    const emitter = new ScopeEmitter();
+    emitter.openNode('no-theme-entry');
+    emitter.addText('plain');
+    emitter.finalize(); // a malformed match left the scope open
+    emitter.openNode('keyword');
+    emitter.addText('still');
+    emitter.finalize();
+    expect(emitter.toHTML()).toBe(`plain${KEYWORD('still')}`);
   });
 });
 

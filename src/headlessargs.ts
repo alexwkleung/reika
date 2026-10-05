@@ -87,10 +87,12 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
       // `reika -p --json "text"` — a positional after the flags is still the prompt.
       args.prompt = a;
     } else if (!headless) {
-      // A bare positional is a prompt that lost its -p. The usual way: `npm run dev -p "…"`, where
-      // npm takes -p as its own flag and passes only the text through.
+      // A bare positional is a prompt that lost its -p. The usual way: a package manager eats the
+      // flag — npm takes -p as its own and passes only the text through. pnpm forwards both, so no
+      // separator is needed there, and it forwards a `--` literally, which arrives here as an
+      // unknown flag.
       throw new Error(
-        `unexpected argument ${a} — a prompt needs -p (with npm run dev, put -- first: npm run dev -- -p "…")\n${USAGE}`,
+        `unexpected argument ${a} — a prompt needs -p (pnpm run dev -p "…"; npm: npm run dev -- -p "…")\n${USAGE}`,
       );
     } else {
       throw new Error(`unexpected argument ${a}\n${USAGE}`);

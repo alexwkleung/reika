@@ -45,6 +45,9 @@ export function extractUrls(source: string): string[] {
     // still ground. One-directional like the rest of this module: a skipped URL is silent, a
     // mangled fetch is noise.
     if (url.includes('${')) continue;
+    // Prose like `https://…` matches the pattern but names no host; fetched, it reports
+    // `Invalid URL` as a link the model wrote. Seen in saved sessions after every other guard.
+    if (!URL.canParse(url)) continue;
     if (url.length > 'https://'.length) urls.add(url);
   }
   return [...urls];
@@ -142,27 +145,56 @@ export function isFixturePath(path: string): boolean {
 
 export type UrlGroundingResult = { url: string; res: UrlExtraction };
 
-// Per-URL verdict, accounting for whether the machine is even online:
+// Per-URL verdict. Only two answers count as dead, because a ✗ tells the model to change the link
+// and a wrong one sends it "fixing" a correct URL:
 //   reachable  — resolved (2xx).
-//   dead       — a real bad link: the server answered with an error (4xx/5xx), OR the request got no
-//                response BUT something else in the batch reached a server, proving we're online (so
-//                a no-response here is a bad host, not a dead network).
-//   unverified — got no response and we have NO proof of connectivity (e.g. the machine is offline).
-//                Could be a bad host or could be the network — so we don't flag it as invented. This
-//                is what stops an offline run from false-flagging every URL.
+//   dead       — the server said the page does not exist (404/410) on a path that should be a page,
+//                OR the name does not resolve (ENOTFOUND) while the batch proves we're online.
+//   unverified — everything else: no proof of connectivity, a refusal (401/403 — sign-in or bot
+//                blocking), a rate limit (429), a server error, a timeout, a non-text page, or a 404
+//                that is the normal answer for that URL (a code host hiding a private repo, an API
+//                base path). Saved sessions showed all six ✗ receipts were one of these, and none a
+//                real dead link.
 export type UrlVerdict = 'reachable' | 'dead' | 'unverified';
 
+const GONE_STATUSES = new Set([404, 410]);
+// A private repository answers 404 to an unauthenticated fetch, exactly like a missing one.
+const CODE_HOSTS = /(^|\.)(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org)$/;
+// An API base or endpoint answers a bare GET with 404 (or 405) by design.
+const API_SEGMENT = /^(v\d+(\.\d+)?|api|graphql|rpc)$/i;
+
+function notFoundIsAmbiguous(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (CODE_HOSTS.test(parsed.hostname.toLowerCase())) return true;
+  return parsed.pathname.split('/').some(segment => API_SEGMENT.test(segment));
+}
+
 // Did any fetch in the batch reach a server (resolve, or get an HTTP error status)? That's proof the
-// machine has connectivity, which is what lets us treat an unanswered request as a genuine bad host
+// machine has connectivity, which is what lets us treat an unresolved name as a genuine bad host
 // rather than a possibly-offline one.
 function batchOnline(results: UrlGroundingResult[]): boolean {
   return results.some(r => r.res.ok || r.res.reached);
 }
 
-function verdictOf(res: UrlExtraction, online: boolean): UrlVerdict {
+function verdictOf(url: string, res: UrlExtraction, online: boolean): UrlVerdict {
   if (res.ok) return 'reachable';
-  if (res.reached || online) return 'dead';
-  return 'unverified';
+  if (res.reached) {
+    const gone = res.status !== undefined && GONE_STATUSES.has(res.status);
+    return gone && !notFoundIsAmbiguous(url) ? 'dead' : 'unverified';
+  }
+  return online && res.code === 'ENOTFOUND' ? 'dead' : 'unverified';
+}
+
+// Why a URL was left unverified, in the note's words. A server that answered gets its answer
+// named; one that didn't keeps the offline wording.
+function unverifiedReason(res: UrlExtraction & { ok: false }): string {
+  if (!res.reached) return `no response (${res.error}); could not verify (the network may be down)`;
+  return `the server answered ${res.error}; not treated as a dead link (it may need sign-in, block automated requests, or not serve a page at this path)`;
 }
 
 // Build the model-facing grounding note (edit/write path). Pure (no network) so formatting is
@@ -180,25 +212,26 @@ export function buildUrlGroundingNote(results: UrlGroundingResult[]): string {
         ? `✓ ${url} — resolved: ${snippet}…`
         : `✓ ${url} — resolved (no extractable text).`;
     }
-    if (verdictOf(res, online) === 'dead') {
+    if (verdictOf(url, res, online) === 'dead') {
       return `✗ ${url} — did NOT resolve (${res.error}). Verify this URL is correct; do not assume it works.`;
     }
-    return `? ${url} — no response (${res.error}); could not verify (the network may be down).`;
+    return `? ${url} — ${unverifiedReason(res)}.`;
   });
   return (
     'URL grounding — fetched the URL(s) this change introduces, on your behalf. A ✗ means the link ' +
     'does not resolve (likely wrong or invented) — fix it before relying on it. A ✓ shows a snippet ' +
-    'of the real page so you can confirm it matches your intent. A ? means it could not be reached at ' +
-    'all (possibly an offline machine) — left unverified, not assumed wrong.\n\n' +
+    'of the real page so you can confirm it matches your intent. A ? means it could not be reached ' +
+    'or did not confirm the page (possibly an offline machine, or a site that refuses automated ' +
+    'requests) — left unverified, not assumed wrong.\n\n' +
     lines.join('\n')
   );
 }
 
 // Build the user-facing notice for a grounding run — distinct from the model-facing note above: the
 // user gets a short receipt that the harness fetched on its behalf and how it went. `warn` only when
-// a link is genuinely dead (the actionable case); a batch that only failed to connect (no proof of
-// connectivity) is reported as a quiet `info` "couldn't verify" — never a false dead-link alarm on
-// an offline machine. Returns undefined for an empty run (caller emits nothing).
+// a link is genuinely dead (the actionable case); an unverified link (offline, or a server that
+// refused rather than denied the page) is a quiet `info` "couldn't verify", never a false dead-link
+// alarm. Returns undefined for an empty run (caller emits nothing).
 export function buildUrlGroundingNotice(
   results: UrlGroundingResult[],
 ): { tone: 'info' | 'warn'; content: string } | undefined {
@@ -206,8 +239,10 @@ export function buildUrlGroundingNotice(
   const n = results.length;
   const links = `${n} link${n === 1 ? '' : 's'}`;
   const online = batchOnline(results);
-  const dead = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'dead');
-  const unverified = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'unverified');
+  const dead = results.filter(r => !r.res.ok && verdictOf(r.url, r.res, online) === 'dead');
+  const unverified = results.filter(
+    r => !r.res.ok && verdictOf(r.url, r.res, online) === 'unverified',
+  );
   if (dead.length > 0) {
     // Name the dead ones (capped) — that's the actionable detail; the rest is a count.
     const named = dead
@@ -223,7 +258,9 @@ export function buildUrlGroundingNotice(
   if (unverified.length > 0) {
     return {
       tone: 'info',
-      content: `Grounded ${links} — couldn't verify ${unverified.length} (no response; network may be down).`,
+      content: `Grounded ${links} — couldn't verify ${unverified.length} (${
+        online ? 'the server did not confirm the page' : 'no response; network may be down'
+      }).`,
     };
   }
   return { tone: 'info', content: `Grounded ${links} — all reachable.` };
@@ -237,7 +274,7 @@ export function buildPlanUrlNote(results: UrlGroundingResult[]): string {
   const online = batchOnline(results);
   // Only flag genuinely-dead links — never the 'unverified' (couldn't-reach, maybe-offline) ones, so
   // a plan written on an offline machine isn't stamped with phantom "invented URL" warnings.
-  const dead = results.filter(r => !r.res.ok && verdictOf(r.res, online) === 'dead');
+  const dead = results.filter(r => !r.res.ok && verdictOf(r.url, r.res, online) === 'dead');
   if (dead.length === 0) return '';
   const list = dead.map(r => (r.res.ok ? '' : `\`${r.url}\` (${r.res.error})`)).join(', ');
   return (
@@ -334,7 +371,9 @@ export async function groundUrlsForPlan(
   const results = await groundCandidates(ctx, planText);
   const online = batchOnline(results);
   const dead = results.flatMap(r =>
-    !r.res.ok && verdictOf(r.res, online) === 'dead' ? [{ url: r.url, error: r.res.error }] : [],
+    !r.res.ok && verdictOf(r.url, r.res, online) === 'dead'
+      ? [{ url: r.url, error: r.res.error }]
+      : [],
   );
   return {
     note: buildPlanUrlNote(results) || undefined,

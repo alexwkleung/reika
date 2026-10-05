@@ -6,6 +6,8 @@ import type {
   CdpSearchMode,
   Config,
   DefaultMode,
+  Mode,
+  ModelMode,
   PasteFetchMode,
   Profile,
   SkillAutoMode,
@@ -69,6 +71,8 @@ export function loadConfig(): Config {
     minGenAdaptive,
     vision,
   };
+  // Named once: the per-mode map (#616) resolves its entries against the same set.
+  const profiles = loadProfiles(defaultProfile, models);
   return {
     baseURL,
     apiKey,
@@ -82,7 +86,7 @@ export function loadConfig(): Config {
     // cached round is nearly free on both local and API, so it is sized where a healthy complex
     // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
     maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
-    repoMapBudget: parseInt(process.env.REIKA_REPO_MAP_BUDGET ?? '3200', 10),
+    repoMapBudget: parseIntOrUndef(process.env.REIKA_REPO_MAP_BUDGET),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
     unattended: process.env.REIKA_UNATTENDED === '1',
@@ -98,7 +102,8 @@ export function loadConfig(): Config {
     searxngUrl: emptyToUndefined(process.env.REIKA_SEARXNG_URL),
     cdpSearch: parseCdpSearch(process.env.REIKA_CDP_SEARCH),
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
-    profiles: loadProfiles(defaultProfile, models),
+    profiles,
+    ...parseModeModels(process.env.REIKA_MODE_MODELS, profiles, models),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
     bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '1800000', 10),
@@ -198,6 +203,85 @@ function loadProfiles(defaultProfile: Profile, models: string[]): Record<string,
     }
   }
   return profiles;
+}
+
+// Per-mode models (#616). REIKA_MODE_MODELS=plan=kimi,grind=qwen3-coder says which model each mode
+// runs on, so a session can plan on the big model and grind on the careful one without a /model
+// switch at every mode change (and without a launch env that only covers the mode it names).
+//
+// One key listing pairs, rather than REIKA_PLAN_MODEL / REIKA_GRIND_MODEL: that spelling is
+// already taken. REIKA_<NAME>_MODEL defines the profile NAME, and `minimal` — a mode name — is
+// exactly the sort of thing a user names a profile, so a per-mode key would silently be read as
+// both. Pairs also fail loud: a name that is neither a mode nor a model the config has is reported
+// rather than half-applied.
+//
+// A value is what `/model <name>` accepts: a profile, or one of REIKA_MODEL's models, which lands
+// on the profile that serves it ('default' when a single model is listed, since only then is there
+// no auto-profile of its own — see loadProfiles). An entry that names neither is dropped: an
+// unknown name is far more likely a typo than a model, and resolving it ad-hoc the way a typed
+// `/model x` does would send a whole mode's turns to a name no server serves.
+function parseModeModels(
+  raw: string | undefined,
+  profiles: Record<string, Profile>,
+  models: string[],
+): Pick<Config, 'modeProfiles' | 'modeModelErrors'> {
+  const modeProfiles: Partial<Record<ModelMode, string>> = {};
+  const modeModelErrors: string[] = [];
+  for (const entry of (raw ?? '').split(',')) {
+    const text = entry.trim();
+    if (text === '') continue;
+    const at = text.indexOf('=');
+    const mode = (at === -1 ? '' : text.slice(0, at)).trim().toLowerCase();
+    const name = at === -1 ? '' : text.slice(at + 1).trim();
+    if (name === '' || !isModelMode(mode)) {
+      modeModelErrors.push(
+        `REIKA_MODE_MODELS: ignoring '${text}' — expected <mode>=<profile|model> for ${MODEL_MODES.join(', ')}.`,
+      );
+      continue;
+    }
+    const key = name.toLowerCase();
+    // A registered profile, or one of REIKA_MODEL's models on the profile that serves it.
+    let profile: string | undefined;
+    if (profiles[key]) profile = key;
+    else if (models.some(m => m.toLowerCase() === key)) profile = 'default';
+    if (!profile) {
+      modeModelErrors.push(
+        `REIKA_MODE_MODELS: ignoring '${text}' — no profile or model named '${name}' in your config.`,
+      );
+      continue;
+    }
+    modeProfiles[mode] = profile;
+  }
+  return { modeProfiles, modeModelErrors };
+}
+
+// The modes whose turns reach the model. Shell runs the command itself, so it has no model to
+// choose — see ModelMode.
+export const MODEL_MODES: readonly ModelMode[] = [
+  'agent',
+  'plan',
+  'vibe',
+  'minimal',
+  'grind',
+  'chat',
+];
+
+export function isModelMode(mode: string): mode is ModelMode {
+  return (MODEL_MODES as readonly string[]).includes(mode);
+}
+
+// The profile a mode switch lands on (#616). A mode with its own model runs that; a mode without
+// one comes back to the session's own profile, because the map OVERRIDES that profile rather than
+// replacing it — otherwise one mapping would strand the session on its model for good, and a
+// two-way switch (plan → agent) is the whole point. Undefined means "leave the model alone": shell
+// reaches no model, and the caller's own /model check keeps a hand-picked model for the session.
+export function modeSwitchProfile(
+  config: Pick<Config, 'modeProfiles'>,
+  mode: Mode,
+  sessionProfile: string,
+): string | undefined {
+  if (!isModelMode(mode)) return undefined;
+  return config.modeProfiles?.[mode] ?? sessionProfile;
 }
 
 function emptyToUndefined(s: string | undefined): string | undefined {

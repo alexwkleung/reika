@@ -20,18 +20,28 @@ import {
   CONFIRM_DECLINE,
   Confirm,
   type ConfirmSpec,
+  TOGGLE_CANCEL,
+  TOGGLE_OFF,
+  TOGGLE_ON,
   implementModeConfirmSpec,
   pastedUrlConfirmSpec,
   skillConfirmSpec,
+  toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
-import { inheritProfile, loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import {
+  inheritProfile,
+  loadConfig,
+  modeSwitchProfile,
+  resolveDefaultMode,
+  resolveProfile,
+} from '../config.js';
 import {
   loadLastState,
   persistableMode,
   saveLastState,
   startMode,
-  startProfile,
+  startProfiles,
 } from '../laststate.js';
 import {
   autoApproveForced,
@@ -375,6 +385,14 @@ export function App() {
   modeRef.current = mode;
   const activeProfileRef = useRef('default');
   activeProfileRef.current = activeProfile;
+  // The model a mode switch comes back to when the new mode has none of its own (#616): the
+  // profile the session opened on, or 'default' after /new. A ref, not state: it is read at a mode
+  // switch, never rendered.
+  const ownProfileRef = useRef('default');
+  // Set by /model (command or picker): the user said which model THIS session runs, which outranks
+  // the per-mode map for the rest of it (#616) — a mode switch must not undo a deliberate choice.
+  // Cleared by /new, where the session starts over.
+  const modelPinnedRef = useRef(false);
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
   const suggestionStateRef = useRef<SuggestionState | null>(null);
@@ -455,9 +473,13 @@ export function App() {
     (async () => {
       try {
         const cfg = loadConfig();
-        // The last session's profile, unless REIKA_MODEL was given at launch (#365). Resolved before
-        // the probe and the splash so both describe the model the session actually opens on.
-        const profile = startProfile(cfg, loadLastState());
+        // Where this session opens: the last session's mode and profile (#365), unless a launch
+        // REIKA_MODEL pinned the profile, with the start mode's own model (#616) on top. Resolved
+        // before the probe and the splash so both describe the model the session actually opens
+        // on; `own` is kept for the mode switches below.
+        const started = startProfiles(cfg, modeRef.current, loadLastState());
+        const profile = started.profile;
+        ownProfileRef.current = started.own;
         // Said before the await, because the wait is the point: a configured MCP server is the one
         // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
         // only one whose names are already known. No servers → nothing is painted at all (#265).
@@ -551,6 +573,15 @@ export function App() {
             { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
           ]);
         }
+        // A REIKA_MODE_MODELS entry that named nothing the config has (#616). The mode keeps the
+        // session's model, which from the user's side is indistinguishable from the feature not
+        // working — so the typo says so instead of going unmentioned.
+        for (const problem of cfg.modeModelErrors ?? []) {
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content: problem, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
         // only line that is good news — the shape `connectNotices` emits — so everything else that
         // reaches here (a server that did not start, a document that did not parse) is worth
@@ -586,8 +617,10 @@ export function App() {
   );
 
   // Every route to a new mode (slash command, Shift+Tab, /implement, /clear) lands here, so the
-  // saved state can't miss one. The mount run is skipped: the start mode is already on disk, or is
-  // a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it pinned.
+  // saved state can't miss one — and so the new mode's own model (#616) is applied on every one of
+  // them without a call at each site. The mount run is skipped: the start mode is already on disk,
+  // or is a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it
+  // pinned, and the start mode's model was resolved before the session was created.
   const modeMountedRef = useRef(false);
   useEffect(() => {
     if (!modeMountedRef.current) {
@@ -596,6 +629,10 @@ export function App() {
     }
     const persisted = persistableMode(mode);
     if (persisted) saveLastState({ mode: persisted });
+    applyModeModel(mode);
+    // applyModeModel reads the session and the per-mode policy through refs and the live session
+    // snapshot, so only the mode itself is a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   useEffect(() => {
@@ -651,7 +688,10 @@ export function App() {
   // the command line that triggered it (the picker already echoed on open).
   // Reads the session, not the `config` closure: an ad-hoc profile registered in the same tick is
   // already there.
-  const applyModelSwitch = (target: string, echo?: Message): void => {
+  // `persist` is false for the switch a mode change makes on its own (#616): that model comes from
+  // REIKA_MODE_MODELS and is re-derived every launch, so it is not a choice to remember — and
+  // saving it would strand the next session on a mode's model after the map changed or went away.
+  const applyModelSwitch = (target: string, echo?: Message, persist = true): void => {
     const s = sessionRef.current;
     const cfg = s?.getSnapshot().config;
     if (!s || !cfg) return;
@@ -665,7 +705,12 @@ export function App() {
     });
     // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
-    saveLastState({ profile: target });
+    // A hand-picked model is the choice that pins the session to it (#616): from here on, mode
+    // switches leave the model alone.
+    if (persist) {
+      modelPinnedRef.current = true;
+      saveLastState({ profile: target });
+    }
     // The tok/s chip describes the model that produced it (#204).
     setDecodeRate(undefined);
     setMessages(prev => [
@@ -678,6 +723,20 @@ export function App() {
           : `Switched to ${kind} '${target}' (${next.model})`,
       },
     ]);
+  };
+
+  // The model a mode runs on (#616). REIKA_MODE_MODELS gives each mode its own; a mode without one
+  // comes back to the session's own profile, so plan → agent is a round trip rather than a one-way
+  // switch onto the plan model. A hand-picked /model outranks the map for the rest of the session,
+  // and shell has no model to choose — both cases are the undefined/no-op path. The switch itself
+  // lands in scrollback as the ordinary `Switched to …` line, so the model change is never silent.
+  const applyModeModel = (next: Mode): void => {
+    const s = sessionRef.current;
+    const cfg = s?.getSnapshot().config;
+    if (!s || !cfg || modelPinnedRef.current) return;
+    const target = modeSwitchProfile(cfg, next, ownProfileRef.current);
+    if (!target || target === s.profile || !cfg.profiles[target]) return;
+    applyModelSwitch(target, undefined, false);
   };
 
   useInput((input, key) => {
@@ -1286,7 +1345,13 @@ export function App() {
       setApprovals({ approved: 0, declined: 0 });
       setSessionStartedAt(Date.now());
       setSessionAutoApprove(null);
+      // A new session un-pins the model (#616): a /model choice belonged to the conversation that
+      // just went away, and the map applies again from here. `own` is what resetConversation just
+      // put the session on, so agent mode's own model — if it has one — can land on top of it.
+      modelPinnedRef.current = false;
+      ownProfileRef.current = 'default';
       setMode('agent');
+      applyModeModel('agent');
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1413,7 +1478,7 @@ export function App() {
       setStatus('busy');
       setMessages(prev => [...prev, echo, { role: 'system', content: `Re-indexing ${newCwd}…` }]);
       try {
-        const newBundle = await bootstrap(newCwd, config.repoMapBudget);
+        const newBundle = await bootstrap(newCwd, sessionRef.current?.bundle.repoMapBudget);
         sessionRef.current?.updateBundle(() => newBundle);
         setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
       } catch (e) {
@@ -1530,8 +1595,8 @@ export function App() {
           '  /implement         execute the plan above (from plan mode: pick the mode to run it in)',
           '  /compact           compact older context now (compaction note, then a fold)',
           '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
-          '  /anon              show/toggle anonymized display (on|off)',
-          '  /unattended        show/toggle unattended: decline instead of prompting (on|off)',
+          '  /anon              show/toggle anonymized display (on|off; bare command opens the picker)',
+          '  /unattended        show/toggle unattended: decline instead of prompting (on|off; bare command opens the picker)',
           '  /cwd               show working directory',
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
@@ -1611,34 +1676,44 @@ export function App() {
           response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
           break;
         }
-        // Session toggle grants 'safe' behavior; env can force 'safe' or 'bypass'; unset is 'safe'.
-        const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
-        const source = envOn
-          ? `REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`
-          : sessionAutoApprove !== null
-            ? 'session toggle'
-            : config?.autoApproveExplicit
-              ? 'REIKA_AUTO_APPROVE=off (env)'
-              : 'default (REIKA_AUTO_APPROVE unset)';
+        if (!envOn) {
+          // Bare /approvals (#625): the dialog replaces the status line below — a user typing the
+          // command without on/off is reaching for the toggle, not for a status page. On/off apply
+          // like the explicit forms; cancel closes and changes nothing (the command echo above is
+          // the only record, like a dismissed /model picker).
+          const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
+          const choice = await askToggle(
+            'Approvals',
+            `session auto-approve: ${effectiveMode} — toggle on or off?`,
+            effectiveMode === 'safe',
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          const wantOn = choice === TOGGLE_ON;
+          setSessionAutoApprove(wantOn);
+          response = `Session auto-approve: ${wantOn ? 'on' : 'off'}`;
+          break;
+        }
+        // Env-forced sessions keep the status line: the toggle is shadowed there, so there is
+        // nothing for a dialog to pick.
+        const effectiveMode = config?.autoApprove ?? 'safe';
         const desc =
           effectiveMode === 'bypass'
             ? 'bypass — everything runs without confirmation, including dangerous commands'
-            : effectiveMode === 'safe'
-              ? 'safe — ordinary actions auto-run; dangerous commands still prompt'
-              : 'off — every action asks first';
+            : 'safe — ordinary actions auto-run; dangerous commands still prompt';
         response = [
           `auto-approve: ${effectiveMode}`,
           `  ${desc}`,
-          `  source: ${source}`,
+          `  source: REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`,
           ...(unattended
             ? [
                 '  unattended: on — anything that would prompt is declined instead (/unattended off)',
               ]
             : []),
           '',
-          envOn
-            ? 'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed'
-            : 'toggle with /approvals on or /approvals off',
+          'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed',
         ].join('\n');
         break;
       }
@@ -1648,8 +1723,26 @@ export function App() {
           response = `Unknown argument: ${arg}. Use /unattended on or /unattended off.`;
           break;
         }
-        const next = arg === '' ? unattended : arg === 'on';
-        if (arg !== '') setSessionUnattended(next);
+        let next: boolean;
+        if (arg === '') {
+          // Bare /unattended (#625): ask instead of the arg-less toggle it used to be — "turn it
+          // off" is a real action, and the blind flip surprised the user who typed the bare
+          // command to check. Cancel closes and changes nothing.
+          const current = unattended;
+          const choice = await askToggle(
+            'Unattended',
+            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
+            current,
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          next = choice === TOGGLE_ON;
+        } else {
+          next = arg === 'on';
+        }
+        setSessionUnattended(next);
         // ask_user is fixed at launch (the tool list is the cached prefix), so an attended-start
         // session keeps it; while unattended, its questions resolve as "no user available".
         response = next
@@ -1664,7 +1757,31 @@ export function App() {
       // costs nothing.
       case 'anon': {
         const arg = args.trim().toLowerCase();
-        const want = arg === 'on' ? true : arg === 'off' ? false : !isAnon();
+        let want: boolean;
+        if (arg === 'on') {
+          want = true;
+        } else if (arg === 'off') {
+          want = false;
+        } else if (arg) {
+          // A stray argument used to fall through to the arg-less toggle; with the dialog (#625)
+          // owning the bare form, a typo should say so like the sibling commands do.
+          response = `Unknown argument: ${arg}. Use /anon on or /anon off.`;
+          break;
+        } else {
+          // Bare /anon (#625): ask instead of the arg-less toggle. Same shape as the two toggle
+          // commands above: current state preselected, cancel closes and changes nothing.
+          const current = isAnon();
+          const choice = await askToggle(
+            'Anonymize',
+            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
+            current,
+          );
+          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+            setMessages(prev => [...prev, echo]);
+            return;
+          }
+          want = choice === TOGGLE_ON;
+        }
         if (!want) {
           clearIdentity();
           response = 'anonymize: off — names, emails and account slugs render verbatim again';
@@ -1910,9 +2027,11 @@ export function App() {
 
   // Open the confirm dialog and wait for its answer. Deferred past the current keypress dispatch:
   // Ink hands the Enter that submitted to every useInput handler, and opening synchronously would
-  // let the dialog's own handler see it and answer "send as typed" on the spot.
-  const askChoice = (spec: ConfirmSpec): Promise<number | 'abort'> => {
-    setConfirmSelected(0);
+  // let the dialog's own handler see it and answer "send as typed" on the spot. `initial` is the
+  // row that starts selected — the /implement picker's default row 0, or the current state's row
+  // for the toggle dialogs (#625), so Enter alone changes nothing there.
+  const askChoice = (spec: ConfirmSpec, initial = 0): Promise<number | 'abort'> => {
+    setConfirmSelected(Math.max(0, Math.min(initial, spec.options.length - 1)));
     return new Promise(resolve => {
       queueMicrotask(() => setConfirm({ spec, resolve }));
     });
@@ -1921,6 +2040,14 @@ export function App() {
     const choice = await askChoice(spec);
     return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
   };
+  // The toggle dialogs for /approvals, /unattended, /anon (#625): the user who typed the bare
+  // command picks on/off/cancel. `currentlyOn` preselects the row matching the state.
+  const askToggle = (
+    title: string,
+    subtitle: string,
+    currentlyOn: boolean,
+  ): Promise<number | 'abort'> =>
+    askChoice(toggleConfirmSpec({ title, subtitle }), currentlyOn ? TOGGLE_ON : TOGGLE_OFF);
 
   // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
   // a strong match opens the confirm dialog rather than injecting — the user is the classifier,

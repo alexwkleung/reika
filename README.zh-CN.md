@@ -6,11 +6,12 @@
 </p>
 
 <p align="center">
-  面向小型本地模型的编码代理 CLI，为低量化场景调优，<br>
-  专注于上下文纪律与能力对齐。
+  适用于本地与托管模型的编码代理 CLI，<br>
+  首先围绕小型本地模型设计。
 </p>
 
 <p align="center">
+  <a href="https://reikacode.com">网站</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#文档">文档</a> ·
   <a href="docs/models.md">测试过的模型</a> ·
@@ -21,15 +22,27 @@
 
 <sup>一次真实的本地运行：Qwen3.6 35B A3B（Unsloth UD-IQ2_M）经 llama.cpp，加速 3×。模型的第一次测试失败，它根据报错修好了。</sup>
 
-大多数编码代理是为主流前沿模型打造的。Reika 首先面向你自己能跑起来的模型：8B–35B，通常处于 Q2–Q4，跑在 16–32k 上下文窗口的笔记本上。目标是让这些模型变得**可用**，而不是更聪明。框架抬不高模型的上限，但可以阻止它浪费窗口、在同一个读取上反复打转，或者悄悄弄丢自己的任务。
+Reika 是一个适用于本地与托管模型的编码代理 CLI。它首先围绕小型本地模型设计（8B–35B，通常处于 Q2–Q4，16–32k 上下文窗口），因此对上下文很节制，失败时更体面，卡住时会直说。它不会让小模型变得更聪明，只是让使用小模型的体验少一些挫败：浪费的窗口更少，在同一个读取上打转更少，任务也更不容易被悄悄弄丢。
 
-8–9B 模型在简单任务上能站得住；14–35B 是小模型做代理编码的甜点区。7B 以下只适合范围明确、边界清晰的窄任务。任何 OpenAI 兼容的服务端都能用，所以需要时同一套配置可以直接放大到云端模型。
+日常使用跑在大型托管模型上，小型本地模型是测试它的地方。在小模型这一端，能期待的是更好的体验，而不是前沿模型的效果。测试中，14–35B 模型处理多文件任务最可靠，8–9B 模型能完成简单、范围明确的任务，7B 以下很少能走远。
+
+Reika 还处于 1.0 之前，命令、设置和行为在不同版本之间仍可能变化。
+
+## 测量结果
+
+框架的设计取舍是测量出来的，而不是假设的，记录也都公开。测量的是框架对小模型遇到的问题能做什么、不能做什么，而不是模型会变得多好。简短版本如下，完整的运行记录与数字见 [docs/findings.md](docs/findings.md)：
+
+- **框架自己的上下文管理，代价比模型本身更大。** 一次发生在上下文中段的改写重新预填充了 8,453 个 token —— 7.9 分钟；而同一会话里的一次追加只花 25 个 token、3.5 秒。
+- **折叠之前先向模型要它的发现。** 支撑这一点的 A/B 中，发现被丢弃的那一臂折叠了五次，反复重读已经读过的文件，始终没有作答；被问过的那一臂直接从笔记里给出了答案。
+- **小模型会照字面理解工具输出。** grep 对一个它根本无法执行的调用也回答"0 matches"，结果模型花了五轮去改写一个本来正确的模式；一个被归咎于 Q2 下 35B 模型的循环，其实是 Reika 把模型自己的工具调用标记又喂了回去。
+- **提示词措辞是最弱的杠杆。** 在 Q2 下面对含糊任务，模型收敛与打转大约各占一半，框架改变不了这个比例 —— 只能改变失败那一半的代价。
+- **循环检测器的区分度很干净。** 健康的推理轮次在跨轮相似度上测得 0.2–0.3；锁死的循环停在 1.00，而一个跑了 38 轮的有效轮次从未触发检测。
 
 ## 亮点
 
 - **上下文纪律。** 旧的工具输出折叠成一行摘要；在两次压缩事件之间请求保持只追加，让引擎的 prompt 缓存得以存活；窗口填满时，模型先写下自己的发现笔记，之后较早的轮次才折叠成回顾。
 - **循环与打转中断。** 重复读取、反复重推的推理、以及失控的思考块都会被检测到，并用一套逐级升级的手段回应（轻推、固定台账、收回工具、坦诚终止），而不是让它打转半小时。
-- **弱模型需要的护栏。** 盲改会被退回，要求先读；TypeScript 编辑会对照编辑前的基线做类型检查；写下的计划按框架观察到的事实逐步追踪，而不是按模型自己声称的进度。
+- **对模型行为的检查。** 盲改会被退回，要求先读；TypeScript 编辑会对照编辑前的基线做类型检查；写下的计划按框架观察到的事实逐步追踪，而不是按模型自己声称的进度。
 - **计划 → 实现。** 只读的计划模式最终产出一份带编号、落到具体文件的计划 —— 你可以在执行之前用任意多轮来打磨它 —— 而 vibe 模式会在每次提示时把计划和实现串起来。
 - **默认安全。** 普通编辑直接执行，危险命令仍会询问；在 macOS 上，由模型选择的 shell 命令运行在内核沙箱里（写入限制在项目内，网络被禁止）。
 - **可扩展。** Stdio MCP 服务器可以添加工具，每个工具同时也会变成一个斜杠命令。Markdown 技能同样会变成斜杠命令；`/issue` 和 `/review` 随 Reika 一起发布，只要有 `gh` 和 GitHub 远程仓库就会出现。
@@ -45,25 +58,32 @@
 
 ## 快速开始
 
-先启动一个模型。下面以 llama.cpp 为例：
+用以下任一方式安装（npm 和 pnpm 需要 Node ≥ 22；Homebrew 会自动装好 Node）：
+
+```sh
+npm i -g @alexwkleung/reika
+pnpm add -g @alexwkleung/reika
+brew install alexwkleung/tap/reika
+```
+
+启动一个模型。下面以 llama.cpp 为例：
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-然后安装 Reika 并把它指向该服务器：
+然后把 Reika 指向它：
 
 ```sh
-npm install
-npm run install:global       # 构建并安装 `reika` 可执行文件
-
 export REIKA_MODEL=model  # 或写进 ~/.config/reika/.env
 cd your-project && reika
 ```
 
-`REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取；对于不上报的服务器（部分推理引擎、多数云端 API），请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
+改用托管 API？跳过启动服务器这一步，把 `REIKA_BASE_URL`、`REIKA_API_KEY` 和 `REIKA_MODEL` 设为服务商的端点、你的密钥和它的模型 ID；详见 [安装与首次运行](docs/getting-started.md#hosted)。
 
-想直接从检出目录运行而不安装：`cp .env.example .env`，编辑它，然后 `npm run dev`。`npm run uninstall:global` 会移除全局可执行文件。
+`REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取，托管端点则从 models.dev 目录中读取；两者都没有时，请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
+
+想改从检出目录运行：`git clone https://github.com/alexwkleung/reika.git && cd reika`，然后 `pnpm install`（npm 用户先 `npm i -g pnpm`）并用 `pnpm run install:global` 构建安装 `reika` 可执行文件；或者 `cp .env.example .env`、编辑它，再 `pnpm run dev` 直接运行而不安装。`pnpm run uninstall:global` 会移除全局可执行文件。
 
 ## 常用配置
 
@@ -103,6 +123,8 @@ cd your-project && reika
 
 ## 文档
 
+这些页面也在网站 [reikacode.com](https://reikacode.com) 上（英文）。
+
 | 文档                                   | 内容                                                             |
 | -------------------------------------- | ---------------------------------------------------------------- |
 | [配置](docs/configuration.md)          | 每一个 `.env` 键、实验性开关、具名 profile、上次会话状态         |
@@ -110,14 +132,19 @@ cd your-project && reika
 | [工具](docs/tools.md)                  | 模型可用的工具、审批提示、网络搜索设置、MCP 服务器、`.gitignore` |
 | [指令与技能](docs/skills.md)           | `AGENTS.md`、作为斜杠命令的技能、自然语言路由、粘贴的链接        |
 | [测试过的模型](docs/models.md)         | Reika 实际跑过的本地量化版本和 API                               |
+| [测量结果](docs/findings.md)           | 实测记录：什么坏了、什么撑住了，以及每个数字是怎么得到的         |
 | [平台](docs/platforms.md)              | 运行要求、在弱机器上运行、Linux 和 Windows 上的差异              |
 | [架构与注意事项](docs/architecture.md) | 框架如何工作，以及已知限制                                       |
 | [贡献](CONTRIBUTING.md)                | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
+
+## 灵感来自
+
+Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
 
 ## 许可
 
 Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
-## 灵感来自
+## 支持我们的工作
 
-Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
+如果 Reika 对你有用，可以考虑通过 [GitHub Sponsors](https://github.com/sponsors/alexwkleung)、[Ko-fi](https://ko-fi.com/alexwkleung) 或 [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung) 支持这个项目。

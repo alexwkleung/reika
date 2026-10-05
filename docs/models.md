@@ -2,10 +2,16 @@
 
 [← README](../README.md)
 
-Below are models that were tested in Reika. Local and API are used for testing, both in daily workflows and evaluations. Local is emphasized for usability and behavioral purposes at the absolute scale which is what Reika optimizes for in the majority.
+Models Reika has been run against, in daily use and in evaluations. Local models are what Reika was
+designed around, and where the behavior work is tested. Day-to-day use is mostly on API models,
+which also serve as the comparison for what a local quant can and cannot hold.
+
+Quantization is the one in parentheses. Where a note names modes, that is where the model was used
+rather than the only thing it can do.
 
 ## Local
 
+- Ling 3.0 Tiny (Q4_K_M)
 - Qwen3.8 Flash Next (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
 - DeepSeek V4 Flash 0731 (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
 - Muse Glimmer 30B (IQ3_XXS)
@@ -33,6 +39,8 @@ Below are models that were tested in Reika. Local and API are used for testing, 
 - Kimi K3 (MoonshotAI)
 - Kimi K2.6 (MoonshotAI)
 - Kimi K2.5 (MoonshotAI, OpenRouter)
-- DeepSeek V4 Flash (OpenRouter)
+- DeepSeek V4 Flash (OpenRouter, OpenCode Go)
 - Laguna XS 2.1 (OpenRouter)
 - Laguna M.1 (OpenRouter)
+- StepFun 3.5 Flash (OpenRouter, NVIDIA NIM)
+- StepFun 3.7 Flash (NVIDIA NIM)

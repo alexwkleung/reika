@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  agentConstructor,
   DEFAULT_REQUEST_TIMEOUT_MS,
   isStreamTimeout,
   requestTimeoutMs,
@@ -60,6 +61,64 @@ describe('streamDispatcher', () => {
     const msg = streamTimeoutMessage();
     expect(msg).toContain('REIKA_REQUEST_TIMEOUT_MS');
     expect(msg).toContain('45s');
+  });
+});
+
+// The symbols are process-global, so each case stashes and restores both slots rather than
+// trusting whichever Node runs the suite to exercise the layout under test.
+describe('agentConstructor', () => {
+  const V2 = Symbol.for('undici.globalDispatcher.2');
+  const V1 = Symbol.for('undici.globalDispatcher.1');
+  const g = globalThis as unknown as Record<symbol, unknown>;
+  // An instance whose constructor carries `name`, which is all the resolver reads.
+  function named(name: string): object {
+    const ctor = { [name]: class {} }[name];
+    return new ctor();
+  }
+
+  // undici defines both slots non-configurable (writable, not deletable), so an absent slot is
+  // written as undefined, which is what the resolver's optional chaining reads it as anyway.
+  async function withSlots(
+    slots: { v2?: object; v1?: object },
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const saved = [g[V2], g[V1]];
+    g[V2] = slots.v2;
+    g[V1] = slots.v1;
+    try {
+      await run();
+    } finally {
+      g[V2] = saved[0];
+      g[V1] = saved[1];
+    }
+  }
+
+  it('takes the Agent off .2 on undici 8, past the .1 compatibility wrapper', async () => {
+    const agent = named('Agent');
+    await withSlots({ v2: agent, v1: named('Dispatcher1Wrapper') }, async () => {
+      expect(await agentConstructor()).toBe(agent.constructor);
+    });
+  });
+
+  it('takes the Agent off .1 on a pre-8 undici (Node 22/24)', async () => {
+    const agent = named('Agent');
+    await withSlots({ v1: agent }, async () => {
+      expect(await agentConstructor()).toBe(agent.constructor);
+    });
+  });
+
+  // A pre-8 `setGlobalDispatcher(new ProxyAgent(...))` writes .1 only; cloning .2's Agent would
+  // drop the user's proxy, so this falls open like any non-Agent global.
+  it('falls open when .1 was replaced by something other than the stock pair', async () => {
+    await withSlots({ v2: named('Agent'), v1: named('ProxyAgent') }, async () => {
+      expect(await agentConstructor()).toBeNull();
+    });
+  });
+
+  it('falls open when the global dispatcher is not a plain Agent', async () => {
+    await withSlots({ v2: named('MockAgent') }, async () => {
+      expect(await agentConstructor()).toBeNull();
+    });
   });
 });
 

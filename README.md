@@ -6,11 +6,12 @@
 </p>
 
 <p align="center">
-  A coding agent CLI for small local models, tuned for low quantization,<br>
-  with a focus on context discipline and capability alignment.
+  A coding agent CLI for local and hosted models,<br>
+  designed around small local models first.
 </p>
 
 <p align="center">
+  <a href="https://reikacode.com">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#documentation">Docs</a> ·
   <a href="docs/models.md">Tested models</a> ·
@@ -21,15 +22,27 @@
 
 <sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 
-Most coding agents are built for frontier models. Reika is built first for the models you can run yourself: 8B–35B, often at Q2–Q4, on a laptop with a 16–32k context window. The goal is to make them **usable**, not more intelligent. The harness can't raise a model's ceiling, but it can stop it from wasting its window, looping on the same read, or quietly losing its task.
+Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
 
-8–9B models hold their own on simple tasks; 14–35B is the sweet spot for small-model agentic coding. Below 7B works only for narrow, well-scoped tasks. Anything OpenAI-compatible works, so the same setup scales up to cloud models when you need them.
+Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and below 7B rarely got far.
+
+Reika is pre-1.0, so commands, settings and behavior can still change between releases.
+
+## What the measurements say
+
+The harness's design choices were measured rather than assumed, and the record is published. It measures what a harness can and can't do about the problems small models run into, not how good the models become. The short version, with the runs and the numbers behind it in [docs/findings.md](docs/findings.md):
+
+- **The harness's own context management cost more than the model did.** One mid-context rewrite re-processed 8,453 tokens of prompt — 7.9 minutes of prefill — where an append in the same session cost 25 tokens and 3.5 seconds.
+- **Ask the model for its findings before a fold drops them.** In the A/B behind this, the arm whose findings were dropped folded five times, re-read files it had already read, and never answered; the arm that was asked answered from the digest.
+- **A small model takes tool output literally.** A grep that said "0 matches" for a call it couldn't serve sent a model rewording a correct pattern for five rounds; a loop blamed on a 35B at Q2 was reika feeding the model its own tool-call markup back.
+- **Prompt wording is the weakest lever.** On a vague task at Q2 a model converges or spirals about 50/50, and the harness cannot move that rate — only what the failing half costs.
+- **The loop detectors separate cleanly.** Healthy reasoning rounds measure 0.2–0.3 on cross-round similarity; locked loops sit at 1.00, and a 38-round productive turn never fired the detector.
 
 ## Highlights
 
 - **Context discipline.** Old tool output collapses to one-line summaries, requests stay append-only between shrink events so the engine's prompt cache survives, and when the window fills the model writes its own findings note before older turns fold into a recap.
 - **Loop and spiral breaking.** Repeated reads, re-derived reasoning, and runaway thinking blocks are detected and answered with an escalating ladder (nudge, pinned ledger, tool withdrawal, honest stop) rather than a 30-minute spiral.
-- **Guard rails a weak model needs.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
+- **Checks on what the model does.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
 - **Plan → implement.** A read-only plan mode that ends in a numbered, file-specific plan — refine it over as many turns as you like before executing — and a vibe mode that chains plan and implementation on every prompt.
 - **Safe by default.** Ordinary edits run, dangerous commands still prompt, and on macOS model-chosen shell commands run under a kernel sandbox (writes confined to the project, network denied).
 - **Extensible.** Stdio MCP servers add tools, and each tool also becomes a slash command. Markdown skills become slash commands too; `/issue` and `/review` ship with Reika and appear wherever `gh` and a GitHub remote are.
@@ -45,38 +58,45 @@ Most coding agents are built for frontier models. Reika is built first for the m
 
 ## Quick start
 
+Install it with any of these (npm and pnpm need Node ≥ 22; Homebrew pulls Node in):
+
+```sh
+npm i -g @alexwkleung/reika
+pnpm add -g @alexwkleung/reika
+brew install alexwkleung/tap/reika
+```
+
 Serve a model. Example below with llama.cpp:
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 ```
 
-Then install and point Reika at it:
+Then point Reika at it:
 
 ```sh
-npm install
-npm run install:global       # builds and installs the `reika` binary
-
 export REIKA_MODEL=model  # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
-`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one; set `REIKA_CONTEXT_WINDOW` for servers that don't (some inference engines, most cloud APIs). Reika sends no sampling parameters of its own, so your server's flags are what apply.
+Using a hosted API instead? Skip the server and set `REIKA_BASE_URL`, `REIKA_API_KEY` and `REIKA_MODEL` to the provider's endpoint, your key and its model id; [Install and first run](docs/getting-started.md#hosted) has the details.
 
-To run from a checkout without installing: `cp .env.example .env`, edit it, then `npm run dev`. `npm run uninstall:global` removes the global binary.
+`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one, and for hosted endpoints from the models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it. Reika sends no sampling parameters of its own, so your server's flags are what apply.
+
+To run from a checkout instead — `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm`) and `pnpm run install:global` to build and install the `reika` binary, or `cp .env.example .env` and `pnpm run dev` to run without installing. `pnpm run uninstall:global` removes the global binary.
 
 ## Common configuration
 
 Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that order of precedence). The full list, experimental flags, and multi-model profiles are in [docs/configuration.md](docs/configuration.md).
 
-| Key                    | Default                    | What                                                                        |
-| ---------------------- | -------------------------- | --------------------------------------------------------------------------- |
-| `REIKA_MODEL`          | _required_                 | Model name, or a comma-separated list served by the same endpoint           |
-| `REIKA_BASE_URL`       | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                  |
-| `REIKA_API_KEY`        | `no-key`                   | API key (any non-empty value for local servers)                             |
-| `REIKA_CONTEXT_WINDOW` | _probed from the server_   | Context window in tokens; drives compaction and the context gauge           |
-| `REIKA_MIN_GEN_TOKENS` | _learned_ (from `2048`)    | Room reserved for the reply; learned from the model's rounds, set it to pin |
-| `REIKA_AUTO_APPROVE`   | `safe`                     | `off` confirms every edit and command; `bypass` confirms nothing            |
+| Key                    | Default                    | What                                                                                  |
+| ---------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| `REIKA_MODEL`          | _required_                 | Model name, or a comma-separated list served by the same endpoint                     |
+| `REIKA_BASE_URL`       | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                            |
+| `REIKA_API_KEY`        | `no-key`                   | API key (any non-empty value for local servers)                                       |
+| `REIKA_CONTEXT_WINDOW` | _probed from the server_   | Context window in tokens; drives compaction, the context gauge, and the repo map size |
+| `REIKA_MIN_GEN_TOKENS` | _learned_ (from `2048`)    | Room reserved for the reply; learned from the model's rounds, set it to pin           |
+| `REIKA_AUTO_APPROVE`   | `safe`                     | `off` confirms every edit and command; `bypass` confirms nothing                      |
 
 ## Modes
 
@@ -103,21 +123,29 @@ Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY
 
 ## Documentation
 
+The same pages are on the website, [reikacode.com](https://reikacode.com).
+
 | Doc                                              | Covers                                                                                    |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| [Install and first run](docs/getting-started.md) | Requirements, installing, serving a model, and the first run                              |
 | [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
 | [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
 | [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`          |
 | [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
 | [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
+| [Findings](docs/findings.md)                     | The measured record: what broke, what held, and how each number was obtained              |
 | [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
+
+## Inspired by
+
+Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-## Inspired by
+## Supporting our work
 
-Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
+If Reika is useful to you, consider supporting it via [GitHub Sponsors](https://github.com/sponsors/alexwkleung), [Ko-fi](https://ko-fi.com/alexwkleung), or [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung). See [Support](docs/support.md) for what it funds and other ways to help.

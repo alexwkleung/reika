@@ -111,9 +111,10 @@ describe('sandboxProfile', () => {
   });
 });
 
-// The network half is per command: `gh`/`git` reads keep it (the shipped skills open with them and
-// their mutating forms are flagged → prompted → unsandboxed anyway), everything else is denied past
-// loopback. An allowlist — a wrong `false` costs a footer, a wrong `true` costs the guarantee.
+// The network half is per command: `gh`/`git`/`hf` reads keep it (the shipped skills open with the
+// first two and the third downloads models the user names, and their mutating forms are flagged →
+// prompted → unsandboxed anyway), everything else is denied past loopback. An allowlist — a wrong
+// `false` costs a footer, a wrong `true` costs the guarantee.
 describe('networkAllowedFor', () => {
   it('allows the unflagged gh/git reads the shipped skills open with', () => {
     expect(networkAllowedFor('gh pr view 436 --json title,body')).toBe(true);
@@ -121,6 +122,28 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git fetch origin && git log --oneline main..origin/main')).toBe(true);
     expect(networkAllowedFor('git ls-remote origin')).toBe(true);
     expect(networkAllowedFor('glab mr view 12')).toBe(true);
+  });
+
+  // The user's own words: "download this model" / "what's in that repo". `hf` is in NET_VERBS for
+  // these, and _danger.ts holds it to HF_READ_VERBS so the mutating verbs cannot arrive unflagged —
+  // which is what makes the allow safe to make (see the `hf` note on NET_VERBS).
+  it('allows the unflagged hf reads a download or an inspection is made of', () => {
+    expect(networkAllowedFor('hf download meta-llama/Llama-3.2-1B-Instruct')).toBe(true);
+    expect(networkAllowedFor('hf download gpt2 --local-dir ./model 2>&1 | tail -20')).toBe(true);
+    expect(networkAllowedFor('hf models info meta-llama/Llama-3.2-1B-Instruct')).toBe(true);
+    expect(networkAllowedFor('hf datasets info HuggingFaceFW/fineweb')).toBe(true);
+    expect(networkAllowedFor('hf spaces info user/space')).toBe(true);
+  });
+
+  // `HF_HUB_ENABLE_HF_TRANSFER=1 hf download …` is the documented speedup, so the prefix must not
+  // cost the allow. A credential assigned inline does not keep it, the line `GH_TOKEN` sits on —
+  // authentication does not need it (`hf` reads the saved token either way), and a token that is not
+  // the saved one goes in by flag, `hf download --token …`, which keeps the allow.
+  it('keeps the allow through a harmless hf env prefix, not a credential', () => {
+    expect(networkAllowedFor('HF_HUB_ENABLE_HF_TRANSFER=1 hf download gpt2')).toBe(true);
+    expect(networkAllowedFor('HF_HUB_DISABLE_PROGRESS_BARS=1 hf models ls --limit 10')).toBe(true);
+    expect(networkAllowedFor('HF_TOKEN=hf_xxx hf download gpt2')).toBe(false);
+    expect(networkAllowedFor('hf download --token hf_xxx gated/repo')).toBe(true);
   });
 
   it('keeps the allow through the inspection pipeline a model pages with', () => {
@@ -143,6 +166,47 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('echo x | xargs -I {} curl {}')).toBe(false);
   });
 
+  // #621: the reads the shipped skills open with, in the clothes a model actually writes them in.
+  // Sighted in this repo's session history — `timeout 120 gh pr view 620 --json …`, the wrapper a
+  // model adds when GitHub is slow, and `sleep 5 && gh pr view 609 --json mergeable`, the poll that
+  // wants the state GitHub has not finished computing — each ran with the network denied while the
+  // bare read went through: the same read, blocked by its wrapper.
+  it('reads the verb through a `timeout` carrier', () => {
+    expect(networkAllowedFor('timeout 120 gh pr view 620 --json title,state')).toBe(true);
+    expect(
+      networkAllowedFor('cd /repo && timeout 120 gh pr view 620 --json body 2>&1 | tail -12'),
+    ).toBe(true);
+    expect(networkAllowedFor('timeout -k 5 30 gh issue view 1 --json body')).toBe(true);
+    expect(networkAllowedFor('timeout --signal=KILL 30 git ls-remote origin')).toBe(true);
+    // The carrier is not a way past the allow: what it bounds is still what gets read.
+    expect(networkAllowedFor('timeout 30 curl https://x.example')).toBe(false);
+    expect(networkAllowedFor("timeout 30 node -e 'fetch(1)'")).toBe(false);
+    expect(networkDecision('timeout 30 npm test && gh pr view 1')).toEqual({
+      allowed: false,
+      blockedBy: 'npm',
+    });
+    // A carrier with nothing after it runs nothing, and is not a read.
+    expect(networkAllowedFor('timeout 5')).toBe(false);
+    expect(networkAllowedFor('timeout -k 5')).toBe(false);
+  });
+
+  it('keeps the allow through the wait a poll needs and the loop a multi-read needs', () => {
+    expect(networkAllowedFor('sleep 5 && gh pr view 609 --json mergeable,mergeStateStatus')).toBe(
+      true,
+    );
+    expect(networkAllowedFor('sleep 0.5; gh pr view 609 --json state')).toBe(true);
+    // Still an allowlist: `sleep` alone is not a read, and it does not lend one to a sibling.
+    expect(networkAllowedFor('sleep 5')).toBe(false);
+    expect(networkAllowedFor('sleep 5 && npm test')).toBe(false);
+    // The loop's head and `do`/`done` are grammar; the body's commands are each read on their own.
+    expect(networkAllowedFor('for n in 610 608; do gh pr view $n --json title; done')).toBe(true);
+    expect(networkAllowedFor('for n in 610 608; do\ngh pr view $n --json title\ndone')).toBe(true);
+    expect(networkAllowedFor('for f in *; do rm -f $f; done')).toBe(false);
+    expect(networkAllowedFor('for f in *; do curl https://x.example/$f; done')).toBe(false);
+    // `while`'s condition is a command, and an unbounded poll is what the idle bound exists to kill.
+    expect(networkAllowedFor('while true; do sleep 5; gh pr view 1; done')).toBe(false);
+  });
+
   it('denies a pipeline with an unrecognized verb in it', () => {
     expect(
       networkAllowedFor('gh pr diff 436 | python3 -c "import sys; print(sys.stdin.read())"'),
@@ -162,6 +226,50 @@ describe('networkAllowedFor', () => {
   it('denies when a substitution could smuggle a second command', () => {
     expect(networkAllowedFor('gh pr view $(cat n.txt)')).toBe(false);
     expect(networkAllowedFor('git log `curl -s x`')).toBe(false);
+    // Double quotes still execute a substitution, so this one is not data.
+    expect(networkAllowedFor('gh pr view 1 --json body | sed -n "$(cat n)"')).toBe(false);
+    expect(networkAllowedFor("gh pr view $(cat n.txt) | grep -c '```'")).toBe(false);
+  });
+
+  // Sighted: `gh pr view 609 --json body --jq .body | grep -c '```'` — reading a PR body for a
+  // fenced block — was denied the network and blamed on `grep`. Inside single quotes the backtick
+  // is a character the model is searching for, not a command; the same rule plan mode uses.
+  it('keeps the allow when the substitution character is data', () => {
+    expect(networkAllowedFor("gh pr view 609 --json body --jq .body | grep -c '```'")).toBe(true);
+    expect(networkAllowedFor("gh pr view 1 --json body | grep -n '$(dirname'")).toBe(true);
+    expect(networkAllowedFor("gh issue view 621 --json body | grep -c '`'")).toBe(true);
+  });
+
+  // A heredoc body is cut before the verb read (its prose runs nothing), but an UNQUOTED delimiter's
+  // body is expanded by the shell when the line runs, so a `$(…)` in it executes on whatever network
+  // the line's `git` verb was granted. The two shapes a model writes — `gh issue comment -F -` and
+  // `git commit -F -` — are flagged, so they never reach this allow; `git apply -`/`--stdin` reads are
+  // not, and those are what this pins.
+  it('sees a substitution in a heredoc body the shell will expand', () => {
+    expect(networkAllowedFor('git apply - <<EOF\n$(python3 -c "import urllib.request")\nEOF')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git hash-object --stdin <<EOF\n`id`\nEOF')).toBe(false);
+    expect(networkAllowedFor('git fetch && cat <<EOF\n$(id)\nEOF')).toBe(false);
+    // A body is not quote-parsed, so an apostrophe in it must not mask a real substitution.
+    expect(networkAllowedFor("git stripspace <<EOF\nit's $(id) don't\nEOF")).toBe(false);
+  });
+
+  it('keeps the allow for a body that is literal, or carries nothing that runs', () => {
+    // The `#163` case: a QUOTED delimiter pastes its body, expansion and all.
+    expect(networkAllowedFor("git stripspace <<'EOF'\n$(id)\nEOF")).toBe(true);
+    expect(
+      networkAllowedFor(
+        "gh issue comment 1 --body-file - <<'EOF'\nLooks good.\n\nOne question.\nEOF",
+      ),
+    ).toBe(true);
+    // Unquoted, but nothing in the body runs: prose must not deny the line (that is why the body is
+    // cut for the verb read in the first place).
+    expect(networkAllowedFor('git fetch && cat <<EOF\nplain prose, no substitution\nEOF')).toBe(
+      true,
+    );
+    expect(networkAllowedFor('git apply - <<EOF\n$(id) is \\$(not-expanded)\nEOF')).toBe(false);
+    expect(networkAllowedFor('git apply - <<EOF\n\\$(id)\nEOF')).toBe(true);
   });
 
   it('is not fooled by a net verb in an argument or a quoted separator', () => {

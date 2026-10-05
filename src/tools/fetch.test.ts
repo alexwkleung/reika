@@ -151,7 +151,7 @@ describe('extractUrl — harness-callable extraction', () => {
       text: async () => '',
     } as unknown as Response);
     const result = await extractUrl('https://example.com/missing');
-    expect(result).toEqual({ ok: false, reached: true, error: '404 Not Found' });
+    expect(result).toEqual({ ok: false, reached: true, error: '404 Not Found', status: 404 });
   });
 
   it('returns {ok:false} with the error message on a network failure', async () => {
@@ -336,7 +336,7 @@ describe('extractUrl — redirect chain', () => {
       text: async () => '',
     } as unknown as Response);
     const result = await extractUrl('https://example.com/x');
-    expect(result).toEqual({ ok: false, reached: true, error: '302 Found' });
+    expect(result).toEqual({ ok: false, reached: true, error: '302 Found', status: 302 });
   });
 });
 

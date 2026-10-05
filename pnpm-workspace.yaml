@@ -1,0 +1,23 @@
+# pnpm workspace and settings.
+#
+# Since pnpm 11 settings live here, not in package.json or .npmrc — .npmrc is
+# read for auth and registry settings only.
+#
+# `docs/` is the site project. The pattern is the directory and not `docs/**`,
+# so `docs/demo/project` (a fixture the demo tape builds against) stays a
+# standalone project of its own.
+packages:
+  - docs
+
+# pnpm 10+ will not run a dependency's lifecycle scripts unless it is listed
+# here. esbuild's postinstall is the only one in this tree and it is an
+# optimization rather than a requirement (esbuild resolves its platform binary
+# at runtime, and the `bin/esbuild` hard link it makes is skipped on failure) —
+# approving it explicitly keeps the gate meaningful for the next dependency that
+# arrives with a postinstall.
+allowBuilds:
+  esbuild: true
+
+# The default since pnpm 11, spelled out: an unreviewed build script fails the
+# install instead of warning, so adding a dependency with one is a decision.
+strictDepBuilds: true
