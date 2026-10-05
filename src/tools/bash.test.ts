@@ -56,14 +56,16 @@ describe('execStream — timeout', () => {
     expect(result.payload).toContain('Do not re-run it as is');
   });
 
+  // Runs ~1.5s against a 1s bound with 0.1s gaps. A 3x margin (0.05s gaps, 0.15s bound) flaked on a
+  // loaded CI runner, where shell startup alone outlasted the bound.
   it('lets a command that keeps writing run past the idle bound', async () => {
-    const result = await execStream('for i in 1 2 3 4 5; do echo $i; sleep 0.05; done', {
+    const result = await execStream('for i in $(seq 1 15); do echo $i; sleep 0.1; done', {
       cwd,
       bashTimeoutMs: 10_000,
-      bashIdleMs: 150,
+      bashIdleMs: 1000,
     });
     expect(result.summary).toMatch(/^Ran: /);
-    expect(result.payload).toContain('5');
+    expect(result.payload).toContain('15');
   });
 
   it('disables a bound set to zero', async () => {
