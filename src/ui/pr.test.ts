@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isFresh, parsePrView, currentBranch, resolvePr, resetPrCache } from './pr.js';
 
@@ -45,9 +49,43 @@ describe('isFresh', () => {
   });
 });
 
+// A repo of its own rather than this checkout: CI checks a PR out at a detached HEAD.
+function makeRepo(branch: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'reika-pr-'));
+  execFileSync('git', ['init', '-q', '-b', branch], { cwd: dir });
+  return dir;
+}
+
 describe('currentBranch', () => {
   it('reads the checked-out branch of a real repo', async () => {
-    expect(await currentBranch(process.cwd())).toBeTruthy();
+    const dir = makeRepo('feature/x');
+    try {
+      expect(await currentBranch(dir)).toBe('feature/x');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null at a detached HEAD', async () => {
+    const dir = makeRepo('main');
+    try {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: dir });
+      git(
+        '-c',
+        'user.name=Mona Lisa',
+        '-c',
+        'user.email=octocat@example.com',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'x',
+      );
+      git('checkout', '-q', '--detach');
+      expect(await currentBranch(dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns null outside a git repo instead of throwing', async () => {

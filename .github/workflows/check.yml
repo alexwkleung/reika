@@ -1,0 +1,45 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    # Skipped while the repo is private, so it costs no Actions minutes until release.
+    if: ${{ !github.event.repository.private }}
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: [22, 24, 26]
+        include:
+          # The sandbox tests run only on macOS; Homebrew's node is the newest major.
+          - os: macos-latest
+            node: 26
+          - os: ubuntu-latest
+            node: 24
+            docs: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      # Packs, installs into a throwaway prefix, runs the binary and imports every module.
+      - run: pnpm run release:check
+      - if: ${{ matrix.docs }}
+        run: pnpm run docs:build

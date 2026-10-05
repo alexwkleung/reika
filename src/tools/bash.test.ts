@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -666,12 +666,19 @@ describe('bashTool — sandbox composition', () => {
   // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param
   // is what the profile's `(subpath (param "GITDIR"))` line binds, and it is the repo's `.git` only
   // when that lies outside cwd — at the root it is WORKDIR itself, so nothing extra is allowed.
-  it.skipIf(!sandboxWorks)('binds GITDIR to the repo when cwd is below it', () => {
-    const repo = realpathSync(process.cwd());
-    const below = sandboxPlan(join(repo, 'src'), { network: false });
-    expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
-    const root = sandboxPlan(repo, { network: false });
-    expect('args' in root && root.args).toContain(`GITDIR=${repo}`);
+  // A repo of its own: in a worktree checkout of reika, `.git` is a file and the git dir lives elsewhere.
+  it.skipIf(!sandboxWorks)('binds GITDIR to the repo when cwd is below it', async () => {
+    const repo = realpathSync(await mkdtemp(join(tmpdir(), 'bash-gitdir-')));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      await mkdir(join(repo, 'src'));
+      const below = sandboxPlan(join(repo, 'src'), { network: false });
+      expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
+      const root = sandboxPlan(repo, { network: false });
+      expect('args' in root && root.args).toContain(`GITDIR=${repo}`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 
   // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
