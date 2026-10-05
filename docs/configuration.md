@@ -245,8 +245,8 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_CONTINUE_TAIL_CHARS` | `6000`  | How much of the cut-off block comes back (default `6000` ≈ 1500 tokens).                                                                                                                                                                                                                                                                                                                           |
 | `REIKA_CONTINUE_MAX`        | `3`     | Consecutive continuations allowed without progress, where progress is a tool call or a committed answer (default `3`).                                                                                                                                                                                                                                                                             |
 | `REIKA_DROPPED_LEDGER`      | `1`     | Tells the model, once per request, that some tool results above show only a summary line because their output was dropped to make room — a context limit, not a command that failed, and not a result it already handled.                                                                                                                                                                          |
-| `REIKA_DEDUP_PAYLOADS`      | `1`     | Replaces a tool result whose serialized bytes repeat an earlier one — an aged summary trail like `Read A / Read A / Read A`, or two identical reads in one round — with a short stub pointing back at the first copy (`toolcall.ts`).                                                                                                                                                              |
-| `REIKA_PLAN_HANDOFF`        | `1`     | Folds the plan-mode exploration transcript into a single digest at the plan→agent boundary (`distillPlanHandoff`), keeping the original request and the written plan verbatim — so on a small window the raw read payloads and reasoning from planning don't crowd out the agent's own loop and let the plan decay.                                                                                |
+| `REIKA_DEDUP_PAYLOADS`      | `1`     | Replaces a tool result whose serialized bytes repeat an earlier one — an aged summary trail like `Read A / Read A / Read A`, or two identical reads in one round — with a short stub pointing back at the first copy.                                                                                                                                                                              |
+| `REIKA_PLAN_HANDOFF`        | `1`     | Folds the plan-mode exploration transcript into a single digest at the plan→agent boundary, keeping the original request and the written plan verbatim — so on a small window the raw read payloads and reasoning from planning don't crowd out the agent's own loop and let the plan decay.                                                                                                       |
 | `REIKA_PLAN_BASH`           | `1`     | Registers a **read-only** `bash` in plan (and vibe) mode: commands a strict allowlist classifier can prove read-only (`grep`/`cat`/`head`/`find`/`wc`/… and pipelines of them) run; anything that could write or run something else — redirection, command substitution, `sed`/`awk`, any unlisted command — is refused with the rule stated.                                                      |
 | `REIKA_REASONING_LOOP`      | `1`     | Acts on detected reasoning rumination (the model re-deriving the same analysis across rounds while tool results look new; measured over 8-gram self-repeat + cross-round similarity): plan mode gains a force-write trigger, agent mode drives the ledger→withdrawal ladder and, past it, an honest terminal stop.                                                                                 |
 | `REIKA_READ_FIRST`          | `1`     | Read-first edit gate: the first `edit` to a file whose contents are no longer in the model's context (never read, or the read has since aged out) is held back once with a directive to read it, so a blind `old_string` never gets the chance to fail and spiral.                                                                                                                                 |
@@ -280,7 +280,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   continuation that merely restates the previous one
 - **`REIKA_DROPPED_LEDGER`** — Without it an aged result reads like success: on a `/review` run
   the model reconstructed a diff from memory and only afterwards doubted itself, where the same
-  situation with the notice produced "the output got dropped, let me re-run it" (#227). Stated as
+  situation with the notice produced "the output got dropped, let me re-run it". Stated as
   one ledger line rather than per message — per-message measured ~19% of a long turn's request — and
   only when something really was dropped, so it can never claim a loss that didn't happen. Rides the
   system suffix, or the trailing note under `REIKA_PREFIX_STABLE`. `0` is the baseline arm
@@ -308,7 +308,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_VERBATIM_ABORT`** — The only pre-cap backstop for a never-ending single block. `0`
   turns it off
 - **`REIKA_SELF_AWARE`** — Never names the `.env` (API keys) or the binary. `0` removes the line
-- **`REIKA_CALLER_CHECK`** — Grind mode's step 6 on its own (#556): on the chunk fixtures
+- **`REIKA_CALLER_CHECK`** — Grind mode's step 6 on its own: on the chunk fixtures
   deepseek-v4.1-flash went from 4/10 to 10/10 with it, a local 27B started searching for callers
   (0/3 → 2/3 runs), and it added no calls on fixtures without callers. Agent mode only. On by
   default since 2026-09-27; `0` is the baseline arm
@@ -321,7 +321,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   context window, not the tool cap, and the marker at that cut says to read a narrower range —
   advice only followable once the page is a local file. A URL fetched again in the same session is
   served from that file with no request and no budget use, and the compaction recap lists saved
-  pages by locator, so a page the session already read stays reachable through every fold (#296).
+  pages by locator, so a page the session already read stays reachable through every fold.
   Benched on a 2300-file monorepo, where `**/*.ts` matched 560 files whose 200-path page covered 3
   of 5 packages — the concentration a small repo never reveals, since a cap it cannot reach behaves
   identically to the flag being off. `0` disables — which is also how the A/B baseline is spelled
@@ -335,8 +335,8 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame as erase-then-redraw, three separate writes when a
   message commits to scrollback, and a process swapped out under memory pressure (a large local
-  model on a small machine) leaves the terminal showing the erased state between them — the flicker
-  of #345. iTerm2, kitty, WezTerm, Ghostty, Alacritty, foot, Windows Terminal, VS Code and tmux ≥
+  model on a small machine) leaves the terminal showing the erased state between them as flicker.
+  iTerm2, kitty, WezTerm, Ghostty, Alacritty, foot, Windows Terminal, VS Code and tmux ≥
   3.3 honor the mode; others ignore it harmlessly. `0` restores plain writes
 - **`REIKA_BASIC_GLYPHS`** — Auto turns it on for `TERM=linux` (the Linux console) and `vt*`; `1`
   forces it for a terminal auto misses, such as an old Windows console font; `0` keeps the full set.
@@ -379,12 +379,12 @@ low-value (and a couple cost a little).
   local setups; a needless (tiny) cost on paid APIs
 - **`REIKA_PREFIX_STABLE`** — Cuts per-round prompt re-processing on llama.cpp (SWA/hybrid-memory
   models especially, which re-process the whole prompt on any prefix change), at the cost of a
-  fuller context between events. **On by default** when `REIKA_CONTEXT_WINDOW` is set (#181: a
+  fuller context between events. **On by default** when `REIKA_CONTEXT_WINDOW` is set (one
   mid-context edit re-prefilled 8453 tokens, 7.9 min at 22.9 tok/s, against 25 tokens for an
   append); inactive without a window. Set `0` for the per-round baseline. Takes precedence over
   `REIKA_DEDUP_PAYLOADS`
 - **`REIKA_AGE_LOW_FRACTION`** — A shrink event re-processes most of the prompt, so a lower value
-  means fewer of them per run — three events were ~24 min of a 2h15m run (#253) — at the cost of a
+  means fewer of them per run — three events were ~24 min of a 2h15m run — at the cost of a
   smaller live working set between events. A tuning knob for measuring that trade
   (`evals/prefixcost-report.ts`), not a setting with a known better value
 - **`REIKA_ANON`** — Identity is looked up once at startup (git config, remotes, and the author

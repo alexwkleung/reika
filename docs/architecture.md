@@ -28,7 +28,7 @@ OpenAI-compatible HTTP, so local engines and hosted APIs take the same path.
   2,000 directories. A tree past those caps — a home directory, a monorepo — starts in about a second
   with a shallow-first map rather than a complete one, so run Reika from the project root for full
   coverage.
-- **Nothing re-indexes itself.** `buildFileIndex`, `buildRepoMap`, `list`, `glob` and `grep` skip
+- **Nothing re-indexes itself.** The file index, the repo map, `list`, `glob` and `grep` skip
   ignored paths (see [Tools](tools.md#gitignore-is-respected)), but a file changed outside Reika stays
   invisible until `/cd .` re-indexes.
 
