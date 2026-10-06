@@ -240,6 +240,26 @@ describe('Scrollback nested (subagent) messages', () => {
     }
   });
 
+  // CJK glyphs are two cells; wrapped by code units, a row of them overflowed and its tail
+  // landed on a bar-less row of its own.
+  it('keeps a user bubble with wide glyphs behind its bar', () => {
+    const frame = framePlusApp([
+      {
+        role: 'user',
+        content:
+          'when i search for 本地大模型 CLI i do see a handful of videos in the feed, do i click them?',
+      },
+    ]);
+    // Blank rows kept: the overflow can be the padding alone, which Ink wraps onto an empty row.
+    const rows = frame.replace(/^\n+|\n+$/g, '').split('\n');
+
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row).toMatch(/^ ▎/);
+      expect(stringWidth(row.trimEnd())).toBeLessThanOrEqual(COLS);
+    }
+  });
+
   it('keeps every reasoning row behind its bar', () => {
     const frame = framePlusApp([
       {
