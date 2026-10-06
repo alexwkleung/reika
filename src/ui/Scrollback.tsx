@@ -1182,35 +1182,22 @@ function UserBubble({
       {rows.map((line, i) => (
         <Text key={i} backgroundColor={theme.userBg}>
           <Text color={barColor}>{glyphs.bar}</Text>
-          <Text color="whiteBright">{` ${line.padEnd(contentW)} `}</Text>
+          <Text color="whiteBright">{` ${line}${' '.repeat(Math.max(0, contentW - stringWidth(line)))} `}</Text>
         </Text>
       ))}
     </Box>
   );
 }
 
-// Word-wrap to a column width, hard-splitting any token longer than the width.
+// Word-wrap to a column width in terminal cells, not code units: a CJK glyph is two cells, and
+// counted as one a row of them overflowed the bubble, so Ink re-wrapped its tail onto a row with
+// no bar. Ink's own wrap options, so its re-wrap of each row is a no-op.
 function wrapText(text: string, width: number): string[] {
   const out: string[] = [];
   for (const raw of text.split('\n')) {
-    let line = '';
-    for (let word of raw.split(' ')) {
-      while (word.length > width) {
-        if (line) {
-          out.push(line);
-          line = '';
-        }
-        out.push(word.slice(0, width));
-        word = word.slice(width);
-      }
-      if (!line) line = word;
-      else if (line.length + 1 + word.length <= width) line += ` ${word}`;
-      else {
-        out.push(line);
-        line = word;
-      }
-    }
-    out.push(line);
+    const rows = wrapAnsi(raw, width, { trim: false, hard: true }).split('\n');
+    // The space a break landed on heads the next row; a leading space on a real line is content.
+    rows.forEach((row, i) => out.push(i === 0 ? row : row.replace(/^ +/, '')));
   }
   return out;
 }
