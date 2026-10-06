@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
+import { COMMANDS } from './commands.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
@@ -401,6 +402,33 @@ describe('last session state (#365)', () => {
     await submit(app, '/chat');
     expect(plain(app.lastFrame())).toContain('? ');
     expect(savedState).not.toHaveBeenCalled();
+    app.unmount();
+  });
+});
+
+// The list is hand-written (AGENTS.md "Adding a slash command" step 3 is what keeps it in step with
+// COMMANDS), and it drifted three times without anything saying so: /plan, /approvals and /skills
+// were each added to COMMANDS and never to this list — /plan being a whole mode, so the one screen a
+// user reads to find out what reika can do did not mention it. Nothing about the list's shape makes
+// the omission visible: it is a hand-padded string array in a switch case, so the only check that
+// sees it is one that reads what the command actually printed.
+describe('the /help list', () => {
+  it('names every command in COMMANDS', async () => {
+    const app = await mountApp();
+    await submit(app, '/help');
+    // The help block is ~50 rows and commits through <Static>, so only its tail is in the last
+    // frame; every write Ink made is in stdout.frames. Wait for the block's last row rather than a
+    // fixed tick, since how many writes the commit takes under parallel suite load is not something
+    // to guess at.
+    for (let i = 0; i < 40; i++) {
+      if (plain(app.stdout.frames.join('')).includes('shift+tab')) break;
+      await tick(25);
+    }
+    const printed = plain(app.stdout.frames.join(''));
+    const missing = COMMANDS.filter(c => !new RegExp(`/${c.name}\\b`).test(printed)).map(
+      c => c.name,
+    );
+    expect(missing).toEqual([]);
     app.unmount();
   });
 });
