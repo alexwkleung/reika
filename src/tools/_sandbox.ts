@@ -171,8 +171,11 @@ const GIT_CONFIG_FLAG_RE = /^(?:-c|--config-env(?:=.*)?)$/;
 
 // ...but only in `git`'s GLOBAL flag prefix: the words between the verb and the subcommand, which is
 // where `git -c core.pager=cat log` puts it. Past the subcommand a `-c` belongs to the subcommand,
-// and none of those can name a program — `git grep -c` counts matches, `git log -c`/`git diff -c`
-// are the combined-diff format, `git commit -c <commit>` reuses a message. Scanning every argument
+// and almost none of those can name a program — `git grep -c` counts matches, `git log -c`/
+// `git diff -c` are the combined-diff format, `git commit -c <commit>` reuses a message — with
+// `clone` as the one exception: ITS `-c`/`--config <key=value>` is the same config setter
+// (`core.sshCommand` runs on the fetch, `core.hooksPath` at checkout — both verified by planting
+// one), so it stays refused wherever it sits among clone's arguments. Scanning every argument
 // instead cost a whole bash call its network the first time a model ran
 // `git ls-remote …; git grep -c '^<<<<<<<'`: the count flag read as `git -c`, the deny took the
 // `git ls-remote` sharing the call down with it, and the ssh refusal read as a flaky remote rather
@@ -188,7 +191,13 @@ function gitConfigFlag(args: string[]): boolean {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (GIT_CONFIG_FLAG_RE.test(a)) return true;
-    if (!a.startsWith('-')) return false; // the subcommand: the global flags are behind us
+    if (!a.startsWith('-')) {
+      // The subcommand: the global flags are behind us. Its own flags are scanned only for
+      // `clone`, the one subcommand whose `-c` is a config flag — every other subcommand's `-c`
+      // is data-shaped (count, combined, reedit, create) and scanning past it was the false
+      // positive this whole prefix question is about.
+      return a === 'clone' && args.slice(i + 1).some(x => GIT_CLONE_CONFIG_FLAG_RE.test(x));
+    }
     if (
       GIT_GLOBAL_VALUE_FLAGS.has(a) &&
       args[i + 1] !== undefined &&
@@ -206,6 +215,10 @@ const GIT_GLOBAL_VALUE_FLAGS = new Set([
   '--namespace',
   '--super-prefix',
 ]);
+// `git clone`'s OWN config flag, spelled like the global one and meaning the same thing (git
+// clone -h: `-c, --[no-]config <key=value>`). Checked against every one of clone's words — option
+// or operand — so neither `git clone -c … <url>` nor a later position hides it.
+const GIT_CLONE_CONFIG_FLAG_RE = /^(?:-c|--no-config|--config(?:=.*)?)$/;
 const HARMLESS_ENV = new Set([
   'GIT_TERMINAL_PROMPT',
   'GIT_OPTIONAL_LOCKS',

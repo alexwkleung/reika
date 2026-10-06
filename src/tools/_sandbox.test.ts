@@ -321,7 +321,7 @@ describe('networkAllowedFor', () => {
   // with the network denied, so the ls-remote failed with an ssh refusal the model read as a flaky
   // remote. The `-c` there is `git grep`'s count flag; only git's global prefix makes it a config
   // flag. The refusal above is unchanged — this is about where the flag sits, not whether it counts.
-  it('reads -c as a config flag only in git’s global prefix, not a subcommand flag', () => {
+  it('reads -c as a config flag only in git’s global prefix, not an ordinary subcommand flag', () => {
     expect(
       networkAllowedFor("git ls-remote origin refs/heads/main; git grep -c '^<<<<<<<' FETCH_HEAD"),
     ).toBe(true);
@@ -348,6 +348,22 @@ describe('networkAllowedFor', () => {
     // and the real one's `-c` is global.
     expect(networkAllowedFor('xargs -I git git -c core.sshCommand=./x.sh fetch')).toBe(false);
     expect(networkAllowedFor('xargs -I git git grep -c TODO')).toBe(true);
+  });
+
+  // The one subcommand whose own `-c` IS a config flag: `git clone -c/--config <key=value>` sets
+  // config in the new repo before the remote fetch (`core.sshCommand`) and its hooks run at checkout
+  // (`core.hooksPath`) — verified by planting a post-checkout through `git clone -c core.hooksPath`.
+  // It keeps the refusal wherever it sits among clone's arguments; a plain clone keeps the allow
+  // like any other fetch-shaped read.
+  it('keeps the refusal for git clone’s own -c/--config, in any position', () => {
+    expect(networkAllowedFor('git clone -c core.hooksPath=/x /repo /dst')).toBe(false);
+    expect(networkAllowedFor('git clone --config core.sshCommand=./x.sh git@h:p.git d')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git clone --config=k=v /repo /dst')).toBe(false);
+    expect(networkAllowedFor('git clone /repo /dst -c k=v')).toBe(false);
+    expect(networkAllowedFor('git clone --depth 1 /repo /dst')).toBe(true);
+    expect(networkAllowedFor('git clone /repo /dst')).toBe(true);
   });
 
   // A heredoc body is data. Its lines split into segments whose "verb" was prose, and the standard
