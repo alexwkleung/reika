@@ -3,7 +3,10 @@ import { defineConfig } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
 
 export default defineConfig({
-  title: 'Reika',
+  title: 'Reika - A coding agent CLI for local and hosted models',
+  // Docs pages read "Page title | Reika" in the tab; the landing page opts out with
+  // its own `titleTemplate: false` in index.md so it keeps the full site title.
+  titleTemplate: ':title | Reika',
   description:
     'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
@@ -20,6 +23,9 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/favicon.svg',
+    // Shown in the nav bar next to the logo, instead of falling back to the full
+    // site `title` above; the document/tab title still uses `title`.
+    siteTitle: 'Reika',
     nav: [
       { text: 'Install', link: '/getting-started' },
       { text: 'Usage', link: '/usage' },

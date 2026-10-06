@@ -4,6 +4,9 @@
 # below in this order: hero, body, features, docs. `sidebar: false` because this page has no sidebar.
 layout: Landing
 sidebar: false
+# Opt out of the site `titleTemplate` in config.ts, so the landing keeps the full
+# site title as its tab title instead of "… | Reika".
+titleTemplate: false
 
 hero:
   name: Reika
