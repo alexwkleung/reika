@@ -420,7 +420,7 @@ describe('the /help list', () => {
     // frame; every write Ink made is in stdout.frames. Wait for the block's last row rather than a
     // fixed tick, since how many writes the commit takes under parallel suite load is not something
     // to guess at.
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 400; i++) {
       if (plain(app.stdout.frames.join('')).includes('shift+tab')) break;
       await tick(25);
     }
