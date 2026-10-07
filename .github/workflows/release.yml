@@ -37,6 +37,8 @@ jobs:
           [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME, package.json $version"; exit 1; }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA is not on main"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: CHANGELOG.md has an entry
+        run: scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
@@ -60,7 +62,7 @@ jobs:
         run: |
           cp "$TGZ" "$OUT/reika-$VERSION.tgz"
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Reika $VERSION" \
-            --generate-notes "$OUT/reika-$VERSION.tgz"
+            --notes-file "$RUNNER_TEMP/notes.md" "$OUT/reika-$VERSION.tgz"
 
       - name: Tap PR
         env:

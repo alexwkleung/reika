@@ -32,6 +32,10 @@ export default defineConfig({
       { text: 'Configuration', link: '/configuration' },
       { text: 'Findings', link: '/findings' },
       { text: 'Support', link: '/support' },
+      {
+        text: 'Changelog',
+        link: 'https://github.com/alexwkleung/reika/blob/main/CHANGELOG.md',
+      },
     ],
     sidebar: [
       {
