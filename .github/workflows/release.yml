@@ -1,0 +1,94 @@
+name: release
+
+# Pushing a vX.Y.Z tag builds the tarball once, stages that file on npm, attaches it to a GitHub
+# release and opens the tap PR with its sha256. Two steps stay human: `npm stage approve` (2FA) and
+# merging the tap PR. A version can never be republished, so the irreversible one needs a person.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  # npm's trust relationship for this workflow allows stage-publish only (RELEASING.md).
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      # `npm stage` and trust tokens need npm 11.15+, newer than Node 24's bundled npm.
+      - run: npm install -g npm@^11.15.0
+
+      - name: Tag matches package.json and is on main
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME, package.json $version"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA is not on main"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - name: Build once
+        run: |
+          export OUT="$RUNNER_TEMP/release"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          pnpm run release:check
+          tgz="$OUT/alexwkleung-reika-$VERSION.tgz"
+          echo "TGZ=$tgz" >> "$GITHUB_ENV"
+          echo "SHA256=$(shasum -a 256 "$tgz" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Stage on npm
+        run: |
+          npm stage publish "$TGZ"
+          npm stage list @alexwkleung/reika
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "$TGZ" "$OUT/reika-$VERSION.tgz"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Reika $VERSION" \
+            --generate-notes "$OUT/reika-$VERSION.tgz"
+
+      - name: Tap PR
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          gh repo clone alexwkleung/homebrew-tap "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          git checkout -b "reika-$VERSION"
+          sed -i -E \
+            -e "s|^(  url \").*(\")$|\1https://registry.npmjs.org/@alexwkleung/reika/-/reika-$VERSION.tgz\2|" \
+            -e "s|^(  sha256 \")[0-9a-f]{64}(\")$|\1$SHA256\2|" \
+            Formula/reika.rb
+          git diff --exit-code --quiet && { echo "formula unchanged"; exit 1; }
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -qam "reika $VERSION"
+          git push -q origin "reika-$VERSION"
+          gh pr create --title "reika $VERSION" \
+            --body "Tarball sha256 \`$SHA256\`, built and staged by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Merge after \`npm stage approve\`."
+
+      - name: Summary
+        run: |
+          {
+            echo "## Reika $VERSION staged"
+            echo
+            echo "sha256 \`$SHA256\`"
+            echo
+            echo '1. `npm stage list @alexwkleung/reika`, then `npm stage approve <id>` (2FA)'
+            echo '2. Merge the tap PR in alexwkleung/homebrew-tap'
+            echo '3. `pnpm run release:verify`'
+          } >> "$GITHUB_STEP_SUMMARY"
