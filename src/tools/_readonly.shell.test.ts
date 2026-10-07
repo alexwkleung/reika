@@ -83,6 +83,12 @@ const CANDIDATES = [
   'realpath f',
   'nl f',
   'cut -d, -f1 f',
+  // The operator that is not one (#685), each admitted now and run for real: a conflict-marker
+  // pattern is data, and a here-string's operand is quote-parsed like any other word — so neither
+  // the backtick in the pattern nor the one in the operand may reach the shell as a command.
+  "grep -c '^<<<<<<<' f",
+  "grep -n '<<<<<<<\\|>>>>>>>' f | head -5",
+  "cat <<< 'x `touch PWNED` y'",
 ];
 
 let dir: string;

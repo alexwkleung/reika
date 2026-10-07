@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
-import { stripHeredocs } from './_writetargets.js';
+import { stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is

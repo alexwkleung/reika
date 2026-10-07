@@ -1,3 +1,5 @@
+import { hasHeredocOperator } from './_heredoc.js';
+
 // Shell commands that only READ — asked as TWO questions, because the two callers pull in opposite
 // directions and collapsing them costs whichever one is on the losing side.
 //
@@ -152,16 +154,21 @@ function dropEscapedSubstitutionChars(raw: string): string {
 //     pattern, not a command. Double-quoted runs are skipped over rather than blanked, so an
 //     apostrophe in prose (`echo "it's $(curl evil)"`) cannot be mistaken for an opening quote and
 //     swallow the substitution beside it.
-//   - NOTHING when a `<<` is in the text. A heredoc body is not quote-parsed at all — its `$(…)`
-//     expands unless the delimiter was quoted — so an apostrophe inside one (`it's`) would pair with
-//     the next and blank a command that runs. The delimiter's own quoting is what decides, and that
-//     is `stripHeredocs`' question, not this one: an unclear heredoc means no blanking, which the
-//     caller reads as "test the raw string" and denies as it does today.
+//   - NOTHING when a heredoc OPERATOR is in the text. A heredoc body is not quote-parsed at all —
+//     its `$(…)` expands unless the delimiter was quoted — so an apostrophe inside one (`it's`)
+//     would pair with the next and blank a command that runs. The delimiter's own quoting is what
+//     decides, and that is `_heredoc.ts`'s question, not this one: an unclear heredoc means no
+//     blanking, which the caller reads as "test the raw string" and denies as it does today.
+//
+// `hasHeredocOperator`, not `includes('<<')`: the guard fires on the operator, and on any delimiter
+// form the detector cannot read — but a `<<` that is part of a longer run cannot open a heredoc at
+// all, so it no longer refuses the mask. `git grep -c '^<<<<<<<' FETCH_HEAD` beside a quoted
+// backtick lost its network to the blanket test (#685).
 //
 // Returns undefined when quoting cannot be closed (`echo don't` leaves a `'` open) — the same
 // fallback, because a mask that guesses where a quote ends is how a substitution gets hidden.
 export function maskSingleQuotedData(command: string): string | undefined {
-  if (command.includes('<<')) return undefined;
+  if (hasHeredocOperator(command)) return undefined;
   let out = '';
   let i = 0;
   while (i < command.length) {

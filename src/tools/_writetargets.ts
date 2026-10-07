@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { stripHeredocs } from './_heredoc.js';
 import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
 
 // The files a shell command names as things it will write — the fallback change detector for a
@@ -10,9 +11,6 @@ import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
 // Pure: absolute paths out, resolved against `cwd` with any leading `cd` hops applied.
 
 const MAX_TARGETS = 20;
-
-// `<<EOF … EOF`: the body is data, and its lines would otherwise parse as commands with redirects.
-const HEREDOC_RE = /<<-?\s*(['"]?)(\w+)\1/;
 
 export function writeTargets(command: string, cwd: string): string[] {
   const stripped = stripHeredocs(command);
@@ -94,47 +92,4 @@ function commandTargets(name: string, args: string[]): string[] {
     default:
       return [];
   }
-}
-
-// Also read by the sandbox's network classifier (#163): a heredoc body's lines would otherwise
-// split into segments whose "verb" is prose, denying `gh issue comment --body-file - <<EOF …`.
-export function stripHeredocs(command: string): string {
-  let s = command;
-  for (let m = HEREDOC_RE.exec(s); m; m = HEREDOC_RE.exec(s)) {
-    const bodyStart = s.indexOf('\n', m.index);
-    if (bodyStart === -1) break;
-    const endRe = new RegExp(`^\\s*${m[2]}\\s*$`, 'm');
-    const rest = s.slice(bodyStart + 1);
-    const end = endRe.exec(rest);
-    const bodyEnd = end ? bodyStart + 1 + end.index + end[0].length : s.length;
-    // Keep the `<<` operator text off the next pass by cutting it out with the body.
-    s = s.slice(0, m.index) + s.slice(bodyEnd);
-  }
-  return s;
-}
-
-// The heredoc bodies the shell EXPANDS, which `stripHeredocs` deliberately cuts away with the rest:
-// `$…` and a backtick in a body are only data when the DELIMITER was quoted, so `<<EOF` runs what
-// `<<'EOF'` pastes. Dropping them answers the verb question correctly ("what commands does this
-// line run" — a body's prose runs nothing) and the substitution question wrongly, because a `$(…)`
-// in an expanding body DOES run, with whatever network the line's `git`/`gh` verb was granted.
-// Walked exactly like `stripHeredocs` — each body cut before the next match — so prose inside one
-// can never be read as a heredoc operator of its own.
-export function expandingHeredocBodies(command: string): string[] {
-  const bodies: string[] = [];
-  let s = command;
-  for (let m = HEREDOC_RE.exec(s); m; m = HEREDOC_RE.exec(s)) {
-    const quoted = m[1] !== '';
-    const bodyStart = s.indexOf('\n', m.index);
-    if (bodyStart === -1) break;
-    const endRe = new RegExp(`^\\s*${m[2]}\\s*$`, 'm');
-    const rest = s.slice(bodyStart + 1);
-    const end = endRe.exec(rest);
-    const bodyEnd = end ? bodyStart + 1 + end.index + end[0].length : s.length;
-    // An unterminated heredoc swallows the rest, which is what the shell does with it too. The
-    // newline before the delimiter line terminates the body rather than belonging to it.
-    if (!quoted) bodies.push(rest.slice(0, end ? end.index : rest.length).replace(/\n$/, ''));
-    s = s.slice(0, m.index) + s.slice(bodyEnd);
-  }
-  return bodies;
 }
