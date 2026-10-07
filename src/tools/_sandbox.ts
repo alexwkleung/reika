@@ -162,63 +162,129 @@ const NET_PIPE_COMMANDS = new Set([...INSPECTION_COMMANDS, 'sleep'].filter(c => 
 // `find`'s exec family runs an arbitrary command per match. `git -c <key>=<value>` can name one
 // through more keys than are worth enumerating — `alias.x='!cmd'`, `core.sshCommand`, `core.pager`,
 // `credential.helper`, `diff.external`, `core.hooksPath` — so `-c` (and `--config-env`) is refused
-// the allow outright: a `git -c core.pager=cat log` loses nothing, since only fetch/pull/clone/
-// ls-remote need the network. Same class through the environment (`GIT_SSH_COMMAND=./x.sh git
+// the allow outright (below): a `git -c core.pager=cat log` loses nothing, since only fetch/pull/
+// clone/ls-remote need the network. Same class through the environment (`GIT_SSH_COMMAND=./x.sh git
 // fetch`, `PAGER=./x.sh gh pr view`), so an env-assignment prefix keeps the allow only when its name
 // is on a short list of settings that cannot name a program.
 const FIND_EXEC_RE = /^-(?:exec|execdir|ok|okdir)$/;
-const GIT_CONFIG_FLAG_RE = /^(?:-c|--config-env(?:=.*)?)$/;
-
-// ...but only in `git`'s GLOBAL flag prefix: the words between the verb and the subcommand, which is
-// where `git -c core.pager=cat log` puts it. Past the subcommand a `-c` belongs to the subcommand,
-// and almost none of those can name a program — `git grep -c` counts matches, `git log -c`/
-// `git diff -c` are the combined-diff format, `git commit -c <commit>` reuses a message — with
-// `clone` as the one exception: ITS `-c`/`--config <key=value>` is the same config setter
-// (`core.sshCommand` runs on the fetch, `core.hooksPath` at checkout — both verified by planting
-// one), so it stays refused wherever it sits among clone's arguments. Scanning every argument
-// instead cost a whole bash call its network the first time a model ran
-// `git ls-remote …; git grep -c '^<<<<<<<'`: the count flag read as `git -c`, the deny took the
-// `git ls-remote` sharing the call down with it, and the ssh refusal read as a flaky remote rather
-// than a classifier false positive. A global option that takes a value has that value as the NEXT
-// word (`-C <path>`, `--git-dir <path>` — git accepts the space form), and that word is not the
-// subcommand: skipping it is what keeps `git --git-dir /x -c core.sshCommand=./x.sh fetch` refused,
-// the `-c` behind the value word still global. The skip only takes a value that does not look like
-// a flag, so `git -C -c k=v log` keeps scanning and stays refused. Called with the git segment's
-// OWN words (the effective list — verb, `timeout`/`xargs` carrier and xargs flags already dropped),
-// so a carrier's data cannot pose as the verb's arguments: `xargs -I git git -c k=v fetch` would
-// otherwise find the `-I` placeholder where it looks for `git`.
-function gitConfigFlag(args: string[]): boolean {
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (GIT_CONFIG_FLAG_RE.test(a)) return true;
-    if (!a.startsWith('-')) {
-      // The subcommand: the global flags are behind us. Its own flags are scanned only for
-      // `clone`, the one subcommand whose `-c` is a config flag — every other subcommand's `-c`
-      // is data-shaped (count, combined, reedit, create) and scanning past it was the false
-      // positive this whole prefix question is about.
-      return a === 'clone' && args.slice(i + 1).some(x => GIT_CLONE_CONFIG_FLAG_RE.test(x));
-    }
-    if (
-      GIT_GLOBAL_VALUE_FLAGS.has(a) &&
-      args[i + 1] !== undefined &&
-      !args[i + 1].startsWith('-')
-    ) {
-      i++;
-    }
-  }
-  return false;
-}
+// A `git` segment keeps the allow only when nothing on its own command line can name a program, and
+// the line is read in two halves because git parses it in two. The GLOBAL prefix (between the verb
+// and the subcommand) is git's own parser, which takes exact spellings only (`--no-pag` is "unknown
+// option"), so it is read against an allowlist and an unrecognized flag refuses: `-c`/`--config-env`
+// set any config key, `--exec-path=<dir>` picks where `git-remote-https` comes from, and a value
+// flag missing from the list would hide every `-c` behind its value word (`git --attr-source HEAD
+// -c alias.z='!cmd' z` ran the alias when `--attr-source` was not on it) — so the next one git adds
+// costs a false deny, never a hole. Past the subcommand a `-c` is that subcommand's (`git grep -c`
+// counts, `git log -c` is the combined diff, `git switch -c` creates), and scanning every argument
+// for it cost a whole call its network the first time a model ran `git ls-remote …; git grep -c`.
+// What CAN name a program there is enumerated per subcommand below, and read the way parse-options
+// reads it: a long option matches any unambiguous abbreviation (`--upl=cmd` ran as `--upload-pack`)
+// and short options bundle (`-qu cmd` ran as `-u`), so both are matched, not just the spelling a
+// model usually writes. `--` ends the options; what follows is operands. The remainder is config the
+// repo already holds (`git config core.sshCommand …` in one call, `git fetch` in the next) — the
+// same class as a writable `.git/hooks`, accepted under the confused-model threat.
+const GIT_GLOBAL_FLAGS = new Set([
+  '-v',
+  '--version',
+  '-h',
+  '--help',
+  '--html-path',
+  '--man-path',
+  '--info-path',
+  '--exec-path', // bare, it prints the path; `--exec-path=<dir>` is refused
+  '-p',
+  '--paginate',
+  '-P',
+  '--no-pager',
+  '--no-replace-objects',
+  '--no-lazy-fetch',
+  '--no-optional-locks',
+  '--no-advice',
+  '--bare',
+  '--literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--icase-pathspecs',
+]);
+// Value globals, which git also accepts as `--flag=<value>` (all but `-C`). The value is a path,
+// a ref or a name — none runs anything — and it is the NEXT word in the space form, so it is
+// skipped rather than read as the subcommand. A value that looks like a flag is not taken, so
+// `git -C -c k=v log` keeps scanning and refuses.
 const GIT_GLOBAL_VALUE_FLAGS = new Set([
   '-C',
   '--git-dir',
   '--work-tree',
   '--namespace',
   '--super-prefix',
+  '--attr-source',
+  '--list-cmds',
 ]);
-// `git clone`'s OWN config flag, spelled like the global one and meaning the same thing (git
-// clone -h: `-c, --[no-]config <key=value>`). Checked against every one of clone's words — option
-// or operand — so neither `git clone -c … <url>` nor a later position hides it.
-const GIT_CLONE_CONFIG_FLAG_RE = /^(?:-c|--no-config|--config(?:=.*)?)$/;
+
+// Subcommand options that run a program the model wrote. `--template` plants hooks that run at
+// checkout and clone's `--config` is `-c` again, so both belong here although neither is spelled
+// as a command. Long names apply to every subcommand: none has a harmless option abbreviated by
+// these, and `push --exec`/`archive --exec` mean the same as `rebase --exec`.
+const GIT_PROGRAM_LONG_FLAGS = [
+  'upload-pack',
+  'receive-pack',
+  'exec',
+  'extcmd',
+  'open-files-in-pager',
+  'template',
+  'config',
+];
+// Short spellings per subcommand: the letters that name a program, and the letters whose value is
+// the rest of the bundle (so `-bcute` is branch `cute`, not `-c`). An unlisted value letter only
+// makes the read stricter.
+const GIT_PROGRAM_SHORT_FLAGS: Record<string, { run: string; value: string }> = {
+  clone: { run: 'cu', value: 'bojcu' },
+  grep: { run: 'O', value: 'efABCmO' },
+  rebase: { run: 'x', value: 'sXxC' },
+  difftool: { run: 'x', value: 'tx' },
+};
+// Whole subcommands (or a subcommand's first operand) whose job is running a command.
+const GIT_PROGRAM_SUBCOMMANDS = new Set(['filter-branch', 'submodule foreach', 'bisect run']);
+
+function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
+  if (GIT_PROGRAM_SUBCOMMANDS.has(sub)) return true;
+  const first = args.find(a => !a.startsWith('-'));
+  if (first && GIT_PROGRAM_SUBCOMMANDS.has(`${sub} ${first}`)) return true;
+  const short = GIT_PROGRAM_SHORT_FLAGS[sub];
+  for (const a of args) {
+    if (a === '--') return false;
+    if (a.startsWith('--')) {
+      const name = a.slice(2).split('=')[0];
+      if (name.length >= 2 && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
+    } else if (short && a.startsWith('-')) {
+      for (const ch of a.slice(1)) {
+        if (short.run.includes(ch)) return true;
+        if (short.value.includes(ch)) break;
+      }
+    }
+  }
+  return false;
+}
+
+// Called with the git segment's OWN words (verb, `timeout`/`xargs` carrier and xargs flags already
+// dropped), so a carrier's data cannot pose as the verb's arguments: `xargs -I git git -c k=v
+// fetch` would otherwise find the `-I` placeholder where it looks for `git`.
+function gitArgsRunProgram(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith('-')) return gitSubcommandRunsProgram(a, args.slice(i + 1));
+    if (GIT_GLOBAL_FLAGS.has(a)) continue;
+    const name = a.split('=')[0];
+    if (GIT_GLOBAL_VALUE_FLAGS.has(name)) {
+      if (a.includes('=')) continue;
+      if (args[i + 1] !== undefined && !args[i + 1].startsWith('-')) {
+        i++;
+        continue;
+      }
+    }
+    return true;
+  }
+  return false;
+}
 const HARMLESS_ENV = new Set([
   'GIT_TERMINAL_PROMPT',
   'GIT_OPTIONAL_LOCKS',
@@ -266,9 +332,12 @@ const HARMLESS_ENV = new Set([
 const PAGER_ENV = new Set(['PAGER', 'GIT_PAGER', 'GH_PAGER']);
 const ENV_ASSIGN_RE = /^([A-Za-z_]\w*)=(.*)$/;
 
-// Whether a segment's leading env assignments can all be trusted not to redirect what runs.
+// Whether a segment's leading env assignments can all be trusted not to redirect what runs. Read
+// past the same wrappers `VERB_PREFIX_RE` strips to find the verb, or `env GIT_SSH_COMMAND=./x.sh
+// git fetch` stopped at `env`, found no assignment, and kept the allow its bare spelling is refused.
 function envPrefixHarmless(segment: string): boolean {
   for (const w of words(segment.trim())) {
+    if (PREFIX_WORDS.has(w)) continue;
     const m = ENV_ASSIGN_RE.exec(w);
     if (!m) return true; // past the assignments
     const [, name, value] = m;
@@ -289,6 +358,10 @@ const REDIRECT_AMP_RE = /\d*>&\d*|&>>?/g;
 // keywords a compound can open with. Stripped before the verb is read.
 const VERB_PREFIX_RE =
   /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
+// The same wrappers as words, for `envPrefixHarmless`, which reads them one at a time.
+export const PREFIX_WORDS = new Set(
+  'sudo command nohup exec env time if then else elif do while until !'.split(' '),
+);
 
 // Substitution runs a nested command the verb check never sees; `_readonly.ts` owns that test
 // (`hasExecutableSubstitution`) so the sandbox and the plan gate cannot drift on which contexts are
@@ -366,7 +439,7 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
     const args = ws.slice(1);
     if (NET_VERBS.has(verb)) {
       if (!envPrefixHarmless(seg)) return { allowed: false };
-      if (verb === 'git' && gitConfigFlag(args)) return { allowed: false };
+      if (verb === 'git' && gitArgsRunProgram(args)) return { allowed: false };
       net = true;
     } else if (!NET_PIPE_COMMANDS.has(verb)) {
       blockedBy ??= verb;

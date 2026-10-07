@@ -8,6 +8,7 @@ import {
   networkAllowedFor,
   networkDecision,
   sandboxRefusedWrite,
+  PREFIX_WORDS,
 } from './_sandbox.js';
 
 // The generator's string output, not the syscall — per AGENTS.md's "unit-test the logic the wrapper
@@ -366,6 +367,59 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git clone /repo /dst')).toBe(true);
   });
 
+  // The global prefix is git's own parser, which takes exact spellings only, so it is read against an
+  // allowlist: a value flag missing from a skip list hid every `-c` behind its value word (`git
+  // --attr-source HEAD -c alias.z='!echo RAN' z` ran the alias, checked on git 2.50), and an
+  // unrecognized flag now costs a false deny instead of a hole.
+  it('refuses any git global flag it does not recognize', () => {
+    expect(networkAllowedFor("git --attr-source HEAD -c alias.z='!curl x' z")).toBe(false);
+    expect(networkAllowedFor('git --frobnicate x -c core.sshCommand=./x.sh fetch')).toBe(false);
+    expect(networkAllowedFor('git --exec-path=/tmp/x fetch origin')).toBe(false);
+    expect(networkAllowedFor('git -C./repo log')).toBe(false);
+    expect(networkAllowedFor('git --attr-source HEAD log -1')).toBe(true);
+    expect(networkAllowedFor('git --attr-source=HEAD log -1')).toBe(true);
+    expect(networkAllowedFor('git --git-dir=/x --no-pager log -1')).toBe(true);
+    expect(networkAllowedFor('git -P --no-optional-locks fetch origin')).toBe(true);
+  });
+
+  // Past the subcommand, what can name a program is enumerated — and matched the way parse-options
+  // reads it: `--upl=cmd` ran as `--upload-pack` and `git clone -qu cmd` as `-u` (both checked on
+  // git 2.50), so abbreviations and short bundles count, not only the spelling a model usually writes.
+  it('refuses the git subcommand options that run a program', () => {
+    expect(networkAllowedFor('git clone --template=/tmp/t https://h/r d')).toBe(false);
+    expect(networkAllowedFor('git clone --templ /tmp/t https://h/r d')).toBe(false);
+    expect(networkAllowedFor('git clone -u ./x.sh https://h/r d')).toBe(false);
+    expect(networkAllowedFor('git clone -qu ./x.sh https://h/r d')).toBe(false);
+    expect(networkAllowedFor("git fetch --upload-pack='curl x;git-upload-pack' origin")).toBe(
+      false,
+    );
+    expect(networkAllowedFor("git ls-remote --upl='curl x' origin")).toBe(false);
+    expect(networkAllowedFor('git push --receive-pack=./x.sh origin')).toBe(false);
+    expect(networkAllowedFor("git rebase -x 'curl x' HEAD~1")).toBe(false);
+    expect(networkAllowedFor("git rebase --exec='curl x' HEAD~1")).toBe(false);
+    expect(networkAllowedFor("git grep -O'curl x' TODO")).toBe(false);
+    expect(networkAllowedFor("git grep -nO 'curl x' TODO")).toBe(false);
+    expect(networkAllowedFor("git difftool -x 'curl x'")).toBe(false);
+    expect(networkAllowedFor("git submodule foreach 'curl x'")).toBe(false);
+    expect(networkAllowedFor("git submodule --quiet foreach 'curl x'")).toBe(false);
+    expect(networkAllowedFor("git bisect run 'curl x'")).toBe(false);
+    expect(networkAllowedFor("git filter-branch --tree-filter 'curl x' HEAD")).toBe(false);
+  });
+
+  // The other direction: the same letters mean something else elsewhere, a value letter's value is
+  // the rest of its bundle, `--no-config` only removes config, and after `--` everything is operands.
+  it('keeps the allow for look-alike git options that run nothing', () => {
+    expect(networkAllowedFor('git fetch -u origin main')).toBe(true);
+    expect(networkAllowedFor('git grep -n -e TODO')).toBe(true);
+    expect(networkAllowedFor('git clone -bcute https://h/r d')).toBe(true);
+    expect(networkAllowedFor('git clone --no-config /repo d')).toBe(true);
+    expect(networkAllowedFor('git clone /repo -- -c')).toBe(true);
+    expect(networkAllowedFor('git grep -e x -- -O')).toBe(true);
+    expect(networkAllowedFor('git submodule update --init')).toBe(true);
+    expect(networkAllowedFor('git bisect log')).toBe(true);
+    expect(networkAllowedFor('git switch -c topic origin/topic')).toBe(true);
+  });
+
   // A heredoc body is data. Its lines split into segments whose "verb" was prose, and the standard
   // way a model writes a multi-line comment was denied every time.
   it('ignores heredoc bodies when reading verbs', () => {
@@ -396,6 +450,26 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('GIT_TERMINAL_PROMPT=0 git fetch --all')).toBe(true);
     expect(networkAllowedFor('time git clone https://example.com/r.git')).toBe(true);
     expect(networkAllowedFor('sudo git fetch')).toBe(true);
+  });
+
+  // The env check reads past the same wrappers the verb reader strips: stopping at `env` found no
+  // assignment and gave `env GIT_SSH_COMMAND=./x.sh git fetch` the allow its bare spelling is refused.
+  it('checks env assignments behind a wrapper as well as bare ones', () => {
+    expect(networkAllowedFor('env GIT_SSH_COMMAND=./x.sh git fetch')).toBe(false);
+    expect(networkAllowedFor('sudo GIT_SSH_COMMAND=./x.sh git fetch')).toBe(false);
+    expect(networkAllowedFor('command env PAGER=./x.sh gh pr view 1')).toBe(false);
+    expect(networkAllowedFor('env GIT_TERMINAL_PROMPT=0 git fetch')).toBe(true);
+    for (const w of PREFIX_WORDS) {
+      expect(networkAllowedFor(`${w} GIT_SSH_COMMAND=./x.sh git fetch`)).toBe(false);
+    }
+  });
+
+  // `args` is the verb's own words after its carrier is dropped, so find's exec scan has to see
+  // through `timeout` and `xargs` like the verb does.
+  it('sees find -exec through a carrier', () => {
+    expect(networkAllowedFor("git fetch && timeout 5 find . -exec curl x '{}' +")).toBe(false);
+    expect(networkAllowedFor("git ls-files | xargs find -exec curl x '{}' +")).toBe(false);
+    expect(networkAllowedFor('git fetch && timeout 5 find . -name x')).toBe(true);
   });
 });
 
