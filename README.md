@@ -137,6 +137,7 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 | [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
+| [Changelog](CHANGELOG.md)                        | What changed in each release                                                              |
 
 ## Inspired by
 

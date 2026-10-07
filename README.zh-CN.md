@@ -136,6 +136,7 @@ cd your-project && reika
 | [平台](docs/platforms.md)              | 运行要求、在弱机器上运行、Linux 和 Windows 上的差异              |
 | [架构与注意事项](docs/architecture.md) | 框架如何工作，以及已知限制                                       |
 | [贡献](CONTRIBUTING.md)                | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
+| [更新日志](CHANGELOG.md)（英文）       | 每个版本的变更                                                   |
 
 ## 灵感来自
 

@@ -10,12 +10,16 @@ fixed by the next patch, not a re-publish.
 
 ## Automated (`.github/workflows/release.yml`)
 
-1. **Bump.** Set `version` in `package.json` in a PR and merge it. CI must be green on `main`.
+1. **Bump.** In one PR, set `version` in `package.json` and add a `## [X.Y.Z] - YYYY-MM-DD` section
+   to `CHANGELOG.md`: user-facing changes only (fixes, changed behavior or defaults, new or renamed
+   config keys, commands and tools), not tests, CI or refactors. Merge it. CI must be green on
+   `main`.
 
 2. **Tag.** `git checkout main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`. The workflow
    refuses a tag that disagrees with `package.json` or is not on `main`. It runs `check` and
    `release:check`, stages that tarball on npm, creates the GitHub release with the same file and
-   opens a PR on the tap with its sha256. Edit the generated release notes if they need it.
+   opens a PR on the tap with its sha256. The release notes are that version's `CHANGELOG.md` section
+   (`scripts/release-notes.sh X.Y.Z`); the workflow stops before staging if there isn't one.
 
 3. **Approve on npm.** In a normal terminal (2FA):
 
@@ -50,7 +54,7 @@ fixed by the next patch, not a re-publish.
 
 The fallback when the workflow cannot run, and what it automates.
 
-1. **Bump.** Set `version` in `package.json` in a PR and merge it. CI must be green on `main`.
+1. **Bump.** As in the automated flow: `package.json` and a `CHANGELOG.md` section, in one PR.
 
 2. **Build once.** On `main` with a clean tree:
 
@@ -79,7 +83,7 @@ The fallback when the workflow cannot run, and what it automates.
    ```sh
    cp ~/reika-release/alexwkleung-reika-X.Y.Z.tgz ~/reika-release/reika-X.Y.Z.tgz
    gh release create vX.Y.Z --target "$(git rev-parse main)" --title "Reika X.Y.Z" \
-     --notes "…" ~/reika-release/reika-X.Y.Z.tgz
+     --notes "$(scripts/release-notes.sh X.Y.Z)" ~/reika-release/reika-X.Y.Z.tgz
    ```
 
 6. **Verify.**
