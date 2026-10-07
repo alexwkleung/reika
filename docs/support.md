@@ -33,3 +33,12 @@ GitHub Sponsors accepts sponsorships from organizations as well as from individu
 - **Contribute.** Start with [CONTRIBUTING.md](../CONTRIBUTING.md), which covers setup, conventions
   and what makes a change easy to accept.
 - **Tell someone.** A star, or mentioning it to someone running models locally, is how people find it.
+
+## Contact
+
+- **Bugs:** [GitHub Issues](https://github.com/alexwkleung/reika/issues).
+- **Questions, ideas and model reports:** [GitHub Discussions](https://github.com/alexwkleung/reika/discussions),
+  where the answer helps the next person too.
+- **Security issues:** report privately, as described in [SECURITY.md](../SECURITY.md). Please don't
+  email them or open a public issue.
+- **Anything else:** [hello@reikacode.com](mailto:hello@reikacode.com).

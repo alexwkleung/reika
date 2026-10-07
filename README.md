@@ -150,3 +150,7 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 ## Supporting our work
 
 If Reika is useful to you, consider supporting it via [GitHub Sponsors](https://github.com/sponsors/alexwkleung), [Ko-fi](https://ko-fi.com/alexwkleung), or [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung). See [Support](docs/support.md) for what it funds and other ways to help.
+
+## Contact
+
+Bugs go to [GitHub Issues](https://github.com/alexwkleung/reika/issues), questions and ideas to [Discussions](https://github.com/alexwkleung/reika/discussions), and security reports go through [SECURITY.md](SECURITY.md). For anything else, email [hello@reikacode.com](mailto:hello@reikacode.com).
