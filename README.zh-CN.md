@@ -149,3 +149,7 @@ Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 ## 支持我们的工作
 
 如果 Reika 对你有用，可以考虑通过 [GitHub Sponsors](https://github.com/sponsors/alexwkleung)、[Ko-fi](https://ko-fi.com/alexwkleung) 或 [Buy Me a Coffee](https://buymeacoffee.com/alexwkleung) 支持这个项目。
+
+## 联系
+
+Bug 请提交到 [GitHub Issues](https://github.com/alexwkleung/reika/issues)，问题和想法请发到 [Discussions](https://github.com/alexwkleung/reika/discussions)，安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。其他事情可以发邮件到 [hello@reikacode.com](mailto:hello@reikacode.com)。

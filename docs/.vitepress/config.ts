@@ -60,7 +60,7 @@ export default defineConfig({
     socialLinks: [{ icon: 'github', link: 'https://github.com/alexwkleung/reika' }],
     footer: {
       message:
-        'Released under the Apache-2.0 license. Free to use; <a href="/support">support the project</a>.',
+        'Free and open source under the Apache-2.0 license · <a href="/support">Support the project</a> · <a href="/support#contact">Contact</a>',
       copyright: 'Copyright 2026 Alex Leung',
     },
   },
