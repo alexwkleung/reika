@@ -56,7 +56,7 @@ export interface Heredoc {
 export interface HeredocScan {
   heredocs: Heredoc[];
   // Every region the shell reads as quoted DATA, in the order the lexer closes it — a `'…'` inside a
-  // `$(…)` inside a `"…"` is three spans, innermost recorded first. See `scanQuotes`.
+  // `$(…)` inside a `"…"` is two spans, innermost recorded first. See `scanQuotes`.
   quotes: QuoteSpan[];
   // The walk stopped at a quote it could not close. An unterminated quote is a syntax error, so
   // nothing after it runs — but nothing after it was read either, which the mask callers must know.
