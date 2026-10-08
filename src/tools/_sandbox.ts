@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { expandingHeredocBodies, stripHeredocs } from './_heredoc.js';
 import {
   dropCarriers,
   hasExecutableSubstitution,
@@ -11,7 +12,6 @@ import {
   words,
   INSPECTION_COMMANDS,
 } from './_readonly.js';
-import { expandingHeredocBodies, stripHeredocs } from './_writetargets.js';
 
 // Kernel-enforced confinement for model-chosen shell commands (#163). Seatbelt (`sandbox-exec`)
 // only: bubblewrap has no port-level network filtering, so a sandboxed process gets its own

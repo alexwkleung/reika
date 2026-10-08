@@ -220,9 +220,9 @@ describe('heredocSubstitutionHint (#446)', () => {
     // wiring should be pinned where the rest of the suite also runs — including that the platform
     // gate reads the real platform at the call site.
     const result = await execStream(
-      'printf \'%s\\n\' "sh: -c: line 3: unexpected EOF while looking for matching" >&2\n' +
-        'exit 2\n' +
-        "# $(cat <<'EOF'",
+      'x="$(cat <<\'EOF\'\nbody\nEOF\n)"\n' +
+        'printf \'%s\\n\' "sh: -c: line 3: unexpected EOF while looking for matching" >&2\n' +
+        'exit 2',
       { cwd: process.cwd() },
     );
     expect(result.exitCode).toBe(2);

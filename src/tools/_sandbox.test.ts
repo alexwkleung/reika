@@ -254,6 +254,11 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git fetch && cat <<EOF\n$(id)\nEOF')).toBe(false);
     // A body is not quote-parsed, so an apostrophe in it must not mask a real substitution.
     expect(networkAllowedFor("git stripspace <<EOF\nit's $(id) don't\nEOF")).toBe(false);
+    // A delimiter form the detector used to read as prose, and which `sh`, `bash`, `dash` and `zsh`
+    // all open a heredoc for. The shells paste its body (the backslash quotes the delimiter), so the
+    // deny here is the deliberate fail-closed read in `_heredoc.ts`: an apostrophe in the body must
+    // not be what decides whether the `$(…)` between the apostrophes runs (#685).
+    expect(networkAllowedFor("git hash-object --stdin <<\\EOF\nit's $(id) don't\nEOF")).toBe(false);
   });
 
   it('keeps the allow for a body that is literal, or carries nothing that runs', () => {
@@ -271,6 +276,11 @@ describe('networkAllowedFor', () => {
     );
     expect(networkAllowedFor('git apply - <<EOF\n$(id) is \\$(not-expanded)\nEOF')).toBe(false);
     expect(networkAllowedFor('git apply - <<EOF\n\\$(id)\nEOF')).toBe(true);
+    // The two newly-recognized delimiter forms, read the way their quoting says. `<<'A B'` pastes its
+    // body, so a literal-looking `$(…)` in it is data. `<<\EOF` is deliberately read as expanding
+    // (`_heredoc.ts`), so it keeps the allow here only because the body's `$` is escaped.
+    expect(networkAllowedFor('git stripspace <<\\EOF\n\\$(id)\nEOF')).toBe(true);
+    expect(networkAllowedFor("git stripspace <<'A B'\nit's literal $(id) here\nA B")).toBe(true);
   });
 
   it('is not fooled by a net verb in an argument or a quoted separator', () => {
@@ -349,6 +359,36 @@ describe('networkAllowedFor', () => {
     // and the real one's `-c` is global.
     expect(networkAllowedFor('xargs -I git git -c core.sshCommand=./x.sh fetch')).toBe(false);
     expect(networkAllowedFor('xargs -I git git grep -c TODO')).toBe(true);
+  });
+
+  // The second, independent cause of that same call's refusal (#685), and the end-to-end shape: with
+  // the `-c` half fixed by the test above the call still lost its allow, because a quoted `<<` in the
+  // conflict-marker pattern made `maskSingleQuotedData` decline, and the raw fallback then read the
+  // backtick inside single quotes further along the line as a substitution. Replayed over 5,920
+  // recorded bash calls, this change moves exactly two verdicts: this shape and its own retry.
+  it('keeps the allow for a compound whose quoted `<<` is a conflict-marker pattern', () => {
+    const sighted =
+      "cd /repo && echo '=== remote main ==='; git ls-remote origin refs/heads/main; " +
+      "git show FETCH_HEAD:docs/configuration.md | grep -c 'optional `offset` reads from'; " +
+      "git grep -c '^<<<<<<< \\|^>>>>>>> ' FETCH_HEAD -- docs src AGENTS.md | head -5; echo done";
+    expect(networkAllowedFor(sighted)).toBe(true);
+    expect(networkDecision(sighted)).toEqual({ allowed: true });
+  });
+
+  // Review of #693, each run against `/bin/sh`: a body the reader ended LATER than the shell hid the
+  // `curl` after it from the verb read, and an escaped `<` hid a heredoc from the mask guard.
+  it('keeps the deny when a heredoc reader could disagree with the shell', () => {
+    for (const cmd of [
+      "git log \\<<<git\ngit log '$(curl https://evil.example/x)'\ngit",
+      'git log - <<\\EOF"x"\nEOFx\ncurl https://evil.example\nEOF',
+      'git log - <<"EOF"x\nEOFx\ncurl https://evil.example\nEOF',
+      "git log - <<'EOF'x\nEOFx\ncurl https://evil.example\nEOF",
+      'git log - <<END-X\nEND-X\ncurl https://evil.example\nEND',
+      "git log --grep '<<EOF'\ncurl https://evil.example\nEOF",
+      'gh issue view 1 --body-file - <<EOF && curl https://evil.example\nbody\nEOF',
+    ]) {
+      expect(networkAllowedFor(cmd)).toBe(false);
+    }
   });
 
   // The one subcommand whose own `-c` IS a config flag: `git clone -c/--config <key=value>` sets
