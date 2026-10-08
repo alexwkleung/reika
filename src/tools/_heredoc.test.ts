@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { expandingHeredocBodies, hasHeredocOperator, stripHeredocs } from './_heredoc.js';
+import {
+  expandingHeredocBodies,
+  hasHeredocOperator,
+  scanHeredocs,
+  stripHeredocs,
+} from './_heredoc.js';
 
 // The operator is a run of exactly two `<`, and both halves of this module have to agree on where
 // it is — the guard is the conservative superset, so it may fire where the detector finds no
@@ -15,7 +20,6 @@ describe('hasHeredocOperator', () => {
     "cat <<'A B'",
     'gh pr comment 5 -F - <<EOF\nbody\nEOF',
     'git apply - <<$DELIM\nbody\n$DELIM', // no delimiter form is recognized here: the guard covers it
-    'grep -c "<<" f', // a bare operator the shell would reject: unproven, so the guard fires
   ])('fires on %s', cmd => {
     expect(hasHeredocOperator(cmd)).toBe(true);
   });
@@ -25,6 +29,7 @@ describe('hasHeredocOperator', () => {
     "grep -n '<<<<<<<\\|>>>>>>>\\|=======' f",
     "cat <<< 'here-string'",
     "echo $'<<<<<<<<'",
+    'grep -c "<<" f',
   ])('stays quiet on %s, which cannot open a heredoc', cmd => {
     expect(hasHeredocOperator(cmd)).toBe(false);
   });
@@ -105,5 +110,85 @@ describe('expandingHeredocBodies', () => {
   it('swallows the rest of the command when the delimiter never closes, as the shell does', () => {
     expect(expandingHeredocBodies('git apply - <<EOF\n$(id)')).toEqual(['$(id)']);
     expect(expandingHeredocBodies('git apply - <<EOF')).toEqual([]);
+  });
+});
+
+// Each of these is a shape a regex reader got wrong, checked against `/bin/sh` (bash 3.2) and bash 5.
+// The direction matters more than the case: a body read too long hides the commands after it from
+// the verb readers, which is a network allow or a skipped prompt; a body read too short only
+// over-denies.
+describe('scanHeredocs reads heredocs the way /bin/sh does', () => {
+  it('splits the `<` run the way the shell does: `\\<<<EOF` is a literal `<` and a real heredoc', () => {
+    const cmd = "cat \\<<<EOF\n'$(id)'\nEOF";
+    expect(hasHeredocOperator(cmd)).toBe(true);
+    expect(expandingHeredocBodies(cmd)).toEqual(["'$(id)'"]);
+    // An escaped `<` on its own is no operator, and four or more is a syntax error read fail-closed.
+    expect(hasHeredocOperator('cat \\<\\< x')).toBe(false);
+    expect(scanHeredocs('cat <<<<<EOF\nx\nEOF').uncertain).toBe(true);
+  });
+
+  it('takes the whole delimiter word, with its quotes and backslashes removed', () => {
+    expect(scanHeredocs('cat <<"EOF"x\nEOFx\nEOF').heredocs[0].delimiter).toBe('EOFx');
+    expect(scanHeredocs("cat <<'EOF'x\nb\nEOFx").heredocs[0].delimiter).toBe('EOFx');
+    expect(scanHeredocs('cat <<\\EOF"x"\nb\nEOFx').heredocs[0].delimiter).toBe('EOFx');
+    expect(scanHeredocs('cat <<END-X\nb\nEND-X').heredocs[0].delimiter).toBe('END-X');
+    expect(scanHeredocs('cat <<E"O"F\nb\nEOF').heredocs[0]).toMatchObject({
+      delimiter: 'EOF',
+      literal: true,
+    });
+    expect(stripHeredocs('cat <<"EOF"x\nEOF\nEOFx\necho after')).toBe('cat \necho after');
+  });
+
+  it('never reads a quoted or commented `<<` as an operator', () => {
+    for (const cmd of [
+      "git log --grep '<<EOF'\ncurl x\nEOF",
+      'echo "see <<EOF"\ncurl x\nEOF',
+      'echo hi # <<EOF\ncurl x\nEOF',
+    ]) {
+      expect(hasHeredocOperator(cmd)).toBe(false);
+      expect(stripHeredocs(cmd)).toBe(cmd);
+    }
+    // Inside a `$(…)` the text is a command again, quotes around it or not.
+    expect(hasHeredocOperator('x="$(cat <<EOF\nb\nEOF\n)"')).toBe(true);
+  });
+
+  it('ends a body only on a line that is exactly the delimiter', () => {
+    // Leading or trailing blanks keep the line in the body…
+    expect(stripHeredocs('cat <<EOF\n  EOF\nEOF \nbody\nEOF\necho after')).toBe('cat \necho after');
+    // …except leading tabs, and only for `<<-`.
+    expect(stripHeredocs('cat <<-EOF\n\tb\n\tEOF\necho after')).toBe('cat \necho after');
+    expect(stripHeredocs('cat <<EOF\n\tEOF\nEOF\necho after')).toBe('cat \necho after');
+  });
+
+  // bash ends a heredoc at `EOF)` inside a substitution (zsh and dash do not, but `/bin/sh` is bash).
+  it('closes a heredoc and its substitution together at `EOF)`', () => {
+    expect(stripHeredocs('x="$(cat <<EOF\nhi\nEOF)"\necho after')).toBe(
+      'x="$(cat \n)"\necho after',
+    );
+    expect(stripHeredocs('x=`cat <<EOF\nhi\nEOF`\ncurl x')).toBe('x=`cat \n`\ncurl x');
+    // Only the closer of the substitution the heredoc is in: at the top level `EOF)` is body.
+    expect(stripHeredocs('cat <<EOF\nEOF)\nEOF\necho after')).toBe('cat \necho after');
+  });
+
+  // The old cut ran from the operator to the body's end, taking the rest of the operator's line with
+  // it: a command chained after a heredoc on the same line vanished from the verb read.
+  it('keeps the rest of the operator line', () => {
+    expect(stripHeredocs('gh issue view 1 -F - <<EOF && curl x\nbody\nEOF')).toBe(
+      'gh issue view 1 -F -  && curl x\n',
+    );
+    expect(stripHeredocs('cat <<EOF > out.md\nbody\nEOF')).toBe('cat  > out.md\n');
+  });
+
+  it('reads two heredocs on one line in order', () => {
+    expect(stripHeredocs('cat <<A <<B\na\nA\nb\nB\necho after')).toBe('cat  \necho after');
+  });
+
+  // A `<<` in arithmetic is a shift, but `$((` can also open a subshell in a `$(`, so the lexer says
+  // it cannot tell rather than guessing — and every reader then fails closed.
+  it('fails closed on a `<<` it cannot place', () => {
+    const cmd = 'echo $((1<<2))\ncurl x';
+    expect(hasHeredocOperator(cmd)).toBe(true);
+    expect(stripHeredocs(cmd)).toBe(cmd);
+    expect(expandingHeredocBodies(cmd)).toEqual([cmd]);
   });
 });

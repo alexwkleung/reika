@@ -406,6 +406,14 @@ describe('substitution quoting contexts', () => {
     expect(hasExecutableSubstitution("cat <<< 'a `b` c'")).toBe(false);
   });
 
+  // `\<<<EOF` is a literal `<` followed by a real `<<EOF` (review of #693): the body's apostrophes
+  // must not pair and blank the `$(…)` between them, which the shell expands.
+  it('declines the mask when an escaped `<` leaves a heredoc behind it', () => {
+    const cmd = "cat \\<<<cat\ncat '$(touch pwned)'\ncat";
+    expect(maskSingleQuotedData(cmd)).toBeUndefined();
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
   // The other half of that agreement, and the reason the detector was widened in the same change:
   // `sh` opens a heredoc for each of these forms, and the old `(['"]?)(\w+)\1` read them as prose.
   // A guard that trusted it without the widening would pair the body's apostrophes and blank the

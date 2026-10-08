@@ -22,10 +22,8 @@
 // verbatim and the ordinary scan still answers for them. That is the same rule `_sandbox.ts` applies
 // to heredoc bodies (data for the verb question, re-read for the substitution one), narrowed here to
 // text we can name as Markdown.
+import { scanHeredocs } from './_heredoc.js';
 import { maskQuoted } from './_readonly.js';
-
-// Matched exactly as `_writetargets.ts` matches it: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
-const HEREDOC_OP_RE = /<<-?\s*(['"]?)(\w+)\1/g;
 
 // The extensions that make a written file Markdown. `mdx` rides along because it is read as
 // Markdown with JSX in it; a component file is not what this is for, and a false negative there
@@ -92,47 +90,19 @@ export function maskMarkdownData(command: string): string {
 // Heredoc bodies whose segment writes Markdown. The operator's own segment is what decides, not the
 // line: two heredocs on one line are two different commands more often than they are one.
 function heredocRegions(command: string): Region[] {
-  const out: Region[] = [];
-  // The operators are read from the RAW command, and the segments from the quote mask. That split is
-  // forced: `gh pr create --body "$(cat <<'EOF' … EOF)"` puts the operator INSIDE the double-quoted
-  // value, and the mask blanks the whole value — reading operators off the mask finds nothing and
-  // turns this rule off for the most common shape there is (measured: that exact command stopped
-  // being recognised the moment the operator scan switched to the mask). Liveness is decided by
-  // `heredocOperatorIsLive` below, because a raw scan also finds `<<` inside quoted PROSE, which
-  // the shell reads as literal text (`gh pr create --title 'use <<EOF'` mentions a heredoc, it
-  // does not start one).
+  // The operators come off the RAW command and the segments off the quote mask, because
+  // `gh pr create --body "$(cat <<'EOF' … EOF)"` puts the operator INSIDE the double-quoted value the
+  // mask blanks. Which `<<` is live — never one in quoted prose (`--title 'use <<EOF'`), always one
+  // inside a `$(…)` — is `scanHeredocs`' answer, the same one the sandbox and the danger scan get.
+  // A scan it cannot read exactly blanks nothing: the danger labels then over-report, never hide.
+  const scan = scanHeredocs(command);
+  if (scan.uncertain) return [];
   const view = maskQuoted(command);
-  // Compute every operator's body first, then cut them out together — back to front, so each cut
-  // leaves the offsets of everything before it alone. `stripHeredocs` walks a shrinking tail instead,
-  // which is the same answer, but the CUT bodies are not this function's output: it needs the
-  // offsets, and a tail it mutates while another pass is still reading it is a bug waiting to
-  // happen (a second heredoc's operator lands inside the first body's hole and the scan never
-  // resumes — measured, and it silently turned the rule off for everything after the first heredoc).
-  const spans: Array<{ start: number; end: number; opAt: number; quoted: boolean }> = [];
-  for (const m of command.matchAll(HEREDOC_OP_RE)) {
-    // A `<<` the shell treats as literal text is not an operator — never in a plain quoted string
-    // (`echo 'see <<EOF here' > NOTES.md` writes a sentence) and never in a single-quoted run at
-    // all. Only inside a `$( )` or backtick substitution does a quoted `<<` start a real heredoc.
-    // Reading a literal one as an operator manufactures a body that swallows real commands on the
-    // following lines — measured: `echo 'docs say <<EOF' > NOTES.md\nrm -rf /x` went unflagged.
-    if (!heredocOperatorIsLive(command, m.index)) continue;
-    const bodyStart = command.indexOf('\n', m.index);
-    if (bodyStart === -1) break;
-    const endRe = new RegExp(`^\\s*${m[2]}\\s*$`, 'm');
-    const rest = command.slice(bodyStart + 1);
-    const end = endRe.exec(rest);
-    spans.push({
-      start: bodyStart + 1,
-      end: bodyStart + 1 + (end ? end.index : rest.length),
-      opAt: m.index,
-      quoted: m[1] !== '',
-    });
-    if (spans.some(s2 => bodyStart + 1 > s2.start && bodyStart + 1 < s2.end)) break;
-  }
-  for (const span of spans) {
-    const seg = segmentAt(command, view, span.opAt);
+  const out: Region[] = [];
+  for (const h of scan.heredocs) {
+    const seg = segmentAt(command, view, h.opAt);
     if (!seg || !isMarkdownSegment(seg.text)) continue;
-    out.push({ start: span.start, end: span.end, expands: !span.quoted });
+    out.push({ start: h.bodyStart, end: h.bodyEnd, expands: !h.literal });
   }
   return out;
 }
@@ -272,64 +242,6 @@ function isMarkdownSegment(seg: string): boolean {
 
 function unquote(word: string): string {
   return word.replace(/['"]/g, '');
-}
-
-// The quoted runs of the command, paired EXACTLY as `maskQuoted` pairs them (same regex), so the
-// question "is this offset inside a quoted string?" has one answer across this file.
-const QUOTED_RUN_RE = /"[^"]*"|'[^']*'/g;
-
-function quotedRunAt(command: string, at: number): { start: number; end: number } | undefined {
-  for (const m of command.matchAll(QUOTED_RUN_RE)) {
-    const start = m.index ?? 0;
-    if (at >= start && at < start + m[0].length) return { start, end: start + m[0].length };
-  }
-  return undefined;
-}
-
-// Whether the shell parses the `<<` at `at` as a heredoc operator. Outside quotes it always does.
-// A single-quoted run is literal all the way through — even `$( )` in it does not expand. Inside a
-// double-quoted run the `<<` is literal text UNLESS it sits in a `$( )` or backtick substitution,
-// where the substituted text is parsed as a command again (`--body "$(cat <<'EOF' …)"` is the
-// common shape). An unterminated `$(`/backtick still counts as live: either the whole command is a
-// parse error (nothing runs, so blanking the body costs nothing) or the closer is past a heredoc
-// body's unbalanced quote — and there the body is real data that SHOULD be blanked.
-function heredocOperatorIsLive(command: string, at: number): boolean {
-  const run = quotedRunAt(command, at);
-  if (!run) return true;
-  if (command[run.start] === "'") return false;
-  let inSub = 0;
-  let inSingle = false;
-  let inBacktick = false;
-  for (let i = run.start + 1; i < at; i++) {
-    const ch = command[i];
-    if (inSingle) {
-      if (ch === "'") inSingle = false;
-      continue;
-    }
-    if (inBacktick) {
-      if (ch === '`') inBacktick = false;
-      continue;
-    }
-    if (ch === '\\') {
-      i++;
-      continue;
-    }
-    if (inSub > 0 && ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '`') {
-      inBacktick = true;
-      continue;
-    }
-    if (ch === '$' && command[i + 1] === '(') {
-      inSub++;
-      i++;
-      continue;
-    }
-    if (ch === ')' && inSub > 0) inSub--;
-  }
-  return inSub > 0 || inBacktick;
 }
 
 // Blank a stretch of data, keeping the newlines (so line-based parsers downstream see the same
