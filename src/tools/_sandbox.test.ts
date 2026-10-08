@@ -232,6 +232,19 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor("gh pr view $(cat n.txt) | grep -c '```'")).toBe(false);
   });
 
+  // An escaped quote outside quotes is a literal character, not the start of a quoted run: the mask
+  // paired one with the next and blanked everything between them, `; curl …` included, so the
+  // command split never saw a second verb and the line kept the allow as what it read as one `git log`
+  // (#695). `/bin/sh` runs the curl.
+  it('denies the network to a command hidden behind an escaped quote', () => {
+    expect(networkDecision('git log \\"; curl https://evil.example \\"')).toEqual({
+      allowed: false,
+      blockedBy: 'curl',
+    });
+    expect(networkAllowedFor("git log \\'$(curl https://evil.example)\\'")).toBe(false);
+    expect(networkAllowedFor('git fetch \\"; curl https://evil.example \\"')).toBe(false);
+  });
+
   // Sighted: `gh pr view 609 --json body --jq .body | grep -c '```'` — reading a PR body for a
   // fenced block — was denied the network and blamed on `grep`. Inside single quotes the backtick
   // is a character the model is searching for, not a command; the same rule plan mode uses.

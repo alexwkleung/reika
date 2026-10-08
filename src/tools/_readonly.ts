@@ -1,4 +1,4 @@
-import { hasHeredocOperator } from './_heredoc.js';
+import { hasHeredocOperator, scanQuotes, type QuoteSpan } from './_heredoc.js';
 
 // Shell commands that only READ — asked as TWO questions, because the two callers pull in opposite
 // directions and collapsing them costs whichever one is on the losing side.
@@ -146,13 +146,27 @@ function dropEscapedSubstitutionChars(raw: string): string {
   return raw.replace(/\\\\/g, '').replace(/\\[`$]/g, '');
 }
 
+// Blank the ranges a caller asks for, preserving length and everything else. Spans nest (a `'…'`
+// inside a `$(…)` inside a `"…"`), which is why this blanks one range at a time off the string it has
+// already blanked: a space is never re-interpreted, so an outer span blanking over an inner one is
+// the same as blanking either alone.
+function blankSpans(command: string, spans: QuoteSpan[], take: (s: QuoteSpan) => boolean): string {
+  let out = command;
+  for (const s of spans) {
+    if (!take(s)) continue;
+    out = out.slice(0, s.start) + ' '.repeat(s.end - s.start) + out.slice(s.end);
+  }
+  return out;
+}
+
 // What a substitution check should actually read: the command with the regions where a `$(` or a
 // backtick is DATA blanked out, length-preserving so any offset taken against it still lines up.
 // Two contexts blank, one refuses to answer:
 //
-//   - inside SINGLE quotes (a `'` opens the run, the next `'` closes it): `grep -c '```'` is a
-//     pattern, not a command. Double-quoted runs are skipped over rather than blanked, so an
-//     apostrophe in prose (`echo "it's $(curl evil)"`) cannot be mistaken for an opening quote and
+//   - inside SINGLE quotes, including the `$'…'` form (a `'` opens the run, the next `'` closes it,
+//     and the lexer knows a `\'` outside them is a literal quote rather than an opener): `grep -c
+//     '```'` is a pattern, not a command. Double-quoted runs are skipped over rather than blanked, so
+//     an apostrophe in prose (`echo "it's $(curl evil)"`) cannot be mistaken for an opening quote and
 //     swallow the substitution beside it.
 //   - NOTHING when a heredoc OPERATOR is in the text. A heredoc body is not quote-parsed at all —
 //     its `$(…)` expands unless the delimiter was quoted — so an apostrophe inside one (`it's`)
@@ -165,30 +179,14 @@ function dropEscapedSubstitutionChars(raw: string): string {
 // all, so it no longer refuses the mask. `git grep -c '^<<<<<<<' FETCH_HEAD` beside a quoted
 // backtick lost its network to the blanket test (#685).
 //
-// Returns undefined when quoting cannot be closed (`echo don't` leaves a `'` open) — the same
-// fallback, because a mask that guesses where a quote ends is how a substitution gets hidden.
+// Returns undefined when the walk cannot read the quoting (`echo don't` leaves a `'` open, and an
+// unterminated quote is a syntax error nothing runs past) — the same fallback, because a mask that
+// guesses where a quote ends is how a substitution gets hidden.
 export function maskSingleQuotedData(command: string): string | undefined {
   if (hasHeredocOperator(command)) return undefined;
-  let out = '';
-  let i = 0;
-  while (i < command.length) {
-    const ch = command[i];
-    if (ch === '"') {
-      const end = command.indexOf('"', i + 1);
-      if (end === -1) return undefined;
-      out += command.slice(i, end + 1);
-      i = end + 1;
-    } else if (ch === "'") {
-      const end = command.indexOf("'", i + 1);
-      if (end === -1) return undefined;
-      out += ' '.repeat(end + 1 - i);
-      i = end + 1;
-    } else {
-      out += ch;
-      i++;
-    }
-  }
-  return out;
+  const scan = scanQuotes(command);
+  if (scan.uncertain) return undefined;
+  return blankSpans(command, scan.spans, s => s.kind !== 'double');
 }
 
 // The one call a command line makes. `dropEscapedSubstitutionChars` first (a `\$(` is a literal),
@@ -355,10 +353,21 @@ function segmentIsReadOnly(segment: string, recognized: Set<string>, planReads: 
 }
 
 // Blank out quoted regions while preserving length, so a scan can tell syntax from data and a
-// segment offset still indexes the raw command. An unbalanced quote masks nothing, leaving junk
-// that fails the command-name test above → false.
+// segment offset still indexes the raw command. The regions come from `_heredoc.ts`'s walk, so the
+// mask agrees with `/bin/sh` about where a quote opens: `\'` outside quotes is a literal quote and
+// not an opening one (`cat f \"; touch pwned \"` is TWO commands), `$'…'` is a quoted run of its own,
+// and a `'` inside a `$(…)` inside a `"…"` is quoted data while the `$(…)` it sits in is not.
+//
+// It is a walk and not a regex, so it cannot pair a quote with the wrong partner (`maskQuoted` used
+// to pair `\"` with the next `"`, blanking the `; touch pwned` between them — #695).
+//
+// A command whose quoting the walk cannot read blanks NOTHING: the separators, redirects and command
+// names all stay in view, and every caller reads that as the more dangerous text it partly is. The
+// alternative — masking up to the point of confusion — is what hides a second command.
 export function maskQuoted(command: string): string {
-  return command.replace(/"[^"]*"|'[^']*'/g, m => ' '.repeat(m.length));
+  const scan = scanQuotes(command);
+  if (scan.uncertain) return command;
+  return blankSpans(command, scan.spans, () => true);
 }
 
 // Cut the command at every separator that sits OUTSIDE quotes, returning each segment's RAW text —

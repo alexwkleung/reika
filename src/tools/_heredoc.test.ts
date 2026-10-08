@@ -3,6 +3,7 @@ import {
   expandingHeredocBodies,
   hasHeredocOperator,
   scanHeredocs,
+  scanQuotes,
   stripHeredocs,
 } from './_heredoc.js';
 
@@ -190,5 +191,56 @@ describe('scanHeredocs reads heredocs the way /bin/sh does', () => {
     expect(hasHeredocOperator(cmd)).toBe(true);
     expect(stripHeredocs(cmd)).toBe(cmd);
     expect(expandingHeredocBodies(cmd)).toEqual([cmd]);
+  });
+});
+
+// The same walk's quoting regions, which `_readonly.ts`'s two masks are built from (#695). Only the
+// spans matter here — what each mask blanks with them is `_readonly.test.ts`'s question.
+describe('scanQuotes', () => {
+  it('reports each quoting form with its kind and its exact range', () => {
+    const cmd = "cat 'a;b' \"c;d\" $'e;f'";
+    const spans = scanQuotes(cmd).spans.map(s => [s.kind, cmd.slice(s.start, s.end)]);
+    expect(spans).toEqual([
+      ['single', "'a;b'"],
+      ['double', '"c;d"'],
+      ['ansi', "$'e;f'"],
+    ]);
+  });
+
+  // Nesting is the reason this is one span list and not two: a `'…'` inside a `$(…)` inside a `"…"`
+  // is quoted data (the single-quote mask blanks it) while the `"…"` around it is not (that mask
+  // leaves it, because a `$(…)` runs there).
+  it('reports a nested region as its own span', () => {
+    const cmd = 'echo "$(grep \'x;y\' f)"';
+    const spans = scanQuotes(cmd).spans.map(s => [s.kind, cmd.slice(s.start, s.end)]);
+    expect(spans).toEqual([
+      ['single', "'x;y'"],
+      ['double', '"$(grep \'x;y\' f)"'],
+    ]);
+  });
+
+  // An escaped quote opens nothing, and `$'…'` is the one single-quoted form a backslash escapes in.
+  it("follows backslash escapes outside and inside `$'…'`", () => {
+    const escaped = 'cat f \\"; touch pwned \\"';
+    expect(scanQuotes(escaped).spans).toEqual([]);
+    expect(scanQuotes("echo $'a\\' ; touch pwned'").spans).toHaveLength(1);
+    expect(scanQuotes("echo $'a\\' ; touch pwned'").spans[0].kind).toBe('ansi');
+  });
+
+  // Not quote-parsed by the shell, so a quote in either is a character rather than an opener.
+  it('records nothing inside a comment or a heredoc body', () => {
+    expect(scanQuotes("echo hi # don't\ncat 'a;b' f").spans).toHaveLength(1);
+    const heredoc = "cat <<'EOF'\nit's\nEOF\ncat 'a;b' f";
+    expect(scanQuotes(heredoc).spans.map(s => heredoc.slice(s.start, s.end))).toEqual(["'a;b'"]);
+  });
+
+  it('is uncertain only about a quote it could not close', () => {
+    expect(scanQuotes("cat 'a;b' f").uncertain).toBe(false);
+    expect(scanQuotes('cat "; touch PWNED').uncertain).toBe(true);
+    expect(scanQuotes("echo don't").uncertain).toBe(true);
+    expect(scanQuotes("echo $'never closed").uncertain).toBe(true);
+    // A `<<` the heredoc half cannot place says nothing about quoting, and must not refuse the mask.
+    expect(scanHeredocs('echo $((1<<2))').uncertain).toBe(true);
+    expect(scanQuotes('echo $((1<<2))').uncertain).toBe(false);
   });
 });

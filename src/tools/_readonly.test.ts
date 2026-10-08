@@ -4,6 +4,7 @@ import {
   hasRawSubstitution,
   isInspectionEscape,
   isProvablyReadOnly,
+  maskQuoted,
   maskSingleQuotedData,
 } from './_readonly.js';
 
@@ -436,6 +437,60 @@ describe('substitution quoting contexts', () => {
     expect(hasRawSubstitution("it's $(id) don't")).toBe(true);
     expect(hasRawSubstitution('solely prose here')).toBe(false);
     expect(hasRawSubstitution('\\$(id) is literal in an expanding body')).toBe(false);
+  });
+});
+
+// An escaped quote is a literal character and does not open a run: `/bin/sh` keeps parsing, so the
+// command between two of them runs. Both masks paired quotes by lookup — `\"` outside quotes opened a
+// double-quoted region that swallowed the `;` behind it — which hid a second command from the segment
+// split, the redirect test and the substitution test alike (#695). Every command here was run under
+// `/bin/sh`, and the hidden half executes in each one.
+describe('an escaped quote does not open a quoted run (#695)', () => {
+  it('sees the second command behind an escaped double quote', () => {
+    const cmd = 'cat f \\"; touch pwned \\"';
+    expect(maskQuoted(cmd)).toContain(';');
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+    expect(isInspectionEscape(cmd)).toBe(false);
+  });
+
+  it('sees the substitution between two escaped single quotes', () => {
+    const cmd = "echo \\'$(touch pwned)\\'";
+    // Nothing blanked: the escaped quotes are literals, so the `$(` between them is command text.
+    expect(maskSingleQuotedData(cmd)).toBe(cmd);
+    expect(hasExecutableSubstitution(cmd)).toBe(true);
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+  });
+
+  // The other half of the same walk: quoting the shell really does read as data stays admitted, so
+  // the fix is not a blanket refusal of anything carrying a backslash.
+  it('keeps admitting the quoting the shell reads as data', () => {
+    // `\"` inside a double-quoted run is a literal quote, not the end of the run — the mask used to
+    // end it there and read `; touch PWNED` as a second command (over-deny, observed).
+    expect(isProvablyReadOnly('echo "a\\" ; touch PWNED"')).toBe(true);
+    // `$'…'` is a quoted word of its own, and a backslash escapes inside it.
+    const ansi = "echo $'a;b'";
+    expect(maskQuoted(ansi)).toHaveLength(ansi.length);
+    expect(maskQuoted(ansi)).not.toContain(';');
+    expect(isProvablyReadOnly("echo $'a\\' ; touch PWNED'")).toBe(true);
+    expect(hasExecutableSubstitution("grep -c $'$(id)' f")).toBe(false);
+  });
+
+  // A comment is not quote-parsed either, and a heredoc body is not parsed at all — the walk skips
+  // both, so an apostrophe in either cannot pair with a later quote and blank a command.
+  it('does not pair a quote inside a comment or a heredoc body with a later one', () => {
+    expect(maskQuoted("echo hi # don't\ncat 'a;b' f")).not.toContain(';');
+    const heredoc = "cat <<'EOF'\nit's\nEOF; touch pwned";
+    expect(maskQuoted(heredoc)).toContain(';');
+    expect(isProvablyReadOnly(heredoc)).toBe(false);
+  });
+
+  // Fail-closed, and the shape of it: a quote the walk cannot close is a syntax error that runs
+  // nothing, so the mask blanks NOTHING rather than guessing where the run ended.
+  it('blanks nothing when the quoting cannot be read', () => {
+    expect(maskQuoted('cat "; touch PWNED')).toBe('cat "; touch PWNED');
+    expect(maskQuoted("echo don't")).toBe("echo don't");
+    expect(maskSingleQuotedData('cat "; touch PWNED')).toBeUndefined();
+    expect(maskSingleQuotedData("echo $'never closed")).toBeUndefined();
   });
 });
 

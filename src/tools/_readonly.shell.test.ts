@@ -35,6 +35,12 @@ const CANDIDATES = [
   `echo 'a;b'`,
   `cat "; touch PWNED"`,
   'cat "; touch PWNED',
+  // An escaped quote OUTSIDE quotes is a literal and the `;` after it is a separator: the mask used
+  // to pair the two escaped quotes and blank the command between them (#695). This one is refused,
+  // so it never runs — the two admitted rows after it are the same walk read the other way.
+  `cat f \\"; touch PWNED \\"`,
+  `echo $'a\\' ; touch PWNED'`,
+  `echo $'a;b'`,
   // Substitution, in every spelling that executes.
   'echo $(touch PWNED)',
   'echo `touch PWNED`',
