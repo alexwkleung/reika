@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +36,13 @@ const CANDIDATES = [
   `echo 'a;b'`,
   `cat "; touch PWNED"`,
   'cat "; touch PWNED',
+  // An escaped quote OUTSIDE quotes is a literal and the `;` after it is a separator: the mask used
+  // to pair the two escaped quotes and blank the command between them (#695). This one is refused,
+  // so it never runs — the two admitted rows after it are the same walk read the other way.
+  `cat f \\"; touch PWNED \\"`,
+  `echo $'a\\' ; touch PWNED'`,
+  `echo $'a\\' ; touch PWNED; echo 'x\\'`,
+  `echo $'a;b'`,
   // Substitution, in every spelling that executes.
   'echo $(touch PWNED)',
   'echo `touch PWNED`',
@@ -109,15 +117,20 @@ async function seed(): Promise<string[]> {
 }
 
 describe('isProvablyReadOnly against the real shell', () => {
+  // bash, and dash where it is installed (`/bin/sh` on Debian/Ubuntu, and on macOS since 10.15) —
+  // the two disagree about quoting (`$'…'` is bash-only), and `bash.ts` runs whichever `/bin/sh` is.
+  const shells = ['bash', ...(existsSync('/bin/dash') ? ['/bin/dash'] : [])];
   it.each(CANDIDATES)('admitting %s never writes to disk', async cmd => {
     if (!isProvablyReadOnly(cmd)) return; // refused: never executed, nothing to observe
-    const before = await seed();
-    try {
-      await exec('bash', ['-c', cmd], { cwd: dir, timeout: 5000 });
-    } catch {
-      // A non-zero exit is fine — the assertion is about side effects, not success.
+    for (const shell of shells) {
+      const before = await seed();
+      try {
+        await exec(shell, ['-c', cmd], { cwd: dir, timeout: 5000 });
+      } catch {
+        // A non-zero exit is fine — the assertion is about side effects, not success.
+      }
+      expect((await readdir(dir)).sort(), shell).toEqual(before);
     }
-    expect((await readdir(dir)).sort()).toEqual(before);
   });
 
   // The suite would pass vacuously if the gate refused everything, so pin that it actually admits

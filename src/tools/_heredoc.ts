@@ -15,6 +15,9 @@
 //     the next and blanks a `$(…)` that really runs.
 //   scanHeredocs — the spans themselves, for `_markdown.ts` (which blanks bodies in place) and the
 //     `bash.ts` hint (which asks whether one sits inside a `$(…)`).
+//   scanQuotes — the quoting REGIONS of the same walk, for `_readonly.ts`'s two masks (#695). It is
+//     the same read of the same text: what the shell calls quoted data here is what the heredoc
+//     readers skip as text there, which is why it is one walk and not a second idea of quoting.
 //
 // What the lexer follows, each one a way a regex had disagreed with the shell:
 //   - quoting and escapes: a `<<` inside quotes is text, and `\<<<EOF` is a literal `<` and then a
@@ -52,7 +55,33 @@ export interface Heredoc {
 
 export interface HeredocScan {
   heredocs: Heredoc[];
+  // Every region the shell reads as quoted DATA, in the order the lexer closes it — a `'…'` inside a
+  // `$(…)` inside a `"…"` is two spans, innermost recorded first. See `scanQuotes`.
+  quotes: QuoteSpan[];
+  // The walk stopped at a quote it could not close. An unterminated quote is a syntax error, so
+  // nothing after it runs — but nothing after it was read either, which the mask callers must know.
+  unclosedQuote: boolean;
+  // A `$'…'` that bash and dash close at different quotes (an escaped `'` inside it). The spans
+  // follow bash, so a mask built from them would blank text dash runs as a command.
+  ambiguousQuote: boolean;
   uncertain: boolean;
+}
+
+// One quoting region, `[start, end)` in the command. `kind` is which of the shell's three forms
+// opened it, because the two masks built from these disagree about the double-quoted one: a `$(…)`
+// RUNS inside `"…"` (so `maskSingleQuotedData` leaves that text alone) while a `;` does not.
+export interface QuoteSpan {
+  start: number;
+  end: number;
+  kind: 'single' | 'ansi' | 'double';
+}
+
+export interface QuoteScan {
+  spans: QuoteSpan[];
+  // True when the text could not be read exactly and the spans are therefore not to be trusted.
+  uncertain: boolean;
+  // `hasHeredocOperator`'s answer off the same walk, so a caller asking both pays for one.
+  heredocOperator: boolean;
 }
 
 type FrameKind = 'top' | 'sub' | 'tick' | 'dq' | 'arith';
@@ -61,6 +90,9 @@ interface Frame {
   kind: FrameKind;
   // Unclosed `(` inside this frame, so a subshell's `)` does not close the `$(` around it.
   parens: number;
+  // A `double` frame's opening quote, so the region it spans can be recorded in `quotes` when it
+  // closes — the one span whose start is behind the lexer by the time it is known.
+  quoteAt?: number;
 }
 
 interface Pending {
@@ -81,6 +113,9 @@ const WORD_END_RE = /[\s;&|<>()]/;
 
 export function scanHeredocs(command: string): HeredocScan {
   const heredocs: Heredoc[] = [];
+  const quotes: QuoteSpan[] = [];
+  let unclosedQuote = false;
+  let ambiguousQuote = false;
   let uncertain = false;
   const stack: Frame[] = [{ kind: 'top', parens: 0 }];
   let pending: Pending[] = [];
@@ -103,6 +138,9 @@ export function scanHeredocs(command: string): HeredocScan {
       if (ch === '\\') i += 2;
       else if (ch === '"') {
         stack.pop();
+        if (frame.quoteAt !== undefined) {
+          quotes.push({ start: frame.quoteAt, end: i + 1, kind: 'double' });
+        }
         i++;
       } else if (ch === '`') {
         stack.push({ kind: 'tick', parens: 0 });
@@ -143,7 +181,13 @@ export function scanHeredocs(command: string): HeredocScan {
     }
     if (ch === "'") {
       const close = command.indexOf("'", i + 1);
-      if (close === -1) break; // an unterminated quote is a syntax error: nothing runs
+      if (close === -1) {
+        // An unterminated quote is a syntax error: nothing runs. The lexer stops with it, and says
+        // so — the mask callers must not fill in the rest by guessing.
+        unclosedQuote = true;
+        break;
+      }
+      quotes.push({ start: i, end: close + 1, kind: 'single' });
       i = close + 1;
       continue;
     }
@@ -151,12 +195,23 @@ export function scanHeredocs(command: string): HeredocScan {
       // ANSI-C quoting, the one single-quoted form a backslash escapes inside.
       let j = i + 2;
       while (j < n && command[j] !== "'") j += command[j] === '\\' ? 2 : 1;
-      if (j >= n) break;
+      // dash, `/bin/sh` on Debian/Ubuntu, has no `$'…'`: it reads `$` and then a plain `'…'`
+      // closed by the FIRST `'`. Where an escaped quote makes the two closes differ, the text after
+      // it is a command in one shell and data in the other, and `bash` runs `/bin/sh -c`.
+      if (command.indexOf("'", i + 2) !== (j < n ? j : -1)) {
+        ambiguousQuote = true;
+        uncertain = true;
+      }
+      if (j >= n) {
+        unclosedQuote = true;
+        break;
+      }
+      quotes.push({ start: i, end: j + 1, kind: 'ansi' });
       i = j + 1;
       continue;
     }
     if (ch === '"') {
-      stack.push({ kind: 'dq', parens: 0 });
+      stack.push({ kind: 'dq', parens: 0, quoteAt: i });
       i++;
       continue;
     }
@@ -257,7 +312,11 @@ export function scanHeredocs(command: string): HeredocScan {
   // An operator whose line never ended has no body — the shell reads none — but it is still an
   // operator, so the guard fires on it and the strip still takes its delimiter word.
   for (const p of pending) heredocs.push({ ...pendingFields(p), bodyStart: n, bodyEnd: n, end: n });
-  return { heredocs, uncertain };
+  // A double quote still open at the end never closed. The other frames (`$(…)`, a backtick,
+  // arithmetic) do not matter here: the text inside them is quote-parsed the same way whether or not
+  // the `)` ever arrives, so the spans read there are good either way.
+  if (stack.some(f => f.kind === 'dq')) unclosedQuote = true;
+  return { heredocs, quotes, unclosedQuote, ambiguousQuote, uncertain };
 }
 
 function pendingFields(p: Pending) {
@@ -337,8 +396,33 @@ function readBody(command: string, start: number, p: Pending): { bodyEnd: number
 }
 
 export function hasHeredocOperator(command: string): boolean {
-  const scan = scanHeredocs(command);
+  return heredocOperatorIn(scanHeredocs(command));
+}
+
+function heredocOperatorIn(scan: HeredocScan): boolean {
   return scan.uncertain || scan.heredocs.length > 0;
+}
+
+// The quoting regions of a command, for the length-preserving masks in `_readonly.ts` (#695). Same
+// walk as `scanHeredocs`, because the two questions are the same read: a region this call reports as
+// quoted data is one the heredoc readers skip as text (`$'…'`, a quoted delimiter, prose in a
+// double-quoted `--body`), and a region it reports nothing about is one the shell parses as commands.
+//
+// `uncertain` is the quoting walk's own doubt — an unterminated quote, or a `$'…'` bash and dash
+// close at different quotes — not `HeredocScan.uncertain`. Everything that makes the heredoc half
+// unsure (a `<<` in arithmetic, a run of four `<`, a delimiter word it cannot read) is about `<`, and
+// folding it in would refuse the mask over a `<<` that has nothing to do with quoting. That is not a
+// claim the walk reads such text correctly: after an unreadable delimiter it quote-parses a body the
+// shell does not. What keeps that from hiding a command today is that a stray quote in the body
+// leaves the walk unclosed, so the mask blanks nothing — a mask that trusted a partial walk would
+// lose that.
+export function scanQuotes(command: string): QuoteScan {
+  const scan = scanHeredocs(command);
+  return {
+    spans: scan.quotes,
+    uncertain: scan.unclosedQuote || scan.ambiguousQuote,
+    heredocOperator: heredocOperatorIn(scan),
+  };
 }
 
 // The command with each heredoc's operator, delimiter word, body and terminator line cut, and the
