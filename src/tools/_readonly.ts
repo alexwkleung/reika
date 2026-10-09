@@ -1,4 +1,4 @@
-import { hasHeredocOperator, scanQuotes, type QuoteSpan } from './_heredoc.js';
+import { scanQuotes, type QuoteSpan } from './_heredoc.js';
 
 // Shell commands that only READ — asked as TWO questions, because the two callers pull in opposite
 // directions and collapsing them costs whichever one is on the losing side.
@@ -147,16 +147,19 @@ function dropEscapedSubstitutionChars(raw: string): string {
 }
 
 // Blank the ranges a caller asks for, preserving length and everything else. Spans nest (a `'…'`
-// inside a `$(…)` inside a `"…"`), which is why this blanks one range at a time off the string it has
-// already blanked: a space is never re-interpreted, so an outer span blanking over an inner one is
-// the same as blanking either alone.
+// inside a `$(…)` inside a `"…"`), so they are sorted and merged first and the string is built once:
+// rebuilding it per span was quadratic, and a long `python3 -c` carries thousands of quoted words.
 function blankSpans(command: string, spans: QuoteSpan[], take: (s: QuoteSpan) => boolean): string {
-  let out = command;
-  for (const s of spans) {
-    if (!take(s)) continue;
-    out = out.slice(0, s.start) + ' '.repeat(s.end - s.start) + out.slice(s.end);
+  const ranges = spans.filter(take).sort((a, b) => a.start - b.start);
+  let out = '';
+  let pos = 0;
+  for (const r of ranges) {
+    if (r.end <= pos) continue;
+    const start = Math.max(r.start, pos);
+    out += command.slice(pos, start) + ' '.repeat(r.end - start);
+    pos = r.end;
   }
-  return out;
+  return out + command.slice(pos);
 }
 
 // What a substitution check should actually read: the command with the regions where a `$(` or a
@@ -183,9 +186,8 @@ function blankSpans(command: string, spans: QuoteSpan[], take: (s: QuoteSpan) =>
 // unterminated quote is a syntax error nothing runs past) — the same fallback, because a mask that
 // guesses where a quote ends is how a substitution gets hidden.
 export function maskSingleQuotedData(command: string): string | undefined {
-  if (hasHeredocOperator(command)) return undefined;
   const scan = scanQuotes(command);
-  if (scan.uncertain) return undefined;
+  if (scan.heredocOperator || scan.uncertain) return undefined;
   return blankSpans(command, scan.spans, s => s.kind !== 'double');
 }
 

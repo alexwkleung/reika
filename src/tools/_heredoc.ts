@@ -80,6 +80,8 @@ export interface QuoteScan {
   spans: QuoteSpan[];
   // True when the text could not be read exactly and the spans are therefore not to be trusted.
   uncertain: boolean;
+  // `hasHeredocOperator`'s answer off the same walk, so a caller asking both pays for one.
+  heredocOperator: boolean;
 }
 
 type FrameKind = 'top' | 'sub' | 'tick' | 'dq' | 'arith';
@@ -394,7 +396,10 @@ function readBody(command: string, start: number, p: Pending): { bodyEnd: number
 }
 
 export function hasHeredocOperator(command: string): boolean {
-  const scan = scanHeredocs(command);
+  return heredocOperatorIn(scanHeredocs(command));
+}
+
+function heredocOperatorIn(scan: HeredocScan): boolean {
   return scan.uncertain || scan.heredocs.length > 0;
 }
 
@@ -413,7 +418,11 @@ export function hasHeredocOperator(command: string): boolean {
 // lose that.
 export function scanQuotes(command: string): QuoteScan {
   const scan = scanHeredocs(command);
-  return { spans: scan.quotes, uncertain: scan.unclosedQuote || scan.ambiguousQuote };
+  return {
+    spans: scan.quotes,
+    uncertain: scan.unclosedQuote || scan.ambiguousQuote,
+    heredocOperator: heredocOperatorIn(scan),
+  };
 }
 
 // The command with each heredoc's operator, delimiter word, body and terminator line cut, and the
