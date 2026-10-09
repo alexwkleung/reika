@@ -141,7 +141,7 @@ export function Question({
       <Box marginTop={1}>
         <Text color={theme.muted}>
           {typing
-            ? 'enter submit  ·  ctrl-c abort'
+            ? 'enter submit  ·  ctrl-c back to the options'
             : '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
         </Text>
       </Box>

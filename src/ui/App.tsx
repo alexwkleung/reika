@@ -749,6 +749,16 @@ export function App() {
         setPending(null);
       }
       if (questionRef.current) {
+        // Typing an answer or a note (#651): ctrl-c backs out of the field to the option list
+        // instead of dropping the question. The field is live and owns the keyboard, so this is the
+        // only route back to the list, and ask_user is one-shot — dropping it here throws away the
+        // menu the turn is waiting on. The list keeps the abort, so a second ctrl-c still ends the
+        // dialog. Returned rather than fallen through: nothing has been decided, and the code below
+        // would abort the whole turn with it.
+        if (questionTypingRef.current) {
+          setQuestionTyping(null);
+          return;
+        }
         questionRef.current.resolve(null);
         setQuestion(null);
         setQuestionTyping(null);
