@@ -227,6 +227,19 @@ describe('scanQuotes', () => {
     expect(scanQuotes("echo $'a\\' ; touch pwned'").spans[0].kind).toBe('ansi');
   });
 
+  // dash has no `$'…'` and closes it at the first `'`, so an escaped quote inside one splits the two
+  // shells' readings: `; touch PWNED` is data to bash and a command to dash (#696 review).
+  it("is uncertain about a `$'…'` that bash and dash close at different quotes", () => {
+    const split = "echo $'a\\' ; touch PWNED; echo 'x\\'";
+    expect(scanQuotes(split).uncertain).toBe(true);
+    expect(scanHeredocs(split).uncertain).toBe(true);
+    expect(scanQuotes("echo $'a\\\\\\'b' ; cat f").uncertain).toBe(true);
+    expect(scanQuotes("echo $'a\\\\b' ; cat f").uncertain).toBe(false);
+    // Escapes that leave the first `'` where both shells close agree, and stay certain.
+    expect(scanQuotes("echo $'a;b'").uncertain).toBe(false);
+    expect(scanQuotes("echo $'a\\nb\\\\'").uncertain).toBe(false);
+  });
+
   // Not quote-parsed by the shell, so a quote in either is a character rather than an opener.
   it('records nothing inside a comment or a heredoc body', () => {
     expect(scanQuotes("echo hi # don't\ncat 'a;b' f").spans).toHaveLength(1);

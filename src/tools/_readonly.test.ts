@@ -471,8 +471,20 @@ describe('an escaped quote does not open a quoted run (#695)', () => {
     const ansi = "echo $'a;b'";
     expect(maskQuoted(ansi)).toHaveLength(ansi.length);
     expect(maskQuoted(ansi)).not.toContain(';');
-    expect(isProvablyReadOnly("echo $'a\\' ; touch PWNED'")).toBe(true);
     expect(hasExecutableSubstitution("grep -c $'$(id)' f")).toBe(false);
+  });
+
+  // dash — `/bin/sh` on Debian/Ubuntu, and what `bash` runs commands with — has no `$'…'`: it closes
+  // the quote at the first `'`, escaped or not. So an escaped quote inside one hides a command from a
+  // mask that read it bash's way (#696 review, run under dash: this writes PWNED). Neither reading is
+  // safe to assume, so both masks fall back to the raw text and the `;` stays visible.
+  it("refuses a `$'…'` that dash would close early", () => {
+    const cmd = "echo $'a\\' ; touch PWNED; echo 'x\\'";
+    expect(maskQuoted(cmd)).toBe(cmd);
+    expect(maskSingleQuotedData(cmd)).toBeUndefined();
+    expect(isProvablyReadOnly(cmd)).toBe(false);
+    // Bash reads this one as a single quoted word, dash as an unclosed quote: refused either way.
+    expect(isProvablyReadOnly("echo $'a\\' ; touch PWNED'")).toBe(false);
   });
 
   // A comment is not quote-parsed either, and a heredoc body is not parsed at all — the walk skips

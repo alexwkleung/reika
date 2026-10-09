@@ -61,6 +61,9 @@ export interface HeredocScan {
   // The walk stopped at a quote it could not close. An unterminated quote is a syntax error, so
   // nothing after it runs — but nothing after it was read either, which the mask callers must know.
   unclosedQuote: boolean;
+  // A `$'…'` that bash and dash close at different quotes (an escaped `'` inside it). The spans
+  // follow bash, so a mask built from them would blank text dash runs as a command.
+  ambiguousQuote: boolean;
   uncertain: boolean;
 }
 
@@ -110,6 +113,7 @@ export function scanHeredocs(command: string): HeredocScan {
   const heredocs: Heredoc[] = [];
   const quotes: QuoteSpan[] = [];
   let unclosedQuote = false;
+  let ambiguousQuote = false;
   let uncertain = false;
   const stack: Frame[] = [{ kind: 'top', parens: 0 }];
   let pending: Pending[] = [];
@@ -189,6 +193,13 @@ export function scanHeredocs(command: string): HeredocScan {
       // ANSI-C quoting, the one single-quoted form a backslash escapes inside.
       let j = i + 2;
       while (j < n && command[j] !== "'") j += command[j] === '\\' ? 2 : 1;
+      // dash, `/bin/sh` on Debian/Ubuntu, has no `$'…'`: it reads `$` and then a plain `'…'`
+      // closed by the FIRST `'`. Where an escaped quote makes the two closes differ, the text after
+      // it is a command in one shell and data in the other, and `bash` runs `/bin/sh -c`.
+      if (command.indexOf("'", i + 2) !== (j < n ? j : -1)) {
+        ambiguousQuote = true;
+        uncertain = true;
+      }
       if (j >= n) {
         unclosedQuote = true;
         break;
@@ -303,7 +314,7 @@ export function scanHeredocs(command: string): HeredocScan {
   // arithmetic) do not matter here: the text inside them is quote-parsed the same way whether or not
   // the `)` ever arrives, so the spans read there are good either way.
   if (stack.some(f => f.kind === 'dq')) unclosedQuote = true;
-  return { heredocs, quotes, unclosedQuote, uncertain };
+  return { heredocs, quotes, unclosedQuote, ambiguousQuote, uncertain };
 }
 
 function pendingFields(p: Pending) {
@@ -392,14 +403,17 @@ export function hasHeredocOperator(command: string): boolean {
 // quoted data is one the heredoc readers skip as text (`$'…'`, a quoted delimiter, prose in a
 // double-quoted `--body`), and a region it reports nothing about is one the shell parses as commands.
 //
-// `uncertain` is ONLY the unterminated quote, not `HeredocScan.uncertain`. Everything that makes the
-// heredoc half unsure — a `<<` in arithmetic, a run of four `<`, a delimiter word it cannot read — is
-// about `<`, and leaves the quoting walk reading correctly on its own or reading nothing where it
-// could have blanked something (which costs a refusal, never a hidden command). Folding that flag in
-// here would refuse the mask over a `<<` that has nothing to do with quoting.
+// `uncertain` is the quoting walk's own doubt — an unterminated quote, or a `$'…'` bash and dash
+// close at different quotes — not `HeredocScan.uncertain`. Everything that makes the heredoc half
+// unsure (a `<<` in arithmetic, a run of four `<`, a delimiter word it cannot read) is about `<`, and
+// folding it in would refuse the mask over a `<<` that has nothing to do with quoting. That is not a
+// claim the walk reads such text correctly: after an unreadable delimiter it quote-parses a body the
+// shell does not. What keeps that from hiding a command today is that a stray quote in the body
+// leaves the walk unclosed, so the mask blanks nothing — a mask that trusted a partial walk would
+// lose that.
 export function scanQuotes(command: string): QuoteScan {
   const scan = scanHeredocs(command);
-  return { spans: scan.quotes, uncertain: scan.unclosedQuote };
+  return { spans: scan.quotes, uncertain: scan.unclosedQuote || scan.ambiguousQuote };
 }
 
 // The command with each heredoc's operator, delimiter word, body and terminator line cut, and the
