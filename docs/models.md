@@ -11,6 +11,7 @@ rather than the only thing it can do.
 
 ## Local
 
+- Mellum2.1 12B A2.5B Thinking (Q4_K_M)
 - Ling 3.0 Tiny (Q4_K_M)
 - Qwen3.8 Flash Next (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
 - DeepSeek V4 Flash 0731 (UD-IQ3_XXS; chat mode; minimal mode; via SSD streaming)
