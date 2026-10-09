@@ -72,8 +72,11 @@ type TurnOpts = {
 
 // The turn asks one question, as ask_user would, and waits on the answer.
 const answers: (QuestionAnswer | null)[] = [];
+// Set by a test that needs the turn running, question not yet asked (a draft typed mid-turn).
+let gate: Promise<void> | null = null;
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'user', content: opts.userInput });
+  if (gate) await gate;
   answers.push(await opts.requestQuestion!(REQUEST));
 });
 vi.mock('../agent/loop.js', () => ({ runTurn: (...a: unknown[]) => runTurn(...(a as [never])) }));
@@ -125,6 +128,7 @@ describe('ask_user dialog: backing out of the answer field (#651)', () => {
   beforeEach(() => {
     runTurn.mockClear();
     answers.length = 0;
+    gate = null;
   });
 
   it('ctrl-c on the own-answer field returns to the options, and ctrl-c there aborts', async () => {
@@ -141,10 +145,8 @@ describe('ask_user dialog: backing out of the answer field (#651)', () => {
     await press(app, CTRL_C, 'Flag every interpreter invocation', 'the option list');
     expect(plain(app.lastFrame())).not.toContain('Type your answer below.');
     expect(answers).toEqual([]);
-    // Backing out keeps the draft in the box. Deliberate: leaving costs a visible sentence in the
-    // input, while discarding costs an answer the user may only have paused over — and re-entering
-    // the field (Enter on the own-answer row) picks the sentence up where it was left.
-    expect(plain(app.lastFrame())).toContain('my own');
+    // Backing out discards the typed answer: left in the box, it would outlive the question.
+    expect(plain(app.lastFrame())).not.toContain('my own');
 
     // From the list, ctrl-c is still the abort.
     await press(app, CTRL_C);
@@ -168,9 +170,32 @@ describe('ask_user dialog: backing out of the answer field (#651)', () => {
     await press(app, '\r');
     for (let i = 0; i < 100 && answers.length === 0; i++) await tick(20);
     expect(answers).toEqual([{ text: 'Flag every interpreter invocation', index: 1 }]);
-    // The note the user backed out of is still in the box: it stays visible under the dialog and is
-    // editable again the moment the question resolves, so nothing is sent without being seen.
-    expect(plain(app.lastFrame())).toContain('wait');
+    // The abandoned note is gone, so it can't be queued as the next prompt once the box is live.
+    expect(plain(app.lastFrame())).not.toContain('wait');
+    app.unmount();
+  });
+
+  it('backing out restores a draft that was in the box before the field opened', async () => {
+    let release!: () => void;
+    gate = new Promise(r => (release = r));
+    const app = await mountApp();
+    for (let i = 0; i < 200 && !plain(app.lastFrame()).includes('ask me'); i++) {
+      app.stdin.write('ask me');
+      await tick(20);
+    }
+    await press(app, '\r');
+    // Mid-turn the box is live: the user starts their next prompt before the question arrives.
+    await press(app, 'next', 'next', 'the mid-turn draft');
+    release();
+    await until(app, 'Flag only inline bodies', 'the question dialog');
+
+    // The field opens on the draft, as it always has; only what is typed in it is discarded.
+    await press(app, '\t', 'Adding a note to: Flag only inline bodies', 'the note field');
+    await press(app, ' note', 'next note', 'the typed note');
+    await press(app, CTRL_C, 'Flag every interpreter invocation', 'the option list');
+    expect(plain(app.lastFrame())).toContain('next');
+    expect(plain(app.lastFrame())).not.toContain('next note');
+    expect(answers).toEqual([]);
     app.unmount();
   });
 
