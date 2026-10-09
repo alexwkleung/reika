@@ -395,6 +395,8 @@ export function App() {
   const modelPinnedRef = useRef(false);
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
+  // What the box held when the ask_user answer field opened, so backing out discards only the answer.
+  const preAnswerDraftRef = useRef('');
   const suggestionStateRef = useRef<SuggestionState | null>(null);
   suggestionStateRef.current = suggestionState;
   const suggestionSelectedRef = useRef(0);
@@ -749,6 +751,20 @@ export function App() {
         setPending(null);
       }
       if (questionRef.current) {
+        // Typing an answer or a note (#651): ctrl-c backs out of the field to the option list
+        // instead of dropping the question. The field is live and owns the keyboard, so this is the
+        // only route back to the list, and ask_user is one-shot — dropping it here throws away the
+        // menu the turn is waiting on. The list keeps the abort, so a second ctrl-c still ends the
+        // dialog. Returned rather than fallen through: nothing has been decided, and the code below
+        // would abort the whole turn with it. The typed answer is discarded — left in the box it
+        // outlives the question and one stray Enter queues it as the next prompt — but a draft that
+        // was there before the field opened comes back.
+        if (questionTypingRef.current) {
+          setInputValue(preAnswerDraftRef.current);
+          setSuggestionState(null);
+          setQuestionTyping(null);
+          return;
+        }
         questionRef.current.resolve(null);
         setQuestion(null);
         setQuestionTyping(null);
@@ -849,6 +865,7 @@ export function App() {
       // Tab on an option: take it, but add a note in your own words. The model gets both.
       if (key.tab && questionSelectedRef.current < last) {
         const forIndex = questionSelectedRef.current;
+        preAnswerDraftRef.current = inputValueRef.current;
         queueMicrotask(() => setQuestionTyping({ forIndex }));
         return;
       }
@@ -858,6 +875,7 @@ export function App() {
           // Deferred a microtask: this same keypress is dispatched to every useInput handler with
           // re-renders in between, so enabling Input synchronously hands it the very Enter that
           // opened it and submits an empty answer.
+          preAnswerDraftRef.current = inputValueRef.current;
           queueMicrotask(() => setQuestionTyping({}));
           return;
         }

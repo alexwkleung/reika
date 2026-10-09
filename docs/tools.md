@@ -42,6 +42,8 @@ in your own words, or the last row — always present — to type your own answe
 options is the right frame. One question per turn, and the answer is pinned into context afterwards so
 it cannot be forgotten and re-asked later in the same turn. Small models can and do frame a question
 around a misreading, so the options are not a summary of the request; that last row is the way out.
+`Ctrl-C` backs out of the answer field and puts the list back, so an answer started by mistake costs a
+keystroke rather than the question; from the list itself it drops the question.
 
 ## The web tools
 
