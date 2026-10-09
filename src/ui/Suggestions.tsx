@@ -62,10 +62,7 @@ export function Suggestions({
         return (
           <Text key={start + j}>
             <Text color={selected ? theme.accent : undefined}>
-              {start + visible < total && j === visible - 1
-                ? '↓ '
-                : selected ? '› '
-                : '  '}
+              {start + visible < total && j === visible - 1 ? '↓ ' : selected ? '› ' : '  '}
             </Text>
             <Text color={selected ? theme.accent : undefined}>
               {truncate(item.display, maxDisplay)}
