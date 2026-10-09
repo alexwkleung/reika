@@ -687,6 +687,28 @@ fetched:` line (URL → locator, capped at 10, outside the entry budget next to 
 the fetch analogue of the file-coverage line — a page the session read stays addressable through
 every fold. Failed fetches and pages under the spill floor have nothing to point at and are left
 out.
+**That same file is what a read-less tool list pages through (#379).** #377 gave chat the honest but
+dead-end result: the file is written, the model has nothing that opens it, and an over-cap footer
+could only say the rest was unreachable. `fetch_url` now takes an optional `offset` — a char offset
+into the extracted text — and a URL in `savedPages` is served from the file at that offset: no
+request, no budget. The over-cap footer becomes `call fetch_url again with the same url and offset:
+65536 to continue`, which makes blind stepping the one retrieval primitive chat has (no grep out
+there). Two spellings were on the table: the param in every mode, or a chat-only variant object
+sharing `run`, like `readOnlyBashTool`. Taken: everywhere. A variant needs `webTools` to know the
+mode, a second object carrying `fetch_url`'s name with a different schema, and two descriptions kept
+in step — all to hold the agent-mode request byte-identical, in a build that already changes that
+prefix on release. The agent-mode footer is deliberately untouched and still names `read`, so the
+param is inert wherever a locator already works. An `offset` with nothing saved is refused rather
+than answered with a request: the file is the only thing an offset can be taken from — a fresh
+extraction is not in hand to slice, and the request that would produce it returns the head, which is
+what the model already has. The refusal sits ahead of the offline and exfil checks because it makes
+no egress; a past-the-end offset comes back as `read`'s past-EOF shape; a window that reaches the end
+of the page gets no footer. A paged call records `followed` with `how: 'offset'` in `_spillstats.ts`
+(it opens the artifact without naming its path, so the loop's `referencesSpill` check cannot see it),
+which is how a run answers the question the issue left open — whether a model follows a param it was
+never trained on. Left alone deliberately, and still open in the issue: the window-chop marker in
+`capPayload` (`provider/toolcall.ts`) says "read a narrower line range" whatever the tool list —
+serialization, not spill.
 **`search` does the same with the query as the handle** (#297). A result list ages out like any
 payload and should: the model followed one of eight links or lifted one snippet, and the rest was
 never worth the window. What it keeps is the summary, which quotes the query verbatim — a few

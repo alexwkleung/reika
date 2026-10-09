@@ -332,7 +332,10 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   context window, not the tool cap, and the marker at that cut says to read a narrower range —
   advice only followable once the page is a local file. A URL fetched again in the same session is
   served from that file with no request and no budget use, and the compaction recap lists saved
-  pages by locator, so a page the session already read stays reachable through every fold.
+  pages by locator, so a page the session already read stays reachable through every fold. That file
+  is also what `fetch_url`'s optional `offset` reads from — a paged call costs no request and no
+  budget, which is how a tool list with no `read` (chat) gets past the head of a long page, the
+  footer naming the next offset (#379).
   Benched on a 2300-file monorepo, where `**/*.ts` matched 560 files whose 200-path page covered 3
   of 5 packages — the concentration a small repo never reveals, since a cap it cannot reach behaves
   identically to the flag being off. `0` disables — which is also how the A/B baseline is spelled

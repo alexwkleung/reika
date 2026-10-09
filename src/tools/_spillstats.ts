@@ -51,8 +51,11 @@ export function recordCapped(opts: {
   write({ event: 'capped', ...opts });
 }
 
-// The model referenced a path we handed out. This is the payoff side of the ledger: `capped`
-// events without matching `followed` events are windows being retained for nothing.
-export function recordFollowed(opts: { by: string }): void {
+// The model took a recovery path on an artifact we handed out. This is the payoff side of the
+// ledger: `capped` events without matching `followed` events are windows being retained for
+// nothing. `by` is the tool that took it, and `how` distinguishes the two shapes a page has —
+// naming the path (the tools' `read`/`grep`/`bash`), or paging it through `fetch_url` with an
+// `offset` (#379), which names no path at all and would otherwise be invisible here.
+export function recordFollowed(opts: { by: string; how?: string }): void {
   write({ event: 'followed', ...opts });
 }
