@@ -54,9 +54,17 @@ describe('suggestion window (#470)', () => {
   it('keeps the selected item on screen past the first window', () => {
     const state = commandState(25);
     const { lastFrame } = render(<Suggestions state={state} selectedIndex={20} />);
-    expect(lastFrame()).toContain('› /cmd20');
+    // The selected item is the last visible row and the list is truncated, so it
+    // carries the down arrow (more items below) instead of the › marker.
+    expect(lastFrame()).toContain('↓ /cmd20');
     expect(lastFrame()).not.toContain('/cmd0 ');
     expect(lastFrame()).toContain('21/25');
+  });
+
+  it('marks the selected item with › when it is not the last visible row', () => {
+    const state = commandState(25);
+    const { lastFrame } = render(<Suggestions state={state} selectedIndex={0} />);
+    expect(lastFrame()).toContain('› /cmd0');
   });
 
   it('a short list keeps its height and shows no position', () => {
