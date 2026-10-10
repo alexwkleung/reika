@@ -53,8 +53,12 @@ jobs:
 
       - name: Stage on npm
         run: |
-          npm stage publish "$TGZ"
-          npm stage list @alexwkleung/reika
+          # The trust grant allows stage-publish only, so `npm stage list` is a 401 here; the id
+          # comes from publish's own output instead.
+          set -o pipefail
+          npm stage publish "$TGZ" 2>&1 | tee "$RUNNER_TEMP/stage.log"
+          stage_id="$(grep -oE 'staged with id [0-9a-f-]+' "$RUNNER_TEMP/stage.log" | awk '{print $4}')"
+          echo "STAGE_ID=${stage_id:-unknown}" >> "$GITHUB_ENV"
 
       - name: GitHub release
         env:
@@ -90,7 +94,7 @@ jobs:
             echo
             echo "sha256 \`$SHA256\`"
             echo
-            echo '1. `npm stage list @alexwkleung/reika`, then `npm stage approve <id>` (2FA)'
+            echo "1. \`npm stage approve $STAGE_ID\` (2FA)"
             echo '2. Merge the tap PR in alexwkleung/homebrew-tap'
             echo '3. `pnpm run release:verify`'
           } >> "$GITHUB_STEP_SUMMARY"
