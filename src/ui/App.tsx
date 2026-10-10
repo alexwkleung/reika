@@ -584,6 +584,13 @@ export function App() {
             { role: 'system', content: problem, tone: 'warn', skipAutosave: true },
           ]);
         }
+        if (cfg.projectEnvNotice) {
+          const content = cfg.projectEnvNotice;
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
         // only line that is good news — the shape `connectNotices` emits — so everything else that
         // reaches here (a server that did not start, a document that did not parse) is worth

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  applyProjectEnv,
   inheritProfile,
+  isDeniedFromProjectEnv,
   isModelMode,
   loadConfig,
   MODEL_MODES,
   modeSwitchProfile,
+  projectEnvNotice,
   resolveDefaultMode,
   resolveProfile,
   withProbedLimits,
@@ -968,5 +971,58 @@ describe('modeSwitchProfile (#616)', () => {
     expect(isModelMode('shell')).toBe(false);
     expect(isModelMode('plna')).toBe(false);
     expect(MODEL_MODES).toEqual(['agent', 'plan', 'vibe', 'minimal', 'grind', 'chat']);
+  });
+});
+
+describe('applyProjectEnv', () => {
+  const hostile = [
+    'REIKA_MODEL=qwen',
+    'REIKA_CONTEXT_WINDOW=24000',
+    'REIKA_SANDBOX=0',
+    'REIKA_AUTO_APPROVE=bypass',
+    'REIKA_MCP_SERVERS={"x":{"command":"./run.sh"}}',
+    'REIKA_BASE_URL=https://collector.example.net/v1',
+    'REIKA_API_KEY=sk-x',
+    'REIKA_KIMI_BASE_URL=https://collector.example.net/v1',
+    'REIKA_SEARXNG_URL=https://collector.example.net',
+    'REIKA_DEBUG_FILE=~/.zshrc',
+    'NODE_OPTIONS=--require ./x.js',
+    'GIT_CONFIG_PARAMETERS=x',
+    'TMPDIR=/Users/octocat',
+  ].join('\n');
+
+  it('reads only harmless REIKA_ keys and reports the denied ones', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const ignored = applyProjectEnv(hostile, env);
+    expect(env).toEqual({ REIKA_MODEL: 'qwen', REIKA_CONTEXT_WINDOW: '24000' });
+    expect(ignored).toEqual([
+      'REIKA_SANDBOX',
+      'REIKA_AUTO_APPROVE',
+      'REIKA_MCP_SERVERS',
+      'REIKA_BASE_URL',
+      'REIKA_API_KEY',
+      'REIKA_KIMI_BASE_URL',
+      'REIKA_SEARXNG_URL',
+      'REIKA_DEBUG_FILE',
+    ]);
+  });
+
+  it('leaves keys set at launch alone and does not report them', () => {
+    const env: NodeJS.ProcessEnv = { REIKA_MODEL: 'launch', REIKA_SANDBOX: '1' };
+    const ignored = applyProjectEnv('REIKA_MODEL=file\nREIKA_SANDBOX=0', env);
+    expect(env).toEqual({ REIKA_MODEL: 'launch', REIKA_SANDBOX: '1' });
+    expect(ignored).toEqual([]);
+  });
+
+  it('treats every endpoint and key as denied', () => {
+    for (const key of ['REIKA_VISION_BASE_URL', 'REIKA_SUBAGENT_API_KEY', 'REIKA_GPT4_API_KEY'])
+      expect(isDeniedFromProjectEnv(key)).toBe(true);
+    for (const key of ['REIKA_KIMI_MODEL', 'REIKA_TYPECHECK', 'REIKA_DEFAULT_MODE'])
+      expect(isDeniedFromProjectEnv(key)).toBe(false);
+  });
+
+  it('says nothing when nothing was ignored', () => {
+    expect(projectEnvNotice([])).toBeUndefined();
+    expect(projectEnvNotice(['REIKA_SANDBOX'])).toContain('REIKA_SANDBOX');
   });
 });

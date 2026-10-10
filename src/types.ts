@@ -528,6 +528,8 @@ export type Config = {
   // has, worded for the startup scrollback. Fail-open: the entry is dropped and the mode keeps the
   // session's model — this line is what keeps that from being invisible.
   modeModelErrors?: string[];
+  // Security-relevant keys the cwd .env set and loadConfig ignored, worded for the startup notice.
+  projectEnvNotice?: string;
   maxTokens?: number;
   contextWindow?: number;
   // The active profile's maxOutputTokens, overlaid by resolveProfile.
