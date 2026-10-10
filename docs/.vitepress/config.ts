@@ -11,6 +11,60 @@ export default defineConfig({
     'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
   appearance: 'force-dark',
+  locales: {
+    root: { label: 'English', lang: 'en', link: '/' },
+    zh: {
+      label: '简体中文',
+      lang: 'zh-CN',
+      link: '/zh/',
+      title: 'Reika - 面向本地和托管模型的编程智能体 CLI',
+      description: '面向本地和托管模型的编程智能体 CLI，优先围绕小型本地模型设计。',
+      themeConfig: {
+        nav: [
+          { text: '安装（英文）', link: '/getting-started' },
+          { text: '使用（英文）', link: '/usage' },
+          { text: '配置（英文）', link: '/configuration' },
+          { text: '研究结果（英文）', link: '/findings' },
+          { text: '支持项目（英文）', link: '/support' },
+          {
+            text: '更新日志（英文）',
+            link: 'https://github.com/alexwkleung/reika/blob/main/CHANGELOG.md',
+          },
+        ],
+        sidebar: [
+          {
+            text: '指南',
+            items: [
+              { text: '安装（英文）', link: '/getting-started' },
+              { text: '使用（英文）', link: '/usage' },
+              { text: '配置（英文）', link: '/configuration' },
+              { text: '工具（英文）', link: '/tools' },
+              { text: '指令与技能（英文）', link: '/skills' },
+              { text: '模型', link: '/zh/models' },
+              { text: '平台', link: '/zh/platforms' },
+              { text: '架构', link: '/zh/architecture' },
+              { text: '研究结果（英文）', link: '/findings' },
+            ],
+          },
+          {
+            text: '项目',
+            items: [{ text: '支持项目（英文）', link: '/support' }],
+          },
+        ],
+        outline: { label: '本页目录' },
+        docFooter: { prev: '上一篇', next: '下一篇' },
+        langMenuLabel: '切换语言',
+        sidebarMenuLabel: '菜单',
+        returnToTopLabel: '返回顶部',
+        darkModeSwitchLabel: '外观',
+        footer: {
+          message:
+            '基于 Apache-2.0 许可证免费开源 · <a href="/support">支持项目（英文）</a> · <a href="/support#contact">联系（英文）</a>',
+          copyright: 'Copyright 2026 Alex Leung',
+        },
+      },
+    },
+  },
   srcExclude: ['demo/**', 'node_modules/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
@@ -22,6 +76,8 @@ export default defineConfig({
     config: md => md.use(githubLinks),
   },
   themeConfig: {
+    // Untranslated pages have no /zh/ counterpart; the language menu goes to each locale's home.
+    i18nRouting: false,
     logo: '/favicon.svg',
     // Shown in the nav bar next to the logo, instead of falling back to the full
     // site `title` above; the document/tab title still uses `title`.
@@ -68,7 +124,7 @@ export default defineConfig({
     if (brokenLinks.size > 0) {
       throw new Error(`Broken links:\n  ${[...brokenLinks].join('\n  ')}`);
     }
-    // llms.txt is written by hand, so a page added to the sidebar has to be added there too.
+    // llms.txt covers the canonical English sidebar; translated sidebars are exempt.
     const llms = readFileSync(new URL('../public/llms.txt', import.meta.url), 'utf8');
     const sidebar = siteConfig.site.themeConfig.sidebar as { items: { link: string }[] }[];
     const missing = sidebar

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress';
 import { VPHomeHero } from 'vitepress/theme';
+import { computed } from 'vue';
 
 // The landing page, top to bottom: the default theme's hero, then the markdown body (demo and
 // install), then two plain sections drawn from the frontmatter — `features` as a short grid and
@@ -8,8 +9,8 @@ import { VPHomeHero } from 'vitepress/theme';
 // cards, which made the page read as a wall of boxes.
 type Item = { title: string; details: string; link?: string };
 const { frontmatter } = useData();
-const features = (frontmatter.value.features ?? []) as Item[];
-const docs = (frontmatter.value.docs ?? []) as Item[];
+const features = computed(() => (frontmatter.value.features ?? []) as Item[]);
+const docs = computed(() => (frontmatter.value.docs ?? []) as Item[]);
 </script>
 
 <template>
@@ -22,7 +23,7 @@ const docs = (frontmatter.value.docs ?? []) as Item[];
       </div>
 
       <section v-if="features.length" class="LandingSection">
-        <h2>What it does</h2>
+        <h2>{{ frontmatter.featuresTitle }}</h2>
         <div class="LandingFeatures">
           <div v-for="item in features" :key="item.title" class="LandingFeature">
             <h3>{{ item.title }}</h3>
@@ -32,7 +33,7 @@ const docs = (frontmatter.value.docs ?? []) as Item[];
       </section>
 
       <section v-if="docs.length" class="LandingSection">
-        <h2>Documentation</h2>
+        <h2>{{ frontmatter.docsTitle }}</h2>
         <div class="LandingDocs">
           <a v-for="item in docs" :key="item.title" class="LandingDoc" :href="withBase(item.link!)">
             <span class="title">{{ item.title }}</span>
