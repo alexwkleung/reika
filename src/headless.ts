@@ -133,6 +133,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);
     // The same startup line the TUI shows for a REIKA_MODE_MODELS entry it could not use (#616).
     for (const problem of config.modeModelErrors ?? []) io.stderr(`reika: ${problem}\n`);
+    if (config.projectEnvNotice) io.stderr(`reika: ${config.projectEnvNotice}\n`);
 
     // An MCP tool typed as a slash command (#265): the same direct call the TUI makes, answered with
     // the tool's own output instead of a model turn. There is no question for the model to answer —

@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -16,12 +17,61 @@ import type {
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
 import { parseMcpServers } from './mcp/config.js';
 
+// The cwd .env belongs to whatever repo reika was opened in, which may not be the user's. A cloned
+// repo's file must not turn the sandbox or approvals off, start a program (MCP), redirect where
+// requests or logs go, or reach child processes (NODE_OPTIONS, GIT_*, TMPDIR — the last also names
+// a sandbox-writable path), so only REIKA_* keys are read from it and these are not.
+const PROJECT_ENV_DENIED = new Set([
+  'REIKA_SANDBOX',
+  'REIKA_AUTO_APPROVE',
+  'REIKA_MCP',
+  'REIKA_MCP_SERVERS',
+  'REIKA_PASTE_FETCH',
+  'REIKA_SKILL_AUTO',
+  'REIKA_URL_GROUNDING',
+  'REIKA_CDP_SEARCH',
+  'REIKA_CDP_PORT',
+  'REIKA_DEBUG_FILE',
+]);
+
+export function isDeniedFromProjectEnv(key: string): boolean {
+  // Every endpoint and key, including REIKA_<NAME>_BASE_URL for a profile the global file defines.
+  return PROJECT_ENV_DENIED.has(key) || /_(URL|API_KEY)$/.test(key);
+}
+
+// Returns the denied keys that would otherwise have taken effect, for the startup notice.
+export function applyProjectEnv(text: string, env: NodeJS.ProcessEnv): string[] {
+  const ignored: string[] = [];
+  for (const [key, value] of Object.entries(dotenv.parse(text))) {
+    if (!key.startsWith('REIKA_') || key in env) continue;
+    if (isDeniedFromProjectEnv(key)) ignored.push(key);
+    else env[key] = value;
+  }
+  return ignored;
+}
+
+export function projectEnvNotice(ignored: string[]): string | undefined {
+  if (ignored.length === 0) return undefined;
+  return `Ignored ${ignored.join(', ')} from ./.env: settings for the sandbox, approvals, endpoints, keys and MCP servers are read only from your shell or ~/.config/reika/.env.`;
+}
+
+function readTextOrEmpty(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
-// dotenv defaults to no-override, so loading cwd first then global gives the right order.
+// Neither file overrides a key already set, so loading cwd first then global gives the right order.
 // The keys already present before dotenv runs are the ones set at launch (`REIKA_X=1 reika`, or an
 // export in the shell rc); the persisted session state (#365) defers to those and beats the files.
 const launchEnvKeys = new Set(Object.keys(process.env));
-dotenv.config();
+const ignoredProjectEnvKeys = applyProjectEnv(
+  readTextOrEmpty(join(process.cwd(), '.env')),
+  process.env,
+);
 dotenv.config({ path: join(homedir(), '.config', 'reika', '.env') });
 
 export function setAtLaunch(name: string): boolean {
@@ -104,6 +154,7 @@ export function loadConfig(): Config {
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
     profiles,
     ...parseModeModels(process.env.REIKA_MODE_MODELS, profiles, models),
+    projectEnvNotice: projectEnvNotice(ignoredProjectEnvKeys),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
     bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '1800000', 10),

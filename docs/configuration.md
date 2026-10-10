@@ -8,6 +8,13 @@ Config sources, in precedence order (higher wins):
 2. **Project `.env`** (cwd where you run `reika`) — per-project overrides.
 3. **Global `~/.config/reika/.env`** — defaults for a global install.
 
+The project `.env` belongs to whatever repo you open, so it is read narrowly: only `REIKA_*` keys,
+and never the ones that change the sandbox, approvals, endpoints, keys or MCP servers
+(`REIKA_SANDBOX`, `REIKA_AUTO_APPROVE`, `REIKA_MCP`, `REIKA_MCP_SERVERS`, `REIKA_PASTE_FETCH`,
+`REIKA_SKILL_AUTO`, `REIKA_URL_GROUNDING`, `REIKA_CDP_SEARCH`, `REIKA_CDP_PORT`,
+`REIKA_DEBUG_FILE`, and every key ending in `_URL` or `_API_KEY`). Set those in your shell or the
+global file; Reika prints a warning naming any it ignored.
+
 The keys are grouped by area below. In each table, the **Default** column is what Reika uses when the key is unset;
 [`.env.example`](../.env.example) is a tuned starting point, not a copy of those defaults, and
 deliberately ships larger values for a few keys, sized for a reasoning-on local model with room

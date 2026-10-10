@@ -3,6 +3,15 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Security
+
+- A `.env` in the working directory can no longer change sandbox, approval, endpoint, API key or
+  MCP settings, or set non-Reika environment variables. Only `REIKA_*` keys are read from it, and
+  Reika warns at startup about any security-relevant key it ignored. Set those in your shell or
+  `~/.config/reika/.env`.
+
 ## [0.1.2] - 2026-10-09
 
 ### Fixed

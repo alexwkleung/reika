@@ -887,6 +887,8 @@ Bootstrap loads `.gitignore` (and `.git/info/exclude`, plus nested `.gitignore` 
 
 `loadConfig()` reads dotenv from cwd `.env` first, then `~/.config/reika/.env` as fallback. Shell env vars take precedence over both (dotenv's no-override default). Order matters — don't reorder without thinking about precedence.
 
+The cwd `.env` is untrusted: it belongs to whatever repo reika was opened in. `applyProjectEnv` reads only `REIKA_*` keys from it (a `NODE_OPTIONS`, `GIT_*` or `TMPDIR` there would reach every child process, reika's own unsandboxed git and tsc included) and skips the security-relevant ones (`isDeniedFromProjectEnv`: sandbox, approvals, MCP, egress toggles, the debug file path, and any `_URL`/`_API_KEY`), which a startup `warn` names. A new key that changes where data goes or what runs without asking belongs in `PROJECT_ENV_DENIED`.
+
 A new `REIKA_*` key goes in the table in `docs/configuration.md` (and in `.env.example` if it is worth a commented default); the README lists only the handful a new user needs.
 
 ## Last session state (#365, `src/laststate.ts`)
