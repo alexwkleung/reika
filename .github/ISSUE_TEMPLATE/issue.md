@@ -16,7 +16,9 @@ months, re-deriving the finding.
 
 ## What happens today
 
-<!-- The problem, then a concrete input: the command or prompt, the harness that drove it —
+<!-- For a bug: the Reika version (`reika --version`, or `main` at a commit if you run from
+     source).
+     The problem, then a concrete input: the command or prompt, the harness that drove it —
      reika's own session, unless a script or another harness drives reika itself — the model
      and the inference engine or API provider, the observed output, the file and line. A rate
      measured over saved sessions ("4 of 96 used the idiom, 1 failed") beats "sometimes". -->
