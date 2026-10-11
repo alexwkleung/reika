@@ -3,6 +3,16 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Changed
+
+- Default `REIKA_MAX_TURNS` raised from 200 to 400 and `REIKA_SUBAGENT_MAX_TURNS` from 8 to 10.
+  The loop detectors stop a stuck turn; the turn cap is only a backstop for what they miss, and
+  200 could end a healthy long turn on a fast endpoint. Headless runs, where the cap is the only
+  stop, can run up to twice as long before it fires. `.env.example` no longer sets the subagent
+  value, so a copy made from an earlier one still pins 8.
+
 ## [0.2.0] - 2026-10-10
 
 ### Security
