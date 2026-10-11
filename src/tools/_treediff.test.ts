@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -233,6 +233,51 @@ describe('changesSince', () => {
     const [f] = (await changesSince(snap))!.files;
     expect(f.kind).toBe('binary');
     expect(f.hunks).toEqual([]);
+  });
+
+  // #706: these calls run in reika's own process, unsandboxed, on a repo the model's sandboxed
+  // commands can write to — so the config keys that name a PROGRAM are turned off on the command
+  // line. `core.fsmonitor` is the one the index refresh below reaches: measured before the fix, with
+  // `core.fsmonitor` set to a script, `snapshotTree`'s plain `git status` ran it (`-c
+  // core.fsmonitor=false` also verified by hand, against that same repo).
+  it('does not run a configured fsmonitor program', async () => {
+    const marker = join(dir, 'fsmonitor-ran');
+    const hook = join(dir, 'fsmonitor.sh');
+    await writeFile(hook, `#!/bin/sh\ntouch "${marker}"\nprintf '{}\n'`, { mode: 0o755 });
+    sh('git', ['config', 'core.fsmonitor', hook]);
+    await write('a.ts', numbered(20) + 'touched\n');
+    expect(await snapshotTree(dir, 'echo')).not.toBeNull();
+    await expect(readFile(marker, 'utf8')).rejects.toThrow();
+  });
+
+  // The other program the same config can name, and the reason the blob read is no longer `--filters`:
+  // that flag runs the path's smudge driver, which is how the previous bytes of a file that was clean
+  // at the snapshot are fetched. `filter.x.clean` is set to a marker too, and the test's own `git add`
+  // runs it — which is what keeps the smudge assertion from passing vacuously.
+  it('reads previous bytes without running the path’s smudge filter', async () => {
+    const cleanMarker = join(dir, 'clean-ran');
+    const smudgeMarker = join(dir, 'smudge-ran');
+    await writeFile(join(dir, 'clean.sh'), `#!/bin/sh\ntouch "${cleanMarker}"\ncat`, {
+      mode: 0o755,
+    });
+    await writeFile(join(dir, 'smudge.sh'), `#!/bin/sh\ntouch "${smudgeMarker}"\ncat`, {
+      mode: 0o755,
+    });
+    sh('git', ['config', 'filter.x.clean', join(dir, 'clean.sh')]);
+    sh('git', ['config', 'filter.x.smudge', join(dir, 'smudge.sh')]);
+    await write('.gitattributes', 'a.ts filter=x\n');
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'attributes']);
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    // Committed in the same call: the file was clean at the snapshot, so its previous bytes come from
+    // the commit instead of from `before` — the `cat-file` path this test is about.
+    await write('a.ts', numbered(20) + 'plus\n');
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'edit']);
+    const { files } = (await changesSince(snap))!;
+    expect(files.map(f => f.path)).toContain('a.ts');
+    await expect(readFile(cleanMarker, 'utf8')).resolves.toBeDefined();
+    await expect(readFile(smudgeMarker, 'utf8')).rejects.toThrow();
   });
 
   it('paths are relative to the session cwd, reaching up with ../ when the edit was elsewhere', async () => {

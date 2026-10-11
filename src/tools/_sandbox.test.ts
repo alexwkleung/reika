@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { dirname } from 'node:path';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
-  sandboxProfile,
+  SANDBOX_PROFILE_ERROR_CODE,
   sandboxFooter,
+  sandboxParams,
+  sandboxProfile,
   isBroadWorkdir,
   broadWorkdirNotice,
   networkAllowedFor,
@@ -39,6 +44,41 @@ describe('sandboxProfile', () => {
     expect(lines[9]).toBe('(allow file-write* (subpath (param "XDGCACHE")))');
     expect(lines[10]).toBe('(allow file-write* (subpath "/dev"))');
     expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(8);
+  });
+
+  // #706: the two paths inside the allowed git dirs that name a PROGRAM rather than hold data —
+  // `.git/config` (`core.fsmonitor`, `filter.<x>.clean`, `core.hooksPath`) and any hook in
+  // `.git/hooks`. The order is the whole enforcement: both are inside WORKDIR/GITDIR, so a deny
+  // placed with the other denies near the top would be re-allowed by the two lines below it, and
+  // `sandbox-exec` would say nothing about it. Four lines because cwd's `.git` and the common dir
+  // above it are separate params, and which one holds `config` depends on the checkout.
+  it('refuses the git metadata a config write would leave behind, after both git-dir allows', () => {
+    const lines = profile.split('\n');
+    const rules = lines.filter(l => l.includes('file-write*'));
+    // [0] is the wholesale deny; the eight allows follow it, then the four that narrow them.
+    expect(rules.slice(1, 9)).toEqual([
+      '(allow file-write* (subpath (param "WORKDIR")))',
+      '(allow file-write* (subpath (param "GITDIR")))',
+      '(allow file-write* (subpath "/private/tmp"))',
+      '(allow file-write* (subpath "/private/var/tmp"))',
+      '(allow file-write* (subpath (param "TMPDIR")))',
+      '(allow file-write* (subpath (param "USERCACHE")))',
+      '(allow file-write* (subpath (param "XDGCACHE")))',
+      '(allow file-write* (subpath "/dev"))',
+    ]);
+    expect(rules.slice(9)).toEqual([
+      '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/config")))',
+      '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/hooks")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
+    ]);
+    // The two dirs the four denies are derived from are the two that get an allow, and nothing
+    // else: a deny derived from a param with no allow above it would be dead code pretending to be
+    // a boundary — or, for a param like WORKDIR, a real deny over a path the project owns.
+    const derived = new Set(
+      [...profile.matchAll(/string-append \(param "(\w+)"\)/g)].map(m => m[1]),
+    );
+    expect([...derived].sort()).toEqual(['GITDIR', 'WORKDIR']);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode
@@ -90,7 +130,9 @@ describe('sandboxProfile', () => {
   it('drops the network rules entirely for a network-allowed command, keeping the write rules', () => {
     const net = sandboxProfile({ network: true });
     expect(net).not.toContain('network');
-    expect(net.split('\n').slice(0, 11)).toEqual(profile.split('\n').slice(0, 11));
+    // The whole write half, the four `.git` denies included: they are what a `git fetch` (a command
+    // that keeps the network) must not be able to walk around, so they are not part of the drop.
+    expect(net.split('\n').slice(0, 15)).toEqual(profile.split('\n').slice(0, 15));
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,
@@ -110,6 +152,37 @@ describe('sandboxProfile', () => {
       expect(opens).toBe(closes);
     }
   });
+
+  // What the string assertions cannot see: whether `sandbox-exec` ACCEPTS the profile, and whether
+  // every `(param …)` it names is bound. Both fail the same way — exit 65 without running the
+  // command — and `bash.ts` answers that by re-running the command unsandboxed, so a generator typo
+  // (a misspelled param, an unclosed `string-append`, a missing `-D`) turns the sandbox off and
+  // leaves no trace in the output. The profile is parsed before sandbox_apply runs, so this holds
+  // nested inside another seatbelt sandbox (exit 71), where the enforcement tests skip and the rest
+  // of this file can only read strings. Measured both ways while writing #706.
+  it.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'))(
+    'is a profile sandbox-exec parses, with every param it names bound',
+    () => {
+      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sandbox-profile-')));
+      try {
+        for (const network of [true, false]) {
+          const args = ['-p', sandboxProfile({ network })];
+          for (const [k, v] of Object.entries(sandboxParams(dir, dir)))
+            args.push('-D', `${k}=${v}`);
+          const r = spawnSync('/usr/bin/sandbox-exec', [...args, '/bin/sh', '-c', ':'], {
+            encoding: 'utf8',
+          });
+          expect(r.error).toBeUndefined();
+          // 71 is "a profile cannot be applied here" — parsed fine, and the only status this
+          // assertion can see nested. 65 is the profile itself: a syntax error, or a `(param …)`
+          // nothing bound.
+          expect(r.status, `network=${network}: ${r.stderr}`).not.toBe(SANDBOX_PROFILE_ERROR_CODE);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // The network half is per command: `gh`/`git`/`hf` reads keep it (the shipped skills open with the

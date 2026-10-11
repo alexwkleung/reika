@@ -146,12 +146,17 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
       before = null;
     } else {
       // The old head's bytes, fetched only for files that get rendered — a formatter sweeping 200
-      // files must not cost 200 git processes. `--filters` applies the same eol/smudge conversion
-      // the worktree copy went through, so a CRLF checkout doesn't diff as a full-file rewrite. A
-      // miss (no commit had the path, yet it wasn't listed before) or a mode-only change has
-      // nothing to draw.
+      // files must not cost 200 git processes. Read RAW (`cat-file blob <rev>:<path>`): `--filters`
+      // runs the path's smudge driver — a program named in `.git/config`, which is what the model's
+      // sandboxed commands can write and this process, unsandboxed, would then run. The third word
+      // is the price of dropping the flag: `--filters` was what made the one-argument
+      // `<rev>:<path>` form valid, and bare `cat-file <rev>:<path>` reads the first word as a type
+      // ("fatal: only two arguments allowed in <type> <object> mode"). The other cost is eol/encoding
+      // conversion: a CRLF worktree now diffs against the LF blob as a whole-file rewrite (#706). A
+      // miss (no commit had the path, yet it wasn't listed before) or a mode-only change has nothing
+      // to draw.
       const old = await git(
-        ['cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
+        ['cat-file', 'blob', `${snap.head ?? 'HEAD'}:${c.path}`],
         root,
         'buffer',
       );
@@ -315,7 +320,14 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
   return new Promise(resolve => {
     execFile(
       'git',
-      args,
+      // Harness git runs in reika's own process, unsandboxed, on a repo the model's commands can
+      // write to — so the one config key that makes the index refresh `git status` do on every bash
+      // call run a program is turned off on the command line, which beats every config file
+      // (#706). Measured: with `core.fsmonitor=/tmp/f.sh` set, a plain `git status` ran `/tmp/f.sh`,
+      // and `-c core.fsmonitor=false` did not. Hooks are not this gap (none of these commands runs
+      // one) and neither is the clean filter `status` runs when a file's size is unchanged — that
+      // half is the profile's, which refuses the `.git/config` that would name it.
+      ['-c', 'core.fsmonitor=false', ...args],
       {
         cwd,
         timeout: GIT_TIMEOUT_MS,

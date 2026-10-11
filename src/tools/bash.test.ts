@@ -14,7 +14,7 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
-import { sandboxExecAvailable, sandboxPlan } from './_sandbox.js';
+import { NO_GITDIR, sandboxExecAvailable, sandboxPlan } from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -667,7 +667,9 @@ describe('bashTool — sandbox composition', () => {
   // A cwd below the repo root (monorepo package, worktree, submodule) keeps its git dir writable:
   // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param
   // is what the profile's `(subpath (param "GITDIR"))` line binds, and it is the repo's `.git` only
-  // when that lies outside cwd — at the root it is WORKDIR itself, so nothing extra is allowed.
+  // when that lies outside cwd — at the root nothing extra is allowed, and since #706 it is bound to
+  // a path that cannot exist rather than to WORKDIR, because the profile also derives its `.git/config`
+  // deny from it by path.
   // A repo of its own: in a worktree checkout of reika, `.git` is a file and the git dir lives elsewhere.
   it.skipIf(!sandboxWorks)('binds GITDIR to the repo when cwd is below it', async () => {
     const repo = realpathSync(await mkdtemp(join(tmpdir(), 'bash-gitdir-')));
@@ -677,7 +679,50 @@ describe('bashTool — sandbox composition', () => {
       const below = sandboxPlan(join(repo, 'src'), { network: false });
       expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
       const root = sandboxPlan(repo, { network: false });
-      expect('args' in root && root.args).toContain(`GITDIR=${repo}`);
+      expect('args' in root && root.args).toContain(`GITDIR=${NO_GITDIR}`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  // #706, and the half a string test cannot reach: the profile's four denies actually refuse the
+  // write, in both git dirs. `.git/config` is the one that matters — `core.fsmonitor` there is run
+  // by reika's own unsandboxed `git status` after every bash call — and `.git/hooks` is the script
+  // the USER's shell would run at their next commit. Everything else in `.git` stays writable, so
+  // the control below is the point of the pair, not decoration.
+  it.skipIf(!sandboxWorks)('refuses a write to the git metadata, in cwd and above it', async () => {
+    const repo = realpathSync(await mkdtemp(join(tmpdir(), 'bash-gitmeta-')));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      await mkdir(join(repo, 'src'));
+      const inside = join(repo, '.git');
+      // The in-cwd git dir is reached through WORKDIR (cwd is the repo root), the one above it
+      // through GITDIR (cwd is `src`), and each has its own deny line. The control is a `.git` file
+      // outside both denied paths, so it says the deny is scoped to `.git/config` and `.git/hooks`
+      // rather than to `.git` — nothing under `hooks` can be its own control, since the whole
+      // subtree is the thing being refused.
+      for (const [cwd, target] of [
+        [repo, join(inside, 'config')],
+        [repo, join(inside, 'hooks/pre-commit')],
+        [join(repo, 'src'), join(inside, 'config')],
+      ] as Array<[string, string]>) {
+        const r = await bashTool.run({ command: `echo x > '${target}'; echo rc=$?` }, { cwd });
+        expect(r.payload, target).toContain('Operation not permitted');
+        await expect(readFile(target, 'utf8'), target).rejects.toThrow();
+        const ok = await bashTool.run(
+          { command: `echo x > '${join(inside, 'COMMIT_EDITMSG')}'` },
+          { cwd },
+        );
+        expect(ok.exitCode, target).toBe(0);
+      }
+      // The command the trade is about: git's own config write, refused rather than landing in a
+      // file the harness would then read.
+      const cfg = await bashTool.run(
+        { command: 'git config core.fsmonitor /tmp/reika-fsm.sh' },
+        { cwd: repo },
+      );
+      expect(cfg.exitCode).not.toBe(0);
+      expect(await readFile(join(inside, 'config'), 'utf8')).not.toContain('fsmonitor');
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

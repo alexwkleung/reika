@@ -3,6 +3,20 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Security
+
+- The sandbox refuses writes to `.git/config` and `.git/hooks`, in the working directory's git dir
+  and in the common dir above it. Both name programs something else runs: `core.fsmonitor` was run
+  by Reika's own unsandboxed `git status` after every shell command, and a hook is run by your next
+  commit. Reika's own git calls now pass `-c core.fsmonitor=false` and read file contents without
+  `--filters`, so a repo's config cannot make it run a program either way (#706).
+- The cost, and it is wider than a refused `git config`: `git init`, `git clone` and
+  `git submodule add` write both paths, so creating a repository is now a command you run instead of
+  the model. Everything else in `.git` — `add`, `commit`, `checkout`, `stash`, `fetch`, the index
+  lock — is unchanged.
+
 ## [0.2.0] - 2026-10-10
 
 ### Security

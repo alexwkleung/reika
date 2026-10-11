@@ -69,8 +69,11 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // (`.git` is a file pointing into `main/.git/worktrees/x`) or a submodule. Without it every git
     // write there — `add`, `stash`, `checkout`, even `fetch` (writes FETCH_HEAD) — fails on
     // `.git/index.lock: Operation not permitted`, which reads as a stale lock and whose natural next
-    // move is `rm -f .git/index.lock` (measured). Bound to WORKDIR when the git dir is inside it or
-    // there is no repo, since an unbound param exits 65.
+    // move is `rm -f .git/index.lock` (measured). Bound to `NO_GITDIR`, a path that cannot exist,
+    // when the git dir is inside cwd or there is no repo — a param must be bound (an unbound one
+    // exits 65, which turns the sandbox off), and WORKDIR covers cwd's own `.git` in that case. It
+    // must NOT stand in as WORKDIR: the `.git/config` deny below is derived from this param by path,
+    // and a stand-in of the workdir would deny a project's own top-level `config` and `hooks` (#706).
     '(allow file-write* (subpath (param "GITDIR")))',
     // Temp is writable: `mktemp -d`, `cd /tmp && …` and `tempfile` are how a model scratches, and
     // denying them did worse than fail — python's `tempfile.mkdtemp()` fell through TMPDIR and /tmp
@@ -89,6 +92,31 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath (param "USERCACHE")))',
     '(allow file-write* (subpath (param "XDGCACHE")))',
     '(allow file-write* (subpath "/dev"))',
+    // The repo's git metadata is the one thing inside WORKDIR/GITDIR that stays unwritable (#706).
+    // Both dirs are covered, because a cwd below the repo root has cwd's `.git` (if any) and the
+    // common dir above it, and which of the two holds `config` depends on the checkout: a monorepo
+    // package or a submodule keeps cwd's `.git` a file, a plain subdirectory keeps only the one above.
+    // Last-match-wins, so these sit after the two allows they narrow.
+    //
+    // `.git/hooks` is a script git runs at commit, checkout, push — inside the sandbox while the
+    // model runs it, but in the USER's own shell the next time they commit. AGENTS.md used to accept
+    // that as a remainder; #706 is where it stopped being one, since the same write is reachable
+    // through `.git/config`, whose `core.fsmonitor` is run by reika's own unsandboxed `git status`
+    // after every bash call, and whose `filter.<name>.clean/smudge/process` are run by the same
+    // command's content check and by `cat-file`. A program named there does not care which process
+    // starts it, so the config that names it is refused here — belt, with `_treediff.ts`'s
+    // `-c core.fsmonitor=false` as braces for config the user already had.
+    //
+    // Measured cost, and it is wider than a refused `git config`: `git init`, `git clone` and
+    // `git submodule add` write both paths, so creating a repo is now a command the user runs —
+    // git dies on the template copy (`fatal: cannot copy '…/templates/hooks/commit-msg.sample' to
+    // '….git/hooks/commit-msg.sample': Operation not permitted`, rc 128) and on
+    // `fatal: could not set 'core.repositoryformatversion' to '0'`. Nothing else in `.git` moves:
+    // `add`, `commit`, `checkout`, `stash`, `fetch` and the index lock are still writable.
+    '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/config")))',
+    '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/hooks")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
   ];
   if (!opts.network) {
     lines.push(
@@ -526,18 +554,39 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   // Same realpath rule for every other allowed dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink
   // hop away from the `/private/var/…` the kernel matches. Each falls back to a path the profile
   // already covers, so an unresolvable dir costs nothing rather than an unbound param (exit 65).
-  const home = homedir();
-  const params = {
-    WORKDIR: resolved,
-    GITDIR: gitDirOutside(cwd, resolved) ?? resolved,
-    TMPDIR: realOr(tmpdir(), '/private/tmp'),
-    USERCACHE: realOr(join(home, 'Library', 'Caches'), resolved),
-    XDGCACHE: realOr(process.env.XDG_CACHE_HOME || join(home, '.cache'), resolved),
-  };
+  const params = sandboxParams(cwd, resolved);
   const args = ['-p', sandboxProfile(opts)];
   for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
   return { args };
 }
+
+/**
+ * The `-D` bindings the profile's `(param …)` names resolve against, from one cwd.
+ *
+ * `sandboxPlan`'s other half, and exported for the same reason `sandboxProfile` is: the tests hand
+ * the profile to `sandbox-exec` themselves to prove it parses and every param it names is bound,
+ * which is exactly the check `sandboxPlan` declines to take part in on a machine where the binary
+ * cannot apply a profile at all (nested inside another seatbelt sandbox, where it exits 71 before
+ * running anything — the profile is still parsed there, and an unbound param still exits 65).
+ */
+export function sandboxParams(cwd: string, resolved: string): Record<string, string> {
+  const home = homedir();
+  return {
+    WORKDIR: resolved,
+    GITDIR: gitDirOutside(cwd, resolved) ?? NO_GITDIR,
+    TMPDIR: realOr(tmpdir(), '/private/tmp'),
+    USERCACHE: realOr(join(home, 'Library', 'Caches'), resolved),
+    XDGCACHE: realOr(process.env.XDG_CACHE_HOME || join(home, '.cache'), resolved),
+  };
+}
+
+/**
+ * What GITDIR is bound to when there is no git dir outside cwd — because cwd IS the repo root, or
+ * because there is no repo. A param must be bound (unbound exits 65, turning the sandbox off), so
+ * the two rules that name it need *something* to name: `/dev/null` is a character device, so no path
+ * under it can ever exist and both the allow and the denies above match nothing.
+ */
+export const NO_GITDIR = '/dev/null/reika-no-gitdir';
 
 function realOr(path: string, fallback: string): string {
   try {
