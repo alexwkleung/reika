@@ -706,9 +706,14 @@ describe('bashTool — sandbox composition', () => {
         [repo, join(inside, 'hooks/pre-commit')],
         [join(repo, 'src'), join(inside, 'config')],
       ] as Array<[string, string]>) {
+        // `.git/config` already exists — the test's own `git init` wrote it — so what a refused write
+        // has to leave behind is its bytes, not absence. `hooks/pre-commit` does not exist, and the
+        // same comparison is what says nothing created it (measured on CI: asserting absence made
+        // this test fail against a refusal that had worked).
+        const before = await readFile(target, 'utf8').catch(() => null);
         const r = await bashTool.run({ command: `echo x > '${target}'; echo rc=$?` }, { cwd });
         expect(r.payload, target).toContain('Operation not permitted');
-        await expect(readFile(target, 'utf8'), target).rejects.toThrow();
+        expect(await readFile(target, 'utf8').catch(() => null), target).toBe(before);
         const ok = await bashTool.run(
           { command: `echo x > '${join(inside, 'COMMIT_EDITMSG')}'` },
           { cwd },
