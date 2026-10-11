@@ -321,13 +321,18 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
     execFile(
       'git',
       // Harness git runs in reika's own process, unsandboxed, on a repo the model's commands can
-      // write to — so the one config key that makes the index refresh `git status` do on every bash
-      // call run a program is turned off on the command line, which beats every config file
-      // (#706). Measured: with `core.fsmonitor=/tmp/f.sh` set, a plain `git status` ran `/tmp/f.sh`,
-      // and `-c core.fsmonitor=false` did not. Hooks are not this gap (none of these commands runs
-      // one) and neither is the clean filter `status` runs when a file's size is unchanged — that
-      // half is the profile's, which refuses the `.git/config` that would name it.
-      ['-c', 'core.fsmonitor=false', ...args],
+      // write to — so the config keys and the hook dir that make these commands run a program are
+      // turned off on the command line, which beats every config file (#706). Measured: with
+      // `core.fsmonitor=/tmp/f.sh` set, a plain `git status` ran `/tmp/f.sh`, and `-c
+      // core.fsmonitor=false` did not. Hooks ARE this gap, contrary to an earlier claim here: the
+      // index refresh `git status` opportunistically does runs `post-index-change` (measured — a
+      // planted hook ran this file's exact argv, with no config gate at all), so `core.hooksPath`
+      // is pinned to `/dev/null`, a character device no hook name can exist under. The clean filter
+      // `status` runs when a file's size is unchanged is the remainder: the driver must be named by
+      // config the user already had, but a model-written `.gitattributes` can bind it to any path
+      // with whatever bytes it likes — activation half in #719, config write refused by the
+      // profile half (#706).
+      ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
       {
         cwd,
         timeout: GIT_TIMEOUT_MS,

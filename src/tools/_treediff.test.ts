@@ -250,6 +250,25 @@ describe('changesSince', () => {
     await expect(readFile(marker, 'utf8')).rejects.toThrow();
   });
 
+  // Hooks are the same gap: the index refresh `git status` opportunistically does runs
+  // `post-index-change` (measured before the fix — a planted hook ran this file's exact argv, with
+  // no config gate at all), so the harness pins `core.hooksPath` to `/dev/null` as well. The plain
+  // `git status` below runs the hook first, which is what keeps the assertion from passing
+  // vacuously.
+  it('does not run a planted post-index-change hook', async () => {
+    const marker = join(dir, 'hook-ran');
+    await writeFile(join(dir, '.git/hooks/post-index-change'), `#!/bin/sh\ntouch "${marker}"\n`, {
+      mode: 0o755,
+    });
+    await write('a.ts', numbered(20) + 'touched\n');
+    sh('git', ['status']);
+    await expect(readFile(marker, 'utf8')).resolves.toBeDefined();
+    await rm(marker, { force: true });
+    await write('a.ts', numbered(20) + 'touched\ntouched\n');
+    expect(await snapshotTree(dir, 'echo')).not.toBeNull();
+    await expect(readFile(marker, 'utf8')).rejects.toThrow();
+  });
+
   // The other program the same config can name, and the reason the blob read is no longer `--filters`:
   // that flag runs the path's smudge driver, which is how the previous bytes of a file that was clean
   // at the snapshot are fetched. `filter.x.clean` is set to a marker too, and the test's own `git add`

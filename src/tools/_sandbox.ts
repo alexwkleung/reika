@@ -102,10 +102,11 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // model runs it, but in the USER's own shell the next time they commit. AGENTS.md used to accept
     // that as a remainder; #706 is where it stopped being one, since the same write is reachable
     // through `.git/config`, whose `core.fsmonitor` is run by reika's own unsandboxed `git status`
-    // after every bash call, and whose `filter.<name>.clean/smudge/process` are run by the same
-    // command's content check and by `cat-file`. A program named there does not care which process
-    // starts it, so the config that names it is refused here — belt, with `_treediff.ts`'s
-    // `-c core.fsmonitor=false` as braces for config the user already had.
+    // after every bash call, and whose `filter.<name>.clean/smudge/process` were run by the same
+    // command's content check and by `cat-file --filters`. A program named there does not care which
+    // process starts it, so the config that names it is refused here — belt, with `_treediff.ts`'s
+    // `-c core.fsmonitor=false -c core.hooksPath=/dev/null` as braces for config and hooks the user
+    // already had.
     //
     // Measured cost, and it is wider than a refused `git config`: `git init`, `git clone` and
     // `git submodule add` write both paths, so creating a repo is now a command the user runs —
