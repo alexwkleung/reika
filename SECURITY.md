@@ -8,7 +8,7 @@ Only the latest release gets security fixes. Reika is 0.x, so a fix ships in the
 
 Please report privately, through GitHub's [private vulnerability reporting](https://github.com/alexwkleung/reika/security/advisories/new) (the repository's **Security** tab, then **Report a vulnerability**). Don't open a public issue for a bypass: it shows everyone how to do it before there is a fix.
 
-Include the model and inference engine or API provider, your OS, the `REIKA_AUTO_APPROVE` mode, and the smallest reproduction you have: a prompt, a command, or a transcript (`/save`).
+Include the Reika version (`reika --version`), the model and inference engine or API provider, your OS, the `REIKA_AUTO_APPROVE` mode, and the smallest reproduction you have: a prompt, a command, or a transcript (`/save`).
 
 Reika is maintained by one person, so reports are handled on a best-effort basis. There is no bug bounty.
 
@@ -25,6 +25,7 @@ A way around one of these, under the default `safe` approval mode:
 - **The exfiltration guard:** data leaving through a URL the model built. That covers a `fetch_url` or a `git`/`gh` remote that carries data and appears nowhere in your messages or tool results, and that is fetched or pushed without a prompt.
 - **Credential handling:** Reika passing its API keys or your environment to an MCP server, a fetched page or a model request where it isn't meant to. MCP servers inherit only a fixed set of variables such as `HOME` and `PATH`.
 - **MCP approval:** a call to a server marked `"approve": "always"` that runs without a prompt.
+- **Project files:** a file in the project you opened Reika in, such as a `.env`, that changes Reika's protections or endpoints, or starts a program, without your say.
 
 ### Out of scope
 
