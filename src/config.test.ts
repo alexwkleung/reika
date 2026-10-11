@@ -1014,6 +1014,16 @@ describe('applyProjectEnv', () => {
     expect(ignored).toEqual([]);
   });
 
+  it('skips empty values so they neither shadow the global file nor raise the notice', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const ignored = applyProjectEnv(
+      'REIKA_SUBAGENT_MODEL=\nREIKA_VISION_MODEL=""\nREIKA_CDP_PORT=\nREIKA_SEARXNG_URL=  \nREIKA_MODEL=qwen',
+      env,
+    );
+    expect(env).toEqual({ REIKA_MODEL: 'qwen' });
+    expect(ignored).toEqual([]);
+  });
+
   it('treats every endpoint and key as denied', () => {
     for (const key of ['REIKA_VISION_BASE_URL', 'REIKA_SUBAGENT_API_KEY', 'REIKA_GPT4_API_KEY'])
       expect(isDeniedFromProjectEnv(key)).toBe(true);
