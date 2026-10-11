@@ -3,6 +3,14 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- An empty `REIKA_*` line in a project `.env` (`REIKA_SUBAGENT_MODEL=`, as older copies of
+  `.env.example` had) no longer hides the value set for that key in `~/.config/reika/.env`, and no
+  longer triggers the "Ignored … from ./.env" startup notice.
+
 ## [0.2.0] - 2026-10-10
 
 ### Security

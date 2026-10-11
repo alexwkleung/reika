@@ -43,7 +43,8 @@ export function isDeniedFromProjectEnv(key: string): boolean {
 export function applyProjectEnv(text: string, env: NodeJS.ProcessEnv): string[] {
   const ignored: string[] = [];
   for (const [key, value] of Object.entries(dotenv.parse(text))) {
-    if (!key.startsWith('REIKA_') || key in env) continue;
+    // An empty line sets nothing, but would still claim the key ahead of ~/.config/reika/.env.
+    if (!key.startsWith('REIKA_') || key in env || value.trim() === '') continue;
     if (isDeniedFromProjectEnv(key)) ignored.push(key);
     else env[key] = value;
   }
