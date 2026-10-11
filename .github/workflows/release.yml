@@ -72,6 +72,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
+          # gh's clone leaves git without credentials, so the push below needs gh as git's helper.
+          gh auth setup-git
           gh repo clone alexwkleung/homebrew-tap "$RUNNER_TEMP/tap"
           cd "$RUNNER_TEMP/tap"
           git checkout -b "reika-$VERSION"
