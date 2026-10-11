@@ -43,7 +43,8 @@ export function isDeniedFromProjectEnv(key: string): boolean {
 export function applyProjectEnv(text: string, env: NodeJS.ProcessEnv): string[] {
   const ignored: string[] = [];
   for (const [key, value] of Object.entries(dotenv.parse(text))) {
-    if (!key.startsWith('REIKA_') || key in env) continue;
+    // An empty line sets nothing, but would still claim the key ahead of ~/.config/reika/.env.
+    if (!key.startsWith('REIKA_') || key in env || value.trim() === '') continue;
     if (isDeniedFromProjectEnv(key)) ignored.push(key);
     else env[key] = value;
   }
@@ -135,7 +136,7 @@ export function loadConfig(): Config {
     // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
     // cached round is nearly free on both local and API, so it is sized where a healthy complex
     // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '400', 10),
     repoMapBudget: parseIntOrUndef(process.env.REIKA_REPO_MAP_BUDGET),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
@@ -144,7 +145,7 @@ export function loadConfig(): Config {
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
     // Not a backstop: the last round IS the report round (#340), so this stays tight.
-    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '8', 10),
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '10', 10),
     visionModel: emptyToUndefined(process.env.REIKA_VISION_MODEL),
     visionBaseURL,
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
