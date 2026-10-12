@@ -431,7 +431,13 @@ export function execStream(
     proc.on('close', (code, signal) => {
       cleanup();
       const rawOutput = buffer.join('');
-      const truncated = totalBytes >= MAX_PAYLOAD_BYTES ? '\n…(truncated)' : '';
+      const capped = totalBytes >= MAX_PAYLOAD_BYTES;
+      const truncated = capped ? '\n…(truncated)' : '';
+      // #723: a denial printed after the 64KB head is still a denial, and a build log that ends in a
+      // refusal is the whole reason the tail exists. `uiTail` is the 4KB that holds the end of a run,
+      // joined on a newline so a head cut mid-line cannot fuse with the tail's first line into a line
+      // neither of them wrote. Off the cap, `rawOutput` is the output and already holds the tail.
+      const scanned = capped ? `${rawOutput}\n${uiTail.text()}` : rawOutput;
       // The sandbox-aware half (#163). Seatbelt's network denials never say "permission" — curl
       // reports a DNS failure, git/npm report credentials or proxy problems — so a headerless failure
       // reads to a model as a bug in its own command and sets up the classic spiral. Keyed on the
@@ -442,7 +448,7 @@ export function execStream(
         searchHint(command, rawOutput) +
         heredocSubstitutionHint(command, code, rawOutput) +
         (argv && sandbox
-          ? sandboxFooter(command, code, rawOutput, { ...sandbox, toolNames: ctx.toolNames })
+          ? sandboxFooter(command, code, scanned, { ...sandbox, toolNames: ctx.toolNames })
           : '');
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
@@ -450,7 +456,7 @@ export function execStream(
       if (notice && plan) sandboxNoticed.add(ctx.cwd);
       // On the output's shape, not the exit status: `mkdir ~/x; echo ok` exits 0 with the denial in
       // its output, and the user would otherwise never learn the flag exists.
-      if (argv && sandboxRefusedWrite(rawOutput) && !sandboxDenialNoticed.has(ctx.cwd)) {
+      if (argv && sandboxRefusedWrite(scanned) && !sandboxDenialNoticed.has(ctx.cwd)) {
         sandboxDenialNoticed.add(ctx.cwd);
         notice = {
           tone: 'warn',

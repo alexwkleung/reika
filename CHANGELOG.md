@@ -29,6 +29,15 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   shapes can still read as a denial. A denial behind a task runner's line prefix (turbo, `pnpm -r`)
   or indentation is still reported. The refusal lines also stopped saying "outside the working
   directory", which was wrong for a refused `.git/config` or hook (#720).
+- A sandbox write-denial is also read from the shapes the #706 refusals print: a path with no
+  slash after one of the file verbs (`rm -rf .git` prints `rm: .git: Operation not permitted`, and
+  `mv .git .g` prints `mv: rename .git to .g: …`); only those verbs may introduce a slashless
+  path, so `docker: connect: operation not permitted` still reads as the network denial it is, and
+  git's quoted form `fatal: cannot copy '…' to '…': Operation not permitted` (what `git init`
+  prints). Once a run passes the 64KB output cap, the 4KB tail the command chip shows is scanned
+  too, so a refusal printed after a long build log is no longer invisible, and a `ps` refusal no
+  longer hides a refused write in the same output (`ps aux | grep node; mkdir ~/x` reports both)
+  (#723).
 
 ### Security
 

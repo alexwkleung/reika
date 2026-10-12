@@ -774,6 +774,24 @@ describe('sandboxFooter', () => {
     ).toContain('cannot be run under the local sandbox');
   });
 
+  // #723: `ps aux | grep node; mkdir ~/x` is a ps refusal AND a refused write, and testing the whole
+  // output for the ps signature dropped the write line — the half the model can act on. Only the
+  // ps/top lines are taken out of the write check now.
+  it('reports a write refusal that shares the output with a ps refusal', () => {
+    const out = 'ps: Operation not permitted\nmkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('ps aux | grep node; mkdir ~/x', 1, out, denied);
+    expect(footer).toContain('cannot be run under the local sandbox');
+    expect(footer).toContain('refused a write');
+    expect(sandboxRefusedWrite(out)).toBe(true);
+    // A ps refusal on its own is still only the ps note, and never the user-facing write notice.
+    const psOnly = 'ps: Operation not permitted\n';
+    expect(sandboxRefusedWrite(psOnly)).toBe(false);
+    expect(sandboxFooter('ps aux', 1, psOnly, denied)).not.toContain('refused a write');
+    expect(
+      sandboxFooter('ps aux', 1, '/bin/sh: /bin/ps: Operation not permitted\n', denied),
+    ).not.toContain('refused a write');
+  });
+
   // Filesystem denials name the path, so they get one line: it is the sandbox, not something sudo
   // fixes. Keyed on a PATH before the colon, which is what tells the shape from the network ones.
   // The shell's and coreutils' six shapes here are the ones measured on this machine (#720).
@@ -807,6 +825,17 @@ describe('sandboxFooter', () => {
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
       // what tells them apart, and it must not collect the fetch_url advice.
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
+      // #723: the path need not carry a slash when one of the file verbs a model runs introduces it.
+      // `rm -rf .git` and `mv .git .g` are the two #706 made ordinary, and the slash requirement
+      // dropped both; a task runner's `<prefix>: ` and indentation still reach them.
+      'rm: .git: Operation not permitted\n',
+      'mv: rename .git to .g: Operation not permitted\n',
+      'cp: .git/config: Operation not permitted\n',
+      '[0] rm: .git: Operation not permitted\n',
+      'packages/web build: rm: .git: Operation not permitted\n',
+      // …and git's own form for the same refusal, quoted paths and all: `git init` fails on the hook
+      // copy now that #706 denies it, which is what AGENTS.md documents.
+      "fatal: cannot copy '/private/var/folders/x/T/tmp.9qcQIRzGc/templates/hooks/commit-msg.sample' to '/private/var/folders/x/T/tmp.9qcQIRzGc/.git/hooks/commit-msg.sample': Operation not permitted\n",
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
       expect(footer, out).toContain('refused a write');
@@ -818,6 +847,10 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('ssh: connect to host x port 22: Operation not permitted\n')).toBe(
       false,
     );
+    // The slashless form is the one that could swallow a network denial, so the verbs that may
+    // introduce it are pinned: docker's connect refusal and a bare ps refusal are not writes.
+    expect(sandboxRefusedWrite('docker: connect: operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
     expect(
       sandboxRefusedWrite(
         'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',

@@ -628,6 +628,24 @@ describe('bashTool — sandbox composition', () => {
     },
   );
 
+  // #723: the denial is read from the payload head, which is capped at 64KB, so a refusal printed
+  // after a long build log was in the output and neither the footer nor the once-per-cwd notice saw
+  // it. The chip's 4KB tail is scanned too now, and that is where the end of such a run lives.
+  it.skipIf(!sandboxWorks)('reports a refused write printed after 64KB of output', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const outside = join(homedir(), 'reika-bash-test-should-not-exist-tail.txt');
+      // ~109KB, comfortably past the payload cap, then the refusal: `seq` pushes it out of the head.
+      const r = await bashTool.run({ command: `seq 1 20000; echo x > ${outside}` }, { cwd: dir });
+      expect(r.payload).toContain('…(truncated)');
+      expect(r.payload).not.toContain('20000'); // the denial's own line is not in the head either
+      expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
+      await expect(readFile(outside, 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // The hole the per-operation rules close: with `(allow network* (local ip …))` an unconnected
   // socket matched the local filter and every outbound connection went through. A raw non-loopback
   // IP needs no DNS and no route — the kernel refuses connect() before a packet exists — so this is

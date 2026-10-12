@@ -651,13 +651,26 @@ const NET_DENIAL_RE =
 
 // A write the profile refused: `<prog>: <path>: Operation not permitted` from the shell and
 // coreutils (behind any `<runner>: ` prefixes — turbo, pnpm -r, a go error chain — or indentation),
-// go's `open <path>: …` with no colon after the verb, git's bare absolute `<path>: …`, and node's and
-// python's mid-line shapes. The first three must END the line (#720): quoted text — a comment, a
-// fixture string, a grep hit — carries text after the phrase, and prose before the path must end in
-// `: ` or be a single verb, so a sentence that quotes the error is not a refusal. A denial line
-// quoted whole at column 0, and the node/python shapes, still read as one.
+// go's `open <path>: …` with no colon after the verb, git's bare absolute `<path>: …`, node's and
+// python's mid-line shapes, and (#723) two forms the slash requirement dropped:
+//
+// - a SLASHLESS path, which only a file verb may introduce: `rm -rf .git` prints `rm: .git:
+//   Operation not permitted` and `mv .git .g` prints `mv: rename .git to .g: …`. Since #706 these are
+//   among the refusals a model is likeliest to cause, and the slash dropped both. Making the slash
+//   optional after ANY `<prog>: ` instead would match `docker: connect: operation not permitted`, a
+//   network denial, and the write line would then point the model at the wrong thing.
+// - a quoted path before the phrase, which is git's form for the same refusals: `fatal: cannot copy
+//   '…/templates/hooks/commit-msg.sample' to '…/.git/hooks/commit-msg.sample': Operation not
+//   permitted`, what `git init` prints now that #706 denies the hook copy. The quotes and spaces put
+//   it out of reach of the path forms above, and the tail is the only part of git's line that does
+//   not change with the message.
+//
+// The first three must END the line (#720): quoted text — a comment, a fixture string, a grep hit —
+// carries text after the phrase, and prose before the path must end in `: ` or be a single verb, so a
+// sentence that quotes the error is not a refusal. A denial line quoted whole at column 0, the
+// node/python shapes, and a line that quotes a quoted-path tail still read as one.
 const FS_DENIAL_RE =
-  /^(?:.*: (?:[a-z]+ )?[^\s:'"]*|[ \t]*(?:\[[^\]\r\n]*\] )?(?:[a-z]+ )?)\/[^:'"\r\n]*: operation not permitted[ \t]*$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
+  /^(?:.*: (?:[a-z]+ )?[^\s:'"]*|[ \t]*(?:\[[^\]\r\n]*\] )?(?:[a-z]+ )?)\/[^:'"\r\n]*: operation not permitted[ \t]*$|^(?:.*: )?[ \t]*(?:\[[^\]\r\n]*\] )?(?:rm|mv|cp|mkdir|touch|ln): [^:'"\r\n]*: operation not permitted[ \t]*$|'[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -678,6 +691,18 @@ function webRoute(toolNames?: ReadonlySet<string>): string {
 // The exec refusal the setuid note at the top of the file is about, as the shell prints it.
 const PS_DENIAL_RE = /\b(?:ps|top): Operation not permitted/;
 
+// One output can carry both a ps refusal and a refused write — `ps aux | grep node; mkdir ~/x` —
+// and `!ps` on the whole output dropped the write line for exactly the command that shows both
+// (#723). Only the ps/top lines are taken out of the write check: `/bin/ps: Operation not permitted`
+// is a path by shape and is already explained by the ps note, and `ps: …\nmkdir: /x: …` still reports
+// the mkdir.
+function withoutPsDenials(output: string): string {
+  return output
+    .split('\n')
+    .filter(line => !PS_DENIAL_RE.test(line))
+    .join('\n');
+}
+
 // `curl -s` prints nothing on a denial and exits 6 (could not resolve) or 7 (could not connect) —
 // the one shape the output gate cannot see, so the exit status has to carry it.
 const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
@@ -685,7 +710,7 @@ const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
 /** True when a sandboxed command's output shows a write the profile refused. The user-facing half:
  *  the footer tells the model not to fight it, this tells the user the flag exists (`bash.ts`). */
 export function sandboxRefusedWrite(output: string): boolean {
-  return FS_DENIAL_RE.test(output) && !PS_DENIAL_RE.test(output);
+  return FS_DENIAL_RE.test(withoutPsDenials(output));
 }
 
 /**
@@ -745,10 +770,11 @@ export function sandboxFooter(
             ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
-  // `/bin/ps: Operation not permitted` is a path too, and already explained above. The line says "a
-  // path it does not allow", not "outside the working directory": since #706 the denied paths
-  // include `.git/config` and `.git/hooks`, which are INSIDE the working directory.
-  if (!ps && FS_DENIAL_RE.test(output)) {
+  // `/bin/ps: Operation not permitted` is a path too, and already explained above, so the ps lines
+  // are taken out before this test rather than the write check being skipped for the whole output.
+  // The line says "a path it does not allow", not "outside the working directory": since #706 the
+  // denied paths include `.git/config` and `.git/hooks`, which are INSIDE the working directory.
+  if (FS_DENIAL_RE.test(withoutPsDenials(output))) {
     lines.push(
       'The sandbox refused a write to a path it does not allow — not a permissions problem, so do ' +
         'not reach for sudo or chmod. If the command must write there, say so and ask the user to ' +
