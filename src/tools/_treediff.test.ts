@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -252,20 +252,28 @@ describe('changesSince', () => {
 
   // Hooks are the same gap: the index refresh `git status` opportunistically does runs
   // `post-index-change` (measured before the fix — a planted hook ran this file's exact argv, with
-  // no config gate at all), so the harness pins `core.hooksPath` to `/dev/null` as well. The plain
-  // `git status` below runs the hook first, which is what keeps the assertion from passing
-  // vacuously.
+  // no config gate at all), so the harness pins `core.hooksPath` to `/dev/null` as well. Whether a
+  // status writes the index at all depends on timing — a racily-clean index is rewritten, a settled
+  // one is not — so each step forces it: an unchanged tracked file gets a new, explicit mtime, which
+  // the refresh has to record. The index's inode is what says the snapshot really wrote it (git
+  // replaces the file through a lock), so the negative assertion cannot pass by the hook never being
+  // due; the plain `git status` before it is the control that the hook runs when it is.
   it('does not run a planted post-index-change hook', async () => {
     const marker = join(dir, 'hook-ran');
+    const index = join(dir, '.git/index');
+    const restat = (year: number): Promise<void> =>
+      utimes(join(dir, 'sub/b.ts'), new Date(`${year}-01-01`), new Date(`${year}-01-01`));
     await writeFile(join(dir, '.git/hooks/post-index-change'), `#!/bin/sh\ntouch "${marker}"\n`, {
       mode: 0o755,
     });
-    await write('a.ts', numbered(20) + 'touched\n');
+    await restat(2001);
     sh('git', ['status']);
     await expect(readFile(marker, 'utf8')).resolves.toBeDefined();
     await rm(marker, { force: true });
-    await write('a.ts', numbered(20) + 'touched\ntouched\n');
+    await restat(2002);
+    const before = (await stat(index)).ino;
     expect(await snapshotTree(dir, 'echo')).not.toBeNull();
+    expect((await stat(index)).ino).not.toBe(before);
     await expect(readFile(marker, 'utf8')).rejects.toThrow();
   });
 
