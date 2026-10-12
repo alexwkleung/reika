@@ -791,6 +791,56 @@ describe('bashTool — sandbox composition', () => {
     },
   );
 
+  // A common dir not named `.git` has no name for the denies to match, so its pointers are spelled
+  // out from GITDIR. Writing a worktree's `commondir` there succeeded before they were (measured).
+  it.skipIf(!sandboxWorks)('refuses the pointers of a common dir not named .git', async () => {
+    const base = realpathSync(await mkdtemp(join(tmpdir(), 'bash-bare-')));
+    try {
+      const bare = join(base, 'r.bare');
+      execFileSync('git', ['init', '-q', '--bare', bare]);
+      const wt = join(base, 'wt');
+      execFileSync('git', ['worktree', 'add', '-q', '--orphan', '-b', 'main', wt], { cwd: bare });
+      for (const target of ['worktrees/wt/commondir', 'worktrees/wt/config.worktree', 'config']) {
+        const r = await bashTool.run({ command: `echo x >> '${join(bare, target)}'` }, { cwd: wt });
+        expect(r.payload, target).toContain('Operation not permitted');
+      }
+      const mv = await bashTool.run({ command: `mv '${bare}' '${bare}2'` }, { cwd: wt });
+      expect(mv.payload).toContain('Operation not permitted');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  // The name denies cover temp as well: a repo built there with a planted fsmonitor, `mv`'d into
+  // the project and added as a gitlink, ran that fsmonitor from the user's own `git status`. Deletes
+  // stay allowed so a nested repo can be removed, but never the project's own `.git`.
+  it.skipIf(!sandboxWorks)(
+    'refuses a repo in temp, deletes a nested one, keeps the project .git',
+    async () => {
+      const repo = realpathSync(await mkdtemp(join(tmpdir(), 'bash-gitdelete-')));
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: repo });
+        execFileSync('git', ['init', '-q', 'vendor/dep'], { cwd: repo });
+        const init = await bashTool.run(
+          { command: 'd=$(mktemp -d) && git init -q "$d/r"; echo rc=$?' },
+          { cwd: repo },
+        );
+        expect(init.payload).toContain('Operation not permitted');
+        const del = await bashTool.run({ command: 'rm -rf vendor && echo RM-OK' }, { cwd: repo });
+        expect(del.payload).toContain('RM-OK');
+        expect(existsSync(join(repo, 'vendor'))).toBe(false);
+        for (const command of ['mv .git .g', 'rm .git/config', 'rm -rf .git/hooks']) {
+          const r = await bashTool.run({ command }, { cwd: repo });
+          expect(r.payload, command).toContain('Operation not permitted');
+        }
+        expect(existsSync(join(repo, '.git/config'))).toBe(true);
+        expect(existsSync(join(repo, '.git/hooks'))).toBe(true);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    },
+  );
+
   // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
   // local server (this repo's transport.test.ts does) used to go red with EPERM on `listen(0)` and
   // then collect the network footer blaming the sandbox for the whole run.

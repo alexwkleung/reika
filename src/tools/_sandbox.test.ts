@@ -71,14 +71,28 @@ describe('sandboxProfile', () => {
       '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
       '(deny file-write* (literal (param "GITDIR")))',
       '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/config.worktree")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/commondir")))',
       '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
+      '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/worktrees")) (regex #"/worktrees/[^/]+/(config|config\\.worktree|commondir|gitdir)$")))',
+      '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/modules")) (regex #"/(config|config\\.worktree|commondir|gitdir)$|/hooks(/|$)")))',
     ]);
-    // Only GITDIR derives a path deny: one derived from WORKDIR would deny a project's own
+    // The name denies are not scoped to WORKDIR: a repo planted in temp and `mv`'d into the
+    // project is one `git status` recurses into, and the move itself names no `.git`.
+    expect(rules.slice(9, 12).every(r => !r.includes('subpath'))).toBe(true);
+    // Deletes are re-allowed between the name denies and the GITDIR ones, so `rm -rf` of a nested
+    // repo works while GITDIR and the project's own `.git` stay whole. Scoped to the writable
+    // dirs, or it would let a command delete git metadata anywhere on disk.
+    const unlink = lines.filter(l => l.includes('file-write-unlink'));
+    expect(unlink).toEqual([
+      '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git")))))',
+    ]);
+    expect(lines.indexOf(unlink[0])).toBeGreaterThan(lines.indexOf(rules[11]));
+    expect(lines.indexOf(unlink[0])).toBeLessThan(lines.indexOf(rules[12]));
+    // WORKDIR derives only that exception: a deny derived from it would hit a project's own
     // top-level `config` or `hooks`, which is why cwd's `.git` is covered by name instead.
-    const derived = new Set(
-      [...profile.matchAll(/string-append \(param "(\w+)"\)/g)].map(m => m[1]),
-    );
-    expect([...derived]).toEqual(['GITDIR']);
+    const derived = lines.filter(l => l.includes('string-append (param "WORKDIR")'));
+    expect(derived).toEqual(unlink);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode
@@ -130,9 +144,9 @@ describe('sandboxProfile', () => {
   it('drops the network rules entirely for a network-allowed command, keeping the write rules', () => {
     const net = sandboxProfile({ network: true });
     expect(net).not.toContain('network');
-    // The whole write half, the four `.git` denies included: they are what a `git fetch` (a command
+    // The whole write half, the `.git` denies included: they are what a `git fetch` (a command
     // that keeps the network) must not be able to walk around, so they are not part of the drop.
-    expect(net.split('\n').slice(0, 15)).toEqual(profile.split('\n').slice(0, 15));
+    expect(net.split('\n')).toEqual(profile.split('\n').filter(l => !l.includes('network')));
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,

@@ -91,12 +91,14 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   command the danger scan flags prompts a human first and, once cleared, runs unsandboxed — which is
   what lets `npm install`/`git push` work without a proxy. Under `bypass` every command is
   sandboxed, because there is no prompt to fall back on. Reads stay open (a blocklist of secret
-  paths is incomplete by construction). Inside the working directory, the repo's git metadata is the
-  exception: git's `config` and `hooks`, and the files that decide which config git reads (anything
-  named `.git`, `commondir`, `gitdir`), are never writable, wherever they sit, because `core.fsmonitor` and a hook are
-  programs something else runs — reika's own `git status` after the next command, or your next
-  commit. The cost is that `git init`, `git clone`, `git submodule add` and `git worktree add` write
-  them, so creating a repo is a command you run yourself. macOS only — on Linux it reports unavailable and behaves as
+  paths is incomplete by construction). Git metadata is the exception to the writable dirs: git's
+  `config` and `hooks`, and the files that decide which config git reads (anything named `.git`,
+  `commondir`, `gitdir`), are never writable, wherever they sit — temp included — because
+  `core.fsmonitor` and a hook are programs something else runs: reika's own `git status` after the
+  next command, or your next commit. Deleting them stays allowed, so removing a nested repo works,
+  except for the project's own `.git`. The cost is that `git init`, `git clone`, `git submodule add`
+  and `git worktree add` write them, so creating a repo is a command you run yourself, and a test
+  suite that creates repos in a temp dir fails under the sandbox. macOS only — on Linux it reports unavailable and behaves as
   before, since bubblewrap's `--unshare-net` gives the child its own loopback and would block the
   host's model server. `0` disables
 - **`REIKA_BASH_TIMEOUT_MS`** — `0` disables

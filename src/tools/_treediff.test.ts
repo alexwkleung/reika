@@ -250,6 +250,32 @@ describe('changesSince', () => {
     await expect(readFile(marker, 'utf8')).rejects.toThrow();
   });
 
+  // A gitlink's status runs git inside that repo, with its own filter drivers — which the guard,
+  // reading only this repo's config, never names (`-c` reaches the child, so fsmonitor and hooks
+  // were already off there). The plain `git status` after is the control that the nested clean
+  // driver runs when status recurses into the same-size edit.
+  it('does not recurse into a submodule, whose filter drivers could run a program', async () => {
+    const marker = join(dir, 'nested-ran');
+    await writeFile(join(dir, 'clean.sh'), `#!/bin/sh\ntouch "${marker}"\ncat`, { mode: 0o755 });
+    const nested = (args: string[]) => sh('git', ['-C', 'nested', ...args]);
+    sh('git', ['init', '-q', 'nested']);
+    await write('nested/.gitattributes', 'f.txt filter=x\n');
+    await write('nested/f.txt', 'abc\n');
+    nested(['add', '-A']);
+    nested(['-c', 'user.email=dev@example.com', '-c', 'user.name=dev', 'commit', '-qm', 'n']);
+    sh('git', ['add', 'nested']);
+    sh('git', ['commit', '-qm', 'gitlink']);
+    nested(['config', 'filter.x.clean', join(dir, 'clean.sh')]);
+    await write('nested/f.txt', 'xyz\n');
+    const snap = await snapshotTree(dir, 'echo');
+    expect(snap).not.toBeNull();
+    await write('a.ts', numbered(21));
+    expect((await changesSince(snap!))!.files.map(f => f.path)).toEqual(['a.ts']);
+    await expect(readFile(marker, 'utf8')).rejects.toThrow();
+    sh('git', ['status']);
+    await expect(readFile(marker, 'utf8')).resolves.toBeDefined();
+  });
+
   // Hooks are the same gap: the index refresh `git status` opportunistically does runs
   // `post-index-change` (measured before the fix — a planted hook ran this file's exact argv, with
   // no config gate at all), so the harness pins `core.hooksPath` to `/dev/null` as well. Whether a

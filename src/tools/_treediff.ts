@@ -109,12 +109,12 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
 export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | null> {
   if (snap.root === null) return namedChanges(snap);
   const root = snap.root;
-  const guard = await repoFilterGuard(root);
-  if (guard === null) return null;
-  const [listed, head] = await Promise.all([
-    dirtyPaths(root, guard),
+  const [guard, head] = await Promise.all([
+    repoFilterGuard(root),
     git(['rev-parse', 'HEAD'], root),
   ]);
+  if (guard === null) return null;
+  const listed = await dirtyPaths(root, guard);
   if (listed === null) return null;
   const moved = snap.head !== null && head !== null && head.trim() !== snap.head;
   const between = moved
@@ -267,7 +267,16 @@ function splitLines(text: string): string[] {
 // of, and it's the same rule the file index and the read tools already apply.
 async function dirtyPaths(root: string, guard: string[]): Promise<Map<string, string> | null> {
   const out = await git(
-    [...guard, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    // A submodule's status runs git inside it under that repo's own filter drivers, which the
+    // guard never names (measured), and its changes can't be drawn as a file diff anyway.
+    [
+      ...guard,
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=all',
+    ],
     root,
   );
   if (out === null) return null;
@@ -350,6 +359,9 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
       ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
       {
         cwd,
+        // git-lfs is a global driver, so `--filters` runs it here, unsandboxed, and a missing
+        // object is a download. A `.gitattributes` the model wrote must not start one.
+        env: { ...process.env, GIT_LFS_SKIP_SMUDGE: '1' },
         timeout: GIT_TIMEOUT_MS,
         windowsHide: true,
         maxBuffer: 64 * 1024 * 1024,

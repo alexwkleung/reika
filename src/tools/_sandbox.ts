@@ -89,15 +89,25 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath "/dev"))',
     // Git config and hooks name programs something else runs, so they stay unwritable (#706).
     // Matched by name, not under an anchored dir: renaming `.git`, writing `commondir`, or
-    // repointing a worktree's `.git` file each redirected git to a planted config (measured). The
-    // config pattern names only metadata dirs, so a branch called `config` still works; the GITDIR
-    // lines cover a common dir not named `.git`. Last-match-wins: these follow the allows.
+    // repointing a worktree's `.git` file each redirected git to a planted config (measured). Temp
+    // is covered too, since a repo built there and `mv`'d in is one git status recurses into. The
+    // config pattern names only metadata dirs, so a branch called `config` still works.
     '(deny file-write* (regex #"/\\.git$"))',
     '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
     '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
+    // Deleting stays allowed, or `rm -rf vendor` with a nested repo in it fails on that repo's
+    // metadata. Removing one plants nothing, and the file can't be created again. The project's
+    // own `.git` is excluded, because renaming it away counts as an unlink.
+    '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git")))))',
+    // A common dir not named `.git` has no name to match, so its places are spelled out from the
+    // param. These come after the unlink allow, so it can't be deleted or renamed either.
     '(deny file-write* (literal (param "GITDIR")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/config.worktree")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/commondir")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
+    '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/worktrees")) (regex #"/worktrees/[^/]+/(config|config\\.worktree|commondir|gitdir)$")))',
+    '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/modules")) (regex #"/(config|config\\.worktree|commondir|gitdir)$|/hooks(/|$)")))',
   ];
   if (!opts.network) {
     lines.push(
