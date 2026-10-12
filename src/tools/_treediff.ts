@@ -68,9 +68,10 @@ export type TreeSnapshot = {
 // Capture the state a diff will be taken against. `null` when git is present but can't answer
 // (slow, or too much untracked to read), which callers treat as "no diff" rather than an error.
 export async function snapshotTree(cwd: string, command: string): Promise<TreeSnapshot | null> {
-  const [root, head] = await Promise.all([
+  const [root, head, guard] = await Promise.all([
     git(['rev-parse', '--show-toplevel'], cwd),
     git(['rev-parse', 'HEAD'], cwd),
+    repoFilterGuard(cwd),
   ]);
   // git reports the resolved root; the cwd must be resolved the same way or a project under a
   // symlinked dir (macOS /tmp → /private/tmp) gets every path as a long `../` chain.
@@ -86,7 +87,8 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
   if (snap.root === null) {
     paths = writeTargets(command, realCwd);
   } else {
-    const listed = await dirtyPaths(snap.root);
+    if (guard === null) return null;
+    const listed = await dirtyPaths(snap.root, guard);
     if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
     paths = [...listed.keys()];
   }
@@ -107,7 +109,12 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
 export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | null> {
   if (snap.root === null) return namedChanges(snap);
   const root = snap.root;
-  const [listed, head] = await Promise.all([dirtyPaths(root), git(['rev-parse', 'HEAD'], root)]);
+  const [guard, head] = await Promise.all([
+    repoFilterGuard(root),
+    git(['rev-parse', 'HEAD'], root),
+  ]);
+  if (guard === null) return null;
+  const listed = await dirtyPaths(root, guard);
   if (listed === null) return null;
   const moved = snap.head !== null && head !== null && head.trim() !== snap.head;
   const between = moved
@@ -146,12 +153,11 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
       before = null;
     } else {
       // The old head's bytes, fetched only for files that get rendered — a formatter sweeping 200
-      // files must not cost 200 git processes. `--filters` applies the same eol/smudge conversion
-      // the worktree copy went through, so a CRLF checkout doesn't diff as a full-file rewrite. A
-      // miss (no commit had the path, yet it wasn't listed before) or a mode-only change has
-      // nothing to draw.
+      // files must not cost 200 git processes. `--filters` applies eol and LFS conversion so a CRLF or
+      // LFS file doesn't diff as a rewrite; the guard stops repo-defined drivers. A miss or a
+      // mode-only change has nothing to draw.
       const old = await git(
-        ['cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
+        [...guard, 'cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
         root,
         'buffer',
       );
@@ -259,8 +265,20 @@ function splitLines(text: string): string[] {
 // `git status` lists tracked files that differ from HEAD or the index, plus untracked ones. Ignored
 // files are deliberately absent: a build writing into `dist/` is not an edit the user wants a diff
 // of, and it's the same rule the file index and the read tools already apply.
-async function dirtyPaths(root: string): Promise<Map<string, string> | null> {
-  const out = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root);
+async function dirtyPaths(root: string, guard: string[]): Promise<Map<string, string> | null> {
+  const out = await git(
+    // A submodule's status runs git inside it under that repo's own filter drivers, which the
+    // guard never names (measured), and its changes can't be drawn as a file diff anyway.
+    [
+      ...guard,
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=all',
+    ],
+    root,
+  );
   if (out === null) return null;
   const paths = new Map<string, string>();
   const tokens = out.split('\0');
@@ -291,6 +309,26 @@ async function commitDiff(
   return paths;
 }
 
+// `-c` overrides blanking every filter driver from the repo's own config, which a model can write
+// (#719); global ones like git-lfs are the user's and keep running. Null when that can't be
+// decided (git < 2.26, an `=` in a name): callers skip the diff rather than run git unguarded.
+async function repoFilterGuard(cwd: string): Promise<string[] | null> {
+  const out = await git(['config', '--show-scope', '--list', '-z'], cwd);
+  if (out === null) return null;
+  const names = new Set<string>();
+  const tokens = out.split('\0');
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const key = tokens[i + 1].split('\n', 1)[0];
+    if (!key.startsWith('filter.') || (tokens[i] !== 'local' && tokens[i] !== 'worktree')) continue;
+    const name = key.slice('filter.'.length, key.lastIndexOf('.'));
+    if (name.includes('=')) return null;
+    names.add(name);
+  }
+  return [...names].flatMap(n =>
+    ['smudge=', 'clean=', 'process=', 'required=false'].flatMap(v => ['-c', `filter.${n}.${v}`]),
+  );
+}
+
 async function readBounded(path: string): Promise<Bytes | 'oversize'> {
   try {
     const buf = await readFile(path);
@@ -315,9 +353,15 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
   return new Promise(resolve => {
     execFile(
       'git',
-      args,
+      // Unsandboxed git on a repo the model can write: `status` ran a planted fsmonitor and a
+      // `post-index-change` hook (measured), so both are off on the command line (#706). Filter
+      // drivers are per-repo and blanked by `repoFilterGuard`.
+      ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
       {
         cwd,
+        // git-lfs is a global driver, so `--filters` runs it here, unsandboxed, and a missing
+        // object is a download. A `.gitattributes` the model wrote must not start one.
+        env: { ...process.env, GIT_LFS_SKIP_SMUDGE: '1' },
         timeout: GIT_TIMEOUT_MS,
         windowsHide: true,
         maxBuffer: 64 * 1024 * 1024,
