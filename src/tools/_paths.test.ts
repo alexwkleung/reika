@@ -132,6 +132,7 @@ describe('gitMetadataWarning — the names the sandbox refuses, at the file-tool
     ['a worktree commondir', '.git/worktrees/wt/commondir'],
     ['a worktree gitdir pointer', '.git/worktrees/wt/gitdir'],
     ['the .git pointer file itself', '.git'],
+    ['a bare repo config under a *.git name', 'website.git/config'],
   ])('flags %s', (_label, rel) => {
     expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBe(GIT_METADATA_WARNING);
   });
@@ -142,6 +143,7 @@ describe('gitMetadataWarning — the names the sandbox refuses, at the file-tool
     ['the index', '.git/index'],
     ['a branch named config', '.git/refs/heads/config'],
     ['a repo-relative name that only ends in .git', 'website.git/README'],
+    ['a name that merely ends in .git', 'website.git'],
     ['.gitattributes', '.gitattributes'],
     ['a plain file named config', 'config'],
     ['a normal source file', 'src/a.ts'],
@@ -185,5 +187,18 @@ describe('gitMetadataWarning — the GITDIR group for a git dir with no .git nam
     // differs exactly there must not read as this repo's metadata.
     const sibling = cwd.replace('git.dir', 'gitxdir');
     expect(gitMetadataWarning(sibling, join(sibling, 'config'))).toBeUndefined();
+  });
+
+  it('finds a repo created after an earlier probe of the same cwd', async () => {
+    // A null answer is not cached: a `--separate-git-dir`/bare repo the user creates mid-session
+    // must still reach the GITDIR group on the next write.
+    const dir = await mkdtemp(join(tmpdir(), 'reika+git.late-'));
+    try {
+      expect(gitMetadataWarning(dir, join(dir, 'config'))).toBeUndefined();
+      execFileSync('git', ['init', '-q', '--bare'], { cwd: dir });
+      expect(gitMetadataWarning(dir, join(dir, 'config'))).toBe(GIT_METADATA_WARNING);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

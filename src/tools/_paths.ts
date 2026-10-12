@@ -81,7 +81,7 @@ export const GIT_METADATA_WARNING =
 // Unanchored, so a repo nested anywhere in the project is covered. Paths are normalized to `/` so
 // a Windows separator cannot dodge the `/`-spelled rules.
 const GIT_METADATA_NAME_RE =
-  /\.git$|\.git\/((modules\/.+\/|worktrees\/[^/]+\/)?(config|config\.worktree|commondir|gitdir))$|\.git\/(modules\/.+\/)?hooks(\/|$)/;
+  /\/\.git$|\.git\/((modules\/.+\/|worktrees\/[^/]+\/)?(config|config\.worktree|commondir|gitdir))$|\.git\/(modules\/.+\/)?hooks(\/|$)/;
 
 // A common git dir NOT named `.git` (`git init --separate-git-dir`, a dotfiles bare repo) escapes
 // the name rules, the same hole the sandbox's GITDIR param exists for. Protected places are the
@@ -97,13 +97,14 @@ const GIT_DIR_DENY_RE = (g: string): RegExp => {
   );
 };
 
-const commonGitDirs = new Map<string, string | null>();
+const commonGitDirs = new Map<string, string>();
 
 // The session cwd's common git dir, normalized, or null when there is none. Mirrors the sandbox's
 // `gitDirToBind` (src/tools/_sandbox.ts) minus its realpath of cwd and its "cwd's own `.git`" skip:
 // for the file tools the name rules already cover a `.git`-named dir, and protecting it again here
-// changes nothing, so the skip is a comparison that cannot differ in outcome. Cached per cwd, nulls
-// included.
+// changes nothing, so the skip is a comparison that cannot differ in outcome. A found dir is cached
+// per cwd; a null is not, so a `--separate-git-dir`/bare repo the user creates mid-session is still
+// probed for on the next write.
 function commonGitDir(cwd: string): string | null {
   const cached = commonGitDirs.get(cwd);
   if (cached !== undefined) return cached;
@@ -122,7 +123,7 @@ function commonGitDir(cwd: string): string | null {
   } catch {
     // not a repo, or no git — nothing to protect beyond the name rules
   }
-  commonGitDirs.set(cwd, dir);
+  if (dir !== null) commonGitDirs.set(cwd, dir);
   return dir;
 }
 
