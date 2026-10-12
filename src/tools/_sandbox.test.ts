@@ -46,16 +46,15 @@ describe('sandboxProfile', () => {
     expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(8);
   });
 
-  // #706: the two paths inside the allowed git dirs that name a PROGRAM rather than hold data —
-  // `.git/config` (`core.fsmonitor`, `filter.<x>.clean`, `core.hooksPath`) and any hook in
-  // `.git/hooks`. The order is the whole enforcement: both are inside WORKDIR/GITDIR, so a deny
-  // placed with the other denies near the top would be re-allowed by the two lines below it, and
-  // `sandbox-exec` would say nothing about it. Four lines because cwd's `.git` and the common dir
-  // above it are separate params, and which one holds `config` depends on the checkout.
+  // #706: the git metadata that names a PROGRAM — `config` (`core.fsmonitor`, `filter.<x>.clean`)
+  // and `hooks` — plus every file that decides WHICH config git reads (an entry named `.git`,
+  // `commondir`, `gitdir`), matched by name because an anchored path was walked around by renaming
+  // or repointing `.git`. The order is the whole enforcement: all of it sits inside WORKDIR/GITDIR,
+  // so a deny placed near the top would be re-allowed below it and `sandbox-exec` would say nothing.
   it('refuses the git metadata a config write would leave behind, after both git-dir allows', () => {
     const lines = profile.split('\n');
     const rules = lines.filter(l => l.includes('file-write*'));
-    // [0] is the wholesale deny; the eight allows follow it, then the four that narrow them.
+    // [0] is the wholesale deny; the eight allows follow it, then the denies that narrow them.
     expect(rules.slice(1, 9)).toEqual([
       '(allow file-write* (subpath (param "WORKDIR")))',
       '(allow file-write* (subpath (param "GITDIR")))',
@@ -67,18 +66,19 @@ describe('sandboxProfile', () => {
       '(allow file-write* (subpath "/dev"))',
     ]);
     expect(rules.slice(9)).toEqual([
-      '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/config")))',
-      '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/hooks")))',
+      '(deny file-write* (regex #"/\\.git$"))',
+      '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
+      '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
+      '(deny file-write* (literal (param "GITDIR")))',
       '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
       '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
     ]);
-    // The two dirs the four denies are derived from are the two that get an allow, and nothing
-    // else: a deny derived from a param with no allow above it would be dead code pretending to be
-    // a boundary — or, for a param like WORKDIR, a real deny over a path the project owns.
+    // Only GITDIR derives a path deny: one derived from WORKDIR would deny a project's own
+    // top-level `config` or `hooks`, which is why cwd's `.git` is covered by name instead.
     const derived = new Set(
       [...profile.matchAll(/string-append \(param "(\w+)"\)/g)].map(m => m[1]),
     );
-    expect([...derived].sort()).toEqual(['GITDIR', 'WORKDIR']);
+    expect([...derived]).toEqual(['GITDIR']);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode

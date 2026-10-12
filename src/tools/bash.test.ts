@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -680,6 +680,15 @@ describe('bashTool — sandbox composition', () => {
       expect('args' in below && below.args).toContain(`GITDIR=${join(repo, '.git')}`);
       const root = sandboxPlan(repo, { network: false });
       expect('args' in root && root.args).toContain(`GITDIR=${NO_GITDIR}`);
+      // A git dir inside cwd that is not named `.git` escapes the name-based denies, so it is bound
+      // too — otherwise its `config` and `hooks` were writable through WORKDIR.
+      const sep = join(repo, 'sep');
+      await mkdir(sep);
+      execFileSync('git', ['init', '-q', '--separate-git-dir', join(sep, 'repo.git')], {
+        cwd: sep,
+      });
+      const separate = sandboxPlan(sep, { network: false });
+      expect('args' in separate && separate.args).toContain(`GITDIR=${join(sep, 'repo.git')}`);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
@@ -732,6 +741,55 @@ describe('bashTool — sandbox composition', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  // #706's denies were first anchored to `WORKDIR/.git`, and each of these walked around them by
+  // changing WHICH config git reads rather than writing the denied one — every route planted a
+  // working `core.fsmonitor` (measured). Each is refused now, and git's config is unchanged after.
+  it.skipIf(!sandboxWorks)(
+    'refuses the writes that would repoint git at another config',
+    async () => {
+      const repo = realpathSync(await mkdtemp(join(tmpdir(), 'bash-gitredirect-')));
+      const id = ['-c', 'user.email=a@example.com', '-c', 'user.name=a'];
+      try {
+        execFileSync('git', ['init', '-q'], { cwd: repo });
+        execFileSync('git', [...id, 'commit', '-q', '--allow-empty', '-m', 'i'], { cwd: repo });
+        const wt = join(repo, 'wt');
+        execFileSync('git', ['worktree', 'add', '-q', wt], { cwd: repo });
+        const wtGitDir = join(repo, '.git/worktrees/wt');
+        for (const [cwd, command] of [
+          [repo, 'mv .git .g'],
+          [repo, 'echo ../evil > .git/commondir'],
+          [repo, 'git init -q sub'],
+          [repo, 'mkdir -p .git/modules/s && echo x > .git/modules/s/config'],
+          [wt, 'echo "gitdir: ./evil" > .git'],
+          [wt, `echo /tmp/evil > '${join(wtGitDir, 'commondir')}'`],
+        ] as Array<[string, string]>) {
+          const r = await bashTool.run({ command }, { cwd });
+          expect(r.payload, command).toContain('Operation not permitted');
+        }
+        expect(
+          execFileSync('git', ['rev-parse', '--git-common-dir'], {
+            cwd: wt,
+            encoding: 'utf8',
+          }).trim(),
+        ).toBe(join(repo, '.git'));
+        expect(existsSync(join(repo, '.git/HEAD'))).toBe(true);
+        // The control: ordinary work in both checkouts, including a branch named like a denied file.
+        for (const cwd of [repo, wt]) {
+          const ok = await bashTool.run(
+            {
+              command: `echo a >> f && git add f && git ${id.join(' ')} commit -qm a && git branch config && git stash list && echo WORK-OK`,
+            },
+            { cwd },
+          );
+          expect(ok.payload, cwd).toContain('WORK-OK');
+          execFileSync('git', ['branch', '-D', 'config'], { cwd });
+        }
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    },
+  );
 
   // Loopback stays open under the network deny, bind and connect both: a test suite that starts a
   // local server (this repo's transport.test.ts does) used to go red with EPERM on `listen(0)` and

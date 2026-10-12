@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { expandingHeredocBodies, stripHeredocs } from './_heredoc.js';
 import {
@@ -65,12 +65,13 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // typecheck`). That is a very common shape, and losing to it makes the sandbox unusable.
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
-    // The repo's git dir, when it sits ABOVE cwd: a monorepo package (`packages/web/`), a worktree
-    // (`.git` is a file pointing into `main/.git/worktrees/x`) or a submodule. Without it every git
+    // The repo's git dir when it is not cwd's own `.git` — usually one ABOVE cwd: a monorepo package
+    // (`packages/web/`), a worktree (`.git` is a file pointing into `main/.git/worktrees/x`) or a
+    // submodule. Without it every git
     // write there — `add`, `stash`, `checkout`, even `fetch` (writes FETCH_HEAD) — fails on
     // `.git/index.lock: Operation not permitted`, which reads as a stale lock and whose natural next
     // move is `rm -f .git/index.lock` (measured). Bound to `NO_GITDIR`, a path that cannot exist,
-    // when the git dir is inside cwd or there is no repo — a param must be bound (an unbound one
+    // when the git dir is cwd's own `.git` or there is no repo — a param must be bound (an unbound one
     // exits 65, which turns the sandbox off), and WORKDIR covers cwd's own `.git` in that case. It
     // must NOT stand in as WORKDIR: the `.git/config` deny below is derived from this param by path,
     // and a stand-in of the workdir would deny a project's own top-level `config` and `hooks` (#706).
@@ -92,30 +93,22 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath (param "USERCACHE")))',
     '(allow file-write* (subpath (param "XDGCACHE")))',
     '(allow file-write* (subpath "/dev"))',
-    // The repo's git metadata is the one thing inside WORKDIR/GITDIR that stays unwritable (#706).
-    // Both dirs are covered, because a cwd below the repo root has cwd's `.git` (if any) and the
-    // common dir above it, and which of the two holds `config` depends on the checkout: a monorepo
-    // package or a submodule keeps cwd's `.git` a file, a plain subdirectory keeps only the one above.
-    // Last-match-wins, so these sit after the two allows they narrow.
-    //
-    // `.git/hooks` is a script git runs at commit, checkout, push — inside the sandbox while the
-    // model runs it, but in the USER's own shell the next time they commit. AGENTS.md used to accept
-    // that as a remainder; #706 is where it stopped being one, since the same write is reachable
-    // through `.git/config`, whose `core.fsmonitor` is run by reika's own unsandboxed `git status`
-    // after every bash call, and whose `filter.<name>.clean/smudge/process` were run by the same
-    // command's content check and by `cat-file --filters`. A program named there does not care which
-    // process starts it, so the config that names it is refused here — belt, with `_treediff.ts`'s
-    // `-c core.fsmonitor=false -c core.hooksPath=/dev/null` as braces for config and hooks the user
-    // already had.
-    //
-    // Measured cost, and it is wider than a refused `git config`: `git init`, `git clone` and
-    // `git submodule add` write both paths, so creating a repo is now a command the user runs —
-    // git dies on the template copy (`fatal: cannot copy '…/templates/hooks/commit-msg.sample' to
-    // '….git/hooks/commit-msg.sample': Operation not permitted`, rc 128) and on
-    // `fatal: could not set 'core.repositoryformatversion' to '0'`. Nothing else in `.git` moves:
-    // `add`, `commit`, `checkout`, `stash`, `fetch` and the index lock are still writable.
-    '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/config")))',
-    '(deny file-write* (subpath (string-append (param "WORKDIR") "/.git/hooks")))',
+    // Git metadata that names a PROGRAM stays unwritable (#706): `config` (`core.fsmonitor`, run by
+    // reika's own unsandboxed `git status` after every call; `filter.<x>.smudge`) and `hooks` (run in
+    // the user's shell at their next commit). Matched by NAME, not under one anchored dir, because
+    // which config git reads is itself decided by writable files — measured on the anchored form:
+    // `mv .git .g`, edit, `mv .g .git`; `echo ../evil > .git/commondir`; and a worktree's `.git`
+    // pointer rewritten to `gitdir: ./evil` each planted a working fsmonitor. So any entry named
+    // `.git` (dir or pointer file) is unwritable, as are the pointers inside one (`commondir`,
+    // `gitdir`). The config pattern names only where git keeps metadata — top level, `modules/…`,
+    // `worktrees/<x>/` — so a branch called `config` still checks out. The GITDIR lines cover a
+    // common dir not named `.git` (a dotfiles bare repo); its `literal` is the rename. Last-match-wins,
+    // so all of these follow the allows they narrow. Cost: `git init`, `clone`, `submodule add` and
+    // `worktree add` write these paths, so creating a repo is a command the user runs.
+    '(deny file-write* (regex #"/\\.git$"))',
+    '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
+    '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
+    '(deny file-write* (literal (param "GITDIR")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
   ];
@@ -574,7 +567,7 @@ export function sandboxParams(cwd: string, resolved: string): Record<string, str
   const home = homedir();
   return {
     WORKDIR: resolved,
-    GITDIR: gitDirOutside(cwd, resolved) ?? NO_GITDIR,
+    GITDIR: gitDirToBind(cwd, resolved) ?? NO_GITDIR,
     TMPDIR: realOr(tmpdir(), '/private/tmp'),
     USERCACHE: realOr(join(home, 'Library', 'Caches'), resolved),
     XDGCACHE: realOr(process.env.XDG_CACHE_HOME || join(home, '.cache'), resolved),
@@ -582,8 +575,8 @@ export function sandboxParams(cwd: string, resolved: string): Record<string, str
 }
 
 /**
- * What GITDIR is bound to when there is no git dir outside cwd — because cwd IS the repo root, or
- * because there is no repo. A param must be bound (unbound exits 65, turning the sandbox off), so
+ * What GITDIR is bound to when the git dir is cwd's own `.git` — the name-based denies cover it —
+ * or there is no repo. A param must be bound (unbound exits 65, turning the sandbox off), so
  * the two rules that name it need *something* to name: `/dev/null` is a character device, so no path
  * under it can ever exist and both the allow and the denies above match nothing.
  */
@@ -599,9 +592,11 @@ function realOr(path: string, fallback: string): string {
 
 const gitDirs = new Map<string, string | null>();
 
-/** The repo's common git dir when it lies outside cwd, resolved; null inside cwd or without a repo.
- *  Cached per cwd — a property of the checkout, and `git rev-parse` per command is a process. */
-function gitDirOutside(cwd: string, resolvedCwd: string): string | null {
+/** The repo's common git dir, resolved, unless it is cwd's own `.git` or there is no repo. Bound
+ *  inside cwd too: a common dir not named `.git` (`--separate-git-dir=./repo.git`, a dotfiles bare
+ *  repo at `$HOME`) escapes the name-based denies, and only GITDIR's lines reach it. Cached per cwd
+ *  — a property of the checkout, and `git rev-parse` per command is a process. */
+function gitDirToBind(cwd: string, resolvedCwd: string): string | null {
   const cached = gitDirs.get(cwd);
   if (cached !== undefined) return cached;
   let dir: string | null = null;
@@ -613,7 +608,7 @@ function gitDirOutside(cwd: string, resolvedCwd: string): string | null {
       timeout: 5_000,
     }).trim();
     const abs = realOr(isAbsolute(out) ? out : resolve(cwd, out), '');
-    if (abs && abs !== resolvedCwd && !abs.startsWith(resolvedCwd + sep)) dir = abs;
+    if (abs && abs !== join(resolvedCwd, '.git')) dir = abs;
   } catch {
     // not a repo, or no git — nothing to allow
   }
