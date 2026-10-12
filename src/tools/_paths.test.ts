@@ -1,8 +1,14 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { escapesProject, resolveUserPath } from './_paths.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  escapesProject,
+  GIT_METADATA_WARNING,
+  gitMetadataWarning,
+  resolveUserPath,
+} from './_paths.js';
 
 describe('resolveUserPath', () => {
   it('expands a bare ~ to the home directory', () => {
@@ -103,5 +109,81 @@ describe('escapesProject — symlinked cwd', () => {
     await symlink(outside, escape, 'dir');
     expect(escapesProject(real, join(escape, 'x.ts'))).toBe(false);
     await rm(outside, { recursive: true, force: true });
+  });
+});
+
+// #719: the sandbox profile's git-metadata denies, mirrored for the file tools. The name rules
+// below are the profile's regex denies read as strings — an entry named `.git` anywhere in the
+// path, the metadata files at its top level and under `modules/`/`worktrees/<x>/`, and the `hooks`
+// subtree. cwd is a path that does not exist, so no git subprocess can run: a flagged path must be
+// flagged by the names alone, and an unflagged one must not need the common-dir probe to pass.
+describe('gitMetadataWarning — the names the sandbox refuses, at the file-tool level', () => {
+  it.each([
+    ['the git config', '.git/config'],
+    ['config.worktree', '.git/config.worktree'],
+    ['commondir', '.git/commondir'],
+    ['the gitdir pointer', '.git/gitdir'],
+    ['a hook', '.git/hooks/pre-commit'],
+    ['the hooks dir itself', '.git/hooks'],
+    ['a hook in a nested repo', 'sub/.git/hooks/post-commit'],
+    ['a nested repo config', 'sub/.git/config'],
+    ['a submodule config', '.git/modules/s/config'],
+    ['a submodule hook', '.git/modules/s/hooks/post-commit'],
+    ['a worktree commondir', '.git/worktrees/wt/commondir'],
+    ['a worktree gitdir pointer', '.git/worktrees/wt/gitdir'],
+    ['the .git pointer file itself', '.git'],
+  ])('flags %s', (_label, rel) => {
+    expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBe(GIT_METADATA_WARNING);
+  });
+
+  it.each([
+    ['COMMIT_EDITMSG', '.git/COMMIT_EDITMSG'],
+    ['HEAD', '.git/HEAD'],
+    ['the index', '.git/index'],
+    ['a branch named config', '.git/refs/heads/config'],
+    ['a repo-relative name that only ends in .git', 'website.git/README'],
+    ['.gitattributes', '.gitattributes'],
+    ['a plain file named config', 'config'],
+    ['a normal source file', 'src/a.ts'],
+  ])('does not flag %s', (_label, rel) => {
+    expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBeUndefined();
+  });
+});
+
+// A git dir with no `.git` in its name escapes the name rules — `git init --bare`, a dotfiles
+// repo, a `--separate-git-dir` target. The GITDIR group (the profile's `(subpath GITDIR/…)`
+// denies, spelled against the session cwd's resolved common git dir) is what catches those.
+describe('gitMetadataWarning — the GITDIR group for a git dir with no .git name', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    // The prefix carries regex-special characters on purpose: the GITDIR deny spells the common
+    // dir into a regex, and an unescaped `.`/`+` in the cwd's own name must not widen the match.
+    cwd = await mkdtemp(join(tmpdir(), 'reika+git.dir-'));
+    execFileSync('git', ['init', '-q', '--bare'], { cwd });
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it('flags config and hooks under the bare repo the cwd is in', () => {
+    expect(gitMetadataWarning(cwd, join(cwd, 'config'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'config.worktree'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'hooks/pre-commit'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'worktrees/wt/commondir'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'modules/s/config'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('leaves the rest of the bare repo alone', () => {
+    expect(gitMetadataWarning(cwd, join(cwd, 'HEAD'))).toBeUndefined();
+    expect(gitMetadataWarning(cwd, join(cwd, 'objects/ab/cdef'))).toBeUndefined();
+    expect(gitMetadataWarning(cwd, join(cwd, 'COMMIT_EDITMSG'))).toBeUndefined();
+  });
+
+  it('does not let a regex-special character in the cwd name match a sibling', () => {
+    // The `.` in `reika+git.dir-<suffix>` would match any character unescaped: a sibling dir that
+    // differs exactly there must not read as this repo's metadata.
+    const sibling = cwd.replace('git.dir', 'gitxdir');
+    expect(gitMetadataWarning(sibling, join(sibling, 'config'))).toBeUndefined();
   });
 });

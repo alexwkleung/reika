@@ -1,9 +1,12 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { editTool } from './edit.js';
+import { GIT_METADATA_WARNING } from './_paths.js';
 import { addFileToIndex } from '../context/files.js';
 import type { ApprovalRequest } from '../types.js';
 
@@ -377,5 +380,78 @@ describe('editTool — file changed during approval (#487)', () => {
     );
     expect(result.summary).toMatch(/changed on disk/);
     await expect(readFile(p, 'utf8')).rejects.toThrow();
+  });
+});
+
+// #719, the edit half of the gate: same warning shape and bypass refusal as write, and the consent
+// still lands BEFORE the read — point `edit` at `.git/config` with an old_string that cannot match
+// and the failure branch must not return the file's contents without the modal.
+//
+// The `git init` setup writes `.git` files, which some test environments deny (the repo's own
+// sandbox refuses `.git`-named writes even in temp) — the same boundary bash.test.ts's sandbox
+// enforcement skips past, via the same probe.
+const gitInitWorks = (() => {
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'reika-gitinit-probe-'));
+    execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!gitInitWorks)('editTool — git metadata gate (#719)', () => {
+  beforeEach(async () => {
+    execFileSync('git', ['init', '-q'], { cwd });
+  });
+
+  it('warns before editing .git/config and applies the edit on approval', async () => {
+    const g = gate(true);
+    const result = await editTool.run(
+      { path: '.git/config', old_string: '[core]', new_string: '[core]\n\ttest = 1' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen).toHaveLength(1);
+    expect(g.seen[0].warnings).toEqual([GIT_METADATA_WARNING]);
+    expect(result.summary).toMatch(/^Edited /);
+    expect(await readFile(join(cwd, '.git/config'), 'utf8')).toContain('test = 1');
+  });
+
+  it('refuses an edit to .git/hooks/pre-commit under bypass, bytes unchanged', async () => {
+    const p = join(cwd, '.git/hooks/pre-commit');
+    await writeFile(p, '#!/bin/sh\necho old\n', 'utf8');
+    const result = await editTool.run(
+      { path: '.git/hooks/pre-commit', old_string: 'echo old', new_string: 'echo evil' },
+      ctx(),
+    );
+    expect(result.summary).toContain('Edit refused');
+    expect(await readFile(p, 'utf8')).toBe('#!/bin/sh\necho old\n');
+  });
+
+  it('leaves .git/COMMIT_EDITMSG ungated — the control from the sandbox test', async () => {
+    const p = join(cwd, '.git/COMMIT_EDITMSG');
+    await writeFile(p, 'old\n', 'utf8');
+    const g = gate(true);
+    const result = await editTool.run(
+      { path: '.git/COMMIT_EDITMSG', old_string: 'old', new_string: 'new' },
+      { ...ctx(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen[0].warnings).toBeUndefined();
+    expect(result.summary).toMatch(/^Edited /);
+    expect(await readFile(p, 'utf8')).toBe('new\n');
+  });
+});
+
+// The gate is by NAME, so it fires before anything touches the filesystem — this runs in every
+// environment, including ones that deny `.git` writes outright (the setup above skips there).
+describe('editTool — the git-metadata gate needs no .git on disk', () => {
+  it('refuses .git/hooks/pre-commit under bypass even when no .git exists', async () => {
+    const result = await editTool.run(
+      { path: '.git/hooks/pre-commit', old_string: 'old', new_string: 'new' },
+      ctx(),
+    );
+    expect(result.summary).toContain('Edit refused');
+    expect(result.summary).toContain('git config or a hook');
   });
 });
