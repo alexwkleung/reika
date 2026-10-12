@@ -1,6 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { relative } from 'node:path';
-import { escapesProject, OUTSIDE_PROJECT_WARNING, resolveUserPath } from './_paths.js';
+import {
+  escapesProject,
+  gitMetadataWarning,
+  OUTSIDE_PROJECT_WARNING,
+  resolveUserPath,
+} from './_paths.js';
 import type { Tool, EditFailure } from '../types.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -29,6 +34,12 @@ export const editTool: Tool = {
     const newStr = String(args.new_string ?? '');
     const full = resolveUserPath(ctx.cwd, path);
     const outside = escapesProject(ctx.cwd, full);
+    // Git config and hooks name programs something else runs, so they carry a warning the same way
+    // an out-of-project path does (#719). Combined into one `warnings` list so a path that is both
+    // (an outside repo's `.git/config`) raises each flag once, in one modal.
+    const gitMeta = gitMetadataWarning(ctx.cwd, full);
+    const gated = outside || gitMeta !== undefined;
+    const warnings = [...(outside ? [OUTSIDE_PROJECT_WARNING] : []), ...(gitMeta ? [gitMeta] : [])];
     // See write.ts for why these are two names. `rel` stays project-relative because it rides
     // `diff.path`, which App.tsx hands to addFileToIndex -> ignore (a RangeError on an absolute
     // path); `display` is what the user and the model see.
@@ -37,11 +48,19 @@ export const editTool: Tool = {
 
     // See write.ts — the same gap, the same gate. Checked before the file is read so the boundary is
     // reported instead of an incidental read error on a path we would refuse anyway.
-    if (outside && !ctx.requestApproval) {
+    if (gated && !ctx.requestApproval) {
+      if (outside) {
+        return {
+          summary:
+            `Edit refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
+            'are bypassed so it cannot be confirmed with the user. Edit inside the project instead.',
+        };
+      }
       return {
         summary:
-          `Edit refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
-          'are bypassed so it cannot be confirmed with the user. Edit inside the project instead.',
+          `Edit refused: ${display} is git config or a hook, which runs code at the user's next ` +
+          'git command. Approvals are bypassed so it cannot be confirmed with the user; edit a ' +
+          'project file instead, or leave the change for the user.',
       };
     }
 
@@ -65,12 +84,12 @@ export const editTool: Tool = {
     // below, which no longer re-raises the warning — the boundary was consented to here, so under
     // `safe` that second one auto-approves and this stays a single modal.
     let approvedOutside = false;
-    if (outside && ctx.requestApproval) {
+    if (gated && ctx.requestApproval) {
       const ok = await ctx.requestApproval({
         tool: 'edit',
         subject: display,
         preview: intentDiff(oldStr, newStr),
-        warnings: [OUTSIDE_PROJECT_WARNING],
+        warnings,
       });
       if (!ok) return { summary: declineSummary('Edit', ` for ${display}`, ctx) };
       approvedOutside = true;

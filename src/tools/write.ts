@@ -1,6 +1,11 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, relative } from 'node:path';
-import { escapesProject, OUTSIDE_PROJECT_WARNING, resolveUserPath } from './_paths.js';
+import {
+  escapesProject,
+  gitMetadataWarning,
+  OUTSIDE_PROJECT_WARNING,
+  resolveUserPath,
+} from './_paths.js';
 import type { Tool } from '../types.js';
 import { buildWriteDiff } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
@@ -24,6 +29,12 @@ export const writeTool: Tool = {
     const content = String(args.content ?? '');
     const full = resolveUserPath(ctx.cwd, path);
     const outside = escapesProject(ctx.cwd, full);
+    // Git config and hooks name programs something else runs, so they carry a warning the same way
+    // an out-of-project path does (#719). Combined into one `warnings` list so a path that is both
+    // (an outside repo's `.git/config`) raises each flag once, in one modal.
+    const gitMeta = gitMetadataWarning(ctx.cwd, full);
+    const gated = outside || gitMeta !== undefined;
+    const warnings = [...(outside ? [OUTSIDE_PROJECT_WARNING] : []), ...(gitMeta ? [gitMeta] : [])];
     // Two names for the same file, deliberately. `rel` stays project-relative because it is what
     // rides `diff.path`, and App.tsx feeds that straight to addFileToIndex -> ignore, which throws
     // a RangeError on an absolute path. `display` is the human- and model-facing string: an
@@ -36,11 +47,21 @@ export const writeTool: Tool = {
     // passed `warnings`, so under `safe` every write auto-approved to any path `resolveUserPath`
     // would produce — `~/.zshrc` included. Under `bypass` there is no modal to fall through to, so
     // the only honest answer is no; the model is told why, and that the project is where to write.
-    if (outside && !ctx.requestApproval) {
+    // Git metadata gets the same treatment: bypassed, there is nobody to clear a hook write, so it
+    // is refused rather than landed (#719).
+    if (gated && !ctx.requestApproval) {
+      if (outside) {
+        return {
+          summary:
+            `Write refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
+            'are bypassed so it cannot be confirmed with the user. Write inside the project instead.',
+        };
+      }
       return {
         summary:
-          `Write refused: ${full} is outside the project directory (${ctx.cwd}), and approvals ` +
-          'are bypassed so it cannot be confirmed with the user. Write inside the project instead.',
+          `Write refused: ${display} is git config or a hook, which runs code at the user's next ` +
+          'git command. Approvals are bypassed so it cannot be confirmed with the user; write a ' +
+          'project file instead, or leave the change for the user.',
       };
     }
 
@@ -52,13 +73,13 @@ export const writeTool: Tool = {
     // model's own content, not the file's, so gating early loses no information. Inside the
     // project the order is unchanged.
     let approved = false;
-    if (outside && ctx.requestApproval) {
+    if (gated && ctx.requestApproval) {
       const ok = await ctx.requestApproval({
         tool: 'write',
         subject: display,
         preview: diffText,
         startLine: 1,
-        warnings: [OUTSIDE_PROJECT_WARNING],
+        warnings,
       });
       if (!ok) return { summary: declineSummary('Write', ` for ${display}`, ctx) };
       approved = true;

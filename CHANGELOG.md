@@ -40,12 +40,18 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   switch off any filter driver the repo's own config defines, and skip submodules, so a repo's
   config or hooks cannot make it run a program either way; drivers from your global config, such as
   Git LFS, still apply to the diffs it draws, but LFS never downloads a missing object for one
-  (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed. The `write`/`edit` tools can still write those paths; that gap is #719.
+  (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed. The `write`/`edit` tools now gate the same paths through the approval dialog instead of landing silently (below).
 - The cost, and it is wider than a refused `git config`: `git init`, `git clone`,
   `git submodule add` and `git worktree add` write these paths, so creating a repository — in any
   directory, temp included — is now a command you run instead of the model, and a test suite that
   creates repos in a temp dir fails when the model runs it. Everything else in `.git` — `add`, `commit`, `checkout`, `stash`, `fetch`, the index
   lock — is unchanged.
+- The `write`/`edit` tools gate the same paths the sandbox refuses for shell commands: writing to a
+  repo's `config` or `hooks` (or to the files that decide which config git reads) raises the same
+  warning in the approval dialog an out-of-project write does, so under `safe` it cannot be
+  auto-approved silently — an approved write still lands, and with approvals bypassed it is refused
+  outright. Writing a hook or a `core.fsmonitor` through a file tool now needs the same deliberate
+  user approval a sandboxed command would have, instead of landing with nothing to clear (#719).
 
 ## [0.2.0] - 2026-10-10
 
