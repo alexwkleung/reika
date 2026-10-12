@@ -651,30 +651,38 @@ const NET_DENIAL_RE =
 
 // A write the profile refused, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
 // mkdir/rm/… (`rm: .git/config: Operation not permitted`), git (`/Users/x/.git: Operation not
-// permitted`), node (`EPERM: operation not permitted, mkdir '/Users/x/d'`) and python (`Operation
-// not permitted: '/Users/x/f'`) each print it — a PATH next to the message is what tells it apart
-// from the network and exec shapes above.
+// permitted`), go's file errors (`open /Users/x/f: operation not permitted`), node (`EPERM:
+// operation not permitted, mkdir '/Users/x/d'`) and python (`Operation not permitted: '/Users/x/f'`)
+// each print it — a PATH next to the message is what tells it apart from the network and exec
+// shapes above.
 //
 // The shell's and coreutils' shape is the WHOLE line (`^…$` under `m`): `<prog>: <path>: operation
 // not permitted`, nothing before and nothing after, which is how they print it (#720). Without the
 // anchors the phrase alone was enough, so a `cat`, `grep` or `gh pr diff` of text that only QUOTES
 // the error — a comment, a test fixture, a diff line — told the user the sandbox had refused a
-// write that never happened, and offered to turn the sandbox off over it. Quoted text carries the
-// phrase mid-line (a diff line's `+`/`-`/space, a string's opening quote), which these reject.
+// write that never happened, and offered to turn the sandbox off over it. Quoted text usually
+// carries the phrase mid-line (a diff line's `+`/`-`/space, a string's opening quote) or text after
+// it, which these reject; what they cannot reject is a line that ENDS in the shape — a quoted
+// denial line at column 0 (`+mkdir: /x: Operation not permitted`, indistinguishable from the real
+// thing without a diff-marker test that would also drop a real `-bash: …`) or prose ending in one
+// (`it printed /x/f: operation not permitted`). See the test.
 //
-// The optional program prefix is there for git's own shape, measured on Apple git 2.50.1:
-// `<path>: Operation not permitted` and nothing else on the line, no program name in front — `git
-// init` refused the mkdir of `.git`. Since #706 makes creating a repo a command the model cannot
-// run, this is the refusal most likely to show up, and the message names no program: unattributed,
-// it reads as a stale lock or a permissions problem, which is what the footer exists to stop. The
-// path git prints there is absolute, so an added diff line (`+foo/bar: …`) still cannot match.
+// The prefix before the path is optional and comes in two shapes: the program with its colon
+// (`/bin/sh: `) or just the verb — go prints `open <path>: operation not permitted` with no colon
+// after the verb, and anchoring only to `<prog>:` missed it. Neither shape is git's own, measured
+// on Apple git 2.50.1: `<path>: Operation not permitted` and nothing else on the line, no program
+// name in front — `git init` refused the mkdir of `.git`. Since #706 makes creating a repo a
+// command the model cannot run, this is the refusal most likely to show up, and the message names
+// no program: unattributed, it reads as a stale lock or a permissions problem, which is what the
+// footer exists to stop. The path git prints there is absolute, so an added diff line
+// (`+foo/bar: …`) still cannot match.
 //
 // node's and python's shapes cannot be anchored: they print the message mid-line (`Error: EPERM:
 // operation not permitted, mkdir '…'`, `PermissionError: [Errno 1] Operation not permitted: '/…'`),
 // so text quoting one of those still reads as a denial. That narrows the false positive rather than
 // removing it (#720).
 const FS_DENIAL_RE =
-  /^(?:[^\s:]+: .*)?\/[^\s:'"]+: operation not permitted$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
+  /^(?:(?:[^\s:]+: |[A-Za-z][\w-]* ).*)?\/[^\s:'"]+: operation not permitted$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an

@@ -791,6 +791,11 @@ describe('sandboxFooter', () => {
       '/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
       "Error: EPERM: operation not permitted, mkdir '/Users/someone/x'\n",
       'go: failed to initialize build cache at /Users/someone/.cargo/x: mkdir /Users/someone/.cargo/x: operation not permitted\n',
+      // go's file errors print the verb with no colon after it (`open <path>: operation not
+      // permitted`): the build-cache line above only matches through its `go: ` prefix, and an
+      // anchor on `<prog>:` alone would leave these two unreported.
+      'open /Users/someone/.cargo/x: operation not permitted\n',
+      'unlinkat /Users/someone/x: Operation not permitted\n',
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
       // what tells them apart, and it must not collect the fetch_url advice.
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
@@ -828,8 +833,9 @@ describe('sandboxFooter', () => {
       "      '/bin/sh: /Users/someone/notes.md: Operation not permitted',\n", // a fixture string
       // The shape git itself prints, as an added diff line. What this rule cannot reject is an
       // added line that IS a denial line at column 0 with nothing after it (`+git: /x/.git:
-      // Operation not permitted`): it is indistinguishable from the real thing, and the only way
-      // to tell them apart is to test for the diff marker, which would also drop a real `-bash: …`.
+      // Operation not permitted`, `+mkdir: /x: Operation not permitted`): it is indistinguishable
+      // from the real thing, and the only way to tell them apart is to test for the diff marker,
+      // which would also drop a real `-bash: …`.
       '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
     ]) {
       expect(sandboxRefusedWrite(out), out).toBe(false);
