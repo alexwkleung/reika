@@ -21,6 +21,14 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - An empty `REIKA_*` line in a project `.env` (`REIKA_SUBAGENT_MODEL=`, as older copies of
   `.env.example` had) no longer hides the value set for that key in `~/.config/reika/.env`, and no
   longer triggers the "Ignored … from ./.env" startup notice.
+- A sandbox write-denial is read from the shape a tool prints it in — the shell's
+  `/bin/sh: /path: Operation not permitted`, or git's path with no program name in front — not from
+  the phrase "Operation not permitted" appearing anywhere in the output. Reading a diff, a log or a
+  test fixture that only quotes the error no longer tells you the sandbox refused a write that never
+  happened, or offers to turn the sandbox off over it. Text quoting node's or python's mid-line
+  shapes can still read as a denial. A denial behind a task runner's line prefix (turbo, `pnpm -r`)
+  or indentation is still reported. The refusal lines also stopped saying "outside the working
+  directory", which was wrong for a refused `.git/config` or hook (#720).
 
 ### Security
 
