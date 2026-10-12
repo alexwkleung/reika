@@ -295,8 +295,8 @@ export const sandboxNoticed = new Set<string>();
 // that needs a home-dir path will refuse on every command until they act on it.
 const sandboxDenialNoticed = new Set<string>();
 const SANDBOX_DENIAL_NOTICE =
-  'The sandbox refused a write outside the working directory, temp and cache dirs (see the ' +
-  'command output). If this project needs it, REIKA_SANDBOX=0 turns the sandbox off.';
+  'The sandbox refused a write to a path it does not allow (see the command output). If this ' +
+  'project needs it, REIKA_SANDBOX=0 turns the sandbox off.';
 
 export function execStream(
   command: string,

@@ -776,10 +776,19 @@ describe('sandboxFooter', () => {
 
   // Filesystem denials name the path, so they get one line: it is the sandbox, not something sudo
   // fixes. Keyed on a PATH before the colon, which is what tells the shape from the network ones.
+  // The shell's and coreutils' six shapes here are the ones measured on this machine (#720).
   it('names a refused write for what it is, without the network advice', () => {
     for (const out of [
       '/bin/sh: /Users/someone/notes.md: Operation not permitted\n',
       'mkdir: /Users/someone/x: Operation not permitted\n',
+      'touch: /Users/someone/notes.md: Operation not permitted\n',
+      // `.git/config`: the path need not be absolute, and since #706 this one is INSIDE the working
+      // directory, which is why the line says "a path it does not allow" rather than "outside".
+      'rm: .git/config: Operation not permitted\n',
+      // git's own shape, measured on Apple git 2.50.1: `git init` refused the mkdir of `.git` and
+      // printed the path with no program name in front. #706 makes creating a repo a refusal the
+      // model cannot work around, so this is the shape most likely to show up now.
+      '/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
       "Error: EPERM: operation not permitted, mkdir '/Users/someone/x'\n",
       'go: failed to initialize build cache at /Users/someone/.cargo/x: mkdir /Users/someone/.cargo/x: operation not permitted\n',
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
@@ -787,7 +796,8 @@ describe('sandboxFooter', () => {
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
-      expect(footer, out).toContain('refused by the sandbox');
+      expect(footer, out).toContain('refused a write');
+      expect(footer, out).toContain('a path it does not allow');
       expect(footer, out).not.toContain('Network access is denied');
       expect(sandboxRefusedWrite(out), out).toBe(true);
     }
@@ -802,11 +812,36 @@ describe('sandboxFooter', () => {
     ).toBe(false);
   });
 
+  // #720: the phrase alone is not the shape. Reading a file, a diff or a search hit that only
+  // QUOTES the error told the user the sandbox had refused a write that never happened, and offered
+  // to turn the sandbox off over it. Measured in reika's own session: `gh pr diff 715 | sed -n
+  // '601,821p'` exited 0 with the branch's comment about `.git/index.lock` in it.
+  it('does not read quoted text as a refused write', () => {
+    const comment =
+      '  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param';
+    for (const out of [
+      `+${comment}\n`, // the diff line, as `gh pr diff` printed it
+      `${comment}\n`, // the comment itself, as `cat` prints it with no diff prefix
+      '668:  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param\n', // a `grep -n` hit
+      "+        expect(r.payload).toContain('Operation not permitted');\n",
+      "-      expect(mv.payload).toContain('Operation not permitted');\n",
+      "      '/bin/sh: /Users/someone/notes.md: Operation not permitted',\n", // a fixture string
+      // The shape git itself prints, as an added diff line. What this rule cannot reject is an
+      // added line that IS a denial line at column 0 with nothing after it (`+git: /x/.git:
+      // Operation not permitted`): it is indistinguishable from the real thing, and the only way
+      // to tell them apart is to test for the diff marker, which would also drop a real `-bash: …`.
+      '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
+    ]) {
+      expect(sandboxRefusedWrite(out), out).toBe(false);
+      expect(sandboxFooter('gh pr diff 715 | sed -n 601,821p', 0, out, denied), out).toBe('');
+    }
+  });
+
   // `mkdir ~/x; echo ok` exits 0 with the denial in its output. The write note is on the shape
   // alone; the ps and network notes keep the exit gate, since a red run is when they are read.
   it('reports a refused write even when the command exited 0', () => {
     const out = 'mkdir: /Users/someone/x: Operation not permitted\nok\n';
-    expect(sandboxFooter('mkdir ~/x; echo ok', 0, out, denied)).toContain('refused by the sandbox');
+    expect(sandboxFooter('mkdir ~/x; echo ok', 0, out, denied)).toContain('refused a write');
     expect(sandboxFooter('curl -s x; echo done', 0, curlConnect, denied)).toBe('');
   });
 

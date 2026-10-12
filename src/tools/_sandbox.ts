@@ -649,12 +649,32 @@ export function sandboxNotice(cwd: string, home = homedir()): string {
 const NET_DENIAL_RE =
   /couldn.t connect to server|connect EPERM|code EPERM|\[Errno 1\] Operation not permitted(?!: ')|connect(?: to host \S+ port \d+)?: operation not permitted|could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable/i;
 
-// A write outside the allowed dirs, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
-// mkdir/cp/… (`mkdir: /Users/x/d: Operation not permitted`), node (`EPERM: operation not permitted,
-// mkdir '/Users/x/d'`) and python (`Operation not permitted: '/Users/x/f'`) each print it — a PATH
-// next to the message is what tells it apart from the network and exec shapes above.
+// A write the profile refused, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
+// mkdir/rm/… (`rm: .git/config: Operation not permitted`), git (`/Users/x/.git: Operation not
+// permitted`), node (`EPERM: operation not permitted, mkdir '/Users/x/d'`) and python (`Operation
+// not permitted: '/Users/x/f'`) each print it — a PATH next to the message is what tells it apart
+// from the network and exec shapes above.
+//
+// The shell's and coreutils' shape is the WHOLE line (`^…$` under `m`): `<prog>: <path>: operation
+// not permitted`, nothing before and nothing after, which is how they print it (#720). Without the
+// anchors the phrase alone was enough, so a `cat`, `grep` or `gh pr diff` of text that only QUOTES
+// the error — a comment, a test fixture, a diff line — told the user the sandbox had refused a
+// write that never happened, and offered to turn the sandbox off over it. Quoted text carries the
+// phrase mid-line (a diff line's `+`/`-`/space, a string's opening quote), which these reject.
+//
+// The optional program prefix is there for git's own shape, measured on Apple git 2.50.1:
+// `<path>: Operation not permitted` and nothing else on the line, no program name in front — `git
+// init` refused the mkdir of `.git`. Since #706 makes creating a repo a command the model cannot
+// run, this is the refusal most likely to show up, and the message names no program: unattributed,
+// it reads as a stale lock or a permissions problem, which is what the footer exists to stop. The
+// path git prints there is absolute, so an added diff line (`+foo/bar: …`) still cannot match.
+//
+// node's and python's shapes cannot be anchored: they print the message mid-line (`Error: EPERM:
+// operation not permitted, mkdir '…'`, `PermissionError: [Errno 1] Operation not permitted: '/…'`),
+// so text quoting one of those still reads as a denial. That narrows the false positive rather than
+// removing it (#720).
 const FS_DENIAL_RE =
-  /\/[^\s:'"]+: operation not permitted|EPERM: operation not permitted, \w+ '|operation not permitted: '\//i;
+  /^(?:[^\s:]+: .*)?\/[^\s:'"]+: operation not permitted$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -742,12 +762,14 @@ export function sandboxFooter(
             ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
-  // `/bin/ps: Operation not permitted` is a path too, and already explained above.
+  // `/bin/ps: Operation not permitted` is a path too, and already explained above. The line says "a
+  // path it does not allow", not "outside the working directory": since #706 the denied paths
+  // include `.git/config` and `.git/hooks`, which are INSIDE the working directory.
   if (!ps && FS_DENIAL_RE.test(output)) {
     lines.push(
-      'A write outside the working directory, temp and cache dirs was refused by the sandbox — not ' +
-        'a permissions problem, so do not reach for sudo or chmod. If the command must write there, ' +
-        'say so and ask the user to run it.',
+      'The sandbox refused a write to a path it does not allow — not a permissions problem, so do ' +
+        'not reach for sudo or chmod. If the command must write there, say so and ask the user to ' +
+        'run it.',
     );
   }
   if (lines.length === 0) return '';
