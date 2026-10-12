@@ -65,16 +65,10 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // typecheck`). That is a very common shape, and losing to it makes the sandbox unusable.
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
-    // The repo's git dir when it is not cwd's own `.git` — usually one ABOVE cwd: a monorepo package
-    // (`packages/web/`), a worktree (`.git` is a file pointing into `main/.git/worktrees/x`) or a
-    // submodule. Without it every git
-    // write there — `add`, `stash`, `checkout`, even `fetch` (writes FETCH_HEAD) — fails on
-    // `.git/index.lock: Operation not permitted`, which reads as a stale lock and whose natural next
-    // move is `rm -f .git/index.lock` (measured). Bound to `NO_GITDIR`, a path that cannot exist,
-    // when the git dir is cwd's own `.git` or there is no repo — a param must be bound (an unbound one
-    // exits 65, which turns the sandbox off), and WORKDIR covers cwd's own `.git` in that case. It
-    // must NOT stand in as WORKDIR: the `.git/config` deny below is derived from this param by path,
-    // and a stand-in of the workdir would deny a project's own top-level `config` and `hooks` (#706).
+    // The repo's git dir when it isn't cwd's own `.git` — usually above cwd (monorepo package,
+    // worktree, submodule). Without it `git add` fails on `.git/index.lock: Operation not
+    // permitted`, which reads as a stale lock and invites `rm -f` (measured). Never bound to
+    // WORKDIR: the denies below derive `config`/`hooks` from it and would hit the project's own.
     '(allow file-write* (subpath (param "GITDIR")))',
     // Temp is writable: `mktemp -d`, `cd /tmp && …` and `tempfile` are how a model scratches, and
     // denying them did worse than fail — python's `tempfile.mkdtemp()` fell through TMPDIR and /tmp
@@ -93,18 +87,11 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath (param "USERCACHE")))',
     '(allow file-write* (subpath (param "XDGCACHE")))',
     '(allow file-write* (subpath "/dev"))',
-    // Git metadata that names a PROGRAM stays unwritable (#706): `config` (`core.fsmonitor`, run by
-    // reika's own unsandboxed `git status` after every call; `filter.<x>.smudge`) and `hooks` (run in
-    // the user's shell at their next commit). Matched by NAME, not under one anchored dir, because
-    // which config git reads is itself decided by writable files — measured on the anchored form:
-    // `mv .git .g`, edit, `mv .g .git`; `echo ../evil > .git/commondir`; and a worktree's `.git`
-    // pointer rewritten to `gitdir: ./evil` each planted a working fsmonitor. So any entry named
-    // `.git` (dir or pointer file) is unwritable, as are the pointers inside one (`commondir`,
-    // `gitdir`). The config pattern names only where git keeps metadata — top level, `modules/…`,
-    // `worktrees/<x>/` — so a branch called `config` still checks out. The GITDIR lines cover a
-    // common dir not named `.git` (a dotfiles bare repo); its `literal` is the rename. Last-match-wins,
-    // so all of these follow the allows they narrow. Cost: `git init`, `clone`, `submodule add` and
-    // `worktree add` write these paths, so creating a repo is a command the user runs.
+    // Git config and hooks name programs something else runs, so they stay unwritable (#706).
+    // Matched by name, not under an anchored dir: renaming `.git`, writing `commondir`, or
+    // repointing a worktree's `.git` file each redirected git to a planted config (measured). The
+    // config pattern names only metadata dirs, so a branch called `config` still works; the GITDIR
+    // lines cover a common dir not named `.git`. Last-match-wins: these follow the allows.
     '(deny file-write* (regex #"/\\.git$"))',
     '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
     '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
@@ -554,15 +541,8 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   return { args };
 }
 
-/**
- * The `-D` bindings the profile's `(param …)` names resolve against, from one cwd.
- *
- * `sandboxPlan`'s other half, and exported for the same reason `sandboxProfile` is: the tests hand
- * the profile to `sandbox-exec` themselves to prove it parses and every param it names is bound,
- * which is exactly the check `sandboxPlan` declines to take part in on a machine where the binary
- * cannot apply a profile at all (nested inside another seatbelt sandbox, where it exits 71 before
- * running anything — the profile is still parsed there, and an unbound param still exits 65).
- */
+/** The `-D` bindings for the profile's params. Exported so tests can prove every param is bound
+ *  even where `sandboxPlan` refuses (nested seatbelt exits 71, but still parses the profile). */
 export function sandboxParams(cwd: string, resolved: string): Record<string, string> {
   const home = homedir();
   return {
@@ -574,12 +554,8 @@ export function sandboxParams(cwd: string, resolved: string): Record<string, str
   };
 }
 
-/**
- * What GITDIR is bound to when the git dir is cwd's own `.git` — the name-based denies cover it —
- * or there is no repo. A param must be bound (unbound exits 65, turning the sandbox off), so
- * the two rules that name it need *something* to name: `/dev/null` is a character device, so no path
- * under it can ever exist and both the allow and the denies above match nothing.
- */
+/** GITDIR when there is none to bind: an unbound param exits 65, and nothing can exist under the
+ *  `/dev/null` device, so every rule naming it matches nothing. */
 export const NO_GITDIR = '/dev/null/reika-no-gitdir';
 
 function realOr(path: string, fallback: string): string {
@@ -592,10 +568,8 @@ function realOr(path: string, fallback: string): string {
 
 const gitDirs = new Map<string, string | null>();
 
-/** The repo's common git dir, resolved, unless it is cwd's own `.git` or there is no repo. Bound
- *  inside cwd too: a common dir not named `.git` (`--separate-git-dir=./repo.git`, a dotfiles bare
- *  repo at `$HOME`) escapes the name-based denies, and only GITDIR's lines reach it. Cached per cwd
- *  — a property of the checkout, and `git rev-parse` per command is a process. */
+/** The repo's common git dir unless it is cwd's own `.git`: one inside cwd under another name
+ *  (`--separate-git-dir`, a dotfiles repo) escapes the name-based denies. Cached per cwd. */
 function gitDirToBind(cwd: string, resolvedCwd: string): string | null {
   const cached = gitDirs.get(cwd);
   if (cached !== undefined) return cached;

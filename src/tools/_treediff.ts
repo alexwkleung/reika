@@ -153,11 +153,9 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
       before = null;
     } else {
       // The old head's bytes, fetched only for files that get rendered — a formatter sweeping 200
-      // files must not cost 200 git processes. `--filters` applies the eol and smudge conversion the
-      // worktree copy went through, so a CRLF checkout or an LFS file doesn't diff as a whole-file
-      // rewrite; the guard keeps it from running a driver the repo's own config names (#706). A miss
-      // (no commit had the path, yet it wasn't listed before) or a mode-only change has nothing to
-      // draw.
+      // files must not cost 200 git processes. `--filters` applies eol and LFS conversion so a CRLF or
+      // LFS file doesn't diff as a rewrite; the guard stops repo-defined drivers. A miss or a
+      // mode-only change has nothing to draw.
       const old = await git(
         [...guard, 'cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
         root,
@@ -302,13 +300,9 @@ async function commitDiff(
   return paths;
 }
 
-// `-c` overrides that switch off every filter driver the repo's own config defines (`local` or
-// `worktree` scope, includes counted as their includer), for the harness calls that run filters:
-// `status` runs a clean driver, `cat-file --filters` a smudge one. Those files are what a model can
-// write (#719), while a driver from the user's global or system config — git-lfs — is theirs and
-// keeps running. Blanking was measured to stop smudge, clean and process drivers, `required` ones
-// included, with eol conversion intact. Null when the scopes can't be read (git older than 2.26) or
-// a name won't fit `-c` (an `=` in it): callers then skip the diff rather than run git unguarded.
+// `-c` overrides blanking every filter driver from the repo's own config, which a model can write
+// (#719); global ones like git-lfs are the user's and keep running. Null when that can't be
+// decided (git < 2.26, an `=` in a name): callers skip the diff rather than run git unguarded.
 async function repoFilterGuard(cwd: string): Promise<string[] | null> {
   const out = await git(['config', '--show-scope', '--list', '-z'], cwd);
   if (out === null) return null;
@@ -350,15 +344,9 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
   return new Promise(resolve => {
     execFile(
       'git',
-      // Harness git runs in reika's own process, unsandboxed, on a repo the model's commands can
-      // write to — so the config keys and the hook dir that make these commands run a program are
-      // turned off on the command line, which beats every config file (#706). Measured: with
-      // `core.fsmonitor=/tmp/f.sh` set, a plain `git status` ran `/tmp/f.sh`, and `-c
-      // core.fsmonitor=false` did not. Hooks ARE this gap, contrary to an earlier claim here: the
-      // index refresh `git status` opportunistically does runs `post-index-change` (measured — a
-      // planted hook ran this file's exact argv, with no config gate at all), so `core.hooksPath`
-      // is pinned to `/dev/null`, a character device no hook name can exist under. Filter drivers
-      // are the third program-naming key, and per-repo: `repoFilterGuard` blanks those.
+      // Unsandboxed git on a repo the model can write: `status` ran a planted fsmonitor and a
+      // `post-index-change` hook (measured), so both are off on the command line (#706). Filter
+      // drivers are per-repo and blanked by `repoFilterGuard`.
       ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
       {
         cwd,
