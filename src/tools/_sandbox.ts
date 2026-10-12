@@ -97,10 +97,11 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
     // Deleting stays allowed, or `rm -rf vendor` with a nested repo in it fails on that repo's
     // metadata. Removing one plants nothing, and the file can't be created again. The project's
-    // own `.git` is excluded, because renaming it away counts as an unlink.
-    '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git")))))',
+    // own `.git` and GITDIR are excluded here, because renaming one away counts as an unlink, and a
+    // later deny does not win over this unlink allow (measured).
+    '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git"))) (require-not (subpath (param "GITDIR")))))',
     // A common dir not named `.git` has no name to match, so its places are spelled out from the
-    // param. These come after the unlink allow, so it can't be deleted or renamed either.
+    // param.
     '(deny file-write* (literal (param "GITDIR")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
     '(deny file-write* (subpath (string-append (param "GITDIR") "/config.worktree")))',

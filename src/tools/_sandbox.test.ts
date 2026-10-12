@@ -85,7 +85,7 @@ describe('sandboxProfile', () => {
     // dirs, or it would let a command delete git metadata anywhere on disk.
     const unlink = lines.filter(l => l.includes('file-write-unlink'));
     expect(unlink).toEqual([
-      '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git")))))',
+      '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git"))) (require-not (subpath (param "GITDIR")))))',
     ]);
     expect(lines.indexOf(unlink[0])).toBeGreaterThan(lines.indexOf(rules[11]));
     expect(lines.indexOf(unlink[0])).toBeLessThan(lines.indexOf(rules[12]));

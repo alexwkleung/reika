@@ -833,6 +833,13 @@ describe('bashTool — sandbox composition', () => {
           const r = await bashTool.run({ command }, { cwd: repo });
           expect(r.payload, command).toContain('Operation not permitted');
         }
+        // From a subdirectory the repo's `.git` is GITDIR, and tmpdir sits inside the unlink allow's
+        // scope: a GITDIR deny placed after that allow did not win over it (measured).
+        await mkdir(join(repo, 'src'));
+        for (const command of ['mv ../.git ../.g', 'rm ../.git/config', 'rm -rf ../.git/hooks']) {
+          const r = await bashTool.run({ command }, { cwd: join(repo, 'src') });
+          expect(r.payload, command).toContain('Operation not permitted');
+        }
         expect(existsSync(join(repo, '.git/config'))).toBe(true);
         expect(existsSync(join(repo, '.git/hooks'))).toBe(true);
       } finally {
