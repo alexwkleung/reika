@@ -26,7 +26,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the phrase "Operation not permitted" appearing anywhere in the output. Reading a diff, a log or a
   test fixture that only quotes the error no longer tells you the sandbox refused a write that never
   happened, or offers to turn the sandbox off over it. Text quoting node's or python's mid-line
-  shapes can still read as a denial. The refusal lines also stopped saying "outside the working
+  shapes can still read as a denial. A denial behind a task runner's line prefix (turbo, `pnpm -r`)
+  or indentation is still reported. The refusal lines also stopped saying "outside the working
   directory", which was wrong for a refused `.git/config` or hook (#720).
 
 ### Security

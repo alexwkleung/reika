@@ -796,6 +796,14 @@ describe('sandboxFooter', () => {
       // anchor on `<prog>:` alone would leave these two unreported.
       'open /Users/someone/.cargo/x: operation not permitted\n',
       'unlinkat /Users/someone/x: Operation not permitted\n',
+      // Task runners prefix each line (turbo, pnpm -r, concurrently) and test runners indent it;
+      // the denial is still the line's last thing.
+      'web:build: mkdir: /Users/someone/.cargo/x: Operation not permitted\n',
+      'packages/web build: mkdir: /Users/someone/x: Operation not permitted\n',
+      '[0] mkdir: /Users/someone/x: Operation not permitted\n',
+      '    mkdir: /Users/someone/x: Operation not permitted \n',
+      // macOS paths carry spaces (`My Project`, iCloud's `Mobile Documents`).
+      '/Users/someone/My Project/.git: Operation not permitted\n',
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
       // what tells them apart, and it must not collect the fetch_url advice.
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
@@ -837,6 +845,10 @@ describe('sandboxFooter', () => {
       // from the real thing, and the only way to tell them apart is to test for the diff marker,
       // which would also drop a real `-bash: …`.
       '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
+      // Prose ending in the shape: a commit subject, a sentence. Before the path there must be a
+      // `: ` or a single verb, so the words in front rule it out.
+      'ab71044 docs: note that mkdir printed /x/f: operation not permitted\n',
+      'it printed /x/f: operation not permitted\n',
     ]) {
       expect(sandboxRefusedWrite(out), out).toBe(false);
       expect(sandboxFooter('gh pr diff 715 | sed -n 601,821p', 0, out, denied), out).toBe('');
