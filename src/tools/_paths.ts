@@ -1,6 +1,6 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 // Resolve a model-supplied path against cwd. Models routinely emit `~/...`
@@ -79,9 +79,11 @@ export const GIT_METADATA_WARNING =
 // The names the sandbox profile refuses (src/tools/_sandbox.ts): any entry named `.git`, the
 // metadata files at its top level and under `modules/`/`worktrees/<x>/`, and the `hooks` subtree.
 // Unanchored, so a repo nested anywhere in the project is covered. Paths are normalized to `/` so
-// a Windows separator cannot dodge the `/`-spelled rules.
+// a Windows separator cannot dodge the `/`-spelled rules. Case-insensitive because macOS's default
+// volume is: `.git/Config` and `.GIT/hooks/x` write the real files, and on a case-sensitive volume
+// the extra matches are only a prompt.
 const GIT_METADATA_NAME_RE =
-  /\/\.git$|\.git\/((modules\/.+\/|worktrees\/[^/]+\/)?(config|config\.worktree|commondir|gitdir))$|\.git\/(modules\/.+\/)?hooks(\/|$)/;
+  /\/\.git$|\.git\/((modules\/.+\/|worktrees\/[^/]+\/)?(config|config\.worktree|commondir|gitdir))$|\.git\/(modules\/.+\/)?hooks(\/|$)/i;
 
 // A common git dir NOT named `.git` (`git init --separate-git-dir`, a dotfiles bare repo) escapes
 // the name rules, the same hole the sandbox's GITDIR param exists for. Protected places are the
@@ -94,13 +96,14 @@ const GIT_DIR_DENY_RE = (g: string): RegExp => {
   const dir = g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(
     `^${dir}$|^${dir}/(config|config\\.worktree|commondir|gitdir)$|^${dir}/hooks(/|$)|^${dir}/worktrees/[^/]+/(config|config\\.worktree|commondir|gitdir)$|^${dir}/modules/.+/(config|config\\.worktree|commondir|gitdir)$|^${dir}/modules/.+/hooks(/|$)`,
+    'i',
   );
 };
 
 const commonGitDirs = new Map<string, string>();
 
 // The session cwd's common git dir, normalized, or null when there is none. Mirrors the sandbox's
-// `gitDirToBind` (src/tools/_sandbox.ts) minus its realpath of cwd and its "cwd's own `.git`" skip:
+// `gitDirToBind` (src/tools/_sandbox.ts) minus its "cwd's own `.git`" skip:
 // for the file tools the name rules already cover a `.git`-named dir, and protecting it again here
 // changes nothing, so the skip is a comparison that cannot differ in outcome. A found dir is cached
 // per cwd; a null is not, so a `--separate-git-dir`/bare repo the user creates mid-session is still
@@ -117,8 +120,9 @@ function commonGitDir(cwd: string): string | null {
       timeout: 5_000,
     }).trim();
     if (out) {
-      const abs = isAbsolute(out) ? out : resolve(cwd, out);
-      dir = resolve(abs); // normalize a trailing or interior `/.`; git prints the path as-is
+      // Real path, as the sandbox binds it: git prints a separate git dir already resolved, so a
+      // cwd behind a symlink (`/tmp`, `os.tmpdir()`) would otherwise never match it.
+      dir = realTarget(resolve(isAbsolute(out) ? out : resolve(cwd, out)));
     }
   } catch {
     // not a repo, or no git — nothing to protect beyond the name rules
@@ -127,12 +131,44 @@ function commonGitDir(cwd: string): string | null {
   return dir;
 }
 
+// Where a write to `full` actually lands: the real path of its deepest existing ancestor plus the
+// rest, with a dangling symlink followed by hand (writeFile creates its target). The sandbox gets
+// this from the kernel; a string check does not, and a sandboxed `ln -s .git/hooks h` is an
+// ordinary in-project write that would turn `write h/pre-commit` into a hook.
+function realTarget(full: string): string {
+  let head = full;
+  const tail: string[] = [];
+  for (let hops = 0; hops < 40; hops++) {
+    try {
+      return join(realpathSync.native(head), ...tail);
+    } catch {
+      // does not exist (yet), or a dangling link — handled below
+    }
+    try {
+      if (lstatSync(head).isSymbolicLink()) {
+        head = resolve(dirname(head), readlinkSync(head));
+        continue;
+      }
+    } catch {
+      // nothing there
+    }
+    const parent = dirname(head);
+    if (parent === head) return full;
+    tail.unshift(basename(head));
+    head = parent;
+  }
+  return full;
+}
+
 // Whether a resolved path is git metadata that names a program, and the warning to raise when it
 // is. Undefined for anything else, so the tools' `warnings` arrays stay absent for a normal write.
+// Both the path as written and where it really lands are checked: either one naming git metadata
+// is enough.
 export function gitMetadataWarning(cwd: string, full: string): string | undefined {
-  const f = full.replaceAll('\\', '/');
-  if (GIT_METADATA_NAME_RE.test(f)) return GIT_METADATA_WARNING;
+  const targets = [...new Set([full, realTarget(full)])].map(p => p.replaceAll('\\', '/'));
+  if (targets.some(f => GIT_METADATA_NAME_RE.test(f))) return GIT_METADATA_WARNING;
   const g = commonGitDir(cwd);
-  if (g && GIT_DIR_DENY_RE(g.replaceAll('\\', '/')).test(f)) return GIT_METADATA_WARNING;
-  return undefined;
+  if (!g) return undefined;
+  const deny = GIT_DIR_DENY_RE(g.replaceAll('\\', '/'));
+  return targets.some(f => deny.test(f)) ? GIT_METADATA_WARNING : undefined;
 }

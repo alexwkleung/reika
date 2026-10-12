@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -133,6 +133,10 @@ describe('gitMetadataWarning — the names the sandbox refuses, at the file-tool
     ['a worktree gitdir pointer', '.git/worktrees/wt/gitdir'],
     ['the .git pointer file itself', '.git'],
     ['a bare repo config under a *.git name', 'website.git/config'],
+    // macOS's default volume is case-insensitive, so these write the real files.
+    ['a differently-cased config', '.git/Config'],
+    ['a differently-cased .git', '.GIT/hooks/pre-commit'],
+    ['a differently-cased hooks dir', '.git/HOOKS/pre-commit'],
   ])('flags %s', (_label, rel) => {
     expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBe(GIT_METADATA_WARNING);
   });
@@ -189,6 +193,23 @@ describe('gitMetadataWarning — the GITDIR group for a git dir with no .git nam
     expect(gitMetadataWarning(sibling, join(sibling, 'config'))).toBeUndefined();
   });
 
+  it('flags a --separate-git-dir target from a cwd reached through a symlink', async () => {
+    // git prints a separate git dir already resolved; tmpdir() on macOS is a symlink hop away from
+    // it, so comparing against the path as written never matched.
+    const base = await mkdtemp(join(tmpdir(), 'reika-sep-'));
+    try {
+      const proj = join(base, 'proj');
+      execFileSync('git', ['init', '-q', '--separate-git-dir', join(proj, 'gd'), proj]);
+      expect(gitMetadataWarning(proj, join(proj, 'gd/config'))).toBe(GIT_METADATA_WARNING);
+      expect(gitMetadataWarning(proj, join(proj, 'gd/hooks/pre-commit'))).toBe(
+        GIT_METADATA_WARNING,
+      );
+      expect(gitMetadataWarning(proj, join(proj, 'gd/HEAD'))).toBeUndefined();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   it('finds a repo created after an earlier probe of the same cwd', async () => {
     // A null answer is not cached: a `--separate-git-dir`/bare repo the user creates mid-session
     // must still reach the GITDIR group on the next write.
@@ -200,5 +221,35 @@ describe('gitMetadataWarning — the GITDIR group for a git dir with no .git nam
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// The sandbox resolves symlinks in the kernel; the file tools have to do it themselves, or a link
+// the model planted with an ordinary in-project `ln -s` walks a write into git's metadata.
+describe('gitMetadataWarning — a symlink into git metadata', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'reika-link-'));
+    await mkdir(join(cwd, '.git', 'hooks'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it('flags a write through a linked directory', async () => {
+    await symlink(join(cwd, '.git', 'hooks'), join(cwd, 'h'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'h/pre-commit'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('flags a dangling link whose target is a hook', async () => {
+    await symlink('.git/hooks/pre-commit', join(cwd, 'p'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'p'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('leaves a link to an ordinary file alone', async () => {
+    await mkdir(join(cwd, 'src'));
+    await symlink(join(cwd, 'src'), join(cwd, 'lib'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'lib/a.ts'))).toBeUndefined();
   });
 });
