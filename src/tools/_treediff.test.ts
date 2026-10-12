@@ -269,10 +269,11 @@ describe('changesSince', () => {
     await expect(readFile(marker, 'utf8')).rejects.toThrow();
   });
 
-  // The other program the same config can name, and the reason the blob read is no longer `--filters`:
-  // that flag runs the path's smudge driver, which is how the previous bytes of a file that was clean
-  // at the snapshot are fetched. `filter.x.clean` is set to a marker too, and the test's own `git add`
-  // runs it — which is what keeps the smudge assertion from passing vacuously.
+  // The other program the same config can name: `cat-file --filters` runs the path's smudge driver,
+  // which is how the previous bytes of a file that was clean at the snapshot are fetched, so a driver
+  // from the repo's own config is blanked on the command line. `filter.x.clean` is set to a marker
+  // too, and the test's own `git add` runs it — which keeps the smudge assertion from passing
+  // vacuously.
   it('reads previous bytes without running the path’s smudge filter', async () => {
     const cleanMarker = join(dir, 'clean-ran');
     const smudgeMarker = join(dir, 'smudge-ran');
@@ -297,6 +298,71 @@ describe('changesSince', () => {
     expect(files.map(f => f.path)).toContain('a.ts');
     await expect(readFile(cleanMarker, 'utf8')).resolves.toBeDefined();
     await expect(readFile(smudgeMarker, 'utf8')).rejects.toThrow();
+  });
+
+  // `status` runs a clean driver too, on a file whose stat changed but size did not. The plain
+  // `git status` AFTER the snapshot is the control: the guarded one left the index stale, so the
+  // unguarded one still has to clean the file — and does.
+  it('does not run the repo’s clean filter during the status scan', async () => {
+    const marker = join(dir, 'clean-ran');
+    await write('.gitattributes', 'a.ts filter=x\n');
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'attributes']);
+    await writeFile(join(dir, 'clean.sh'), `#!/bin/sh\ntouch "${marker}"\ncat`, { mode: 0o755 });
+    sh('git', ['config', 'filter.x.clean', join(dir, 'clean.sh')]);
+    await write('a.ts', numbered(20).replace('line 1\n', 'LINE 1\n'));
+    expect(await snapshotTree(dir, 'echo')).not.toBeNull();
+    await expect(readFile(marker, 'utf8')).rejects.toThrow();
+    sh('git', ['status']);
+    await expect(readFile(marker, 'utf8')).resolves.toBeDefined();
+  });
+
+  // Why the blob read keeps `--filters`: read raw, a CRLF checkout's previous bytes are the LF blob,
+  // and a one-line commit diffs as every line rewritten.
+  it('applies eol conversion to previous bytes, so a CRLF file diffs by the line changed', async () => {
+    const crlf = (t: string): string => t.replace(/\n/g, '\r\n');
+    await write('.gitattributes', 'w.txt text eol=crlf\n');
+    await write('w.txt', crlf(numbered(10)));
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'crlf']);
+    const snap = (await snapshotTree(dir, 'echo'))!;
+    await write('w.txt', crlf(numbered(10).replace('line 3\n', 'LINE 3\n')));
+    sh('git', ['add', '-A']);
+    sh('git', ['commit', '-qm', 'edit']);
+    const [f] = (await changesSince(snap))!.files;
+    expect([f.path, f.added, f.removed]).toEqual(['w.txt', 1, 1]);
+  });
+
+  // The guard blanks only drivers the repo's own config defines. One from the user's global config —
+  // where git-lfs installs itself — still smudges, so an LFS-style file's previous bytes are its
+  // content, not the pointer stub. The raw blob is read first to prove a stub is what's stored.
+  it('still runs a filter driver from the user’s global config', async () => {
+    const globalCfg = join(dir, 'global.gitconfig');
+    await writeFile(
+      globalCfg,
+      '[filter "fake"]\n\tclean = sed s/real/stub/\n\tsmudge = sed s/stub/real/\n',
+    );
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    try {
+      await write('.gitattributes', '*.dat filter=fake\n');
+      await write('x.dat', 'real\nline 2\n');
+      sh('git', ['add', '-A']);
+      sh('git', ['commit', '-qm', 'lfs-ish']);
+      expect(
+        execFileSync('git', ['cat-file', 'blob', 'HEAD:x.dat'], { cwd: dir, encoding: 'utf8' }),
+      ).toBe('stub\nline 2\n');
+      const snap = (await snapshotTree(dir, 'echo'))!;
+      await write('x.dat', 'real\nline 3\n');
+      sh('git', ['add', '-A']);
+      sh('git', ['commit', '-qm', 'edit']);
+      const [f] = (await changesSince(snap))!.files;
+      expect([f.path, f.added, f.removed]).toEqual(['x.dat', 1, 1]);
+      expect(f.hunks[0].text).not.toContain('stub');
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = saved;
+    }
   });
 
   it('paths are relative to the session cwd, reaching up with ../ when the edit was elsewhere', async () => {

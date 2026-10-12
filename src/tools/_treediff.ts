@@ -68,9 +68,10 @@ export type TreeSnapshot = {
 // Capture the state a diff will be taken against. `null` when git is present but can't answer
 // (slow, or too much untracked to read), which callers treat as "no diff" rather than an error.
 export async function snapshotTree(cwd: string, command: string): Promise<TreeSnapshot | null> {
-  const [root, head] = await Promise.all([
+  const [root, head, guard] = await Promise.all([
     git(['rev-parse', '--show-toplevel'], cwd),
     git(['rev-parse', 'HEAD'], cwd),
+    repoFilterGuard(cwd),
   ]);
   // git reports the resolved root; the cwd must be resolved the same way or a project under a
   // symlinked dir (macOS /tmp → /private/tmp) gets every path as a long `../` chain.
@@ -86,7 +87,8 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
   if (snap.root === null) {
     paths = writeTargets(command, realCwd);
   } else {
-    const listed = await dirtyPaths(snap.root);
+    if (guard === null) return null;
+    const listed = await dirtyPaths(snap.root, guard);
     if (listed === null || listed.size > MAX_DIRTY_ENTRIES) return null;
     paths = [...listed.keys()];
   }
@@ -107,7 +109,12 @@ export async function snapshotTree(cwd: string, command: string): Promise<TreeSn
 export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | null> {
   if (snap.root === null) return namedChanges(snap);
   const root = snap.root;
-  const [listed, head] = await Promise.all([dirtyPaths(root), git(['rev-parse', 'HEAD'], root)]);
+  const guard = await repoFilterGuard(root);
+  if (guard === null) return null;
+  const [listed, head] = await Promise.all([
+    dirtyPaths(root, guard),
+    git(['rev-parse', 'HEAD'], root),
+  ]);
   if (listed === null) return null;
   const moved = snap.head !== null && head !== null && head.trim() !== snap.head;
   const between = moved
@@ -146,17 +153,13 @@ export async function changesSince(snap: TreeSnapshot): Promise<TreeChanges | nu
       before = null;
     } else {
       // The old head's bytes, fetched only for files that get rendered — a formatter sweeping 200
-      // files must not cost 200 git processes. Read RAW (`cat-file blob <rev>:<path>`): `--filters`
-      // runs the path's smudge driver — a program named in `.git/config`, which is what the model's
-      // sandboxed commands can write and this process, unsandboxed, would then run. The third word
-      // is the price of dropping the flag: `--filters` was what made the one-argument
-      // `<rev>:<path>` form valid, and bare `cat-file <rev>:<path>` reads the first word as a type
-      // ("fatal: only two arguments allowed in <type> <object> mode"). The other cost is eol/encoding
-      // conversion: a CRLF worktree now diffs against the LF blob as a whole-file rewrite (#706). A
-      // miss (no commit had the path, yet it wasn't listed before) or a mode-only change has nothing
-      // to draw.
+      // files must not cost 200 git processes. `--filters` applies the eol and smudge conversion the
+      // worktree copy went through, so a CRLF checkout or an LFS file doesn't diff as a whole-file
+      // rewrite; the guard keeps it from running a driver the repo's own config names (#706). A miss
+      // (no commit had the path, yet it wasn't listed before) or a mode-only change has nothing to
+      // draw.
       const old = await git(
-        ['cat-file', 'blob', `${snap.head ?? 'HEAD'}:${c.path}`],
+        [...guard, 'cat-file', '--filters', `${snap.head ?? 'HEAD'}:${c.path}`],
         root,
         'buffer',
       );
@@ -264,8 +267,11 @@ function splitLines(text: string): string[] {
 // `git status` lists tracked files that differ from HEAD or the index, plus untracked ones. Ignored
 // files are deliberately absent: a build writing into `dist/` is not an edit the user wants a diff
 // of, and it's the same rule the file index and the read tools already apply.
-async function dirtyPaths(root: string): Promise<Map<string, string> | null> {
-  const out = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root);
+async function dirtyPaths(root: string, guard: string[]): Promise<Map<string, string> | null> {
+  const out = await git(
+    [...guard, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    root,
+  );
   if (out === null) return null;
   const paths = new Map<string, string>();
   const tokens = out.split('\0');
@@ -294,6 +300,30 @@ async function commitDiff(
   const tokens = out.split('\0');
   for (let i = 0; i + 1 < tokens.length; i += 2) paths.set(tokens[i + 1], tokens[i][0]);
   return paths;
+}
+
+// `-c` overrides that switch off every filter driver the repo's own config defines (`local` or
+// `worktree` scope, includes counted as their includer), for the harness calls that run filters:
+// `status` runs a clean driver, `cat-file --filters` a smudge one. Those files are what a model can
+// write (#719), while a driver from the user's global or system config — git-lfs — is theirs and
+// keeps running. Blanking was measured to stop smudge, clean and process drivers, `required` ones
+// included, with eol conversion intact. Null when the scopes can't be read (git older than 2.26) or
+// a name won't fit `-c` (an `=` in it): callers then skip the diff rather than run git unguarded.
+async function repoFilterGuard(cwd: string): Promise<string[] | null> {
+  const out = await git(['config', '--show-scope', '--list', '-z'], cwd);
+  if (out === null) return null;
+  const names = new Set<string>();
+  const tokens = out.split('\0');
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const key = tokens[i + 1].split('\n', 1)[0];
+    if (!key.startsWith('filter.') || (tokens[i] !== 'local' && tokens[i] !== 'worktree')) continue;
+    const name = key.slice('filter.'.length, key.lastIndexOf('.'));
+    if (name.includes('=')) return null;
+    names.add(name);
+  }
+  return [...names].flatMap(n =>
+    ['smudge=', 'clean=', 'process=', 'required=false'].flatMap(v => ['-c', `filter.${n}.${v}`]),
+  );
 }
 
 async function readBounded(path: string): Promise<Bytes | 'oversize'> {
@@ -327,11 +357,8 @@ function git(args: string[], cwd: string, as?: 'buffer'): Promise<string | Buffe
       // core.fsmonitor=false` did not. Hooks ARE this gap, contrary to an earlier claim here: the
       // index refresh `git status` opportunistically does runs `post-index-change` (measured — a
       // planted hook ran this file's exact argv, with no config gate at all), so `core.hooksPath`
-      // is pinned to `/dev/null`, a character device no hook name can exist under. The clean filter
-      // `status` runs when a file's size is unchanged is the remainder: the driver must be named by
-      // config the user already had, but a model-written `.gitattributes` can bind it to any path
-      // with whatever bytes it likes — activation half in #719, config write refused by the
-      // profile half (#706).
+      // is pinned to `/dev/null`, a character device no hook name can exist under. Filter drivers
+      // are the third program-naming key, and per-repo: `repoFilterGuard` blanks those.
       ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', ...args],
       {
         cwd,

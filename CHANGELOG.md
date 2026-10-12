@@ -29,8 +29,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   name, so renaming or repointing `.git` does not get around it. Both name programs something else runs: `core.fsmonitor` was run
   by Reika's own unsandboxed `git status` after every shell command, and a hook is run by your next
   commit. Reika's own git calls now pass `-c core.fsmonitor=false` and `-c core.hooksPath=/dev/null`,
-  and read file contents without `--filters`, so a repo's config or hooks cannot make it run a program
-  either way (#706). The `write`/`edit` tools can still write those paths; that gap is #719.
+  and switch off any filter driver the repo's own config defines, so a repo's config or hooks cannot
+  make it run a program either way; drivers from your global config, such as Git LFS, still apply to
+  the diffs it draws (#706). The `write`/`edit` tools can still write those paths; that gap is #719.
 - The cost, and it is wider than a refused `git config`: `git init`, `git clone`,
   `git submodule add` and `git worktree add` write these paths, so creating a repository — in any
   directory — is now a command you run instead of the model. Everything else in `.git` — `add`, `commit`, `checkout`, `stash`, `fetch`, the index
