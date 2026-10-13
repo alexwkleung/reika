@@ -13,9 +13,10 @@ import {
   networkAllowedFor,
   networkDecision,
   refusedWriteLine,
-  sandboxRefusedWrite,
   PREFIX_WORDS,
 } from './_sandbox.js';
+
+const sandboxRefusedWrite = (output: string): boolean => refusedWriteLine(output) !== null;
 
 // The generator's string output, not the syscall — per AGENTS.md's "unit-test the logic the wrapper
 // adds (caps, windows, footers — not the syscall)". Enforcement is verified by driving the real
@@ -871,6 +872,18 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
     expect(sandboxRefusedWrite('/bin/sh: /usr/bin/top: Operation not permitted\n')).toBe(false);
     expect(sandboxRefusedWrite('sed: -e expression #1: Operation not permitted\n')).toBe(false);
+    // Quoted text that is not git's own line, and a quoted token that is not python's.
+    expect(sandboxRefusedWrite("  ✓ asserts 'a/b': Operation not permitted\n")).toBe(false);
+    expect(sandboxRefusedWrite("expected Operation not permitted: 'foo'\n")).toBe(false);
+    // The ps refusal in every shape the shell prints it is the ps note's, never a write.
+    for (const ps of [
+      '/bin/sh: line 1: /bin/ps: Operation not permitted\n',
+      'env: ps: Operation not permitted\n',
+      'xargs: ps: Operation not permitted\n',
+    ]) {
+      expect(sandboxRefusedWrite(ps), ps).toBe(false);
+      expect(sandboxFooter('ps aux', 1, ps, denied), ps).toContain('`ps`/`top` cannot be run');
+    }
     // A quoted URL is a network shape: git names the remote it could not reach.
     expect(
       sandboxRefusedWrite(
@@ -965,6 +978,12 @@ describe('sandboxFooter — a refusal found past the payload head', () => {
     const footer = sandboxFooter('mkdir ~/x', 1, out, sandboxed);
     expect(footer).toContain('refused a write');
     expect(footer).not.toContain('printed after');
+  });
+
+  it('keeps a backtick in the quoted line from closing the code span', () => {
+    const line = 'mkdir: /Users/someone/`x`: Operation not permitted';
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer).toContain("`mkdir: /Users/someone/'x': Operation not permitted`");
   });
 
   it('caps a pathological quoted line', () => {

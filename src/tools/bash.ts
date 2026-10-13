@@ -435,18 +435,19 @@ export function execStream(
       const truncated = capped ? '\n…(truncated)' : '';
       // #723: a denial printed after the 64KB head is still a denial. The spill window holds the last
       // 4MB, so a refusal in one package of a `pnpm -r build` followed by 20KB of the others' logs is
-      // still seen; with spill off only the 4KB `uiTail` is retained. Joined on a newline so a head cut
-      // mid-line cannot fuse with the tail's first line into a line neither of them wrote. Off the
-      // cap, `rawOutput` is the output and already holds the tail.
-      // Only the refused-write check reads past the head: the ps and network notes stay on the output
-      // the model was shown, since loose words like `ENOTFOUND` in 4MB of a red test suite would
-      // blame the sandbox for a genuine failure.
+      // still seen; with spill off only the 4KB `uiTail` is retained. Only the refused-write check
+      // reads past the head: the ps and network notes stay on the output the model was shown, since
+      // loose words like `ENOTFOUND` in 4MB of a red test suite would blame the sandbox for a
+      // genuine failure. Joined once and reused by the spill below.
       const retained = spilling ? tail : uiTail;
+      const tailText = capped ? retained.text() : '';
+      // The window is chunk-granular, so its first line may be the back half of one: cut off, a prose
+      // line (`we tried to open /x/y: operation not permitted`) reads as a refusal.
       const scanned = !capped
         ? rawOutput
         : retained.bytes >= rawBytes
-          ? retained.text()
-          : `${rawOutput}\n${retained.text()}`;
+          ? tailText
+          : `${rawOutput}\n${tailText.slice(tailText.indexOf('\n') + 1)}`;
       const refusedWrite = argv ? refusedWriteLine(scanned) : null;
       // The sandbox-aware half (#163). Seatbelt's network denials never say "permission" — curl
       // reports a DNS failure, git/npm report credentials or proxy problems — so a headerless failure
@@ -555,7 +556,7 @@ export function execStream(
       }
       void (async () => {
         const complete = tail.bytes >= rawBytes;
-        const ref = await spillResult('bash', tail.text());
+        const ref = await spillResult('bash', tailText);
         recordCapped({
           tool: 'bash',
           total: rawBytes,
