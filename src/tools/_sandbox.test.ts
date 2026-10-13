@@ -12,6 +12,7 @@ import {
   broadWorkdirNotice,
   networkAllowedFor,
   networkDecision,
+  refusedWriteLine,
   sandboxRefusedWrite,
   PREFIX_WORDS,
 } from './_sandbox.js';
@@ -836,8 +837,19 @@ describe('sandboxFooter', () => {
       // …and git's own form for the same refusal, quoted paths and all: `git init` fails on the hook
       // copy now that #706 denies it, which is what AGENTS.md documents.
       "fatal: cannot copy '/private/var/folders/x/T/tmp.9qcQIRzGc/templates/hooks/commit-msg.sample' to '/private/var/folders/x/T/tmp.9qcQIRzGc/.git/hooks/commit-msg.sample': Operation not permitted\n",
-      // `git config core.hooksPath …` since #706: no verb, no slash in front, no quotes.
+      // `git config core.hooksPath …` since #706: no verb, no slash in front, no quotes. `write` is
+      // what Apple git printed under the profile; `lock` is the same message on the lock file.
+      'error: could not write config file .git/config: Operation not permitted\n',
       'error: could not lock config file .git/config: Operation not permitted\n',
+      // Measured under the profile: `tee` from inside `.git` names a slashless path, and macOS
+      // `sed -i` names none at all.
+      'tee: config: Operation not permitted\n',
+      'sed: rename(): Operation not permitted\n',
+      // Python's write refusal with a relative path.
+      "PermissionError: [Errno 1] Operation not permitted: '.git/config'\n",
+      // Runner prefixes: a padded `[n]` and a `name | ` column.
+      '[1]   rm: .git: Operation not permitted\n',
+      'web:build | rm: .git: Operation not permitted\n',
       // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
       'mkdir: /Users/someone/top: Operation not permitted\n',
       '/bin/sh: /Users/someone/ps: Operation not permitted\n',
@@ -858,6 +870,7 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('docker: connect: operation not permitted\n')).toBe(false);
     expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
     expect(sandboxRefusedWrite('/bin/sh: /usr/bin/top: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('sed: -e expression #1: Operation not permitted\n')).toBe(false);
     // A quoted URL is a network shape: git names the remote it could not reach.
     expect(
       sandboxRefusedWrite(
@@ -930,5 +943,41 @@ describe('filesystem root detection', () => {
   it('is the dirname-is-itself test', () => {
     expect(dirname('/')).toBe('/');
     expect(dirname('/Users/someone')).toBe('/Users');
+  });
+});
+
+// #723: past the payload head the model sees no refusal, so the footer quotes the line it found.
+describe('sandboxFooter — a refusal found past the payload head', () => {
+  const sandboxed = { network: false };
+
+  it('quotes the refused line when the shown output does not hold it', () => {
+    const line = 'mkdir: /Users/someone/.cache-y: Operation not permitted';
+    const footer = sandboxFooter('pnpm -r build', 1, '1\n2\n3\n', {
+      ...sandboxed,
+      refusedWrite: line,
+    });
+    expect(footer).toContain('refused a write');
+    expect(footer).toContain(`\`${line}\``);
+  });
+
+  it('does not quote a line the shown output already holds', () => {
+    const out = 'mkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('mkdir ~/x', 1, out, sandboxed);
+    expect(footer).toContain('refused a write');
+    expect(footer).not.toContain('printed after');
+  });
+
+  it('caps a pathological quoted line', () => {
+    const line = `${'x'.repeat(5000)}: /Users/someone/x: Operation not permitted`;
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer.length).toBeLessThan(1500);
+    expect(footer).toContain('…`');
+  });
+
+  it('returns the whole line from refusedWriteLine', () => {
+    expect(
+      refusedWriteLine('ok\n[0] mkdir: /Users/someone/x: Operation not permitted\nmore\n'),
+    ).toBe('[0] mkdir: /Users/someone/x: Operation not permitted');
+    expect(refusedWriteLine('ps: Operation not permitted\n')).toBeNull();
   });
 });

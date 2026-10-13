@@ -15,7 +15,7 @@ import {
   sandboxFooter,
   sandboxNotice,
   sandboxPlan,
-  sandboxRefusedWrite,
+  refusedWriteLine,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
 import { GH_PLAN_READ_LIST, READ_ONLY_COMMAND_LIST, isProvablyReadOnly } from './_readonly.js';
@@ -438,12 +438,16 @@ export function execStream(
       // still seen; with spill off only the 4KB `uiTail` is retained. Joined on a newline so a head cut
       // mid-line cannot fuse with the tail's first line into a line neither of them wrote. Off the
       // cap, `rawOutput` is the output and already holds the tail.
+      // Only the refused-write check reads past the head: the ps and network notes stay on the output
+      // the model was shown, since loose words like `ENOTFOUND` in 4MB of a red test suite would
+      // blame the sandbox for a genuine failure.
       const retained = spilling ? tail : uiTail;
       const scanned = !capped
         ? rawOutput
         : retained.bytes >= rawBytes
           ? retained.text()
           : `${rawOutput}\n${retained.text()}`;
+      const refusedWrite = argv ? refusedWriteLine(scanned) : null;
       // The sandbox-aware half (#163). Seatbelt's network denials never say "permission" — curl
       // reports a DNS failure, git/npm report credentials or proxy problems — so a headerless failure
       // reads to a model as a bug in its own command and sets up the classic spiral. Keyed on the
@@ -454,7 +458,11 @@ export function execStream(
         searchHint(command, rawOutput) +
         heredocSubstitutionHint(command, code, rawOutput) +
         (argv && sandbox
-          ? sandboxFooter(command, code, scanned, { ...sandbox, toolNames: ctx.toolNames })
+          ? sandboxFooter(command, code, rawOutput, {
+              ...sandbox,
+              toolNames: ctx.toolNames,
+              refusedWrite,
+            })
           : '');
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
@@ -462,7 +470,7 @@ export function execStream(
       if (notice && plan) sandboxNoticed.add(ctx.cwd);
       // On the output's shape, not the exit status: `mkdir ~/x; echo ok` exits 0 with the denial in
       // its output, and the user would otherwise never learn the flag exists.
-      if (argv && sandboxRefusedWrite(scanned) && !sandboxDenialNoticed.has(ctx.cwd)) {
+      if (refusedWrite !== null && !sandboxDenialNoticed.has(ctx.cwd)) {
         sandboxDenialNoticed.add(ctx.cwd);
         notice = {
           tone: 'warn',

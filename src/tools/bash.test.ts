@@ -642,8 +642,11 @@ describe('bashTool — sandbox composition', () => {
       // ~109KB, comfortably past the payload cap, then the refusal: `seq` pushes it out of the head.
       const r = await bashTool.run({ command: `seq 1 20000; echo x > ${outside}` }, { cwd: dir });
       expect(r.payload).toContain('…(truncated)');
-      expect(r.payload).not.toContain('Operation not permitted'); // not in the head: the tail found it
-      expect(r.payload).toContain('refused a write');
+      // Not in the head: the tail found it, and the footer quotes it.
+      expect(r.payload).toMatch(
+        /printed after the output shown above: `[^`]*: Operation not permitted`/,
+      );
+      expect((r.payload ?? '').split('…(truncated)')[0]).not.toContain('Operation not permitted');
       expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
       await expect(readFile(outside, 'utf8')).rejects.toThrow();
     } finally {
@@ -664,8 +667,11 @@ describe('bashTool — sandbox composition', () => {
         { cwd: dir },
       );
       expect(r.payload).toContain('…(truncated)');
-      expect(r.payload).not.toContain('Operation not permitted');
-      expect(r.payload).toContain('refused a write');
+      // Not in the head, so the footer quotes it: the model's only pointer to which write failed.
+      expect(r.payload).toMatch(
+        /printed after the output shown above: `[^`]*: Operation not permitted`/,
+      );
+      expect((r.payload ?? '').split('…(truncated)')[0]).not.toContain('Operation not permitted');
       expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
       await expect(readFile(outside, 'utf8')).rejects.toThrow();
     } finally {
@@ -673,6 +679,26 @@ describe('bashTool — sandbox composition', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  // The wider scan is for refused writes only. The network and ps notes key on loose words
+  // (`ENOTFOUND`, `getaddrinfo`), and a red suite's last megabytes are full of them as test names
+  // and assertions: read there, they blamed the sandbox for a genuine failure.
+  it.skipIf(!sandboxWorks)(
+    'does not read the network note off the tail of a long run',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const r = await bashTool.run(
+          { command: 'seq 1 20000; echo "expected getaddrinfo ENOTFOUND"; exit 1' },
+          { cwd: dir },
+        );
+        expect(r.payload).toContain('…(truncated)');
+        expect(r.payload).not.toContain('Network access is denied');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   // The hole the per-operation rules close: with `(allow network* (local ip …))` an unconnected
   // socket matched the local filter and every outbound connection went through. A raw non-loopback
