@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { sandboxPlan, sandboxArgv } from '../tools/_sandbox.js';
 
 // Post-edit typecheck for JS/TS projects. The harness runs this so a weak model doesn't have
 // to remember to verify its own work: after edits, we diff the project's type errors against a
@@ -205,9 +206,17 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
   const tsc = await resolveTscBin(cwd);
   if (!tsc) return { ran: false, reason: 'no local tsc binary' };
   const buildInfo = opts.tsBuildInfoFile ?? defaultBuildInfoFile(cwd);
-  // `--incremental` with an explicit `--tsBuildInfoFile` is what makes the re-check cheap and is
-  // accepted alongside `--noEmit` across TS versions. `--pretty false` forces the stable
-  // one-line-per-diagnostic format regardless of TTY, which DIAG_RE parses.
+  // Route the project-local `tsc` through the sandbox wrapper so it runs inside the
+  // confinement (sandbox-exec + a profile that denies writes outside cwd). When the
+  // sandbox is unavailable, fall back to the original direct spawn — fail-open, as the
+  // gate's design requires.
+  const plan = sandboxPlan(cwd, { network: false });
+  if ('args' in plan) {
+    // Sandbox available: run tsc through the sandbox wrapper so it stays inside confinement.
+    const argv = sandboxArgv(plan, '--noEmit --incremental --tsBuildInfoFile ' + buildInfo + ' --pretty false -p ' + tsconfig);
+    return runTscProcess(argv!.cmd, argv!.args, cwd, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
+  }
+  // Sandbox unavailable: fall back to the original direct spawn (fail-open).
   const args = [
     '--noEmit',
     '--incremental',
