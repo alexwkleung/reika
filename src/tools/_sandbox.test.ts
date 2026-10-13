@@ -12,9 +12,11 @@ import {
   broadWorkdirNotice,
   networkAllowedFor,
   networkDecision,
-  sandboxRefusedWrite,
+  refusedWriteLine,
   PREFIX_WORDS,
 } from './_sandbox.js';
+
+const sandboxRefusedWrite = (output: string): boolean => refusedWriteLine(output) !== null;
 
 // The generator's string output, not the syscall — per AGENTS.md's "unit-test the logic the wrapper
 // adds (caps, windows, footers — not the syscall)". Enforcement is verified by driving the real
@@ -774,6 +776,24 @@ describe('sandboxFooter', () => {
     ).toContain('cannot be run under the local sandbox');
   });
 
+  // #723: `ps aux | grep node; mkdir ~/x` is a ps refusal AND a refused write, and testing the whole
+  // output for the ps signature dropped the write line — the half the model can act on. Only the
+  // ps/top lines are taken out of the write check now.
+  it('reports a write refusal that shares the output with a ps refusal', () => {
+    const out = 'ps: Operation not permitted\nmkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('ps aux | grep node; mkdir ~/x', 1, out, denied);
+    expect(footer).toContain('cannot be run under the local sandbox');
+    expect(footer).toContain('refused a write');
+    expect(sandboxRefusedWrite(out)).toBe(true);
+    // A ps refusal on its own is still only the ps note, and never the user-facing write notice.
+    const psOnly = 'ps: Operation not permitted\n';
+    expect(sandboxRefusedWrite(psOnly)).toBe(false);
+    expect(sandboxFooter('ps aux', 1, psOnly, denied)).not.toContain('refused a write');
+    expect(
+      sandboxFooter('ps aux', 1, '/bin/sh: /bin/ps: Operation not permitted\n', denied),
+    ).not.toContain('refused a write');
+  });
+
   // Filesystem denials name the path, so they get one line: it is the sandbox, not something sudo
   // fixes. Keyed on a PATH before the colon, which is what tells the shape from the network ones.
   // The shell's and coreutils' six shapes here are the ones measured on this machine (#720).
@@ -807,6 +827,34 @@ describe('sandboxFooter', () => {
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
       // what tells them apart, and it must not collect the fetch_url advice.
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
+      // #723: the path need not carry a slash when one of the file verbs a model runs introduces it.
+      // `rm -rf .git` and `mv .git .g` are the two #706 made ordinary, and the slash requirement
+      // dropped both; a task runner's `<prefix>: ` and indentation still reach them.
+      'rm: .git: Operation not permitted\n',
+      'mv: rename .git to .g: Operation not permitted\n',
+      'cp: .git/config: Operation not permitted\n',
+      '[0] rm: .git: Operation not permitted\n',
+      'packages/web build: rm: .git: Operation not permitted\n',
+      // …and git's own form for the same refusal, quoted paths and all: `git init` fails on the hook
+      // copy now that #706 denies it, which is what AGENTS.md documents.
+      "fatal: cannot copy '/private/var/folders/x/T/tmp.9qcQIRzGc/templates/hooks/commit-msg.sample' to '/private/var/folders/x/T/tmp.9qcQIRzGc/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // `git config core.hooksPath …` since #706: no verb, no slash in front, no quotes. `write` is
+      // what Apple git printed under the profile; `lock` is the same message on the lock file.
+      'error: could not write config file .git/config: Operation not permitted\n',
+      'error: could not lock config file .git/config: Operation not permitted\n',
+      // Measured under the profile: `tee` from inside `.git` names a slashless path, and macOS
+      // `sed -i` names none at all.
+      'tee: config: Operation not permitted\n',
+      'sed: rename(): Operation not permitted\n',
+      // Python's write refusal with a relative path.
+      "PermissionError: [Errno 1] Operation not permitted: '.git/config'\n",
+      // Runner prefixes: a padded `[n]` and a `name | ` column.
+      '[1]   rm: .git: Operation not permitted\n',
+      'web:build | rm: .git: Operation not permitted\n',
+      // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
+      'mkdir: /Users/someone/top: Operation not permitted\n',
+      '/bin/sh: /Users/someone/ps: Operation not permitted\n',
+      'ps: Operation not permitted\nmkdir: /Users/someone/top: Operation not permitted\n',
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
       expect(footer, out).toContain('refused a write');
@@ -818,6 +866,30 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('ssh: connect to host x port 22: Operation not permitted\n')).toBe(
       false,
     );
+    // The slashless form is the one that could swallow a network denial, so the verbs that may
+    // introduce it are pinned: docker's connect refusal and a bare ps refusal are not writes.
+    expect(sandboxRefusedWrite('docker: connect: operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('/bin/sh: /usr/bin/top: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('sed: -e expression #1: Operation not permitted\n')).toBe(false);
+    // Quoted text that is not git's own line, and a quoted token that is not python's.
+    expect(sandboxRefusedWrite("  ✓ asserts 'a/b': Operation not permitted\n")).toBe(false);
+    expect(sandboxRefusedWrite("expected Operation not permitted: 'foo'\n")).toBe(false);
+    // The ps refusal in every shape the shell prints it is the ps note's, never a write.
+    for (const ps of [
+      '/bin/sh: line 1: /bin/ps: Operation not permitted\n',
+      'env: ps: Operation not permitted\n',
+      'xargs: ps: Operation not permitted\n',
+    ]) {
+      expect(sandboxRefusedWrite(ps), ps).toBe(false);
+      expect(sandboxFooter('ps aux', 1, ps, denied), ps).toContain('`ps`/`top` cannot be run');
+    }
+    // A quoted URL is a network shape: git names the remote it could not reach.
+    expect(
+      sandboxRefusedWrite(
+        "fatal: unable to access 'https://github.com/octocat/hello/': Operation not permitted\n",
+      ),
+    ).toBe(false);
     expect(
       sandboxRefusedWrite(
         'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',
@@ -884,5 +956,47 @@ describe('filesystem root detection', () => {
   it('is the dirname-is-itself test', () => {
     expect(dirname('/')).toBe('/');
     expect(dirname('/Users/someone')).toBe('/Users');
+  });
+});
+
+// #723: past the payload head the model sees no refusal, so the footer quotes the line it found.
+describe('sandboxFooter — a refusal found past the payload head', () => {
+  const sandboxed = { network: false };
+
+  it('quotes the refused line when the shown output does not hold it', () => {
+    const line = 'mkdir: /Users/someone/.cache-y: Operation not permitted';
+    const footer = sandboxFooter('pnpm -r build', 1, '1\n2\n3\n', {
+      ...sandboxed,
+      refusedWrite: line,
+    });
+    expect(footer).toContain('refused a write');
+    expect(footer).toContain(`\`${line}\``);
+  });
+
+  it('does not quote a line the shown output already holds', () => {
+    const out = 'mkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('mkdir ~/x', 1, out, sandboxed);
+    expect(footer).toContain('refused a write');
+    expect(footer).not.toContain('printed after');
+  });
+
+  it('keeps a backtick in the quoted line from closing the code span', () => {
+    const line = 'mkdir: /Users/someone/`x`: Operation not permitted';
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer).toContain("`mkdir: /Users/someone/'x': Operation not permitted`");
+  });
+
+  it('caps a pathological quoted line', () => {
+    const line = `${'x'.repeat(5000)}: /Users/someone/x: Operation not permitted`;
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer.length).toBeLessThan(1500);
+    expect(footer).toContain('…`');
+  });
+
+  it('returns the whole line from refusedWriteLine', () => {
+    expect(
+      refusedWriteLine('ok\n[0] mkdir: /Users/someone/x: Operation not permitted\nmore\n'),
+    ).toBe('[0] mkdir: /Users/someone/x: Operation not permitted');
+    expect(refusedWriteLine('ps: Operation not permitted\n')).toBeNull();
   });
 });

@@ -360,6 +360,10 @@ describe('execStream — spill', () => {
 describe('execStream — command chip', () => {
   const cwd = process.cwd();
 
+  afterEach(() => {
+    delete process.env.REIKA_SPILL;
+  });
+
   it('shows the end of a truncated run, not the end of the payload head', async () => {
     process.env.REIKA_SPILL = '0';
     const result = await execStream('seq 1 20000', { cwd });
@@ -622,6 +626,74 @@ describe('bashTool — sandbox composition', () => {
         const denied = await bashTool.run({ command: `echo x > ${home}` }, { cwd: dir });
         expect(denied.payload).toContain('Operation not permitted');
         await expect(readFile(home, 'utf8')).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // #723: the denial is read from the payload head, which is capped at 64KB, so a refusal printed
+  // after a long build log was in the output and neither the footer nor the once-per-cwd notice saw
+  // it. The chip's 4KB tail is scanned too now, and that is where the end of such a run lives.
+  it.skipIf(!sandboxWorks)('reports a refused write printed after 64KB of output', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    try {
+      const outside = join(homedir(), 'reika-bash-test-should-not-exist-tail.txt');
+      // ~109KB, comfortably past the payload cap, then the refusal: `seq` pushes it out of the head.
+      const r = await bashTool.run({ command: `seq 1 20000; echo x > ${outside}` }, { cwd: dir });
+      expect(r.payload).toContain('…(truncated)');
+      // Not in the head: the tail found it, and the footer quotes it.
+      expect(r.payload).toMatch(
+        /printed after the output shown above: `[^`]*: Operation not permitted`/,
+      );
+      expect((r.payload ?? '').split('…(truncated)')[0]).not.toContain('Operation not permitted');
+      expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
+      await expect(readFile(outside, 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The 4KB chip tail only holds the very end: a refusal in one package of a `pnpm -r build`,
+  // followed by the other packages' logs, sits between the head and that tail. The spill window
+  // still holds it.
+  it.skipIf(!sandboxWorks)('reports a refused write in the middle of a long run', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    process.env.REIKA_SPILL = '1';
+    try {
+      const outside = join(homedir(), 'reika-bash-test-should-not-exist-mid.txt');
+      const r = await bashTool.run(
+        { command: `seq 1 20000; echo x > ${outside}; seq 1 5000` },
+        { cwd: dir },
+      );
+      expect(r.payload).toContain('…(truncated)');
+      // Not in the head, so the footer quotes it: the model's only pointer to which write failed.
+      expect(r.payload).toMatch(
+        /printed after the output shown above: `[^`]*: Operation not permitted`/,
+      );
+      expect((r.payload ?? '').split('…(truncated)')[0]).not.toContain('Operation not permitted');
+      expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
+      await expect(readFile(outside, 'utf8')).rejects.toThrow();
+    } finally {
+      delete process.env.REIKA_SPILL;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The wider scan is for refused writes only. The network and ps notes key on loose words
+  // (`ENOTFOUND`, `getaddrinfo`), and a red suite's last megabytes are full of them as test names
+  // and assertions: read there, they blamed the sandbox for a genuine failure.
+  it.skipIf(!sandboxWorks)(
+    'does not read the network note off the tail of a long run',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const r = await bashTool.run(
+          { command: 'seq 1 20000; echo "expected getaddrinfo ENOTFOUND"; exit 1' },
+          { cwd: dir },
+        );
+        expect(r.payload).toContain('…(truncated)');
+        expect(r.payload).not.toContain('Network access is denied');
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
