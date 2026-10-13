@@ -129,12 +129,47 @@ export async function loadModelCatalog(
   return fetchCatalog(path);
 }
 
+// Catalog bases on the same host as `baseURL`, other than itself. A provider that moves its API
+// path (models.dev's opencode-go went from /zen/go/v1 to /inference/go/v1) leaves a profile on the
+// old base with no entry, and the new base is what the user needs to see. Named, never used: two
+// bases on one host can be two products, so picking one would be a guess.
+export function sameHostBases(index: CatalogIndex, baseURL: string): string[] {
+  let host: string;
+  try {
+    host = new URL(baseURL).host.toLowerCase();
+  } catch {
+    return [];
+  }
+  const own = normalizeApiBase(baseURL);
+  return Object.keys(index)
+    .filter(base => base !== own && hostOf(base) === host)
+    .sort();
+}
+
+function hostOf(base: string): string | undefined {
+  try {
+    return new URL(base).host.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+// Why the catalog gave no window, for the notice: a miss that reads as "no window" alone sent a
+// user hunting a local-server fix for a provider that had moved its URL.
+export type CatalogMiss = {
+  // The base is in the catalog but this model is not under it.
+  baseListed: boolean;
+  sameHost: string[];
+};
+
 export type ModelLimitsProbe = ModelLimits & {
   // Where the window came from, for the notice: the user is told which number governs the session.
   windowSource?: 'endpoint' | 'catalog';
   // The endpoint probe's `reached` (#417): false only when the window was asked for and nothing
   // answered, which is what the per-submit retry keys on.
   reached: boolean;
+  // Set when the catalog was consulted for a window and had none for this base and model.
+  catalogMiss?: CatalogMiss;
 };
 
 // What startup and a /model switch need to ask about. An explicit window still leaves the output
@@ -173,6 +208,12 @@ export async function probeModelLimits(
   if (!(wantWindow || wantOutput) || !isCatalogEligible(profile.baseURL)) return probe;
   const index = await catalog();
   const found = index && lookupModelLimits(index, profile.baseURL, profile.model);
+  if (index && wantWindow && !found?.window) {
+    probe.catalogMiss = {
+      baseListed: index[normalizeApiBase(profile.baseURL)] !== undefined,
+      sameHost: sameHostBases(index, profile.baseURL),
+    };
+  }
   if (!found) return probe;
   if (wantWindow && found.window) {
     probe.window = found.window;
