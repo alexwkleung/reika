@@ -663,14 +663,17 @@ const NET_DENIAL_RE =
 //   '…/templates/hooks/commit-msg.sample' to '…/.git/hooks/commit-msg.sample': Operation not
 //   permitted`, what `git init` prints now that #706 denies the hook copy. The quotes and spaces put
 //   it out of reach of the path forms above, and the tail is the only part of git's line that does
-//   not change with the message.
+//   not change with the message. A quoted URL is not a path: `fatal: unable to access
+//   'https://…/': Operation not permitted` is a network shape.
+// - git's config-lock refusal, `error: could not lock config file .git/config: Operation not
+//   permitted` — what `git config` prints since #706, with no verb or slash in front of the path.
 //
 // The first three must END the line (#720): quoted text — a comment, a fixture string, a grep hit —
 // carries text after the phrase, and prose before the path must end in `: ` or be a single verb, so a
 // sentence that quotes the error is not a refusal. A denial line quoted whole at column 0, the
 // node/python shapes, and a line that quotes a quoted-path tail still read as one.
 const FS_DENIAL_RE =
-  /^(?:.*: (?:[a-z]+ )?[^\s:'"]*|[ \t]*(?:\[[^\]\r\n]*\] )?(?:[a-z]+ )?)\/[^:'"\r\n]*: operation not permitted[ \t]*$|^(?:.*: )?[ \t]*(?:\[[^\]\r\n]*\] )?(?:rm|mv|cp|mkdir|touch|ln): [^:'"\r\n]*: operation not permitted[ \t]*$|'[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
+  /^(?:.*: (?:[a-z]+ )?[^\s:'"]*|[ \t]*(?:\[[^\]\r\n]*\] )?(?:[a-z]+ )?)\/[^:'"\r\n]*: operation not permitted[ \t]*$|^(?:.*: )?[ \t]*(?:\[[^\]\r\n]*\] )?(?:rm|mv|cp|mkdir|touch|ln): [^:'"\r\n]*: operation not permitted[ \t]*$|'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$|could not lock config file [^\r\n]*: operation not permitted[ \t]*$|EPERM: operation not permitted, \w+ '|operation not permitted: '\//im;
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -688,8 +691,10 @@ function webRoute(toolNames?: ReadonlySet<string>): string {
   return `For a web page, ${parts.join(', and ')}.`;
 }
 
-// The exec refusal the setuid note at the top of the file is about, as the shell prints it.
-const PS_DENIAL_RE = /\b(?:ps|top): Operation not permitted/;
+// The exec refusal the setuid note at the top of the file is about, as the shell prints it. Anchored to
+// the line start (behind a shell's `sh: ` prefix) so a refused write to a path ending in `/top` or
+// `/ps` is not mistaken for it and dropped from the write check.
+const PS_DENIAL_RE = /^(?:\S*sh: )?(?:\/(?:usr\/)?bin\/)?(?:ps|top): Operation not permitted/m;
 
 // One output can carry both a ps refusal and a refused write — `ps aux | grep node; mkdir ~/x` —
 // and `!ps` on the whole output dropped the write line for exactly the command that shows both

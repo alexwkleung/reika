@@ -433,11 +433,17 @@ export function execStream(
       const rawOutput = buffer.join('');
       const capped = totalBytes >= MAX_PAYLOAD_BYTES;
       const truncated = capped ? '\n…(truncated)' : '';
-      // #723: a denial printed after the 64KB head is still a denial, and a build log that ends in a
-      // refusal is the whole reason the tail exists. `uiTail` is the 4KB that holds the end of a run,
-      // joined on a newline so a head cut mid-line cannot fuse with the tail's first line into a line
-      // neither of them wrote. Off the cap, `rawOutput` is the output and already holds the tail.
-      const scanned = capped ? `${rawOutput}\n${uiTail.text()}` : rawOutput;
+      // #723: a denial printed after the 64KB head is still a denial. The spill window holds the last
+      // 4MB, so a refusal in one package of a `pnpm -r build` followed by 20KB of the others' logs is
+      // still seen; with spill off only the 4KB `uiTail` is retained. Joined on a newline so a head cut
+      // mid-line cannot fuse with the tail's first line into a line neither of them wrote. Off the
+      // cap, `rawOutput` is the output and already holds the tail.
+      const retained = spilling ? tail : uiTail;
+      const scanned = !capped
+        ? rawOutput
+        : retained.bytes >= rawBytes
+          ? retained.text()
+          : `${rawOutput}\n${retained.text()}`;
       // The sandbox-aware half (#163). Seatbelt's network denials never say "permission" — curl
       // reports a DNS failure, git/npm report credentials or proxy problems — so a headerless failure
       // reads to a model as a bug in its own command and sets up the classic spiral. Keyed on the

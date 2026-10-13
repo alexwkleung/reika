@@ -360,6 +360,10 @@ describe('execStream — spill', () => {
 describe('execStream — command chip', () => {
   const cwd = process.cwd();
 
+  afterEach(() => {
+    delete process.env.REIKA_SPILL;
+  });
+
   it('shows the end of a truncated run, not the end of the payload head', async () => {
     process.env.REIKA_SPILL = '0';
     const result = await execStream('seq 1 20000', { cwd });
@@ -638,10 +642,34 @@ describe('bashTool — sandbox composition', () => {
       // ~109KB, comfortably past the payload cap, then the refusal: `seq` pushes it out of the head.
       const r = await bashTool.run({ command: `seq 1 20000; echo x > ${outside}` }, { cwd: dir });
       expect(r.payload).toContain('…(truncated)');
-      expect(r.payload).not.toContain('20000'); // the denial's own line is not in the head either
+      expect(r.payload).not.toContain('Operation not permitted'); // not in the head: the tail found it
+      expect(r.payload).toContain('refused a write');
       expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
       await expect(readFile(outside, 'utf8')).rejects.toThrow();
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The 4KB chip tail only holds the very end: a refusal in one package of a `pnpm -r build`,
+  // followed by the other packages' logs, sits between the head and that tail. The spill window
+  // still holds it.
+  it.skipIf(!sandboxWorks)('reports a refused write in the middle of a long run', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    process.env.REIKA_SPILL = '1';
+    try {
+      const outside = join(homedir(), 'reika-bash-test-should-not-exist-mid.txt');
+      const r = await bashTool.run(
+        { command: `seq 1 20000; echo x > ${outside}; seq 1 5000` },
+        { cwd: dir },
+      );
+      expect(r.payload).toContain('…(truncated)');
+      expect(r.payload).not.toContain('Operation not permitted');
+      expect(r.payload).toContain('refused a write');
+      expect(r.notice?.content).toContain('REIKA_SANDBOX=0');
+      await expect(readFile(outside, 'utf8')).rejects.toThrow();
+    } finally {
+      delete process.env.REIKA_SPILL;
       await rm(dir, { recursive: true, force: true });
     }
   });

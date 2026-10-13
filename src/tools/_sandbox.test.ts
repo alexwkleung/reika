@@ -836,6 +836,12 @@ describe('sandboxFooter', () => {
       // …and git's own form for the same refusal, quoted paths and all: `git init` fails on the hook
       // copy now that #706 denies it, which is what AGENTS.md documents.
       "fatal: cannot copy '/private/var/folders/x/T/tmp.9qcQIRzGc/templates/hooks/commit-msg.sample' to '/private/var/folders/x/T/tmp.9qcQIRzGc/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // `git config core.hooksPath …` since #706: no verb, no slash in front, no quotes.
+      'error: could not lock config file .git/config: Operation not permitted\n',
+      // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
+      'mkdir: /Users/someone/top: Operation not permitted\n',
+      '/bin/sh: /Users/someone/ps: Operation not permitted\n',
+      'ps: Operation not permitted\nmkdir: /Users/someone/top: Operation not permitted\n',
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
       expect(footer, out).toContain('refused a write');
@@ -851,6 +857,13 @@ describe('sandboxFooter', () => {
     // introduce it are pinned: docker's connect refusal and a bare ps refusal are not writes.
     expect(sandboxRefusedWrite('docker: connect: operation not permitted\n')).toBe(false);
     expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('/bin/sh: /usr/bin/top: Operation not permitted\n')).toBe(false);
+    // A quoted URL is a network shape: git names the remote it could not reach.
+    expect(
+      sandboxRefusedWrite(
+        "fatal: unable to access 'https://github.com/octocat/hello/': Operation not permitted\n",
+      ),
+    ).toBe(false);
     expect(
       sandboxRefusedWrite(
         'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',
