@@ -604,6 +604,35 @@ describe('bashTool — sandbox composition', () => {
     },
   );
 
+  // #707: the exit-65 signal is only two things the harness reads — a status, and the text
+  // `sandbox-exec:` — and a command can produce both. Without the probe, that let a command talk the
+  // harness into re-running it unsandboxed, with the network and the whole filesystem. The command
+  // here counts its own runs, so "it was not re-run" is a measured fact and not a reading of the
+  // notice; `sandboxWorks` is the guard because a command that never ran cannot exit 65 at all.
+  it.skipIf(!sandboxWorks)(
+    'does not re-run a command that fakes the sandbox profile failure',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+      try {
+        const r = await bashTool.run(
+          {
+            command:
+              'echo run >> runs.txt; echo "sandbox-exec: syntax error: expecting \')\'"; exit 65',
+          },
+          { cwd: dir },
+        );
+        expect(r.exitCode).toBe(65);
+        expect(await readFile(join(dir, 'runs.txt'), 'utf8')).toBe('run\n');
+        expect(r.notice?.content ?? '').not.toContain('re-ran unsandboxed');
+        // The command's own output is the whole result: an ordinary failure, with nothing claimed
+        // about the machine.
+        expect(r.payload).toContain('sandbox-exec: syntax error');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   // The scratchpad workflow — `mktemp -d`, write, `rm -rf` — is the commonest thing a model does
   // outside cwd, and denying temp made python's mkdtemp fall through to cwd and write scratch into
   // the project. Real paths matter here: `/tmp` → `/private/tmp`, `$TMPDIR` → `/private/var/…`.

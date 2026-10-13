@@ -3,6 +3,19 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Security
+
+- A command can no longer get itself re-run unsandboxed. When a sandboxed command exits 65 with
+  `sandbox-exec:` in its output, Reika reads that as "the profile failed to load" and re-runs the
+  command without the sandbox — but both halves of that signal are things the command itself can
+  print, so the retry was triggerable by the command it exists to contain, and it ran with the
+  network and the whole filesystem. The profile is now confirmed first, by running it against
+  `/usr/bin/true`, and the retry happens only if that fails too; a command that faked the signal has
+  its own exit 65 reported as an ordinary failure. A real generator bug still fails open, at the cost
+  of one probe (#707).
+
 ## [0.3.0] - 2026-10-12
 
 ### Changed

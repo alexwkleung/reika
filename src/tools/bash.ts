@@ -15,6 +15,7 @@ import {
   sandboxFooter,
   sandboxNotice,
   sandboxPlan,
+  sandboxProfileLoads,
   refusedWriteLine,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
@@ -313,6 +314,9 @@ export function execStream(
   // user should hear about.
   const plan = sandbox ? sandboxPlan(ctx.cwd, sandbox) : undefined;
   const argv = plan ? sandboxArgv(plan, command) : undefined;
+  // The profile and its bindings, for the #707 probe below. A plan that refused to be built has no
+  // args, and only one that does is ever spawned — so this is defined exactly when `argv` is.
+  const profileArgs = plan && 'args' in plan ? plan.args : undefined;
   // A UI receipt, never in the model's context (the agent prompt carries the model's copy). Nothing
   // otherwise announces the sandbox, so without this the user's only evidence would be a command
   // that mysteriously failed. Once per cwd, both for the receipt and for the machine-fault warning.
@@ -517,13 +521,22 @@ export function execStream(
       };
       // A bad profile exits 65 without running anything — the sandbox fails CLOSED, which is the
       // opposite of what a fail-open feature wants: one bug in the generator would otherwise turn
-      // every command into an uninterpretable failure. Retried unsandboxed, exactly once — and said,
-      // as a warn: a command that ran unconfined after the sandbox refused to load is the one event
-      // here the user must see, and the one that points at a generator bug.
+      // every command into an uninterpretable failure. The signal is only two things, though, and a
+      // command can produce both — `exit 65`, and the text `sandbox-exec:` — so on its own it let a
+      // command talk the harness into re-running it unsandboxed, with the network and the whole
+      // filesystem: the escape the sandbox exists to close (#707). The probe is what tells them
+      // apart, by running the same profile against a binary that can produce neither half.
+      //
+      // Only a profile that fails to load under the probe is a generator bug, and only then is the
+      // command retried unsandboxed — once, and said, as a warn: a command that ran unconfined after
+      // the sandbox refused to load is the one event here the user must see, and the one that points
+      // at a generator bug. A loaded profile makes the exit 65 the command's own, and no claim about
+      // the machine is made: it falls through to the ordinary result below with its output intact.
       if (
-        argv &&
+        profileArgs &&
         code === SANDBOX_PROFILE_ERROR_CODE &&
-        rawOutput.includes(SANDBOX_EXEC_ERROR_PREFIX)
+        rawOutput.includes(SANDBOX_EXEC_ERROR_PREFIX) &&
+        !sandboxProfileLoads(profileArgs)
       ) {
         execStream(command, ctx).then(r =>
           resolve({

@@ -505,6 +505,7 @@ function hasSandboxExec(): boolean {
 export function resetSandboxCache(): void {
   execAvailable = undefined;
   gitDirs.clear();
+  profileProbes.clear();
 }
 
 /**
@@ -609,6 +610,49 @@ export function sandboxArgv(
 ): { cmd: string; args: string[] } | undefined {
   if (!('args' in plan)) return undefined;
   return { cmd: '/usr/bin/sandbox-exec', args: [...plan.args, '/bin/sh', '-c', command] };
+}
+
+// #707: the exit-65 signal `bash.ts` re-runs a command unsandboxed for is two things a command can
+// produce itself — the status, and the text `sandbox-exec:` — so on its own it let a command talk the
+// harness into re-running it with the network and the whole filesystem, which is the escape the
+// sandbox exists to close. This is the proof that separates the two: the same profile against
+// `/usr/bin/true`, which writes nothing, reads nothing, and cannot exit 65 with that text — so a 65
+// from the probe can only be the profile. Measured: `sandbox-exec` parses the profile BEFORE it
+// applies it, so the probe reaches that verdict even nested inside another seatbelt sandbox, where
+// applying a profile fails with 71.
+//
+// Keyed on the profile AND its `-D` bindings: an unbound param is the other way a profile fails to
+// load (measured, exit 65), and the bindings are per cwd. So a real generator bug — where every
+// command in a cwd exits 65 — costs one probe per cwd rather than one per command.
+const profileProbes = new Map<string, boolean>();
+
+/**
+ * Whether `planArgs` — a `sandboxPlan`'s profile and bindings — can be loaded at all.
+ *
+ * `false` is a generator bug, the one case `bash.ts` re-runs a command unsandboxed for; `true` means
+ * the exit 65 it saw came from the command itself. Only the profile error code counts as a failure
+ * to load, which is the very signal the caller is disambiguating: exit 0, exit 71, a spawn that never
+ * happened, the timeout — none is evidence of a generator bug, and the caller then returns its
+ * command's own result. Fail CLOSED on doubt, so the fail-open retry needs proof.
+ */
+export function sandboxProfileLoads(planArgs: readonly string[]): boolean {
+  // NUL, which cannot appear inside an argv element, so the key cannot be forged by a path that
+  // happens to contain whatever separator was chosen.
+  const key = planArgs.join('\u0000');
+  const cached = profileProbes.get(key);
+  if (cached !== undefined) return cached;
+  let loads = true;
+  try {
+    const r = spawnSync('/usr/bin/sandbox-exec', [...planArgs, '/usr/bin/true'], {
+      stdio: 'ignore',
+      timeout: 5_000,
+    });
+    loads = r.status !== SANDBOX_PROFILE_ERROR_CODE;
+  } catch {
+    // No probe, no proof: `loads` stays true and the caller reports the command's own failure.
+  }
+  profileProbes.set(key, loads);
+  return loads;
 }
 
 /** Whether this cwd is broad enough that the filesystem guarantee is visibly weaker. */
