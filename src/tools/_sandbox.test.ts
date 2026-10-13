@@ -854,6 +854,9 @@ describe('sandboxFooter', () => {
       // #726: the allowlist sits in front of every form, so git's quoted refusal keeps its footer
       // behind a runner's column too (a package script that runs `git init`).
       "web:build: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // A path that merely ends in a vocabulary word is still a write: the refusal is on the column's
+      // token before its `: `, not on the path.
+      'mkdir: /x/Expected: Operation not permitted\n',
       // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
       'mkdir: /Users/someone/top: Operation not permitted\n',
       '/bin/sh: /Users/someone/ps: Operation not permitted\n',
@@ -937,6 +940,15 @@ describe('sandboxFooter', () => {
       // `| grep -E "AssertionError|expected"` a model wraps a red suite in, and it is the one verdict
       // the replay over 7,335 saved bash outputs changed.
       'AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // The vocabulary is refused wherever it ENDS a column too, not only where one begins: behind a
+      // per-line runner column the same header arrives as `web:build: Expected: …` (the red suite
+      // above, run under turbo), it can end a column as a trailing token (`run: Expected: `), and the
+      // go chain's prose segment can carry it (`go: x: Expected: `) — each still a quote of a refusal
+      // that never happened.
+      'web:build: Expected: rm: .git: Operation not permitted\n',
+      'web:build: AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      "go: cmd/x: Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      '[Expected: rm: .git: Operation not permitted\n',
       // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
       // behind it stays refused.
       '668:  mkdir: /x: Operation not permitted\n',

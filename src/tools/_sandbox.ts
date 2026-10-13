@@ -703,7 +703,12 @@ const NET_DENIAL_RE =
 //
 // What may NOT be one is assertion vocabulary, refused BY NAME because it is name-shaped: a
 // capitalized header (`Expected: `/`Received: `/`Actual: `/`AssertionError: `, the last measured, the
-// rest the issue's) is a value being compared, never a runner. A diff's `+ `/`- ` marker needs no
+// rest the issue's) is a value being compared, never a runner — and a runner's own column in front
+// does not make it one: `web:build: Expected: …` is the issue's red suite under turbo, the word can
+// end a column as its trailing token (`run: Expected: `), and the go chain's prose segment can carry
+// it (`go: x: Expected: `). So the vocabulary is checked where a name starts AND at the `:` that ends
+// a column (the `(?<!…)` before each terminator), not only at the line's first token. A diff's
+// `+ `/`- ` marker needs no
 // rule of its own — a column cannot start with one, which is also why a column-0 `-bash: /x: …` (a
 // login shell naming itself) is dropped: at column 0 the marker and the shell's name are the same
 // character. A line number is not a column either, so a name must carry a letter somewhere — that is
@@ -718,7 +723,7 @@ const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror)
 const RUNNER_NAME = String.raw`(?=[^\s|]*[A-Za-z])[^\s|+-][^\s|]*`;
 // The `go: …: ` alternative comes last: it is unbounded by design, so every shape that can be read
 // as a name is tried first.
-const RUNNER_COLUMN = String.raw`(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?:[ \t]+[^\s:]+)?:[ \t]+|go:[^\r\n]*?:[ \t]+)`;
+const RUNNER_COLUMN = String.raw`(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?:[ \t]+[^\s:]+)?(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+|go:[^\r\n]*?(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+)`;
 const RUNNER_PREFIX = String.raw`(?:[ \t]*${RUNNER_COLUMN})*[ \t]*`;
 // A path may carry one token in front of its first slash — `~/x`, `./x`, `../x`, and the `~` a shell
 // prints unexpanded when the command was quoted. It cannot start with `+`/`-` for the diff marker's
