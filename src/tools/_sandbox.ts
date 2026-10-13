@@ -712,7 +712,7 @@ const NET_DENIAL_RE =
 //
 // What is left is one-directional and stated: a runner whose column is one of the shapes above keeps
 // its footer, and adding one belongs on the list rather than back in the open form. Replayed over the
-// 7,312 `bash` outputs saved in a session history (32,353 distinct lines, `evals/sandboxdenial-replay.ts`),
+// 7,335 `bash` outputs saved in a session history (32,418 distinct lines, `evals/sandboxdenial-replay.ts`),
 // this changed one verdict — the `AssertionError: ` line above — and lost no runner shape.
 const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror)`;
 const RUNNER_NAME = String.raw`(?=[^\s|]*[A-Za-z])[^\s|+-][^\s|]*`;

@@ -935,7 +935,7 @@ describe('sandboxFooter', () => {
       "Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
       // Measured rather than hypothetical: this is reika's own `_sandbox.test.ts` failing under the
       // `| grep -E "AssertionError|expected"` a model wraps a red suite in, and it is the one verdict
-      // the replay over 7,312 saved bash outputs changed.
+      // the replay over 7,335 saved bash outputs changed.
       'AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
       // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
       // behind it stays refused.

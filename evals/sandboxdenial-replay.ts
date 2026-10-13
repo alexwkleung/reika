@@ -21,7 +21,7 @@
 // `--all` prints every line either grammar hits, not only the changed ones. The lines are quoted
 // verbatim from the user's sessions, so do not paste the output into the repo.
 //
-// Result of the run this shipped on (7,312 bash outputs, 32,353 distinct lines): 32 lines hit by the
+// Result of the run this shipped on (7,335 bash outputs, 32,418 distinct lines): 32 lines hit by the
 // old grammar, 31 by the new, one changed — `AssertionError: /bin/sh: /Users/someone/notes.md:
 // Operation not permitted`, the false positive #726 exists for. No runner shape was lost. The corpus
 // grows with every session, so a later run's totals will be larger; the changed set is the part to
@@ -92,7 +92,14 @@ function hit(re: RegExp, output: string): string | null {
 }
 
 const lines = new Set<string>();
-for (const output of outputs) for (const l of output.split('\n')) if (l.trim()) lines.add(l);
+for (const output of outputs) {
+  for (const l of output.split('\n')) {
+    // A session that has run this instrument before has its report in the history, and those lines
+    // are the report's own verdict labels in front of a refusal — replaying them would report the
+    // instrument's output as a changed shape forever. The labels are unique to it.
+    if (l.trim() && !/^\s*(?:NO LONGER|NOW HIT)\s/.test(l)) lines.add(l);
+  }
+}
 
 const changed: string[] = [];
 const kept: string[] = [];
