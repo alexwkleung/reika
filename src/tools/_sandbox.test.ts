@@ -851,6 +851,9 @@ describe('sandboxFooter', () => {
       // Runner prefixes: a padded `[n]` and a `name | ` column.
       '[1]   rm: .git: Operation not permitted\n',
       'web:build | rm: .git: Operation not permitted\n',
+      // #726: the allowlist sits in front of every form, so git's quoted refusal keeps its footer
+      // behind a runner's column too (a package script that runs `git init`).
+      "web:build: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
       // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
       'mkdir: /Users/someone/top: Operation not permitted\n',
       '/bin/sh: /Users/someone/ps: Operation not permitted\n',
@@ -911,12 +914,32 @@ describe('sandboxFooter', () => {
       "+        expect(r.payload).toContain('Operation not permitted');\n",
       "-      expect(mv.payload).toContain('Operation not permitted');\n",
       "      '/bin/sh: /Users/someone/notes.md: Operation not permitted',\n", // a fixture string
-      // The shape git itself prints, as an added diff line. What this rule cannot reject is an
-      // added line that IS a denial line at column 0 with nothing after it (`+git: /x/.git:
-      // Operation not permitted`, `+mkdir: /x: Operation not permitted`): it is indistinguishable
-      // from the real thing, and the only way to tell them apart is to test for the diff marker,
-      // which would also drop a real `-bash: …`.
+      // A denial line as a diff line, which is what the rule above could not reject: `+git: /x/.git:
+      // Operation not permitted` and `+mkdir: /x: Operation not permitted` are the real thing's own
+      // shape, and the only way to tell them apart is to test for the marker. #726 does, since a
+      // column cannot start with `+`/`-` — the cost is a column-0 `-bash: /x: Operation not
+      // permitted` (a login shell's own name), which no measured output prints and which is only a
+      // footer: the denial itself is in the output the model was shown.
       '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
+      '+mkdir: /x: Operation not permitted\n',
+      '+git: /x/.git: Operation not permitted\n',
+      '-mkdir: /x: Operation not permitted\n',
+      // #726: the prefix itself, one column over. #720 allowed ANY `<text>: ` in front of the shape,
+      // so a line that only QUOTES a refusal read as one whenever the quote sat behind a colon column
+      // of its own: the assertion header a failing test prints over the value it compared, or a
+      // diff's added/removed marker.
+      'Expected: rm: .git: Operation not permitted\n',
+      'Received: mv: rename .git to .g: Operation not permitted\n',
+      '+ mkdir: /Users/someone/x: Operation not permitted\n',
+      '- rm: .git: Operation not permitted\n',
+      "Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // Measured rather than hypothetical: this is reika's own `_sandbox.test.ts` failing under the
+      // `| grep -E "AssertionError|expected"` a model wraps a red suite in, and it is the one verdict
+      // the replay over 7,312 saved bash outputs changed.
+      'AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
+      // behind it stays refused.
+      '668:  mkdir: /x: Operation not permitted\n',
       // Prose ending in the shape: a commit subject, a sentence. Before the path there must be a
       // `: ` or a single verb, so the words in front rule it out.
       'ab71044 docs: note that mkdir printed /x/f: operation not permitted\n',

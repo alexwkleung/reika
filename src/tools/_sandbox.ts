@@ -679,18 +679,61 @@ const NET_DENIAL_RE =
 // carries text after the phrase, and prose before the path must end in `: ` or be a single verb, so a
 // sentence that quotes the error is not a refusal. A denial line quoted whole at column 0 and node's
 // mid-line shape still read as one.
-// A task runner's per-line prefix in front of the slashless forms: `[n]` (padded or not) or a
-// `name | ` column. One source, so a new runner is added in one place.
-const RUNNER_PREFIX = String.raw`(?:\[[^\]\r\n]*\][ \t]+|[^\s|]+[ \t]+\|[ \t]+)?`;
+//
+// The prefix in front of every form below is an ALLOWLIST of what runners print (#726). #720 allowed
+// any `.*: ` here so that a runner's column reached a shape added for the shell's own output, and
+// that is what let a line which only QUOTES a refusal read as one whenever the quote sat behind a
+// colon column of its own — the assertion header a failing test prints over the fixture it compared
+// (`Expected: rm: .git: Operation not permitted`, and `AssertionError: /bin/sh: /Users/x/f: Operation
+// not permitted`, which is not a hypothetical: it is reika's own `_sandbox.test.ts` failing under the
+// `| grep -E "AssertionError|expected"` a model wraps it in), a diff's added/removed line (`+ mkdir:
+// /Users/x: …`, what `gh pr diff` of such a fixture prints), and git's own quoted form behind either
+// (`Expected: fatal: cannot copy '…' to '….git/hooks/…': Operation not permitted`). Each produced the
+// write footer and the once-per-cwd `REIKA_SANDBOX=0` receipt for a write that never happened — the
+// #720 class, which #725 widened the exposure of by scanning a run's 4MB tail, not just its 64KB
+// head. So the prefix is these five shapes, one source for all the forms below, and a runner nobody
+// listed loses its footer rather than the rest of the class getting through: a miss costs one
+// footer, a false hit costs a footer AND that receipt.
+//
+//   `name: ` / `name build: `   turbo's `web:build: `, pnpm -r's `packages/web build: `
+//   `[n] `                      a job or worker number, padded or not (`[0] `, `[1]   `)
+//   `name | `                   concurrently's column (`web:build | `)
+//   indentation                 a test runner printing an indented line
+//   `go: <prose>: `             go's error chain, whose middle segment is prose and cannot be a name
+//
+// What may NOT be one is assertion vocabulary, refused BY NAME because it is name-shaped: a
+// capitalized header (`Expected: `/`Received: `/`Actual: `/`AssertionError: `, the last measured, the
+// rest the issue's) is a value being compared, never a runner. A diff's `+ `/`- ` marker needs no
+// rule of its own — a column cannot start with one, which is also why a column-0 `-bash: /x: …` (a
+// login shell naming itself) is dropped: at column 0 the marker and the shell's name are the same
+// character. A line number is not a column either, so a name must carry a letter somewhere — that is
+// what keeps `668:  mkdir: /x: Operation not permitted`, a `grep -n` hit on an indented denial, out;
+// a runner that numbers its lines brackets the number (`[0] `), form or not.
+//
+// What is left is one-directional and stated: a runner whose column is one of the shapes above keeps
+// its footer, and adding one belongs on the list rather than back in the open form. Replayed over the
+// 7,312 `bash` outputs saved in a session history (32,353 distinct lines, `evals/sandboxdenial-replay.ts`),
+// this changed one verdict — the `AssertionError: ` line above — and lost no runner shape.
+const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror)`;
+const RUNNER_NAME = String.raw`(?=[^\s|]*[A-Za-z])[^\s|+-][^\s|]*`;
+// The `go: …: ` alternative comes last: it is unbounded by design, so every shape that can be read
+// as a name is tried first.
+const RUNNER_COLUMN = String.raw`(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?:[ \t]+[^\s:]+)?:[ \t]+|go:[^\r\n]*?:[ \t]+)`;
+const RUNNER_PREFIX = String.raw`(?:[ \t]*${RUNNER_COLUMN})*[ \t]*`;
+// A path may carry one token in front of its first slash — `~/x`, `./x`, `../x`, and the `~` a shell
+// prints unexpanded when the command was quoted. It cannot start with `+`/`-` for the diff marker's
+// reason: with the column above optional, an unconstrained token here would read `+/Users/x/.git:
+// Operation not permitted` (the added-line form of a fixture) as a path.
+const PATH_LEAD = String.raw`(?:[^\s:'"+-][^\s:'"]*)?`;
 const FS_DENIAL_RE = new RegExp(
   [
     // `<prog>: <abs path>: …`, go's `open <abs path>: …`, git's bare `<abs path>: …`.
-    String.raw`^(?:.*: (?:[a-z]+ )?[^\s:'"]*|[ \t]*${RUNNER_PREFIX}(?:[a-z]+ )?)\/[^:'"\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`^${RUNNER_PREFIX}(?:[a-z]+ )?${PATH_LEAD}\/[^:'"\r\n]*: operation not permitted[ \t]*$`,
     // A slashless path, which only a file verb may introduce.
-    String.raw`^(?:.*: )?[ \t]*${RUNNER_PREFIX}(?:rm|mv|cp|mkdir|touch|ln|tee): [^:'"\r\n]*: operation not permitted[ \t]*$`,
-    String.raw`^(?:.*: )?[ \t]*${RUNNER_PREFIX}sed: rename\(\): operation not permitted[ \t]*$`,
+    String.raw`^${RUNNER_PREFIX}(?:rm|mv|cp|mkdir|touch|ln|tee): [^:'"\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`^${RUNNER_PREFIX}sed: rename\(\): operation not permitted[ \t]*$`,
     // git's quoted-path form, behind its own `fatal:`/`error:` so a test title quoting a path is not one.
-    String.raw`^(?:.*: )?(?:fatal|error): [^\r\n]*'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$`,
+    String.raw`^${RUNNER_PREFIX}(?:fatal|error): [^\r\n]*'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$`,
     String.raw`could not (?:lock|write) config file [^\r\n]*: operation not permitted[ \t]*$`,
     String.raw`EPERM: operation not permitted, \w+ '`,
     String.raw`\[Errno 1\] operation not permitted: '[^'\r\n]+'[ \t]*$`,

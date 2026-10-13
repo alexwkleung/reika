@@ -43,6 +43,14 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   too, so a refusal printed after a long build log is no longer invisible, and a `ps` refusal no
   longer hides a refused write in the same output (`ps aux | grep node; mkdir ~/x` reports both)
   (#723).
+- The write-denial check no longer fires on a refusal that is only being quoted behind a colon column
+  of its own: `Expected: rm: .git: Operation not permitted` (a failing test's assertion header over
+  the value it compared), `+ mkdir: /path: Operation not permitted` (a diff's added or removed line,
+  as `gh pr diff` prints one), `AssertionError: /bin/sh: /path: Operation not permitted` (Reika's own
+  sandbox tests under a `grep -E "AssertionError|expected"`). A runner's own column still counts —
+  turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
+  `name | `, indentation, and a go error chain — so a denial behind one is still reported; any other
+  column shape now costs a footer rather than producing one for a write that never happened (#726).
 
 ### Security
 
