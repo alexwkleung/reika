@@ -18,6 +18,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- The "No context window known" warning for a hosted model now says why: models.dev had no entry
+  for the profile's base URL (or listed the URL but not the model), which other base URLs it lists
+  on the same host, and which profile keys to set (`REIKA_<NAME>_BASE_URL`,
+  `REIKA_<NAME>_CONTEXT_WINDOW`). When a provider moved its URL on models.dev, the old warning
+  pointed at a local-server setting instead.
 - An empty `REIKA_*` line in a project `.env` (`REIKA_SUBAGENT_MODEL=`, as older copies of
   `.env.example` had) no longer hides the value set for that key in `~/.config/reika/.env`, and no
   longer triggers the "Ignored … from ./.env" startup notice.

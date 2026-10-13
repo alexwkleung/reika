@@ -138,9 +138,39 @@ describe('probeModelLimits', () => {
     expect(catalog).not.toHaveBeenCalled();
   });
 
-  it('reports nothing for a model the catalog does not list', async () => {
+  it('reports a model the catalog does not list as a miss under a listed base', async () => {
     stubModels(bareListing);
     const probe = await probeModelLimits({ ...profile, model: 'unlisted' }, async () => index);
+    expect(probe).toEqual({ reached: true, catalogMiss: { baseListed: true, sameHost: [] } });
+  });
+
+  // models.dev moved opencode-go from /zen/go/v1 to /inference/go/v1 (2026-10-12): the profile on
+  // the old base found nothing, and the notice could not say where the provider had gone.
+  it('names the bases the catalog lists on the same host when the base itself is gone', async () => {
+    stubModels(bareListing);
+    const moved: CatalogIndex = {
+      'https://router.example.com/inference/go/v1': { 'big-flash': { window: 200000 } },
+      'https://router.example.com/inference/v1': { 'big-flash': { window: 200000 } },
+      'https://other.example.net/v1': { 'big-flash': { window: 32768 } },
+    };
+    const probe = await probeModelLimits(
+      { ...profile, baseURL: 'https://router.example.com/zen/go/v1' },
+      async () => moved,
+    );
+    // Named, never adopted: the window stays unknown.
+    expect(probe.window).toBeUndefined();
+    expect(probe.catalogMiss).toEqual({
+      baseListed: false,
+      sameHost: [
+        'https://router.example.com/inference/go/v1',
+        'https://router.example.com/inference/v1',
+      ],
+    });
+  });
+
+  it('records no miss when the catalog could not be loaded', async () => {
+    stubModels(bareListing);
+    const probe = await probeModelLimits(profile, async () => undefined);
     expect(probe).toEqual({ reached: true });
   });
 });

@@ -271,7 +271,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       changed();
       notices.push({ role: 'system', content: notice });
     }
-    const warn = noWindowNotice(probe, before);
+    const warn = noWindowNotice(probe, before, name);
     if (warn) notices.push({ role: 'system', content: warn, tone: 'warn' });
     return notices;
   };
@@ -461,7 +461,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     offline,
     searchNotice: offline ? undefined : searchPrecedenceNotice(chooseSearchBackend(cfg)),
     limitsNotice: probed && probedLimitsNotice(probed),
-    windowNotice: probed && noWindowNotice(probed, startProfile),
+    windowNotice: probed && noWindowNotice(probed, startProfile, profile),
     mcp,
     // Config errors come first: they explain a server that never even started.
     mcpNotices: [...(cfg.mcpErrors ?? []), ...mcp.notices],
@@ -540,11 +540,33 @@ export function probedLimitsNotice(probe: ModelLimitsProbe): string | undefined 
 
 // A server that answered without a window (Ollama, a router the catalog does not list) leaves the
 // session with no compaction and per-round payload aging, and nothing on screen would say why.
-// Not while the probe is unreached: the retry at the next submit may still find one.
-export function noWindowNotice(probe: ModelLimitsProbe, before: Profile): string | undefined {
+// Not while the probe is unreached: the retry at the next submit may still find one. A hosted
+// endpoint gets the catalog's side of it too: a provider that moved its URL on models.dev reads
+// as "no window" with nothing pointing at the move, and the keys named are this profile's own.
+export function noWindowNotice(
+  probe: ModelLimitsProbe,
+  before: Profile,
+  name = 'default',
+): string | undefined {
   if (before.contextWindow != null || !probe.reached || probe.window) return undefined;
-  return [
-    `No context window known for ${before.model}, so there is no compaction and older tool output`,
-    "is dropped from every request. Set REIKA_CONTEXT_WINDOW to the server's context size.",
-  ].join(' ');
+  const lead = `No context window known for ${before.model}, so there is no compaction and older tool output is dropped from every request.`;
+  const miss = probe.catalogMiss;
+  if (!miss) {
+    return `${lead} Set REIKA_CONTEXT_WINDOW to the server's context size.`;
+  }
+  const group = before.group ?? name;
+  const prefix = group === 'default' ? 'REIKA' : `REIKA_${group.toUpperCase()}`;
+  const parts = [
+    lead,
+    miss.baseListed
+      ? `models.dev lists ${before.baseURL} but not ${before.model} under it.`
+      : `models.dev has no entry for ${before.baseURL}.`,
+  ];
+  if (!miss.baseListed && miss.sameHost.length > 0) {
+    parts.push(
+      `It lists this host at ${miss.sameHost.join(', ')} — if the provider moved, update ${prefix}_BASE_URL.`,
+    );
+  }
+  parts.push(`Or set ${prefix}_CONTEXT_WINDOW to the model's context size.`);
+  return parts.join(' ');
 }
