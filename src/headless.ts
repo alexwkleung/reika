@@ -89,7 +89,10 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
 
   // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
   // Always unattended: nobody can answer a prompt here, so a decline must not read as the user's.
-  const loaded = { ...loadConfig(), unattended: true };
+  const loaded = { ...loadConfig(), unattended: true } as Config & { profile?: string };
+  if (args.profile) {
+    loaded.profile = args.profile;
+  }
   // The mode is settled before the session is created, because it decides the model (#616): a mode
   // with its own model in REIKA_MODE_MODELS runs that one, `--mode` or not. Headless has no /model
   // and no saved state — its env is the whole answer — so an empty state is the whole of #365 here.
@@ -215,7 +218,9 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
 
     if (failed) {
       debugLog(`headless: turn failed: ${failed.message}`);
-      io.stderr(`reika: ${failed.message}\n`);
+      io.stderr(
+        `reika: fetch failed for profile "${profile}" at ${loaded.baseURL}: ${failed.message}\n`,
+      );
       return controller.signal.aborted ? 130 : 1;
     }
     if (args.json && !args.stream) {
