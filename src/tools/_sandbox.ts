@@ -703,11 +703,12 @@ const NET_DENIAL_RE =
 //
 // What may NOT be one is assertion vocabulary, refused BY NAME because it is name-shaped: a
 // capitalized header (`Expected: `/`Received: `/`Actual: `/`AssertionError: `, the last measured, the
-// rest the issue's) is a value being compared, never a runner — and a runner's own column in front
+// rest the issue's, and the bare `Error: ` a test prints over a thrown fixture string) is a value being compared, never a runner — and a runner's own column in front
 // does not make it one: `web:build: Expected: …` is the issue's red suite under turbo, the word can
 // end a column as its trailing token (`run: Expected: `), and the go chain's prose segment can carry
 // it (`go: x: Expected: `). So the vocabulary is checked where a name starts AND at the `:` that ends
-// a column (the `(?<!…)` before each terminator), not only at the line's first token. A diff's
+// a column (the `(?<!…)` before each terminator), and a go chain stops at the first segment that
+// ends in it, not only at the line's first token. A diff's
 // `+ `/`- ` marker needs no
 // rule of its own — a column cannot start with one, which is also why a column-0 `-bash: /x: …` (a
 // login shell naming itself) is dropped: at column 0 the marker and the shell's name are the same
@@ -719,32 +720,84 @@ const NET_DENIAL_RE =
 // its footer, and adding one belongs on the list rather than back in the open form. Replayed over the
 // 7,335 `bash` outputs saved in a session history (32,418 distinct lines, `evals/sandboxdenial-replay.ts`),
 // this changed one verdict — the `AssertionError: ` line above — and lost no runner shape.
-const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror)`;
+// `error` is the generic header a test prints over a thrown fixture string (`Error: rm: .git: …`); no
+// runner is named for it, and git's own `error: … '…': …` form is matched as a form, not a column.
+const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror|error)`;
 const RUNNER_NAME = String.raw`(?=[^\s|]*[A-Za-z])[^\s|+-][^\s|]*`;
-// The `go: …: ` alternative comes last: it is unbounded by design, so every shape that can be read
-// as a name is tried first.
-const RUNNER_COLUMN = String.raw`(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?:[ \t]+[^\s:]+)?(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+|go:[^\r\n]*?(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+)`;
-const RUNNER_PREFIX = String.raw`(?:[ \t]*${RUNNER_COLUMN})*[ \t]*`;
+// One column, anchored at the start of what is left of the line. Matched one at a time by
+// `isRefusalBehindRunnerColumns` rather than repeated inside one regex: a name may contain `:`
+// (`web:build`), so `a: b: ` splits into columns more than one way, and a quantified group over
+// those overlapping readings backtracks exponentially on a line of repeated `x: ` segments — over
+// a run's 4MB tail, on the main thread. Alternation order is the tie-break the regex no longer gets
+// from backtracking: `name: ` before `name build: `, or `/bin/sh: /x/f: ` reads as one column.
+const RUNNER_COLUMN_RE = new RegExp(
+  String.raw`^(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+[^\s:]+(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+)`,
+  'i',
+);
+// go's chain is `go: <prose>: <prose>: <error>`, so its segments are cut at every `: ` in turn.
+const GO_CHAIN_RE = /^go:[ \t]+/i;
+const GO_SEGMENT_END_RE = new RegExp(String.raw`\b${RUNNER_VOCABULARY}$`, 'i');
+// Deeper than any runner nests its columns or go its chain; it bounds the walk on a line that is
+// nothing but `x: x: x: …`.
+const MAX_RUNNER_COLUMNS = 8;
 // A path may carry one token in front of its first slash — `~/x`, `./x`, `../x`, and the `~` a shell
 // prints unexpanded when the command was quoted. It cannot start with `+`/`-` for the diff marker's
 // reason: with the column above optional, an unconstrained token here would read `+/Users/x/.git:
 // Operation not permitted` (the added-line form of a fixture) as a path.
 const PATH_LEAD = String.raw`(?:[^\s:'"+-][^\s:'"]*)?`;
-const FS_DENIAL_RE = new RegExp(
+// The forms a refusal takes once the runner's columns are off the front of its line.
+const FS_DENIAL_FORM_RE = new RegExp(
   [
     // `<prog>: <abs path>: …`, go's `open <abs path>: …`, git's bare `<abs path>: …`.
-    String.raw`^${RUNNER_PREFIX}(?:[a-z]+ )?${PATH_LEAD}\/[^:'"\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`^(?:[a-z]+ )?${PATH_LEAD}\/[^:'"\r\n]*: operation not permitted[ \t]*$`,
     // A slashless path, which only a file verb may introduce.
-    String.raw`^${RUNNER_PREFIX}(?:rm|mv|cp|mkdir|touch|ln|tee): [^:'"\r\n]*: operation not permitted[ \t]*$`,
-    String.raw`^${RUNNER_PREFIX}sed: rename\(\): operation not permitted[ \t]*$`,
+    String.raw`^(?:rm|mv|cp|mkdir|touch|ln|tee): [^:'"\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`^sed: rename\(\): operation not permitted[ \t]*$`,
     // git's quoted-path form, behind its own `fatal:`/`error:` so a test title quoting a path is not one.
-    String.raw`^${RUNNER_PREFIX}(?:fatal|error): [^\r\n]*'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$`,
+    String.raw`^(?:fatal|error): [^\r\n]*'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$`,
+  ].join('|'),
+  'i',
+);
+// Shapes printed mid-line, so no column rule applies to them.
+const FS_DENIAL_ANYWHERE_RE = new RegExp(
+  [
     String.raw`could not (?:lock|write) config file [^\r\n]*: operation not permitted[ \t]*$`,
     String.raw`EPERM: operation not permitted, \w+ '`,
     String.raw`\[Errno 1\] operation not permitted: '[^'\r\n]+'[ \t]*$`,
   ].join('|'),
-  'im',
+  'i',
 );
+
+function isRefusalForm(rest: string): boolean {
+  return FS_DENIAL_FORM_RE.test(rest.replace(/^[ \t]+/, ''));
+}
+
+// A go chain carrying assertion vocabulary is a quote (`go: x: Expected: …`), so the walk stops at the
+// first segment that ends in it rather than cutting past it.
+function isRefusalBehindGoChain(rest: string): boolean {
+  let from = rest.match(GO_CHAIN_RE)![0].length;
+  if (isRefusalForm(rest.slice(from))) return true;
+  for (let i = 0; i < MAX_RUNNER_COLUMNS; i++) {
+    const cut = rest.indexOf(': ', from);
+    if (cut === -1 || GO_SEGMENT_END_RE.test(rest.slice(from, cut))) return false;
+    from = cut + 2;
+    if (isRefusalForm(rest.slice(from))) return true;
+  }
+  return false;
+}
+
+function isRefusalBehindRunnerColumns(line: string): boolean {
+  let rest = line;
+  for (let i = 0; i <= MAX_RUNNER_COLUMNS; i++) {
+    rest = rest.replace(/^[ \t]+/, '');
+    if (isRefusalForm(rest)) return true;
+    if (GO_CHAIN_RE.test(rest)) return isRefusalBehindGoChain(rest);
+    const column = RUNNER_COLUMN_RE.exec(rest);
+    if (!column) return false;
+    rest = rest.slice(column[0].length);
+  }
+  return false;
+}
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -784,16 +837,35 @@ function withoutPsDenials(output: string): string {
 // the one shape the output gate cannot see, so the exit status has to carry it.
 const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
 
+function lineEndFrom(text: string, from: number): number {
+  const lf = text.indexOf('\n', from);
+  const cr = text.indexOf('\r', from);
+  if (lf === -1) return cr === -1 ? text.length : cr;
+  return cr === -1 ? lf : Math.min(lf, cr);
+}
+
 /** The line of a sandboxed command's output that shows a write the profile refused, or null. The
  *  user-facing half: the footer tells the model not to fight it, the notice tells the user the flag
  *  exists (`bash.ts`). Returned whole so the footer can quote it when it is not in the payload. */
 export function refusedWriteLine(output: string): string | null {
   const scanned = withoutPsDenials(output);
-  const m = FS_DENIAL_RE.exec(scanned);
-  if (!m) return null;
-  const start = scanned.lastIndexOf('\n', m.index) + 1;
-  const end = scanned.indexOf('\n', m.index);
-  return scanned.slice(start, end === -1 ? undefined : end).trim();
+  // Every form carries the phrase, so only the lines that do are read — linear in the output.
+  const phrase = /operation not permitted/gi;
+  for (let found = phrase.exec(scanned); found; found = phrase.exec(scanned)) {
+    const at = found.index;
+    // A `\r` starts a line as a `\n` does (a progress bar redrawn over), as `^`/`$` read it under
+    // the `m` flag; the quote is the whole `\n` line around it.
+    const segStart = Math.max(scanned.lastIndexOf('\n', at), scanned.lastIndexOf('\r', at)) + 1;
+    const segEnd = lineEndFrom(scanned, at);
+    const segment = scanned.slice(segStart, segEnd);
+    if (FS_DENIAL_ANYWHERE_RE.test(segment) || isRefusalBehindRunnerColumns(segment)) {
+      const start = scanned.lastIndexOf('\n', at) + 1;
+      const end = scanned.indexOf('\n', at);
+      return scanned.slice(start, end === -1 ? undefined : end).trim();
+    }
+    phrase.lastIndex = segEnd;
+  }
+  return null;
 }
 
 // A quoted line is the model's only pointer to WHICH write failed when it sat past the payload head;

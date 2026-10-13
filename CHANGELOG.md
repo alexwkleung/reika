@@ -48,7 +48,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the value it compared), `+ mkdir: /path: Operation not permitted` (a diff's added or removed line,
   as `gh pr diff` prints one), `AssertionError: /bin/sh: /path: Operation not permitted` (Reika's own
   sandbox tests under a `grep -E "AssertionError|expected"`), at line start or behind a runner's own
-  column (`web:build: Expected: …`). A runner's own column still counts —
+  column (`web:build: Expected: …`), or behind a bare `Error: ` header. A runner's own column still counts —
   turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
   `name | `, indentation, and a go error chain — so a denial behind one is still reported; any other
   column shape now costs a footer rather than producing one for a write that never happened (#726).

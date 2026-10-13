@@ -26,7 +26,7 @@
 // Operation not permitted`, the false positive #726 exists for. No runner shape was lost. The corpus
 // grows with every session, so a later run's totals will be larger; the changed set is the part to
 // read.
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { refusedWriteLine } from '../src/tools/_sandbox.js';
@@ -43,8 +43,10 @@ function sessionFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+// No history (autosave off, a fresh install) is an empty corpus, not a crash.
+const files = existsSync(historyRoot) ? sessionFiles(historyRoot) : [];
 const outputs: string[] = [];
-for (const f of sessionFiles(historyRoot)) {
+for (const f of files) {
   for (const line of readFileSync(f, 'utf8').split('\n')) {
     // A bash result's retained output is `command.outputTail`; `summary` holds it too, but with the
     // chip's own prefix on some rows, so the tail is the field to replay.
@@ -119,9 +121,7 @@ for (const line of lines) {
   }
 }
 
-console.log(
-  `files=${sessionFiles(historyRoot).length} bashOutputs=${outputs.length} distinctLines=${lines.size}`,
-);
+console.log(`files=${files.length} bashOutputs=${outputs.length} distinctLines=${lines.size}`);
 console.log(`lines hit: old=${oldHits} new=${newHits} changed=${changed.length}`);
 if (changed.length > 0) {
   console.log(

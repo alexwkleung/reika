@@ -857,6 +857,10 @@ describe('sandboxFooter', () => {
       // A path that merely ends in a vocabulary word is still a write: the refusal is on the column's
       // token before its `: `, not on the path.
       'mkdir: /x/Expected: Operation not permitted\n',
+      // go's chain behind a runner column, each segment prose; and a progress bar's `\r` starts a line.
+      'web:build: go: creating work dir: mkdir /Users/someone/x: operation not permitted\n',
+      'go: downloading x: go: writing stat cache: mkdir /Users/someone/x: operation not permitted\n',
+      '  3% done\rmkdir: /Users/someone/x: Operation not permitted\n',
       // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
       'mkdir: /Users/someone/top: Operation not permitted\n',
       '/bin/sh: /Users/someone/ps: Operation not permitted\n',
@@ -949,6 +953,12 @@ describe('sandboxFooter', () => {
       'web:build: AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
       "go: cmd/x: Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
       '[Expected: rm: .git: Operation not permitted\n',
+      // The vocabulary inside the go chain stops the walk, whichever form follows it.
+      'go: x: Expected: mkdir: /x: Operation not permitted\n',
+      'go: cmd/x: Expected: /bin/sh: /Users/someone/f: Operation not permitted\n',
+      // A test that throws with the fixture string prints it behind a bare `Error: ` header.
+      'Error: rm: .git: Operation not permitted\n',
+      'web:build: Error: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
       // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
       // behind it stays refused.
       '668:  mkdir: /x: Operation not permitted\n',
@@ -1033,5 +1043,20 @@ describe('sandboxFooter — a refusal found past the payload head', () => {
       refusedWriteLine('ok\n[0] mkdir: /Users/someone/x: Operation not permitted\nmore\n'),
     ).toBe('[0] mkdir: /Users/someone/x: Operation not permitted');
     expect(refusedWriteLine('ps: Operation not permitted\n')).toBeNull();
+  });
+
+  // The columns are peeled one at a time: as a repeated group inside one regex, `a: b: ` read more
+  // than one way and a line of repeated segments backtracked exponentially (`go: a: ` ×20 never
+  // returned), on the main thread, over a run's 4MB tail.
+  it('stays linear on a line of repeated columns', () => {
+    const lines = [
+      `${'go: a: '.repeat(2000)}x: Operation not permitted`,
+      `${'Error: '.repeat(2000)}x: Operation not permitted`,
+      `${'web:build: '.repeat(2000)}x: Operation not permitted`,
+      `${'a: '.repeat(200_000)}x: Operation not permitted`,
+    ];
+    const started = performance.now();
+    for (const line of lines) expect(refusedWriteLine(line), line.slice(0, 40)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
