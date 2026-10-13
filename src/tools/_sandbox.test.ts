@@ -851,6 +851,16 @@ describe('sandboxFooter', () => {
       // Runner prefixes: a padded `[n]` and a `name | ` column.
       '[1]   rm: .git: Operation not permitted\n',
       'web:build | rm: .git: Operation not permitted\n',
+      // #726: the allowlist sits in front of every form, so git's quoted refusal keeps its footer
+      // behind a runner's column too (a package script that runs `git init`).
+      "web:build: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // A path that merely ends in a vocabulary word is still a write: the refusal is on the column's
+      // token before its `: `, not on the path.
+      'mkdir: /x/Expected: Operation not permitted\n',
+      // go's chain behind a runner column, each segment prose; and a progress bar's `\r` starts a line.
+      'web:build: go: creating work dir: mkdir /Users/someone/x: operation not permitted\n',
+      'go: downloading x: go: writing stat cache: mkdir /Users/someone/x: operation not permitted\n',
+      '  3% done\rmkdir: /Users/someone/x: Operation not permitted\n',
       // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
       'mkdir: /Users/someone/top: Operation not permitted\n',
       '/bin/sh: /Users/someone/ps: Operation not permitted\n',
@@ -911,12 +921,47 @@ describe('sandboxFooter', () => {
       "+        expect(r.payload).toContain('Operation not permitted');\n",
       "-      expect(mv.payload).toContain('Operation not permitted');\n",
       "      '/bin/sh: /Users/someone/notes.md: Operation not permitted',\n", // a fixture string
-      // The shape git itself prints, as an added diff line. What this rule cannot reject is an
-      // added line that IS a denial line at column 0 with nothing after it (`+git: /x/.git:
-      // Operation not permitted`, `+mkdir: /x: Operation not permitted`): it is indistinguishable
-      // from the real thing, and the only way to tell them apart is to test for the diff marker,
-      // which would also drop a real `-bash: …`.
+      // A denial line as a diff line, which is what the rule above could not reject: `+git: /x/.git:
+      // Operation not permitted` and `+mkdir: /x: Operation not permitted` are the real thing's own
+      // shape, and the only way to tell them apart is to test for the marker. #726 does, since a
+      // column cannot start with `+`/`-` — the cost is a column-0 `-bash: /x: Operation not
+      // permitted` (a login shell's own name), which no measured output prints and which is only a
+      // footer: the denial itself is in the output the model was shown.
       '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
+      '+mkdir: /x: Operation not permitted\n',
+      '+git: /x/.git: Operation not permitted\n',
+      '-mkdir: /x: Operation not permitted\n',
+      // #726: the prefix itself, one column over. #720 allowed ANY `<text>: ` in front of the shape,
+      // so a line that only QUOTES a refusal read as one whenever the quote sat behind a colon column
+      // of its own: the assertion header a failing test prints over the value it compared, or a
+      // diff's added/removed marker.
+      'Expected: rm: .git: Operation not permitted\n',
+      'Received: mv: rename .git to .g: Operation not permitted\n',
+      '+ mkdir: /Users/someone/x: Operation not permitted\n',
+      '- rm: .git: Operation not permitted\n',
+      "Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // Measured rather than hypothetical: this is reika's own `_sandbox.test.ts` failing under the
+      // `| grep -E "AssertionError|expected"` a model wraps a red suite in, and it is the one verdict
+      // the replay over 7,335 saved bash outputs changed.
+      'AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // The vocabulary is refused wherever it ENDS a column too, not only where one begins: behind a
+      // per-line runner column the same header arrives as `web:build: Expected: …` (the red suite
+      // above, run under turbo), it can end a column as a trailing token (`run: Expected: `), and the
+      // go chain's prose segment can carry it (`go: x: Expected: `) — each still a quote of a refusal
+      // that never happened.
+      'web:build: Expected: rm: .git: Operation not permitted\n',
+      'web:build: AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      "go: cmd/x: Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      '[Expected: rm: .git: Operation not permitted\n',
+      // The vocabulary inside the go chain stops the walk, whichever form follows it.
+      'go: x: Expected: mkdir: /x: Operation not permitted\n',
+      'go: cmd/x: Expected: /bin/sh: /Users/someone/f: Operation not permitted\n',
+      // A test that throws with the fixture string prints it behind a bare `Error: ` header.
+      'Error: rm: .git: Operation not permitted\n',
+      'web:build: Error: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
+      // behind it stays refused.
+      '668:  mkdir: /x: Operation not permitted\n',
       // Prose ending in the shape: a commit subject, a sentence. Before the path there must be a
       // `: ` or a single verb, so the words in front rule it out.
       'ab71044 docs: note that mkdir printed /x/f: operation not permitted\n',
@@ -998,5 +1043,20 @@ describe('sandboxFooter — a refusal found past the payload head', () => {
       refusedWriteLine('ok\n[0] mkdir: /Users/someone/x: Operation not permitted\nmore\n'),
     ).toBe('[0] mkdir: /Users/someone/x: Operation not permitted');
     expect(refusedWriteLine('ps: Operation not permitted\n')).toBeNull();
+  });
+
+  // The columns are peeled one at a time: as a repeated group inside one regex, `a: b: ` read more
+  // than one way and a line of repeated segments backtracked exponentially (`go: a: ` ×20 never
+  // returned), on the main thread, over a run's 4MB tail.
+  it('stays linear on a line of repeated columns', () => {
+    const lines = [
+      `${'go: a: '.repeat(2000)}x: Operation not permitted`,
+      `${'Error: '.repeat(2000)}x: Operation not permitted`,
+      `${'web:build: '.repeat(2000)}x: Operation not permitted`,
+      `${'a: '.repeat(200_000)}x: Operation not permitted`,
+    ];
+    const started = performance.now();
+    for (const line of lines) expect(refusedWriteLine(line), line.slice(0, 40)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
