@@ -186,4 +186,10 @@ describe('startProfiles (#616)', () => {
       own: 'default',
     });
   });
+
+  it('lets an explicit override beat both, since the user named the profile outright (#710)', () => {
+    expect(
+      startProfiles(MODES, 'plan', { profile: 'kimi' }, only('REIKA_MODEL'), 'qwen3-coder'),
+    ).toEqual({ profile: 'qwen3-coder', own: 'default' });
+  });
 });

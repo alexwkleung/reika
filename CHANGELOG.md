@@ -3,6 +3,19 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Changed
+
+- `reika -p` takes `--profile <name>`, so a headless run can use a profile the TUI would resume
+  without exporting `REIKA_MODEL` first. The named profile wins over a `REIKA_MODEL` given at launch
+  and over the model a mode lists in `REIKA_MODE_MODELS`, because it is the user naming it outright;
+  a name no profile defines falls back to the default profile rather than failing the run (#710).
+- A headless turn that fails names the profile and the base URL it was using, instead of only the
+  throw's own message: `reika: fetch failed for profile "<name>" at <baseURL>: <error>`, where a
+  route that could not be reached used to print `reika: fetch failed` and nothing more. The URL is
+  the selected profile's, not the default profile's (#710).
+
 ## [0.3.0] - 2026-10-12
 
 ### Changed
