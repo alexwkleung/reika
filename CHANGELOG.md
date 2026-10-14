@@ -3,6 +3,16 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Security
+
+- The post-edit typecheck gate runs its `tsc --noEmit` through the sandbox wrapper, so the project's
+  own `node_modules/.bin/tsc` runs under the same confinement as a model-run shell command instead
+  of outside it. The binary sits in the directory a sandboxed command may write, so a sandboxed
+  command could have replaced it before the harness ran it; it no longer can. When the sandbox is
+  unavailable the gate falls back to the direct spawn, fail-open, as its design requires (#708).
+
 ## [0.3.0] - 2026-10-12
 
 ### Changed
