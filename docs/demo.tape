@@ -1,7 +1,8 @@
 # Records a raw take of the demo. Install VHS (`brew install vhs`), start your model server, then
 # run from the repo root:
 #   vhs docs/demo.tape
-# The take is real time, so it is written as an MP4 and cut into docs/demo.gif afterwards with
+# The take is real time, so it is written as an MP4 and cut into docs/demo.gif (README) and
+# docs/public/demo.mp4 + demo-poster.webp (site) afterwards with
 #   scripts/demo-cut.sh <turn-end-seconds>
 # which keeps the typed prompt at normal speed, speeds up the turn, and drops the idle tail.
 # REIKA_DEMO_MODEL=<id> picks the model for the take without changing your saved profile.

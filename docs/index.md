@@ -70,7 +70,7 @@ docs:
     link: /support
 ---
 
-![Reika fixing a retry helper and its test with a local model](./demo.gif)
+<video src="/demo.mp4" poster="/demo-poster.webp" width="1280" height="760" autoplay loop muted playsinline aria-label="Reika fixing a retry helper and its test with a local model"></video>
 
 <sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 

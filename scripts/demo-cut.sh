@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Cuts the raw take from docs/demo.tape into docs/demo.gif: the typed prompt at normal speed, the
-# model's turn sped up, then a short hold on the result.
+# Cuts the raw take from docs/demo.tape into docs/demo.gif (the README's copy) and
+# docs/public/demo.mp4 + demo-poster.webp (the site's, ~6x smaller): the typed prompt at normal
+# speed, the model's turn sped up, then a short hold on the result. Needs ffmpeg and cwebp
+# (`brew install ffmpeg webp`).
 #   scripts/demo-cut.sh <turn-end-seconds> [raw.mp4] [speed]
 # Find the turn end by scrubbing the raw take for the "Worked for …" line.
 set -euo pipefail
@@ -29,4 +31,11 @@ ffmpeg -v error -y -i "$raw" -filter_complex "\
 ffmpeg -v error -y -i "$tmp/cut.mkv" -filter_complex \
   "split[x][y];[x]palettegen=max_colors=64:stats_mode=diff[p];[y][p]paletteuse=dither=none:diff_mode=rectangle" \
   "$here/../docs/demo.gif"
-ls -la "$here/../docs/demo.gif"
+# The poster is the first frame, so a browser that won't autoplay (iOS Low Power Mode) shows the
+# splash instead of a blank box, and one that does play has no visible jump.
+ffmpeg -v error -y -i "$tmp/cut.mkv" -movflags +faststart -pix_fmt yuv420p \
+  -c:v libx264 -crf 28 -preset veryslow -tune animation "$here/../docs/public/demo.mp4"
+ffmpeg -v error -y -i "$tmp/cut.mkv" -frames:v 1 "$tmp/poster.png"
+cwebp -quiet -q 80 "$tmp/poster.png" -o "$here/../docs/public/demo-poster.webp"
+
+ls -la "$here/../docs/demo.gif" "$here/../docs/public/demo.mp4" "$here/../docs/public/demo-poster.webp"

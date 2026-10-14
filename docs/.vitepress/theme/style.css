@@ -115,7 +115,8 @@
 }
 
 /* The demo is a terminal recording, so it sits in a quiet frame rather than floating on the page. */
-.vp-doc img[src*='demo'] {
+.vp-doc img[src*='demo'],
+.vp-doc video[src*='demo'] {
   display: block;
   border: 1px solid var(--vp-c-divider);
   border-radius: 10px;
