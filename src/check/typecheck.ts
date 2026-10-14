@@ -206,17 +206,10 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
   const tsc = await resolveTscBin(cwd);
   if (!tsc) return { ran: false, reason: 'no local tsc binary' };
   const buildInfo = opts.tsBuildInfoFile ?? defaultBuildInfoFile(cwd);
-  // Route the project-local `tsc` through the sandbox wrapper so it runs inside the
-  // confinement (sandbox-exec + a profile that denies writes outside cwd). When the
-  // sandbox is unavailable, fall back to the original direct spawn — fail-open, as the
-  // gate's design requires.
-  const plan = sandboxPlan(cwd, { network: false });
-  if ('args' in plan) {
-    // Sandbox available: run tsc through the sandbox wrapper so it stays inside confinement.
-    const argv = sandboxArgv(plan, '--noEmit --incremental --tsBuildInfoFile ' + buildInfo + ' --pretty false -p ' + tsconfig);
-    return runTscProcess(argv!.cmd, argv!.args, cwd, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
-  }
-  // Sandbox unavailable: fall back to the original direct spawn (fail-open).
+  // `--incremental` with an explicit `--tsBuildInfoFile` is what makes the re-check cheap and is
+  // accepted alongside `--noEmit` across TS versions. `--pretty false` forces the stable
+  // one-line-per-diagnostic format regardless of TTY, which DIAG_RE parses. One list, used by both
+  // spawns below, so the confined and unconfined runs cannot drift apart.
   const args = [
     '--noEmit',
     '--incremental',
@@ -227,7 +220,28 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
     '-p',
     tsconfig,
   ];
-  return runTscProcess(tsc, args, cwd, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Route the project-local `tsc` through the sandbox wrapper so it runs inside confinement
+  // (sandbox-exec + a profile that denies writes outside cwd). The wrapper takes a shell command,
+  // so the binary has to be part of the line and both it and every argument must be quoted: a bare
+  // flag list would be run *as* the command (`/bin/sh -c "--noEmit …"` is an invalid option, exit
+  // 2), and tsc would never start — indistinguishable from a clean check, and so a silently dead
+  // gate. When the sandbox is unavailable, fall back to the direct spawn (fail-open), which is the
+  // gate's standing design.
+  const plan = sandboxPlan(cwd, { network: false });
+  if ('args' in plan) {
+    const argv = sandboxArgv(plan, [tsc, ...args].map(shellQuote).join(' '));
+    if (argv) return runTscProcess(argv.cmd, argv.args, cwd, timeoutMs, opts.signal);
+  }
+  return runTscProcess(tsc, args, cwd, timeoutMs, opts.signal);
+}
+
+// Single-quote one argument for the `/bin/sh -c` line `sandboxArgv` builds. Every path interpolated
+// into that line is user-controlled — a cwd, tsconfig, or tsbuildinfo path may contain spaces or
+// quotes — so concatenating bare would split one argument into several or let a quote re-parse the
+// rest. `'\''` is the only way to carry a single quote inside a single-quoted string.
+function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
 function runTscProcess(
