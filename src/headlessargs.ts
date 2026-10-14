@@ -22,10 +22,10 @@ export type HeadlessArgs = {
 };
 
 export const USAGE = `usage: reika                  start the interactive TUI in the current directory
-       reika -p [prompt] ...   run one turn headless; reads stdin when no text is given
+       reika -p [prompt] ...   run one turn without the TUI and print the reply
 
   -p, --prompt [text]   run one turn headless; reads stdin when no text is given
-  --profile <name>      run one turn headless with the named profile (explicit; outranks REIKA_MODEL)
+  --profile <name>      with -p: use this profile (outranks REIKA_MODEL and REIKA_MODE_MODELS)
   --mode <mode>         agent | plan | vibe | minimal | grind | chat (default: REIKA_DEFAULT_MODE, else agent)
   --json                print the turn's messages as a JSON array instead of the reply text
   --stream              print as the turn runs: the reply as it is generated, tool calls on
@@ -72,8 +72,9 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
       }
       args.mode = value as HeadlessMode;
     } else if (a === '--profile') {
+      // A flag-shaped value is a missing name: taking it would swallow the -p or --json after it.
       const value = argv[++i];
-      if (!value) throw new Error(`unexpected argument ${a}\n${USAGE}`);
+      if (!value || value.startsWith('-')) throw new Error('--profile needs a profile name');
       args.profile = value;
     } else if (a === '--json') {
       args.json = true;
@@ -103,6 +104,10 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
     } else {
       throw new Error(`unexpected argument ${a}\n${USAGE}`);
     }
+  }
+  // The TUI does not read it, so starting one would drop the flag without a word.
+  if (!headless && args.profile !== undefined) {
+    throw new Error(`--profile applies to a headless run; add -p\n${USAGE}`);
   }
   return headless ? args : null;
 }

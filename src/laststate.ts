@@ -96,10 +96,8 @@ export function startProfiles(
   mode: Mode,
   state: LastState,
   launched: (name: string) => boolean = setAtLaunch,
-  profileOverride?: string,
 ): StartProfiles {
   const own = startProfile(config, state, launched);
-  if (profileOverride) return { profile: profileOverride, own };
   if (launched('REIKA_MODEL')) return { profile: own, own };
   return { profile: modeSwitchProfile(config, mode, own) ?? own, own };
 }

@@ -185,6 +185,7 @@ when debugging.
 reika -p "summarize what this repo does"
 echo "explain src/agent/loop.ts" | reika -p          # prompt from stdin
 reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | grind | chat
+reika -p --profile kimi "review this diff"           # run on a named profile
 reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
 reika -p --stream "explain the build"                # print the reply as it is generated
 reika -p --json --stream "..." | jq -c .role         # one message per line (NDJSON) as each lands
@@ -209,6 +210,10 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   take back.
 - **Exit status:** 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted
   (ctrl-c aborts the turn cleanly).
+- **Profiles** (`--profile <name>`): the run uses that profile, over a launch `REIKA_MODEL` and over
+  the mode's own model in `REIKA_MODE_MODELS`. Names match case-insensitively; a name no profile
+  defines prints a notice on stderr listing the defined ones and runs on the profile it would have
+  used without the flag. A failed turn names the profile and base URL it was on.
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
 ### Unattended sessions

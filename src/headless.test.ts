@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { buildHeadlessInput, createStreamPrinter, finalReply } from './headless.js';
+import {
+  buildHeadlessInput,
+  createStreamPrinter,
+  finalReply,
+  formatTurnFailure,
+  headlessProfile,
+} from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
 import type { Config, ContextBundle, Message } from './types.js';
 
@@ -41,6 +47,24 @@ describe('parseHeadlessArgs', () => {
 
   it('rejects an unknown flag rather than running the wrong turn', () => {
     expect(() => parseHeadlessArgs(['-p', 'x', '--yolo'])).toThrow(/unknown flag --yolo/);
+  });
+
+  it('takes --profile with -p, in any position', () => {
+    expect(parseHeadlessArgs(['-p', 'x', '--profile', 'kimi'])?.profile).toBe('kimi');
+    expect(parseHeadlessArgs(['--profile', 'kimi', '-p', 'x'])).toMatchObject({
+      prompt: 'x',
+      profile: 'kimi',
+    });
+  });
+
+  it('refuses a --profile with no name rather than swallowing the next flag', () => {
+    expect(() => parseHeadlessArgs(['-p', 'x', '--profile'])).toThrow(/--profile needs/);
+    expect(() => parseHeadlessArgs(['--profile', '-p', 'x'])).toThrow(/--profile needs/);
+    expect(() => parseHeadlessArgs(['-p', 'x', '--profile', '--json'])).toThrow(/--profile needs/);
+  });
+
+  it('refuses --profile without -p, since the TUI would drop it silently', () => {
+    expect(() => parseHeadlessArgs(['--profile', 'kimi'])).toThrow(/add -p/);
   });
 
   it('rejects a stray positional', () => {
@@ -235,5 +259,44 @@ describe('createStreamPrinter', () => {
         .split('\n')
         .map(l => JSON.parse(l)),
     ).toEqual(msgs);
+  });
+});
+
+describe('headlessProfile (#710)', () => {
+  const profile = { model: 'm', baseURL: 'http://localhost:8080/v1', apiKey: 'k' };
+  const config = {
+    profiles: { default: profile, kimi: { ...profile, model: 'kimi-k2' } },
+  } as unknown as Config;
+
+  it('uses the named profile, matched case-insensitively', () => {
+    expect(headlessProfile(config, 'agent', 'kimi')).toEqual({ profile: 'kimi' });
+    expect(headlessProfile(config, 'agent', 'Kimi')).toEqual({ profile: 'kimi' });
+  });
+
+  it("outranks the mode's own model", () => {
+    const mapped = { ...config, modeProfiles: { plan: 'kimi' } } as unknown as Config;
+    expect(headlessProfile(mapped, 'plan', 'default')).toEqual({ profile: 'default' });
+  });
+
+  it('falls back to a defined profile on an unknown name, and says so', () => {
+    const chosen = headlessProfile(config, 'agent', 'typo');
+    expect(chosen.profile).toBe('default');
+    expect(chosen.notice).toMatch(
+      /no profile named "typo" \(defined: default, kimi\); using "default"/,
+    );
+  });
+
+  it('is the ordinary start profile without the flag', () => {
+    expect(headlessProfile(config, 'agent')).toEqual({ profile: 'default' });
+  });
+});
+
+describe('formatTurnFailure', () => {
+  it('names the route without calling every failure a fetch failure', () => {
+    expect(
+      formatTurnFailure('kimi', 'https://api.example.com/v1', 'This operation was aborted'),
+    ).toBe(
+      'reika: turn failed (profile "kimi" at https://api.example.com/v1): This operation was aborted',
+    );
   });
 });
