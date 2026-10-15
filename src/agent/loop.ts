@@ -1672,6 +1672,7 @@ export async function runTurn(opts: {
       return await runTypecheck(opts.bundle.cwd, {
         signal: opts.signal,
         tsconfigPath: typecheckTsconfig,
+        sandbox: opts.config.sandbox,
       });
     } finally {
       opts.onTypecheck?.(false);

@@ -23,9 +23,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   own `node_modules/.bin/tsc` runs under the same confinement as a model-run shell command instead
   of outside it. The binary sits in the directory a sandboxed command may write, so a sandboxed
   command could have replaced it before the harness ran it; it no longer can. When the sandbox is
-  unavailable the gate falls back to the direct spawn, fail-open, as its design requires — and a
-  wrapper that refuses at spawn time (a profile the OS rejects, which the availability probe cannot
-  see) is detected rather than read as a clean check, and retried unsandboxed the same way (#708).
+  unavailable, or switched off with `REIKA_SANDBOX=0`, the gate spawns tsc directly as before. A
+  wrapper that refuses at spawn time, or a tsc the shell cannot execute, is detected rather than read
+  as a clean check, and turns the gate off for that turn instead of retrying unsandboxed: the refusal
+  is read from tsc's own output, so a planted binary could otherwise fake one to get the unconfined
+  run (#708).
 
 ## [0.3.0] - 2026-10-12
 

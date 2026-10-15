@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sandboxExecAvailable, sandboxPlan, sandboxProfile } from '../tools/_sandbox.js';
@@ -423,10 +423,84 @@ describe('runTypecheck — the spawn line', () => {
         undefined,
         true,
       );
-      expect(res).toMatchObject({ ran: false, sandboxRefused: true });
+      expect(res).toMatchObject({ ran: false });
       if (!res.ran) expect(res.reason).toContain('sandbox wrapper refused');
       // Nothing ran — which is exactly why an undetected refusal masquerades as a clean check.
       await expect(access(argvOut)).rejects.toThrow();
+    },
+  );
+  it.skipIf(!sandboxWorks)(
+    'never retries unsandboxed when the confined tsc claims the wrapper refused',
+    async () => {
+      // A planted tsc can print the wrapper's line and exit 65 as easily as sandbox-exec can. If
+      // that bought a retry, the retry would be the unconfined run of the same binary — so it
+      // must run exactly once, and the gate is off for the turn rather than reopened.
+      const { bin } = await fakeTsc();
+      const runs = join(cwd, 'runs.log');
+      await writeFile(
+        bin,
+        `#!/bin/sh\necho run >> ${shellQuote(runs)}\necho 'sandbox-exec: fake refusal' >&2\nexit 65\n`,
+        'utf8',
+      );
+      const res = await runTypecheck(cwd);
+      expect(res).toMatchObject({ ran: false });
+      expect((await readFile(runs, 'utf8')).trim().split('\n')).toEqual(['run']);
+    },
+  );
+
+  it.skipIf(!sandboxWorks)(
+    'reads a tsc the shell could not execute as not run, not a clean check',
+    async () => {
+      // Exec bit lost: the direct spawn reports EACCES, but behind `/bin/sh -c` it is exit 126
+      // with no tsc output — zero diagnostics, which used to read as green.
+      const { bin, argvOut } = await fakeTsc();
+      await chmod(bin, 0o644);
+      const res = await runTypecheck(cwd);
+      expect(res.ran).toBe(false);
+      if (!res.ran) expect(res.reason).toContain('exit 126');
+      await expect(access(argvOut)).rejects.toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'spawns tsc directly when the sandbox is switched off',
+    async () => {
+      // REIKA_SANDBOX=0: a tsc that writes outside the confined paths must keep working, so the
+      // wrapper is skipped outright — proved by a write the profile would refuse.
+      const { bin, argvOut } = await fakeTsc();
+      const outside = await mkdtemp(join(homedir(), '.reika-tc-test-'));
+      try {
+        const marker = join(outside, 'wrote');
+        await writeFile(
+          bin,
+          `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(marker)}, 'x');\nrequire('fs').writeFileSync(${JSON.stringify(argvOut)}, '[]');\n`,
+          'utf8',
+        );
+        const res = await runTypecheck(cwd, { sandbox: false });
+        expect(res.ran).toBe(true);
+        await expect(access(marker)).resolves.toBeUndefined();
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'a timeout kills the whole process group, not just the wrapper',
+    async () => {
+      // A shim that forks tsc without exec: killing only the shell left the grandchild running.
+      const { bin } = await fakeTsc();
+      const pidFile = join(cwd, 'grandchild.pid');
+      await writeFile(
+        bin,
+        `#!/bin/sh\nsleep 30 &\necho $! > ${shellQuote(pidFile)}\nwait\n`,
+        'utf8',
+      );
+      const res = await runTypecheck(cwd, { timeoutMs: 1000 });
+      expect(res).toMatchObject({ ran: false, reason: expect.stringContaining('timed out') });
+      const pid = Number((await readFile(pidFile, 'utf8')).trim());
+      await new Promise(r => setTimeout(r, 200));
+      expect(() => process.kill(pid, 0)).toThrow();
     },
   );
 });
