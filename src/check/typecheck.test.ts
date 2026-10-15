@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +12,8 @@ import {
   formatIntroduced,
   introducedDiagnostics,
   parseTscOutput,
+  runTypecheck,
+  shellQuote,
 } from './typecheck.js';
 
 function diag(over: Partial<Diagnostic> = {}): Diagnostic {
@@ -263,4 +266,85 @@ describe('detectTsProject', () => {
       else process.env.REIKA_TSCONFIG = prev;
     }
   });
+});
+
+describe('shellQuote', () => {
+  it('wraps every argument in single quotes, empty included', () => {
+    expect(shellQuote('tsc')).toBe(`'tsc'`);
+    expect(shellQuote('')).toBe(`''`);
+    expect(shellQuote('/a b/c.ts')).toBe(`'/a b/c.ts'`);
+  });
+
+  it('escapes an embedded single quote so the shell cannot re-parse', () => {
+    expect(shellQuote("it's")).toBe(`'it'\\''s'`);
+    expect(shellQuote("'")).toBe(`''\\'''`);
+  });
+
+  it('keeps shell metacharacters literal', () => {
+    const arg = '$(rm -rf /); `reboot` | & > * ? [ ]';
+    expect(shellQuote(arg)).toBe(`'${arg}'`);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'round-trips hostile arguments through a real /bin/sh',
+    () => {
+      const args = [
+        'plain',
+        'with spaces',
+        "it's quoted",
+        '$(echo pwned)',
+        '`reboot`',
+        '*?[]{}',
+        'mix \' $ ( ) ; & | < > " \n newline',
+      ];
+      const line = `printf '%s\\0' ${args.map(shellQuote).join(' ')}`;
+      const r = spawnSync('/bin/sh', ['-c', line], { encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      expect(r.stdout.split('\0').slice(0, -1)).toEqual(args);
+    },
+  );
+});
+
+describe('runTypecheck — the sandboxed spawn line', () => {
+  let cwd: string;
+  beforeEach(async () => {
+    // Deliberately hostile path: a space and a single quote, the case bare concatenation into the
+    // `/bin/sh -c` line would split in two or let a quote re-parse the rest.
+    cwd = await mkdtemp(join(tmpdir(), "reika's typecheck "));
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'reaches the project-local tsc with exactly one argv per element',
+    async () => {
+      await writeFile(join(cwd, 'tsconfig.json'), '{}', 'utf8');
+      const bin = join(cwd, 'node_modules', '.bin', 'tsc');
+      await mkdir(join(cwd, 'node_modules', '.bin'), { recursive: true });
+      const argvOut = join(cwd, 'tsc-argv.json');
+      // A fake tsc that records its argv: the quoting failure mode is tsc never starting, or
+      // starting with the flags split apart, and either shows up here.
+      await writeFile(
+        bin,
+        `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(process.argv.slice(2)));\n`,
+        'utf8',
+      );
+      await chmod(bin, 0o755);
+      const buildInfo = join(cwd, "it's a build.tsbuildinfo");
+      const res = await runTypecheck(cwd, { tsBuildInfoFile: buildInfo });
+      expect(res.ran).toBe(true);
+      const argv = JSON.parse(await readFile(argvOut, 'utf8'));
+      expect(argv).toEqual([
+        '--noEmit',
+        '--incremental',
+        '--tsBuildInfoFile',
+        buildInfo,
+        '--pretty',
+        'false',
+        '-p',
+        join(cwd, 'tsconfig.json'),
+      ]);
+    },
+  );
 });

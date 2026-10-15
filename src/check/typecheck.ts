@@ -221,13 +221,14 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
     tsconfig,
   ];
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  // Route the project-local `tsc` through the sandbox wrapper so it runs inside confinement
-  // (sandbox-exec + a profile that denies writes outside cwd). The wrapper takes a shell command,
-  // so the binary has to be part of the line and both it and every argument must be quoted: a bare
-  // flag list would be run *as* the command (`/bin/sh -c "--noEmit …"` is an invalid option, exit
-  // 2), and tsc would never start — indistinguishable from a clean check, and so a silently dead
-  // gate. When the sandbox is unavailable, fall back to the direct spawn (fail-open), which is the
-  // gate's standing design.
+  // Route the project-local `tsc` through the sandbox wrapper so it runs inside confinement — the
+  // same profile model-run bash gets (writes confined to cwd, temp and cache dirs, network denied;
+  // the temp allow is what lets `--tsBuildInfoFile` land in os.tmpdir()). The wrapper takes a shell
+  // command, so the binary has to be part of the line and both it and every argument must be
+  // quoted: a bare flag list would be run *as* the command (`/bin/sh -c "--noEmit …"` is an
+  // invalid option, exit 2), and tsc would never start — indistinguishable from a clean check, and
+  // so a silently dead gate. When the sandbox is unavailable, fall back to the direct spawn
+  // (fail-open), which is the gate's standing design.
   const plan = sandboxPlan(cwd, { network: false });
   if ('args' in plan) {
     const argv = sandboxArgv(plan, [tsc, ...args].map(shellQuote).join(' '));
@@ -239,8 +240,10 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
 // Single-quote one argument for the `/bin/sh -c` line `sandboxArgv` builds. Every path interpolated
 // into that line is user-controlled — a cwd, tsconfig, or tsbuildinfo path may contain spaces or
 // quotes — so concatenating bare would split one argument into several or let a quote re-parse the
-// rest. `'\''` is the only way to carry a single quote inside a single-quoted string.
-function shellQuote(arg: string): string {
+// rest. `'\''` is the only way to carry a single quote inside a single-quoted string. Exported for
+// tests: the quoting is the security boundary here, and a round-trip through a real /bin/sh is the
+// only proof it holds.
+export function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
