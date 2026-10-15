@@ -22,6 +22,18 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   never to follow an issue's references, so a pointer-only issue left the review without its
   requirement.
 
+### Security
+
+- The post-edit typecheck gate runs its `tsc --noEmit` through the sandbox wrapper, so the project's
+  own `node_modules/.bin/tsc` runs under the same confinement as a model-run shell command instead
+  of outside it. The binary sits in the directory a sandboxed command may write, so a sandboxed
+  command could have replaced it before the harness ran it; it no longer can. When the sandbox is
+  unavailable, or switched off with `REIKA_SANDBOX=0`, the gate spawns tsc directly as before. A
+  wrapper that refuses at spawn time, or a tsc the shell cannot execute, is detected rather than read
+  as a clean check, and turns the gate off for that turn instead of retrying unsandboxed: the refusal
+  is read from tsc's own output, so a planted binary could otherwise fake one to get the unconfined
+  run (#708).
+
 ## [0.3.0] - 2026-10-12
 
 ### Changed

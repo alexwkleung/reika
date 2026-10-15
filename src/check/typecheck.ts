@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { SANDBOX_EXEC_ERROR_PREFIX, sandboxArgv, sandboxPlan } from '../tools/_sandbox.js';
 
 // Post-edit typecheck for JS/TS projects. The harness runs this so a weak model doesn't have
 // to remember to verify its own work: after edits, we diff the project's type errors against a
@@ -39,6 +40,8 @@ export type RunOptions = {
   tsBuildInfoFile?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  // Config.sandbox: `false` is REIKA_SANDBOX=0, which spawns tsc directly as it did before #708.
+  sandbox?: boolean;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -207,7 +210,8 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
   const buildInfo = opts.tsBuildInfoFile ?? defaultBuildInfoFile(cwd);
   // `--incremental` with an explicit `--tsBuildInfoFile` is what makes the re-check cheap and is
   // accepted alongside `--noEmit` across TS versions. `--pretty false` forces the stable
-  // one-line-per-diagnostic format regardless of TTY, which DIAG_RE parses.
+  // one-line-per-diagnostic format regardless of TTY, which DIAG_RE parses. One list, used by both
+  // spawns below, so the confined and unconfined runs cannot drift apart.
   const args = [
     '--noEmit',
     '--incremental',
@@ -218,39 +222,130 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
     '-p',
     tsconfig,
   ];
-  return runTscProcess(tsc, args, cwd, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.signal);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  // Route the project-local `tsc` through the sandbox wrapper so it runs inside confinement — the
+  // same profile model-run bash gets (writes confined to cwd, temp and cache dirs, network denied;
+  // the temp allow is what lets `--tsBuildInfoFile` land in os.tmpdir()). The wrapper takes a shell
+  // command, so the binary has to be part of the line and both it and every argument must be
+  // quoted: a bare flag list would be run *as* the command (`/bin/sh -c "--noEmit …"` is an
+  // invalid option, exit 2), and tsc would never start — indistinguishable from a clean check, and
+  // so a silently dead gate. When the sandbox is unavailable, fall back to the direct spawn
+  // (fail-open), which is the gate's standing design.
+  //
+  // Once a plan exists there is no unconfined retry, even when the wrapper looks like it refused:
+  // that verdict is read off the output of the process we just ran, and a planted tsc can print the
+  // wrapper's line and exit 65 as easily as sandbox-exec can. A retry would hand it exactly the
+  // unconfined run this exists to prevent, so a refusal disables the gate for the turn instead.
+  if (opts.sandbox !== false) {
+    const plan = sandboxPlan(cwd, { network: false });
+    if ('args' in plan) {
+      const argv = sandboxArgv(plan, [tsc, ...args].map(shellQuote).join(' '));
+      if (argv) return runTscProcess(argv.cmd, argv.args, cwd, timeoutMs, opts.signal, true);
+    }
+  }
+  return runTscProcess(tsc, args, cwd, timeoutMs, opts.signal);
 }
 
-function runTscProcess(
+// Whether the sandbox wrapper itself refused to run the command: nonzero exit, the wrapper's own
+// line in the output, and nothing that parses as a diagnostic (so a tsc that really ran — even one
+// whose errors the DIAG_RE cannot parse — is never mistaken for a refusal). This is the refusal the
+// availability probe is blind to: sandbox-exec parses the profile before applying it, so a profile
+// the OS rejects, or a param the profile references without its `-D` binding, exits 65 having run
+// nothing, while the probe applies a minimal profile of its own. Undetected, the empty output
+// parses to zero diagnostics and masquerades as a green check. Any nonzero exit in this shape
+// counts rather than bash.ts's exit-65 pin: an apply failure (71) leaves the same nothing-ran
+// signature, and the prefix is required there too. Spoofable by the process inside, which is why a
+// refusal only ever resolves "didn't run" and never buys a retry: the worst a fake one can do is
+// switch the gate off for a turn.
+export function sandboxRefused(code: number | null, out: string): boolean {
+  return (
+    code !== null &&
+    code !== 0 &&
+    out.includes(SANDBOX_EXEC_ERROR_PREFIX) &&
+    parseTscOutput(out).length === 0
+  );
+}
+
+// Single-quote one argument for the `/bin/sh -c` line `sandboxArgv` builds. Every path interpolated
+// into that line is user-controlled — a cwd, tsconfig, or tsbuildinfo path may contain spaces or
+// quotes — so concatenating bare would split one argument into several or let a quote re-parse the
+// rest. `'\''` is the only way to carry a single quote inside a single-quoted string. Exported for
+// tests: the quoting is the security boundary here, and a round-trip through a real /bin/sh is the
+// only proof it holds.
+export function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+// What `/bin/sh` exits with when it could not run the command it was given: 126 found but not
+// executable (a lost exec bit), 127 not found (a shebang interpreter missing from PATH). The direct
+// spawn reports both as a spawn error; behind the wrapper they are ordinary exits with no tsc
+// output, which would otherwise parse as zero diagnostics — a clean check from a tsc that never ran.
+const SHELL_COULD_NOT_RUN = new Set([126, 127]);
+
+// The wrapper is `sandbox-exec` → `/bin/sh` → tsc, so a kill aimed at the child pid can stop short
+// of tsc (a shim that runs node without exec). Each spawn gets its own process group and every
+// kill goes to the group, as bash.ts does (#408); the exit sweep covers a reika exit mid-check,
+// since a group of its own is one the terminal's hangup no longer reaches.
+const liveGroups = new Set<number>();
+process.once('exit', () => {
+  for (const pid of liveGroups) {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+});
+
+// Exported for tests: the refusal branch is this gate's fail-open boundary — the case that used to
+// resolve as a green check — and a real sandbox-exec refusing to load a profile is the only
+// faithful way to drive it.
+export function runTscProcess(
   bin: string,
   args: string[],
   cwd: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  viaSandboxWrapper = false,
 ): Promise<CheckOutcome> {
   return new Promise(resolve => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(bin, args, { cwd });
+      child = spawn(bin, args, { cwd, detached: process.platform !== 'win32' });
     } catch (e) {
       resolve({ ran: false, reason: `spawn failed: ${(e as Error).message}` });
       return;
     }
+    const pid = child.pid;
+    if (pid != null && process.platform !== 'win32') liveGroups.add(pid);
+    const killTree = () => {
+      try {
+        if (pid == null || process.platform === 'win32') throw new Error('no group');
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    };
     let out = '';
     let settled = false;
     const finish = (r: CheckOutcome) => {
       if (settled) return;
       settled = true;
+      if (pid != null) liveGroups.delete(pid);
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       resolve(r);
     };
     const timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      killTree();
       finish({ ran: false, reason: `timed out after ${timeoutMs}ms` });
     }, timeoutMs);
     const onAbort = () => {
-      child.kill('SIGKILL');
+      killTree();
       finish({ ran: false, reason: 'aborted' });
     };
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -259,6 +354,24 @@ function runTscProcess(
     child.stdout?.on('data', d => (out += d.toString()));
     child.stderr?.on('data', d => (out += d.toString()));
     child.on('error', e => finish({ ran: false, reason: `process error: ${e.message}` }));
-    child.on('close', () => finish({ ran: true, diagnostics: parseTscOutput(out) }));
+    child.on('close', code => {
+      // Only the wrapper spawn gets refusal semantics: a nonzero exit there with the wrapper's own
+      // line and no tsc output means the command never ran — read as a clean check, that outcome is
+      // the silently-dead gate (see sandboxRefused above).
+      if (viaSandboxWrapper && sandboxRefused(code, out)) {
+        finish({ ran: false, reason: `sandbox wrapper refused to run tsc (exit ${code})` });
+        return;
+      }
+      if (
+        viaSandboxWrapper &&
+        code !== null &&
+        SHELL_COULD_NOT_RUN.has(code) &&
+        parseTscOutput(out).length === 0
+      ) {
+        finish({ ran: false, reason: `shell could not run tsc (exit ${code})` });
+        return;
+      }
+      finish({ ran: true, diagnostics: parseTscOutput(out) });
+    });
   });
 }
