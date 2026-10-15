@@ -14,7 +14,14 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
-import { NO_GITDIR, sandboxExecAvailable, sandboxPlan } from './_sandbox.js';
+import {
+  NO_GITDIR,
+  sandboxArgv,
+  sandboxExecAvailable,
+  sandboxMarkerPrefix,
+  sandboxPlan,
+  sandboxProfileFailed,
+} from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -937,6 +944,111 @@ describe('bashTool — sandbox composition', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+// #738. The retry that keeps a malformed profile from failing every command read its verdict off
+// the output of the process the sandbox was confining — so `echo 'sandbox-exec: x' >&2; exit 65`
+// bought an unconfined rerun: writes outside cwd, temp and the caches, and the network, in exactly
+// the `bypass` configuration where nobody reads the warn that announces it. The verdict is the
+// wrapper's own marker on a private fd now, and the cases below pin both directions of it against
+// the real `sandbox-exec`.
+describe('bash — a command that fakes a sandbox refusal (#738)', () => {
+  it('decides off the marker, never off the output the command controls', () => {
+    // The refusal this exists for: an unbound param, exit 65, the wrapper's line, and no marker —
+    // the shell that would have written one never ran.
+    expect(
+      sandboxProfileFailed({
+        marker: false,
+        code: 65,
+        output: 'sandbox-exec: unbound variable: WORKDIR at <input string>, line 1, column 17',
+      }),
+    ).toBe(true);
+    // The spoof, byte-identical from outside the sandbox: same line, same status, and the command
+    // demonstrably ran.
+    expect(sandboxProfileFailed({ marker: true, code: 65, output: 'sandbox-exec: x' })).toBe(false);
+    // A marker alone settles it — no output or status describes the profile as unloaded.
+    expect(sandboxProfileFailed({ marker: true, code: 0, output: '' })).toBe(false);
+    // And the output half still gates, which is what the marker falling out of the plumbing would
+    // degrade to: the behavior before #738, rather than a sandbox that never retries at all.
+    expect(sandboxProfileFailed({ marker: false, code: 65, output: 'boom' })).toBe(false);
+    expect(sandboxProfileFailed({ marker: false, code: null, output: 'sandbox-exec: x' })).toBe(
+      false,
+    );
+  });
+
+  // The command text is prefixed, never rewritten: everything else in this file that reads it —
+  // display, the footer, the danger scan — still sees what the model asked to run.
+  it('prefixes the wrapper line without touching the command it was handed', () => {
+    const plan = { args: ['-p', '(version 1)'] };
+    expect(sandboxArgv(plan, 'echo hi', { marker: true })?.args.at(-1)).toBe(
+      'printf 1 >&3; exec 3>&-; echo hi',
+    );
+    // Off by default: the typecheck gate's spawn has no fd 3, and the prefix writes to it.
+    expect(sandboxArgv(plan, 'echo hi')?.args.at(-1)).toBe('echo hi');
+    expect(sandboxMarkerPrefix()).toContain('exec 3>&-');
+  });
+
+  it.skipIf(!sandboxWorks)(
+    'runs a command that fakes a refusal exactly once, and still confined',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-spoof-'));
+      try {
+        const outside = join(homedir(), 'reika-bash-spoof-should-not-exist.txt');
+        const r = await bashTool.run(
+          {
+            command: `echo 'sandbox-exec: x' >&2; echo run >> runs.txt; echo x > ${outside}; exit 65`,
+          },
+          { cwd: dir },
+        );
+        // One line is one run: the retry this used to buy appended a second, and did it outside the
+        // sandbox. The status and the line the command printed are both unchanged from before.
+        expect(await readFile(join(dir, 'runs.txt'), 'utf8')).toBe('run\n');
+        expect(r.exitCode).toBe(65);
+        // A write outside cwd is still refused — the thing the retry handed over.
+        expect(r.payload).toContain('Operation not permitted');
+        await expect(readFile(outside, 'utf8')).rejects.toThrow();
+        expect(r.notice?.content ?? '').not.toContain('re-ran unsandboxed');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The other direction, through the same code path: a profile `sandbox-exec` really cannot load
+  // writes no marker, so the retry and its warn survive — the fail-open behavior that exists because
+  // a generator bug would otherwise fail every command until a release. `sandboxPlan` cannot build
+  // one, which is what the argv seam on `execStream` is for.
+  it.skipIf(!sandboxWorks)(
+    'still retries, with the warn, when the profile really fails to load',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-badprofile-'));
+      try {
+        const command = 'echo run >> runs.txt';
+        const r = await execStream(
+          command,
+          { cwd: dir },
+          { network: false },
+          {
+            cmd: '/usr/bin/sandbox-exec',
+            // The real profile with one of its params left unbound: exit 65 before /bin/sh starts.
+            args: [
+              '-p',
+              '(version 1)\n(allow default)\n(allow file-write* (subpath (param "WORKDIR")))',
+              '/bin/sh',
+              '-c',
+              sandboxMarkerPrefix() + command,
+            ],
+          },
+        );
+        expect(r.exitCode).toBe(0);
+        expect(r.notice?.content).toContain('re-ran unsandboxed');
+        // Exactly one run, and it is the retry's: the refused one never reached the shell.
+        expect(await readFile(join(dir, 'runs.txt'), 'utf8')).toBe('run\n');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in

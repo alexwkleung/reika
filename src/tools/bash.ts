@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
@@ -6,8 +7,7 @@ import { scanHeredocs } from './_heredoc.js';
 import { remoteUrlRisk } from './_exfil.js';
 import { declineSummary } from '../approval.js';
 import {
-  SANDBOX_EXEC_ERROR_PREFIX,
-  SANDBOX_PROFILE_ERROR_CODE,
+  SANDBOX_MARKER_FD,
   broadWorkdirNotice,
   isBroadWorkdir,
   networkAllowedFor,
@@ -15,6 +15,7 @@ import {
   sandboxFooter,
   sandboxNotice,
   sandboxPlan,
+  sandboxProfileFailed,
   refusedWriteLine,
 } from './_sandbox.js';
 import { recordCapped } from './_spillstats.js';
@@ -302,6 +303,11 @@ export function execStream(
   command: string,
   ctx: ExecContext,
   sandbox?: SandboxRequest,
+  /** Test seam, in the shape of `typecheck.ts`'s exported `runTscProcess`: `sandboxPlan` cannot
+   *  produce a profile that fails to load, and a real `sandbox-exec` refusing one is the only
+   *  faithful way to drive the retry below — the fail-open boundary that, broken, fails every command
+   *  until a release. */
+  argvOverride?: { cmd: string; args: string[] },
 ): Promise<ToolResult> {
   const timeoutMs = ctx.bashTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   const idleMs = ctx.bashIdleMs ?? DEFAULT_IDLE_MS;
@@ -311,8 +317,11 @@ export function execStream(
   // sandboxed command could not reach the host's model server — the issue's "Linux is a real second
   // project"). There the reason is expected and gets no notice; on macOS it is a machine fault the
   // user should hear about.
-  const plan = sandbox ? sandboxPlan(ctx.cwd, sandbox) : undefined;
-  const argv = plan ? sandboxArgv(plan, command) : undefined;
+  const plan = argvOverride ? undefined : sandbox ? sandboxPlan(ctx.cwd, sandbox) : undefined;
+  // `marker: true` is the fourth stdio entry on the spawn below (`SANDBOX_MARKER_FD`), where the
+  // wrapper's shell says the profile loaded. The retry decision reads that pipe, never the output of
+  // the process the sandbox is containing (#738).
+  const argv = argvOverride ?? (plan ? sandboxArgv(plan, command, { marker: true }) : undefined);
   // A UI receipt, never in the model's context (the agent prompt carries the model's copy). Nothing
   // otherwise announces the sandbox, so without this the user's only evidence would be a command
   // that mysteriously failed. Once per cwd, both for the receipt and for the machine-fault warning.
@@ -339,12 +348,15 @@ export function execStream(
     //
     // Sandboxed, the argv is `sandbox-exec … /bin/sh -c command` — a different program with the same
     // pipes one level down, so exit codes, SIGTERM to the process group, streaming and both timeout
-    // bounds behave identically (each verified, #163).
+    // bounds behave identically (each verified, #163). That spawn carries one more: a fourth stdio
+    // entry, `SANDBOX_MARKER_FD`, which is the wrapper's own report that it got as far as running the
+    // command (see `sandboxMarkerPrefix`). It widens the spawn's inferred type to the nullable one,
+    // which is the only reason the two stream handlers below are optional — both spawns pass 'pipe'.
     const proc = argv
       ? spawn(argv.cmd, argv.args, {
           cwd: ctx.cwd,
           detached: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
         })
       : spawn('/bin/sh', ['-c', command], {
           cwd: ctx.cwd,
@@ -352,6 +364,14 @@ export function execStream(
           stdio: ['ignore', 'pipe', 'pipe'],
         });
     if (proc.pid != null) liveGroups.add(proc.pid);
+    // Whatever the wrapper's shell wrote on fd 3. One byte means the profile applied and the command
+    // started; empty means `sandbox-exec` exited before the shell ran. Collected here and read on
+    // 'close', which fires only once every stdio stream has ended, so the byte cannot arrive late.
+    let marker = '';
+    if (argv) {
+      const markerPipe = proc.stdio[SANDBOX_MARKER_FD] as Readable | null;
+      markerPipe?.on('data', (chunk: Buffer) => (marker += chunk.toString()));
+    }
     const buffer: string[] = [];
     let totalBytes = 0;
     let stopped: StopReason | null = null;
@@ -385,8 +405,8 @@ export function execStream(
       totalBytes += slice.length;
     };
 
-    proc.stdout.on('data', append);
-    proc.stderr.on('data', append);
+    proc.stdout?.on('data', append);
+    proc.stderr?.on('data', append);
 
     // Signals go to the group, not to `sh`: `sh -c 'cd x && npm run dev'` forks, and killing only
     // the shell left the server running with our stdout pipe open — 'close' never fired, and the
@@ -515,16 +535,17 @@ export function execStream(
           });
         }
       };
-      // A bad profile exits 65 without running anything — the sandbox fails CLOSED, which is the
+      // A bad profile exits 65 *without running anything* — the sandbox fails CLOSED, which is the
       // opposite of what a fail-open feature wants: one bug in the generator would otherwise turn
       // every command into an uninterpretable failure. Retried unsandboxed, exactly once — and said,
       // as a warn: a command that ran unconfined after the sandbox refused to load is the one event
       // here the user must see, and the one that points at a generator bug.
-      if (
-        argv &&
-        code === SANDBOX_PROFILE_ERROR_CODE &&
-        rawOutput.includes(SANDBOX_EXEC_ERROR_PREFIX)
-      ) {
+      //
+      // What earns the retry is the marker's ABSENCE, never the shape of the command's own output
+      // (#738). Read off the output, this branch is a request: `echo 'sandbox-exec: x' >&2; exit 65`
+      // gets the unconfined rerun, and under REIKA_AUTO_APPROVE=bypass there is nobody for the warn
+      // below to reach.
+      if (argv && sandboxProfileFailed({ marker: marker !== '', code, output: rawOutput })) {
         execStream(command, ctx).then(r =>
           resolve({
             ...r,

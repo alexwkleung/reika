@@ -49,6 +49,47 @@ import {
 export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 
+// …but the output of the process the sandbox is confining is not evidence about the sandbox:
+// `echo 'sandbox-exec: x' >&2; exit 65` is indistinguishable from a profile that failed to load,
+// and the retry that buys is an unconfined run — writes outside cwd, temp and the caches, and the
+// network — obtained by printing a string (#738). It is worst under `bypass`, where the warn the
+// retry raises reaches nobody. So the verdict is the ABSENCE of a marker instead: the wrapper's
+// shell writes one byte on fd 3 before the command starts, and a profile that fails to load means
+// `sandbox-exec` exits before the shell runs at all, so nothing writes it. A marker present is then
+// a fact about `sandbox-exec`, whatever the command prints or exits with.
+//
+// Both properties that make it unforgeable are measured against the real `sandbox-exec` in
+// `bash.test.ts`: the byte is written before the command runs, so the command can only ADD to the
+// pipe; and the fd is closed before the command runs, so the command cannot DRAIN it — the pipe
+// Node opens for fd 3 is a socketpair, readable as well as writable, and a command that read the
+// byte would empty it and earn the very retry it was faking. `exec` here has no command word, so it
+// is a redirection the shell performs rather than a replacement of it: everything after it runs.
+export const SANDBOX_MARKER_FD = 3;
+/** What `sandboxArgv` puts in front of the command when the caller has opened `SANDBOX_MARKER_FD`:
+ *  one byte on the fd, then the fd closed. `printf` because it is a builtin of the `/bin/sh` this
+ *  runs under, so the line needs no binary on PATH to write its byte. */
+export function sandboxMarkerPrefix(): string {
+  return `printf 1 >&${SANDBOX_MARKER_FD}; exec ${SANDBOX_MARKER_FD}>&-; `;
+}
+
+/** Whether a sandboxed run's exit is the profile failing to load — the one thing that still buys a
+ *  retry unsandboxed. `marker` is what the wrapper's shell wrote on `SANDBOX_MARKER_FD`; present
+ *  means the profile applied and the command started, so no output or exit status can make this
+ *  true. The output test stays alongside it as the fallback rather than the missing case: if the
+ *  marker ever stopped arriving (a macOS that closed fd 3 through the wrapper), the verdict would
+ *  be today's one instead of a sandbox that never retries at all. */
+export function sandboxProfileFailed(opts: {
+  marker: boolean;
+  code: number | null;
+  output: string;
+}): boolean {
+  return (
+    !opts.marker &&
+    opts.code === SANDBOX_PROFILE_ERROR_CODE &&
+    opts.output.includes(SANDBOX_EXEC_ERROR_PREFIX)
+  );
+}
+
 /** Seatbelt profile for one cwd. Pure string in, string out — the unit under test. */
 export function sandboxProfile(opts: { network: boolean }): string {
   const lines = [
@@ -602,13 +643,22 @@ function gitDirToBind(cwd: string, resolvedCwd: string): string | null {
 }
 
 /** The `spawn` argv for a sandboxed command. `-D` params, never interpolated — a cwd containing `"`
- *  or `)` would otherwise escape the `(subpath "…")` form. */
+ *  or `)` would otherwise escape the `(subpath "…")` form.
+ *
+ *  `marker: true` puts `sandboxMarkerPrefix()` in front of the command, which requires the caller to
+ *  open `SANDBOX_MARKER_FD` as a pipe on the spawn — `bash.ts` does, and the typecheck gate
+ *  deliberately does not, having no retry to gate. Off by default because the prefix writes to a fd
+ *  that must then exist: without the pipe `/bin/sh` reports `3: Bad file descriptor` for every
+ *  command. The caller's own copy of the command is untouched, so display, the footer and the
+ *  classifiers all still read what the model asked to run. */
 export function sandboxArgv(
   plan: SandboxPlan,
   command: string,
+  opts: { marker?: boolean } = {},
 ): { cmd: string; args: string[] } | undefined {
   if (!('args' in plan)) return undefined;
-  return { cmd: '/usr/bin/sandbox-exec', args: [...plan.args, '/bin/sh', '-c', command] };
+  const line = opts.marker ? sandboxMarkerPrefix() + command : command;
+  return { cmd: '/usr/bin/sandbox-exec', args: [...plan.args, '/bin/sh', '-c', line] };
 }
 
 /** Whether this cwd is broad enough that the filesystem guarantee is visibly weaker. */
