@@ -5,6 +5,18 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Changed
+
+- `reika -p` takes `--profile <name>`, so a headless run can use a profile the TUI would resume
+  without exporting `REIKA_MODEL` first. The named profile wins over a `REIKA_MODEL` given at launch
+  and over the model a mode lists in `REIKA_MODE_MODELS`, because it is the user naming it outright;
+  names match case-insensitively, and a name no profile defines prints a notice listing the defined
+  ones and runs on the profile the flag would not have changed (#710). `--profile` without `-p` is
+  an error, since the TUI does not read it.
+- A headless turn that fails names the profile and the base URL it was using, instead of only the
+  throw's own message: `reika: turn failed (profile "<name>" at <baseURL>): <error>`, where a route
+  that could not be reached used to print `reika: fetch failed` and nothing more (#710).
+
 ### Security
 
 - The post-edit typecheck gate runs its `tsc --noEmit` through the sandbox wrapper, so the project's
