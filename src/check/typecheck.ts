@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { sandboxPlan, sandboxArgv } from '../tools/_sandbox.js';
+import { SANDBOX_EXEC_ERROR_PREFIX, sandboxArgv, sandboxPlan } from '../tools/_sandbox.js';
 
 // Post-edit typecheck for JS/TS projects. The harness runs this so a weak model doesn't have
 // to remember to verify its own work: after edits, we diff the project's type errors against a
@@ -33,7 +33,9 @@ export type CheckOutcome =
   // Surfaced only to REIKA_DEBUG, never to the model: "didn't run" and "ran clean" are the same
   // outcome for the agent (proceed), but the reason keeps them distinguishable in the logs so a
   // silently-dead checker doesn't masquerade as a green check. See the debug-output note.
-  | { ran: false; reason: string };
+  // `sandboxRefused` marks a wrapper-level refusal; runTypecheck's unsandboxed retry consumes it,
+  // so it never escapes this module.
+  | { ran: false; reason: string; sandboxRefused?: true };
 
 export type RunOptions = {
   tsconfigPath?: string;
@@ -232,9 +234,34 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
   const plan = sandboxPlan(cwd, { network: false });
   if ('args' in plan) {
     const argv = sandboxArgv(plan, [tsc, ...args].map(shellQuote).join(' '));
-    if (argv) return runTscProcess(argv.cmd, argv.args, cwd, timeoutMs, opts.signal);
+    if (argv) {
+      const confined = await runTscProcess(argv.cmd, argv.args, cwd, timeoutMs, opts.signal, true);
+      // A refusal means the wrapper exited before tsc started — the one unavailability the probe
+      // cannot see. Fall through to the direct spawn rather than resolve "didn't run": fail-open is
+      // this gate's design, but a check that still runs beats one a wrapper quirk disabled. Exactly
+      // once — the fall-through below is the original spawn, not another plan.
+      if (confined.ran || !confined.sandboxRefused) return confined;
+    }
   }
   return runTscProcess(tsc, args, cwd, timeoutMs, opts.signal);
+}
+
+// Whether the sandbox wrapper itself refused to run the command: nonzero exit, the wrapper's own
+// line in the output, and nothing that parses as a diagnostic (so a tsc that really ran — even one
+// whose errors the DIAG_RE cannot parse — is never mistaken for a refusal). This is the refusal the
+// availability probe is blind to: sandbox-exec parses the profile before applying it, so a profile
+// the OS rejects, or a param the profile references without its `-D` binding, exits 65 having run
+// nothing, while the probe applies a minimal profile of its own. Undetected, the empty output
+// parses to zero diagnostics and masquerades as a green check. Any nonzero exit in this shape
+// counts rather than bash.ts's exit-65 pin: an apply failure (71) leaves the same nothing-ran
+// signature, and the prefix is required there too.
+export function sandboxRefused(code: number | null, out: string): boolean {
+  return (
+    code !== null &&
+    code !== 0 &&
+    out.includes(SANDBOX_EXEC_ERROR_PREFIX) &&
+    parseTscOutput(out).length === 0
+  );
 }
 
 // Single-quote one argument for the `/bin/sh -c` line `sandboxArgv` builds. Every path interpolated
@@ -247,12 +274,16 @@ export function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
-function runTscProcess(
+// Exported for tests: the refusal branch is this gate's fail-open boundary — the case that used to
+// resolve as a green check — and a real sandbox-exec refusing to load a profile is the only
+// faithful way to drive it.
+export function runTscProcess(
   bin: string,
   args: string[],
   cwd: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  viaSandboxWrapper = false,
 ): Promise<CheckOutcome> {
   return new Promise(resolve => {
     let child: ReturnType<typeof spawn>;
@@ -285,6 +316,19 @@ function runTscProcess(
     child.stdout?.on('data', d => (out += d.toString()));
     child.stderr?.on('data', d => (out += d.toString()));
     child.on('error', e => finish({ ran: false, reason: `process error: ${e.message}` }));
-    child.on('close', () => finish({ ran: true, diagnostics: parseTscOutput(out) }));
+    child.on('close', code => {
+      // Only the wrapper spawn gets refusal semantics: a nonzero exit there with the wrapper's own
+      // line and no tsc output means the command never ran — read as a clean check, that outcome is
+      // the silently-dead gate (see sandboxRefused above).
+      if (viaSandboxWrapper && sandboxRefused(code, out)) {
+        finish({
+          ran: false,
+          reason: `sandbox wrapper refused to run tsc (exit ${code})`,
+          sandboxRefused: true,
+        });
+        return;
+      }
+      finish({ ran: true, diagnostics: parseTscOutput(out) });
+    });
   });
 }
