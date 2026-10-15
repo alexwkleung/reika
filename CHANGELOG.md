@@ -16,6 +16,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - A headless turn that fails names the profile and the base URL it was using, instead of only the
   throw's own message: `reika: turn failed (profile "<name>" at <baseURL>): <error>`, where a route
   that could not be reached used to print `reika: fetch failed` and nothing more (#710).
+- `/review` may read one more issue when the linked issue does not state the requirement itself —
+  its body only points elsewhere ("see #179", "follow-up to #185") or is too short to say what is
+  wanted. It fetches that one issue's title and body once and goes no further; before, it was told
+  never to follow an issue's references, so a pointer-only issue left the review without its
+  requirement.
 
 ## [0.3.0] - 2026-10-12
 

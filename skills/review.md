@@ -23,8 +23,14 @@ straight on to the diff.
 
 If output comes back it is the linked issue, in the same JSON shape as before:
 `body` may be empty, and then the content is in `comments`. The issue may itself
-reference other numbers (`#179`, `#185`). Do not go read those. One level is
-enough.
+reference other numbers (`#179`, `#185`). Most are background — leave them. Read
+one only when this issue does not state the requirement itself: its body sends
+you elsewhere for it ("see #179", "as described in #185", "follow-up to #179"),
+or is too short to say what is wanted. Then run, once, for that one number:
+
+    gh issue view <that number> --json title,body
+
+and go on. Do not follow any number that second issue mentions.
 
 Then, before any other call, write one or two sentences in your reply saying what
 the issue asks for — not what the PR does, the requirement. Later tool output can
