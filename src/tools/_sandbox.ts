@@ -44,54 +44,10 @@ import {
 // letting a model read this as a bug in its own pipeline.
 
 // A malformed profile makes `sandbox-exec` exit 65 *without running the command* — the sandbox
-// fails closed, which is the opposite of what a fail-open feature wants. Detected so the caller
-// can retry unsandboxed instead of turning every command into an uninterpretable failure.
+// fails closed, which is the opposite of what a fail-open feature wants. `sandboxPlan` probes for it
+// before any command runs (`profileLoadFailure`); the typecheck gate also reads it off its output.
 export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
-
-// …but the output of the process the sandbox is confining is not evidence about the sandbox:
-// `echo 'sandbox-exec: x' >&2; exit 65` is indistinguishable from a profile that failed to load,
-// and the retry that buys is an unconfined run — writes outside cwd, temp and the caches, and the
-// network — obtained by printing a string (#738). It is worst under `bypass`, where the warn the
-// retry raises reaches nobody. So the verdict is the ABSENCE of a marker instead: the wrapper's
-// shell writes one byte on fd 3 before the command starts, and a profile that fails to load means
-// `sandbox-exec` exits before the shell runs at all, so nothing writes it. A marker present is then
-// a fact about `sandbox-exec`, whatever the command prints or exits with.
-//
-// Both orderings make it unforgeable. The byte is written before the command runs, so nothing the
-// command prints can precede it. The fd is closed before the command runs, so the command can
-// neither DRAIN the byte nor write to the pipe at all: the pipe Node opens for fd 3 is a socketpair,
-// readable as well as writable, and a command that still held the fd could read the byte out and
-// earn the very retry it was faking — but `exec 3>&-` shuts both directions (`cat <&3` and
-// `echo x >&3` are each `Bad file descriptor` after it), and `exec` with no command word is a
-// redirection the shell performs rather than a replacement of it: everything after it runs.
-// `bash.test.ts` pins the two outcomes against the real `sandbox-exec`: a refusal the command fakes
-// earns no retry, and a profile that really fails to load still gets one.
-export const SANDBOX_MARKER_FD = 3;
-/** What `sandboxArgv` puts in front of the command when the caller has opened `SANDBOX_MARKER_FD`:
- *  one byte on the fd, then the fd closed. `printf` because it is a builtin of the `/bin/sh` this
- *  runs under, so the line needs no binary on PATH to write its byte. */
-export function sandboxMarkerPrefix(): string {
-  return `printf 1 >&${SANDBOX_MARKER_FD}; exec ${SANDBOX_MARKER_FD}>&-; `;
-}
-
-/** Whether a sandboxed run's exit is the profile failing to load — the one thing that still buys a
- *  retry unsandboxed. `marker` is what the wrapper's shell wrote on `SANDBOX_MARKER_FD`; present
- *  means the profile applied and the command started, so no output or exit status can make this
- *  true. The output test stays alongside it as the fallback rather than the missing case: if the
- *  marker ever stopped arriving (a macOS that closed fd 3 through the wrapper), the verdict would
- *  be today's one instead of a sandbox that never retries at all. */
-export function sandboxProfileFailed(opts: {
-  marker: boolean;
-  code: number | null;
-  output: string;
-}): boolean {
-  return (
-    !opts.marker &&
-    opts.code === SANDBOX_PROFILE_ERROR_CODE &&
-    opts.output.includes(SANDBOX_EXEC_ERROR_PREFIX)
-  );
-}
 
 /** Seatbelt profile for one cwd. Pure string in, string out — the unit under test. */
 export function sandboxProfile(opts: { network: boolean }): string {
@@ -549,6 +505,7 @@ function hasSandboxExec(): boolean {
 export function resetSandboxCache(): void {
   execAvailable = undefined;
   gitDirs.clear();
+  profileProbes.clear();
 }
 
 /**
@@ -593,7 +550,45 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   const params = sandboxParams(cwd, resolved);
   const args = ['-p', sandboxProfile(opts)];
   for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
-  return { args };
+  const failure = profileLoadFailure(args);
+  return failure ? { reason: failure } : { args };
+}
+
+const profileProbes = new Map<string, string | null>();
+
+/**
+ * Why `sandbox-exec` will not load these exact args, or null when it does. A generator bug (a bad
+ * rule, an unbound param) makes it exit 65 having run nothing, so every command would fail. Asking
+ * here, against `:`, settles that before a model's command exists (#738): the old check read the
+ * refusal off the confined command's own output, and `echo 'sandbox-exec: x' >&2; exit 65` bought
+ * itself an unconfined rerun. The probe runs the same bytes the command will get, and loading
+ * depends on nothing else, so a pass here means the real run loads too, and its exit 65 is its own.
+ *
+ * Only a refusal counts. A timeout or spawn error reads as loaded: assuming it failed would let a
+ * swapping machine switch the sandbox off, where assuming it loaded costs at worst a command that
+ * fails closed, visibly. Cached per argv: at most one per cwd and network setting.
+ */
+export function profileLoadFailure(args: string[]): string | null {
+  const key = args.join('\0');
+  const cached = profileProbes.get(key);
+  if (cached !== undefined) return cached;
+  let failure: string | null = null;
+  try {
+    const r = spawnSync('/usr/bin/sandbox-exec', [...args, '/bin/sh', '-c', ':'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    // `:` cannot fail, so any exit but 0 is sandbox-exec's own (65 a parse or bind error, 71 apply).
+    if (r.error === undefined && r.status !== null && r.status !== 0) {
+      const detail = r.stderr.trim().split('\n')[0] ?? '';
+      failure = `the sandbox profile failed to load (sandbox-exec exit ${r.status}${detail ? `: ${detail}` : ''})`;
+    }
+  } catch {
+    // Spawn threw: same as a timeout, read as loaded.
+  }
+  profileProbes.set(key, failure);
+  return failure;
 }
 
 /** The `-D` bindings for the profile's params. Exported so tests can prove every param is bound
@@ -646,22 +641,13 @@ function gitDirToBind(cwd: string, resolvedCwd: string): string | null {
 }
 
 /** The `spawn` argv for a sandboxed command. `-D` params, never interpolated — a cwd containing `"`
- *  or `)` would otherwise escape the `(subpath "…")` form.
- *
- *  `marker: true` puts `sandboxMarkerPrefix()` in front of the command, which requires the caller to
- *  open `SANDBOX_MARKER_FD` as a pipe on the spawn — `bash.ts` does, and the typecheck gate
- *  deliberately does not, having no retry to gate. Off by default because the prefix writes to a fd
- *  that must then exist: without the pipe `/bin/sh` reports `3: Bad file descriptor` for every
- *  command. The caller's own copy of the command is untouched, so display, the footer and the
- *  classifiers all still read what the model asked to run. */
+ *  or `)` would otherwise escape the `(subpath "…")` form. */
 export function sandboxArgv(
   plan: SandboxPlan,
   command: string,
-  opts: { marker?: boolean } = {},
 ): { cmd: string; args: string[] } | undefined {
   if (!('args' in plan)) return undefined;
-  const line = opts.marker ? sandboxMarkerPrefix() + command : command;
-  return { cmd: '/usr/bin/sandbox-exec', args: [...plan.args, '/bin/sh', '-c', line] };
+  return { cmd: '/usr/bin/sandbox-exec', args: [...plan.args, '/bin/sh', '-c', command] };
 }
 
 /** Whether this cwd is broad enough that the filesystem guarantee is visibly weaker. */

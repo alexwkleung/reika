@@ -248,11 +248,10 @@ export async function runTypecheck(cwd: string, opts: RunOptions = {}): Promise<
 
 // Whether the sandbox wrapper itself refused to run the command: nonzero exit, the wrapper's own
 // line in the output, and nothing that parses as a diagnostic (so a tsc that really ran — even one
-// whose errors the DIAG_RE cannot parse — is never mistaken for a refusal). This is the refusal the
-// availability probe is blind to: sandbox-exec parses the profile before applying it, so a profile
-// the OS rejects, or a param the profile references without its `-D` binding, exits 65 having run
-// nothing, while the probe applies a minimal profile of its own. Undetected, the empty output
-// parses to zero diagnostics and masquerades as a green check. Any nonzero exit in this shape
+// whose errors the DIAG_RE cannot parse — is never mistaken for a refusal). A profile the OS
+// rejects, or a param without its `-D` binding, exits 65 having run nothing; `sandboxPlan` probes
+// the real argv for that before tsc runs (#738), so this is the backstop. Undetected, the empty
+// output parses to zero diagnostics and masquerades as a green check. Any nonzero exit in this shape
 // counts rather than bash.ts's exit-65 pin: an apply failure (71) leaves the same nothing-ran
 // signature, and the prefix is required there too. Spoofable by the process inside, which is why a
 // refusal only ever resolves "didn't run" and never buys a retry: the worst a fake one can do is
