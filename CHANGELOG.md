@@ -7,6 +7,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- The process is named `reika` rather than `node`, so a session is identifiable in `ps`, `top` and
+  Activity Monitor, and `pgrep reika`/`pkill reika` find it.
 - `reika -p` takes `--profile <name>`, so a headless run can use a profile the TUI would resume
   without exporting `REIKA_MODEL` first. The named profile wins over a `REIKA_MODEL` given at launch
   and over the model a mode lists in `REIKA_MODE_MODELS`, because it is the user naming it outright;
