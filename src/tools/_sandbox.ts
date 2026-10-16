@@ -58,12 +58,15 @@ export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 // `sandbox-exec` exits before the shell runs at all, so nothing writes it. A marker present is then
 // a fact about `sandbox-exec`, whatever the command prints or exits with.
 //
-// Both properties that make it unforgeable are measured against the real `sandbox-exec` in
-// `bash.test.ts`: the byte is written before the command runs, so the command can only ADD to the
-// pipe; and the fd is closed before the command runs, so the command cannot DRAIN it — the pipe
-// Node opens for fd 3 is a socketpair, readable as well as writable, and a command that read the
-// byte would empty it and earn the very retry it was faking. `exec` here has no command word, so it
-// is a redirection the shell performs rather than a replacement of it: everything after it runs.
+// Both orderings make it unforgeable. The byte is written before the command runs, so nothing the
+// command prints can precede it. The fd is closed before the command runs, so the command can
+// neither DRAIN the byte nor write to the pipe at all: the pipe Node opens for fd 3 is a socketpair,
+// readable as well as writable, and a command that still held the fd could read the byte out and
+// earn the very retry it was faking — but `exec 3>&-` shuts both directions (`cat <&3` and
+// `echo x >&3` are each `Bad file descriptor` after it), and `exec` with no command word is a
+// redirection the shell performs rather than a replacement of it: everything after it runs.
+// `bash.test.ts` pins the two outcomes against the real `sandbox-exec`: a refusal the command fakes
+// earns no retry, and a profile that really fails to load still gets one.
 export const SANDBOX_MARKER_FD = 3;
 /** What `sandboxArgv` puts in front of the command when the caller has opened `SANDBOX_MARKER_FD`:
  *  one byte on the fd, then the fd closed. `printf` because it is a builtin of the `/bin/sh` this
