@@ -15,7 +15,9 @@ with tsx.
 # From ANY cwd (point cwd at a small temp project so bootstrap is instant).
 # --tsconfig is REQUIRED when cwd is outside the repo: tsx resolves tsconfig from cwd,
 # and without it JSX compiles classic → "ReferenceError: React is not defined".
-node /path/to/reika/node_modules/.bin/tsx \
+# Run the shim itself, not through `node`: pnpm's .bin/tsx is a shell script, and
+# `node .bin/tsx` dies with "SyntaxError: Invalid or unexpected token".
+/path/to/reika/node_modules/.bin/tsx \
   --tsconfig /path/to/reika/tsconfig.json /path/to/reika/src/cli.tsx
 ```
 
@@ -62,6 +64,9 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
   either way pty backpressure blocks the app and the next send coalesces into a paste
   chunk whose `\r` becomes an inserted newline instead of a submit.
 - Ctrl+C with a non-empty input clears the input; twice while empty arms+confirms exit.
+- Shell snippets mid-drive (a `ps` snapshot, a file check) go in a script run with
+  `system sh <file>`: Tcl evaluates `[...]` inline, so a `[0-9]` in a quoted `system`
+  string runs as a command, errors, and the drive exits 1 with nothing written.
 - Pane evidence: `log_file`, then strip ANSI with
   `perl -pe 's/\e\[[0-9;?]*[a-zA-Z]//g; s/\r/\n/g'`.
 - Match phrases must be unique to the target output — the status bar ("shift+tab") and
