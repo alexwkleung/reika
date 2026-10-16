@@ -3,6 +3,10 @@ import { sweepStaleSpills } from './tools/_spill.js';
 import { USAGE, parseHeadlessArgs } from './headlessargs.js';
 import { VERSION } from './version.js';
 
+// Lowercase like the command: ps/top/Activity Monitor otherwise list every session as `node`, and
+// pgrep/pkill match case-sensitively.
+process.title = 'reika';
+
 // Spill directories are removed on a normal exit, but SIGHUP (closing the terminal window),
 // SIGTERM, SIGKILL and hard crashes never reach that handler (#224). The sweep is the cleanup
 // path for those, and it belongs here rather than in a React effect: it is a property of the
