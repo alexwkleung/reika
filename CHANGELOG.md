@@ -35,6 +35,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   as a clean check, and turns the gate off for that turn instead of retrying unsandboxed: the refusal
   is read from tsc's own output, so a planted binary could otherwise fake one to get the unconfined
   run (#708).
+- A shell command can no longer fake a sandbox failure to get itself re-run unsandboxed. A sandbox
+  profile that fails to load was detected from the command's own output and retried with no
+  confinement, so `echo 'sandbox-exec: x' >&2; exit 65`, or any script shaped like it, got a second
+  run that could write outside the project and reach the network. The profile is now checked once
+  per project before any command runs, and a command is never re-run; a profile that really fails to
+  load still runs commands unsandboxed, with the same warning (#738).
 
 ## [0.3.0] - 2026-10-12
 

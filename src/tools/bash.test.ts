@@ -14,7 +14,13 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
-import { NO_GITDIR, sandboxExecAvailable, sandboxPlan } from './_sandbox.js';
+import {
+  NO_GITDIR,
+  profileLoadFailure,
+  sandboxExecAvailable,
+  sandboxPlan,
+  sandboxProfile,
+} from './_sandbox.js';
 import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
@@ -937,6 +943,50 @@ describe('bashTool — sandbox composition', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+// #738. A profile that fails to load used to be detected after the fact, from the confined
+// command's own output and exit, and retried unsandboxed — so `echo 'sandbox-exec: x' >&2; exit 65`
+// bought an unconfined rerun, in exactly the `bypass` setup where nobody reads the warn. The probe
+// now settles it before any command runs, and there is no retry left to fake.
+describe('bash — a profile that fails to load is caught before the command (#738)', () => {
+  it.skipIf(!sandboxWorks)(
+    'reports a profile sandbox-exec refuses, and passes one it loads',
+    () => {
+      // The real profile with its params left unbound: sandbox-exec exits 65 having run nothing.
+      const refused = profileLoadFailure(['-p', sandboxProfile({ network: false })]);
+      expect(refused).toContain('the sandbox profile failed to load (sandbox-exec exit 65');
+      const dir = realpathSync(tmpdir());
+      const plan = sandboxPlan(dir, { network: false });
+      expect('args' in plan && profileLoadFailure(plan.args)).toBe(null);
+    },
+  );
+
+  it.skipIf(!sandboxWorks)(
+    'runs a command that fakes a refusal exactly once, and still confined',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'bash-spoof-'));
+      const outside = join(homedir(), 'reika-bash-spoof-should-not-exist.txt');
+      try {
+        const r = await bashTool.run(
+          {
+            command: `echo 'sandbox-exec: x' >&2; echo run >> runs.txt; echo x > ${outside}; exit 65`,
+          },
+          { cwd: dir },
+        );
+        // One line is one run: the retry this used to buy appended a second, outside the sandbox.
+        expect(await readFile(join(dir, 'runs.txt'), 'utf8')).toBe('run\n');
+        expect(r.exitCode).toBe(65);
+        expect(r.payload).toContain('Operation not permitted');
+        await expect(readFile(outside, 'utf8')).rejects.toThrow();
+        expect(r.notice?.content ?? '').not.toContain('Not sandboxed');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+        // A run on the old logic did land it; left behind, it would fail every later run.
+        await rm(outside, { force: true });
+      }
+    },
+  );
 });
 
 // A shell edit gets the visual receipt the edit tool gives (#278). The detector is tested in

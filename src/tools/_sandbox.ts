@@ -44,8 +44,8 @@ import {
 // letting a model read this as a bug in its own pipeline.
 
 // A malformed profile makes `sandbox-exec` exit 65 *without running the command* — the sandbox
-// fails closed, which is the opposite of what a fail-open feature wants. Detected so the caller
-// can retry unsandboxed instead of turning every command into an uninterpretable failure.
+// fails closed, which is the opposite of what a fail-open feature wants. `sandboxPlan` probes for it
+// before any command runs (`profileLoadFailure`); the typecheck gate also reads it off its output.
 export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 
@@ -505,6 +505,7 @@ function hasSandboxExec(): boolean {
 export function resetSandboxCache(): void {
   execAvailable = undefined;
   gitDirs.clear();
+  profileProbes.clear();
 }
 
 /**
@@ -549,7 +550,45 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   const params = sandboxParams(cwd, resolved);
   const args = ['-p', sandboxProfile(opts)];
   for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
-  return { args };
+  const failure = profileLoadFailure(args);
+  return failure ? { reason: failure } : { args };
+}
+
+const profileProbes = new Map<string, string | null>();
+
+/**
+ * Why `sandbox-exec` will not load these exact args, or null when it does. A generator bug (a bad
+ * rule, an unbound param) makes it exit 65 having run nothing, so every command would fail. Asking
+ * here, against `:`, settles that before a model's command exists (#738): the old check read the
+ * refusal off the confined command's own output, and `echo 'sandbox-exec: x' >&2; exit 65` bought
+ * itself an unconfined rerun. The probe runs the same bytes the command will get, and loading
+ * depends on nothing else, so a pass here means the real run loads too, and its exit 65 is its own.
+ *
+ * Only a refusal counts. A timeout or spawn error reads as loaded: assuming it failed would let a
+ * swapping machine switch the sandbox off, where assuming it loaded costs at worst a command that
+ * fails closed, visibly. Cached per argv: at most one per cwd and network setting.
+ */
+export function profileLoadFailure(args: string[]): string | null {
+  const key = args.join('\0');
+  const cached = profileProbes.get(key);
+  if (cached !== undefined) return cached;
+  let failure: string | null = null;
+  try {
+    const r = spawnSync('/usr/bin/sandbox-exec', [...args, '/bin/sh', '-c', ':'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    // `:` cannot fail, so any exit but 0 is sandbox-exec's own (65 a parse or bind error, 71 apply).
+    if (r.error === undefined && r.status !== null && r.status !== 0) {
+      const detail = r.stderr.trim().split('\n')[0] ?? '';
+      failure = `the sandbox profile failed to load (sandbox-exec exit ${r.status}${detail ? `: ${detail}` : ''})`;
+    }
+  } catch {
+    // Spawn threw: same as a timeout, read as loaded.
+  }
+  profileProbes.set(key, failure);
+  return failure;
 }
 
 /** The `-D` bindings for the profile's params. Exported so tests can prove every param is bound

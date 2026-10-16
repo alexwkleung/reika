@@ -6,8 +6,6 @@ import { scanHeredocs } from './_heredoc.js';
 import { remoteUrlRisk } from './_exfil.js';
 import { declineSummary } from '../approval.js';
 import {
-  SANDBOX_EXEC_ERROR_PREFIX,
-  SANDBOX_PROFILE_ERROR_CODE,
   broadWorkdirNotice,
   isBroadWorkdir,
   networkAllowedFor,
@@ -316,10 +314,14 @@ export function execStream(
   // A UI receipt, never in the model's context (the agent prompt carries the model's copy). Nothing
   // otherwise announces the sandbox, so without this the user's only evidence would be a command
   // that mysteriously failed. Once per cwd, both for the receipt and for the machine-fault warning.
-  // Marked shown only when a run completes with it attached (below): an aborted first command or
-  // an exit-65 retry must not consume the one receipt this cwd gets.
+  // Marked shown only when a run completes with it attached (below): an aborted first command must
+  // not consume the one receipt this cwd gets.
+  //
+  // Keyed by the reason as well when there is one: the two network settings are separate profiles,
+  // and a receipt the other one already showed must not hide that this one runs unconfined.
+  const noticeKey = plan && 'reason' in plan ? `${ctx.cwd}\0${plan.reason}` : ctx.cwd;
   let notice: ToolResult['notice'];
-  if (plan && !sandboxNoticed.has(ctx.cwd)) {
+  if (plan && !sandboxNoticed.has(noticeKey)) {
     notice = argv
       ? {
           tone: 'info',
@@ -468,7 +470,7 @@ export function execStream(
       // Built from the retained tail, not the payload head: the chip is the user's answer to "how
       // did it end?", which the head cannot give once a run passes the cap.
       const display = buildCommandDisplay(command, uiTail.text(), rawBytes > uiTail.bytes);
-      if (notice && plan) sandboxNoticed.add(ctx.cwd);
+      if (notice && plan) sandboxNoticed.add(noticeKey);
       // On the output's shape, not the exit status: `mkdir ~/x; echo ok` exits 0 with the denial in
       // its output, and the user would otherwise never learn the flag exists.
       if (refusedWrite !== null && !sandboxDenialNoticed.has(ctx.cwd)) {
@@ -515,32 +517,8 @@ export function execStream(
           });
         }
       };
-      // A bad profile exits 65 without running anything — the sandbox fails CLOSED, which is the
-      // opposite of what a fail-open feature wants: one bug in the generator would otherwise turn
-      // every command into an uninterpretable failure. Retried unsandboxed, exactly once — and said,
-      // as a warn: a command that ran unconfined after the sandbox refused to load is the one event
-      // here the user must see, and the one that points at a generator bug.
-      if (
-        argv &&
-        code === SANDBOX_PROFILE_ERROR_CODE &&
-        rawOutput.includes(SANDBOX_EXEC_ERROR_PREFIX)
-      ) {
-        execStream(command, ctx).then(r =>
-          resolve({
-            ...r,
-            notice: {
-              tone: 'warn',
-              content: [
-                r.notice?.content,
-                `Not sandboxed: the sandbox profile failed to load (sandbox-exec exit ${code}); re-ran unsandboxed: ${command}`,
-              ]
-                .filter(Boolean)
-                .join('\n'),
-            },
-          }),
-        );
-        return;
-      }
+      // No retry on exit 65: `sandboxPlan` has already proved this profile loads (#738), so a 65
+      // here is the command's own, and re-running it unsandboxed is what a fake refusal was after.
       // Recorded whether or not spilling is on: the question this answers is how often bash
       // output exceeds the cap at all, which is a property of the workload, not of the flag. The
       // spilling arm records below instead, after the write, so `spilled` reports whether an
