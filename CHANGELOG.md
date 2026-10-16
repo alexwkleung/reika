@@ -3,6 +3,19 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- A heredoc body the shell only pastes is no longer read as commands by the approval gate's
+  verb-position scan, so `python3 - <<'EOF'` with `print("x; curl y")` inside the script no longer
+  prompts as a network request — nor does a `node` script, a heredoc written to a file, or prose in
+  a commit message. Those labels were an accident of the quote mask: each cost a dialog
+  recommending a command nobody was asking to run, and, once approved, ran the command outside the
+  sandbox. A body the shell still expands (`<<EOF`, `<<\EOF`) or hands to a shell as its program
+  (`bash -s <<'EOF'`, `cat <<'EOF' | sh`) is unchanged, as is the half of the scan that matches the
+  whole command rather than each segment, so an `rm -rf` written into a script still prompts (#699).
+
 ## [0.4.0] - 2026-10-15
 
 ### Changed
