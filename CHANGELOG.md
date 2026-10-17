@@ -15,6 +15,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   sandbox. A body the shell still expands (`<<EOF`, `<<\EOF`) or hands to a shell as its program
   (`bash -s <<'EOF'`, `cat <<'EOF' | sh`) is unchanged, as is the half of the scan that matches the
   whole command rather than each segment, so an `rm -rf` written into a script still prompts (#699).
+  Three edges hold the same line: `cat <<'EOF';` does not re-read the body's first line as a
+  command, the terminator of an empty body (`cat <<'curl'` / `curl`) is not a command either, and a
+  shell reader spelled so the name lookup cannot see it (`cat <<'EOF' | $SHELL`, `| s\h`) keeps its
+  body in the scan instead of hiding it.
 
 ## [0.4.0] - 2026-10-15
 

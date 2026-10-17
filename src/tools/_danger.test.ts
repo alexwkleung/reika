@@ -1571,4 +1571,54 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
       'Privilege escalation (sudo)',
     );
   });
+
+  it('does not let a glued separator re-open the body, nor one swallow the command after it', () => {
+    // The region is `[bodyStart - 1, bodyEnd)`, and the question asked of a separator RUN is where
+    // it ENDS. `cat <<'EOF';` glues the body's opening newline onto the `;` before it — a run that
+    // ends INSIDE the region — and a start-position test would push the body's first line as a
+    // segment. Bash agrees the line is body: `cat <<'EOF';` / `wget x` / `EOF` runs cat and nothing
+    // else (`&&` and `&` behave the same at the newline).
+    for (const cmd of [
+      `cat <<'EOF';\nwget x\nEOF`,
+      `cat <<'EOF' &\nwget x\nEOF`,
+      `cat <<'EOF' &&\nwget x\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+    // The mirror: a run that starts inside the body and crosses `bodyEnd` swallows the newline that
+    // restores `keep` for what follows. A separator-char delimiter is exactly that shape — the
+    // terminator's `;` and its newline join the body's last run — and the command after the body
+    // must still read.
+    expect(detectDangerousPatterns(`cat <<';'\nbody\n;\ncurl x`)).toEqual([
+      'Network request (curl/wget)',
+    ]);
+    expect(detectDangerousPatterns(`cat <<';'\nbody\n;\npkill other`)).toEqual([
+      'Kill processes by name (pkill/killall)',
+    ]);
+  });
+
+  it('does not read the terminator of an EMPTY body as a command', () => {
+    // An empty body is a zero-width span, but the newline that opened it is still the separator
+    // that must not close a segment: `cat <<'curl'` / `curl` runs cat with empty stdin, and the
+    // `curl` is the text that closes the body.
+    expect(detectDangerousPatterns(`cat <<'curl'\ncurl`)).toEqual([]);
+    // What follows the body restores at the terminator's own newline, body or not.
+    expect(detectDangerousPatterns(`cat <<'curl'\ncurl\npkill x`)).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+  });
+
+  it('treats a reader it cannot name as a shell', () => {
+    // The lookup is lexical: `s\h`, `$SHELL`, `rbash` name a shell to the shell but not to the set,
+    // and a miss here HIDES the body's commands. Escapes and expansions all carry a `\`, a `$` or a
+    // backtick — no literal shell name does — so any such stage keeps the body in the scan.
+    for (const cmd of [
+      `cat <<'EOF' | $SHELL\npkill node\nEOF`,
+      `cat <<'EOF' | s\\h\npkill node\nEOF`,
+      `cat <<'EOF' | rbash\npkill node\nEOF`,
+      `cat <<'EOF' | \`sh\`\npkill node\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
+    }
+  });
 });

@@ -601,6 +601,7 @@ const VERB_SEPARATOR_RE = /[\n;&|(){}]+|\$\(|`/g;
 const SHELL_READERS = new Set([
   'sh',
   'bash',
+  'rbash',
   'dash',
   'ash',
   'ksh',
@@ -624,9 +625,19 @@ const SHELL_READERS = new Set([
 // then keeps the body in the scan and over-reports, which is the direction this can afford. A stage
 // with no words at all is one the caller cannot read (`cat <<'EOF' |` with the pipeline continuing on
 // the next line) and is answered the same way.
+//
+// The lookup is lexical, so it misses any name that only BECOMES a shell after quote removal or
+// expansion — `s\h`, `$SHELL`, a backtick — and each miss HIDES a body a shell runs. One character
+// of them is visible without guessing: they all carry a `\`, a `$` or a backtick, which no literal
+// shell name does. A stage carrying one is answered as a shell too; over-report is the affordable
+// error, a hidden `pkill node` is not.
 function readsAsShell(stage: string): boolean {
   const ws = words(stage);
-  return ws.length === 0 || ws.some(w => SHELL_READERS.has(w.slice(w.lastIndexOf('/') + 1)));
+  return (
+    ws.length === 0 ||
+    /[$`\\]/.test(stage) ||
+    ws.some(w => SHELL_READERS.has(w.slice(w.lastIndexOf('/') + 1)))
+  );
 }
 
 // The pipeline stages of one physical line, split on `|` as the quote mask sees it: a `|` inside a
@@ -662,7 +673,12 @@ function lineStages(
 // cosmetic: `verbSegments` reads a separator off `masked[i] === command[i]`, and a body's OPENING
 // newline cannot be blanked without changing the command's line structure. A region is therefore
 // reported as the half-open span `[bodyStart - 1, bodyEnd)` — the body plus the newline that opened
-// it, terminator line excluded — and a caller asks whether a separator position is in one.
+// it, terminator line excluded — and a caller asks whether a separator RUN ends in one. Not where
+// it STARTS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it, so a
+// start-position test lets the body's first line through as a segment — while a run starting inside
+// the body (a separator-char delimiter like `cat <<';'`) can cross `bodyEnd` and swallow the
+// newline that restores `keep`, hiding the command after the body. The END of the run is what says
+// "inside": it is the separator the run stands for.
 //
 // Three things keep a body out of `pasted`, and they are all the over-reporting side:
 //
@@ -684,7 +700,10 @@ function verbData(command: string): { masked: string; pasted: Array<[number, num
   if (scan.uncertain) return { masked, pasted: [] };
   const pasted: Array<[number, number]> = [];
   for (const h of scan.heredocs) {
-    if (!h.literal || h.bodyEnd <= h.bodyStart) continue;
+    if (!h.literal) continue;
+    // An EMPTY body still reports its opening newline: the line that would close it is the
+    // terminator, and a terminator that reads as a verb (`cat <<'curl'` / `curl`) is not a command.
+    // The span degenerates to that one newline, which is all the caller needs.
     // The verb question runs per line, and the reader and every stage the body could reach are both
     // on the operator's own line: the body starts after the newline that ends it.
     const lineStart = command.lastIndexOf('\n', h.opAt - 1) + 1;
@@ -719,11 +738,15 @@ function verbSegments(command: string): string[] {
     // A separator inside a pasted body ends nothing the shell runs, so the text it closes is not a
     // segment of its own — and `keep` goes false, which is what holds the body's own lines out of
     // the next segment. It is read off `pasted` rather than off a blanked `masked`, because the
-    // opening separator of a body IS that body's newline and stays one in the mask. The
-    // substitution arm is consulted after it: a `$(…)` inside a pasted body is a string in that
-    // script, where one inside a `"…"` in the command really does run.
+    // opening separator of a body IS that body's newline and stays one in the mask. The test is
+    // where the run ENDS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it
+    // (a start-position test would let the body's first line through), and a run starting inside
+    // the body can cross `bodyEnd` and swallow the newline that restores `keep` (hiding the command
+    // after the body) — an END past the region means the run ends in real syntax, and its text is
+    // the shell's again. The substitution arm is consulted after it: a `$(…)` inside a pasted body
+    // is a string in that script, where one inside a `"…"` in the command really does run.
     keep =
-      !pasted.some(([from, to]) => m.index >= from && m.index < to) &&
+      !pasted.some(([from, to]) => m.index + m[0].length > from && m.index + m[0].length <= to) &&
       (m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index]);
   }
   if (keep) segments.push(command.slice(start));
