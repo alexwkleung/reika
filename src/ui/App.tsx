@@ -119,6 +119,13 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
+import {
+  buildShellRunsBlock,
+  captureShellRun,
+  holdShellRun,
+  shellRunBudget,
+  type ShellRun,
+} from '../agent/shellruns.js';
 import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
 import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
 
@@ -290,6 +297,8 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
+  // Shell-mode runs since the last prompt, prepended to the next one (agent/shellruns.ts).
+  const heldShellRunsRef = useRef<ShellRun[]>([]);
   // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N +412 lines]` marker
   // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
   // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
@@ -1365,6 +1374,7 @@ export function App() {
       // may be a different model on different hardware (#204): the tok/s chip goes with the token
       // counts it sits next to.
       resetConversation(true);
+      heldShellRunsRef.current = [];
       sessionRef.current?.switchSide('agent');
       setDecodeRate(undefined);
       setApprovals({ approved: 0, declined: 0 });
@@ -1892,8 +1902,8 @@ export function App() {
 
   const runShell = async (command: string): Promise<void> => {
     if (!bundle) return;
-    // Shell mode is "raw bash, no model" — the command echo stays in the scrollback but is
-    // kept out of the model history (its output, the `shell` message below, is UI-only too).
+    // Shell mode is "raw bash, no model" — the echo and the `shell` message below are UI-only. The
+    // model sees the run through the held copy, attached to the next prompt.
     const echo: Message = { role: 'user', content: command, meta: true };
     setMessages(prev => [...prev, echo]);
     setStatus('busy');
@@ -1921,6 +1931,10 @@ export function App() {
         output: result.payload ?? '',
       };
       setMessages(prev => [...prev, shellMsg]);
+      heldShellRunsRef.current = holdShellRun(
+        heldShellRunsRef.current,
+        await captureShellRun(command, result.exitCode ?? null, result.payload ?? ''),
+      );
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
     } finally {
@@ -2376,6 +2390,13 @@ export function App() {
       // request to fetch a link inside it. The marker survives in `display`, keeping the user
       // bubble (and the input history entry) short while the model gets the full text.
       modelText = expandPastes(modelText, pastedTextsRef.current);
+      // Chat's history is its own, and its tools could not act on a run anyway: held for the
+      // agent side.
+      if (heldShellRunsRef.current.length > 0 && modeRef.current !== 'chat') {
+        const budget = shellRunBudget(sessionRef.current?.config.contextWindow);
+        modelText = `${buildShellRunsBlock(heldShellRunsRef.current, budget)}\n\n${modelText}`;
+        heldShellRunsRef.current = [];
+      }
     } finally {
       setExpanding(null);
       submitBusyRef.current = false;

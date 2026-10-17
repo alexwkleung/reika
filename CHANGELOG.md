@@ -7,6 +7,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Commands run in shell mode now reach the model, as the docs said they did: the next prompt carries
+  each command, its exit status and the end of its output, sized to the context window (about 1KB a
+  run on 16k, up to 4KB), with cut output saved to a file the model can read. They were shown in the
+  scrollback only, so asking about a failed run sent the model to run it again.
 - A reply that opens by copying reika's continuation marker
   (`[reika: N chars of your earlier reasoning trimmed …]`), or a made-up `[tool result …]` stub in
   the same voice, no longer shows those lines as the answer in scrollback or `/save`. Only lines at

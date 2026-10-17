@@ -174,6 +174,12 @@ forth keeps each side's history independent.
 `/shell` runs your input as bash directly — no model, no approval — and streams the output to the
 scrollback.
 
+The model sees what you ran with your next prompt, sent from any mode but chat: each command, its
+exit status, and the end of its output. That is up to 4KB a run on a large context window and about
+1KB on a 16k one; two runs' worth in total, newest first, so an older run may come through as its
+command line alone. Output that is cut is saved to a temp file the model can read. `/new` drops runs
+not yet sent.
+
 ## Headless mode
 
 `reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout — for scripts, other
