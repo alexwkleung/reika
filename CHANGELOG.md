@@ -7,6 +7,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A reply that opens by copying reika's continuation marker
+  (`[reika: N chars of your earlier reasoning trimmed …]`), or a made-up `[tool result …]` stub in
+  the same voice, no longer shows those lines as the answer in scrollback or `/save`. Only lines at
+  the head of the reply are dropped, and the model's own history is unchanged (#745).
 - A heredoc body the shell only pastes is no longer read as commands by the approval gate's
   verb-position scan, so `python3 - <<'EOF'` with `print("x; curl y")` inside the script no longer
   prompts as a network request — nor does a `node` script, a heredoc written to a file, or prose in
