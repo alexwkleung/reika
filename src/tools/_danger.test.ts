@@ -1608,6 +1608,37 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
     );
   });
 
+  it('keeps the bodies when a shell is named anywhere outside them', () => {
+    // The reader is not only the operator's own pipeline: a body written to a script is run on a
+    // later line, a shell on an earlier line reaches it through a continuation or an open `$(`, and
+    // a pipe carries on past a comment. Each of these hid the body's commands from the scan.
+    for (const cmd of [
+      `cat > s.sh <<'EOF'\npkill node\nEOF\nsh s.sh`,
+      `cat > s.sh <<'EOF'\npkill node\nEOF\nbash s.sh`,
+      `bash \\\n  -s <<'EOF'\npkill node\nEOF`,
+      `cat <<'EOF' | # pipe\npkill node\nEOF\nsh`,
+      // Shells the set did not name: `source`/`.` of stdin, `su`, and a versioned binary.
+      `. /dev/stdin <<'EOF'\npkill node\nEOF`,
+      `source /dev/stdin <<'EOF'\npkill node\nEOF`,
+      `su - <<'EOF'\npkill node\nEOF`,
+      `ksh93 <<'EOF'\npkill node\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
+    }
+    // A shell's `-c` program pastes nothing: the substitution's output is the program it runs.
+    expect(detectDangerousPatterns(`bash -c "$(\ncat <<'EOF'\npkill node\nEOF\n)"`)).toContain(
+      'via bash -c: Kill processes by name (pkill/killall)',
+    );
+    // A shell named only INSIDE a body is the body's text, and keeps nothing: the body is pasted.
+    expect(detectDangerousPatterns(`python3 - <<'EOF'\nprint("bash; pkill node")\nEOF`)).toEqual(
+      [],
+    );
+    // A `.` that is not sourcing stdin is an ordinary operand.
+    expect(
+      detectDangerousPatterns(`find . -name x; python3 - <<'EOF'\nprint("x; pkill y")\nEOF`),
+    ).toEqual([]);
+  });
+
   it('treats a reader it cannot name as a shell', () => {
     // The lookup is lexical: `s\h`, `$SHELL`, `rbash` name a shell to the shell but not to the set,
     // and a miss here HIDES the body's commands. Escapes and expansions all carry a `\`, a `$` or a

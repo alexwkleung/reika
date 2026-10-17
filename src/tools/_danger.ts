@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WORD_RE, maskQuoted, splitSegments, words } from './_readonly.js';
-import { scanHeredocs, stripHeredocs } from './_heredoc.js';
+import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is
@@ -616,7 +616,32 @@ const SHELL_READERS = new Set([
   'xonsh',
   'elvish',
   'busybox',
+  'su',
 ]);
+
+// A version suffix still names the shell: `ksh93`, `bash5`, `zsh-5.9`.
+function namesShell(word: string): boolean {
+  const name = word.slice(word.lastIndexOf('/') + 1);
+  return SHELL_READERS.has(name) || SHELL_READERS.has(name.replace(/-?\d[\d.]*$/, ''));
+}
+
+// `.`/`source` read a file as shell, and stdin is a file: `. /dev/stdin <<'EOF'` runs the body.
+const SOURCE_STDIN_RE =
+  /(?:^|[\s;&|(])(?:\.|source)\s+\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)(?=\s|$)/m;
+
+// Whether a shell is named anywhere in the command outside its heredoc bodies. Any one then keeps
+// every body in the scan, because the reader is not only the operator's own pipeline: a body
+// written to a file is run by a shell on a later line (`cat > s.sh <<'EOF'` … `sh s.sh`), a shell
+// on an earlier line reaches it through a `\` continuation or an open `bash -c "$(`, and a pipe
+// carries on past a comment (`| # note`). Over-reports a command that merely names a shell.
+function shellOutsideBodies(command: string, heredocs: Heredoc[]): boolean {
+  let outside = command;
+  for (const h of heredocs) {
+    outside =
+      outside.slice(0, h.bodyStart) + ' '.repeat(h.end - h.bodyStart) + outside.slice(h.end);
+  }
+  return SOURCE_STDIN_RE.test(outside) || words(outside).some(namesShell);
+}
 
 // Whether a pipeline stage could be the shell that runs the body. ANY word naming a shell counts,
 // not just the command word, because the shell can sit behind a wrapper's flags — `sudo -u me bash`,
@@ -633,11 +658,7 @@ const SHELL_READERS = new Set([
 // error, a hidden `pkill node` is not.
 function readsAsShell(stage: string): boolean {
   const ws = words(stage);
-  return (
-    ws.length === 0 ||
-    /[$`\\]/.test(stage) ||
-    ws.some(w => SHELL_READERS.has(w.slice(w.lastIndexOf('/') + 1)))
-  );
+  return ws.length === 0 || /[$`\\]/.test(stage) || ws.some(namesShell);
 }
 
 // The pipeline stages of one physical line, split on `|` as the quote mask sees it: a `|` inside a
@@ -697,7 +718,7 @@ function lineStages(
 function verbData(command: string): { masked: string; pasted: Array<[number, number]> } {
   const masked = maskQuoted(command);
   const scan = scanHeredocs(command);
-  if (scan.uncertain) return { masked, pasted: [] };
+  if (scan.uncertain || shellOutsideBodies(command, scan.heredocs)) return { masked, pasted: [] };
   const pasted: Array<[number, number]> = [];
   for (const h of scan.heredocs) {
     if (!h.literal) continue;
@@ -726,8 +747,9 @@ function verbData(command: string): { masked: string; pasted: Array<[number, num
   return { masked, pasted };
 }
 
-function verbSegments(command: string): string[] {
-  const { masked, pasted } = verbData(command);
+function verbSegments(command: string, pasteBodies: boolean): string[] {
+  const { masked, pasted: found } = verbData(command);
+  const pasted = pasteBodies ? found : [];
   const segments: string[] = [];
   let start = 0;
   let keep = true;
@@ -753,9 +775,9 @@ function verbSegments(command: string): string[] {
   return segments;
 }
 
-function verbLabels(command: string): string[] {
+function verbLabels(command: string, pasteBodies: boolean): string[] {
   const hits: string[] = [];
-  for (const segment of verbSegments(command)) {
+  for (const segment of verbSegments(command, pasteBodies)) {
     const seg = segment.trim().replace(VERB_PREFIX_RE, '');
     if (!seg) continue;
     for (const { re, label } of VERB_PATTERNS) {
@@ -1169,7 +1191,9 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
     if (re.test(command) && !hits.includes(label)) hits.push(label);
   }
   for (const label of [
-    ...verbLabels(command),
+    // A shell's `-c` program pastes nothing: a heredoc there can be a `$(cat <<'EOF' …)` whose
+    // output IS the program, and the shell that runs it was named one level up, out of sight here.
+    ...verbLabels(command, depth === 0),
     remoteExecLabel(command, cwd),
     checkoutPathLabel(command, cwd),
   ]) {
