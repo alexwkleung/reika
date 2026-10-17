@@ -59,6 +59,13 @@ change anything" guarantee is untouched. In grind the alternative is `curl`, whi
 under `safe` and has no network under `bypass` or unattended. Minimal mode stays bash-only. Each mode's
 prompt names them only when they are actually in the list.
 
+A page over 2KB is kept on disk for the session, and `fetch_url` reads it back: the same URL
+fetched twice is served from that copy with no request and no fetch budget, and an `offset` pages
+through it — `offset: 65536` returns the next window. That is how chat, which has no `read` and no
+`grep`, reaches past the head of a long page: the footer of a cut result names the exact call to
+continue with. Paging costs nothing, so it is not rationed by `REIKA_MAX_FETCHES_PER_TURN`; an
+`offset` for a URL that was never fetched is refused, since only the saved copy can be paged.
+
 ## MCP servers
 
 With `REIKA_MCP_SERVERS` set, Reika starts each configured MCP server as a child process and speaks MCP's
