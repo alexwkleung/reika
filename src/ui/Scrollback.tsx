@@ -13,7 +13,7 @@ import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
-import { foldSpilledReasoning, foldedAssistantFields } from './reasoningfold.js';
+import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
 
 export function Scrollback({
   messages,
@@ -77,7 +77,7 @@ export function Scrollback({
   // and whose block is sized for that aside's shape.
   const folded = streamingNote
     ? { reasoning: streamingReasoning, content: streaming }
-    : foldSpilledReasoning(streamingReasoning, streaming);
+    : foldedLiveFields(streamingReasoning, streaming);
   // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label. The block
   // builders are the memoized ones: a render where this block's text (or width, or the terminal's
   // columns) is unchanged reuses the rows it built last time instead of re-parsing the same text.

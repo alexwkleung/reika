@@ -299,6 +299,22 @@ describe('Scrollback nested (subagent) messages', () => {
     expect(body).toContain('the model wrote inside its own reasoning.');
   });
 
+  // #745: a reply that opens on a copied continuation marker must not render it as the answer.
+  it('drops a harness marker the model copied into the head of its reply', () => {
+    const frame = framePlusApp([
+      {
+        role: 'assistant',
+        content:
+          '[reika: 26476 chars of your earlier reasoning trimmed to fit — what follows is your most recent working]\n\n' +
+          '[tool result omitted: repeated from earlier]\n\nNow a quick look at the tests.',
+      },
+    ]);
+    const text = stripAnsi(frame);
+    expect(text).not.toContain('[reika:');
+    expect(text).not.toContain('tool result omitted');
+    expect(text).toContain('Now a quick look at the tests.');
+  });
+
   // #431: markdown wrapped to the top-level width and then landed in a box four columns
   // narrower, so Ink re-wrapped every full line — the last word of a paragraph line, or of a
   // bullet, on a row of its own and flush left, under no hanging indent. The compaction note
