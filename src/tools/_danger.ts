@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
-import { stripHeredocs } from './_heredoc.js';
+import { WORD_RE, maskQuoted, splitSegments, words } from './_readonly.js';
+import { scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is
@@ -589,11 +589,145 @@ const VERB_PREFIX_RE =
 // Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
 // are seen as the commands they are rather than as arguments of whatever encloses them.
 // A separator inside quotes is data — `grep "a\|gh pr\|b"` is one grep, not a `gh pr` — except a
-// substitution, which runs inside double quotes too.
+// substitution, which runs inside double quotes too. A separator inside a heredoc body the shell
+// only pastes is data by the same rule, which is what `verbData` below adds to the quote mask.
 const VERB_SEPARATOR_RE = /[\n;&|(){}]+|\$\(|`/g;
 
-function verbSegments(command: string): string[] {
+// The shells that read a heredoc body as a program of their own. Everything else — `python3 -`,
+// `node -`, `cat > run.py`, `gh --body-file -` — reads a body as a script in another language or as
+// text, where a `; curl y` inside a string literal is a string and not a second command. Naming a
+// shell here is the direction that KEEPS a body in the scan, so the set errs long: a wrong name
+// costs an over-reported label, not a hidden command.
+const SHELL_READERS = new Set([
+  'sh',
+  'bash',
+  'rbash',
+  'dash',
+  'ash',
+  'ksh',
+  'mksh',
+  'pdksh',
+  'oksh',
+  'zsh',
+  'yash',
+  'csh',
+  'tcsh',
+  'fish',
+  'xonsh',
+  'elvish',
+  'busybox',
+]);
+
+// Whether a pipeline stage could be the shell that runs the body. ANY word naming a shell counts,
+// not just the command word, because the shell can sit behind a wrapper's flags — `sudo -u me bash`,
+// `env -i sh` — where the first word is the wrapper or one of its operands, and because a shell in
+// the stage is the one reading the body either way. Coarse on purpose: `cat <<'EOF' | grep -n sh`
+// then keeps the body in the scan and over-reports, which is the direction this can afford. A stage
+// with no words at all is one the caller cannot read (`cat <<'EOF' |` with the pipeline continuing on
+// the next line) and is answered the same way.
+//
+// The lookup is lexical, so it misses any name that only BECOMES a shell after quote removal or
+// expansion — `s\h`, `$SHELL`, a backtick — and each miss HIDES a body a shell runs. One character
+// of them is visible without guessing: they all carry a `\`, a `$` or a backtick, which no literal
+// shell name does. A stage carrying one is answered as a shell too; over-report is the affordable
+// error, a hidden `pkill node` is not.
+function readsAsShell(stage: string): boolean {
+  const ws = words(stage);
+  return (
+    ws.length === 0 ||
+    /[$`\\]/.test(stage) ||
+    ws.some(w => SHELL_READERS.has(w.slice(w.lastIndexOf('/') + 1)))
+  );
+}
+
+// The pipeline stages of one physical line, split on `|` as the quote mask sees it: a `|` inside a
+// quoted string is a data character, not a stage boundary.
+function lineStages(
+  command: string,
+  view: string,
+  lineStart: number,
+  lineEnd: number,
+): Array<{ start: number; end: number }> {
+  const stages: Array<{ start: number; end: number }> = [];
+  let start = lineStart;
+  for (let i = lineStart; i < lineEnd; i++) {
+    if (view[i] !== '|') continue;
+    stages.push({ start, end: i });
+    start = i + 1;
+  }
+  stages.push({ start, end: lineEnd });
+  return stages;
+}
+
+// The verb question's two accounts of one command: `maskQuoted`'s, plus the heredoc bodies nothing
+// runs (#699). A body is the verb scan's blind spot in both directions. The shell pastes it whole,
+// so none of its separators are the shell's — but the walk that builds the quote mask deliberately
+// records no quote spans inside one, because the shell doesn't quote-parse a body either. So before
+// this, a `;` inside a string literal in a body split a segment and made the next word a verb:
+// `python3 - <<'EOF'` / `print("x; curl y")` / `EOF` read as a `curl`, which for a script that runs
+// no shell is exactly the reflexive-approval prompt the gate exists to avoid. Approving it also runs
+// the script UNSANDBOXED (a flagged command a human cleared is `decideSandbox`'s unbounded case),
+// where without the label it would have run sandboxed and unprompted.
+//
+// `pasted` comes back as its own list rather than as more blanking in `masked`, and that is not
+// cosmetic: `verbSegments` reads a separator off `masked[i] === command[i]`, and a body's OPENING
+// newline cannot be blanked without changing the command's line structure. A region is therefore
+// reported as the half-open span `[bodyStart - 1, bodyEnd)` — the body plus the newline that opened
+// it, terminator line excluded — and a caller asks whether a separator RUN ends in one. Not where
+// it STARTS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it, so a
+// start-position test lets the body's first line through as a segment — while a run starting inside
+// the body (a separator-char delimiter like `cat <<';'`) can cross `bodyEnd` and swallow the
+// newline that restores `keep`, hiding the command after the body. The END of the run is what says
+// "inside": it is the separator the run stands for.
+//
+// Three things keep a body out of `pasted`, and they are all the over-reporting side:
+//
+//   - an UNQUOTED delimiter (`<<EOF`, `<<\EOF`): the shell expands `$(…)` and backticks in the body,
+//     so a substitution there runs — the same body `expandingHeredocBodies` reports. Only a body
+//     the shell pastes literally is data here.
+//   - a shell as the reader: `sh -s <<'EOF'`, one behind a wrapper's flags (`env -i sh <<'EOF'`) or
+//     further down the pipeline (`cat <<'EOF' | sh`, `cat <<'EOF' | sudo /bin/bash -s`), where the
+//     body arrives on the shell's stdin as commands. Such a body stays in the scan, because nothing
+//     here quote-parses it and so a bare `pkill node` line in one cannot be told from a string.
+//   - a reader that cannot be read: a stage with no words at all, and a line that ends in `\`, are
+//     both pipelines this does not see the end of.
+//
+// A command the lexer cannot read exactly pastes nothing, exactly as `maskQuoted` blanks nothing:
+// the labels then over-report, never hide.
+function verbData(command: string): { masked: string; pasted: Array<[number, number]> } {
   const masked = maskQuoted(command);
+  const scan = scanHeredocs(command);
+  if (scan.uncertain) return { masked, pasted: [] };
+  const pasted: Array<[number, number]> = [];
+  for (const h of scan.heredocs) {
+    if (!h.literal) continue;
+    // An EMPTY body still reports its opening newline: the line that would close it is the
+    // terminator, and a terminator that reads as a verb (`cat <<'curl'` / `curl`) is not a command.
+    // The span degenerates to that one newline, which is all the caller needs.
+    // The verb question runs per line, and the reader and every stage the body could reach are both
+    // on the operator's own line: the body starts after the newline that ends it.
+    const lineStart = command.lastIndexOf('\n', h.opAt - 1) + 1;
+    const nl = command.indexOf('\n', h.opAt);
+    // A backslash before the newline continues the line, so the pipeline the operator sits in may
+    // reach further than this reads (and the shell puts the body after the NEXT newline, which is
+    // not where the lexer looked). Nothing is pasted then: the body stays in the scan.
+    let trailing = 0;
+    while (nl > lineStart && command[nl - 1 - trailing] === '\\') trailing++;
+    if (trailing % 2 === 1) continue;
+    const stages = lineStages(command, masked, lineStart, nl === -1 ? command.length : nl);
+    // The stage the operator sits in is the reader's; the ones after it are where a pipe could hand
+    // the body on to a shell. Earlier stages cannot read it, so `sh setup.sh | cat <<'EOF'` pastes.
+    const readers = stages
+      .slice(stages.findIndex(s => h.opAt < s.end))
+      .map(s => command.slice(s.start, s.end));
+    if (readers.some(readsAsShell)) continue;
+    pasted.push([h.bodyStart - 1, h.bodyEnd]);
+  }
+  return { masked, pasted };
+}
+
+function verbSegments(command: string): string[] {
+  const { masked, pasted } = verbData(command);
   const segments: string[] = [];
   let start = 0;
   let keep = true;
@@ -601,7 +735,19 @@ function verbSegments(command: string): string[] {
   for (let m = VERB_SEPARATOR_RE.exec(command); m; m = VERB_SEPARATOR_RE.exec(command)) {
     if (keep) segments.push(command.slice(start, m.index));
     start = m.index + m[0].length;
-    keep = m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index];
+    // A separator inside a pasted body ends nothing the shell runs, so the text it closes is not a
+    // segment of its own — and `keep` goes false, which is what holds the body's own lines out of
+    // the next segment. It is read off `pasted` rather than off a blanked `masked`, because the
+    // opening separator of a body IS that body's newline and stays one in the mask. The test is
+    // where the run ENDS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it
+    // (a start-position test would let the body's first line through), and a run starting inside
+    // the body can cross `bodyEnd` and swallow the newline that restores `keep` (hiding the command
+    // after the body) — an END past the region means the run ends in real syntax, and its text is
+    // the shell's again. The substitution arm is consulted after it: a `$(…)` inside a pasted body
+    // is a string in that script, where one inside a `"…"` in the command really does run.
+    keep =
+      !pasted.some(([from, to]) => m.index + m[0].length > from && m.index + m[0].length <= to) &&
+      (m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index]);
   }
   if (keep) segments.push(command.slice(start));
   return segments;

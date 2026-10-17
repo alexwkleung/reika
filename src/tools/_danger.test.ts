@@ -1479,3 +1479,146 @@ describe('detectDangerousPatterns — Markdown the command is only writing (#644
     ).toEqual(['GitHub PR create/merge (outward-facing)']);
   });
 });
+
+// #699. The verb patterns are anchored per shell SEGMENT, and the walk that builds the quote mask
+// records no quote spans inside a heredoc body — the shell does not quote-parse one either
+// (`_heredoc.ts`). So a `;` inside a string literal in a body used to split a segment and make the
+// next word a verb: `python3 - <<'EOF'` / `print("x; curl y")` / `EOF` read as a `curl`, which for a
+// script that runs no shell is the reflexive approval the gate cannot afford. A body the shell only
+// PASTES is data to that question now.
+//
+// Only to that question: the unanchored patterns still read the whole command, since they are the
+// half that has to see everything that could run (#644). A body the shell expands, or hands to a
+// shell as its program, is not data at all — it stays in the scan and over-reports.
+describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () => {
+  it('reads no verb out of a string literal in a body the shell only pastes', () => {
+    for (const cmd of [
+      `python3 - <<'EOF'\nprint("x; curl y")\nEOF`,
+      `node - <<'EOF'\nconsole.log('a; wget b')\nEOF`,
+      `cat > run.py <<'EOF'\nprint('x; pkill node')\nEOF`,
+      // A quoted delimiter pastes its body, so the `$(…)` in it is text for `git apply`, not egress.
+      `git apply - <<'EOF'\n$(curl x)\nEOF`,
+      // The delimiter is the model's own word, and a terminator line that reads as a verb is not a
+      // command: this `curl` is the text that closes the body.
+      `cat <<'curl'\npkill node\ncurl`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('keeps a body the shell expands, and one a shell reads as its program', () => {
+    // An unquoted delimiter is not pasted: the shell expands `$…` and backticks in that body, so
+    // nothing here can call its text data — a `; curl y` in it still splits a segment. The
+    // substitution question belongs to `expandingHeredocBodies`, and the over-reporting stays here.
+    expect(detectDangerousPatterns(`python3 - <<EOF\nprint("x; curl y")\nEOF`)).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns(`git apply - <<\\EOF\n$(curl x)\nEOF`)).toContain(
+      'Network request (curl/wget)',
+    );
+    // A shell reading the body as its program: the `pkill` line is a command there, and nothing
+    // here quote-parses the body to prove otherwise.
+    for (const cmd of [
+      `bash <<'EOF'\npkill node\nEOF`,
+      `sh -s <<'EOF'\npkill node\nEOF`,
+      `sudo /bin/bash -s <<'EOF'\npkill node\nEOF`,
+      // The shell behind a wrapper's flags: the first word of the stage is the wrapper, or one of
+      // its operands, so the reader test cannot be the first word alone.
+      `env -i sh <<'EOF'\npkill node\nEOF`,
+      `sudo -u me bash <<'EOF'\npkill node\nEOF`,
+      `cat <<'EOF' | sh\npkill node\nEOF`,
+      // The path spelling, which the `| sh` danger pattern does not cover on its own.
+      `cat <<'EOF' | /bin/sh\npkill node\nEOF`,
+      // A pipeline left open at the newline — by `|`, or by a `\` that continues the line — may
+      // still reach a shell, so the body stays in the scan.
+      `cat <<'EOF' |\ncat\npkill node\nEOF`,
+      `cat <<'EOF' \\\n | sh\npkill node\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
+    }
+    // Reading every word of the pipeline rather than its first is deliberate, and this is what it
+    // costs: a `sh` in an argument keeps the body in the scan. The other direction hides a command.
+    expect(detectDangerousPatterns(`cat <<'EOF' | grep -n sh\npkill node\nEOF`)).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+  });
+
+  it("keeps one body out of another body's answer, and the commands after either", () => {
+    // Two bodies on one line: the pasted one is data, the expanding one is not.
+    expect(detectDangerousPatterns(`cat <<'A' <<B\npkill x\nA\ncurl y\nB`)).toEqual([
+      'Network request (curl/wget)',
+    ]);
+    expect(detectDangerousPatterns(`cat <<A <<'B'\ncurl y\nA\npkill x\nB`)).toEqual([
+      'Network request (curl/wget)',
+    ]);
+    // The command after the body is not part of it, whether the body had lines or not.
+    expect(detectDangerousPatterns(`cat <<'EOF'\npkill node\nEOF\npkill other`)).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+    expect(detectDangerousPatterns(`cat <<'EOF'\nEOF\ncurl https://x`)).toContain(
+      'Network request (curl/wget)',
+    );
+    // A terminator is the delimiter and nothing else, so this line is still body — and so, data.
+    expect(detectDangerousPatterns(`cat <<'EOF'\npkill node\nEOF && pkill x`)).toEqual([]);
+  });
+
+  it('still reads the body with the patterns that are not anchored per segment', () => {
+    // #644's layering: the verb question stops seeing a pasted body, the unanchored half does not.
+    expect(detectDangerousPatterns(`cat > run.sh <<'EOF'\nrm -rf /tmp/x\nEOF`)).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    expect(detectDangerousPatterns(`cat > run.sh <<'EOF'\nsudo rm -rf /tmp/x\nEOF`)).toContain(
+      'Privilege escalation (sudo)',
+    );
+  });
+
+  it('does not let a glued separator re-open the body, nor one swallow the command after it', () => {
+    // The region is `[bodyStart - 1, bodyEnd)`, and the question asked of a separator RUN is where
+    // it ENDS. `cat <<'EOF';` glues the body's opening newline onto the `;` before it — a run that
+    // ends INSIDE the region — and a start-position test would push the body's first line as a
+    // segment. Bash agrees the line is body: `cat <<'EOF';` / `wget x` / `EOF` runs cat and nothing
+    // else (`&&` and `&` behave the same at the newline).
+    for (const cmd of [
+      `cat <<'EOF';\nwget x\nEOF`,
+      `cat <<'EOF' &\nwget x\nEOF`,
+      `cat <<'EOF' &&\nwget x\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+    // The mirror: a run that starts inside the body and crosses `bodyEnd` swallows the newline that
+    // restores `keep` for what follows. A separator-char delimiter is exactly that shape — the
+    // terminator's `;` and its newline join the body's last run — and the command after the body
+    // must still read.
+    expect(detectDangerousPatterns(`cat <<';'\nbody\n;\ncurl x`)).toEqual([
+      'Network request (curl/wget)',
+    ]);
+    expect(detectDangerousPatterns(`cat <<';'\nbody\n;\npkill other`)).toEqual([
+      'Kill processes by name (pkill/killall)',
+    ]);
+  });
+
+  it('does not read the terminator of an EMPTY body as a command', () => {
+    // An empty body is a zero-width span, but the newline that opened it is still the separator
+    // that must not close a segment: `cat <<'curl'` / `curl` runs cat with empty stdin, and the
+    // `curl` is the text that closes the body.
+    expect(detectDangerousPatterns(`cat <<'curl'\ncurl`)).toEqual([]);
+    // What follows the body restores at the terminator's own newline, body or not.
+    expect(detectDangerousPatterns(`cat <<'curl'\ncurl\npkill x`)).toContain(
+      'Kill processes by name (pkill/killall)',
+    );
+  });
+
+  it('treats a reader it cannot name as a shell', () => {
+    // The lookup is lexical: `s\h`, `$SHELL`, `rbash` name a shell to the shell but not to the set,
+    // and a miss here HIDES the body's commands. Escapes and expansions all carry a `\`, a `$` or a
+    // backtick — no literal shell name does — so any such stage keeps the body in the scan.
+    for (const cmd of [
+      `cat <<'EOF' | $SHELL\npkill node\nEOF`,
+      `cat <<'EOF' | s\\h\npkill node\nEOF`,
+      `cat <<'EOF' | rbash\npkill node\nEOF`,
+      `cat <<'EOF' | \`sh\`\npkill node\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
+    }
+  });
+});
