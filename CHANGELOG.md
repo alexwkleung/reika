@@ -3,6 +3,15 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- A reply that opens by copying reika's continuation marker
+  (`[reika: N chars of your earlier reasoning trimmed …]`), or a made-up `[tool result …]` stub in
+  the same voice, no longer shows those lines as the answer in scrollback or `/save`. Only lines at
+  the head of the reply are dropped, and the model's own history is unchanged (#745).
+
 ## [0.4.0] - 2026-10-15
 
 ### Changed
