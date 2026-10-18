@@ -27,6 +27,17 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   command, the terminator of an empty body (`cat <<'curl'` / `curl`) is not a command either, and a
   shell reader spelled so the name lookup cannot see it (`cat <<'EOF' | $SHELL`, `| s\h`) keeps its
   body in the scan instead of hiding it.
+- The gate's generic install fallback had the same blind spot one function over, and it is gone the
+  same way: `python3 - <<'EOF'` with `print("x; make install")` inside the script no longer prompts
+  as an install command — a dialog for a script that runs no shell, and an unsandboxed run once
+  approved. Both per-segment readers now split a command in one place, on the separators the shell
+  itself reads: a separator inside quotes no longer cuts a command short, so
+  `FOO="a;b" make install` and `make CFLAGS="-DFOO(x)=x" install` prompt as installs; a
+  `\`-continued line is one command; a `$(…)` or backtick inside single quotes
+  (`grep -n '$(make install)'`) is text, while one inside double quotes is still read as the
+  command it runs. A body a shell actually runs
+  (`bash <<'EOF'` with `make install` in it) still reports, and so does a real install the old
+  split missed because it sat on its own line of a multi-line command (#749).
 
 ## [0.4.0] - 2026-10-15
 

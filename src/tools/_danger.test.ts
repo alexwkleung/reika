@@ -1490,6 +1490,8 @@ describe('detectDangerousPatterns — Markdown the command is only writing (#644
 // Only to that question: the unanchored patterns still read the whole command, since they are the
 // half that has to see everything that could run (#644). A body the shell expands, or hands to a
 // shell as its program, is not data at all — it stays in the scan and over-reports.
+const INSTALL = 'Install command (fetches and runs third-party code)';
+
 describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () => {
   it('reads no verb out of a string literal in a body the shell only pastes', () => {
     for (const cmd of [
@@ -1504,6 +1506,24 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
     ]) {
       expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
     }
+  });
+
+  it('holds the line for the generic install fallback, the other per-segment reader', () => {
+    // #749: `genericPackageLabel` used to split on `[;&|]+` alone, so the same body made the word
+    // after a `;` its verb and reported a generic Install for a script that runs no shell.
+    expect(detectDangerousPatterns(`python3 - <<'EOF'\nprint("x; make install")\nEOF`)).toEqual([]);
+    expect(
+      detectDangerousPatterns(`python3 - <<'EOF'\nprint('a; conda uninstall b')\nEOF`),
+    ).toEqual([]);
+    // A body LINE in the verb position: the old one-segment read took `install` as the third word.
+    expect(detectDangerousPatterns(`python3 <<'EOF'\ninstall\nEOF`)).toEqual([]);
+    // A body a shell RUNS is commands, not data — the `make install` there is a command the shell
+    // will execute, and the verb scan still sees it.
+    expect(detectDangerousPatterns(`bash <<'EOF'\nmake install\nEOF`)).toContain(INSTALL);
+    // The command after the body is the shell's again.
+    expect(
+      detectDangerousPatterns(`cat <<'EOF'\nprint install\nEOF\nconda install numpy`),
+    ).toContain(INSTALL);
   });
 
   it('keeps a body the shell expands, and one a shell reads as its program', () => {
@@ -1625,10 +1645,13 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
     ]) {
       expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
     }
-    // A shell's `-c` program pastes nothing: the substitution's output is the program it runs.
-    expect(detectDangerousPatterns(`bash -c "$(\ncat <<'EOF'\npkill node\nEOF\n)"`)).toContain(
-      'via bash -c: Kill processes by name (pkill/killall)',
-    );
+    // A shell's `-c` program pastes nothing: the substitution's output is the program it runs. The
+    // outer pass already reads the `"$(…)"` as commands (#749), so the nested copy is not repeated.
+    expect(
+      detectDangerousPatterns(`bash -c "$(\ncat <<'EOF'\npkill node\nEOF\n)"`).some(l =>
+        l.endsWith('Kill processes by name (pkill/killall)'),
+      ),
+    ).toBe(true);
     // A shell named only INSIDE a body is the body's text, and keeps nothing: the body is pasted.
     expect(detectDangerousPatterns(`python3 - <<'EOF'\nprint("bash; pkill node")\nEOF`)).toEqual(
       [],
@@ -1651,5 +1674,58 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
     ]) {
       expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
     }
+  });
+});
+
+describe('detectDangerousPatterns — where a segment ends (#749)', () => {
+  const CURL = 'Network request (curl/wget)';
+  const PKILL = 'Kill processes by name (pkill/killall)';
+
+  it('runs a segment on past a quoted separator instead of dropping its tail', () => {
+    // The old split cut at the quoted `;`/`(` and never pushed the text after it, so the install
+    // that followed was invisible to both readers.
+    for (const cmd of [
+      `FOO="a;b" make install`,
+      `make CFLAGS="-DFOO(x)=x" install`,
+      `make DESTDIR="/tmp/a b;c" install`,
+      `make PREFIX='/opt/a|b' install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns(`FOO="a;b" curl https://example.com`)).toContain(CURL);
+    // A quoted separator is still data: the quoted text never opens a segment of its own.
+    expect(detectDangerousPatterns(`grep -rn "a; curl b" src/`)).toEqual([]);
+    expect(detectDangerousPatterns(`echo "x | make install"`)).toEqual([]);
+  });
+
+  it('reads a backslash-newline as one line, and an escaped separator as a character', () => {
+    expect(detectDangerousPatterns(`make \\\n  install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`sudo \\\n  pkill node`)).toContain(PKILL);
+    // `\;` is a literal semicolon handed to echo, not a second command.
+    expect(detectDangerousPatterns(`echo a\\; curl https://example.com`)).toEqual([]);
+    // An escaped BACKSLASH before the newline leaves the newline a real separator.
+    expect(detectDangerousPatterns(`echo a\\\\\nmake install`)).toContain(INSTALL);
+  });
+
+  it('opens a segment at a substitution that runs, and not at one inside single quotes', () => {
+    for (const cmd of [
+      "grep -rn '`make install`' docs/",
+      `grep -n '$(make install)' x`,
+      "echo 'run `make install` next'",
+      `grep -n '$(curl x)' src/`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+    expect(detectDangerousPatterns(`echo "$(make install)"`)).toContain(INSTALL);
+    expect(detectDangerousPatterns('echo "`curl https://example.com`"')).toContain(CURL);
+    // Inside a `"$(…)"` the separators are the shell's: the second command is a segment too.
+    expect(detectDangerousPatterns(`echo "x $(true; pkill node)"`)).toContain(PKILL);
+    // A quote inside that substitution is data again.
+    expect(detectDangerousPatterns(`echo "$(grep 'a; curl b' f)"`)).toEqual([]);
+  });
+
+  it('splits a command whose quoting it cannot read on every separator', () => {
+    // An unterminated quote blanks nothing, so the text after it is still read as commands.
+    expect(detectDangerousPatterns(`echo don't; make install`)).toContain(INSTALL);
   });
 });
