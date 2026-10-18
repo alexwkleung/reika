@@ -30,8 +30,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The gate's generic install fallback had the same blind spot one function over, and it is gone the
   same way: `python3 - <<'EOF'` with `print("x; make install")` inside the script no longer prompts
   as an install command — a dialog for a script that runs no shell, and an unsandboxed run once
-  approved. It now splits a command on the same segments the verb scan does, so a pasted body and a
-  quoted string are data to both readers. A body a shell actually runs (`bash <<'EOF'` with
+  approved. It now splits a command on the same segments the verb scan does, so a pasted body is
+  data to both readers, and a `;` inside a quoted string no longer invents a verb position. A body
+  a shell actually runs (`bash <<'EOF'` with
   `make install` in it) still reports, and so does a real install the old split missed because it
   sat on its own line of a multi-line command (#749).
 
