@@ -1506,6 +1506,26 @@ describe('detectDangerousPatterns — quoted text in a heredoc body (#699)', () 
     }
   });
 
+  it('holds the line for the generic install fallback, the other per-segment reader', () => {
+    // #749: `genericPackageLabel` used to split on `[;&|]+` alone, so the same body made the word
+    // after a `;` its verb and reported a generic Install for a script that runs no shell.
+    expect(detectDangerousPatterns(`python3 - <<'EOF'\nprint("x; make install")\nEOF`)).toEqual([]);
+    expect(
+      detectDangerousPatterns(`python3 - <<'EOF'\nprint('a; conda uninstall b')\nEOF`),
+    ).toEqual([]);
+    // A body a shell RUNS is commands, not data — the `make install` there is a command the shell
+    // will execute, and the verb scan still sees it.
+    expect(detectDangerousPatterns(`bash <<'EOF'\nmake install\nEOF`)).toContain(
+      'Install command (fetches and runs third-party code)',
+    );
+    // A body line is no more a verb position for this reader than for `verbSegments`, and the
+    // command after the body is the shell's again.
+    expect(detectDangerousPatterns(`cat <<'EOF'\nprint install\nEOF`)).toEqual([]);
+    expect(
+      detectDangerousPatterns(`cat <<'EOF'\nprint install\nEOF\nconda install numpy`),
+    ).toContain('Install command (fetches and runs third-party code)');
+  });
+
   it('keeps a body the shell expands, and one a shell reads as its program', () => {
     // An unquoted delimiter is not pasted: the shell expands `$…` and backticks in that body, so
     // nothing here can call its text data — a `; curl y` in it still splits a segment. The

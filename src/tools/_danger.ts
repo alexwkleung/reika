@@ -158,9 +158,14 @@ const READ_ONLY_LEAD_RE =
 // user reads to decide.
 const SELF_COVERED_LEAD_RE = /^(?:helm|kubectl|oc|docker|podman|terraform|tofu|pulumi)\b/;
 
-function genericPackageLabel(command: string): string | undefined {
-  for (const segment of command.split(/[;&|]+/)) {
-    const seg = segment.trim();
+// The segments are `verbSegments`' own rather than a split of this function's, because the two
+// per-segment readers must not have two answers about what a segment is: this one used to split on
+// `[;&|]+` alone, so a separator inside a heredoc body the shell only pastes still made the next
+// word a verb (`python3 - <<'EOF'` / `print("x; make install")` / `EOF`) — #699 one function over —
+// and so did one inside a quoted string. Sharing the reader also brings what that split never saw:
+// newlines, braces, and the `pasteBodies` arm that keeps a body in the scan inside a shell's `-c`.
+function genericPackageLabel(command: string, pasteBodies: boolean): string | undefined {
+  for (const seg of verbSegments(command, pasteBodies).map(s => s.trim())) {
     if (!seg || READ_ONLY_LEAD_RE.test(seg) || SELF_COVERED_LEAD_RE.test(seg)) continue;
     const m = GENERIC_PACKAGE_RE.exec(seg);
     if (m) {
@@ -1203,7 +1208,7 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
   // reports one precise label instead of two overlapping ones. Every install/uninstall label
   // above contains the word, which is what makes this cheap test sufficient.
   if (!hits.some(h => /install/i.test(h))) {
-    const generic = genericPackageLabel(command);
+    const generic = genericPackageLabel(command, depth === 0);
     if (generic) hits.push(generic);
   }
   // One level of recursion only: a model confused enough to nest two carriers is not the case
