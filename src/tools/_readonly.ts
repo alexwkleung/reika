@@ -372,6 +372,28 @@ export function maskQuoted(command: string): string {
   return blankSpans(command, scan.spans, () => true);
 }
 
+// `maskQuoted` with the command text inside quotes given back: a `$(…)` or a backtick inside `"…"`
+// runs, separators and all, while one inside `'…'` is a character. An escaped character is data too,
+// so `make \`-newline-`install` stays one command and `a\;` ends nothing. For a reader that asks where
+// the shell's own separators are. Regions apply outermost first, so an inner one decides its text.
+export function maskShellData(command: string): string {
+  const scan = scanQuotes(command);
+  if (scan.uncertain) return command;
+  const regions = [
+    ...scan.spans.map(s => ({ start: s.start, end: s.end, data: true })),
+    ...scan.substitutions.map(s => ({ start: s.start, end: s.end, data: false })),
+  ].sort((a, b) => a.start - b.start || b.end - a.end);
+  const out = command.split('');
+  for (const r of regions) {
+    for (let i = r.start; i < r.end; i++) out[i] = r.data ? ' ' : command[i];
+  }
+  for (const i of scan.escapes) {
+    out[i] = ' ';
+    if (i + 1 < out.length) out[i + 1] = ' ';
+  }
+  return out.join('');
+}
+
 // Cut the command at every separator that sits OUTSIDE quotes, returning each segment's RAW text —
 // a search pattern like "a;b" carries separators that are data, not syntax, so the split walks the
 // mask while the slices come from the original.

@@ -58,6 +58,11 @@ export interface HeredocScan {
   // Every region the shell reads as quoted DATA, in the order the lexer closes it — a `'…'` inside a
   // `$(…)` inside a `"…"` is two spans, innermost recorded first. See `scanQuotes`.
   quotes: QuoteSpan[];
+  // Every `$(…)`, backtick and process substitution, `[start, end)` from its opener through its
+  // closer (to the end of the text when it never closes). Inside a `"…"` this is command text again.
+  substitutions: Array<{ start: number; end: number }>;
+  // The backslash of each escape read in a command context; it and the character after it are data.
+  escapes: number[];
   // The walk stopped at a quote it could not close. An unterminated quote is a syntax error, so
   // nothing after it runs — but nothing after it was read either, which the mask callers must know.
   unclosedQuote: boolean;
@@ -78,6 +83,8 @@ export interface QuoteSpan {
 
 export interface QuoteScan {
   spans: QuoteSpan[];
+  substitutions: HeredocScan['substitutions'];
+  escapes: number[];
   // True when the text could not be read exactly and the spans are therefore not to be trusted.
   uncertain: boolean;
   // `hasHeredocOperator`'s answer off the same walk, so a caller asking both pays for one.
@@ -93,6 +100,8 @@ interface Frame {
   // A `double` frame's opening quote, so the region it spans can be recorded in `quotes` when it
   // closes — the one span whose start is behind the lexer by the time it is known.
   quoteAt?: number;
+  // A `sub` or `tick` frame's opener, for the same reason.
+  subAt?: number;
 }
 
 interface Pending {
@@ -114,6 +123,8 @@ const WORD_END_RE = /[\s;&|<>()]/;
 export function scanHeredocs(command: string): HeredocScan {
   const heredocs: Heredoc[] = [];
   const quotes: QuoteSpan[] = [];
+  const substitutions: HeredocScan['substitutions'] = [];
+  const escapes: number[] = [];
   let unclosedQuote = false;
   let ambiguousQuote = false;
   let uncertain = false;
@@ -121,6 +132,11 @@ export function scanHeredocs(command: string): HeredocScan {
   let pending: Pending[] = [];
   const n = command.length;
   let i = 0;
+
+  const closeSubstitution = (end: number) => {
+    const f = stack.pop();
+    if (f?.subAt !== undefined) substitutions.push({ start: f.subAt, end });
+  };
 
   const innermostCloser = (): Pending['closer'] => {
     for (let k = stack.length - 1; k >= 0; k--) {
@@ -143,11 +159,11 @@ export function scanHeredocs(command: string): HeredocScan {
         }
         i++;
       } else if (ch === '`') {
-        stack.push({ kind: 'tick', parens: 0 });
+        stack.push({ kind: 'tick', parens: 0, subAt: i });
         i++;
       } else if (ch === '$' && command[i + 1] === '(') {
         const arith = command[i + 2] === '(';
-        stack.push({ kind: arith ? 'arith' : 'sub', parens: 0 });
+        stack.push({ kind: arith ? 'arith' : 'sub', parens: 0, subAt: arith ? undefined : i });
         i += arith ? 3 : 2;
       } else i++;
       continue;
@@ -176,6 +192,7 @@ export function scanHeredocs(command: string): HeredocScan {
 
     // A command context: the top level, a `$(…)`, a backtick or a process substitution.
     if (ch === '\\') {
+      escapes.push(i);
       i += 2;
       continue;
     }
@@ -216,14 +233,14 @@ export function scanHeredocs(command: string): HeredocScan {
       continue;
     }
     if (ch === '`') {
-      if (frame.kind === 'tick') stack.pop();
-      else stack.push({ kind: 'tick', parens: 0 });
+      if (frame.kind === 'tick') closeSubstitution(i + 1);
+      else stack.push({ kind: 'tick', parens: 0, subAt: i });
       i++;
       continue;
     }
     if (ch === '$' && command[i + 1] === '(') {
       const arith = command[i + 2] === '(';
-      stack.push({ kind: arith ? 'arith' : 'sub', parens: 0 });
+      stack.push({ kind: arith ? 'arith' : 'sub', parens: 0, subAt: arith ? undefined : i });
       i += arith ? 3 : 2;
       continue;
     }
@@ -244,13 +261,13 @@ export function scanHeredocs(command: string): HeredocScan {
     }
     if (ch === ')') {
       if (frame.parens > 0) frame.parens--;
-      else if (frame.kind === 'sub') stack.pop();
+      else if (frame.kind === 'sub') closeSubstitution(i + 1);
       i++;
       continue;
     }
     if ((ch === '<' || ch === '>') && command[i + 1] === '(') {
       // Process substitution runs a command of its own, with its own heredocs.
-      stack.push({ kind: 'sub', parens: 0 });
+      stack.push({ kind: 'sub', parens: 0, subAt: i });
       i += 2;
       continue;
     }
@@ -316,7 +333,10 @@ export function scanHeredocs(command: string): HeredocScan {
   // arithmetic) do not matter here: the text inside them is quote-parsed the same way whether or not
   // the `)` ever arrives, so the spans read there are good either way.
   if (stack.some(f => f.kind === 'dq')) unclosedQuote = true;
-  return { heredocs, quotes, unclosedQuote, ambiguousQuote, uncertain };
+  for (const f of stack) {
+    if (f.subAt !== undefined) substitutions.push({ start: f.subAt, end: n });
+  }
+  return { heredocs, quotes, substitutions, escapes, unclosedQuote, ambiguousQuote, uncertain };
 }
 
 function pendingFields(p: Pending) {
@@ -420,6 +440,8 @@ export function scanQuotes(command: string): QuoteScan {
   const scan = scanHeredocs(command);
   return {
     spans: scan.quotes,
+    substitutions: scan.substitutions,
+    escapes: scan.escapes,
     uncertain: scan.unclosedQuote || scan.ambiguousQuote,
     heredocOperator: heredocOperatorIn(scan),
   };

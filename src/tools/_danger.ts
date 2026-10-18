@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WORD_RE, maskQuoted, splitSegments, words } from './_readonly.js';
+import { WORD_RE, maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
 import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
@@ -158,14 +158,9 @@ const READ_ONLY_LEAD_RE =
 // user reads to decide.
 const SELF_COVERED_LEAD_RE = /^(?:helm|kubectl|oc|docker|podman|terraform|tofu|pulumi)\b/;
 
-// The segments are `verbSegments`' own rather than a split of this function's, because the two
-// per-segment readers must not have two answers about what a segment is: this one used to split on
-// `[;&|]+` alone, so a separator inside a heredoc body the shell only pastes still made the next
-// word a verb (`python3 - <<'EOF'` / `print("x; make install")` / `EOF`) — #699 one function over —
-// and so did one inside a quoted string. Sharing the reader also brings what that split never saw:
-// newlines, braces, and the `pasteBodies` arm that keeps a body in the scan inside a shell's `-c`.
-function genericPackageLabel(command: string, pasteBodies: boolean): string | undefined {
-  for (const seg of verbSegments(command, pasteBodies).map(s => s.trim())) {
+// Reads `verbSegments`' segments, so the two per-segment readers agree on what a segment is (#749).
+function genericPackageLabel(segments: string[]): string | undefined {
+  for (const seg of segments.map(s => s.trim())) {
     if (!seg || READ_ONLY_LEAD_RE.test(seg) || SELF_COVERED_LEAD_RE.test(seg)) continue;
     const m = GENERIC_PACKAGE_RE.exec(seg);
     if (m) {
@@ -592,10 +587,9 @@ const VERB_PREFIX_RE =
   /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
 
 // Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
-// are seen as the commands they are rather than as arguments of whatever encloses them.
-// A separator inside quotes is data — `grep "a\|gh pr\|b"` is one grep, not a `gh pr` — except a
-// substitution, which runs inside double quotes too. A separator inside a heredoc body the shell
-// only pastes is data by the same rule, which is what `verbData` below adds to the quote mask.
+// are seen as the commands they are rather than as arguments of whatever encloses them. Matched
+// against `maskShellData`, where a separator inside quotes is data — `grep "a\|gh pr\|b"` is one
+// grep, not a `gh pr` — but a `$(…)` inside `"…"` is commands, and one inside `'…'` is neither.
 const VERB_SEPARATOR_RE = /[\n;&|(){}]+|\$\(|`/g;
 
 // The shells that read a heredoc body as a program of their own. Everything else — `python3 -`,
@@ -695,10 +689,10 @@ function lineStages(
 // the script UNSANDBOXED (a flagged command a human cleared is `decideSandbox`'s unbounded case),
 // where without the label it would have run sandboxed and unprompted.
 //
-// `pasted` comes back as its own list rather than as more blanking in `masked`, and that is not
-// cosmetic: `verbSegments` reads a separator off `masked[i] === command[i]`, and a body's OPENING
-// newline cannot be blanked without changing the command's line structure. A region is therefore
-// reported as the half-open span `[bodyStart - 1, bodyEnd)` — the body plus the newline that opened
+// `pasted` comes back as its own list rather than as more blanking in `syntax`, and that is not
+// cosmetic: `verbSegments` finds its separators in that mask, and a body's OPENING newline cannot be
+// blanked without changing the command's line structure. A region is therefore reported as the
+// half-open span `[bodyStart - 1, bodyEnd)` — the body plus the newline that opened
 // it, terminator line excluded — and a caller asks whether a separator RUN ends in one. Not where
 // it STARTS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it, so a
 // start-position test lets the body's first line through as a segment — while a run starting inside
@@ -720,10 +714,14 @@ function lineStages(
 //
 // A command the lexer cannot read exactly pastes nothing, exactly as `maskQuoted` blanks nothing:
 // the labels then over-report, never hide.
-function verbData(command: string): { masked: string; pasted: Array<[number, number]> } {
+function verbData(command: string): {
+  syntax: string;
+  pasted: Array<[number, number]>;
+} {
+  const syntax = maskShellData(command);
   const masked = maskQuoted(command);
   const scan = scanHeredocs(command);
-  if (scan.uncertain || shellOutsideBodies(command, scan.heredocs)) return { masked, pasted: [] };
+  if (scan.uncertain || shellOutsideBodies(command, scan.heredocs)) return { syntax, pasted: [] };
   const pasted: Array<[number, number]> = [];
   for (const h of scan.heredocs) {
     if (!h.literal) continue;
@@ -749,18 +747,25 @@ function verbData(command: string): { masked: string; pasted: Array<[number, num
     if (readers.some(readsAsShell)) continue;
     pasted.push([h.bodyStart - 1, h.bodyEnd]);
   }
-  return { masked, pasted };
+  return { syntax, pasted };
 }
 
+// A separator the mask blanked is not found at all, so the segment it sits in runs on to the next
+// real one: cutting there and dropping the rest hid `FOO="a;b" make install` (#749).
 function verbSegments(command: string, pasteBodies: boolean): string[] {
-  const { masked, pasted: found } = verbData(command);
+  const { syntax, pasted: found } = verbData(command);
   const pasted = pasteBodies ? found : [];
+  // The shell deletes a line continuation, so the readers see it as the space it leaves; an escaped
+  // backslash before a newline is not one, and the mask is what tells them apart.
+  const text = command.replace(/\\\n/g, (m, at: number) =>
+    syntax[at] === ' ' && syntax[at + 1] === ' ' ? '  ' : m,
+  );
   const segments: string[] = [];
   let start = 0;
   let keep = true;
   VERB_SEPARATOR_RE.lastIndex = 0;
-  for (let m = VERB_SEPARATOR_RE.exec(command); m; m = VERB_SEPARATOR_RE.exec(command)) {
-    if (keep) segments.push(command.slice(start, m.index));
+  for (let m = VERB_SEPARATOR_RE.exec(syntax); m; m = VERB_SEPARATOR_RE.exec(syntax)) {
+    if (keep) segments.push(text.slice(start, m.index));
     start = m.index + m[0].length;
     // A separator inside a pasted body ends nothing the shell runs, so the text it closes is not a
     // segment of its own — and `keep` goes false, which is what holds the body's own lines out of
@@ -770,19 +775,18 @@ function verbSegments(command: string, pasteBodies: boolean): string[] {
     // (a start-position test would let the body's first line through), and a run starting inside
     // the body can cross `bodyEnd` and swallow the newline that restores `keep` (hiding the command
     // after the body) — an END past the region means the run ends in real syntax, and its text is
-    // the shell's again. The substitution arm is consulted after it: a `$(…)` inside a pasted body
-    // is a string in that script, where one inside a `"…"` in the command really does run.
-    keep =
-      !pasted.some(([from, to]) => m.index + m[0].length > from && m.index + m[0].length <= to) &&
-      (m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index]);
+    // the shell's again. A `$(…)` inside a pasted body is a string in that script.
+    keep = !pasted.some(
+      ([from, to]) => m.index + m[0].length > from && m.index + m[0].length <= to,
+    );
   }
-  if (keep) segments.push(command.slice(start));
+  if (keep) segments.push(text.slice(start));
   return segments;
 }
 
-function verbLabels(command: string, pasteBodies: boolean): string[] {
+function verbLabels(segments: string[]): string[] {
   const hits: string[] = [];
-  for (const segment of verbSegments(command, pasteBodies)) {
+  for (const segment of segments) {
     const seg = segment.trim().replace(VERB_PREFIX_RE, '');
     if (!seg) continue;
     for (const { re, label } of VERB_PATTERNS) {
@@ -1195,10 +1199,11 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
   }
+  // A shell's `-c` program pastes nothing: a heredoc there can be a `$(cat <<'EOF' …)` whose
+  // output IS the program, and the shell that runs it was named one level up, out of sight here.
+  const segments = verbSegments(command, depth === 0);
   for (const label of [
-    // A shell's `-c` program pastes nothing: a heredoc there can be a `$(cat <<'EOF' …)` whose
-    // output IS the program, and the shell that runs it was named one level up, out of sight here.
-    ...verbLabels(command, depth === 0),
+    ...verbLabels(segments),
     remoteExecLabel(command, cwd),
     checkoutPathLabel(command, cwd),
   ]) {
@@ -1208,7 +1213,7 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
   // reports one precise label instead of two overlapping ones. Every install/uninstall label
   // above contains the word, which is what makes this cheap test sufficient.
   if (!hits.some(h => /install/i.test(h))) {
-    const generic = genericPackageLabel(command, depth === 0);
+    const generic = genericPackageLabel(segments);
     if (generic) hits.push(generic);
   }
   // One level of recursion only: a model confused enough to nest two carriers is not the case
