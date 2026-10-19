@@ -165,11 +165,17 @@ const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?!
 // A flag token: the gap between the leading words and the verb.
 const GENERIC_FLAG_RE = /^-{1,2}[\w-]+$/;
 
+// A `VAR=value` operand (`make DESTDIR=/x install`) sits in the same gap: a make line carries
+// several, and counted as leading words they pushed the verb past the budget.
+const GENERIC_ASSIGN_RE = /^[A-Za-z_]\w*=/;
+
 function genericVerbWord(list: string[]): 'uninstall' | 'install' | undefined {
-  // 1–3 leading words, then any run of flags, then the verb — the shape the regex above says.
+  // 1–3 leading words, then any run of flags and assignments, then the verb.
   for (let i = 1; i <= 3 && i < list.length; i++) {
     let j = i;
-    while (j < list.length && GENERIC_FLAG_RE.test(list[j])) j++;
+    while (j < list.length && (GENERIC_FLAG_RE.test(list[j]) || GENERIC_ASSIGN_RE.test(list[j]))) {
+      j++;
+    }
     if (j >= list.length) break;
     if (list[j] === 'uninstall') return 'uninstall';
     if (list[j] === 'install') return 'install';
@@ -610,25 +616,67 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
 // Leading tokens that don't change what a segment actually runs: env assignments, privilege and
 // timing wrappers, and the shell keywords a segment can open with (`if curl … ; then`).
 //
-// `VERB_PREFIX_RE`'s assignment value is quote-aware, and that is the fix: `[A-Za-z_]\w*=\S*` stops
-// at the space inside `"a b"` and leaves `b" curl …` standing, so the `^`-anchored verbs never see
-// `curl` and the fetch runs unprompted (#752). The bare arm comes LAST, so a quote this cannot close
-// still matches as much of the value as runs to the next space: the assignment is never left
-// unmatchable. It costs a quoted token two viable ends, and this regex survives that only because
-// `.replace` keeps the longest prefix it found and never fails — an anchor after the prefix run
-// would make the engine re-explore every earlier token's choice (`SSH_LEAD_RE` keeps `\S*` for it).
+// The quoted reading (`stripVerbPrefix`) walks the segment one shell word at a time, so an
+// assignment's value is whatever the shell reads as one word: `"a b"`, `pre"a b"`, `"a b"c`, `$'a b'`,
+// `a\ b`. `[A-Za-z_]\w*=\S*` stops at the space inside `"a b"` and leaves `b" curl …` standing, so
+// the `^`-anchored verbs never see `curl` and the fetch runs unprompted (#752); a regex alternative
+// that read only a value made of exactly one quoted run was the first cut, and missed the rest. A
+// quote the walk cannot close takes the rest of its non-space run, the old reading, so an assignment
+// is never left unmatchable. A lexer rather than a quote-aware pattern because a pattern that also
+// tolerates an unclosed quote gives each token two viable ends, and anything anchored after it
+// re-explores every earlier token's choice.
 //
 // `VERB_PREFIX_WS_RE` is the old strip, and it stays because the fragment IT leaves behind is
 // sometimes the verb: `A="x pkill node" bash -c "$A"` reads as a `pkill` only through the blind
 // reading, and the value is exactly what that `bash -c` runs. So `verbLabels` reads a segment both
-// ways and reports the union — quoting can add a label, and cannot cost one.
-const ENV_ASSIGN_SRC = String.raw`[A-Za-z_]\w*=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\S*)`;
-
-const VERB_PREFIX_RE = new RegExp(
-  String.raw`^(?:(?:${ENV_ASSIGN_SRC}|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+`,
+// ways and reports the union — quoting can add a label, and cannot cost one. Both readings strip the
+// same words, from one list, or the union would disagree about a wrapper only one of them knows.
+const VERB_PREFIX_WORDS = [
+  'sudo',
+  'command',
+  'nohup',
+  'exec',
+  'env',
+  'time',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'do',
+  'while',
+  'until',
+  '!',
+];
+const VERB_PREFIX_WORD_SET = new Set(VERB_PREFIX_WORDS);
+const VERB_PREFIX_WS_RE = new RegExp(
+  String.raw`^(?:(?:[A-Za-z_]\w*=\S*|${VERB_PREFIX_WORDS.join('|')})\s+)+`,
 );
-const VERB_PREFIX_WS_RE =
-  /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
+
+const SHELL_WORD_RE =
+  /(?:"(?:[^"\\]|\\[\s\S])*"|\$'(?:[^'\\]|\\[\s\S])*'|'[^']*'|\\[\s\S]|[^\s"'\\])+/y;
+const NON_SPACE_RUN_RE = /\S*/y;
+const WORD_GAP_RE = /\s+/y;
+const ENV_ASSIGN_WORD_RE = /^[A-Za-z_]\w*=/;
+
+function stripVerbPrefix(segment: string): string {
+  let at = 0;
+  for (;;) {
+    SHELL_WORD_RE.lastIndex = at;
+    let end = SHELL_WORD_RE.exec(segment) ? SHELL_WORD_RE.lastIndex : at;
+    if (end < segment.length && /["'\\]/.test(segment[end])) {
+      NON_SPACE_RUN_RE.lastIndex = end;
+      NON_SPACE_RUN_RE.exec(segment);
+      end = NON_SPACE_RUN_RE.lastIndex;
+    }
+    const word = segment.slice(at, end);
+    WORD_GAP_RE.lastIndex = end;
+    const gap = WORD_GAP_RE.exec(segment);
+    if (!gap || !(VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))) {
+      return segment.slice(at);
+    }
+    at = WORD_GAP_RE.lastIndex;
+  }
+}
 
 // Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
 // are seen as the commands they are rather than as arguments of whatever encloses them. Matched
@@ -835,7 +883,7 @@ function verbLabels(segments: string[]): string[] {
     // Both prefix readings, unioned — see `VERB_PREFIX_WS_RE` above. They agree on any segment
     // without a quoted value holding a space, which is nearly all of them, so the second pass only
     // runs when they differ.
-    const quoted = trimmed.replace(VERB_PREFIX_RE, '');
+    const quoted = stripVerbPrefix(trimmed);
     const spaced = trimmed.replace(VERB_PREFIX_WS_RE, '');
     for (const seg of spaced === quoted ? [quoted] : [quoted, spaced]) {
       if (!seg) continue;
@@ -1073,12 +1121,11 @@ const SHELL_C_RE = /\b(?:sh|bash|zsh|dash|ksh)\s+(?:-[\w-]+\s+)*-c(?![\w-])/g;
 const INTERPRETER_C_RE =
   /\b(python[\d.]*|ruby|perl|node|deno|php)\s+(?:-[\w-]+\s+)*(-[ce])(?![\w-])/g;
 const CONTAINER_EXEC_RE = /\b(kubectl|oc|docker|podman)\s+(?:exec|run)\b[^\n]*?\s--(?=\s)/g;
-// The assignment arm keeps its bare `\S*` where `VERB_PREFIX_RE` went quote-aware (#752), and the
+// The assignment arm keeps its bare `\S*` where the verb reader went to a lexer (#752), and the
 // trailing `ssh` is why: a quoted value has two viable ends (up to the space, or at the closing
 // `"`) and an `ssh` that fails to appear makes the engine re-explore every earlier token's choice.
-// `VERB_PREFIX_RE` has no such anchor — `.replace` keeps the longest prefix it found — so it can
-// read both. What a miss costs here is the `via ssh:` detail only: the fixed prefix strip still
-// puts `ssh` itself in verb position, so the remote command prompts as remote host access.
+// What a miss costs here is the `via ssh:` detail only: `stripVerbPrefix` still puts `ssh` itself
+// in verb position, so the remote command prompts as remote host access.
 const SSH_LEAD_RE =
   /(?:^|[\n;&|`(])\s*(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|env|time)\s+)*ssh(?![\w./-])/g;
 

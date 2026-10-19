@@ -1824,4 +1824,43 @@ describe('detectDangerousPatterns — a quoted value with spaces in it (#752)', 
     expect(Date.now() - start).toBeLessThan(1000);
     expect(detectDangerousPatterns(`make ${'"a b"'.repeat(200)} install`)).toContain(INSTALL);
   });
+
+  it('reads a value the shell builds from several pieces as one word', () => {
+    // A value that is not exactly one quoted run: the first cut's quoted arm matched none of these,
+    // and both strips stopped at the inner space.
+    for (const cmd of [
+      `FOO=pre"a b" curl https://example.com`,
+      `FOO="a b"c curl https://example.com`,
+      `FOO=$'a b' curl https://example.com`,
+      String.raw`FOO=$'a\' b' curl https://example.com`,
+      String.raw`FOO=a\ b curl https://example.com`,
+      String.raw`FOO="a \" b" curl https://example.com`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(CURL);
+    }
+  });
+
+  it('skips the VAR=value operands between a make and its verb', () => {
+    for (const cmd of [
+      `make A=1 B=2 C="x y" install`,
+      `make -j4 A=1 B="x y" install`,
+      `make DESTDIR=/tmp/x PREFIX=/usr install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns(`make A=1 B=2 test`)).toEqual([]);
+  });
+
+  it('strips a run of quotes in an assignment without backtracking', () => {
+    // The verb reader's own pathological inputs: a quote run inside the value, unclosed and closed,
+    // and an escape run. A slow answer is the regression.
+    const start = Date.now();
+    for (const value of ['"'.repeat(4001), '"'.repeat(4000), "'".repeat(4001), '\\'.repeat(4001)]) {
+      expect(detectDangerousPatterns(`A=${value} curl https://example.com`)).toBeDefined();
+    }
+    expect(detectDangerousPatterns(`${'A="a b" '.repeat(500)}curl https://example.com`)).toContain(
+      CURL,
+    );
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
 });

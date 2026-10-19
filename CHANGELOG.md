@@ -44,7 +44,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   so the install fell past the three leading words the generic fallback counts and the command after
   the assignment fell out of the anchored verbs' reach. Each reader now also reads the shell's own
   words, where a quoted value is one token whatever it holds — `make DESTDIR="/tmp/a b" install`
-  prompts, and so does `make "install"`, because quoting a target does not stop it installing. The
+  prompts, and so does `make "install"`, because quoting a target does not stop it installing.
+  A value the shell builds from pieces (`FOO=pre"a b"`, `$'a b'`, `a\ b`) is one word too, and the
+  `VAR=value` operands of a make line no longer count against the verb's position. The
   whitespace reading stays beside it rather than being replaced: an unterminated quote splits its run
   and can push the verb past that budget, and the fragment a blind strip leaves behind is where a
   command one expansion away is still visible (`A="x pkill node" bash -c "$A"`), so quoting can add a
