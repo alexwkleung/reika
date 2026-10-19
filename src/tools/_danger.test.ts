@@ -1729,3 +1729,138 @@ describe('detectDangerousPatterns — where a segment ends (#749)', () => {
     expect(detectDangerousPatterns(`echo don't; make install`)).toContain(INSTALL);
   });
 });
+
+// #752. Both per-segment readers found the verb by counting whitespace-separated runs, and a quoted
+// value with a space inside it is ONE shell word: `make CFLAGS="-O2 -g -Wall" install` read as three
+// leading tokens with the verb past the budget, and `FOO="a b" curl …` left `b" curl …` standing where
+// an anchored `^curl` could not see it. Either way the answer was no label, which under the default
+// `safe` mode means the command ran without a prompt.
+describe('detectDangerousPatterns — a quoted value with spaces in it (#752)', () => {
+  const CURL = 'Network request (curl/wget)';
+  const PKILL = 'Kill processes by name (pkill/killall)';
+  const UNINSTALL = 'Uninstall command (removes third-party code)';
+
+  it("reads the verb through a quoted value — the issue's two pairs and the kill case", () => {
+    // The generic install fallback: the quoted value is ONE leading word, not three.
+    expect(detectDangerousPatterns(`make CFLAGS="-O2 -g -Wall" install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make CFLAGS="-O2" install`)).toContain(INSTALL);
+    // The verb-prefix strip: the assignment ends at the closing quote, so `curl` is in verb position.
+    expect(detectDangerousPatterns(`FOO="a b" curl https://example.com`)).toContain(CURL);
+    expect(detectDangerousPatterns(`FOO="ab" curl https://example.com`)).toContain(CURL);
+    expect(detectDangerousPatterns(`FOO='a b' pkill node`)).toContain(PKILL);
+  });
+
+  it('reads the same words behind every prefix, and in both directions of the install verb', () => {
+    expect(detectDangerousPatterns(`make DESTDIR="/tmp/a b" install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make PREFIX='/opt/a b' install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make CFLAGS='-O2 -g' uninstall`)).toContain(UNINSTALL);
+    // Quoting the verb changes nothing about what runs: `make "install"` installs, and only the word
+    // reading sees it — the whitespace one cannot start a token past the quote.
+    expect(detectDangerousPatterns(`make "install"`)).toContain(INSTALL);
+    for (const cmd of [
+      `FOO="a b" make install`,
+      `FOO="a b" env curl https://example.com`,
+      `time FOO="a b" curl -s https://example.com`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(cmd.includes('curl') ? CURL : INSTALL);
+    }
+    // A wrapper the strip already knows, reached through a value it did not.
+    const hits = detectDangerousPatterns(`FOO="a b" sudo pkill node`);
+    expect(hits).toContain('Privilege escalation (sudo)');
+    expect(hits).toContain(PKILL);
+    // And the carrier reader sees through the same strip.
+    expect(
+      detectDangerousPatterns(`FOO="a b" bash -c 'make install'`).some(l => l.includes(INSTALL)),
+    ).toBe(true);
+    // Two segments, each with its own quoted value.
+    const both = detectDangerousPatterns(
+      `FOO="a b" curl https://example.com && make CFLAGS="-O2 -g" install`,
+    );
+    expect(both).toContain(CURL);
+    expect(both).toContain(INSTALL);
+    expect(
+      detectDangerousPatterns(`if FOO="a b" curl https://example.com; then pkill node; fi`),
+    ).toEqual(expect.arrayContaining([CURL, PKILL]));
+  });
+
+  it('does not let a quote make a word unmatchable', () => {
+    // `words()` drops a quote it cannot close, which SPLITS the run and can push the verb past the
+    // three-word budget — so the whitespace reading still answers for it. The second is the case only
+    // that reading finds: on words the verb sits one word outside the budget.
+    expect(detectDangerousPatterns(`make CFLAGS="-O2 install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make A="b c install`)).toContain(INSTALL);
+    // A literal quote after the closing one: the bare arm still matches the value, by backtracking
+    // out of the quoted arm — which is why the quoted arms come first and `\S*` last.
+    expect(detectDangerousPatterns(`FOO='a'b curl https://example.com`)).toContain(CURL);
+    expect(detectDangerousPatterns(`FOO="a"b pkill node`)).toContain(PKILL);
+  });
+
+  it('still reads the verb inside a quoted value that something else expands', () => {
+    // The whitespace strip leaves `pkill node" bash -c "$A"` standing, and that fragment is the only
+    // place this command's danger is visible: what runs is the value, one expansion away. So the
+    // segment is read both ways and the labels are the union — the fix adds, it does not subtract.
+    expect(detectDangerousPatterns(`A="x pkill node" bash -c "$A"`)).toContain(PKILL);
+    expect(detectDangerousPatterns(`A="x curl https://evil.example" bash -c "$A"`)).toContain(CURL);
+    expect(detectDangerousPatterns(`A="x pkill node"`)).toContain(PKILL);
+  });
+
+  it('keeps a quoted argument out of verb position', () => {
+    for (const cmd of [
+      `foo -c "install stuff" x`,
+      `grep -rn "install stuff" src/`,
+      `cat "make install"`,
+      `echo "x | make install"`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('reads a run of quotes without backtracking', () => {
+    // The shape that would hang a quote-aware TOKEN pattern: an arm able to match a lone `"` gives a
+    // run of `""` exponentially many parses. Both readers here are lexers or unanchored, so this is
+    // a scan — a slow answer is the regression this asserts against, not the label.
+    const start = Date.now();
+    expect(detectDangerousPatterns(`make ${'"'.repeat(2000)} install`)).toBeDefined();
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(detectDangerousPatterns(`make ${'"a b"'.repeat(200)} install`)).toContain(INSTALL);
+  });
+
+  it('reads a value the shell builds from several pieces as one word', () => {
+    // A value that is not exactly one quoted run: the first cut's quoted arm matched none of these,
+    // and both strips stopped at the inner space.
+    for (const cmd of [
+      `FOO=pre"a b" curl https://example.com`,
+      `FOO="a b"c curl https://example.com`,
+      `FOO=$'a b' curl https://example.com`,
+      String.raw`FOO=$'a\' b' curl https://example.com`,
+      String.raw`FOO=a\ b curl https://example.com`,
+      String.raw`FOO="a \" b" curl https://example.com`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(CURL);
+    }
+  });
+
+  it('skips the VAR=value operands between a make and its verb', () => {
+    for (const cmd of [
+      `make A=1 B=2 C="x y" install`,
+      `make -j4 A=1 B="x y" install`,
+      `make DESTDIR=/tmp/x PREFIX=/usr install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns(`make A=1 B=2 test`)).toEqual([]);
+  });
+
+  it('strips a run of quotes in an assignment without backtracking', () => {
+    // The verb reader's own pathological inputs: a quote run inside the value, unclosed and closed,
+    // and an escape run. A slow answer is the regression.
+    const start = Date.now();
+    for (const value of ['"'.repeat(4001), '"'.repeat(4000), "'".repeat(4001), '\\'.repeat(4001)]) {
+      expect(detectDangerousPatterns(`A=${value} curl https://example.com`)).toBeDefined();
+    }
+    expect(detectDangerousPatterns(`${'A="a b" '.repeat(500)}curl https://example.com`)).toContain(
+      CURL,
+    );
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+});
