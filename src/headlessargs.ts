@@ -35,7 +35,7 @@ export const USAGE = `usage: reika                  start the interactive TUI in
   -h, --help            show this
 
 Configuration is read from the environment, then ./.env, then ~/.config/reika/.env; REIKA_MODEL
-is required and REIKA_BASE_URL defaults to http://localhost:8080/v1.
+is required and REIKA_BASE_URL defaults to http://localhost:9931/v1.
 
 With -p: a prompt starting with /<skill> runs that skill. Approvals follow REIKA_AUTO_APPROVE
 (default 'safe'): with no prompt to fall back on, anything 'safe' would have asked about is

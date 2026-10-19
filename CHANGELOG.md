@@ -5,6 +5,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Changed
+
+- `REIKA_BASE_URL` now defaults to `http://localhost:9931/v1`, following llama-server's new default
+  port in llama.cpp v0.7.0. A llama-server older than that, or one in llama.cpp's Docker images,
+  still listens on 8080: set `REIKA_BASE_URL=http://localhost:8080/v1` for it. A refused connection
+  at the default now says so instead of a bare `fetch failed`.
+
 ### Fixed
 
 - Commands run in shell mode now reach the model, as the docs said they did: the next prompt carries

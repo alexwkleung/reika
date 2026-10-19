@@ -1,7 +1,13 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { createServer } from 'node:http';
 import type { Server, ServerResponse } from 'node:http';
-import { SESSION_ID, createSSEDecoder, streamChatCompletion, tokenize } from './transport.js';
+import {
+  DEFAULT_BASE_URL,
+  SESSION_ID,
+  createSSEDecoder,
+  streamChatCompletion,
+  tokenize,
+} from './transport.js';
 import type { ChatCompletionChunk, ChatCompletionRequest, SSEEvent } from './transport.js';
 import { resetStreamDispatcher } from './dispatcher.js';
 import { API_USER_AGENT } from '../version.js';
@@ -224,6 +230,48 @@ describe('session header', () => {
     for (const headers of sentHeaders(fetchMock)) {
       expect(headers['User-Agent']).toBe(API_USER_AGENT);
     }
+  });
+});
+
+describe('refused connection at the default base URL', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function refuse(): void {
+    const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9931'), {
+      code: 'ECONNREFUSED',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed', { cause: refused });
+      }),
+    );
+  }
+
+  async function failure(baseURL: string): Promise<Error> {
+    vi.useFakeTimers();
+    const run = drain(baseURL).then(
+      () => new Error('resolved'),
+      (e: Error) => e,
+    );
+    await vi.runAllTimersAsync();
+    return run;
+  }
+
+  it('names the pre-v0.7.0 port, since an older llama-server still listens on 8080', async () => {
+    refuse();
+    const e = await failure(DEFAULT_BASE_URL);
+    expect(e.message).toMatch(/8080/);
+    expect(e.message).toMatch(/REIKA_BASE_URL/);
+  });
+
+  it('leaves a refusal at any other URL as it was', async () => {
+    refuse();
+    const e = await failure('http://localhost:1234/v1');
+    expect(e.message).toBe('fetch failed');
   });
 });
 

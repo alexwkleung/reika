@@ -24,7 +24,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 | Key                  | Default                    | What                                                                                                                                                                            |
 | -------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_BASE_URL`     | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                                                                                                                      |
+| `REIKA_BASE_URL`     | `http://localhost:9931/v1` | OpenAI-compatible endpoint                                                                                                                                                      |
 | `REIKA_MODEL`        | _required_                 | Model name, or a comma-separated list of models served by the same `REIKA_BASE_URL`.                                                                                            |
 | `REIKA_API_KEY`      | `no-key`                   | Cloud API key (any non-empty for local)                                                                                                                                         |
 | `REIKA_PROFILES`     | _unset_                    | Comma-separated names of extra profiles, each defined by `REIKA_<NAME>_MODEL` / `_BASE_URL` / `_API_KEY` (plus optional `_MAX_TOKENS` / `_CONTEXT_WINDOW` / `_MIN_GEN_TOKENS`). |
@@ -415,7 +415,7 @@ switchable with `/model <name>` — no extra env vars to add or remove as your r
 changes:
 
 ```ini
-REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_MODEL=qwen3-coder,kimi-k2,glm-4.6   # /model kimi-k2 to switch
 ```
 
@@ -425,7 +425,7 @@ key, define a full profile and switch between them at runtime with `/model <name
 ```ini
 # Default profile (existing keys — always available as "default")
 REIKA_MODEL=qwen3.5-9b
-REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_API_KEY=no-key
 
 # Additional named profiles — list them, then define each
