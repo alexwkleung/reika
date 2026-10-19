@@ -38,6 +38,19 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   command it runs. A body a shell actually runs
   (`bash <<'EOF'` with `make install` in it) still reports, and so does a real install the old
   split missed because it sat on its own line of a multi-line command (#749).
+- Those same two readers mis-read a quoted word, which hid the verb the other way: under the default
+  `safe` mode, `make CFLAGS="-O2 -g -Wall" install`, `FOO="a b" curl https://example.com` and
+  `FOO='a b' pkill node` ran with no prompt at all. The space inside the value was a word boundary,
+  so the install fell past the three leading words the generic fallback counts and the command after
+  the assignment fell out of the anchored verbs' reach. Each reader now also reads the shell's own
+  words, where a quoted value is one token whatever it holds — `make DESTDIR="/tmp/a b" install`
+  prompts, and so does `make "install"`, because quoting a target does not stop it installing. The
+  whitespace reading stays beside it rather than being replaced: an unterminated quote splits its run
+  and can push the verb past that budget, and the fragment a blind strip leaves behind is where a
+  command one expansion away is still visible (`A="x pkill node" bash -c "$A"`), so quoting can add a
+  label and never cost one. Replayed against `main` over the saved session history: no label moved
+  in either direction, because none of its 7,723 distinct calls puts a verb behind a quoted value —
+  the eleven that come closest carry it inside a heredoc body the shell only pastes (#752).
 
 ## [0.4.0] - 2026-10-15
 
