@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { isStreamTimeout, streamDispatcher, streamTimeoutMessage } from './dispatcher.js';
 import type { ToolParameters } from '../types.js';
 import { API_USER_AGENT } from '../version.js';
+import { errorCode } from '../tools/_net.js';
+
+// llama-server's default since llama.cpp v0.7.0 (ggml-org/llama.cpp#30159); it was 8080 before.
+export const DEFAULT_BASE_URL = 'http://localhost:9931/v1';
 
 // Minimal client for the OpenAI-compatible `/v1/chat/completions` streaming API.
 //
@@ -234,7 +238,7 @@ async function postWithRetry(
         await sleep(backoffMs(attempt), signal);
         continue;
       }
-      throw e;
+      throw refusedAtDefaultPort(url, e) ?? e;
     }
   }
   throw lastErr;
@@ -300,6 +304,18 @@ function parseSSELine(line: string): SSEEvent | null {
   } catch {
     return null;
   }
+}
+
+// Nothing answering on the default port is most often a llama-server older than v0.7.0, which
+// still listens on 8080 — say so, since a bare ECONNREFUSED reads as "the server is down".
+function refusedAtDefaultPort(url: string, e: unknown): Error | undefined {
+  if (errorCode(e) !== 'ECONNREFUSED' || !url.startsWith(`${DEFAULT_BASE_URL}/`)) return undefined;
+  return new Error(
+    `Nothing is listening at ${DEFAULT_BASE_URL}. llama-server uses 9931 since llama.cpp v0.7.0 ` +
+      'and 8080 before it (and in its Docker images); set REIKA_BASE_URL to match your server, ' +
+      'e.g. http://localhost:8080/v1.',
+    { cause: e },
+  );
 }
 
 // Stream a chat completion as an async iterable of typed chunks. The caller accumulates

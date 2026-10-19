@@ -73,8 +73,9 @@ export REIKA_MODEL=model          # or put it in ~/.config/reika/.env
 cd your-project && reika
 ```
 
-- `REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default; a hosted API sets
-  its own (above).
+- `REIKA_BASE_URL` defaults to `http://localhost:9931/v1`, llama-server's default since llama.cpp
+  v0.7.0; an older llama-server (or its Docker image) listens on 8080, and a hosted API sets its own
+  (above).
 - The context window is read from the server when it reports one, and for hosted endpoints from the
   models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it, and a startup line says so.
 - `REIKA_MODEL` is required, and takes a comma-separated list for models served by one endpoint —
