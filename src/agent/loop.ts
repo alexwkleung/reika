@@ -2755,7 +2755,10 @@ export async function runTurn(opts: {
         `usage.promptTokens=${response.usage?.promptTokens ?? 'MISSING'} ` +
         `completion=${completion} finishReason=${response.finishReason ?? '?'} ` +
         `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
-        `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source}\n`,
+        `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source} ` +
+        // Process uptime, not turn time: on a fanless machine the rates sag with sustained load
+        // and recover across idle gaps, so separating that from context growth needs wall clock.
+        `t=${process.uptime().toFixed(0)}s\n`,
     );
 
     if (opts.signal?.aborted) {
