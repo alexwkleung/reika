@@ -6,6 +6,7 @@ import {
   isProvablyReadOnly,
   maskQuoted,
   maskSingleQuotedData,
+  words,
 } from './_readonly.js';
 
 // Two predicates, opposite consequences, so they get separate suites. `isProvablyReadOnly` gates
@@ -565,5 +566,46 @@ describe('isInspectionEscape — the withdrawal ladder refuses the call', () => 
     ['an unrecognized command in the pipeline', 'grep foo file | node script.js'],
   ])('returns false for %s', (_label, cmd) => {
     expect(isInspectionEscape(cmd)).toBe(false);
+  });
+});
+
+// Every reader of `words()` is an allowlist, so a word read differently from the shell is a flag the
+// allowlist never saw. Each case below is a write the shell performs and an earlier `words()` hid.
+describe('words — quoting removed the way the shell removes it', () => {
+  it('reads backslashes, escaped quotes and ANSI-C strings as the shell does', () => {
+    expect(words(String.raw`a\ b "c \" d" 'e\f' $'\x41\101é\n' $"g" -de\lete`)).toEqual([
+      'a b',
+      'c " d',
+      'e\\f',
+      'A' + 'A' + 'é\n',
+      'g',
+      '-delete',
+    ]);
+    // An escaped quote opens no quoted run, so the words between two of them stay separate.
+    expect(words(String.raw`find . \" -delete \"`)).toEqual(['find', '.', '"', '-delete', '"']);
+    expect(words(String.raw`grep -rn "it's" src`)).toEqual(['grep', '-rn', "it's", 'src']);
+  });
+
+  it('does not admit a write spelled through quoting into plan mode', () => {
+    for (const cmd of [
+      String.raw`find . -name \" -o -delete -o -name \"`,
+      String.raw`find . \-delete`,
+      String.raw`find . -de\lete`,
+      String.raw`find . $'\x2ddelete'`,
+      String.raw`find . $'-delete'`,
+      String.raw`find . $"-delete"`,
+      String.raw`sort f \" -o out \"`,
+      String.raw`gh api \" -X DELETE \" repos/o/r`,
+    ]) {
+      expect(isProvablyReadOnly(cmd), cmd).toBe(false);
+    }
+    for (const cmd of [
+      `find . -name 'a b' -print`,
+      `grep -rn "it's" src`,
+      String.raw`grep -n 'a\|b' f`,
+      String.raw`grep -n "a\\b" f`,
+    ]) {
+      expect(isProvablyReadOnly(cmd), cmd).toBe(true);
+    }
   });
 });

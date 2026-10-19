@@ -66,6 +66,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   in either direction, because none of its 7,723 distinct calls puts a verb behind a quoted value —
   the eleven that come closest carry it inside a heredoc body the shell only pastes (#752).
 
+### Security
+
+- Plan mode's read-only `bash` and the sandbox's network allow for `git`/`gh` now read a command's
+  arguments with the shell's own quoting rules — backslash escapes, escaped quotes and `$'…'` —
+  where before a flag spelled through them could go unrecognized by the allowlist. Replayed over the
+  saved session history (7,745 distinct commands), no decision changed.
+
 ## [0.4.0] - 2026-10-15
 
 ### Changed

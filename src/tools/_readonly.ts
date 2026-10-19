@@ -263,12 +263,108 @@ const MAX_OPERANDS: Record<string, number> = { uniq: 1 };
 const VALUE_FLAGS: Record<string, Set<string>> = { uniq: new Set(['-f', '-s', '-w']) };
 
 // Split into words the way the shell does, keeping a quoted run with spaces in it as ONE word, then
-// drop the quote characters. Quoting changes nothing about how a command reads its own arguments, so
-// `find . '-delete'` must be seen as the flag it is.
-export const WORD_RE = /(?:[^\s'"]|'[^']*'|"[^"]*")+/g;
+// remove the quoting the way the shell does. Quoting changes nothing about how a command reads its
+// own arguments, so `find . '-delete'` must be seen as the flag it is — and so must `-de\lete`,
+// `\" -delete \"` and `$'\x2ddelete'`. Every reader that decides on these words is an allowlist
+// (plan mode's read-only bash, the sandbox's network allow), so a word read differently from the
+// shell is a flag the allowlist never saw: the first cut ignored backslashes, which joined
+// `\" -delete \"` into one quoted word, and dropped quote characters without decoding `$'…'`.
+export const WORD_RE =
+  /(?:\$'(?:[^'\\]|\\[\s\S])*'|\$?"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[\s\S]?|[^\s'"\\])+/g;
 
 export function words(segment: string): string[] {
-  return (segment.match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
+  return (segment.match(WORD_RE) ?? []).map(dequote);
+}
+
+// What a backslash keeps its meaning before inside `"…"`; before anything else it is literal there.
+const DOUBLE_QUOTE_ESCAPES = '$`"\\\n';
+const ANSI_C_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  e: '\x1b',
+  E: '\x1b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+  "'": "'",
+  '"': '"',
+  '?': '?',
+};
+
+export function dequote(word: string): string {
+  let out = '';
+  let i = 0;
+  while (i < word.length) {
+    const c = word[i];
+    if (c === '\\') {
+      // A backslash-newline is a line continuation and disappears; a trailing one is literal.
+      const next = word[i + 1];
+      if (next === undefined) out += '\\';
+      else if (next !== '\n') out += next;
+      i += 2;
+    } else if (c === "'") {
+      const end = word.indexOf("'", i + 1);
+      out += word.slice(i + 1, end < 0 ? word.length : end);
+      i = end < 0 ? word.length : end + 1;
+    } else if (c === '$' && word[i + 1] === "'") {
+      i = readAnsiC(word, i + 2, s => (out += s));
+    } else if (c === '$' && word[i + 1] === '"') {
+      i++;
+    } else if (c === '"') {
+      i++;
+      while (i < word.length && word[i] !== '"') {
+        if (word[i] === '\\' && DOUBLE_QUOTE_ESCAPES.includes(word[i + 1] ?? '')) {
+          if (word[i + 1] !== '\n') out += word[i + 1];
+          i += 2;
+        } else out += word[i++];
+      }
+      i++;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+// Bash's `$'…'` escapes, decoded so `$'\x2ddelete'` reads as the `-delete` it is.
+function readAnsiC(word: string, start: number, emit: (s: string) => void): number {
+  let i = start;
+  while (i < word.length && word[i] !== "'") {
+    if (word[i] !== '\\') {
+      emit(word[i++]);
+      continue;
+    }
+    const next = word[i + 1] ?? '';
+    const rest = word.slice(i + 2);
+    const hex = (max: number) => new RegExp(`^[0-9a-fA-F]{1,${max}}`).exec(rest)?.[0];
+    if (next in ANSI_C_ESCAPES) {
+      emit(ANSI_C_ESCAPES[next]);
+      i += 2;
+    } else if (/[0-7]/.test(next)) {
+      const digits = /^[0-7]{1,3}/.exec(word.slice(i + 1))![0];
+      emit(String.fromCharCode(parseInt(digits, 8) & 0xff));
+      i += 1 + digits.length;
+    } else if (
+      (next === 'x' || next === 'u' || next === 'U') &&
+      hex(next === 'x' ? 2 : next === 'u' ? 4 : 8)
+    ) {
+      const digits = hex(next === 'x' ? 2 : next === 'u' ? 4 : 8)!;
+      const code = parseInt(digits, 16);
+      emit(code <= 0x10ffff ? String.fromCodePoint(code) : '');
+      i += 2 + digits.length;
+    } else if (next === 'c' && i + 2 < word.length) {
+      emit(String.fromCharCode(word.charCodeAt(i + 2) & 0x1f));
+      i += 3;
+    } else {
+      emit('\\' + next);
+      i += 2;
+    }
+  }
+  return i + 1;
 }
 
 // The carrier that bounds ONE command and changes nothing else about it, skipped so both readers see
