@@ -111,7 +111,7 @@ like a capability problem when it is a wording problem in the harness.
   truncation marker now says it is a context limit, not a command error.
 - **The model was reading its own tool calls back.** A 35B at Q2 kept re-reading the same file in a loop,
   with its reasoning repeating verbatim. The model was not the cause. It sometimes writes a tool call
-  inside its reasoning, and reika recovered the call but fed the reasoning back with the raw
+  inside its reasoning, and Reika recovered the call but fed the reasoning back with the raw
   `<function=read>…` markup still in it — so every round the model read its own call intent and fired
   it again. Stripping the markup ended the loop, and the same model went on to find the real bug and
   edit it. The loop detectors that had been built against that loop stayed on as a net for real ones.
@@ -195,6 +195,10 @@ The detectors are simple statistics, and what makes them usable is how far apart
   stays high — it drifted somewhere and stopped moving — and that separation shows up rounds before the
   similarity threshold is crossed. Nothing branches on these numbers; they exist to be looked at across
   runs, because they vary by quantization.
+
+![Saved reasoning blocks by length and self-repeat: nearly all sit near zero at every length, and one 4,001-character block at 0.549 is above the abort threshold](./selfrepeat-scatter.svg)
+
+<sup>Every reasoning block of 1,500+ characters in the saved sessions up to 2026-10-18: 2,843 blocks, plotted by length against 8-gram self-repeat. Healthy reasoning stays near zero at every length, which is why the abort threshold keys on repetition rather than length. This is not a loop rate or a model comparison: 2,499 of the blocks are from API models, the 35B A3B runs predate saved sessions, and spirals Reika cut on its own had their reasoning discarded. The one loop shown is a qwen3.8-27b block aborted by hand.</sup>
 
 ## What a feature buys is what the baseline fails to do
 
