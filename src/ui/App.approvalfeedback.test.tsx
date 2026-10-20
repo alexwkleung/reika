@@ -134,6 +134,8 @@ describe('approval: decline with a reason', () => {
     await openApproval(app);
     await openField(app);
     expect(plain(app.lastFrame())).toContain('ctrl-c back to the options');
+    // The empty field shows how to write a reason that stops the model, not just one that redirects it.
+    expect(plain(app.lastFrame())).toContain("don't run anything, just tell me");
 
     await press(app, '\r');
     expect(answers).toEqual([]);

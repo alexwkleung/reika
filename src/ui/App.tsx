@@ -2891,11 +2891,15 @@ export function App() {
             onPasteImage={onPasteImageSafely}
             onPasteText={onPasteText}
             placeholder={
-              mode === 'shell'
-                ? 'Run a shell command'
-                : mode === 'vibe'
-                  ? 'Describe a change — it plans first, then implements'
-                  : promptPlaceholder()
+              // A reason that should stop the model has to say so: "tell me the script" read as
+              // run-then-tell and drew retries, "don't run anything" did not (decline-terse/-ask).
+              approvalTyping
+                ? 'e.g. "use pnpm instead", or "don\'t run anything, just tell me …"'
+                : mode === 'shell'
+                  ? 'Run a shell command'
+                  : mode === 'vibe'
+                    ? 'Describe a change — it plans first, then implements'
+                    : promptPlaceholder()
             }
           />
           {suggestionState ? (
