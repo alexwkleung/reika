@@ -181,7 +181,7 @@ body:has(.Landing) {
     center / contain no-repeat;
 }
 
-/* Blog: a plain dated list, with the date and kind in mono like the CLI's status line. */
+/* Blog: a plain dated list, its date and kind set as a byline in the body font. */
 .vp-doc ul.blog-list {
   list-style: none;
   padding: 0;
@@ -198,10 +198,20 @@ body:has(.Landing) {
 .blog-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  font-family: var(--reika-mono);
+  gap: 8px;
   font-size: 13px;
   color: var(--vp-c-text-3);
+}
+
+.blog-meta > * + *::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--vp-c-text-3);
+}
+
+.blog-kind,
+.blog-draft {
+  text-transform: capitalize;
 }
 
 .blog-kind {
