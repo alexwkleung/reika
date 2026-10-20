@@ -3397,6 +3397,8 @@ export async function runTurn(opts: {
       subagentCalls.inRound = 0;
     }
     const subagentInRound = roundHasSubagent && subagentCalls.rounds <= MAX_SUBAGENTS_PER_TURN;
+    // Reasons the user typed while declining this round's calls, sent after its results (below).
+    const roundDeclineFeedback: string[] = [];
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
@@ -3577,6 +3579,7 @@ export async function runTurn(opts: {
             ? withDeclineFeedback(result.summary, declineFeedback)
             : result.summary;
           payload = result.payload;
+          if (declineFeedback) roundDeclineFeedback.push(declineFeedback);
           diff = result.diff;
           command = result.command;
           changes = result.changes;
@@ -3820,6 +3823,18 @@ export async function runTurn(opts: {
       if (planCheckoff) {
         opts.onMessage({ role: 'system', tone: 'info', content: planCheckoff });
       }
+    }
+    // The user's own words, as a user message rather than inside the declined call's result: in a
+    // tool result even a framed quote read to lfm2.5-24b as the environment refusing ("maybe the
+    // environment doesn't support it"), 0/3 on a reason asking for an answer instead of a command.
+    // `harness`: not a turn boundary, so the task-spec pin stays put (#287). History only — the
+    // declined call's row already shows the quote.
+    if (roundDeclineFeedback.length > 0) {
+      opts.history.push({
+        role: 'user',
+        content: roundDeclineFeedback.join('\n\n'),
+        harness: true,
+      });
     }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.

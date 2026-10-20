@@ -48,9 +48,9 @@ export function declineSummary(
 
 // A decline the user explained. A bare "declined by user" leaves a small model guessing what to do
 // next, and the guess is often the same call again; the reason turns the dead end into the next
-// instruction. It rides the summary because the summary is what survives payload aging.
+// instruction. The quote rides the summary, the part that survives aging and the user sees on the row.
 export function withDeclineFeedback(summary: string, feedback: string): string {
-  return `${summary}\nThe user said what to do instead: ${feedback}`;
+  return `${summary}\nThe user wrote: "${feedback}"`;
 }
 
 // The end-of-turn roll-up of what an unattended turn declined (#526). Built from the approval

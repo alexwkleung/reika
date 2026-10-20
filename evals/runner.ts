@@ -27,7 +27,11 @@ import { fixture as f14 } from './fixtures/14-self-docs.js';
 import { fixture as f15 } from './fixtures/15-self-attractor.js';
 import { fixture as f16 } from './fixtures/16-grind-chunk-guard.js';
 import { fixture as f17 } from './fixtures/17-grind-chunk-hidden.js';
-import { bareFixture as f18b, feedbackFixture as f18 } from './fixtures/18-decline-feedback.js';
+import {
+  askFixture as f18c,
+  bareFixture as f18b,
+  feedbackFixture as f18,
+} from './fixtures/18-decline-feedback.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -49,6 +53,7 @@ const FIXTURES: Fixture[] = [
   f17,
   f18,
   f18b,
+  f18c,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 

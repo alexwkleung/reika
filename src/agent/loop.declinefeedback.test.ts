@@ -56,7 +56,9 @@ const config: Config = {
   sandbox: false,
 };
 
-async function runGated(answer: ApprovalAnswer): Promise<{ seen: unknown; summary: string }> {
+type Gated = { seen: unknown; summary: string; followUp?: Message; shown: Message[] };
+
+async function runGated(answer: ApprovalAnswer): Promise<Gated> {
   let seen: unknown;
   const gated: Tool = {
     name: 'gated',
@@ -74,6 +76,7 @@ async function runGated(answer: ApprovalAnswer): Promise<{ seen: unknown; summar
   };
   h.scripted.push({ content: '', toolCalls: [{ id: 'a', name: 'gated', args: {} }] });
   const history: Message[] = [];
+  const shown: Message[] = [];
   await runTurn({
     userInput: 'run the tests',
     history,
@@ -81,27 +84,38 @@ async function runGated(answer: ApprovalAnswer): Promise<{ seen: unknown; summar
     config,
     tools: [gated],
     payloads: new PayloadStore(),
-    onMessage: () => {},
+    onMessage: m => shown.push(m),
     requestApproval: async () => answer,
   });
-  const tool = history.find(m => m.role === 'tool');
-  return { seen, summary: tool && tool.role === 'tool' ? tool.summary : '' };
+  const at = history.findIndex(m => m.role === 'tool');
+  const tool = history[at];
+  return {
+    seen,
+    summary: tool && tool.role === 'tool' ? tool.summary : '',
+    followUp: history[at + 1],
+    shown,
+  };
 }
 
 describe('decline with feedback', () => {
-  it('hands the tool false and puts the reason in the summary', async () => {
-    const { seen, summary } = await runGated({ feedback: 'use pnpm test instead' });
-    expect(seen).toBe(false);
-    expect(summary).toBe(
-      'Bash declined by user: npm test\nThe user said what to do instead: use pnpm test instead',
-    );
+  it('hands the tool false, quotes the reason, and sends it as the user right after', async () => {
+    const r = await runGated({ feedback: 'tell me the script' });
+    expect(r.seen).toBe(false);
+    expect(r.summary).toBe('Bash declined by user: npm test\nThe user wrote: "tell me the script"');
+    // A user message, not text in the tool result, and not a turn boundary (#287).
+    expect(r.followUp).toEqual({ role: 'user', content: 'tell me the script', harness: true });
+    // History only: the row already shows the quote, so the scrollback gets no second copy.
+    expect(r.shown.some(m => m.role === 'user' && m.content === 'tell me the script')).toBe(false);
   });
 
-  it('leaves a plain decline and an approval unchanged', async () => {
-    expect(await runGated(false)).toEqual({
-      seen: false,
-      summary: 'Bash declined by user: npm test',
-    });
-    expect(await runGated(true)).toEqual({ seen: true, summary: 'Ran: npm test' });
+  it('leaves a plain decline and an approval unchanged, with no follow-up message', async () => {
+    const declined = await runGated(false);
+    expect(declined.seen).toBe(false);
+    expect(declined.summary).toBe('Bash declined by user: npm test');
+    expect(declined.followUp?.role).not.toBe('user');
+    const approved = await runGated(true);
+    expect(approved.seen).toBe(true);
+    expect(approved.summary).toBe('Ran: npm test');
+    expect(approved.followUp?.role).not.toBe('user');
   });
 });
