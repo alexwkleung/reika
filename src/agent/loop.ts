@@ -3828,7 +3828,8 @@ export async function runTurn(opts: {
     // tool result even a framed quote read to lfm2.5-24b as the environment refusing ("maybe the
     // environment doesn't support it"), 0/3 on a reason asking for an answer instead of a command.
     // `harness`: not a turn boundary, so the task-spec pin stays put (#287). History only — the
-    // declined call's row already shows the quote.
+    // declined call's row already shows the quote. The words go verbatim: opening with "I declined
+    // `<command>`." gained nothing on a terse reason and buried an explicit one behind a long `cd`.
     if (roundDeclineFeedback.length > 0) {
       opts.history.push({
         role: 'user',

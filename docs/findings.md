@@ -123,8 +123,12 @@ like a capability problem when it is a wording problem in the harness.
   ever mentioning the quote. Rewording it inside the result, quoted and labelled as the user's own
   words, changed nothing (0/3). Sent as a user message instead, it was 3/3, and the model read it as the
   user correcting themselves. A reason that was itself a command worked from the start, in either place.
-  In live use the wording of the reason mattered too: a terse "tell me the script" drew retries where an
-  explicit "don't run anything" did not. That part is an observation, not a measurement.
+  What the channel cannot fix is a reason that does not cancel the task. "Tell me the script" still
+  reads as compatible with "run the tests", so lfm2.5-24b took it as run-then-tell and retried the suite
+  (0/3; mellum2.1-12b 1/3), reading each decline as a technical failure ("maybe because of quoting?").
+  Opening the message with "I declined `<command>`." did not change that (0/3), and on the explicit
+  reason it pushed the user's words behind a long `cd` path, so it was dropped. The explicit "don't run
+  anything" is what carries it.
 
 The rule this left behind: before adding an intervention for "the model is stuck", check what the model
 is actually being shown. Several of these failures were harness bugs, not capability.

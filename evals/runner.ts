@@ -31,6 +31,7 @@ import {
   askFixture as f18c,
   bareFixture as f18b,
   feedbackFixture as f18,
+  terseFixture as f18d,
 } from './fixtures/18-decline-feedback.js';
 
 const FIXTURES: Fixture[] = [
@@ -54,6 +55,7 @@ const FIXTURES: Fixture[] = [
   f18,
   f18b,
   f18c,
+  f18d,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 

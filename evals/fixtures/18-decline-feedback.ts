@@ -139,7 +139,10 @@ export function classifyAskReaction(messages: Message[]): AskReaction {
   const at = commands.findIndex(c => TEST_RUN.test(c));
   if (at < 0) return { kind: 'never-ran' };
   const declined = commands[at];
-  const next = commands.slice(at + 1).find(c => TEST_RUN.test(c) || /\btest\/\S*\.js\b/.test(c));
+  // Running a test file, not reading one: `cat test/math.test.js` is how a model looks before answering.
+  const next = commands
+    .slice(at + 1)
+    .find(c => TEST_RUN.test(c) || /\bnode\s+(?:\S+\s+)*test\/\S*\.js\b/.test(c));
   if (next) return { kind: 'ran-tests', declined, next };
   const replies = messages.flatMap(m => (m.role === 'assistant' && m.content ? [m.content] : []));
   const reply = replies[replies.length - 1] ?? '';
@@ -215,5 +218,19 @@ export const askFixture: Fixture = {
   prompt: PROMPT,
   timeoutMs: 15 * 60 * 1000,
   approver: declineFirstTestRun({ feedback: ASK_REASON }),
+  assert: ({ messages }) => gradeAsk(messages),
+};
+
+// The terse form of the same request, as typed in live use: "tell me the script" says what to do but
+// not to stop, and with "run the tests" still standing a model read it as run-then-tell and retried
+// with variations, taking each decline for a technical failure.
+export const TERSE_REASON = 'tell me the script';
+
+export const terseFixture: Fixture = {
+  name: 'decline-terse',
+  setup,
+  prompt: PROMPT,
+  timeoutMs: 15 * 60 * 1000,
+  approver: declineFirstTestRun({ feedback: TERSE_REASON }),
   assert: ({ messages }) => gradeAsk(messages),
 };

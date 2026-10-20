@@ -121,6 +121,16 @@ describe('classifyAskReaction', () => {
     });
   });
 
+  it('reads a test file being read, not run, as no test run', () => {
+    expect(
+      classifyAskReaction([
+        bash('npm test'),
+        bash('cat test/math.test.js'),
+        reply('The script is `node --test test/`.'),
+      ]),
+    ).toMatchObject({ kind: 'answered' });
+  });
+
   it('fails a reply that never names the script', () => {
     expect(
       classifyAskReaction([bash('npm test'), reply('Okay, I will not run anything.')]),
