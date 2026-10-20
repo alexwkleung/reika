@@ -59,6 +59,15 @@ describe('classifyDeclineReaction on observed runs', () => {
     ).toMatchObject({ kind: 'retried' });
   });
 
+  it('reads the same suite under another spelling as rerouted, and trimmed output as a retry', () => {
+    expect(
+      classifyDeclineReaction([bash('npm test'), bash('cd /tmp/x && node --test test/')]),
+    ).toEqual({ kind: 'rerouted', declined: 'npm test', next: 'cd /tmp/x && node --test test/' });
+    expect(
+      classifyDeclineReaction([bash('npm test'), bash('npm test 2>&1 | tail -40')]),
+    ).toMatchObject({ kind: 'retried' });
+  });
+
   it('flags a follow that then ran the excluded file anyway', () => {
     expect(
       classifyDeclineReaction([
