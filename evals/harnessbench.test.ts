@@ -18,6 +18,15 @@ for (const key of Object.keys(process.env)) if (key.startsWith('REIKA_')) delete
 const home = await mkdtemp(join(tmpdir(), 'reika-bench-home-'));
 process.env.HOME = home;
 
+// Anything machine- or release-specific in the prompt has to be pinned at the source, not only
+// normalized out of the measurement: the fit-to-window cap sizes payloads from the real prompt, so
+// a longer checkout path changes how much of a payload survives.
+vi.mock('../src/version.js', async importActual => ({
+  ...(await importActual<object>()),
+  VERSION: '0.0.0-bench',
+  DOCS_DIR: '/reika/docs',
+}));
+
 // The web pair registers unless the machine is offline, and the tool list is request bytes.
 vi.mock('../src/tools/_net.js', async importActual => ({
   ...(await importActual<object>()),
@@ -195,7 +204,9 @@ function benchConfig(baseURL: string, window: number): Config {
 type BenchRun = { rows: RequestRow[]; shrink: { sheds: number; folds: number } };
 
 async function runScenario(scenario: Scenario): Promise<BenchRun> {
-  const cwd = await mkdtemp(join(tmpdir(), 'reika-bench-'));
+  // A fixed-length path under /tmp, which exists on every CI runner: tmpdir() is /tmp on Linux and a
+  // long per-user folder on macOS, and the cwd's length moves the cap for the same reason.
+  const cwd = await mkdtemp('/tmp/reika-bench-');
   let model: MockModel | undefined;
   try {
     for (const [path, source] of Object.entries(FIXTURE)) {
@@ -206,8 +217,7 @@ async function runScenario(scenario: Scenario): Promise<BenchRun> {
     const config = benchConfig(model.baseURL, scenario.window);
     const session = await createSession({ cwd, config, canAsk: false });
     for (const prompt of scenario.prompts) await session.submit(prompt, { mode: 'agent' });
-    // The temp dir's name differs per run and per machine; its length must not move the numbers.
-    const rows = measureRequests(model.requests, s => s.split(cwd).join('<cwd>'));
+    const rows = measureRequests(model.requests, s => s.split(cwd).join('/tmp/reika-bench-XXXXXX'));
     return { rows, shrink: { ...session.shrink } };
   } finally {
     await model?.close();
