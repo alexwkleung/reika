@@ -3,6 +3,14 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Added
+
+- The approval prompt has a fourth row, **Decline, and say what to do instead**. It opens the input box
+  for a reason, and the model gets that reason as a message from you instead of a bare "declined by
+  user", which small models often answer by trying the same call again.
+
 ## [0.5.0] - 2026-10-19
 
 ### Changed

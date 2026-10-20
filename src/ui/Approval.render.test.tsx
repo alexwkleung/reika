@@ -192,9 +192,9 @@ describe('Approval dialog height (#447)', () => {
   });
 
   it('budgets warnings and reserved rows out of the preview', () => {
-    expect(approvalPreviewRows(0, 0, 40)).toBe(22);
-    expect(approvalPreviewRows(2, 0, 40)).toBe(19);
-    expect(approvalPreviewRows(0, 5, 40)).toBe(17);
+    expect(approvalPreviewRows(0, 0, 40)).toBe(21);
+    expect(approvalPreviewRows(2, 0, 40)).toBe(18);
+    expect(approvalPreviewRows(0, 5, 40)).toBe(16);
     expect(approvalPreviewRows(3, 0, 10)).toBe(3);
   });
 

@@ -27,6 +27,12 @@ import { fixture as f14 } from './fixtures/14-self-docs.js';
 import { fixture as f15 } from './fixtures/15-self-attractor.js';
 import { fixture as f16 } from './fixtures/16-grind-chunk-guard.js';
 import { fixture as f17 } from './fixtures/17-grind-chunk-hidden.js';
+import {
+  askFixture as f18c,
+  bareFixture as f18b,
+  feedbackFixture as f18,
+  terseFixture as f18d,
+} from './fixtures/18-decline-feedback.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -46,6 +52,10 @@ const FIXTURES: Fixture[] = [
   f15,
   f16,
   f17,
+  f18,
+  f18b,
+  f18c,
+  f18d,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -139,10 +149,16 @@ async function runFixture(
 
     // The TUI's boot, not a copy of it: a runner that booted on its own never probed the window,
     // so with REIKA_CONTEXT_WINDOW unset every fixture ran with no compaction, no prefix-stable and
-    // no payload cap — a configuration no interactive session runs. No approver, as before: the
-    // gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
+    // no payload cap — a configuration no interactive session runs. No approver unless the fixture
+    // brings one: the gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
     // calls it and stalls.
-    const session = await createSession({ cwd, canAsk: false, profile });
+    const approve = fix.approver?.();
+    const session = await createSession({
+      cwd,
+      canAsk: false,
+      profile,
+      requestApproval: approve && (async req => approve(req)),
+    });
     const messages = session.history;
 
     const start = Date.now();

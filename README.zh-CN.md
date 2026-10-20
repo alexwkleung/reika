@@ -140,7 +140,7 @@ cd your-project && reika
 
 ## 灵感来自
 
-Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
+Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie、DS4 和 Ante。
 
 ## 许可
 

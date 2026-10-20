@@ -141,7 +141,7 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 
 ## Inspired by
 
-Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
+Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, DS4, and Ante.
 
 ## License
 
