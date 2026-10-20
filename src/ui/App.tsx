@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -51,7 +51,7 @@ import {
 } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugLog } from '../debug.js';
+import { debugLog, processSessionStem } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
 import {
   saveTranscript,
@@ -421,6 +421,7 @@ export function App() {
   // The file this session auto-saves to (#1), fixed at its first save so every later save rewrites
   // one file. null until then, and again after /new, so a new conversation gets a new file.
   const sessionPathRef = useRef<string | null>(null);
+  const sessionStemClaimedRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Writes run one after another: two in flight could rename out of order and leave the older
   // snapshot on disk.
@@ -1065,6 +1066,11 @@ export function App() {
       : { agent: messagesRef.current, chat: stash.chat ?? [] };
   };
 
+  // The basename only: enough to find the transcript under history/, no home path in the log.
+  const logSessionFile = (path: string): void => {
+    debugLog(`[reika:debug] session file=${basename(path)}`);
+  };
+
   const autosaveNow = (): Promise<void> => {
     if (autosaveTimerRef.current !== null) {
       clearTimeout(autosaveTimerRef.current);
@@ -1077,7 +1083,14 @@ export function App() {
     // Nothing typed yet — the splash notices alone are not a session worth listing.
     if (turns === 0 || turns <= (autosaveHoldRef.current ?? 0)) return autosaveChainRef.current;
     autosaveHoldRef.current = null;
-    sessionPathRef.current ??= newSessionPath(projectHistoryDir(bundle.cwd), new Date());
+    if (sessionPathRef.current === null) {
+      // The process's first transcript shares the debug log's name (#761); a later /new gets its
+      // own, and the log line below is what pairs it.
+      const stem = sessionStemClaimedRef.current ? undefined : processSessionStem();
+      sessionStemClaimedRef.current = true;
+      sessionPathRef.current = newSessionPath(projectHistoryDir(bundle.cwd), new Date(), stem);
+      logSessionFile(sessionPathRef.current);
+    }
     const path = sessionPathRef.current;
     const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
     autosaveChainRef.current = autosaveChainRef.current
@@ -1157,7 +1170,10 @@ export function App() {
     resetConversation();
     // A project session carries on in its own file; a manual save from the root is left as it was
     // and the continuation gets a project file of its own on its next save.
-    if (dirname(entry.path) === projectDir) sessionPathRef.current = entry.path;
+    if (dirname(entry.path) === projectDir) {
+      sessionPathRef.current = entry.path;
+      logSessionFile(entry.path);
+    }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
