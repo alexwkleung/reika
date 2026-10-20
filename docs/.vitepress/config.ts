@@ -3,6 +3,9 @@ import { defineConfig } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
 import { SITE_URL, pageDescriptions, socialHead } from './seo';
 
+// Drafts render under `docs:dev` so a post can be previewed in place, and never reach the built site.
+const isBuild = process.argv.includes('build');
+
 export default defineConfig({
   title: 'Reika - A coding agent CLI for local and hosted models',
   // Docs pages read "Page title | Reika" in the tab; the landing page opts out with
@@ -12,7 +15,7 @@ export default defineConfig({
     'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
   appearance: 'force-dark',
-  srcExclude: ['demo/**', 'node_modules/**'],
+  srcExclude: ['demo/**', 'node_modules/**', ...(isBuild ? ['blog/drafts/**'] : [])],
   sitemap: { hostname: SITE_URL },
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
@@ -22,6 +25,15 @@ export default defineConfig({
   transformPageData(pageData) {
     const description = pageDescriptions[pageData.relativePath];
     if (description) pageData.description = description;
+    // Blog pages are read on their own, not as part of the guide, so they drop its sidebar and
+    // prev/next links. A post carries its description in frontmatter, since it is not a docs page
+    // GitHub renders.
+    if (pageData.relativePath.startsWith('blog/')) {
+      pageData.frontmatter.sidebar = false;
+      pageData.frontmatter.prev = false;
+      pageData.frontmatter.next = false;
+      if (pageData.frontmatter.summary) pageData.description = pageData.frontmatter.summary;
+    }
   },
   transformHead({ pageData, title, description }) {
     if (pageData.isNotFound) return [];
@@ -41,6 +53,7 @@ export default defineConfig({
       { text: 'Usage', link: '/usage' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Findings', link: '/findings' },
+      { text: 'Blog', link: '/blog/' },
       { text: 'Support', link: '/support' },
       {
         text: 'Changelog',
