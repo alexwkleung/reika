@@ -141,9 +141,12 @@
   font-family: var(--reika-mono);
 }
 
-/* The landing page has no sidebar for a rule to separate, so its nav and footer carry none. Set on
-   the variable rather than on the elements: the nav's own rules out-rank any selector here. */
-body:has(.Landing) {
+/* The landing page and the blog have no sidebar for a rule to separate, so their nav and footer carry
+   none. Set on the variable rather than on the elements: the nav's own rules out-rank any selector
+   here. */
+body:has(.Landing),
+body:has(.blog-list),
+body:has(.post-meta) {
   --vp-c-gutter: transparent;
 }
 
