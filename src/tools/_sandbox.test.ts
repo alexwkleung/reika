@@ -1060,3 +1060,18 @@ describe('sandboxFooter — a refusal found past the payload head', () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 });
+
+describe('networkAllowedFor — a git option spelled through quoting', () => {
+  it('denies the network to a program-naming option the shell unquotes', () => {
+    for (const cmd of [
+      String.raw`git fetch \" --upload-pack=./x.sh \" origin`,
+      String.raw`git fetch \--upload-pack=./x.sh origin`,
+      String.raw`git fetch --upl\oad-pack=./x.sh origin`,
+      String.raw`git fetch $'\x2d-upload-pack=./x.sh' origin`,
+    ]) {
+      expect(networkAllowedFor(cmd), cmd).toBe(false);
+    }
+    expect(networkAllowedFor('git fetch origin')).toBe(true);
+    expect(networkAllowedFor(`gh pr view 1 --json title`)).toBe(true);
+  });
+});

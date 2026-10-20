@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WORD_RE, maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
+import { maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
 import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
@@ -1187,12 +1187,12 @@ function* segmentsWithDir(
   const stripped = stripHeredocs(command);
   let dir = cwd;
   for (const raw of splitSegments(stripped, maskQuoted(stripped))) {
-    const words = (raw.trim().match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
-    if (words[0] === 'cd') {
-      if (words[1]) dir = resolve(dir, expandHome(words[1]));
+    const ws = words(raw.trim());
+    if (ws[0] === 'cd') {
+      if (ws[1]) dir = resolve(dir, expandHome(ws[1]));
       continue;
     }
-    yield { dir, words };
+    yield { dir, words: ws };
   }
 }
 
