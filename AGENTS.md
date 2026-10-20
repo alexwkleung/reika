@@ -607,7 +607,9 @@ window − calibratedPrompt − margin` (or the fixed `REIKA_MAX_TOKENS`, whiche
   value, which is what keeps the KV warm's round-0 prefix and the status gauge on the same
   number as the next request. Moving the threshold rewrites no request bytes. The `round=`
   debug line carries `completion=` (the provider's count, `~n` for a sampled ceiling cut, `?`
-  otherwise), `reserve=` and `reserveSrc=pinned|learned|default`.
+  otherwise), `reserve=`, `reserveSrc=pinned|learned|default` and `t=` (process uptime in
+  seconds — a rate that sags with elapsed time rather than with `usage.promptTokens` is the
+  machine heating, which a fanless laptop does within a few rounds).
 
 **Tool-output spill (on by default, `REIKA_SPILL=0` disables — `tools/_spill.ts`).** Every
 layer above decides what to _drop_; this decides where the dropped bytes _go_. `grep` and `glob`
