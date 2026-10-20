@@ -1,4 +1,4 @@
-import type { Message } from '../src/types.js';
+import type { ApprovalAnswer, ApprovalRequest, Message } from '../src/types.js';
 
 export type EvalMode = 'agent' | 'plan' | 'minimal' | 'grind';
 
@@ -28,6 +28,10 @@ export type Fixture = {
   // Commit the setup files into a fresh git repo before the turn, for fixtures that grade whether
   // the model reviewed its own `git diff`.
   gitInit?: boolean;
+  // Answers the approval gate, for a fixture about what a model does with an answer. A factory, so
+  // each run gets a fresh approver and per-run state (which call it already declined) cannot leak
+  // between runs. Without it the runner passes no approver and every gate is skipped, as `bypass`.
+  approver?: () => (req: ApprovalRequest) => ApprovalAnswer;
   assert: (ctx: AssertCtx) => AssertResult | Promise<AssertResult>;
 };
 
