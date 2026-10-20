@@ -254,6 +254,11 @@ export type ApprovalRequest = {
   warnings?: string[];
 };
 
+// What a front end answers an approval with. `{ feedback }` is a decline that carries the user's
+// reason; the loop folds it into the tool's summary and hands the tool a plain `false`, so no tool
+// can mistake the (truthy) object for an approval.
+export type ApprovalAnswer = boolean | { feedback: string };
+
 // One choice in an `ask_user` question. `label` is the whole answer as far as the model is
 // concerned — it is what comes back when the user picks this row, so it must stand alone as a
 // sentence. `description` is optional on purpose: a weak model that emits bare labels still

@@ -14,7 +14,7 @@ import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
-import { Approval } from './Approval.js';
+import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, Approval } from './Approval.js';
 import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
@@ -127,7 +127,14 @@ import {
   type ShellRun,
 } from '../agent/shellruns.js';
 import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
-import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
+import type {
+  ApprovalAnswer,
+  ApprovalRequest,
+  Message,
+  QuestionAnswer,
+  QuestionRequest,
+  Usage,
+} from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -236,9 +243,11 @@ export function App() {
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
-    resolve: (allow: boolean) => void;
+    resolve: (answer: ApprovalAnswer) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
+  // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
+  const [approvalTyping, setApprovalTyping] = useState(false);
   // An `ask_user` question waiting on the user (#198). Modal like Approval, with one difference: the
   // input box stays LIVE underneath once `questionTyping` is set, because the free-text row hands the
   // answer to Input rather than to a field rebuilt in the dialog.
@@ -379,6 +388,8 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
+  const approvalTypingRef = useRef(false);
+  approvalTypingRef.current = approvalTyping;
   const confirmRef = useRef<typeof confirm>(null);
   confirmRef.current = confirm;
   const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
@@ -761,6 +772,14 @@ export function App() {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       const hadPending = pendingRef.current !== null;
+      // Typing a decline's reason: back out to the options, as the question's field does (#651).
+      // Nothing is decided yet, so neither the approval nor the turn may end here.
+      if (hadPending && approvalTypingRef.current) {
+        setInputValue(preAnswerDraftRef.current);
+        setSuggestionState(null);
+        setApprovalTyping(false);
+        return;
+      }
       // Interrupt anything in flight: decline a pending approval, drop an unanswered question,
       // abort a turn.
       if (hadPending) {
@@ -829,16 +848,25 @@ export function App() {
       return;
     }
     if (pendingRef.current) {
+      // Input owns the keyboard while the reason is typed; a key consumed here is a lost character.
+      if (approvalTypingRef.current) return;
       if (key.upArrow) {
         setApprovalSelected(i => Math.max(0, i - 1));
         return;
       }
       if (key.downArrow) {
-        setApprovalSelected(i => Math.min(2, i + 1));
+        setApprovalSelected(i => Math.min(APPROVAL_OPTIONS.length - 1, i + 1));
         return;
       }
       if (key.return) {
         const sel = approvalSelectedRef.current;
+        if (sel === APPROVAL_FEEDBACK_INDEX) {
+          // Deferred like the question's field: enabling Input synchronously hands it this Enter.
+          preAnswerDraftRef.current = inputValueRef.current;
+          setInputValue('');
+          queueMicrotask(() => setApprovalTyping(true));
+          return;
+        }
         const resolve = pendingRef.current.resolve;
         setPending(null);
         if (sel === 0) resolve(true);
@@ -1264,7 +1292,7 @@ export function App() {
     setSuggestionSelected(0);
   };
 
-  const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
+  const requestApproval = (req: ApprovalRequest): Promise<ApprovalAnswer> => {
     // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
     // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
     // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
@@ -1282,12 +1310,13 @@ export function App() {
       return Promise.resolve(false);
     }
     setApprovalSelected(0);
+    setApprovalTyping(false);
     return new Promise(resolve => {
-      const wrappedResolve = (allow: boolean): void => {
+      const wrappedResolve = (answer: ApprovalAnswer): void => {
         setApprovals(a =>
-          allow ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
+          answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
-        resolve(allow);
+        resolve(answer);
       };
       setPending({ request: req, resolve: wrappedResolve });
     });
@@ -2240,6 +2269,19 @@ export function App() {
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
     // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
     // be queued as the user's next prompt.
+    // A decline's reason, likewise not a message for the model's next turn. An empty one is not a
+    // reason; the field stays open, and ctrl-c is the way back to a plain Decline.
+    const ap = pendingRef.current;
+    if (ap && approvalTypingRef.current) {
+      const text = input.trim();
+      if (!text) return;
+      setInputValue(preAnswerDraftRef.current);
+      setSuggestionState(null);
+      setPending(null);
+      setApprovalTyping(false);
+      ap.resolve({ feedback: text });
+      return;
+    }
     const q = questionRef.current;
     const typing = questionTypingRef.current;
     if (q && typing) {
@@ -2785,6 +2827,7 @@ export function App() {
             <Approval
               request={pending.request}
               selectedIndex={approvalSelected}
+              typing={approvalTyping}
               reservedRows={dialogReservedRows}
             />
           ) : question ? (
@@ -2820,7 +2863,7 @@ export function App() {
             // The question dialog is modal only while its list is up; once the user is typing an
             // answer the input has to be live, since it IS the answer field.
             disabled={
-              pending !== null ||
+              (pending !== null && !approvalTyping) ||
               modelSelect !== null ||
               resumeSelect !== null ||
               confirm !== null ||

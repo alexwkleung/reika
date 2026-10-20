@@ -1,4 +1,5 @@
 import type {
+  ApprovalAnswer,
   ApprovalRequest,
   Config,
   ContextBundle,
@@ -60,6 +61,7 @@ import {
   buildGroundingNote,
   shouldSuppressGrounding,
 } from './groundcheck.js';
+import { withDeclineFeedback } from '../approval.js';
 import { collectSourcedUrls } from '../tools/_exfil.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
@@ -1336,7 +1338,7 @@ export async function runTurn(opts: {
   // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
   // done-gate are gated behind REIKA_PLAN_ALIGN). The array is the loop's live tracker — copy it.
   onPlanProgress?: (steps: PlanStep[]) => void;
-  requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalAnswer>;
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   // Whether the session is unattended right now (#526): `/unattended` toggles it mid-turn, so tools
   // read it per call. Absent, `config.unattended` (launch state, and headless's constant) decides.
@@ -3449,6 +3451,8 @@ export async function runTurn(opts: {
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
+      // The reason a user typed when declining this call, appended to its summary after the run.
+      let declineFeedback: string | undefined;
       // Read-first (#72): path this call put file bytes in front of the model for, and whether the
       // model authored them (`write`) rather than being handed them. Applied once the tool message
       // exists, since handed-back grounding keys on its history index. See readfirst.ts.
@@ -3552,7 +3556,14 @@ export async function runTurn(opts: {
             groundedUrls,
             sourcedUrls: () => collectSourcedUrls(opts.history),
             askedQuestions,
-            requestApproval: opts.requestApproval,
+            requestApproval:
+              opts.requestApproval &&
+              (async req => {
+                const answer = await opts.requestApproval!(req);
+                if (typeof answer === 'boolean') return answer;
+                declineFeedback = answer.feedback;
+                return false;
+              }),
             requestQuestion,
             onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput, genReserve),
@@ -3562,7 +3573,9 @@ export async function runTurn(opts: {
             unattended: opts.isUnattended?.() ?? opts.config.unattended,
             signal: opts.signal,
           });
-          summary = result.summary;
+          summary = declineFeedback
+            ? withDeclineFeedback(result.summary, declineFeedback)
+            : result.summary;
           payload = result.payload;
           diff = result.diff;
           command = result.command;
