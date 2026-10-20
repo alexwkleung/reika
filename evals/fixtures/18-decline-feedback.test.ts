@@ -15,7 +15,7 @@ const bash = (command: string): Message => ({
 const declinedResult = (command: string): Message => ({
   role: 'tool',
   callId: command,
-  summary: `Bash declined by user: ${command}\nThe user said what to do instead: ${REASON}`,
+  summary: `Bash declined by user: ${command}\nThe user wrote: "${REASON}"`,
 });
 
 describe('classifyDeclineReaction', () => {

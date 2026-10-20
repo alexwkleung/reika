@@ -116,6 +116,16 @@ like a capability problem when it is a wording problem in the harness.
   it again. Stripping the markup ended the loop, and the same model went on to find the real bug and
   edit it. The loop detectors that had been built against that loop stayed on as a net for real ones.
 
+- **The user's words read as the environment.** When you decline an approval you can now say what to do
+  instead. Placed in the declined call's tool result, a reason that asked for an answer rather than a
+  command ("Don't run anything. Just tell me what the test script is.") was ignored: lfm2.5-24b reran
+  the suite 3 times out of 3, reasoning "maybe the environment doesn't support `node --test`?" without
+  ever mentioning the quote. Rewording it inside the result, quoted and labelled as the user's own
+  words, changed nothing (0/3). Sent as a user message instead, it was 3/3, and the model read it as the
+  user correcting themselves. A reason that was itself a command worked from the start, in either place.
+  In live use the wording of the reason mattered too: a terse "tell me the script" drew retries where an
+  explicit "don't run anything" did not. That part is an observation, not a measurement.
+
 The rule this left behind: before adding an intervention for "the model is stuck", check what the model
 is actually being shown. Several of these failures were harness bugs, not capability.
 
