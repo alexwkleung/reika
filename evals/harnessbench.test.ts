@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Config } from '../src/types.js';
 import {
@@ -26,12 +26,8 @@ vi.mock('../src/tools/_net.js', async importActual => ({
 
 const { createSession } = await import('../src/session.js');
 
-const WINDOW = 12_000;
-
-// Six modules of ~4KB: big enough that a handful of reads crosses the threshold on a 12k window,
-// which is what forces the shed and the fold the bench exists to watch.
-function moduleSource(name: string): string {
-  const fns = Array.from({ length: 14 }, (_, i) =>
+function moduleSource(name: string, steps: number): string {
+  const fns = Array.from({ length: steps }, (_, i) =>
     [
       `export function ${name}Step${i}(input: number[]): number {`,
       `  // step ${i} of the ${name} pipeline folds its input into a running total`,
@@ -42,65 +38,136 @@ function moduleSource(name: string): string {
   return [`// ${name}: generated fixture module`, ...fns].join('\n\n') + '\n';
 }
 
-const MODULES = ['parser', 'lexer', 'render', 'config', 'cache', 'router'];
+// Six ~4KB modules and four ~1KB helpers. The stress scenario reads the big ones whole; the typical
+// one mixes small files, line ranges and searches, the shape most real rounds take.
+const FIXTURE: Record<string, string> = {
+  ...Object.fromEntries(
+    ['parser', 'lexer', 'render', 'config', 'cache', 'router'].map(name => [
+      `src/${name}.ts`,
+      moduleSource(name, 14),
+    ]),
+  ),
+  ...Object.fromEntries(
+    ['format', 'paths', 'errors', 'clock'].map(name => [
+      `src/util/${name}.ts`,
+      moduleSource(name, 3),
+    ]),
+  ),
+};
 
-const read = (path: string): ScriptedReply => ({ toolCalls: [{ name: 'read', args: { path } }] });
+const read = (path: string, offset?: number, limit?: number): ScriptedReply => ({
+  toolCalls: [{ name: 'read', args: { path, ...(offset ? { offset, limit } : {}) } }],
+});
 const bash = (command: string): ScriptedReply => ({
   toolCalls: [{ name: 'bash', args: { command } }],
 });
-const thinking = (n: number): string =>
-  `Round ${n}: checking how the pipeline steps compose before changing anything.`;
+const grep = (pattern: string, path = 'src'): ScriptedReply => ({
+  toolCalls: [{ name: 'grep', args: { pattern, path } }],
+});
+const edit = (path: string, old_string: string, new_string: string): ScriptedReply => ({
+  toolCalls: [{ name: 'edit', args: { path, old_string, new_string } }],
+});
+const answer = (content: string): ScriptedReply => ({ content });
 
-// One scripted session: an exploration-heavy first turn with an edit and a failing command, then a
-// short follow-up turn, so the turn boundary is measured too.
-const SCRIPT: ScriptedReply[] = [
-  read('src/parser.ts'),
-  read('src/lexer.ts'),
-  { toolCalls: [{ name: 'grep', args: { pattern: 'Step3', path: 'src' } }] },
-  read('src/render.ts'),
-  read('src/config.ts'),
-  bash('ls src'),
-  read('src/cache.ts'),
-  read('src/router.ts'),
-  read('src/parser.ts'),
-  {
-    toolCalls: [
-      {
-        name: 'edit',
-        args: {
-          path: 'src/parser.ts',
-          old_string: 'acc + value * 1, 0',
-          new_string: 'acc + value * 1, 1',
-        },
-      },
-    ],
-  },
-  bash('cat src/missing.ts'),
-  read('src/lexer.ts'),
-  { content: 'Changed the seed of parserStep0 from 0 to 1.' },
-  read('src/render.ts'),
-  { toolCalls: [{ name: 'grep', args: { pattern: 'running total', path: 'src' } }] },
-  { content: 'render.ts has 14 steps, each folding with its index as the seed.' },
-];
+type Scenario = {
+  name: string;
+  window: number;
+  // One entry per user turn; the model's script runs across them in order, each turn ending on an
+  // answer with no calls.
+  prompts: string[];
+  script: ScriptedReply[];
+  snapshot: string;
+  // Stress must reach the edge or it measures nothing; typical must never get there.
+  shrinks: boolean;
+};
 
-const NOTE = 'Findings: six pipeline modules, 14 steps each; parserStep0 seed changed to 1.';
+// The extreme end on purpose: a 12k window where every read is a tenth of it, so a short session
+// sheds and folds several times. It pins the machinery that runs at the edge, and its numbers are
+// not what a typical session costs.
+const STRESS: Scenario = {
+  name: 'stress: 12k window, whole-file reads',
+  window: 12_000,
+  prompts: [
+    'Look through the pipeline modules and fix the seed of parserStep0.',
+    'Now summarize how render.ts composes its steps.',
+  ],
+  script: [
+    read('src/parser.ts'),
+    read('src/lexer.ts'),
+    grep('Step3'),
+    read('src/render.ts'),
+    read('src/config.ts'),
+    bash('ls src'),
+    read('src/cache.ts'),
+    read('src/router.ts'),
+    read('src/parser.ts'),
+    edit('src/parser.ts', 'acc + value * 1, 0', 'acc + value * 1, 1'),
+    bash('cat src/missing.ts'),
+    read('src/lexer.ts'),
+    answer('Changed the seed of parserStep0 from 0 to 1.'),
+    read('src/render.ts'),
+    grep('running total'),
+    answer('render.ts has 14 steps, each folding with its index as the seed.'),
+  ],
+  snapshot: 'harnessbench.stress.snapshot.txt',
+  shrinks: true,
+};
 
-function scriptedModel(): (body: { tool_choice?: unknown }) => ScriptedReply {
+// The common case: a 32k window, three turns of mixed small reads, ranges, searches and edits. It
+// should stay append-only throughout, so a rewrite or a shrink showing up here is a regression in
+// the path most sessions take.
+const TYPICAL: Scenario = {
+  name: 'typical: 32k window, mixed session',
+  window: 32_000,
+  prompts: [
+    'The clock helper should seed from 1. Fix it and check nothing else depends on the old seed.',
+    'Also rename formatStep2 to formatTotal.',
+    'Which helpers does the router use?',
+  ],
+  script: [
+    grep('clockStep'),
+    read('src/util/clock.ts'),
+    edit('src/util/clock.ts', 'acc + value * 1, 0', 'acc + value * 1, 1'),
+    grep('clockStep0'),
+    bash('cat src/util/clock.ts | head -5'),
+    answer('clockStep0 now seeds from 1; nothing else references it.'),
+    grep('formatStep2'),
+    read('src/util/format.ts'),
+    edit('src/util/format.ts', 'function formatStep2(', 'function formatTotal('),
+    grep('formatStep2'),
+    answer('Renamed formatStep2 to formatTotal; it had no other callers.'),
+    bash('ls src src/util'),
+    read('src/router.ts', 1, 20),
+    grep('util', 'src/router.ts'),
+    read('src/util/paths.ts'),
+    read('src/router.ts', 20, 20),
+    read('src/util/errors.ts'),
+    answer('The router imports none of the helpers; each module is self-contained.'),
+  ],
+  snapshot: 'harnessbench.typical.snapshot.txt',
+  shrinks: false,
+};
+
+const NOTE = 'Findings: pipeline modules with indexed steps; the edits so far are recorded above.';
+
+function scriptedModel(
+  script: ScriptedReply[],
+): (body: { tool_choice?: unknown }) => ScriptedReply {
   let step = 0;
   return body => {
     if (body.tool_choice === 'none') return { content: NOTE };
-    const next = SCRIPT[step] ?? { content: 'done' };
+    const next = script[step] ?? answer('done');
     step++;
-    return { reasoning: thinking(step), ...next };
+    return { reasoning: `Round ${step}: checking how the steps compose before acting.`, ...next };
   };
 }
 
-function benchConfig(baseURL: string): Config {
+function benchConfig(baseURL: string, window: number): Config {
   const profile = {
     model: 'bench',
     baseURL,
     apiKey: 'x',
-    contextWindow: WINDOW,
+    contextWindow: window,
     maxOutputTokens: 4096,
   };
   return {
@@ -125,51 +192,59 @@ function benchConfig(baseURL: string): Config {
   };
 }
 
-describe('harness-cost bench: scripted agent session on a 12k window', () => {
-  let cwd: string;
-  let model: MockModel;
-  let rows: RequestRow[];
-  let shrink: { sheds: number; folds: number };
+type BenchRun = { rows: RequestRow[]; shrink: { sheds: number; folds: number } };
 
-  beforeAll(async () => {
-    cwd = await mkdtemp(join(tmpdir(), 'reika-bench-'));
-    await mkdir(join(cwd, 'src'));
-    for (const name of MODULES) await writeFile(join(cwd, 'src', `${name}.ts`), moduleSource(name));
-    model = await startMockModel(scriptedModel());
-    const session = await createSession({ cwd, config: benchConfig(model.baseURL), canAsk: false });
-    await session.submit('Look through the pipeline modules and fix the seed of parserStep0.', {
-      mode: 'agent',
-    });
-    await session.submit('Now summarize how render.ts composes its steps.', { mode: 'agent' });
-    shrink = session.shrink;
+async function runScenario(scenario: Scenario): Promise<BenchRun> {
+  const cwd = await mkdtemp(join(tmpdir(), 'reika-bench-'));
+  let model: MockModel | undefined;
+  try {
+    for (const [path, source] of Object.entries(FIXTURE)) {
+      await mkdir(dirname(join(cwd, path)), { recursive: true });
+      await writeFile(join(cwd, path), source);
+    }
+    model = await startMockModel(scriptedModel(scenario.script));
+    const config = benchConfig(model.baseURL, scenario.window);
+    const session = await createSession({ cwd, config, canAsk: false });
+    for (const prompt of scenario.prompts) await session.submit(prompt, { mode: 'agent' });
     // The temp dir's name differs per run and per machine; its length must not move the numbers.
-    rows = measureRequests(model.requests, s => s.split(cwd).join('<cwd>'));
-  }, 60_000);
-
-  afterAll(async () => {
+    const rows = measureRequests(model.requests, s => s.split(cwd).join('<cwd>'));
+    return { rows, shrink: { ...session.shrink } };
+  } finally {
     await model?.close();
     await rm(cwd, { recursive: true, force: true });
-    await rm(home, { recursive: true, force: true });
-  });
+  }
+}
+
+const rewrites = (rows: RequestRow[]): RequestRow[] =>
+  rows.filter(r => r.divergence === 'mid-history' || r.divergence === 'system-changed');
+
+afterAll(async () => {
+  await rm(home, { recursive: true, force: true });
+});
+
+describe.each([STRESS, TYPICAL])('harness-cost bench — $name', scenario => {
+  let run: BenchRun;
+  beforeAll(async () => {
+    run = await runScenario(scenario);
+  }, 60_000);
 
   it('matches the recorded request shape', async () => {
-    await expect(formatBenchTable(rows, shrink)).toMatchFileSnapshot('harnessbench.snapshot.txt');
-  });
-
-  it('forces at least one shrink event, or the bench measures nothing', () => {
-    expect(shrink.sheds + shrink.folds).toBeGreaterThan(0);
+    await expect(formatBenchTable(run.rows, run.shrink)).toMatchFileSnapshot(scenario.snapshot);
   });
 
   // Prefix-stable's promise: between shrink events requests only grow at the end. A rewrite above
   // the tail is a full re-prefill on a real engine, and each one has to be paid for by an event.
   it('rewrites history no more often than it shrinks', () => {
-    const rewrites = rows.filter(
-      r => r.divergence === 'mid-history' || r.divergence === 'system-changed',
-    );
-    expect(rewrites.length).toBeLessThanOrEqual(shrink.sheds + shrink.folds);
+    expect(rewrites(run.rows).length).toBeLessThanOrEqual(run.shrink.sheds + run.shrink.folds);
   });
 
   it('never changes the tool list mid-session', () => {
-    expect(rows.filter(r => r.divergence === 'tools-changed')).toEqual([]);
+    expect(run.rows.filter(r => r.divergence === 'tools-changed')).toEqual([]);
+  });
+
+  it(scenario.shrinks ? 'reaches a shrink event' : 'never shrinks or rewrites history', () => {
+    const events = run.shrink.sheds + run.shrink.folds;
+    if (scenario.shrinks) expect(events).toBeGreaterThan(0);
+    else expect({ events, rewrites: rewrites(run.rows) }).toEqual({ events: 0, rewrites: [] });
   });
 });

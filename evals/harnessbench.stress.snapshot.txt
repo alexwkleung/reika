@@ -1,0 +1,23 @@
+  0  round   msgs=  2  chars=  7401  reprocess=  7401  first
+  1  round   msgs=  4  chars= 10931  reprocess=  3530  append-only
+  2  round   msgs=  6  chars= 14430  reprocess=  3499  append-only
+  3  round   msgs=  8  chars= 16797  reprocess=  2367  append-only
+  4  round   msgs= 10  chars= 20327  reprocess=  3530  append-only
+  5  round   msgs= 12  chars= 23857  reprocess=  3530  append-only
+  6  round   msgs= 14  chars= 24253  reprocess=   396  append-only
+  7  round   msgs= 16  chars= 27752  reprocess=  3499  append-only
+  8  round   msgs= 18  chars= 23369  reprocess= 15968  mid-history@3
+  9  round   msgs= 21  chars= 27816  reprocess=  4447  append-only
+ 10  report  msgs= 23  chars= 32225  reprocess=  4888  tail-rewrite
+ 11  round   msgs= 19  chars= 26235  reprocess= 21355  system-changed
+ 12  round   msgs= 21  chars= 26644  reprocess=   888  tail-rewrite
+ 13  report  msgs= 23  chars= 30787  reprocess=  4622  tail-rewrite
+ 14  round   msgs= 21  chars= 24226  reprocess= 19346  system-changed
+ 15  round   msgs= 22  chars= 24432  reprocess=   685  tail-rewrite
+ 16  round   msgs= 25  chars= 27989  reprocess=  4087  tail-rewrite
+ 17  report  msgs= 27  chars= 34237  reprocess=  6727  tail-rewrite
+ 18  round   msgs= 27  chars= 32542  reprocess= 27662  system-changed
+
+requests=19 sent=456250 reprocessed=138427
+sheds=4 folds=3
+first=1 append-only=8 mid-history=1 tail-rewrite=6 system-changed=3
