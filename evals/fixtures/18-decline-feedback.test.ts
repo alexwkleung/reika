@@ -52,6 +52,27 @@ describe('classifyDeclineReaction', () => {
   });
 });
 
+describe('classifyDeclineReaction on observed runs', () => {
+  it('reads a retry that dropped the cd prefix as a retry', () => {
+    expect(
+      classifyDeclineReaction([bash('cd /tmp/x && node --test test/'), bash('node --test test/')]),
+    ).toMatchObject({ kind: 'retried' });
+  });
+
+  it('flags a follow that then ran the excluded file anyway', () => {
+    expect(
+      classifyDeclineReaction([
+        bash('node --test test/'),
+        bash('node --test test/math.test.js'),
+        bash('timeout 30 node --test test/slow.test.js'),
+      ]),
+    ).toMatchObject({ kind: 'followed', overrode: true });
+    expect(
+      classifyDeclineReaction([bash('node --test test/'), bash('node --test test/math.test.js')]),
+    ).toMatchObject({ kind: 'followed', overrode: false });
+  });
+});
+
 describe('the approver', () => {
   it('declines the first test run only, with the reason, and approves everything else', () => {
     const approve = feedbackFixture.approver!();
