@@ -22,6 +22,9 @@ hero:
     - theme: alt
       text: Read the findings
       link: /findings
+    - theme: alt
+      text: Blog
+      link: /blog/
 
 features:
   - title: Context discipline
