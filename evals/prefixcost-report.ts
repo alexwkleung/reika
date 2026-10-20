@@ -20,7 +20,7 @@
 // that actually fired in it.
 //
 // Usage:
-//   npx tsx evals/prefixcost-report.ts ~/reika-debug.log
+//   npx tsx evals/prefixcost-report.ts ~/.config/reika/logs/latest.log
 //   npx tsx evals/prefixcost-report.ts a.log b.log          # two arms, compared
 //   npx tsx evals/prefixcost-report.ts --rounds run.log     # per-round table (the issue's table)
 //

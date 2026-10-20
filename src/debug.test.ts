@@ -1,76 +1,174 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import type * as nodeOs from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// homedir() is mocked so the default-path truncation runs against a temp dir
-// instead of the real ~/reika-debug.log.
+// homedir() is mocked so the per-session logs land in a temp dir instead of the real
+// ~/.config/reika/logs.
 let fakeHome: string;
 vi.mock('node:os', async importOriginal => {
   const os = await importOriginal<typeof nodeOs>();
   return { ...os, homedir: () => fakeHome };
 });
 
-// debugLog's once-per-process reset lives in module state, so each test imports
-// a fresh copy of the module.
+// The session stem and the once-per-process header live in module state, so each test imports a
+// fresh copy of the module.
 async function freshDebug() {
   vi.resetModules();
   return import('./debug.js');
 }
 
-describe('debugLog session reset (#114)', () => {
-  beforeEach(() => {
-    fakeHome = mkdtempSync(join(tmpdir(), 'reika-debug-test-'));
-    process.env.REIKA_DEBUG = '1';
-    delete process.env.REIKA_DEBUG_FILE;
-  });
+const logsDir = (): string => join(fakeHome, '.config', 'reika', 'logs');
 
-  afterEach(() => {
-    delete process.env.REIKA_DEBUG;
-    delete process.env.REIKA_DEBUG_FILE;
-    rmSync(fakeHome, { recursive: true, force: true });
-  });
+beforeEach(() => {
+  fakeHome = mkdtempSync(join(tmpdir(), 'reika-debug-test-'));
+  process.env.REIKA_DEBUG = '1';
+  delete process.env.REIKA_DEBUG_FILE;
+});
 
-  it('truncates the default log on the first write of a session', async () => {
-    const path = join(fakeHome, 'reika-debug.log');
-    writeFileSync(path, 'stale line from a previous session\n');
+afterEach(() => {
+  delete process.env.REIKA_DEBUG;
+  delete process.env.REIKA_DEBUG_FILE;
+  rmSync(fakeHome, { recursive: true, force: true });
+});
 
-    const { debugLog } = await freshDebug();
-    debugLog('first line of new session');
-
-    expect(readFileSync(path, 'utf8')).toBe('first line of new session\n');
-  });
-
-  it('appends within the same session', async () => {
-    const path = join(fakeHome, 'reika-debug.log');
-    const { debugLog } = await freshDebug();
+describe('per-session debug log (#761)', () => {
+  it('writes one file per session under logs/, named by the session stem', async () => {
+    const { debugLog, debugLogPath, processSessionStem } = await freshDebug();
     debugLog('line one');
     debugLog('line two');
 
-    expect(readFileSync(path, 'utf8')).toBe('line one\nline two\n');
+    expect(debugLogPath()).toBe(join(logsDir(), `${processSessionStem()}.log`));
+    expect(processSessionStem()).toMatch(/^\d{4}-\d{2}-\d{2}T[\d-]+Z-[0-9a-f]{6}$/);
+    const lines = readFileSync(debugLogPath(), 'utf8').split('\n');
+    expect(lines[0]).toMatch(new RegExp(`^\\[reika:debug\\] session pid=${process.pid} version=`));
+    expect(lines.slice(1)).toEqual(['line one', 'line two', '']);
   });
 
-  it('never truncates an explicit REIKA_DEBUG_FILE', async () => {
+  it('leaves the previous session alone and repoints latest.log at the new one', async () => {
+    const first = await freshDebug();
+    first.debugLog('session one');
+    const firstPath = first.debugLogPath();
+    const second = await freshDebug();
+    second.debugLog('session two');
+
+    expect(second.debugLogPath()).not.toBe(firstPath);
+    expect(readFileSync(firstPath, 'utf8')).toContain('session one');
+    const latest = join(logsDir(), 'latest.log');
+    expect(lstatSync(latest).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(latest)).toBe(`${second.processSessionStem()}.log`);
+    expect(readFileSync(latest, 'utf8')).toContain('session two');
+    expect(readdirSync(logsDir()).filter(n => n.startsWith('.'))).toEqual([]);
+  });
+
+  it('pairs the auto-save file with the log through the shared stem', async () => {
+    const { processSessionStem } = await freshDebug();
+    const { newSessionPath } = await import('./store/sessions.js');
+    expect(newSessionPath('/h/p', new Date(), processSessionStem())).toBe(
+      `/h/p/${processSessionStem()}.jsonl`,
+    );
+  });
+
+  it('appends to an explicit REIKA_DEBUG_FILE with no header and no latest.log', async () => {
     const path = join(fakeHome, 'experiment.log');
     process.env.REIKA_DEBUG_FILE = path;
     writeFileSync(path, 'run 1\n');
 
-    const { debugLog } = await freshDebug();
+    const { debugLog, debugLogPath } = await freshDebug();
     debugLog('run 2');
 
+    expect(debugLogPath()).toBe(path);
     expect(readFileSync(path, 'utf8')).toBe('run 1\nrun 2\n');
+    expect(() => readdirSync(logsDir())).toThrow();
   });
 
   it('writes nothing when REIKA_DEBUG is unset', async () => {
     delete process.env.REIKA_DEBUG;
-    const path = join(fakeHome, 'reika-debug.log');
-    writeFileSync(path, 'untouched\n');
-
     const { debugLog } = await freshDebug();
     debugLog('should be dropped');
+    expect(() => readdirSync(logsDir())).toThrow();
+  });
+});
 
-    expect(readFileSync(path, 'utf8')).toBe('untouched\n');
+describe('sweepDebugLogs (#761)', () => {
+  const NOW = Date.parse('2026-10-19T12:00:00Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  let n = 0;
+
+  // A log `ageDays` old of `size` bytes, owned by `pid` when given. Names sort by creation order,
+  // but the sweep must order by mtime, so they are deliberately unrelated to age.
+  function log(ageDays: number, size = 10, pid?: number): string {
+    mkdirSync(logsDir(), { recursive: true });
+    const path = join(
+      logsDir(),
+      `2026-10-01T00-00-00-000Z-${(n++).toString(16).padStart(6, '0')}.log`,
+    );
+    const header = pid === undefined ? '' : `[reika:debug] session pid=${pid} version=0\n`;
+    writeFileSync(path, header + 'x'.repeat(Math.max(0, size - header.length)));
+    const t = (NOW - ageDays * DAY) / 1000;
+    utimesSync(path, t, t);
+    return path;
+  }
+
+  // A pid that cannot be running: past any default pid_max.
+  const DEAD_PID = 2 ** 22 + 12345;
+
+  it('removes logs past the age limit and keeps younger ones', async () => {
+    const { sweepDebugLogs } = await freshDebug();
+    const old = log(15);
+    const young = log(13);
+    expect(await sweepDebugLogs(logsDir(), NOW)).toEqual([old]);
+    expect(readdirSync(logsDir())).toEqual([young.split('/').pop()]);
+  });
+
+  it('drops oldest first until the total is under the size limit', async () => {
+    const { sweepDebugLogs, LOG_MAX_TOTAL_BYTES } = await freshDebug();
+    const third = Math.floor(LOG_MAX_TOTAL_BYTES / 3);
+    const newest = log(1, third);
+    const oldest = log(3, third);
+    const middle = log(2, third);
+    const extra = log(0, third);
+    expect(await sweepDebugLogs(logsDir(), NOW)).toEqual([oldest]);
+    expect(readdirSync(logsDir()).sort()).toEqual(
+      [newest, middle, extra].map(p => p.split('/').pop()).sort(),
+    );
+  });
+
+  it("keeps a running session's log at any age, and reaps a dead owner's", async () => {
+    const { sweepDebugLogs } = await freshDebug();
+    const live = log(100, 64, process.pid);
+    const dead = log(100, 64, DEAD_PID);
+    expect(await sweepDebugLogs(logsDir(), NOW)).toEqual([dead]);
+    expect(readFileSync(live, 'utf8')).toContain(`pid=${process.pid}`);
+  });
+
+  it('never touches latest.log, other names, or a REIKA_DEBUG_FILE target', async () => {
+    const { debugLog, sweepDebugLogs } = await freshDebug();
+    const target = join(logsDir(), 'experiment.log');
+    mkdirSync(logsDir(), { recursive: true });
+    writeFileSync(target, 'run\n');
+    utimesSync(target, 0, 0);
+    debugLog('current');
+    const old = log(30);
+    expect(await sweepDebugLogs(logsDir(), NOW + 365 * DAY)).toEqual([old]);
+    expect(readdirSync(logsDir())).toContain('experiment.log');
+    expect(readdirSync(logsDir())).toContain('latest.log');
+  });
+
+  it('is a no-op when the directory does not exist', async () => {
+    const { sweepDebugLogs } = await freshDebug();
+    expect(await sweepDebugLogs(join(fakeHome, 'nope'), NOW)).toEqual([]);
   });
 });
 

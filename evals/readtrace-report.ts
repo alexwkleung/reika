@@ -12,7 +12,7 @@
 //   the spec has fallen outside the trailing block and the pin is the only reason it survives.
 //
 // Usage:
-//   npx tsx evals/readtrace-report.ts ~/reika-debug.log
+//   npx tsx evals/readtrace-report.ts ~/.config/reika/logs/latest.log
 //   npx tsx evals/readtrace-report.ts on.log off.log      # two arms, compared
 //
 // Per Alex's rule on small-model variance, one run per arm proves nothing — concatenate 3+ runs

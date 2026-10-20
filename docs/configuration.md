@@ -231,13 +231,20 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | Key                      | Default                             | What                                                                                                                                                                                                                |
 | ------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `REIKA_DEBUG`            | _unset_                             | Any non-empty value writes diagnostics (session-start bundle size, loop/spiral detectors, grounding, prefix-cache classification with the prefill cost it implies, per-round entropy/KL drift, etc.) to a log file. |
-| `REIKA_DEBUG_FILE`       | `~/reika-debug.log`                 | Path for the `REIKA_DEBUG` log. The default log is reset at the start of each session; an explicit `REIKA_DEBUG_FILE` is always appended to, so use it when an experiment should accumulate across runs             |
+| `REIKA_DEBUG_FILE`       | _unset_                             | One file for the `REIKA_DEBUG` log instead of a file per session. Always appended to and never swept, so use it when an experiment should accumulate across runs                                                    |
 | `REIKA_ENTROPY`          | _unset_                             | `1` asks the server for per-token logprobs, so the `REIKA_DEBUG` drift lines report the model's real predictive entropy (and how surprised it was by its own output) instead of the entropy of the text alone.      |
 | `REIKA_TSCONFIG`         | _unset_                             | Override the tsconfig the post-edit typecheck gate uses (relative to cwd or absolute).                                                                                                                              |
 | `REIKA_SPILL_STATS`      | _unset_                             | `1` appends one JSON line per over-cap tool result — and per call that opens a saved artifact — to a stats file.                                                                                                    |
 | `REIKA_SPILL_STATS_FILE` | `~/.config/reika/spill-stats.jsonl` | Path for the `REIKA_SPILL_STATS` file. Always appended to — unlike the debug log, it is meant to accumulate across sessions                                                                                         |
 
 - **`REIKA_DEBUG`** — Goes to a **file**, never stderr — stderr would corrupt the Ink TUI frame
+  Each session writes its own log to `~/.config/reika/logs/`, named like its auto-save under
+  `history/` so the two pair (the log's `session file=` line names the transcript, including after
+  `/new` and `/resume`). `~/.config/reika/logs/latest.log` always points at the current session's
+  log. Logs older than 14 days are deleted at startup, oldest first, and so is the oldest of what's
+  left while the directory holds more than 50MB; a running session's log is never deleted. To keep
+  logs for every session, put `REIKA_DEBUG=1` in `~/.config/reika/.env`. The log quotes your task
+  and carries the paths and commands the session ran, the same content as the auto-save
 - **`REIKA_ENTROPY`** — Needs `REIKA_DEBUG` — the log is the only consumer — and costs a much
   larger streamed response (top-5 candidates per token). The per-round entropy/KL lines are written
   either way; this only sharpens the entropy half. A server that rejects the fields is retried once

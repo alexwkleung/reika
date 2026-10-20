@@ -7,6 +7,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- `REIKA_DEBUG=1` now writes one log per session to `~/.config/reika/logs/`, named after the
+  session's auto-save, instead of overwriting `~/reika-debug.log` at each launch, so the log of a
+  session nobody planned to debug is still there afterwards. `logs/latest.log` points at the current
+  one. Logs are kept for 14 days or 50MB, whichever comes first. `REIKA_DEBUG_FILE` still names one
+  file that accumulates across runs.
 - `REIKA_BASE_URL` now defaults to `http://localhost:9931/v1`, following llama-server's new default
   port in llama.cpp v0.7.0. A llama-server older than that, or one in llama.cpp's Docker images,
   still listens on 8080: set `REIKA_BASE_URL=http://localhost:8080/v1` for it. A refused connection

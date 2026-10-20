@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { sweepDebugLogs } from './debug.js';
 import { sweepStaleSpills } from './tools/_spill.js';
 import { USAGE, parseHeadlessArgs } from './headlessargs.js';
 import { VERSION } from './version.js';
@@ -13,6 +14,8 @@ process.title = 'reika';
 // process starting, not of anything the UI mounts. Fire-and-forget — cleaning up after a session
 // that is already gone must never delay first paint, and it fails open on its own.
 void sweepStaleSpills();
+// Debug-log retention (#761), the same shape: per-session logs past their age or size budget.
+void sweepDebugLogs();
 
 // Both front-ends are imported lazily: the headless path (#52) never loads Ink, and the TUI
 // never loads the headless runner.
