@@ -33,6 +33,7 @@ import {
   feedbackFixture as f18,
   terseFixture as f18d,
 } from './fixtures/18-decline-feedback.js';
+import { agedFixture as f19b, liveFixture as f19 } from './fixtures/19-edit-recall.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -56,6 +57,8 @@ const FIXTURES: Fixture[] = [
   f18b,
   f18c,
   f18d,
+  f19,
+  f19b,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
