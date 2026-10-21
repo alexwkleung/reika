@@ -11,6 +11,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   for a reason, and the model gets that reason as a message from you instead of a bare "declined by
   user", which small models often answer by trying the same call again.
 
+### Fixed
+
+- Web search through Chrome on macOS no longer pulls focus to the search browser. Its launch and
+  every search's tab used to activate it. A bot check still brings its window to the front.
+
 ## [0.5.0] - 2026-10-19
 
 ### Changed

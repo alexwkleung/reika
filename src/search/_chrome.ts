@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
@@ -55,18 +55,38 @@ export class ChromeHost implements BrowserHost {
   async newTab(): Promise<TabHandle> {
     await this.ensure();
     this.touch();
-    const res = await fetch(`http://127.0.0.1:${this.port}/json/new`, { method: 'PUT' });
-    if (!res.ok) throw new Error(`could not open a tab (CDP ${res.status})`);
-    const tab = (await res.json()) as { id?: string; webSocketDebuggerUrl?: string };
-    if (!tab.webSocketDebuggerUrl || !tab.id)
+    // Not `PUT /json/new`: that opens a foreground tab, which activates Chrome and takes focus on
+    // every search. A background target in a minimized window of its own never shows, and
+    // minimizing or showing one tab's window never moves another search's tab.
+    const browser = await openSession(await this.browserWsUrl());
+    let targetId: string | undefined;
+    try {
+      const res = (await browser.call('Target.createTarget', {
+        url: 'about:blank',
+        newWindow: true,
+        background: true,
+        windowState: 'minimized',
+      })) as { result?: { targetId?: string }; error?: { message?: string } };
+      if (res.error) throw new Error(`could not open a tab (CDP ${res.error.message ?? 'error'})`);
+      targetId = res.result?.targetId;
+    } finally {
+      browser.close();
+    }
+    if (!targetId) throw new Error('CDP returned a tab with no target id');
+    const list = (await (await fetch(`http://127.0.0.1:${this.port}/json/list`)).json()) as {
+      id?: string;
+      webSocketDebuggerUrl?: string;
+    }[];
+    const tab = list.find(t => t.id === targetId);
+    if (!tab?.webSocketDebuggerUrl || !tab.id)
       throw new Error('CDP returned a tab with no debugger URL');
     const session = await openSession(tab.webSocketDebuggerUrl);
     const port = this.port;
     const touch = () => this.touch();
-    // The browser works minimized. `open -g` keeps launch from taking focus, but the window it
-    // makes still sits on the desktop, and one reattached from an earlier session is in whatever
-    // state it was left — so the state is enforced per tab, not per launch. Only a bot check
-    // (`show`) is allowed to surface it; see CdpSearchProvider.
+    const activate = () => this.activate();
+    // The window should already be minimized from creation; this covers a Chrome that predates
+    // `windowState` on `Target.createTarget`. Only a bot check (`show`) is allowed to surface it;
+    // see CdpSearchProvider.
     await setWindowState(session, 'minimized');
     return {
       async navigate(url: string) {
@@ -87,9 +107,11 @@ export class ChromeHost implements BrowserHost {
       async show() {
         touch();
         await setWindowState(session, 'normal');
-        // Page.bringToFront is the reliable path: the browser is a separate instance on its own
-        // profile, so macOS app-level activation would raise the user's Chrome instead (#238).
+        // Page.bringToFront raises the tab within its own browser, but a browser that never took
+        // focus stays behind the active app, so the instance is activated too — by pid, since
+        // activating by name would raise the user's own Chrome instead (#238).
         await session.call('Page.bringToFront').catch(() => undefined);
+        await activate();
       },
       async hide() {
         await setWindowState(session, 'minimized');
@@ -148,13 +170,16 @@ export class ChromeHost implements BrowserHost {
       '--disable-sync',
       '--password-store=basic',
       '--mute-audio',
-      'about:blank',
     ];
-    debugLog(`[cdp] launching ${exe} on port ${this.port}`);
     // Not headless, deliberately: a fresh headless profile is the shape search engines CAPTCHA.
-    // macOS `open -g -na` starts a real browser that never takes focus or shows a window, which is
-    // the same end the headless flag was wanted for without raising the detection surface.
-    if (platform() === 'darwin' && !this.binary) {
+    // Chrome activates itself when its first window opens, even under `open -g -j` (measured on
+    // macOS 26, Chrome 155), so on macOS it starts with no window at all and each search opens
+    // its own. The cost is that Chrome then ignores Quit from the Dock; the idle shutdown closes
+    // it instead. Elsewhere closing the last window quits Chrome, so the launch keeps one.
+    const hidden = platform() === 'darwin' && !this.binary;
+    flags.push(hidden ? '--no-startup-window' : 'about:blank');
+    debugLog(`[cdp] launching ${exe} on port ${this.port}`);
+    if (hidden) {
       spawn('/usr/bin/open', ['-g', '-na', macAppName() ?? 'Google Chrome', '--args', ...flags], {
         detached: true,
         stdio: 'ignore',
@@ -180,6 +205,40 @@ export class ChromeHost implements BrowserHost {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => void this.shutdown(), IDLE_SHUTDOWN_MS);
     this.idleTimer.unref?.();
+  }
+
+  private async browserWsUrl(): Promise<string> {
+    const res = await fetch(`http://127.0.0.1:${this.port}/json/version`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    const { webSocketDebuggerUrl } = (await res.json()) as { webSocketDebuggerUrl?: string };
+    if (!webSocketDebuggerUrl) throw new Error('CDP reported no browser debugger URL');
+    return webSocketDebuggerUrl;
+  }
+
+  // The pid comes from CDP because `open` doesn't report the one it launched. Best-effort, and a
+  // no-op off macOS: the window is restored either way, activation only saves the user a click.
+  private async activate(): Promise<void> {
+    if (platform() !== 'darwin') return;
+    try {
+      const browser = await openSession(await this.browserWsUrl());
+      let pid: number | undefined;
+      try {
+        const res = (await browser.call('SystemInfo.getProcessInfo')) as {
+          result?: { processInfo?: { type?: string; id?: number }[] };
+        };
+        pid = res.result?.processInfo?.find(p => p.type === 'browser')?.id;
+      } finally {
+        browser.close();
+      }
+      if (!Number.isInteger(pid)) return;
+      const script = `ObjC.import('AppKit'); $.NSRunningApplication.runningApplicationWithProcessIdentifier(${pid}).activateWithOptions($.NSApplicationActivateAllWindows)`;
+      await new Promise<void>(resolve => {
+        execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], () => resolve());
+      });
+    } catch {
+      /* best-effort */
+    }
   }
 
   async shutdown(): Promise<void> {
