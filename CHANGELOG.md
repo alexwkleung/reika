@@ -17,6 +17,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   title. Brave puts the date last on some results, and the extractor took the last line.
 - Web search through Chrome on macOS no longer pulls focus to the search browser. Its launch and
   every search's tab used to activate it. A bot check still brings its window to the front.
+- The Chrome search browser on macOS quits from the Dock again. The focus fix above had launched it
+  in a mode where Chrome ignores Quit; it now launches hidden instead, which keeps focus just as well.
 
 ## [0.5.0] - 2026-10-19
 
