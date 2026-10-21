@@ -11,6 +11,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   for a reason, and the model gets that reason as a message from you instead of a bare "declined by
   user", which small models often answer by trying the same call again.
 
+### Fixed
+
+- Web search through Chrome no longer reports a result's date ("May 8, 2026", "3 days ago") as its
+  title. Brave puts the date last on some results, and the extractor took the last line.
+
 ## [0.5.0] - 2026-10-19
 
 ### Changed
