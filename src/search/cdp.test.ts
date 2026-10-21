@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CdpSearchProvider } from './cdp.js';
+import { CdpSearchProvider, DATE_LINE } from './cdp.js';
 import { findChrome, type BrowserHost, type TabHandle } from './_chrome.js';
 import { SearchUnavailableError } from './types.js';
 
@@ -275,5 +275,21 @@ describe('findChrome', () => {
 
   it('ignores a blank override rather than trying to exec whitespace', () => {
     expect(findChrome({ REIKA_CHROME_PATH: '   ' } as NodeJS.ProcessEnv)).not.toBe('   ');
+  });
+});
+
+describe('DATE_LINE', () => {
+  it('matches the date lines Brave ends some result anchors with', () => {
+    for (const l of ['May 8, 2026', 'April 1, 2026', 'Sept. 3, 2025', '3 days ago', '1 year ago'])
+      expect(DATE_LINE.test(l), l).toBe(true);
+  });
+
+  it('leaves titles that merely contain a date or a month', () => {
+    for (const l of [
+      'Release notes for May 8, 2026 update',
+      'March of the Penguins review',
+      'GitHub - kepano/defuddle: Get the main content of any page as Markdown.',
+    ])
+      expect(DATE_LINE.test(l), l).toBe(false);
   });
 });
