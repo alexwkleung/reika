@@ -15,6 +15,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - Web search through Chrome no longer reports a result's date ("May 8, 2026", "3 days ago") as its
   title. Brave puts the date last on some results, and the extractor took the last line.
+- Web search through Chrome on macOS no longer pulls focus to the search browser. Its launch and
+  every search's tab used to activate it. A bot check still brings its window to the front.
 
 ## [0.5.0] - 2026-10-19
 
