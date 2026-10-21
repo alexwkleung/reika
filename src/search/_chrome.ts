@@ -170,20 +170,21 @@ export class ChromeHost implements BrowserHost {
       '--disable-sync',
       '--password-store=basic',
       '--mute-audio',
+      // Not `--no-startup-window`: Chrome then ignores Quit from the Dock, and it kept focus no
+      // better than a hidden launch does (measured on macOS 26, Chrome 155).
+      'about:blank',
     ];
-    // Not headless, deliberately: a fresh headless profile is the shape search engines CAPTCHA.
-    // Chrome activates itself when its first window opens, even under `open -g -j` (measured on
-    // macOS 26, Chrome 155), so on macOS it starts with no window at all and each search opens
-    // its own. The cost is that Chrome then ignores Quit from the Dock; the idle shutdown closes
-    // it instead. Elsewhere closing the last window quits Chrome, so the launch keeps one.
-    const hidden = platform() === 'darwin' && !this.binary;
-    flags.push(hidden ? '--no-startup-window' : 'about:blank');
     debugLog(`[cdp] launching ${exe} on port ${this.port}`);
+    // Not headless, deliberately: a fresh headless profile is the shape search engines CAPTCHA.
+    // `open -g` alone still let Chrome activate itself when its first window opened, so macOS
+    // also launches it hidden (`-j`): a real browser that never takes focus.
+    const hidden = platform() === 'darwin' && !this.binary;
     if (hidden) {
-      spawn('/usr/bin/open', ['-g', '-na', macAppName() ?? 'Google Chrome', '--args', ...flags], {
-        detached: true,
-        stdio: 'ignore',
-      }).unref();
+      spawn(
+        '/usr/bin/open',
+        ['-g', '-j', '-na', macAppName() ?? 'Google Chrome', '--args', ...flags],
+        { detached: true, stdio: 'ignore' },
+      ).unref();
     } else {
       spawn(exe, flags, { detached: true, stdio: 'ignore' }).unref();
     }
@@ -191,6 +192,9 @@ export class ChromeHost implements BrowserHost {
     while (Date.now() < deadline) {
       if (await this.alive()) {
         debugLog(`[cdp] browser ready on port ${this.port}`);
+        // Searches open their own windows, and the startup one would surface beside the first bot
+        // check's tab. macOS only: elsewhere closing the last window quits Chrome.
+        if (hidden) await this.closeStartupWindow();
         return;
       }
       await sleep(LAUNCH_POLL_MS);
@@ -205,6 +209,19 @@ export class ChromeHost implements BrowserHost {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => void this.shutdown(), IDLE_SHUTDOWN_MS);
     this.idleTimer.unref?.();
+  }
+
+  private async closeStartupWindow(): Promise<void> {
+    try {
+      const res = await fetch(`http://127.0.0.1:${this.port}/json/list`);
+      const targets = (await res.json()) as { id?: string; type?: string; url?: string }[];
+      for (const t of targets) {
+        if (t.type === 'page' && t.url === 'about:blank' && t.id)
+          await fetch(`http://127.0.0.1:${this.port}/json/close/${t.id}`);
+      }
+    } catch {
+      /* cosmetic: a leftover blank window never fails a search */
+    }
   }
 
   private async browserWsUrl(): Promise<string> {
