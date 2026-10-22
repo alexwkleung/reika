@@ -11,13 +11,13 @@ hero:
   actions:
     - theme: brand
       text: 开始使用（英文）
-      link: /getting-started
+      link: /zh/getting-started
     - theme: alt
       text: GitHub
       link: https://github.com/alexwkleung/reika
     - theme: alt
       text: 阅读研究结果（英文）
-      link: /findings
+      link: /zh/findings
 
 featuresTitle: 功能
 features:
@@ -38,19 +38,19 @@ docsTitle: 文档
 docs:
   - title: 安装（英文）
     details: 运行要求与首次使用
-    link: /getting-started
+    link: /zh/getting-started
   - title: 使用（英文）
     details: 模式、命令与快捷键
-    link: /usage
+    link: /zh/usage
   - title: 配置（英文）
     details: 所有设置
-    link: /configuration
+    link: /zh/configuration
   - title: 工具（英文）
     details: 智能体可以调用什么
-    link: /tools
+    link: /zh/tools
   - title: 指令与技能（英文）
     details: AGENTS.md 与斜杠命令
-    link: /skills
+    link: /zh/skills
   - title: 模型
     details: 实际使用过的模型
     link: /zh/models
@@ -62,10 +62,10 @@ docs:
     link: /zh/architecture
   - title: 研究结果（英文）
     details: 哪些失效、哪些有效
-    link: /findings
+    link: /zh/findings
   - title: 支持项目（英文）
     details: 资助与其他帮助方式
-    link: /support
+    link: /zh/support
 ---
 
 > 本页是[英文页面](../index.md)的简体中文译文。英文为准，译文可能滞后。

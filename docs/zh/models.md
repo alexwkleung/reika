@@ -10,6 +10,7 @@
 
 ## 本地
 
+- LFM2.5 24B A2B (UD-IQ3_XXS)
 - Mellum2.1 12B A2.5B Thinking (Q4_K_M)
 - Ling 3.0 Tiny (Q4_K_M)
 - Qwen3.8 Flash Next (UD-IQ3_XXS；chat 模式；minimal 模式；通过 SSD 流式加载)
@@ -28,6 +29,8 @@
 - Qwen3.5 9B (MLX Q4)
 - LFM2.5 8B A1B (MLX Q4)
 - Granite 4.1 8B (MLX Q4)
+- Spark X2.6 4B (Q8_0)
+- Gemma 4 E4B IT (MLX Q4)
 
 ## API
 
