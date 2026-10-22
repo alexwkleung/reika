@@ -20,6 +20,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The Chrome search browser on macOS quits from the Dock again. The focus fix above had launched it
   in a mode where Chrome ignores Quit; it now launches hidden instead, which keeps focus just as well.
 
+### Contributors
+
+- @xiaoyu607: Simplified Chinese translations of the pre-install pages and the localized docs site (#700)
+- @zlc-131: Simplified Chinese translation of the support page (#784)
+
 ## [0.5.0] - 2026-10-19
 
 ### Changed
