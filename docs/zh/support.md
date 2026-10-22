@@ -4,7 +4,7 @@
 
 [← README](../../README.md)
 
-Reika 以 [Apache 2.0 许可证](../LICENSE)免费开源，由一位独立开发者构建和维护。没有付费档位，没有托管服务，也没有许可证密钥，并且不打算推出这些。即便你永远不付费，使用它也不会因此有任何改变。
+Reika 以 [Apache 2.0 许可证](../../LICENSE)免费开源，由一位独立开发者构建和维护。没有付费档位，没有托管服务，也没有许可证密钥，并且不打算推出这些。即便你永远不付费，使用它也不会因此有任何改变。
 
 ## 资助
 
@@ -22,14 +22,14 @@ Reika 以 [Apache 2.0 许可证](../LICENSE)免费开源，由一位独立开发
 
 ## 其他可以出力的方式
 
-- **报告出问题的地方。** 一份带有复现步骤、所用模型和推理引擎的 bug 报告，比大多数补丁更有价值。[issue 模板](../.github/ISSUE_TEMPLATE/issue.md)要的正是这些。
+- **报告出问题的地方。** 一份带有复现步骤、所用模型和推理引擎的 bug 报告，比大多数补丁更有价值。[issue 模板](../../.github/ISSUE_TEMPLATE/issue.md)要的正是这些。
 - **分享一个尚未列出的模型上的运行结果。** [已测试的模型](models.md)来自真实运行；在一个还没人试过的模型上，哪些跑通了、哪些没跑通，两种结果都有用。
-- **参与贡献。** 先读 [CONTRIBUTING.md](../CONTRIBUTING.md)，里面讲了环境搭建、约定，以及什么样的改动更容易被接受。
+- **参与贡献。** 先读 [CONTRIBUTING.md](../../CONTRIBUTING.md)，里面讲了环境搭建、约定，以及什么样的改动更容易被接受。
 - **告诉别人。** 点一个 [star](https://github.com/alexwkleung/reika)、在 [Product Hunt](https://www.producthunt.com/products/reika) 上关注、在 [AlternativeTo](https://alternativeto.net/software/reika/about/) 留一句，或把它介绍给一位在本地跑模型的人——人们就是这样找到它的。
 
 ## 联系方式
 
 - **Bug：** [GitHub Issues](https://github.com/alexwkleung/reika/issues)。
 - **疑问、想法和模型报告：** [GitHub Discussions](https://github.com/alexwkleung/reika/discussions)，在这里提问，答案也能帮到后面的人。
-- **安全问题：** 请按 [SECURITY.md](../SECURITY.md) 所述私下报告，不要发邮件，也不要开公开 issue。
+- **安全问题：** 请按 [SECURITY.md](../../SECURITY.md) 所述私下报告，不要发邮件，也不要开公开 issue。
 - **其他事项：** [hello@reikacode.com](mailto:hello@reikacode.com)。
