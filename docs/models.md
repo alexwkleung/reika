@@ -30,6 +30,8 @@ rather than the only thing it can do.
 - Qwen3.5 9B (MLX Q4)
 - LFM2.5 8B A1B (MLX Q4)
 - Granite 4.1 8B (MLX Q4)
+- Spark X2.6 4B (Q8_0)
+- Gemma 4 E4B IT (MLX Q4)
 
 ## API
 
