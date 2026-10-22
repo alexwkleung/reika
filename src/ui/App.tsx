@@ -51,7 +51,8 @@ import {
 } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugLog, processSessionStem } from '../debug.js';
+import { debugEnabled, debugLog, processSessionStem } from '../debug.js';
+import { noteFrameState } from './framedrops.js';
 import { addFileToIndex } from '../context/files.js';
 import {
   saveTranscript,
@@ -2740,6 +2741,31 @@ export function App() {
         <Text>Error</Text>
         <Text>{error}</Text>
       </Box>
+    );
+  }
+
+  if (debugEnabled()) {
+    const live = [
+      streamingReasoning && 'reasoning',
+      streaming && 'content',
+      streamingTool && `tool:${streamingToolName}`,
+    ].filter(Boolean);
+    const dialog = pending
+      ? 'approval'
+      : question
+        ? 'question'
+        : modelSelect
+          ? 'model'
+          : resumeSelect
+            ? 'resume'
+            : confirm
+              ? 'confirm'
+              : '-';
+    noteFrameState(
+      `${status === 'busy' ? phase : status} msgs=${messages.length} live=${live.join(',') || '-'}` +
+        ` pending=${pendingTool || '-'} dialog=${dialog} queue=${queue.length}` +
+        ` plan=${planSteps ? planSteps.length : 0} suggest=${suggestionState ? 1 : 0}` +
+        `${subagentLive ? ' subagent' : ''}`,
     );
   }
 

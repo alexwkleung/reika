@@ -14,6 +14,7 @@ import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
 import { contentWidth, hangingWrap } from './layout.js';
 import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
+import { OUTPUT_TAIL_LINES } from '../tools/bash.js';
 
 export function Scrollback({
   messages,
@@ -104,8 +105,13 @@ export function Scrollback({
   const pendingGap = pendingTool ? pendingToolGap(pendingTool, scrollback.at(-1)) : 0;
   const pool =
     region - (pendingTool ? 1 + pendingGap : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  // A running command's tail is held to the rows its committed chip shows: grown to the pool, it
+  // pushed the input to the bottom and then dropped it by the difference when the chip replaced it.
   const shares = allocateLiveRows(
-    blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
+    blocks.map(b => {
+      const need = b.live.cut ? Infinity : b.live.rows.length;
+      return b.kind === 'tool' && streamingCommand ? Math.min(need, OUTPUT_TAIL_LINES) : need;
+    }),
     pool,
   );
   const live = (
