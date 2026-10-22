@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -14,7 +14,7 @@ import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
-import { Approval } from './Approval.js';
+import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, Approval } from './Approval.js';
 import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
@@ -51,7 +51,7 @@ import {
 } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugLog } from '../debug.js';
+import { debugLog, processSessionStem } from '../debug.js';
 import { addFileToIndex } from '../context/files.js';
 import {
   saveTranscript,
@@ -119,8 +119,22 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { queueReceipt, type QueuedMessage } from './queue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
+import {
+  buildShellRunsBlock,
+  captureShellRun,
+  holdShellRun,
+  shellRunBudget,
+  type ShellRun,
+} from '../agent/shellruns.js';
 import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
-import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
+import type {
+  ApprovalAnswer,
+  ApprovalRequest,
+  Message,
+  QuestionAnswer,
+  QuestionRequest,
+  Usage,
+} from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -229,9 +243,11 @@ export function App() {
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
-    resolve: (allow: boolean) => void;
+    resolve: (answer: ApprovalAnswer) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
+  // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
+  const [approvalTyping, setApprovalTyping] = useState(false);
   // An `ask_user` question waiting on the user (#198). Modal like Approval, with one difference: the
   // input box stays LIVE underneath once `questionTyping` is set, because the free-text row hands the
   // answer to Input rather than to a field rebuilt in the dialog.
@@ -290,6 +306,8 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
+  // Shell-mode runs since the last prompt, prepended to the next one (agent/shellruns.ts).
+  const heldShellRunsRef = useRef<ShellRun[]>([]);
   // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N +412 lines]` marker
   // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
   // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
@@ -370,6 +388,8 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
+  const approvalTypingRef = useRef(false);
+  approvalTypingRef.current = approvalTyping;
   const confirmRef = useRef<typeof confirm>(null);
   confirmRef.current = confirm;
   const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
@@ -395,6 +415,8 @@ export function App() {
   const modelPinnedRef = useRef(false);
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
+  // What the box held when the ask_user answer field opened, so backing out discards only the answer.
+  const preAnswerDraftRef = useRef('');
   const suggestionStateRef = useRef<SuggestionState | null>(null);
   suggestionStateRef.current = suggestionState;
   const suggestionSelectedRef = useRef(0);
@@ -410,6 +432,7 @@ export function App() {
   // The file this session auto-saves to (#1), fixed at its first save so every later save rewrites
   // one file. null until then, and again after /new, so a new conversation gets a new file.
   const sessionPathRef = useRef<string | null>(null);
+  const sessionStemClaimedRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Writes run one after another: two in flight could rename out of order and leave the older
   // snapshot on disk.
@@ -582,6 +605,13 @@ export function App() {
             { role: 'system', content: problem, tone: 'warn', skipAutosave: true },
           ]);
         }
+        if (cfg.projectEnvNotice) {
+          const content = cfg.projectEnvNotice;
+          setMessages(prev => [
+            ...prev,
+            { role: 'system', content, tone: 'warn', skipAutosave: true },
+          ]);
+        }
         // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
         // only line that is good news — the shape `connectNotices` emits — so everything else that
         // reaches here (a server that did not start, a document that did not parse) is worth
@@ -742,6 +772,14 @@ export function App() {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       const hadPending = pendingRef.current !== null;
+      // Typing a decline's reason: back out to the options, as the question's field does (#651).
+      // Nothing is decided yet, so neither the approval nor the turn may end here.
+      if (hadPending && approvalTypingRef.current) {
+        setInputValue(preAnswerDraftRef.current);
+        setSuggestionState(null);
+        setApprovalTyping(false);
+        return;
+      }
       // Interrupt anything in flight: decline a pending approval, drop an unanswered question,
       // abort a turn.
       if (hadPending) {
@@ -749,6 +787,20 @@ export function App() {
         setPending(null);
       }
       if (questionRef.current) {
+        // Typing an answer or a note (#651): ctrl-c backs out of the field to the option list
+        // instead of dropping the question. The field is live and owns the keyboard, so this is the
+        // only route back to the list, and ask_user is one-shot — dropping it here throws away the
+        // menu the turn is waiting on. The list keeps the abort, so a second ctrl-c still ends the
+        // dialog. Returned rather than fallen through: nothing has been decided, and the code below
+        // would abort the whole turn with it. The typed answer is discarded — left in the box it
+        // outlives the question and one stray Enter queues it as the next prompt — but a draft that
+        // was there before the field opened comes back.
+        if (questionTypingRef.current) {
+          setInputValue(preAnswerDraftRef.current);
+          setSuggestionState(null);
+          setQuestionTyping(null);
+          return;
+        }
         questionRef.current.resolve(null);
         setQuestion(null);
         setQuestionTyping(null);
@@ -796,16 +848,25 @@ export function App() {
       return;
     }
     if (pendingRef.current) {
+      // Input owns the keyboard while the reason is typed; a key consumed here is a lost character.
+      if (approvalTypingRef.current) return;
       if (key.upArrow) {
         setApprovalSelected(i => Math.max(0, i - 1));
         return;
       }
       if (key.downArrow) {
-        setApprovalSelected(i => Math.min(2, i + 1));
+        setApprovalSelected(i => Math.min(APPROVAL_OPTIONS.length - 1, i + 1));
         return;
       }
       if (key.return) {
         const sel = approvalSelectedRef.current;
+        if (sel === APPROVAL_FEEDBACK_INDEX) {
+          // Deferred like the question's field: enabling Input synchronously hands it this Enter.
+          preAnswerDraftRef.current = inputValueRef.current;
+          setInputValue('');
+          queueMicrotask(() => setApprovalTyping(true));
+          return;
+        }
         const resolve = pendingRef.current.resolve;
         setPending(null);
         if (sel === 0) resolve(true);
@@ -849,6 +910,7 @@ export function App() {
       // Tab on an option: take it, but add a note in your own words. The model gets both.
       if (key.tab && questionSelectedRef.current < last) {
         const forIndex = questionSelectedRef.current;
+        preAnswerDraftRef.current = inputValueRef.current;
         queueMicrotask(() => setQuestionTyping({ forIndex }));
         return;
       }
@@ -858,6 +920,7 @@ export function App() {
           // Deferred a microtask: this same keypress is dispatched to every useInput handler with
           // re-renders in between, so enabling Input synchronously hands it the very Enter that
           // opened it and submits an empty answer.
+          preAnswerDraftRef.current = inputValueRef.current;
           queueMicrotask(() => setQuestionTyping({}));
           return;
         }
@@ -1031,6 +1094,11 @@ export function App() {
       : { agent: messagesRef.current, chat: stash.chat ?? [] };
   };
 
+  // The basename only: enough to find the transcript under history/, no home path in the log.
+  const logSessionFile = (path: string): void => {
+    debugLog(`[reika:debug] session file=${basename(path)}`);
+  };
+
   const autosaveNow = (): Promise<void> => {
     if (autosaveTimerRef.current !== null) {
       clearTimeout(autosaveTimerRef.current);
@@ -1043,7 +1111,14 @@ export function App() {
     // Nothing typed yet — the splash notices alone are not a session worth listing.
     if (turns === 0 || turns <= (autosaveHoldRef.current ?? 0)) return autosaveChainRef.current;
     autosaveHoldRef.current = null;
-    sessionPathRef.current ??= newSessionPath(projectHistoryDir(bundle.cwd), new Date());
+    if (sessionPathRef.current === null) {
+      // The process's first transcript shares the debug log's name (#761); a later /new gets its
+      // own, and the log line below is what pairs it.
+      const stem = sessionStemClaimedRef.current ? undefined : processSessionStem();
+      sessionStemClaimedRef.current = true;
+      sessionPathRef.current = newSessionPath(projectHistoryDir(bundle.cwd), new Date(), stem);
+      logSessionFile(sessionPathRef.current);
+    }
     const path = sessionPathRef.current;
     const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
     autosaveChainRef.current = autosaveChainRef.current
@@ -1123,7 +1198,10 @@ export function App() {
     resetConversation();
     // A project session carries on in its own file; a manual save from the root is left as it was
     // and the continuation gets a project file of its own on its next save.
-    if (dirname(entry.path) === projectDir) sessionPathRef.current = entry.path;
+    if (dirname(entry.path) === projectDir) {
+      sessionPathRef.current = entry.path;
+      logSessionFile(entry.path);
+    }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
@@ -1214,7 +1292,7 @@ export function App() {
     setSuggestionSelected(0);
   };
 
-  const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
+  const requestApproval = (req: ApprovalRequest): Promise<ApprovalAnswer> => {
     // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
     // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
     // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
@@ -1232,12 +1310,13 @@ export function App() {
       return Promise.resolve(false);
     }
     setApprovalSelected(0);
+    setApprovalTyping(false);
     return new Promise(resolve => {
-      const wrappedResolve = (allow: boolean): void => {
+      const wrappedResolve = (answer: ApprovalAnswer): void => {
         setApprovals(a =>
-          allow ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
+          answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
-        resolve(allow);
+        resolve(answer);
       };
       setPending({ request: req, resolve: wrappedResolve });
     });
@@ -1340,6 +1419,7 @@ export function App() {
       // may be a different model on different hardware (#204): the tok/s chip goes with the token
       // counts it sits next to.
       resetConversation(true);
+      heldShellRunsRef.current = [];
       sessionRef.current?.switchSide('agent');
       setDecodeRate(undefined);
       setApprovals({ approved: 0, declined: 0 });
@@ -1867,8 +1947,8 @@ export function App() {
 
   const runShell = async (command: string): Promise<void> => {
     if (!bundle) return;
-    // Shell mode is "raw bash, no model" — the command echo stays in the scrollback but is
-    // kept out of the model history (its output, the `shell` message below, is UI-only too).
+    // Shell mode is "raw bash, no model" — the echo and the `shell` message below are UI-only. The
+    // model sees the run through the held copy, attached to the next prompt.
     const echo: Message = { role: 'user', content: command, meta: true };
     setMessages(prev => [...prev, echo]);
     setStatus('busy');
@@ -1896,6 +1976,10 @@ export function App() {
         output: result.payload ?? '',
       };
       setMessages(prev => [...prev, shellMsg]);
+      heldShellRunsRef.current = holdShellRun(
+        heldShellRunsRef.current,
+        await captureShellRun(command, result.exitCode ?? null, result.payload ?? ''),
+      );
     } catch (e) {
       setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
     } finally {
@@ -2185,6 +2269,19 @@ export function App() {
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
     // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
     // be queued as the user's next prompt.
+    // A decline's reason, likewise not a message for the model's next turn. An empty one is not a
+    // reason; the field stays open, and ctrl-c is the way back to a plain Decline.
+    const ap = pendingRef.current;
+    if (ap && approvalTypingRef.current) {
+      const text = input.trim();
+      if (!text) return;
+      setInputValue(preAnswerDraftRef.current);
+      setSuggestionState(null);
+      setPending(null);
+      setApprovalTyping(false);
+      ap.resolve({ feedback: text });
+      return;
+    }
     const q = questionRef.current;
     const typing = questionTypingRef.current;
     if (q && typing) {
@@ -2351,6 +2448,13 @@ export function App() {
       // request to fetch a link inside it. The marker survives in `display`, keeping the user
       // bubble (and the input history entry) short while the model gets the full text.
       modelText = expandPastes(modelText, pastedTextsRef.current);
+      // Chat's history is its own, and its tools could not act on a run anyway: held for the
+      // agent side.
+      if (heldShellRunsRef.current.length > 0 && modeRef.current !== 'chat') {
+        const budget = shellRunBudget(sessionRef.current?.config.contextWindow);
+        modelText = `${buildShellRunsBlock(heldShellRunsRef.current, budget)}\n\n${modelText}`;
+        heldShellRunsRef.current = [];
+      }
     } finally {
       setExpanding(null);
       submitBusyRef.current = false;
@@ -2723,6 +2827,7 @@ export function App() {
             <Approval
               request={pending.request}
               selectedIndex={approvalSelected}
+              typing={approvalTyping}
               reservedRows={dialogReservedRows}
             />
           ) : question ? (
@@ -2758,7 +2863,7 @@ export function App() {
             // The question dialog is modal only while its list is up; once the user is typing an
             // answer the input has to be live, since it IS the answer field.
             disabled={
-              pending !== null ||
+              (pending !== null && !approvalTyping) ||
               modelSelect !== null ||
               resumeSelect !== null ||
               confirm !== null ||
@@ -2786,11 +2891,15 @@ export function App() {
             onPasteImage={onPasteImageSafely}
             onPasteText={onPasteText}
             placeholder={
-              mode === 'shell'
-                ? 'Run a shell command'
-                : mode === 'vibe'
-                  ? 'Describe a change — it plans first, then implements'
-                  : promptPlaceholder()
+              // A reason that should stop the model has to say so: "tell me the script" read as
+              // run-then-tell and drew retries, "don't run anything" did not (decline-terse/-ask).
+              approvalTyping
+                ? 'e.g. "use pnpm instead", or "don\'t run anything, just tell me …"'
+                : mode === 'shell'
+                  ? 'Run a shell command'
+                  : mode === 'vibe'
+                    ? 'Describe a change — it plans first, then implements'
+                    : promptPlaceholder()
             }
           />
           {suggestionState ? (

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfigWithTheme } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
+import { SITE_URL, pageDescriptions, socialHead } from './seo';
 import type { TranslationTheme } from './theme/translations';
 
 export default defineConfigWithTheme<TranslationTheme>({
@@ -75,11 +76,20 @@ export default defineConfigWithTheme<TranslationTheme>({
     },
   },
   srcExclude: ['demo/**', 'node_modules/**'],
+  sitemap: { hostname: SITE_URL },
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' }],
     ['meta', { name: 'theme-color', content: '#17151a' }],
   ],
+  transformPageData(pageData) {
+    const description = pageDescriptions[pageData.relativePath];
+    if (description) pageData.description = description;
+  },
+  transformHead({ pageData, title, description }) {
+    if (pageData.isNotFound) return [];
+    return socialHead(pageData, title, description);
+  },
   markdown: {
     anchor: { slugify: githubSlugify },
     config: md => md.use(githubLinks),
@@ -144,6 +154,14 @@ export default defineConfigWithTheme<TranslationTheme>({
       .filter(path => !llms.includes(`/main/${path})`));
     if (missing.length > 0) {
       throw new Error(`Pages missing from docs/public/llms.txt:\n  ${missing.join('\n  ')}`);
+    }
+    const undescribed = sidebar
+      .flatMap(group => group.items.map(item => `${item.link.slice(1)}.md`))
+      .filter(path => !pageDescriptions[path]);
+    if (undescribed.length > 0) {
+      throw new Error(
+        `Pages missing from pageDescriptions in seo.ts:\n  ${undescribed.join('\n  ')}`,
+      );
     }
   },
 });

@@ -1,4 +1,5 @@
 import type { Message } from '../types.js';
+import { stripHarnessEcho } from './harnessecho.js';
 
 type AssistantMessage = Extract<Message, { role: 'assistant' }>;
 
@@ -60,6 +61,16 @@ export function foldedAssistantFields(msg: AssistantMessage): {
   const folded = foldSpilledReasoning(msg.reasoning, msg.content);
   return {
     ...(folded.reasoning ? { reasoning: folded.reasoning } : {}),
-    content: folded.content,
+    content: stripHarnessEcho(folded.content),
   };
+}
+
+// The live region's half of the same display pass, so a streamed reply that opens on a copied
+// harness marker never shows it and then drops it on commit.
+export function foldedLiveFields(
+  reasoning: string | undefined,
+  content: string | undefined,
+): { reasoning: string; content: string } {
+  const folded = foldSpilledReasoning(reasoning, content);
+  return { reasoning: folded.reasoning, content: stripHarnessEcho(folded.content) };
 }

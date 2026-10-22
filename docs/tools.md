@@ -22,7 +22,13 @@ The agent has these tools. Optional ones register only when their config is pres
 ## Approvals
 
 An approval prompt shows a unified diff (or, for `bash`, the command), with **Approve / Decline /
-Always (this session)** selectable by `↑↓` + `Enter` or by the direct `y`/`n` shortcuts.
+Always (this session) / Decline, and say what to do instead** selectable by `↑↓` + `Enter` or by the
+direct `y`/`n` shortcuts. The last row turns the input box into a field for your reason: `Enter`
+sends it, an empty one sends nothing, and `ctrl-c` goes back to the options. The model gets the reason
+as a message from you right after the decline, so it has your next instruction rather than a bare
+"declined", and it can be a question ("why that file?") as well as a different command. If the
+model should stop rather than try something else, say so: "tell me the script" reads to a small model
+as run-then-tell, where "don't run anything, just tell me the script" does not.
 
 Two tools ask about more than the obvious:
 
@@ -42,6 +48,8 @@ in your own words, or the last row — always present — to type your own answe
 options is the right frame. One question per turn, and the answer is pinned into context afterwards so
 it cannot be forgotten and re-asked later in the same turn. Small models can and do frame a question
 around a misreading, so the options are not a summary of the request; that last row is the way out.
+`Ctrl-C` backs out of the answer field and puts the list back, so an answer started by mistake costs a
+keystroke rather than the question; from the list itself it drops the question.
 
 ## The web tools
 

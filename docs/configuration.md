@@ -8,6 +8,13 @@ Config sources, in precedence order (higher wins):
 2. **Project `.env`** (cwd where you run `reika`) — per-project overrides.
 3. **Global `~/.config/reika/.env`** — defaults for a global install.
 
+The project `.env` belongs to whatever repo you open, so it is read narrowly: only `REIKA_*` keys,
+and never the ones that change the sandbox, approvals, endpoints, keys or MCP servers
+(`REIKA_SANDBOX`, `REIKA_AUTO_APPROVE`, `REIKA_MCP`, `REIKA_MCP_SERVERS`, `REIKA_PASTE_FETCH`,
+`REIKA_SKILL_AUTO`, `REIKA_URL_GROUNDING`, `REIKA_CDP_SEARCH`, `REIKA_CDP_PORT`,
+`REIKA_DEBUG_FILE`, and every key ending in `_URL` or `_API_KEY`). Set those in your shell or the
+global file; Reika prints a warning naming any it ignored.
+
 The keys are grouped by area below. In each table, the **Default** column is what Reika uses when the key is unset;
 [`.env.example`](../.env.example) is a tuned starting point, not a copy of those defaults, and
 deliberately ships larger values for a few keys, sized for a reasoning-on local model with room
@@ -17,7 +24,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 | Key                  | Default                    | What                                                                                                                                                                            |
 | -------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_BASE_URL`     | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                                                                                                                      |
+| `REIKA_BASE_URL`     | `http://localhost:9931/v1` | OpenAI-compatible endpoint                                                                                                                                                      |
 | `REIKA_MODEL`        | _required_                 | Model name, or a comma-separated list of models served by the same `REIKA_BASE_URL`.                                                                                            |
 | `REIKA_API_KEY`      | `no-key`                   | Cloud API key (any non-empty for local)                                                                                                                                         |
 | `REIKA_PROFILES`     | _unset_                    | Comma-separated names of extra profiles, each defined by `REIKA_<NAME>_MODEL` / `_BASE_URL` / `_API_KEY` (plus optional `_MAX_TOKENS` / `_CONTEXT_WINDOW` / `_MIN_GEN_TOKENS`). |
@@ -45,7 +52,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_MAX_TOKENS`       | _unset_                 | Cap response tokens per call (cloud cost/latency control).                                                                                                                                                                   |
 | `REIKA_REASONING_ROUNDS` | `2`                     | Recent tool-call rounds that keep their reasoning in context (rest pruned). 1 = leanest; higher avoids re-derivation on thinking models, at a token cost                                                                     |
 | `REIKA_REPO_MAP_BUDGET`  | scales with the window  | Chars allotted to repo map in system prompt. Unset, 5% of the context window, between 3200 and 12000 (3200 when no window is known); set, it pins the value                                                                  |
-| `REIKA_MAX_TURNS`        | `200`                   | Tool-call iterations per user turn. A termination backstop for loops the detectors miss, not a cost cap — sized so a healthy complex turn never hits it; in the TUI ctrl-c is the real cap, in headless this is the only one |
+| `REIKA_MAX_TURNS`        | `400`                   | Tool-call iterations per user turn. A termination backstop for loops the detectors miss, not a cost cap — sized so a healthy complex turn never hits it; in the TUI ctrl-c is the real cap, in headless this is the only one |
 
 - **`REIKA_CONTEXT_WINDOW`** — Per-profile override available. Unset asks the endpoint
   (`/v1/models`: llama.cpp's `n_ctx`, vLLM's `max_model_len`, floored to the thousand), then the
@@ -84,7 +91,14 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   command the danger scan flags prompts a human first and, once cleared, runs unsandboxed — which is
   what lets `npm install`/`git push` work without a proxy. Under `bypass` every command is
   sandboxed, because there is no prompt to fall back on. Reads stay open (a blocklist of secret
-  paths is incomplete by construction). macOS only — on Linux it reports unavailable and behaves as
+  paths is incomplete by construction). Git metadata is the exception to the writable dirs: git's
+  `config` and `hooks`, and the files that decide which config git reads (anything named `.git`,
+  `commondir`, `gitdir`), are never writable, wherever they sit — temp included — because
+  `core.fsmonitor` and a hook are programs something else runs: reika's own `git status` after the
+  next command, or your next commit. Deleting them stays allowed, so removing a nested repo works,
+  except for the project's own `.git`. The cost is that `git init`, `git clone`, `git submodule add`
+  and `git worktree add` write them, so creating a repo is a command you run yourself, and a test
+  suite that creates repos in a temp dir fails under the sandbox. macOS only — on Linux it reports unavailable and behaves as
   before, since bubblewrap's `--unshare-net` gives the child its own loopback and would block the
   host's model server. `0` disables
 - **`REIKA_BASH_TIMEOUT_MS`** — `0` disables
@@ -103,7 +117,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_SUBAGENT_MODEL`     | _falls back to main_ | Override model for subagents                                                                                                                                                                                                                                                |
 | `REIKA_SUBAGENT_BASE_URL`  | _falls back_         | Override server for subagents                                                                                                                                                                                                                                               |
 | `REIKA_SUBAGENT_API_KEY`   | _falls back_         | Override key for subagents                                                                                                                                                                                                                                                  |
-| `REIKA_SUBAGENT_MAX_TURNS` | `8`                  | Subagent round budget. The last round is the report round: every tool is withdrawn and the subagent is told to write up what it has, with a "Not covered" list, so the parent always gets a report and never `(reached max turns…)`.                                        |
+| `REIKA_SUBAGENT_MAX_TURNS` | `10`                 | Subagent round budget. The last round is the report round: every tool is withdrawn and the subagent is told to write up what it has, with a "Not covered" list, so the parent always gets a report and never `(reached max turns…)`.                                        |
 | `REIKA_SUBAGENT_PRESSURE`  | `1`                  | The mid-session subagent trigger: when a `grep`/`glob` result spans 4+ files and reading them would push the request over the compaction threshold, the result gets a one-line footer pointing at `subagent` — an observation at the moment of decision, not a prompt rule. |
 
 - **`REIKA_SUBAGENT_MAX_TURNS`** — Keep it tighter than `REIKA_MAX_TURNS`
@@ -217,13 +231,20 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | Key                      | Default                             | What                                                                                                                                                                                                                |
 | ------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `REIKA_DEBUG`            | _unset_                             | Any non-empty value writes diagnostics (session-start bundle size, loop/spiral detectors, grounding, prefix-cache classification with the prefill cost it implies, per-round entropy/KL drift, etc.) to a log file. |
-| `REIKA_DEBUG_FILE`       | `~/reika-debug.log`                 | Path for the `REIKA_DEBUG` log. The default log is reset at the start of each session; an explicit `REIKA_DEBUG_FILE` is always appended to, so use it when an experiment should accumulate across runs             |
+| `REIKA_DEBUG_FILE`       | _unset_                             | One file for the `REIKA_DEBUG` log instead of a file per session. Always appended to and never swept, so use it when an experiment should accumulate across runs                                                    |
 | `REIKA_ENTROPY`          | _unset_                             | `1` asks the server for per-token logprobs, so the `REIKA_DEBUG` drift lines report the model's real predictive entropy (and how surprised it was by its own output) instead of the entropy of the text alone.      |
 | `REIKA_TSCONFIG`         | _unset_                             | Override the tsconfig the post-edit typecheck gate uses (relative to cwd or absolute).                                                                                                                              |
 | `REIKA_SPILL_STATS`      | _unset_                             | `1` appends one JSON line per over-cap tool result — and per call that opens a saved artifact — to a stats file.                                                                                                    |
 | `REIKA_SPILL_STATS_FILE` | `~/.config/reika/spill-stats.jsonl` | Path for the `REIKA_SPILL_STATS` file. Always appended to — unlike the debug log, it is meant to accumulate across sessions                                                                                         |
 
 - **`REIKA_DEBUG`** — Goes to a **file**, never stderr — stderr would corrupt the Ink TUI frame
+  Each session writes its own log to `~/.config/reika/logs/`, named like its auto-save under
+  `history/` so the two pair (the log's `session file=` line names the transcript, including after
+  `/new` and `/resume`). `~/.config/reika/logs/latest.log` always points at the current session's
+  log. Logs older than 14 days are deleted at startup, oldest first, and so is the oldest of what's
+  left while the directory holds more than 50MB; a running session's log is never deleted. To keep
+  logs for every session, put `REIKA_DEBUG=1` in `~/.config/reika/.env`. The log quotes your task
+  and carries the paths and commands the session ran, the same content as the auto-save
 - **`REIKA_ENTROPY`** — Needs `REIKA_DEBUG` — the log is the only consumer — and costs a much
   larger streamed response (top-5 candidates per token). The per-round entropy/KL lines are written
   either way; this only sharpens the entropy half. A server that rejects the fields is retried once
@@ -401,7 +422,7 @@ switchable with `/model <name>` — no extra env vars to add or remove as your r
 changes:
 
 ```ini
-REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_MODEL=qwen3-coder,kimi-k2,glm-4.6   # /model kimi-k2 to switch
 ```
 
@@ -411,7 +432,7 @@ key, define a full profile and switch between them at runtime with `/model <name
 ```ini
 # Default profile (existing keys — always available as "default")
 REIKA_MODEL=qwen3.5-9b
-REIKA_BASE_URL=http://localhost:8080/v1
+REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_API_KEY=no-key
 
 # Additional named profiles — list them, then define each

@@ -81,7 +81,7 @@ cd your-project && reika
 
 Using a hosted API instead? Skip the server and set `REIKA_BASE_URL`, `REIKA_API_KEY` and `REIKA_MODEL` to the provider's endpoint, your key and its model id; [Install and first run](docs/getting-started.md#hosted) has the details.
 
-`REIKA_BASE_URL` defaults to `http://localhost:8080/v1`, llama-server's default. The context window is read from the server when it reports one, and for hosted endpoints from the models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it. Reika sends no sampling parameters of its own, so your server's flags are what apply.
+`REIKA_BASE_URL` defaults to `http://localhost:9931/v1`, llama-server's default since llama.cpp v0.7.0 (older builds and its Docker images use 8080). The context window is read from the server when it reports one, and for hosted endpoints from the models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it. Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
 To run from a checkout instead — `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm`) and `pnpm run install:global` to build and install the `reika` binary, or `cp .env.example .env` and `pnpm run dev` to run without installing. `pnpm run uninstall:global` removes the global binary.
 
@@ -92,7 +92,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 | Key                    | Default                    | What                                                                                  |
 | ---------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
 | `REIKA_MODEL`          | _required_                 | Model name, or a comma-separated list served by the same endpoint                     |
-| `REIKA_BASE_URL`       | `http://localhost:8080/v1` | OpenAI-compatible endpoint                                                            |
+| `REIKA_BASE_URL`       | `http://localhost:9931/v1` | OpenAI-compatible endpoint                                                            |
 | `REIKA_API_KEY`        | `no-key`                   | API key (any non-empty value for local servers)                                       |
 | `REIKA_CONTEXT_WINDOW` | _probed from the server_   | Context window in tokens; drives compaction, the context gauge, and the repo map size |
 | `REIKA_MIN_GEN_TOKENS` | _learned_ (from `2048`)    | Room reserved for the reply; learned from the model's rounds, set it to pin           |
@@ -141,7 +141,7 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 
 ## Inspired by
 
-Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
+Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, DS4, and Ante.
 
 ## License
 

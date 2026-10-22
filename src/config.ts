@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -14,14 +15,65 @@ import type {
   VisionRoute,
 } from './types.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './provider/budget.js';
+import { DEFAULT_BASE_URL } from './provider/transport.js';
 import { parseMcpServers } from './mcp/config.js';
 
+// The cwd .env belongs to whatever repo reika was opened in, which may not be the user's. A cloned
+// repo's file must not turn the sandbox or approvals off, start a program (MCP), redirect where
+// requests or logs go, or reach child processes (NODE_OPTIONS, GIT_*, TMPDIR — the last also names
+// a sandbox-writable path), so only REIKA_* keys are read from it and these are not.
+const PROJECT_ENV_DENIED = new Set([
+  'REIKA_SANDBOX',
+  'REIKA_AUTO_APPROVE',
+  'REIKA_MCP',
+  'REIKA_MCP_SERVERS',
+  'REIKA_PASTE_FETCH',
+  'REIKA_SKILL_AUTO',
+  'REIKA_URL_GROUNDING',
+  'REIKA_CDP_SEARCH',
+  'REIKA_CDP_PORT',
+  'REIKA_DEBUG_FILE',
+]);
+
+export function isDeniedFromProjectEnv(key: string): boolean {
+  // Every endpoint and key, including REIKA_<NAME>_BASE_URL for a profile the global file defines.
+  return PROJECT_ENV_DENIED.has(key) || /_(URL|API_KEY)$/.test(key);
+}
+
+// Returns the denied keys that would otherwise have taken effect, for the startup notice.
+export function applyProjectEnv(text: string, env: NodeJS.ProcessEnv): string[] {
+  const ignored: string[] = [];
+  for (const [key, value] of Object.entries(dotenv.parse(text))) {
+    // An empty line sets nothing, but would still claim the key ahead of ~/.config/reika/.env.
+    if (!key.startsWith('REIKA_') || key in env || value.trim() === '') continue;
+    if (isDeniedFromProjectEnv(key)) ignored.push(key);
+    else env[key] = value;
+  }
+  return ignored;
+}
+
+export function projectEnvNotice(ignored: string[]): string | undefined {
+  if (ignored.length === 0) return undefined;
+  return `Ignored ${ignored.join(', ')} from ./.env: settings for the sandbox, approvals, endpoints, keys and MCP servers are read only from your shell or ~/.config/reika/.env.`;
+}
+
+function readTextOrEmpty(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 // Precedence: shell env > cwd .env > ~/.config/reika/.env
-// dotenv defaults to no-override, so loading cwd first then global gives the right order.
+// Neither file overrides a key already set, so loading cwd first then global gives the right order.
 // The keys already present before dotenv runs are the ones set at launch (`REIKA_X=1 reika`, or an
 // export in the shell rc); the persisted session state (#365) defers to those and beats the files.
 const launchEnvKeys = new Set(Object.keys(process.env));
-dotenv.config();
+const ignoredProjectEnvKeys = applyProjectEnv(
+  readTextOrEmpty(join(process.cwd(), '.env')),
+  process.env,
+);
 dotenv.config({ path: join(homedir(), '.config', 'reika', '.env') });
 
 export function setAtLaunch(name: string): boolean {
@@ -45,7 +97,7 @@ export function loadConfig(): Config {
   // llama-server's port, matching .env.example and the quick start. The fallback only applies
   // when REIKA_BASE_URL is unset, which for a required-REIKA_MODEL config means somebody
   // running on defaults end to end.
-  const baseURL = process.env.REIKA_BASE_URL ?? 'http://localhost:8080/v1';
+  const baseURL = process.env.REIKA_BASE_URL ?? DEFAULT_BASE_URL;
   validateBaseURL(baseURL, 'REIKA_BASE_URL');
   const apiKey = process.env.REIKA_API_KEY ?? 'no-key';
   const maxTokens = parseIntOrUndef(process.env.REIKA_MAX_TOKENS);
@@ -85,7 +137,7 @@ export function loadConfig(): Config {
     // A termination backstop for the spiral shapes the loop detectors miss, not a cost cap: a
     // cached round is nearly free on both local and API, so it is sized where a healthy complex
     // turn never lands and a spiral in headless (no ctrl-c) still ends in hours, not days.
-    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '200', 10),
+    maxTurns: parseInt(process.env.REIKA_MAX_TURNS ?? '400', 10),
     repoMapBudget: parseIntOrUndef(process.env.REIKA_REPO_MAP_BUDGET),
     autoApprove: parseAutoApprove(process.env.REIKA_AUTO_APPROVE),
     autoApproveExplicit: (process.env.REIKA_AUTO_APPROVE ?? '').trim() !== '',
@@ -94,7 +146,7 @@ export function loadConfig(): Config {
     subagentBaseURL: emptyToUndefined(process.env.REIKA_SUBAGENT_BASE_URL),
     subagentApiKey: emptyToUndefined(process.env.REIKA_SUBAGENT_API_KEY),
     // Not a backstop: the last round IS the report round (#340), so this stays tight.
-    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '8', 10),
+    subagentMaxTurns: parseInt(process.env.REIKA_SUBAGENT_MAX_TURNS ?? '10', 10),
     visionModel: emptyToUndefined(process.env.REIKA_VISION_MODEL),
     visionBaseURL,
     visionApiKey: emptyToUndefined(process.env.REIKA_VISION_API_KEY),
@@ -104,6 +156,7 @@ export function loadConfig(): Config {
     cdpPort: parseIntOrUndef(process.env.REIKA_CDP_PORT),
     profiles,
     ...parseModeModels(process.env.REIKA_MODE_MODELS, profiles, models),
+    projectEnvNotice: projectEnvNotice(ignoredProjectEnvKeys),
     maxSearchesPerTurn: parseInt(process.env.REIKA_MAX_SEARCHES_PER_TURN ?? '3', 10),
     maxFetchesPerTurn: parseInt(process.env.REIKA_MAX_FETCHES_PER_TURN ?? '5', 10),
     bashTimeoutMs: parseInt(process.env.REIKA_BASH_TIMEOUT_MS ?? '1800000', 10),

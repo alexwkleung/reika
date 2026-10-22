@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { sandboxExecAvailable, sandboxPlan, sandboxProfile } from '../tools/_sandbox.js';
 import {
   type CheckOutcome,
   type Diagnostic,
@@ -11,6 +13,10 @@ import {
   formatIntroduced,
   introducedDiagnostics,
   parseTscOutput,
+  runTypecheck,
+  runTscProcess,
+  sandboxRefused,
+  shellQuote,
 } from './typecheck.js';
 
 function diag(over: Partial<Diagnostic> = {}): Diagnostic {
@@ -263,4 +269,238 @@ describe('detectTsProject', () => {
       else process.env.REIKA_TSCONFIG = prev;
     }
   });
+});
+
+describe('shellQuote', () => {
+  it('wraps every argument in single quotes, empty included', () => {
+    expect(shellQuote('tsc')).toBe(`'tsc'`);
+    expect(shellQuote('')).toBe(`''`);
+    expect(shellQuote('/a b/c.ts')).toBe(`'/a b/c.ts'`);
+  });
+
+  it('escapes an embedded single quote so the shell cannot re-parse', () => {
+    expect(shellQuote("it's")).toBe(`'it'\\''s'`);
+    expect(shellQuote("'")).toBe(`''\\'''`);
+  });
+
+  it('keeps shell metacharacters literal', () => {
+    const arg = '$(rm -rf /); `reboot` | & > * ? [ ]';
+    expect(shellQuote(arg)).toBe(`'${arg}'`);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'round-trips hostile arguments through a real /bin/sh',
+    () => {
+      const args = [
+        'plain',
+        'with spaces',
+        "it's quoted",
+        '$(echo pwned)',
+        '`reboot`',
+        '*?[]{}',
+        'mix \' $ ( ) ; & | < > " \n newline',
+      ];
+      const line = `printf '%s\\0' ${args.map(shellQuote).join(' ')}`;
+      const r = spawnSync('/bin/sh', ['-c', line], { encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      expect(r.stdout.split('\0').slice(0, -1)).toEqual(args);
+    },
+  );
+});
+
+describe('sandboxRefused', () => {
+  // Measured from a real sandbox-exec that failed before running the command: exit 65 (a profile
+  // the OS rejects, an unbound param) or 71 (nested seatbelt), the wrapper's own line on stderr,
+  // and no stdout at all.
+  const wrapperLine =
+    'sandbox-exec: unbound variable: WORKDIR at <input string>, line 1, column 17';
+
+  it('is a refusal when the wrapper exited before running anything', () => {
+    expect(sandboxRefused(65, wrapperLine)).toBe(true);
+    expect(sandboxRefused(71, 'sandbox-exec: sandbox_apply: Operation not permitted')).toBe(true);
+  });
+
+  it('is not a refusal when tsc itself ran, diagnostics or not', () => {
+    expect(sandboxRefused(1, 'a.ts(1,7): error TS2322: bad type')).toBe(false);
+    expect(sandboxRefused(2, 'error TS5083: Cannot read file')).toBe(false);
+    // The wrapper's line buried under real diagnostics: tsc ran after it, so not a refusal.
+    expect(sandboxRefused(65, `${wrapperLine}\na.ts(1,7): error TS2322: bad type`)).toBe(false);
+  });
+
+  it('is not a refusal on success, a signal, or silence', () => {
+    expect(sandboxRefused(0, wrapperLine)).toBe(false);
+    expect(sandboxRefused(null, wrapperLine)).toBe(false);
+    expect(sandboxRefused(65, '')).toBe(false);
+  });
+});
+
+const sandboxWorks = sandboxExecAvailable();
+
+describe('runTypecheck — the spawn line', () => {
+  let cwd: string;
+  beforeEach(async () => {
+    // Deliberately hostile path: a space and a single quote, the case bare concatenation into the
+    // `/bin/sh -c` line would split in two or let a quote re-parse the rest.
+    cwd = await mkdtemp(join(tmpdir(), "reika's typecheck "));
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  // A fake tsc that records its argv: the failure mode these tests exist for is tsc never
+  // starting, or starting with the flags split apart, and either shows up in what it records.
+  async function fakeTsc(): Promise<{ bin: string; argvOut: string }> {
+    await writeFile(join(cwd, 'tsconfig.json'), '{}', 'utf8');
+    await mkdir(join(cwd, 'node_modules', '.bin'), { recursive: true });
+    const bin = join(cwd, 'node_modules', '.bin', 'tsc');
+    const argvOut = join(cwd, 'tsc-argv.json');
+    await writeFile(
+      bin,
+      `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(process.argv.slice(2)));\n`,
+      'utf8',
+    );
+    await chmod(bin, 0o755);
+    return { bin, argvOut };
+  }
+
+  // Exactly one argv element per flag — what a split or re-parsed argument would break.
+  async function expectRecordedArgv(argvOut: string, buildInfo: string): Promise<void> {
+    expect(JSON.parse(await readFile(argvOut, 'utf8'))).toEqual([
+      '--noEmit',
+      '--incremental',
+      '--tsBuildInfoFile',
+      buildInfo,
+      '--pretty',
+      'false',
+      '-p',
+      join(cwd, 'tsconfig.json'),
+    ]);
+  }
+
+  it.skipIf(process.platform === 'win32')(
+    'reaches the project-local tsc with exactly one argv per element',
+    async ctx => {
+      // Say which path this proved rather than pass on either: a plan that is unavailable
+      // (non-macOS, nested seatbelt) means the fail-open fallback ran, and the next test owns
+      // that path.
+      const plan = sandboxPlan(cwd, { network: false });
+      if (!('args' in plan)) ctx.skip(`sandbox unavailable here (${plan.reason})`);
+      const { argvOut } = await fakeTsc();
+      const buildInfo = join(cwd, "it's a build.tsbuildinfo");
+      const res = await runTypecheck(cwd, { tsBuildInfoFile: buildInfo });
+      expect(res.ran).toBe(true);
+      await expectRecordedArgv(argvOut, buildInfo);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'the fail-open fallback reaches tsc with exactly one argv per element',
+    async ctx => {
+      // The mirror of the one above, run only where the plan is unavailable (Linux CI), so the
+      // fallback spawn is exercised somewhere rather than by a test that may not have taken it.
+      const plan = sandboxPlan(cwd, { network: false });
+      if ('args' in plan) ctx.skip('sandbox available — the sandboxed line is covered above');
+      const { argvOut } = await fakeTsc();
+      const buildInfo = join(cwd, "it's a build.tsbuildinfo");
+      const res = await runTypecheck(cwd, { tsBuildInfoFile: buildInfo });
+      expect(res.ran).toBe(true);
+      await expectRecordedArgv(argvOut, buildInfo);
+    },
+  );
+
+  it.skipIf(!sandboxWorks)(
+    'reads a wrapper that refused to load the profile as a refusal, not a clean check',
+    async () => {
+      const { bin, argvOut } = await fakeTsc();
+      // The real profile with none of its `-D` bindings: an unbound param is the refusal shape the
+      // plan-time probe cannot see, and sandbox-exec exits before running anything — the case that
+      // resolved "ran clean, zero diagnostics" before it was detected.
+      const res = await runTscProcess(
+        '/usr/bin/sandbox-exec',
+        ['-p', sandboxProfile({ network: false }), '/bin/sh', '-c', shellQuote(bin)],
+        cwd,
+        30_000,
+        undefined,
+        true,
+      );
+      expect(res).toMatchObject({ ran: false });
+      if (!res.ran) expect(res.reason).toContain('sandbox wrapper refused');
+      // Nothing ran — which is exactly why an undetected refusal masquerades as a clean check.
+      await expect(access(argvOut)).rejects.toThrow();
+    },
+  );
+  it.skipIf(!sandboxWorks)(
+    'never retries unsandboxed when the confined tsc claims the wrapper refused',
+    async () => {
+      // A planted tsc can print the wrapper's line and exit 65 as easily as sandbox-exec can. If
+      // that bought a retry, the retry would be the unconfined run of the same binary — so it
+      // must run exactly once, and the gate is off for the turn rather than reopened.
+      const { bin } = await fakeTsc();
+      const runs = join(cwd, 'runs.log');
+      await writeFile(
+        bin,
+        `#!/bin/sh\necho run >> ${shellQuote(runs)}\necho 'sandbox-exec: fake refusal' >&2\nexit 65\n`,
+        'utf8',
+      );
+      const res = await runTypecheck(cwd);
+      expect(res).toMatchObject({ ran: false });
+      expect((await readFile(runs, 'utf8')).trim().split('\n')).toEqual(['run']);
+    },
+  );
+
+  it.skipIf(!sandboxWorks)(
+    'reads a tsc the shell could not execute as not run, not a clean check',
+    async () => {
+      // Exec bit lost: the direct spawn reports EACCES, but behind `/bin/sh -c` it is exit 126
+      // with no tsc output — zero diagnostics, which used to read as green.
+      const { bin, argvOut } = await fakeTsc();
+      await chmod(bin, 0o644);
+      const res = await runTypecheck(cwd);
+      expect(res.ran).toBe(false);
+      if (!res.ran) expect(res.reason).toContain('exit 126');
+      await expect(access(argvOut)).rejects.toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'spawns tsc directly when the sandbox is switched off',
+    async () => {
+      // REIKA_SANDBOX=0: a tsc that writes outside the confined paths must keep working, so the
+      // wrapper is skipped outright — proved by a write the profile would refuse.
+      const { bin, argvOut } = await fakeTsc();
+      const outside = await mkdtemp(join(homedir(), '.reika-tc-test-'));
+      try {
+        const marker = join(outside, 'wrote');
+        await writeFile(
+          bin,
+          `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(marker)}, 'x');\nrequire('fs').writeFileSync(${JSON.stringify(argvOut)}, '[]');\n`,
+          'utf8',
+        );
+        const res = await runTypecheck(cwd, { sandbox: false });
+        expect(res.ran).toBe(true);
+        await expect(access(marker)).resolves.toBeUndefined();
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'a timeout kills the whole process group, not just the wrapper',
+    async () => {
+      // A shim that forks tsc without exec: killing only the shell left the grandchild running.
+      const { bin } = await fakeTsc();
+      const pidFile = join(cwd, 'grandchild.pid');
+      await writeFile(
+        bin,
+        `#!/bin/sh\nsleep 30 &\necho $! > ${shellQuote(pidFile)}\nwait\n`,
+        'utf8',
+      );
+      const res = await runTypecheck(cwd, { timeoutMs: 1000 });
+      expect(res).toMatchObject({ ran: false, reason: expect.stringContaining('timed out') });
+      const pid = Number((await readFile(pidFile, 'utf8')).trim());
+      await new Promise(r => setTimeout(r, 200));
+      expect(() => process.kill(pid, 0)).toThrow();
+    },
+  );
 });

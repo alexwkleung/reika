@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { expandingHeredocBodies, stripHeredocs } from './_heredoc.js';
 import {
@@ -44,8 +44,8 @@ import {
 // letting a model read this as a bug in its own pipeline.
 
 // A malformed profile makes `sandbox-exec` exit 65 *without running the command* — the sandbox
-// fails closed, which is the opposite of what a fail-open feature wants. Detected so the caller
-// can retry unsandboxed instead of turning every command into an uninterpretable failure.
+// fails closed, which is the opposite of what a fail-open feature wants. `sandboxPlan` probes for it
+// before any command runs (`profileLoadFailure`); the typecheck gate also reads it off its output.
 export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 
@@ -65,12 +65,10 @@ export function sandboxProfile(opts: { network: boolean }): string {
     // typecheck`). That is a very common shape, and losing to it makes the sandbox unusable.
     '(deny file-write*)',
     '(allow file-write* (subpath (param "WORKDIR")))',
-    // The repo's git dir, when it sits ABOVE cwd: a monorepo package (`packages/web/`), a worktree
-    // (`.git` is a file pointing into `main/.git/worktrees/x`) or a submodule. Without it every git
-    // write there — `add`, `stash`, `checkout`, even `fetch` (writes FETCH_HEAD) — fails on
-    // `.git/index.lock: Operation not permitted`, which reads as a stale lock and whose natural next
-    // move is `rm -f .git/index.lock` (measured). Bound to WORKDIR when the git dir is inside it or
-    // there is no repo, since an unbound param exits 65.
+    // The repo's git dir when it isn't cwd's own `.git` — usually above cwd (monorepo package,
+    // worktree, submodule). Without it `git add` fails on `.git/index.lock: Operation not
+    // permitted`, which reads as a stale lock and invites `rm -f` (measured). Never bound to
+    // WORKDIR: the denies below derive `config`/`hooks` from it and would hit the project's own.
     '(allow file-write* (subpath (param "GITDIR")))',
     // Temp is writable: `mktemp -d`, `cd /tmp && …` and `tempfile` are how a model scratches, and
     // denying them did worse than fail — python's `tempfile.mkdtemp()` fell through TMPDIR and /tmp
@@ -89,6 +87,28 @@ export function sandboxProfile(opts: { network: boolean }): string {
     '(allow file-write* (subpath (param "USERCACHE")))',
     '(allow file-write* (subpath (param "XDGCACHE")))',
     '(allow file-write* (subpath "/dev"))',
+    // Git config and hooks name programs something else runs, so they stay unwritable (#706).
+    // Matched by name, not under an anchored dir: renaming `.git`, writing `commondir`, or
+    // repointing a worktree's `.git` file each redirected git to a planted config (measured). Temp
+    // is covered too, since a repo built there and `mv`'d in is one git status recurses into. The
+    // config pattern names only metadata dirs, so a branch called `config` still works.
+    '(deny file-write* (regex #"/\\.git$"))',
+    '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
+    '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
+    // Deleting stays allowed, or `rm -rf vendor` with a nested repo in it fails on that repo's
+    // metadata. Removing one plants nothing, and the file can't be created again. The project's
+    // own `.git` and GITDIR are excluded here, because renaming one away counts as an unlink, and a
+    // later deny does not win over this unlink allow (measured).
+    '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git"))) (require-not (subpath (param "GITDIR")))))',
+    // A common dir not named `.git` has no name to match, so its places are spelled out from the
+    // param.
+    '(deny file-write* (literal (param "GITDIR")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/config.worktree")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/commondir")))',
+    '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
+    '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/worktrees")) (regex #"/worktrees/[^/]+/(config|config\\.worktree|commondir|gitdir)$")))',
+    '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/modules")) (regex #"/(config|config\\.worktree|commondir|gitdir)$|/hooks(/|$)")))',
   ];
   if (!opts.network) {
     lines.push(
@@ -485,6 +505,7 @@ function hasSandboxExec(): boolean {
 export function resetSandboxCache(): void {
   execAvailable = undefined;
   gitDirs.clear();
+  profileProbes.clear();
 }
 
 /**
@@ -526,18 +547,66 @@ export function sandboxPlan(cwd: string, opts: { network: boolean }): SandboxPla
   // Same realpath rule for every other allowed dir: `os.tmpdir()` is `/var/folders/…/T`, a symlink
   // hop away from the `/private/var/…` the kernel matches. Each falls back to a path the profile
   // already covers, so an unresolvable dir costs nothing rather than an unbound param (exit 65).
+  const params = sandboxParams(cwd, resolved);
+  const args = ['-p', sandboxProfile(opts)];
+  for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
+  const failure = profileLoadFailure(args);
+  return failure ? { reason: failure } : { args };
+}
+
+const profileProbes = new Map<string, string | null>();
+
+/**
+ * Why `sandbox-exec` will not load these exact args, or null when it does. A generator bug (a bad
+ * rule, an unbound param) makes it exit 65 having run nothing, so every command would fail. Asking
+ * here, against `:`, settles that before a model's command exists (#738): the old check read the
+ * refusal off the confined command's own output, and `echo 'sandbox-exec: x' >&2; exit 65` bought
+ * itself an unconfined rerun. The probe runs the same bytes the command will get, and loading
+ * depends on nothing else, so a pass here means the real run loads too, and its exit 65 is its own.
+ *
+ * Only a refusal counts. A timeout or spawn error reads as loaded: assuming it failed would let a
+ * swapping machine switch the sandbox off, where assuming it loaded costs at worst a command that
+ * fails closed, visibly. Cached per argv: at most one per cwd and network setting.
+ */
+export function profileLoadFailure(args: string[]): string | null {
+  const key = args.join('\0');
+  const cached = profileProbes.get(key);
+  if (cached !== undefined) return cached;
+  let failure: string | null = null;
+  try {
+    const r = spawnSync('/usr/bin/sandbox-exec', [...args, '/bin/sh', '-c', ':'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    // `:` cannot fail, so any exit but 0 is sandbox-exec's own (65 a parse or bind error, 71 apply).
+    if (r.error === undefined && r.status !== null && r.status !== 0) {
+      const detail = r.stderr.trim().split('\n')[0] ?? '';
+      failure = `the sandbox profile failed to load (sandbox-exec exit ${r.status}${detail ? `: ${detail}` : ''})`;
+    }
+  } catch {
+    // Spawn threw: same as a timeout, read as loaded.
+  }
+  profileProbes.set(key, failure);
+  return failure;
+}
+
+/** The `-D` bindings for the profile's params. Exported so tests can prove every param is bound
+ *  even where `sandboxPlan` refuses (nested seatbelt exits 71, but still parses the profile). */
+export function sandboxParams(cwd: string, resolved: string): Record<string, string> {
   const home = homedir();
-  const params = {
+  return {
     WORKDIR: resolved,
-    GITDIR: gitDirOutside(cwd, resolved) ?? resolved,
+    GITDIR: gitDirToBind(cwd, resolved) ?? NO_GITDIR,
     TMPDIR: realOr(tmpdir(), '/private/tmp'),
     USERCACHE: realOr(join(home, 'Library', 'Caches'), resolved),
     XDGCACHE: realOr(process.env.XDG_CACHE_HOME || join(home, '.cache'), resolved),
   };
-  const args = ['-p', sandboxProfile(opts)];
-  for (const [k, v] of Object.entries(params)) args.push('-D', `${k}=${v}`);
-  return { args };
 }
+
+/** GITDIR when there is none to bind: an unbound param exits 65, and nothing can exist under the
+ *  `/dev/null` device, so every rule naming it matches nothing. */
+export const NO_GITDIR = '/dev/null/reika-no-gitdir';
 
 function realOr(path: string, fallback: string): string {
   try {
@@ -549,9 +618,9 @@ function realOr(path: string, fallback: string): string {
 
 const gitDirs = new Map<string, string | null>();
 
-/** The repo's common git dir when it lies outside cwd, resolved; null inside cwd or without a repo.
- *  Cached per cwd — a property of the checkout, and `git rev-parse` per command is a process. */
-function gitDirOutside(cwd: string, resolvedCwd: string): string | null {
+/** The repo's common git dir unless it is cwd's own `.git`: one inside cwd under another name
+ *  (`--separate-git-dir`, a dotfiles repo) escapes the name-based denies. Cached per cwd. */
+function gitDirToBind(cwd: string, resolvedCwd: string): string | null {
   const cached = gitDirs.get(cwd);
   if (cached !== undefined) return cached;
   let dir: string | null = null;
@@ -563,7 +632,7 @@ function gitDirOutside(cwd: string, resolvedCwd: string): string | null {
       timeout: 5_000,
     }).trim();
     const abs = realOr(isAbsolute(out) ? out : resolve(cwd, out), '');
-    if (abs && abs !== resolvedCwd && !abs.startsWith(resolvedCwd + sep)) dir = abs;
+    if (abs && abs !== join(resolvedCwd, '.git')) dir = abs;
   } catch {
     // not a repo, or no git — nothing to allow
   }
@@ -619,12 +688,155 @@ export function sandboxNotice(cwd: string, home = homedir()): string {
 const NET_DENIAL_RE =
   /couldn.t connect to server|connect EPERM|code EPERM|\[Errno 1\] Operation not permitted(?!: ')|connect(?: to host \S+ port \d+)?: operation not permitted|could ?n.t resolve host|unable to resolve host|ENOTFOUND|EAI_AGAIN|EAI_NONAME|getaddrinfo|nodename nor servname|no such host|name resolution|network is unreachable/i;
 
-// A write outside the allowed dirs, as the shell (`/bin/sh: /Users/x/f: Operation not permitted`),
-// mkdir/cp/… (`mkdir: /Users/x/d: Operation not permitted`), node (`EPERM: operation not permitted,
-// mkdir '/Users/x/d'`) and python (`Operation not permitted: '/Users/x/f'`) each print it — a PATH
-// next to the message is what tells it apart from the network and exec shapes above.
-const FS_DENIAL_RE =
-  /\/[^\s:'"]+: operation not permitted|EPERM: operation not permitted, \w+ '|operation not permitted: '\//i;
+// A write the profile refused: `<prog>: <path>: Operation not permitted` from the shell and
+// coreutils (behind any `<runner>: ` prefixes — turbo, pnpm -r, a go error chain — or indentation),
+// go's `open <path>: …` with no colon after the verb, git's bare absolute `<path>: …`, node's and
+// python's mid-line shapes, and (#723) two forms the slash requirement dropped:
+//
+// - a SLASHLESS path, which only a file verb may introduce: `rm -rf .git` prints `rm: .git:
+//   Operation not permitted`, `mv .git .g` prints `mv: rename .git to .g: …` and `tee config` from
+//   inside `.git` prints `tee: config: …`; `sed -i` names no path at all (`sed: rename(): …`,
+//   measured on macOS sed). Since #706 these are among the refusals a model is likeliest to cause,
+//   and the slash dropped them. Making the slash
+//   optional after ANY `<prog>: ` instead would match `docker: connect: operation not permitted`, a
+//   network denial, and the write line would then point the model at the wrong thing.
+// - a quoted path before the phrase, which is git's form for the same refusals: `fatal: cannot copy
+//   '…/templates/hooks/commit-msg.sample' to '…/.git/hooks/commit-msg.sample': Operation not
+//   permitted`, what `git init` prints now that #706 denies the hook copy. The quotes and spaces put
+//   it out of reach of the path forms above, and the tail is the only part of git's line that does
+//   not change with the message. It must sit behind git's own `fatal:`/`error:`, so a test title
+//   quoting a path is not one, and a quoted URL is not a path: `fatal: unable to access
+//   'https://…/': Operation not permitted` is a network shape.
+// - git's config refusal, `error: could not write config file .git/config: Operation not
+//   permitted` — what `git config` prints since #706 (measured; `lock` is the same message when the
+//   lock file is the refused one), with no verb or slash in front of the path.
+//
+// Python's `[Errno 1] Operation not permitted: '<path>'` takes a relative path too (`'.git/config'`);
+// the `[Errno 1]` is what keeps a quoted test name or host from reading as one.
+//
+// All but node's must END the line (#720): quoted text — a comment, a fixture string, a grep hit —
+// carries text after the phrase, and prose before the path must end in `: ` or be a single verb, so a
+// sentence that quotes the error is not a refusal. A denial line quoted whole at column 0 and node's
+// mid-line shape still read as one.
+//
+// The prefix in front of every form below is an ALLOWLIST of what runners print (#726). #720 allowed
+// any `.*: ` here so that a runner's column reached a shape added for the shell's own output, and
+// that is what let a line which only QUOTES a refusal read as one whenever the quote sat behind a
+// colon column of its own — the assertion header a failing test prints over the fixture it compared
+// (`Expected: rm: .git: Operation not permitted`, and `AssertionError: /bin/sh: /Users/x/f: Operation
+// not permitted`, which is not a hypothetical: it is reika's own `_sandbox.test.ts` failing under the
+// `| grep -E "AssertionError|expected"` a model wraps it in), a diff's added/removed line (`+ mkdir:
+// /Users/x: …`, what `gh pr diff` of such a fixture prints), and git's own quoted form behind either
+// (`Expected: fatal: cannot copy '…' to '….git/hooks/…': Operation not permitted`). Each produced the
+// write footer and the once-per-cwd `REIKA_SANDBOX=0` receipt for a write that never happened — the
+// #720 class, which #725 widened the exposure of by scanning a run's 4MB tail, not just its 64KB
+// head. So the prefix is these five shapes, one source for all the forms below, and a runner nobody
+// listed loses its footer rather than the rest of the class getting through: a miss costs one
+// footer, a false hit costs a footer AND that receipt.
+//
+//   `name: ` / `name build: `   turbo's `web:build: `, pnpm -r's `packages/web build: `
+//   `[n] `                      a job or worker number, padded or not (`[0] `, `[1]   `)
+//   `name | `                   concurrently's column (`web:build | `)
+//   indentation                 a test runner printing an indented line
+//   `go: <prose>: `             go's error chain, whose middle segment is prose and cannot be a name
+//
+// What may NOT be one is assertion vocabulary, refused BY NAME because it is name-shaped: a
+// capitalized header (`Expected: `/`Received: `/`Actual: `/`AssertionError: `, the last measured, the
+// rest the issue's, and the bare `Error: ` a test prints over a thrown fixture string) is a value being compared, never a runner — and a runner's own column in front
+// does not make it one: `web:build: Expected: …` is the issue's red suite under turbo, the word can
+// end a column as its trailing token (`run: Expected: `), and the go chain's prose segment can carry
+// it (`go: x: Expected: `). So the vocabulary is checked where a name starts AND at the `:` that ends
+// a column (the `(?<!…)` before each terminator), and a go chain stops at the first segment that
+// ends in it, not only at the line's first token. A diff's
+// `+ `/`- ` marker needs no
+// rule of its own — a column cannot start with one, which is also why a column-0 `-bash: /x: …` (a
+// login shell naming itself) is dropped: at column 0 the marker and the shell's name are the same
+// character. A line number is not a column either, so a name must carry a letter somewhere — that is
+// what keeps `668:  mkdir: /x: Operation not permitted`, a `grep -n` hit on an indented denial, out;
+// a runner that numbers its lines brackets the number (`[0] `), form or not.
+//
+// What is left is one-directional and stated: a runner whose column is one of the shapes above keeps
+// its footer, and adding one belongs on the list rather than back in the open form. Replayed over the
+// 7,335 `bash` outputs saved in a session history (32,418 distinct lines, `evals/sandboxdenial-replay.ts`),
+// this changed one verdict — the `AssertionError: ` line above — and lost no runner shape.
+// `error` is the generic header a test prints over a thrown fixture string (`Error: rm: .git: …`); no
+// runner is named for it, and git's own `error: … '…': …` form is matched as a form, not a column.
+const RUNNER_VOCABULARY = String.raw`(?:expected|received|actual|assertionerror|error)`;
+const RUNNER_NAME = String.raw`(?=[^\s|]*[A-Za-z])[^\s|+-][^\s|]*`;
+// One column, anchored at the start of what is left of the line. Matched one at a time by
+// `isRefusalBehindRunnerColumns` rather than repeated inside one regex: a name may contain `:`
+// (`web:build`), so `a: b: ` splits into columns more than one way, and a quantified group over
+// those overlapping readings backtracks exponentially on a line of repeated `x: ` segments — over
+// a run's 4MB tail, on the main thread. Alternation order is the tie-break the regex no longer gets
+// from backtracking: `name: ` before `name build: `, or `/bin/sh: /x/f: ` reads as one column.
+const RUNNER_COLUMN_RE = new RegExp(
+  String.raw`^(?:\[[^\]\r\n]*\][ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+\|[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+|(?!${RUNNER_VOCABULARY}\b)${RUNNER_NAME}[ \t]+[^\s:]+(?<!\b${RUNNER_VOCABULARY}\b):[ \t]+)`,
+  'i',
+);
+// go's chain is `go: <prose>: <prose>: <error>`, so its segments are cut at every `: ` in turn.
+const GO_CHAIN_RE = /^go:[ \t]+/i;
+const GO_SEGMENT_END_RE = new RegExp(String.raw`\b${RUNNER_VOCABULARY}$`, 'i');
+// Deeper than any runner nests its columns or go its chain; it bounds the walk on a line that is
+// nothing but `x: x: x: …`.
+const MAX_RUNNER_COLUMNS = 8;
+// A path may carry one token in front of its first slash — `~/x`, `./x`, `../x`, and the `~` a shell
+// prints unexpanded when the command was quoted. It cannot start with `+`/`-` for the diff marker's
+// reason: with the column above optional, an unconstrained token here would read `+/Users/x/.git:
+// Operation not permitted` (the added-line form of a fixture) as a path.
+const PATH_LEAD = String.raw`(?:[^\s:'"+-][^\s:'"]*)?`;
+// The forms a refusal takes once the runner's columns are off the front of its line.
+const FS_DENIAL_FORM_RE = new RegExp(
+  [
+    // `<prog>: <abs path>: …`, go's `open <abs path>: …`, git's bare `<abs path>: …`.
+    String.raw`^(?:[a-z]+ )?${PATH_LEAD}\/[^:'"\r\n]*: operation not permitted[ \t]*$`,
+    // A slashless path, which only a file verb may introduce.
+    String.raw`^(?:rm|mv|cp|mkdir|touch|ln|tee): [^:'"\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`^sed: rename\(\): operation not permitted[ \t]*$`,
+    // git's quoted-path form, behind its own `fatal:`/`error:` so a test title quoting a path is not one.
+    String.raw`^(?:fatal|error): [^\r\n]*'(?![a-z][a-z0-9+.-]*:\/\/)[^'\r\n]*\/[^'\r\n]*': operation not permitted[ \t]*$`,
+  ].join('|'),
+  'i',
+);
+// Shapes printed mid-line, so no column rule applies to them.
+const FS_DENIAL_ANYWHERE_RE = new RegExp(
+  [
+    String.raw`could not (?:lock|write) config file [^\r\n]*: operation not permitted[ \t]*$`,
+    String.raw`EPERM: operation not permitted, \w+ '`,
+    String.raw`\[Errno 1\] operation not permitted: '[^'\r\n]+'[ \t]*$`,
+  ].join('|'),
+  'i',
+);
+
+function isRefusalForm(rest: string): boolean {
+  return FS_DENIAL_FORM_RE.test(rest.replace(/^[ \t]+/, ''));
+}
+
+// A go chain carrying assertion vocabulary is a quote (`go: x: Expected: …`), so the walk stops at the
+// first segment that ends in it rather than cutting past it.
+function isRefusalBehindGoChain(rest: string): boolean {
+  let from = rest.match(GO_CHAIN_RE)![0].length;
+  if (isRefusalForm(rest.slice(from))) return true;
+  for (let i = 0; i < MAX_RUNNER_COLUMNS; i++) {
+    const cut = rest.indexOf(': ', from);
+    if (cut === -1 || GO_SEGMENT_END_RE.test(rest.slice(from, cut))) return false;
+    from = cut + 2;
+    if (isRefusalForm(rest.slice(from))) return true;
+  }
+  return false;
+}
+
+function isRefusalBehindRunnerColumns(line: string): boolean {
+  let rest = line;
+  for (let i = 0; i <= MAX_RUNNER_COLUMNS; i++) {
+    rest = rest.replace(/^[ \t]+/, '');
+    if (isRefusalForm(rest)) return true;
+    if (GO_CHAIN_RE.test(rest)) return isRefusalBehindGoChain(rest);
+    const column = RUNNER_COLUMN_RE.exec(rest);
+    if (!column) return false;
+    rest = rest.slice(column[0].length);
+  }
+  return false;
+}
 
 // Where to send the model for the page it wanted. Keyed on the turn's tool list (the #377 rule: a
 // result must not point at a tool the model does not have): minimal mode is bash alone, and an
@@ -642,17 +854,69 @@ function webRoute(toolNames?: ReadonlySet<string>): string {
   return `For a web page, ${parts.join(', and ')}.`;
 }
 
-// The exec refusal the setuid note at the top of the file is about, as the shell prints it.
-const PS_DENIAL_RE = /\b(?:ps|top): Operation not permitted/;
+// The exec refusal the setuid note at the top of the file is about, as the shell prints it: bare
+// (`ps: …`), behind the shell (`/bin/sh: /bin/ps: …`, and `/bin/sh: line 1: /bin/ps: …` for a
+// multi-line command) or behind a wrapper (`env: ps: …`, `xargs: ps: …`). `ps`/`top` must follow a
+// line start or `: ` directly, with only `/bin/` or `/usr/bin/` allowed between, so a refused write to
+// a path ending in `/top` (`mkdir: /Users/x/top: …`) is not mistaken for it.
+const PS_DENIAL_RE = /(?:^|: )(?:\/(?:usr\/)?bin\/)?(?:ps|top): Operation not permitted/m;
+const PS_DENIAL_LINE_RE =
+  /^.*?(?:^|: )(?:\/(?:usr\/)?bin\/)?(?:ps|top): Operation not permitted.*$/gm;
+
+// One output can carry both a ps refusal and a refused write — `ps aux | grep node; mkdir ~/x` —
+// and `!ps` on the whole output dropped the write line for exactly the command that shows both
+// (#723). Only the ps/top lines are blanked out of the write check: `/bin/ps: Operation not
+// permitted` is a path by shape and is already explained by the ps note. One replace rather than a
+// split and join, since this runs over up to 4MB of a run's tail.
+function withoutPsDenials(output: string): string {
+  return output.replace(PS_DENIAL_LINE_RE, '');
+}
 
 // `curl -s` prints nothing on a denial and exits 6 (could not resolve) or 7 (could not connect) —
 // the one shape the output gate cannot see, so the exit status has to carry it.
 const CURL_RE = /(?:^|[|;&(]\s*)(?:[A-Za-z_]\w*=\S*\s+)*curl(?![\w./-])/;
 
-/** True when a sandboxed command's output shows a write the profile refused. The user-facing half:
- *  the footer tells the model not to fight it, this tells the user the flag exists (`bash.ts`). */
-export function sandboxRefusedWrite(output: string): boolean {
-  return FS_DENIAL_RE.test(output) && !PS_DENIAL_RE.test(output);
+function lineEndFrom(text: string, from: number): number {
+  const lf = text.indexOf('\n', from);
+  const cr = text.indexOf('\r', from);
+  if (lf === -1) return cr === -1 ? text.length : cr;
+  return cr === -1 ? lf : Math.min(lf, cr);
+}
+
+/** The line of a sandboxed command's output that shows a write the profile refused, or null. The
+ *  user-facing half: the footer tells the model not to fight it, the notice tells the user the flag
+ *  exists (`bash.ts`). Returned whole so the footer can quote it when it is not in the payload. */
+export function refusedWriteLine(output: string): string | null {
+  const scanned = withoutPsDenials(output);
+  // Every form carries the phrase, so only the lines that do are read — linear in the output.
+  const phrase = /operation not permitted/gi;
+  for (let found = phrase.exec(scanned); found; found = phrase.exec(scanned)) {
+    const at = found.index;
+    // A `\r` starts a line as a `\n` does (a progress bar redrawn over), as `^`/`$` read it under
+    // the `m` flag; the quote is the whole `\n` line around it.
+    const segStart = Math.max(scanned.lastIndexOf('\n', at), scanned.lastIndexOf('\r', at)) + 1;
+    const segEnd = lineEndFrom(scanned, at);
+    const segment = scanned.slice(segStart, segEnd);
+    if (FS_DENIAL_ANYWHERE_RE.test(segment) || isRefusalBehindRunnerColumns(segment)) {
+      const start = scanned.lastIndexOf('\n', at) + 1;
+      const end = scanned.indexOf('\n', at);
+      return scanned.slice(start, end === -1 ? undefined : end).trim();
+    }
+    phrase.lastIndex = segEnd;
+  }
+  return null;
+}
+
+// A quoted line is the model's only pointer to WHICH write failed when it sat past the payload head;
+// a pathological one (a minified log on one line) must not become a 4MB footer.
+const QUOTED_DENIAL_MAX_CHARS = 300;
+
+// The line is the command's output, so a backtick in it would close the code span it is quoted in.
+function quoteDenial(line: string): string {
+  const safe = line.replaceAll('`', "'");
+  return safe.length > QUOTED_DENIAL_MAX_CHARS
+    ? `${safe.slice(0, QUOTED_DENIAL_MAX_CHARS)}…`
+    : safe;
 }
 
 /**
@@ -680,7 +944,13 @@ export function sandboxFooter(
   command: string,
   code: number | null,
   output: string,
-  opts: { network: boolean; toolNames?: ReadonlySet<string> },
+  opts: {
+    network: boolean;
+    toolNames?: ReadonlySet<string>;
+    // The refused-write line found in a wider scan than `output` (the run's tail, past the payload
+    // head); computed from `output` when absent.
+    refusedWrite?: string | null;
+  },
 ): string {
   if (code === null) return '';
   const lines: string[] = [];
@@ -712,14 +982,24 @@ export function sandboxFooter(
             ' If the command genuinely needs the network, say so and ask the user to run it.',
     );
   }
-  // `/bin/ps: Operation not permitted` is a path too, and already explained above.
-  if (!ps && FS_DENIAL_RE.test(output)) {
+  // `/bin/ps: Operation not permitted` is a path too, and already explained above, so the ps lines
+  // are taken out before this test rather than the write check being skipped for the whole output.
+  // The line says "a path it does not allow", not "outside the working directory": since #706 the
+  // denied paths include `.git/config` and `.git/hooks`, which are INSIDE the working directory.
+  const refused = opts.refusedWrite === undefined ? refusedWriteLine(output) : opts.refusedWrite;
+  if (refused !== null) {
+    // Past the payload head the model sees no refusal at all, so the line is quoted: without it the
+    // model guesses which write failed or re-runs the whole command to find out.
+    const quoted = output.includes(refused)
+      ? ''
+      : ` It was printed after the output shown above: \`${quoteDenial(refused)}\`.`;
     lines.push(
-      'A write outside the working directory, temp and cache dirs was refused by the sandbox — not ' +
-        'a permissions problem, so do not reach for sudo or chmod. If the command must write there, ' +
-        'say so and ask the user to run it.',
+      'The sandbox refused a write to a path it does not allow — not a permissions problem, so do ' +
+        'not reach for sudo or chmod.' +
+        quoted +
+        ' If the command must write there, say so and ask the user to run it.',
     );
   }
   if (lines.length === 0) return '';
-  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory, temp and cache dirs.)`;
+  return `\n\n(reika: this command ran in a local sandbox, so the failure above may be the sandbox rather than your command. ${lines.join(' ')} Writes are confined to the working directory, temp and cache dirs, and git's config and hooks are not writable even there.)`;
 }

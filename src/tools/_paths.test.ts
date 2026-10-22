@@ -1,8 +1,14 @@
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { escapesProject, resolveUserPath } from './_paths.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  escapesProject,
+  GIT_METADATA_WARNING,
+  gitMetadataWarning,
+  resolveUserPath,
+} from './_paths.js';
 
 describe('resolveUserPath', () => {
   it('expands a bare ~ to the home directory', () => {
@@ -103,5 +109,147 @@ describe('escapesProject — symlinked cwd', () => {
     await symlink(outside, escape, 'dir');
     expect(escapesProject(real, join(escape, 'x.ts'))).toBe(false);
     await rm(outside, { recursive: true, force: true });
+  });
+});
+
+// #719: the sandbox profile's git-metadata denies, mirrored for the file tools. The name rules
+// below are the profile's regex denies read as strings — an entry named `.git` anywhere in the
+// path, the metadata files at its top level and under `modules/`/`worktrees/<x>/`, and the `hooks`
+// subtree. cwd is a path that does not exist, so no git subprocess can run: a flagged path must be
+// flagged by the names alone, and an unflagged one must not need the common-dir probe to pass.
+describe('gitMetadataWarning — the names the sandbox refuses, at the file-tool level', () => {
+  it.each([
+    ['the git config', '.git/config'],
+    ['config.worktree', '.git/config.worktree'],
+    ['commondir', '.git/commondir'],
+    ['the gitdir pointer', '.git/gitdir'],
+    ['a hook', '.git/hooks/pre-commit'],
+    ['the hooks dir itself', '.git/hooks'],
+    ['a hook in a nested repo', 'sub/.git/hooks/post-commit'],
+    ['a nested repo config', 'sub/.git/config'],
+    ['a submodule config', '.git/modules/s/config'],
+    ['a submodule hook', '.git/modules/s/hooks/post-commit'],
+    ['a worktree commondir', '.git/worktrees/wt/commondir'],
+    ['a worktree gitdir pointer', '.git/worktrees/wt/gitdir'],
+    ['the .git pointer file itself', '.git'],
+    ['a bare repo config under a *.git name', 'website.git/config'],
+    // macOS's default volume is case-insensitive, so these write the real files.
+    ['a differently-cased config', '.git/Config'],
+    ['a differently-cased .git', '.GIT/hooks/pre-commit'],
+    ['a differently-cased hooks dir', '.git/HOOKS/pre-commit'],
+  ])('flags %s', (_label, rel) => {
+    expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBe(GIT_METADATA_WARNING);
+  });
+
+  it.each([
+    ['COMMIT_EDITMSG', '.git/COMMIT_EDITMSG'],
+    ['HEAD', '.git/HEAD'],
+    ['the index', '.git/index'],
+    ['a branch named config', '.git/refs/heads/config'],
+    ['a repo-relative name that only ends in .git', 'website.git/README'],
+    ['a name that merely ends in .git', 'website.git'],
+    ['.gitattributes', '.gitattributes'],
+    ['a plain file named config', 'config'],
+    ['a normal source file', 'src/a.ts'],
+  ])('does not flag %s', (_label, rel) => {
+    expect(gitMetadataWarning('/repo', `/repo/${rel}`)).toBeUndefined();
+  });
+});
+
+// A git dir with no `.git` in its name escapes the name rules — `git init --bare`, a dotfiles
+// repo, a `--separate-git-dir` target. The GITDIR group (the profile's `(subpath GITDIR/…)`
+// denies, spelled against the session cwd's resolved common git dir) is what catches those.
+describe('gitMetadataWarning — the GITDIR group for a git dir with no .git name', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    // The prefix carries regex-special characters on purpose: the GITDIR deny spells the common
+    // dir into a regex, and an unescaped `.`/`+` in the cwd's own name must not widen the match.
+    cwd = await mkdtemp(join(tmpdir(), 'reika+git.dir-'));
+    execFileSync('git', ['init', '-q', '--bare'], { cwd });
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it('flags config and hooks under the bare repo the cwd is in', () => {
+    expect(gitMetadataWarning(cwd, join(cwd, 'config'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'config.worktree'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'hooks/pre-commit'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'worktrees/wt/commondir'))).toBe(GIT_METADATA_WARNING);
+    expect(gitMetadataWarning(cwd, join(cwd, 'modules/s/config'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('leaves the rest of the bare repo alone', () => {
+    expect(gitMetadataWarning(cwd, join(cwd, 'HEAD'))).toBeUndefined();
+    expect(gitMetadataWarning(cwd, join(cwd, 'objects/ab/cdef'))).toBeUndefined();
+    expect(gitMetadataWarning(cwd, join(cwd, 'COMMIT_EDITMSG'))).toBeUndefined();
+  });
+
+  it('does not let a regex-special character in the cwd name match a sibling', () => {
+    // The `.` in `reika+git.dir-<suffix>` would match any character unescaped: a sibling dir that
+    // differs exactly there must not read as this repo's metadata.
+    const sibling = cwd.replace('git.dir', 'gitxdir');
+    expect(gitMetadataWarning(sibling, join(sibling, 'config'))).toBeUndefined();
+  });
+
+  it('flags a --separate-git-dir target from a cwd reached through a symlink', async () => {
+    // git prints a separate git dir already resolved; tmpdir() on macOS is a symlink hop away from
+    // it, so comparing against the path as written never matched.
+    const base = await mkdtemp(join(tmpdir(), 'reika-sep-'));
+    try {
+      const proj = join(base, 'proj');
+      execFileSync('git', ['init', '-q', '--separate-git-dir', join(proj, 'gd'), proj]);
+      expect(gitMetadataWarning(proj, join(proj, 'gd/config'))).toBe(GIT_METADATA_WARNING);
+      expect(gitMetadataWarning(proj, join(proj, 'gd/hooks/pre-commit'))).toBe(
+        GIT_METADATA_WARNING,
+      );
+      expect(gitMetadataWarning(proj, join(proj, 'gd/HEAD'))).toBeUndefined();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('finds a repo created after an earlier probe of the same cwd', async () => {
+    // A null answer is not cached: a `--separate-git-dir`/bare repo the user creates mid-session
+    // must still reach the GITDIR group on the next write.
+    const dir = await mkdtemp(join(tmpdir(), 'reika+git.late-'));
+    try {
+      expect(gitMetadataWarning(dir, join(dir, 'config'))).toBeUndefined();
+      execFileSync('git', ['init', '-q', '--bare'], { cwd: dir });
+      expect(gitMetadataWarning(dir, join(dir, 'config'))).toBe(GIT_METADATA_WARNING);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The sandbox resolves symlinks in the kernel; the file tools have to do it themselves, or a link
+// the model planted with an ordinary in-project `ln -s` walks a write into git's metadata.
+describe('gitMetadataWarning — a symlink into git metadata', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'reika-link-'));
+    await mkdir(join(cwd, '.git', 'hooks'), { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  it('flags a write through a linked directory', async () => {
+    await symlink(join(cwd, '.git', 'hooks'), join(cwd, 'h'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'h/pre-commit'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('flags a dangling link whose target is a hook', async () => {
+    await symlink('.git/hooks/pre-commit', join(cwd, 'p'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'p'))).toBe(GIT_METADATA_WARNING);
+  });
+
+  it('leaves a link to an ordinary file alone', async () => {
+    await mkdir(join(cwd, 'src'));
+    await symlink(join(cwd, 'src'), join(cwd, 'lib'));
+    expect(gitMetadataWarning(cwd, join(cwd, 'lib/a.ts'))).toBeUndefined();
   });
 });

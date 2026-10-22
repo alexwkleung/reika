@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { open, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
+import { sessionStem } from '../debug.js';
 import type { Message } from '../types.js';
 import { deriveTitle, serializeJsonl, type TranscriptMeta } from './transcript.js';
 
@@ -24,10 +25,14 @@ export function projectHistoryDir(cwd: string, root = ROOT_HISTORY_DIR): string 
 }
 
 // Fixed for the life of the session: every auto-save rewrites this one file, so a session is one
-// entry in the /resume list rather than one per save.
-export function newSessionPath(dir: string, startedAt: Date): string {
-  const stamp = startedAt.toISOString().replace(/[:.]/g, '-');
-  return join(dir, `${stamp}-${randomBytes(3).toString('hex')}.jsonl`);
+// entry in the /resume list rather than one per save. `stem` names it after the process's debug
+// log (#761), so the two pair.
+export function newSessionPath(
+  dir: string,
+  startedAt: Date,
+  stem = sessionStem(startedAt),
+): string {
+  return join(dir, `${stem}.jsonl`);
 }
 
 // Chat mode keeps its own history (see the mode table in AGENTS.md), so a file carries both sides:

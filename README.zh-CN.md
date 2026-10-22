@@ -81,7 +81,7 @@ cd your-project && reika
 
 改用托管 API？跳过启动服务器这一步，把 `REIKA_BASE_URL`、`REIKA_API_KEY` 和 `REIKA_MODEL` 设为服务商的端点、你的密钥和它的模型 ID；详见 [安装与首次运行](docs/getting-started.md#hosted)。
 
-`REIKA_BASE_URL` 默认是 `http://localhost:8080/v1`，即 llama-server 的默认地址。上下文窗口在服务器上报时从中读取，托管端点则从 models.dev 目录中读取；两者都没有时，请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
+`REIKA_BASE_URL` 默认是 `http://localhost:9931/v1`，即 llama.cpp v0.7.0 起 llama-server 的默认地址（更早的版本及其 Docker 镜像使用 8080）。上下文窗口在服务器上报时从中读取，托管端点则从 models.dev 目录中读取；两者都没有时，请设置 `REIKA_CONTEXT_WINDOW`。Reika 不发送任何自己的采样参数，所以生效的就是你服务器的启动参数。
 
 想改从检出目录运行：`git clone https://github.com/alexwkleung/reika.git && cd reika`，然后 `pnpm install`（npm 用户先 `npm i -g pnpm`）并用 `pnpm run install:global` 构建安装 `reika` 可执行文件；或者 `cp .env.example .env`、编辑它，再 `pnpm run dev` 直接运行而不安装。`pnpm run uninstall:global` 会移除全局可执行文件。
 
@@ -92,7 +92,7 @@ cd your-project && reika
 | 键                     | 默认值                      | 说明                                                   |
 | ---------------------- | --------------------------- | ------------------------------------------------------ |
 | `REIKA_MODEL`          | _必填_                      | 模型名称，或同一端点提供的逗号分隔列表                 |
-| `REIKA_BASE_URL`       | `http://localhost:8080/v1`  | OpenAI 兼容端点                                        |
+| `REIKA_BASE_URL`       | `http://localhost:9931/v1`  | OpenAI 兼容端点                                        |
 | `REIKA_API_KEY`        | `no-key`                    | API 密钥（本地服务器填任意非空值）                     |
 | `REIKA_CONTEXT_WINDOW` | _从服务器探测_              | 上下文窗口 token 数；驱动压缩和上下文占用条            |
 | `REIKA_MIN_GEN_TOKENS` | _学习得到_（起始为 `2048`） | 为回复预留的空间；从模型的轮次中学习，设置它即固定该值 |
@@ -140,7 +140,7 @@ cd your-project && reika
 
 ## 灵感来自
 
-Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
+Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie、DS4 和 Ante。
 
 ## 许可
 

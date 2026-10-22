@@ -32,7 +32,10 @@ GitHub Sponsors accepts sponsorships from organizations as well as from individu
   and what worked or failed on a model nobody has tried yet is useful either way.
 - **Contribute.** Start with [CONTRIBUTING.md](../CONTRIBUTING.md), which covers setup, conventions
   and what makes a change easy to accept.
-- **Tell someone.** A star, or mentioning it to someone running models locally, is how people find it.
+- **Tell someone.** A [star](https://github.com/alexwkleung/reika), a follow on
+  [Product Hunt](https://www.producthunt.com/products/reika), a note on
+  [AlternativeTo](https://alternativeto.net/software/reika/about/), or mentioning it to someone
+  running models locally is how people find it.
 
 ## Contact
 

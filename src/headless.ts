@@ -80,6 +80,32 @@ export async function buildHeadlessInput(
   return { modelText, notices };
 }
 
+// `--profile` is the user naming the profile outright, so it outranks a launch REIKA_MODEL and the
+// mode's own model alike (#710). Matched case-insensitively like /model; a name no profile defines
+// keeps the run going on the profile it would have used anyway, and says so — passed through raw,
+// it reached the session as a profile nothing defines and lost the default's probed window.
+export function headlessProfile(
+  config: Config,
+  mode: HeadlessMode,
+  named?: string,
+): { profile: string; notice?: string } {
+  const fallback = startProfiles(config, mode, {}).profile;
+  if (named === undefined) return { profile: fallback };
+  const key = named.toLowerCase();
+  if (config.profiles[key]) return { profile: key };
+  const known = Object.keys(config.profiles).join(', ');
+  return {
+    profile: fallback,
+    notice: `no profile named "${named}" (defined: ${known}); using "${fallback}"`,
+  };
+}
+
+// Names the route the turn was on, since with --profile it may not be the default one. Not worded
+// as a fetch failure: an abort, a 400 or a tool throw lands here too.
+export function formatTurnFailure(profile: string, baseURL: string, message: string): string {
+  return `reika: turn failed (profile "${profile}" at ${baseURL}): ${message}`;
+}
+
 export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<number> {
   const prompt = (args.prompt ?? (await io.readStdin())).trim();
   if (!prompt) {
@@ -94,7 +120,9 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
   // with its own model in REIKA_MODE_MODELS runs that one, `--mode` or not. Headless has no /model
   // and no saved state — its env is the whole answer — so an empty state is the whole of #365 here.
   const mode: HeadlessMode = args.mode ?? resolveDefaultMode();
-  const profile = startProfiles(loaded, mode, {}).profile;
+  const chosen = headlessProfile(loaded, mode, args.profile);
+  if (chosen.notice) io.stderr(`reika: ${chosen.notice}\n`);
+  const profile = chosen.profile;
   const stream = args.stream ? createStreamPrinter(io, args.json) : null;
   const session = await createSession({
     cwd: process.cwd(),
@@ -133,6 +161,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     for (const notice of session.mcpNotices) io.stderr(`reika: ${notice}\n`);
     // The same startup line the TUI shows for a REIKA_MODE_MODELS entry it could not use (#616).
     for (const problem of config.modeModelErrors ?? []) io.stderr(`reika: ${problem}\n`);
+    if (config.projectEnvNotice) io.stderr(`reika: ${config.projectEnvNotice}\n`);
 
     // An MCP tool typed as a slash command (#265): the same direct call the TUI makes, answered with
     // the tool's own output instead of a model turn. There is no question for the model to answer —
@@ -214,7 +243,7 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
 
     if (failed) {
       debugLog(`headless: turn failed: ${failed.message}`);
-      io.stderr(`reika: ${failed.message}\n`);
+      io.stderr(`${formatTurnFailure(profile, config.baseURL, failed.message)}\n`);
       return controller.signal.aborted ? 130 : 1;
     }
     if (args.json && !args.stream) {

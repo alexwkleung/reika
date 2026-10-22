@@ -1,9 +1,12 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import ignore from 'ignore';
 import { writeTool } from './write.js';
+import { GIT_METADATA_WARNING } from './_paths.js';
 import { addFileToIndex } from '../context/files.js';
 import type { ApprovalRequest } from '../types.js';
 
@@ -161,5 +164,102 @@ describe('writeTool — approval precedes the existence check', () => {
     );
     expect(g.seen).toHaveLength(1);
     expect(g.seen[0].warnings).toEqual(['Writes outside the project directory']);
+  });
+});
+
+// #719: the same deny the sandbox profile gives bash commands, at the file-tool level. The shape is
+// the warning (like OUTSIDE_PROJECT_WARNING): under `safe` the modal carries it and the user
+// decides — a user asking the agent to repair a hook can approve — and under `bypass` the write is
+// refused, since there is nobody to clear it. The control is COMMIT_EDITMSG, mirroring the sandbox
+// enforcement test in bash.test.ts.
+//
+// Creating the `.git` files the gate protects is itself a write some test environments deny (the
+// repo's own sandbox profile refuses `.git`-named writes even in temp), so the setup that needs
+// them — a real `git init` — skips where it cannot, exactly as bash.test.ts's sandbox enforcement
+// skips where sandbox-exec cannot run.
+const gitInitWorks = (() => {
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'reika-gitinit-probe-'));
+    execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!gitInitWorks)('writeTool — git metadata gate (#719)', () => {
+  beforeEach(async () => {
+    execFileSync('git', ['init', '-q'], { cwd });
+  });
+
+  it('warns on .git/config before the existence check, leaving git bytes alone on approval', async () => {
+    const g = gate(true);
+    const result = await writeTool.run(
+      { path: '.git/config', content: '[evil]\n' },
+      { cwd, ignore: ignore(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen).toHaveLength(1);
+    expect(g.seen[0].warnings).toEqual([GIT_METADATA_WARNING]);
+    // Consent precedes the stat, exactly like the out-of-project gate.
+    expect(result.summary).toContain('already exists');
+    expect(await readFile(join(cwd, '.git/config'), 'utf8')).toContain('repositoryformatversion');
+  });
+
+  it('warns on a new .git/hooks/pre-commit and lands it once the user approves', async () => {
+    const g = gate(true);
+    const result = await writeTool.run(
+      { path: '.git/hooks/pre-commit', content: '#!/bin/sh\nexit 0\n' },
+      { cwd, ignore: ignore(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen[0].warnings).toEqual([GIT_METADATA_WARNING]);
+    expect(result.summary).toMatch(/^Wrote /);
+    expect(await readFile(join(cwd, '.git/hooks/pre-commit'), 'utf8')).toBe('#!/bin/sh\nexit 0\n');
+  });
+
+  it('refuses .git/config under bypass, where no modal can clear it', async () => {
+    const before = await readFile(join(cwd, '.git/config'), 'utf8');
+    const result = await writeTool.run(
+      { path: '.git/config', content: '[evil]\n' },
+      { cwd, ignore: ignore() },
+    );
+    expect(result.summary).toContain('Write refused');
+    expect(result.summary).toContain('git config or a hook');
+    expect(await readFile(join(cwd, '.git/config'), 'utf8')).toBe(before);
+  });
+
+  it('refuses a new hook under bypass', async () => {
+    const result = await writeTool.run(
+      { path: '.git/hooks/pre-commit', content: '#!/bin/sh\nexit 0\n' },
+      { cwd, ignore: ignore() },
+    );
+    expect(result.summary).toContain('Write refused');
+    await expect(readFile(join(cwd, '.git/hooks/pre-commit'), 'utf8')).rejects.toThrow();
+  });
+
+  it('leaves .git/COMMIT_EDITMSG ungated — the control from the sandbox test', async () => {
+    const g = gate(true);
+    const result = await writeTool.run(
+      { path: '.git/COMMIT_EDITMSG', content: 'msg\n' },
+      { cwd, ignore: ignore(), requestApproval: g.requestApproval },
+    );
+    expect(g.seen[0].warnings).toBeUndefined();
+    expect(result.summary).toMatch(/^Wrote /);
+    expect(await readFile(join(cwd, '.git/COMMIT_EDITMSG'), 'utf8')).toBe('msg\n');
+  });
+});
+
+// The gate is by NAME, so it fires before anything touches the filesystem — this runs in every
+// environment, including ones that deny `.git` writes outright (the setup above skips there).
+describe('writeTool — the git-metadata gate needs no .git on disk', () => {
+  it('refuses .git/config under bypass even when no .git exists', async () => {
+    const result = await writeTool.run(
+      { path: '.git/config', content: 'x\n' },
+      { cwd, ignore: ignore() },
+    );
+    expect(result.summary).toContain('Write refused');
+    expect(result.summary).toContain('git config or a hook');
+    const rel = join(cwd, '.git', 'config');
+    await expect(readFile(rel, 'utf8')).rejects.toThrow();
   });
 });

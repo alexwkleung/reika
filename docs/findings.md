@@ -111,10 +111,24 @@ like a capability problem when it is a wording problem in the harness.
   truncation marker now says it is a context limit, not a command error.
 - **The model was reading its own tool calls back.** A 35B at Q2 kept re-reading the same file in a loop,
   with its reasoning repeating verbatim. The model was not the cause. It sometimes writes a tool call
-  inside its reasoning, and reika recovered the call but fed the reasoning back with the raw
+  inside its reasoning, and Reika recovered the call but fed the reasoning back with the raw
   `<function=read>…` markup still in it — so every round the model read its own call intent and fired
   it again. Stripping the markup ended the loop, and the same model went on to find the real bug and
   edit it. The loop detectors that had been built against that loop stayed on as a net for real ones.
+
+- **The user's words read as the environment.** When you decline an approval you can now say what to do
+  instead. Placed in the declined call's tool result, a reason that asked for an answer rather than a
+  command ("Don't run anything. Just tell me what the test script is.") was ignored: lfm2.5-24b reran
+  the suite 3 times out of 3, reasoning "maybe the environment doesn't support `node --test`?" without
+  ever mentioning the quote. Rewording it inside the result, quoted and labelled as the user's own
+  words, changed nothing (0/3). Sent as a user message instead, it was 3/3, and the model read it as the
+  user correcting themselves. A reason that was itself a command worked from the start, in either place.
+  What the channel cannot fix is a reason that does not cancel the task. "Tell me the script" still
+  reads as compatible with "run the tests", so lfm2.5-24b took it as run-then-tell and retried the suite
+  (0/3; mellum2.1-12b 1/3), reading each decline as a technical failure ("maybe because of quoting?").
+  Opening the message with "I declined `<command>`." did not change that (0/3), and on the explicit
+  reason it pushed the user's words behind a long `cd` path, so it was dropped. The explicit "don't run
+  anything" is what carries it.
 
 The rule this left behind: before adding an intervention for "the model is stuck", check what the model
 is actually being shown. Several of these failures were harness bugs, not capability.
@@ -195,6 +209,10 @@ The detectors are simple statistics, and what makes them usable is how far apart
   stays high — it drifted somewhere and stopped moving — and that separation shows up rounds before the
   similarity threshold is crossed. Nothing branches on these numbers; they exist to be looked at across
   runs, because they vary by quantization.
+
+![Saved reasoning blocks by length and self-repeat: nearly all sit near zero at every length, and one 4,001-character block at 0.549 is above the abort threshold](./selfrepeat-scatter.svg)
+
+<sup>Every reasoning block of 1,500+ characters in the saved sessions up to 2026-10-18: 2,843 blocks, plotted by length against 8-gram self-repeat. Healthy reasoning stays near zero at every length, which is why the abort threshold keys on repetition rather than length. This is not a loop rate or a model comparison: 2,499 of the blocks are from API models, the 35B A3B runs predate saved sessions, and spirals Reika cut on its own had their reasoning discarded. The one loop shown is a qwen3.8-27b block aborted by hand.</sup>
 
 ## What a feature buys is what the baseline fails to do
 

@@ -16,7 +16,7 @@
 // Usage:
 //   npx tsx evals/selfrepeat-report.ts                       # every saved session
 //   npx tsx evals/selfrepeat-report.ts ~/.config/reika/history/2026-*.jsonl
-//   npx tsx evals/selfrepeat-report.ts ~/reika-debug.log     # actual aborts + flags for one run
+//   npx tsx evals/selfrepeat-report.ts ~/.config/reika/logs/latest.log     # actual aborts + flags for one run
 //
 // Unlike readtrace-report.ts this is a breadth instrument, not a rate one: prefer one run each
 // across several DIFFERENT reasoning shapes (plan mode, an enumerative task, review, issue) over

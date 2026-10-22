@@ -9,6 +9,7 @@ export type HeadlessArgs = {
   // Absent when `-p` was given bare: the prompt is then read from stdin, so a run can be piped.
   prompt?: string;
   mode?: HeadlessMode;
+  profile?: string;
   // Print every message the turn appended as a JSON array instead of the final reply text.
   json: boolean;
   // Print as the turn runs: reply text as it is generated, or with --json one message per line as
@@ -24,6 +25,7 @@ export const USAGE = `usage: reika                  start the interactive TUI in
        reika -p [prompt] ...   run one turn without the TUI and print the reply
 
   -p, --prompt [text]   run one turn headless; reads stdin when no text is given
+  --profile <name>      with -p: use this profile (outranks REIKA_MODEL and REIKA_MODE_MODELS)
   --mode <mode>         agent | plan | vibe | minimal | grind | chat (default: REIKA_DEFAULT_MODE, else agent)
   --json                print the turn's messages as a JSON array instead of the reply text
   --stream              print as the turn runs: the reply as it is generated, tool calls on
@@ -33,7 +35,7 @@ export const USAGE = `usage: reika                  start the interactive TUI in
   -h, --help            show this
 
 Configuration is read from the environment, then ./.env, then ~/.config/reika/.env; REIKA_MODEL
-is required and REIKA_BASE_URL defaults to http://localhost:8080/v1.
+is required and REIKA_BASE_URL defaults to http://localhost:9931/v1.
 
 With -p: a prompt starting with /<skill> runs that skill. Approvals follow REIKA_AUTO_APPROVE
 (default 'safe'): with no prompt to fall back on, anything 'safe' would have asked about is
@@ -69,6 +71,11 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
         throw new Error(`--mode needs one of ${[...MODES].join(', ')}`);
       }
       args.mode = value as HeadlessMode;
+    } else if (a === '--profile') {
+      // A flag-shaped value is a missing name: taking it would swallow the -p or --json after it.
+      const value = argv[++i];
+      if (!value || value.startsWith('-')) throw new Error('--profile needs a profile name');
+      args.profile = value;
     } else if (a === '--json') {
       args.json = true;
     } else if (a === '--stream') {
@@ -97,6 +104,10 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
     } else {
       throw new Error(`unexpected argument ${a}\n${USAGE}`);
     }
+  }
+  // The TUI does not read it, so starting one would drop the flag without a word.
+  if (!headless && args.profile !== undefined) {
+    throw new Error(`--profile applies to a headless run; add -p\n${USAGE}`);
   }
   return headless ? args : null;
 }

@@ -46,6 +46,13 @@ export function declineSummary(
   return `${action} not run${target} — unattended session, nobody to approve it. Carry on without it, or leave it for the user in your final reply.`;
 }
 
+// A decline the user explained. A bare "declined by user" leaves a small model guessing what to do
+// next, and the guess is often the same call again; the reason turns the dead end into the next
+// instruction. The quote rides the summary, the part that survives aging and the user sees on the row.
+export function withDeclineFeedback(summary: string, feedback: string): string {
+  return `${summary}\nThe user wrote: "${feedback}"`;
+}
+
 // The end-of-turn roll-up of what an unattended turn declined (#526). Built from the approval
 // requests themselves, so it is complete by construction — a model asked to recall its declines
 // could drop one or invent one. Null when nothing was declined.

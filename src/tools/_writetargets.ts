@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { stripHeredocs } from './_heredoc.js';
-import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
+import { WORD_RE, dequote, maskQuoted, splitSegments } from './_readonly.js';
 
 // The files a shell command names as things it will write — the fallback change detector for a
 // project with no git (#278). Best-effort by construction: it sees the shapes a model reaches for
@@ -26,11 +26,11 @@ export function writeTargets(command: string, cwd: string): string[] {
       // not. `>&1`-style descriptor dups name no file.
       const m = REDIRECT_WORD_RE.exec(rawWords[i]);
       if (m) {
-        const target = unquote(m[1] || rawWords[++i] || '');
+        const target = dequote(m[1] || rawWords[++i] || '');
         if (target && !target.startsWith('&')) targets.push(target);
         continue;
       }
-      const w = unquote(rawWords[i]);
+      const w = dequote(rawWords[i]);
       if (w !== '') bare.push(w);
     }
     const [name, ...args] = bare;
@@ -50,10 +50,6 @@ export function writeTargets(command: string, cwd: string): string[] {
 
 // `&` is a segment separator, so `&>f` arrives as a segment starting with `>f`.
 const REDIRECT_WORD_RE = /^\d?>>?(.*)$/;
-
-function unquote(word: string): string {
-  return word.replace(/['"]/g, '');
-}
 
 // Files a command writes by its own convention, from its operands.
 function commandTargets(name: string, args: string[]): string[] {

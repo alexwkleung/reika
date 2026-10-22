@@ -131,15 +131,19 @@ describe('Question dialog', () => {
     expect(out).toContain('Type your answer below.');
     expect(out).not.toContain('Flag only inline bodies');
     expect(out).toContain('enter submit');
+    // What ctrl-c does in the field is not what it does on the list (#651), so the field says so.
+    expect(out).toContain('ctrl-c back to the options');
   });
 
   it('names the option being annotated when a note is being added', () => {
     const out = frame(req, 0, { forIndex: 0 });
     expect(out).toContain('Adding a note to: Flag only inline bodies');
+    expect(out).toContain('ctrl-c back to the options');
   });
 
-  // No escape-to-skip: a split arrow-key sequence delivers a bare escape, which would answer the
-  // question on the user's behalf. Ctrl-c is the only way out, as with Approval.
+  // No escape-to-back either: a split arrow-key sequence delivers a bare escape, and on this dialog
+  // that keystroke would answer the question on the user's behalf. Ctrl-c is the only way out — out
+  // of the field back to the list, out of the list when it is the list taking the key.
   it('advertises the note key and offers no escape binding', () => {
     const out = frame(req);
     expect(out).toContain('tab add a note');

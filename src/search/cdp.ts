@@ -10,6 +10,10 @@ import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 // Bing, so it isn't correlated with the engine most likely to block us next. See #235.
 const SEARCH_URL = 'https://search.brave.com/search?q=';
 const OWN_HOSTS = /(^|\.)(brave\.com|search\.brave\.com)$/;
+// Brave ends some result anchors with a date line ("May 8, 2026", "3 days ago"), which the
+// last-line rule below then reported as the result's title.
+export const DATE_LINE =
+  /^(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}|\d+ (?:second|minute|hour|day|week|month|year)s? ago)$/i;
 
 // Deliberately structure-agnostic: every visible link, filtered and deduped. No result-card
 // selectors, so a SERP redesign can't silently empty the results the way class-name scraping does.
@@ -27,9 +31,11 @@ function extractionScript(maxResults: number): string {
   // A result anchor's innerText is "SiteName / breadcrumb › path / actual title" on separate lines.
   // The last line is the title; the earlier ones are chrome that would otherwise be fed to the model
   // as part of it. No class names involved, so a redesign degrades this to "whole text", not to junk.
+  const dateLine = ${DATE_LINE.toString()};
   const titleOf = a => {
     const lines = (a.innerText || '').split('\\n').map(clean).filter(Boolean);
-    return lines.length ? lines[lines.length - 1] : '';
+    const named = lines.filter(l => !dateLine.test(l));
+    return named.length ? named[named.length - 1] : '';
   };
   // The container repeats the anchor's own text before the description; removing it stops every
   // snippet from opening with a copy of the title it sits under.

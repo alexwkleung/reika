@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { dirname } from 'node:path';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
-  sandboxProfile,
+  SANDBOX_PROFILE_ERROR_CODE,
   sandboxFooter,
+  sandboxParams,
+  sandboxProfile,
   isBroadWorkdir,
   broadWorkdirNotice,
   networkAllowedFor,
   networkDecision,
-  sandboxRefusedWrite,
+  refusedWriteLine,
   PREFIX_WORDS,
 } from './_sandbox.js';
+
+const sandboxRefusedWrite = (output: string): boolean => refusedWriteLine(output) !== null;
 
 // The generator's string output, not the syscall — per AGENTS.md's "unit-test the logic the wrapper
 // adds (caps, windows, footers — not the syscall)". Enforcement is verified by driving the real
@@ -39,6 +46,55 @@ describe('sandboxProfile', () => {
     expect(lines[9]).toBe('(allow file-write* (subpath (param "XDGCACHE")))');
     expect(lines[10]).toBe('(allow file-write* (subpath "/dev"))');
     expect(lines.filter(l => l.startsWith('(allow file-write*'))).toHaveLength(8);
+  });
+
+  // #706: the git metadata that names a PROGRAM — `config` (`core.fsmonitor`, `filter.<x>.clean`)
+  // and `hooks` — plus every file that decides WHICH config git reads (an entry named `.git`,
+  // `commondir`, `gitdir`), matched by name because an anchored path was walked around by renaming
+  // or repointing `.git`. The order is the whole enforcement: all of it sits inside WORKDIR/GITDIR,
+  // so a deny placed near the top would be re-allowed below it and `sandbox-exec` would say nothing.
+  it('refuses the git metadata a config write would leave behind, after both git-dir allows', () => {
+    const lines = profile.split('\n');
+    const rules = lines.filter(l => l.includes('file-write*'));
+    // [0] is the wholesale deny; the eight allows follow it, then the denies that narrow them.
+    expect(rules.slice(1, 9)).toEqual([
+      '(allow file-write* (subpath (param "WORKDIR")))',
+      '(allow file-write* (subpath (param "GITDIR")))',
+      '(allow file-write* (subpath "/private/tmp"))',
+      '(allow file-write* (subpath "/private/var/tmp"))',
+      '(allow file-write* (subpath (param "TMPDIR")))',
+      '(allow file-write* (subpath (param "USERCACHE")))',
+      '(allow file-write* (subpath (param "XDGCACHE")))',
+      '(allow file-write* (subpath "/dev"))',
+    ]);
+    expect(rules.slice(9)).toEqual([
+      '(deny file-write* (regex #"/\\.git$"))',
+      '(deny file-write* (regex #"/\\.git/((modules/.+|worktrees/[^/]+)/)?(config|config\\.worktree|commondir|gitdir)$"))',
+      '(deny file-write* (regex #"/\\.git/(modules/.+/)?hooks(/|$)"))',
+      '(deny file-write* (literal (param "GITDIR")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/config")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/config.worktree")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/commondir")))',
+      '(deny file-write* (subpath (string-append (param "GITDIR") "/hooks")))',
+      '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/worktrees")) (regex #"/worktrees/[^/]+/(config|config\\.worktree|commondir|gitdir)$")))',
+      '(deny file-write* (require-all (subpath (string-append (param "GITDIR") "/modules")) (regex #"/(config|config\\.worktree|commondir|gitdir)$|/hooks(/|$)")))',
+    ]);
+    // The name denies are not scoped to WORKDIR: a repo planted in temp and `mv`'d into the
+    // project is one `git status` recurses into, and the move itself names no `.git`.
+    expect(rules.slice(9, 12).every(r => !r.includes('subpath'))).toBe(true);
+    // Deletes are re-allowed between the name denies and the GITDIR ones, so `rm -rf` of a nested
+    // repo works while GITDIR and the project's own `.git` stay whole. Scoped to the writable
+    // dirs, or it would let a command delete git metadata anywhere on disk.
+    const unlink = lines.filter(l => l.includes('file-write-unlink'));
+    expect(unlink).toEqual([
+      '(allow file-write-unlink (require-all (regex #"/\\.git(/|$)") (require-any (subpath (param "WORKDIR")) (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath (param "TMPDIR")) (subpath (param "USERCACHE")) (subpath (param "XDGCACHE"))) (require-not (subpath (string-append (param "WORKDIR") "/.git"))) (require-not (subpath (param "GITDIR")))))',
+    ]);
+    expect(lines.indexOf(unlink[0])).toBeGreaterThan(lines.indexOf(rules[11]));
+    expect(lines.indexOf(unlink[0])).toBeLessThan(lines.indexOf(rules[12]));
+    // WORKDIR derives only that exception: a deny derived from it would hit a project's own
+    // top-level `config` or `hooks`, which is why cwd's `.git` is covered by name instead.
+    const derived = lines.filter(l => l.includes('string-append (param "WORKDIR")'));
+    expect(derived).toEqual(unlink);
   });
 
   // Seatbelt is last-match-wins, and this is the one ordering constraint that has a failure mode
@@ -90,7 +146,9 @@ describe('sandboxProfile', () => {
   it('drops the network rules entirely for a network-allowed command, keeping the write rules', () => {
     const net = sandboxProfile({ network: true });
     expect(net).not.toContain('network');
-    expect(net.split('\n').slice(0, 11)).toEqual(profile.split('\n').slice(0, 11));
+    // The whole write half, the `.git` denies included: they are what a `git fetch` (a command
+    // that keeps the network) must not be able to walk around, so they are not part of the drop.
+    expect(net.split('\n')).toEqual(profile.split('\n').filter(l => !l.includes('network')));
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,
@@ -110,6 +168,37 @@ describe('sandboxProfile', () => {
       expect(opens).toBe(closes);
     }
   });
+
+  // What the string assertions cannot see: whether `sandbox-exec` ACCEPTS the profile, and whether
+  // every `(param …)` it names is bound. Both fail the same way — exit 65 without running the
+  // command — and `bash.ts` answers that by re-running the command unsandboxed, so a generator typo
+  // (a misspelled param, an unclosed `string-append`, a missing `-D`) turns the sandbox off and
+  // leaves no trace in the output. The profile is parsed before sandbox_apply runs, so this holds
+  // nested inside another seatbelt sandbox (exit 71), where the enforcement tests skip and the rest
+  // of this file can only read strings. Measured both ways while writing #706.
+  it.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'))(
+    'is a profile sandbox-exec parses, with every param it names bound',
+    () => {
+      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sandbox-profile-')));
+      try {
+        for (const network of [true, false]) {
+          const args = ['-p', sandboxProfile({ network })];
+          for (const [k, v] of Object.entries(sandboxParams(dir, dir)))
+            args.push('-D', `${k}=${v}`);
+          const r = spawnSync('/usr/bin/sandbox-exec', [...args, '/bin/sh', '-c', ':'], {
+            encoding: 'utf8',
+          });
+          expect(r.error).toBeUndefined();
+          // 71 is "a profile cannot be applied here" — parsed fine, and the only status this
+          // assertion can see nested. 65 is the profile itself: a syntax error, or a `(param …)`
+          // nothing bound.
+          expect(r.status, `network=${network}: ${r.stderr}`).not.toBe(SANDBOX_PROFILE_ERROR_CODE);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // The network half is per command: `gh`/`git`/`hf` reads keep it (the shipped skills open with the
@@ -687,20 +776,99 @@ describe('sandboxFooter', () => {
     ).toContain('cannot be run under the local sandbox');
   });
 
+  // #723: `ps aux | grep node; mkdir ~/x` is a ps refusal AND a refused write, and testing the whole
+  // output for the ps signature dropped the write line — the half the model can act on. Only the
+  // ps/top lines are taken out of the write check now.
+  it('reports a write refusal that shares the output with a ps refusal', () => {
+    const out = 'ps: Operation not permitted\nmkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('ps aux | grep node; mkdir ~/x', 1, out, denied);
+    expect(footer).toContain('cannot be run under the local sandbox');
+    expect(footer).toContain('refused a write');
+    expect(sandboxRefusedWrite(out)).toBe(true);
+    // A ps refusal on its own is still only the ps note, and never the user-facing write notice.
+    const psOnly = 'ps: Operation not permitted\n';
+    expect(sandboxRefusedWrite(psOnly)).toBe(false);
+    expect(sandboxFooter('ps aux', 1, psOnly, denied)).not.toContain('refused a write');
+    expect(
+      sandboxFooter('ps aux', 1, '/bin/sh: /bin/ps: Operation not permitted\n', denied),
+    ).not.toContain('refused a write');
+  });
+
   // Filesystem denials name the path, so they get one line: it is the sandbox, not something sudo
   // fixes. Keyed on a PATH before the colon, which is what tells the shape from the network ones.
+  // The shell's and coreutils' six shapes here are the ones measured on this machine (#720).
   it('names a refused write for what it is, without the network advice', () => {
     for (const out of [
       '/bin/sh: /Users/someone/notes.md: Operation not permitted\n',
       'mkdir: /Users/someone/x: Operation not permitted\n',
+      'touch: /Users/someone/notes.md: Operation not permitted\n',
+      // `.git/config`: the path need not be absolute, and since #706 this one is INSIDE the working
+      // directory, which is why the line says "a path it does not allow" rather than "outside".
+      'rm: .git/config: Operation not permitted\n',
+      // git's own shape, measured on Apple git 2.50.1: `git init` refused the mkdir of `.git` and
+      // printed the path with no program name in front. #706 makes creating a repo a refusal the
+      // model cannot work around, so this is the shape most likely to show up now.
+      '/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
       "Error: EPERM: operation not permitted, mkdir '/Users/someone/x'\n",
       'go: failed to initialize build cache at /Users/someone/.cargo/x: mkdir /Users/someone/.cargo/x: operation not permitted\n',
+      // go's file errors print the verb with no colon after it (`open <path>: operation not
+      // permitted`): the build-cache line above only matches through its `go: ` prefix, and an
+      // anchor on `<prog>:` alone would leave these two unreported.
+      'open /Users/someone/.cargo/x: operation not permitted\n',
+      'unlinkat /Users/someone/x: Operation not permitted\n',
+      // Task runners prefix each line (turbo, pnpm -r, concurrently) and test runners indent it;
+      // the denial is still the line's last thing.
+      'web:build: mkdir: /Users/someone/.cargo/x: Operation not permitted\n',
+      'packages/web build: mkdir: /Users/someone/x: Operation not permitted\n',
+      '[0] mkdir: /Users/someone/x: Operation not permitted\n',
+      '    mkdir: /Users/someone/x: Operation not permitted \n',
+      // macOS paths carry spaces (`My Project`, iCloud's `Mobile Documents`).
+      '/Users/someone/My Project/.git: Operation not permitted\n',
       // Python's write denial carries the same Errno 1 the network one does; the quoted path is
       // what tells them apart, and it must not collect the fetch_url advice.
       "PermissionError: [Errno 1] Operation not permitted: '/Users/someone/out.txt'\n",
+      // #723: the path need not carry a slash when one of the file verbs a model runs introduces it.
+      // `rm -rf .git` and `mv .git .g` are the two #706 made ordinary, and the slash requirement
+      // dropped both; a task runner's `<prefix>: ` and indentation still reach them.
+      'rm: .git: Operation not permitted\n',
+      'mv: rename .git to .g: Operation not permitted\n',
+      'cp: .git/config: Operation not permitted\n',
+      '[0] rm: .git: Operation not permitted\n',
+      'packages/web build: rm: .git: Operation not permitted\n',
+      // …and git's own form for the same refusal, quoted paths and all: `git init` fails on the hook
+      // copy now that #706 denies it, which is what AGENTS.md documents.
+      "fatal: cannot copy '/private/var/folders/x/T/tmp.9qcQIRzGc/templates/hooks/commit-msg.sample' to '/private/var/folders/x/T/tmp.9qcQIRzGc/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // `git config core.hooksPath …` since #706: no verb, no slash in front, no quotes. `write` is
+      // what Apple git printed under the profile; `lock` is the same message on the lock file.
+      'error: could not write config file .git/config: Operation not permitted\n',
+      'error: could not lock config file .git/config: Operation not permitted\n',
+      // Measured under the profile: `tee` from inside `.git` names a slashless path, and macOS
+      // `sed -i` names none at all.
+      'tee: config: Operation not permitted\n',
+      'sed: rename(): Operation not permitted\n',
+      // Python's write refusal with a relative path.
+      "PermissionError: [Errno 1] Operation not permitted: '.git/config'\n",
+      // Runner prefixes: a padded `[n]` and a `name | ` column.
+      '[1]   rm: .git: Operation not permitted\n',
+      'web:build | rm: .git: Operation not permitted\n',
+      // #726: the allowlist sits in front of every form, so git's quoted refusal keeps its footer
+      // behind a runner's column too (a package script that runs `git init`).
+      "web:build: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // A path that merely ends in a vocabulary word is still a write: the refusal is on the column's
+      // token before its `: `, not on the path.
+      'mkdir: /x/Expected: Operation not permitted\n',
+      // go's chain behind a runner column, each segment prose; and a progress bar's `\r` starts a line.
+      'web:build: go: creating work dir: mkdir /Users/someone/x: operation not permitted\n',
+      'go: downloading x: go: writing stat cache: mkdir /Users/someone/x: operation not permitted\n',
+      '  3% done\rmkdir: /Users/someone/x: Operation not permitted\n',
+      // A path ending in `top` or `ps` is a write, not the exec refusal the ps filter takes out.
+      'mkdir: /Users/someone/top: Operation not permitted\n',
+      '/bin/sh: /Users/someone/ps: Operation not permitted\n',
+      'ps: Operation not permitted\nmkdir: /Users/someone/top: Operation not permitted\n',
     ]) {
       const footer = sandboxFooter('go build ./...', 1, out, denied);
-      expect(footer, out).toContain('refused by the sandbox');
+      expect(footer, out).toContain('refused a write');
+      expect(footer, out).toContain('a path it does not allow');
       expect(footer, out).not.toContain('Network access is denied');
       expect(sandboxRefusedWrite(out), out).toBe(true);
     }
@@ -708,6 +876,30 @@ describe('sandboxFooter', () => {
     expect(sandboxRefusedWrite('ssh: connect to host x port 22: Operation not permitted\n')).toBe(
       false,
     );
+    // The slashless form is the one that could swallow a network denial, so the verbs that may
+    // introduce it are pinned: docker's connect refusal and a bare ps refusal are not writes.
+    expect(sandboxRefusedWrite('docker: connect: operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('ps: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('/bin/sh: /usr/bin/top: Operation not permitted\n')).toBe(false);
+    expect(sandboxRefusedWrite('sed: -e expression #1: Operation not permitted\n')).toBe(false);
+    // Quoted text that is not git's own line, and a quoted token that is not python's.
+    expect(sandboxRefusedWrite("  ✓ asserts 'a/b': Operation not permitted\n")).toBe(false);
+    expect(sandboxRefusedWrite("expected Operation not permitted: 'foo'\n")).toBe(false);
+    // The ps refusal in every shape the shell prints it is the ps note's, never a write.
+    for (const ps of [
+      '/bin/sh: line 1: /bin/ps: Operation not permitted\n',
+      'env: ps: Operation not permitted\n',
+      'xargs: ps: Operation not permitted\n',
+    ]) {
+      expect(sandboxRefusedWrite(ps), ps).toBe(false);
+      expect(sandboxFooter('ps aux', 1, ps, denied), ps).toContain('`ps`/`top` cannot be run');
+    }
+    // A quoted URL is a network shape: git names the remote it could not reach.
+    expect(
+      sandboxRefusedWrite(
+        "fatal: unable to access 'https://github.com/octocat/hello/': Operation not permitted\n",
+      ),
+    ).toBe(false);
     expect(
       sandboxRefusedWrite(
         'urllib.error.URLError: <urlopen error [Errno 1] Operation not permitted>\n',
@@ -715,11 +907,76 @@ describe('sandboxFooter', () => {
     ).toBe(false);
   });
 
+  // #720: the phrase alone is not the shape. Reading a file, a diff or a search hit that only
+  // QUOTES the error told the user the sandbox had refused a write that never happened, and offered
+  // to turn the sandbox off over it. Measured in reika's own session: `gh pr diff 715 | sed -n
+  // '601,821p'` exited 0 with the branch's comment about `.git/index.lock` in it.
+  it('does not read quoted text as a refused write', () => {
+    const comment =
+      '  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param';
+    for (const out of [
+      `+${comment}\n`, // the diff line, as `gh pr diff` printed it
+      `${comment}\n`, // the comment itself, as `cat` prints it with no diff prefix
+      '668:  // WORKDIR alone left `git add` failing on `.git/index.lock: Operation not permitted`. The param\n', // a `grep -n` hit
+      "+        expect(r.payload).toContain('Operation not permitted');\n",
+      "-      expect(mv.payload).toContain('Operation not permitted');\n",
+      "      '/bin/sh: /Users/someone/notes.md: Operation not permitted',\n", // a fixture string
+      // A denial line as a diff line, which is what the rule above could not reject: `+git: /x/.git:
+      // Operation not permitted` and `+mkdir: /x: Operation not permitted` are the real thing's own
+      // shape, and the only way to tell them apart is to test for the marker. #726 does, since a
+      // column cannot start with `+`/`-` — the cost is a column-0 `-bash: /x: Operation not
+      // permitted` (a login shell's own name), which no measured output prints and which is only a
+      // footer: the denial itself is in the output the model was shown.
+      '+/private/var/folders/x/T/tmp.9qcQIRzGc/.git: Operation not permitted\n',
+      '+mkdir: /x: Operation not permitted\n',
+      '+git: /x/.git: Operation not permitted\n',
+      '-mkdir: /x: Operation not permitted\n',
+      // #726: the prefix itself, one column over. #720 allowed ANY `<text>: ` in front of the shape,
+      // so a line that only QUOTES a refusal read as one whenever the quote sat behind a colon column
+      // of its own: the assertion header a failing test prints over the value it compared, or a
+      // diff's added/removed marker.
+      'Expected: rm: .git: Operation not permitted\n',
+      'Received: mv: rename .git to .g: Operation not permitted\n',
+      '+ mkdir: /Users/someone/x: Operation not permitted\n',
+      '- rm: .git: Operation not permitted\n',
+      "Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      // Measured rather than hypothetical: this is reika's own `_sandbox.test.ts` failing under the
+      // `| grep -E "AssertionError|expected"` a model wraps a red suite in, and it is the one verdict
+      // the replay over 7,335 saved bash outputs changed.
+      'AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // The vocabulary is refused wherever it ENDS a column too, not only where one begins: behind a
+      // per-line runner column the same header arrives as `web:build: Expected: …` (the red suite
+      // above, run under turbo), it can end a column as a trailing token (`run: Expected: `), and the
+      // go chain's prose segment can carry it (`go: x: Expected: `) — each still a quote of a refusal
+      // that never happened.
+      'web:build: Expected: rm: .git: Operation not permitted\n',
+      'web:build: AssertionError: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      "go: cmd/x: Expected: fatal: cannot copy '/a/templates/hooks/commit-msg.sample' to '/a/.git/hooks/commit-msg.sample': Operation not permitted\n",
+      '[Expected: rm: .git: Operation not permitted\n',
+      // The vocabulary inside the go chain stops the walk, whichever form follows it.
+      'go: x: Expected: mkdir: /x: Operation not permitted\n',
+      'go: cmd/x: Expected: /bin/sh: /Users/someone/f: Operation not permitted\n',
+      // A test that throws with the fixture string prints it behind a bare `Error: ` header.
+      'Error: rm: .git: Operation not permitted\n',
+      'web:build: Error: /bin/sh: /Users/someone/notes.md: Operation not permitted\n',
+      // A `grep -n` hit on an indented denial: a line number is not a runner's column, so the shape
+      // behind it stays refused.
+      '668:  mkdir: /x: Operation not permitted\n',
+      // Prose ending in the shape: a commit subject, a sentence. Before the path there must be a
+      // `: ` or a single verb, so the words in front rule it out.
+      'ab71044 docs: note that mkdir printed /x/f: operation not permitted\n',
+      'it printed /x/f: operation not permitted\n',
+    ]) {
+      expect(sandboxRefusedWrite(out), out).toBe(false);
+      expect(sandboxFooter('gh pr diff 715 | sed -n 601,821p', 0, out, denied), out).toBe('');
+    }
+  });
+
   // `mkdir ~/x; echo ok` exits 0 with the denial in its output. The write note is on the shape
   // alone; the ps and network notes keep the exit gate, since a red run is when they are read.
   it('reports a refused write even when the command exited 0', () => {
     const out = 'mkdir: /Users/someone/x: Operation not permitted\nok\n';
-    expect(sandboxFooter('mkdir ~/x; echo ok', 0, out, denied)).toContain('refused by the sandbox');
+    expect(sandboxFooter('mkdir ~/x; echo ok', 0, out, denied)).toContain('refused a write');
     expect(sandboxFooter('curl -s x; echo done', 0, curlConnect, denied)).toBe('');
   });
 
@@ -744,5 +1001,77 @@ describe('filesystem root detection', () => {
   it('is the dirname-is-itself test', () => {
     expect(dirname('/')).toBe('/');
     expect(dirname('/Users/someone')).toBe('/Users');
+  });
+});
+
+// #723: past the payload head the model sees no refusal, so the footer quotes the line it found.
+describe('sandboxFooter — a refusal found past the payload head', () => {
+  const sandboxed = { network: false };
+
+  it('quotes the refused line when the shown output does not hold it', () => {
+    const line = 'mkdir: /Users/someone/.cache-y: Operation not permitted';
+    const footer = sandboxFooter('pnpm -r build', 1, '1\n2\n3\n', {
+      ...sandboxed,
+      refusedWrite: line,
+    });
+    expect(footer).toContain('refused a write');
+    expect(footer).toContain(`\`${line}\``);
+  });
+
+  it('does not quote a line the shown output already holds', () => {
+    const out = 'mkdir: /Users/someone/x: Operation not permitted\n';
+    const footer = sandboxFooter('mkdir ~/x', 1, out, sandboxed);
+    expect(footer).toContain('refused a write');
+    expect(footer).not.toContain('printed after');
+  });
+
+  it('keeps a backtick in the quoted line from closing the code span', () => {
+    const line = 'mkdir: /Users/someone/`x`: Operation not permitted';
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer).toContain("`mkdir: /Users/someone/'x': Operation not permitted`");
+  });
+
+  it('caps a pathological quoted line', () => {
+    const line = `${'x'.repeat(5000)}: /Users/someone/x: Operation not permitted`;
+    const footer = sandboxFooter('make', 1, '', { ...sandboxed, refusedWrite: line });
+    expect(footer.length).toBeLessThan(1500);
+    expect(footer).toContain('…`');
+  });
+
+  it('returns the whole line from refusedWriteLine', () => {
+    expect(
+      refusedWriteLine('ok\n[0] mkdir: /Users/someone/x: Operation not permitted\nmore\n'),
+    ).toBe('[0] mkdir: /Users/someone/x: Operation not permitted');
+    expect(refusedWriteLine('ps: Operation not permitted\n')).toBeNull();
+  });
+
+  // The columns are peeled one at a time: as a repeated group inside one regex, `a: b: ` read more
+  // than one way and a line of repeated segments backtracked exponentially (`go: a: ` ×20 never
+  // returned), on the main thread, over a run's 4MB tail.
+  it('stays linear on a line of repeated columns', () => {
+    const lines = [
+      `${'go: a: '.repeat(2000)}x: Operation not permitted`,
+      `${'Error: '.repeat(2000)}x: Operation not permitted`,
+      `${'web:build: '.repeat(2000)}x: Operation not permitted`,
+      `${'a: '.repeat(200_000)}x: Operation not permitted`,
+    ];
+    const started = performance.now();
+    for (const line of lines) expect(refusedWriteLine(line), line.slice(0, 40)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
+describe('networkAllowedFor — a git option spelled through quoting', () => {
+  it('denies the network to a program-naming option the shell unquotes', () => {
+    for (const cmd of [
+      String.raw`git fetch \" --upload-pack=./x.sh \" origin`,
+      String.raw`git fetch \--upload-pack=./x.sh origin`,
+      String.raw`git fetch --upl\oad-pack=./x.sh origin`,
+      String.raw`git fetch $'\x2d-upload-pack=./x.sh' origin`,
+    ]) {
+      expect(networkAllowedFor(cmd), cmd).toBe(false);
+    }
+    expect(networkAllowedFor('git fetch origin')).toBe(true);
+    expect(networkAllowedFor(`gh pr view 1 --json title`)).toBe(true);
   });
 });

@@ -25,7 +25,7 @@ export const DIALOG_MARKER = glyphs.dialogCall;
 // preview gets whatever the viewport has left. Fixed rows: marginTop, top border, both paddingY
 // rows, the subject line, and the options and hint with their margins — then the input and status
 // bar underneath, plus slack.
-const DIALOG_FIXED_ROWS = 12;
+const DIALOG_FIXED_ROWS = 13;
 const BELOW_DIALOG_ROWS = 6;
 const MIN_PREVIEW_ROWS = 3;
 
@@ -41,8 +41,15 @@ export function approvalPreviewRows(
   );
 }
 
-export const APPROVAL_OPTIONS = ['Approve', 'Decline', 'Always (this session)'] as const;
-export type ApprovalChoice = 0 | 1 | 2;
+// The last row declines with a reason the user types into the input box below. Last, not beside
+// Decline, so the rows Approval-trained fingers already know keep their places.
+export const APPROVAL_OPTIONS = [
+  'Approve',
+  'Decline',
+  'Always (this session)',
+  'Decline, and say what to do instead',
+] as const;
+export const APPROVAL_FEEDBACK_INDEX = 3;
 
 // The popup renders as the top half of one continuous frame whose bottom half is
 // the input box (see Input's `attachedAbove`): `borderBottom={false}` + the input
@@ -53,10 +60,13 @@ export type ApprovalChoice = 0 | 1 | 2;
 export function Approval({
   request,
   selectedIndex,
+  typing = false,
   reservedRows = 0,
 }: {
   request: ApprovalRequest;
   selectedIndex: number;
+  // The reason is being typed: the input box underneath is live and is the field, as in Question.
+  typing?: boolean;
   // Other live rows above the dialog (plan checklist, queued messages) the preview must leave room for.
   reservedRows?: number;
 }) {
@@ -108,19 +118,25 @@ export function Approval({
         </Box>
       ) : null}
       <Box flexDirection="column" marginTop={1}>
-        {APPROVAL_OPTIONS.map((label, i) => {
-          const selected = i === selectedIndex;
-          return (
-            <Text key={i}>
-              <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
-              <Text color={selected ? theme.accent : undefined}>{label}</Text>
-            </Text>
-          );
-        })}
+        {typing ? (
+          <Text color={theme.secondary}>Declining — type what to do instead below</Text>
+        ) : (
+          APPROVAL_OPTIONS.map((label, i) => {
+            const selected = i === selectedIndex;
+            return (
+              <Text key={i}>
+                <Text color={selected ? theme.accent : undefined}>{selected ? '› ' : '  '}</Text>
+                <Text color={selected ? theme.accent : undefined}>{label}</Text>
+              </Text>
+            );
+          })
+        )}
       </Box>
       <Box marginTop={1}>
         <Text color={theme.muted}>
-          {'↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}
+          {typing
+            ? 'enter send  ·  ctrl-c back to the options'
+            : '↑↓ navigate  ·  enter select  ·  y/n shortcuts  ·  ctrl-c abort'}
         </Text>
       </Box>
     </Box>

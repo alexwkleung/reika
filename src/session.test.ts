@@ -298,6 +298,39 @@ describe('createSession', () => {
       expect(noWindowNotice({ reached: true }, { ...p, contextWindow: 8000 })).toBeUndefined();
     });
 
+    // A hosted model whose catalog entry moved read as a local-server problem: the notice now says
+    // the lookup missed, names what the host is listed at, and the profile's own keys.
+    it('explains a catalog miss with the profile group keys and the same-host bases', () => {
+      const p = {
+        model: 'glm-5.3',
+        baseURL: 'https://opencode.ai/zen/go/v1',
+        apiKey: 'k',
+        group: 'go',
+      };
+      const moved = noWindowNotice(
+        {
+          reached: true,
+          catalogMiss: { baseListed: false, sameHost: ['https://opencode.ai/inference/go/v1'] },
+        },
+        p,
+        'glm-5.3',
+      );
+      expect(moved).toContain('models.dev has no entry for https://opencode.ai/zen/go/v1.');
+      expect(moved).toContain('https://opencode.ai/inference/go/v1');
+      expect(moved).toContain('update REIKA_GO_BASE_URL');
+      expect(moved).toContain('REIKA_GO_CONTEXT_WINDOW');
+      expect(moved).not.toContain('REIKA_CONTEXT_WINDOW ');
+
+      const unlisted = noWindowNotice(
+        { reached: true, catalogMiss: { baseListed: true, sameHost: [] } },
+        { ...p, group: undefined },
+        'default',
+      );
+      expect(unlisted).toContain('lists https://opencode.ai/zen/go/v1 but not glm-5.3 under it');
+      expect(unlisted).toContain('REIKA_CONTEXT_WINDOW');
+      expect(unlisted).not.toContain('BASE_URL');
+    });
+
     it('reports what the startup probe found', async () => {
       probes.push({ reached: true, window: 32000, windowSource: 'catalog' });
       const s = await createSession({ cwd: '/repo', config: CONFIG });

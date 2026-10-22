@@ -174,6 +174,12 @@ forth keeps each side's history independent.
 `/shell` runs your input as bash directly — no model, no approval — and streams the output to the
 scrollback.
 
+The model sees what you ran with your next prompt, sent from any mode but chat: each command, its
+exit status, and the end of its output. That is up to 4KB a run on a large context window and about
+1KB on a 16k one; two runs' worth in total, newest first, so an older run may come through as its
+command line alone. Output that is cut is saved to a temp file the model can read. `/new` drops runs
+not yet sent.
+
 ## Headless mode
 
 `reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout — for scripts, other
@@ -185,6 +191,7 @@ when debugging.
 reika -p "summarize what this repo does"
 echo "explain src/agent/loop.ts" | reika -p          # prompt from stdin
 reika -p --mode plan "how would you add X"           # agent (default) | plan | vibe | minimal | grind | chat
+reika -p --profile kimi "review this diff"           # run on a named profile
 reika -p --json "count the tests" | jq '.[-1].content'   # every message the turn appended
 reika -p --stream "explain the build"                # print the reply as it is generated
 reika -p --json --stream "..." | jq -c .role         # one message per line (NDJSON) as each lands
@@ -209,6 +216,10 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   take back.
 - **Exit status:** 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted
   (ctrl-c aborts the turn cleanly).
+- **Profiles** (`--profile <name>`): the run uses that profile, over a launch `REIKA_MODEL` and over
+  the mode's own model in `REIKA_MODE_MODELS`. Names match case-insensitively; a name no profile
+  defines prints a notice on stderr listing the defined ones and runs on the profile it would have
+  used without the flag. A failed turn names the profile and base URL it was on.
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
 ### Unattended sessions

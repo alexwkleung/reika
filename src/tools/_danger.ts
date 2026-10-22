@@ -10,8 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { WORD_RE, maskQuoted, splitSegments } from './_readonly.js';
-import { stripHeredocs } from './_heredoc.js';
+import { maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
+import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
 // Workflow-policy commands: not destructive (a commit is local and reversible, a push is
@@ -148,7 +148,41 @@ const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
 // detectDangerousPatterns. Matching is per shell segment, because the verb position is what
 // makes this precise: `grep -rn install src/` passes `install` as an *argument*, and the
 // read-only leads below never install anything, so they are skipped outright.
+//
+// Position is read TWO ways and a segment needs only one of them (#752). On whitespace,
+// `GENERIC_PACKAGE_RE` counted `CFLAGS="-O2`, `-g` and `-Wall"` in `make CFLAGS="-O2 -g -Wall"
+// install` as three leading tokens, so the verb landed past the budget and the install ran
+// unprompted; `genericVerbWord` reads the same shape off the shell's own words, where that value is
+// ONE token. The whitespace reading stays because `words()` drops a quote it cannot close and so
+// SPLITS an unterminated run (`FOO="a b` reads as `FOO=`, `a`, `b`), and the extra words can push
+// the verb past the budget — an under-report. Keeping both means quoting can add a label but never
+// cost one. A quote-aware token PATTERN was the rejected option: an anchored reader that also
+// tolerates an unterminated quote has two viable ends per token and re-explores every earlier one
+// (`GENERIC_PACKAGE_RE` ends in `install`, so a `""` run backtracks catastrophically). `words()` is
+// a lexer, so it costs one linear scan.
 const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?![\w./-])/;
+
+// A flag token: the gap between the leading words and the verb.
+const GENERIC_FLAG_RE = /^-{1,2}[\w-]+$/;
+
+// A `VAR=value` operand (`make DESTDIR=/x install`) sits in the same gap: a make line carries
+// several, and counted as leading words they pushed the verb past the budget.
+const GENERIC_ASSIGN_RE = /^[A-Za-z_]\w*=/;
+
+function genericVerbWord(list: string[]): 'uninstall' | 'install' | undefined {
+  // 1–3 leading words, then any run of flags and assignments, then the verb.
+  for (let i = 1; i <= 3 && i < list.length; i++) {
+    let j = i;
+    while (j < list.length && (GENERIC_FLAG_RE.test(list[j]) || GENERIC_ASSIGN_RE.test(list[j]))) {
+      j++;
+    }
+    if (j >= list.length) break;
+    if (list[j] === 'uninstall') return 'uninstall';
+    if (list[j] === 'install') return 'install';
+  }
+  return undefined;
+}
+
 const READ_ONLY_LEAD_RE =
   /^(?:e?grep|fgrep|rg|ag|ack|find|man|which|type|whereis|cat|bat|less|more|head|tail|awk|sed|echo|printf|ls|wc|git)\b/;
 
@@ -158,16 +192,14 @@ const READ_ONLY_LEAD_RE =
 // user reads to decide.
 const SELF_COVERED_LEAD_RE = /^(?:helm|kubectl|oc|docker|podman|terraform|tofu|pulumi)\b/;
 
-function genericPackageLabel(command: string): string | undefined {
-  for (const segment of command.split(/[;&|]+/)) {
-    const seg = segment.trim();
+// Reads `verbSegments`' segments, so the two per-segment readers agree on what a segment is (#749).
+function genericPackageLabel(segments: string[]): string | undefined {
+  for (const seg of segments.map(s => s.trim())) {
     if (!seg || READ_ONLY_LEAD_RE.test(seg) || SELF_COVERED_LEAD_RE.test(seg)) continue;
+    const word = genericVerbWord(words(seg));
     const m = GENERIC_PACKAGE_RE.exec(seg);
-    if (m) {
-      return m[1]
-        ? 'Uninstall command (removes third-party code)'
-        : 'Install command (fetches and runs third-party code)';
-    }
+    if (word === 'uninstall' || m?.[1]) return 'Uninstall command (removes third-party code)';
+    if (word === 'install' || m) return 'Install command (fetches and runs third-party code)';
   }
   return undefined;
 }
@@ -583,40 +615,284 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
 
 // Leading tokens that don't change what a segment actually runs: env assignments, privilege and
 // timing wrappers, and the shell keywords a segment can open with (`if curl … ; then`).
-const VERB_PREFIX_RE =
-  /^(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|exec|env|time|if|then|else|elif|do|while|until|!)\s+)+/;
+//
+// The quoted reading (`stripVerbPrefix`) walks the segment one shell word at a time, so an
+// assignment's value is whatever the shell reads as one word: `"a b"`, `pre"a b"`, `"a b"c`, `$'a b'`,
+// `a\ b`. `[A-Za-z_]\w*=\S*` stops at the space inside `"a b"` and leaves `b" curl …` standing, so
+// the `^`-anchored verbs never see `curl` and the fetch runs unprompted (#752); a regex alternative
+// that read only a value made of exactly one quoted run was the first cut, and missed the rest. A
+// quote the walk cannot close takes the rest of its non-space run, the old reading, so an assignment
+// is never left unmatchable. A lexer rather than a quote-aware pattern because a pattern that also
+// tolerates an unclosed quote gives each token two viable ends, and anything anchored after it
+// re-explores every earlier token's choice.
+//
+// `VERB_PREFIX_WS_RE` is the old strip, and it stays because the fragment IT leaves behind is
+// sometimes the verb: `A="x pkill node" bash -c "$A"` reads as a `pkill` only through the blind
+// reading, and the value is exactly what that `bash -c` runs. So `verbLabels` reads a segment both
+// ways and reports the union — quoting can add a label, and cannot cost one. Both readings strip the
+// same words, from one list, or the union would disagree about a wrapper only one of them knows.
+const VERB_PREFIX_WORDS = [
+  'sudo',
+  'command',
+  'nohup',
+  'exec',
+  'env',
+  'time',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'do',
+  'while',
+  'until',
+  '!',
+];
+const VERB_PREFIX_WORD_SET = new Set(VERB_PREFIX_WORDS);
+const VERB_PREFIX_WS_RE = new RegExp(
+  String.raw`^(?:(?:[A-Za-z_]\w*=\S*|${VERB_PREFIX_WORDS.join('|')})\s+)+`,
+);
+
+const SHELL_WORD_RE =
+  /(?:"(?:[^"\\]|\\[\s\S])*"|\$'(?:[^'\\]|\\[\s\S])*'|'[^']*'|\\[\s\S]|[^\s"'\\])+/y;
+const NON_SPACE_RUN_RE = /\S*/y;
+const WORD_GAP_RE = /\s+/y;
+const ENV_ASSIGN_WORD_RE = /^[A-Za-z_]\w*=/;
+
+function stripVerbPrefix(segment: string): string {
+  let at = 0;
+  for (;;) {
+    SHELL_WORD_RE.lastIndex = at;
+    let end = SHELL_WORD_RE.exec(segment) ? SHELL_WORD_RE.lastIndex : at;
+    if (end < segment.length && /["'\\]/.test(segment[end])) {
+      NON_SPACE_RUN_RE.lastIndex = end;
+      NON_SPACE_RUN_RE.exec(segment);
+      end = NON_SPACE_RUN_RE.lastIndex;
+    }
+    const word = segment.slice(at, end);
+    WORD_GAP_RE.lastIndex = end;
+    const gap = WORD_GAP_RE.exec(segment);
+    if (!gap || !(VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))) {
+      return segment.slice(at);
+    }
+    at = WORD_GAP_RE.lastIndex;
+  }
+}
 
 // Segments split on the operators AND on command substitution, so `$(curl …)` and `` `pkill …` ``
-// are seen as the commands they are rather than as arguments of whatever encloses them.
-// A separator inside quotes is data — `grep "a\|gh pr\|b"` is one grep, not a `gh pr` — except a
-// substitution, which runs inside double quotes too.
+// are seen as the commands they are rather than as arguments of whatever encloses them. Matched
+// against `maskShellData`, where a separator inside quotes is data — `grep "a\|gh pr\|b"` is one
+// grep, not a `gh pr` — but a `$(…)` inside `"…"` is commands, and one inside `'…'` is neither.
 const VERB_SEPARATOR_RE = /[\n;&|(){}]+|\$\(|`/g;
 
-function verbSegments(command: string): string[] {
+// The shells that read a heredoc body as a program of their own. Everything else — `python3 -`,
+// `node -`, `cat > run.py`, `gh --body-file -` — reads a body as a script in another language or as
+// text, where a `; curl y` inside a string literal is a string and not a second command. Naming a
+// shell here is the direction that KEEPS a body in the scan, so the set errs long: a wrong name
+// costs an over-reported label, not a hidden command.
+const SHELL_READERS = new Set([
+  'sh',
+  'bash',
+  'rbash',
+  'dash',
+  'ash',
+  'ksh',
+  'mksh',
+  'pdksh',
+  'oksh',
+  'zsh',
+  'yash',
+  'csh',
+  'tcsh',
+  'fish',
+  'xonsh',
+  'elvish',
+  'busybox',
+  'su',
+]);
+
+// A version suffix still names the shell: `ksh93`, `bash5`, `zsh-5.9`.
+function namesShell(word: string): boolean {
+  const name = word.slice(word.lastIndexOf('/') + 1);
+  return SHELL_READERS.has(name) || SHELL_READERS.has(name.replace(/-?\d[\d.]*$/, ''));
+}
+
+// `.`/`source` read a file as shell, and stdin is a file: `. /dev/stdin <<'EOF'` runs the body.
+const SOURCE_STDIN_RE =
+  /(?:^|[\s;&|(])(?:\.|source)\s+\/(?:dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)(?=\s|$)/m;
+
+// Whether a shell is named anywhere in the command outside its heredoc bodies. Any one then keeps
+// every body in the scan, because the reader is not only the operator's own pipeline: a body
+// written to a file is run by a shell on a later line (`cat > s.sh <<'EOF'` … `sh s.sh`), a shell
+// on an earlier line reaches it through a `\` continuation or an open `bash -c "$(`, and a pipe
+// carries on past a comment (`| # note`). Over-reports a command that merely names a shell.
+function shellOutsideBodies(command: string, heredocs: Heredoc[]): boolean {
+  let outside = command;
+  for (const h of heredocs) {
+    outside =
+      outside.slice(0, h.bodyStart) + ' '.repeat(h.end - h.bodyStart) + outside.slice(h.end);
+  }
+  return SOURCE_STDIN_RE.test(outside) || words(outside).some(namesShell);
+}
+
+// Whether a pipeline stage could be the shell that runs the body. ANY word naming a shell counts,
+// not just the command word, because the shell can sit behind a wrapper's flags — `sudo -u me bash`,
+// `env -i sh` — where the first word is the wrapper or one of its operands, and because a shell in
+// the stage is the one reading the body either way. Coarse on purpose: `cat <<'EOF' | grep -n sh`
+// then keeps the body in the scan and over-reports, which is the direction this can afford. A stage
+// with no words at all is one the caller cannot read (`cat <<'EOF' |` with the pipeline continuing on
+// the next line) and is answered the same way.
+//
+// The lookup is lexical, so it misses any name that only BECOMES a shell after quote removal or
+// expansion — `s\h`, `$SHELL`, a backtick — and each miss HIDES a body a shell runs. One character
+// of them is visible without guessing: they all carry a `\`, a `$` or a backtick, which no literal
+// shell name does. A stage carrying one is answered as a shell too; over-report is the affordable
+// error, a hidden `pkill node` is not.
+function readsAsShell(stage: string): boolean {
+  const ws = words(stage);
+  return ws.length === 0 || /[$`\\]/.test(stage) || ws.some(namesShell);
+}
+
+// The pipeline stages of one physical line, split on `|` as the quote mask sees it: a `|` inside a
+// quoted string is a data character, not a stage boundary.
+function lineStages(
+  command: string,
+  view: string,
+  lineStart: number,
+  lineEnd: number,
+): Array<{ start: number; end: number }> {
+  const stages: Array<{ start: number; end: number }> = [];
+  let start = lineStart;
+  for (let i = lineStart; i < lineEnd; i++) {
+    if (view[i] !== '|') continue;
+    stages.push({ start, end: i });
+    start = i + 1;
+  }
+  stages.push({ start, end: lineEnd });
+  return stages;
+}
+
+// The verb question's two accounts of one command: `maskQuoted`'s, plus the heredoc bodies nothing
+// runs (#699). A body is the verb scan's blind spot in both directions. The shell pastes it whole,
+// so none of its separators are the shell's — but the walk that builds the quote mask deliberately
+// records no quote spans inside one, because the shell doesn't quote-parse a body either. So before
+// this, a `;` inside a string literal in a body split a segment and made the next word a verb:
+// `python3 - <<'EOF'` / `print("x; curl y")` / `EOF` read as a `curl`, which for a script that runs
+// no shell is exactly the reflexive-approval prompt the gate exists to avoid. Approving it also runs
+// the script UNSANDBOXED (a flagged command a human cleared is `decideSandbox`'s unbounded case),
+// where without the label it would have run sandboxed and unprompted.
+//
+// `pasted` comes back as its own list rather than as more blanking in `syntax`, and that is not
+// cosmetic: `verbSegments` finds its separators in that mask, and a body's OPENING newline cannot be
+// blanked without changing the command's line structure. A region is therefore reported as the
+// half-open span `[bodyStart - 1, bodyEnd)` — the body plus the newline that opened
+// it, terminator line excluded — and a caller asks whether a separator RUN ends in one. Not where
+// it STARTS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it, so a
+// start-position test lets the body's first line through as a segment — while a run starting inside
+// the body (a separator-char delimiter like `cat <<';'`) can cross `bodyEnd` and swallow the
+// newline that restores `keep`, hiding the command after the body. The END of the run is what says
+// "inside": it is the separator the run stands for.
+//
+// Three things keep a body out of `pasted`, and they are all the over-reporting side:
+//
+//   - an UNQUOTED delimiter (`<<EOF`, `<<\EOF`): the shell expands `$(…)` and backticks in the body,
+//     so a substitution there runs — the same body `expandingHeredocBodies` reports. Only a body
+//     the shell pastes literally is data here.
+//   - a shell as the reader: `sh -s <<'EOF'`, one behind a wrapper's flags (`env -i sh <<'EOF'`) or
+//     further down the pipeline (`cat <<'EOF' | sh`, `cat <<'EOF' | sudo /bin/bash -s`), where the
+//     body arrives on the shell's stdin as commands. Such a body stays in the scan, because nothing
+//     here quote-parses it and so a bare `pkill node` line in one cannot be told from a string.
+//   - a reader that cannot be read: a stage with no words at all, and a line that ends in `\`, are
+//     both pipelines this does not see the end of.
+//
+// A command the lexer cannot read exactly pastes nothing, exactly as `maskQuoted` blanks nothing:
+// the labels then over-report, never hide.
+function verbData(command: string): {
+  syntax: string;
+  pasted: Array<[number, number]>;
+} {
+  const syntax = maskShellData(command);
   const masked = maskQuoted(command);
+  const scan = scanHeredocs(command);
+  if (scan.uncertain || shellOutsideBodies(command, scan.heredocs)) return { syntax, pasted: [] };
+  const pasted: Array<[number, number]> = [];
+  for (const h of scan.heredocs) {
+    if (!h.literal) continue;
+    // An EMPTY body still reports its opening newline: the line that would close it is the
+    // terminator, and a terminator that reads as a verb (`cat <<'curl'` / `curl`) is not a command.
+    // The span degenerates to that one newline, which is all the caller needs.
+    // The verb question runs per line, and the reader and every stage the body could reach are both
+    // on the operator's own line: the body starts after the newline that ends it.
+    const lineStart = command.lastIndexOf('\n', h.opAt - 1) + 1;
+    const nl = command.indexOf('\n', h.opAt);
+    // A backslash before the newline continues the line, so the pipeline the operator sits in may
+    // reach further than this reads (and the shell puts the body after the NEXT newline, which is
+    // not where the lexer looked). Nothing is pasted then: the body stays in the scan.
+    let trailing = 0;
+    while (nl > lineStart && command[nl - 1 - trailing] === '\\') trailing++;
+    if (trailing % 2 === 1) continue;
+    const stages = lineStages(command, masked, lineStart, nl === -1 ? command.length : nl);
+    // The stage the operator sits in is the reader's; the ones after it are where a pipe could hand
+    // the body on to a shell. Earlier stages cannot read it, so `sh setup.sh | cat <<'EOF'` pastes.
+    const readers = stages
+      .slice(stages.findIndex(s => h.opAt < s.end))
+      .map(s => command.slice(s.start, s.end));
+    if (readers.some(readsAsShell)) continue;
+    pasted.push([h.bodyStart - 1, h.bodyEnd]);
+  }
+  return { syntax, pasted };
+}
+
+// A separator the mask blanked is not found at all, so the segment it sits in runs on to the next
+// real one: cutting there and dropping the rest hid `FOO="a;b" make install` (#749).
+function verbSegments(command: string, pasteBodies: boolean): string[] {
+  const { syntax, pasted: found } = verbData(command);
+  const pasted = pasteBodies ? found : [];
+  // The shell deletes a line continuation, so the readers see it as the space it leaves; an escaped
+  // backslash before a newline is not one, and the mask is what tells them apart.
+  const text = command.replace(/\\\n/g, (m, at: number) =>
+    syntax[at] === ' ' && syntax[at + 1] === ' ' ? '  ' : m,
+  );
   const segments: string[] = [];
   let start = 0;
   let keep = true;
   VERB_SEPARATOR_RE.lastIndex = 0;
-  for (let m = VERB_SEPARATOR_RE.exec(command); m; m = VERB_SEPARATOR_RE.exec(command)) {
-    if (keep) segments.push(command.slice(start, m.index));
+  for (let m = VERB_SEPARATOR_RE.exec(syntax); m; m = VERB_SEPARATOR_RE.exec(syntax)) {
+    if (keep) segments.push(text.slice(start, m.index));
     start = m.index + m[0].length;
-    keep = m[0] === '$(' || m[0] === '`' || masked[m.index] === command[m.index];
+    // A separator inside a pasted body ends nothing the shell runs, so the text it closes is not a
+    // segment of its own — and `keep` goes false, which is what holds the body's own lines out of
+    // the next segment. It is read off `pasted` rather than off a blanked `masked`, because the
+    // opening separator of a body IS that body's newline and stays one in the mask. The test is
+    // where the run ENDS: `cat <<'EOF';` glues the body's opening newline onto the `;` before it
+    // (a start-position test would let the body's first line through), and a run starting inside
+    // the body can cross `bodyEnd` and swallow the newline that restores `keep` (hiding the command
+    // after the body) — an END past the region means the run ends in real syntax, and its text is
+    // the shell's again. A `$(…)` inside a pasted body is a string in that script.
+    keep = !pasted.some(
+      ([from, to]) => m.index + m[0].length > from && m.index + m[0].length <= to,
+    );
   }
-  if (keep) segments.push(command.slice(start));
+  if (keep) segments.push(text.slice(start));
   return segments;
 }
 
-function verbLabels(command: string): string[] {
+function verbLabels(segments: string[]): string[] {
   const hits: string[] = [];
-  for (const segment of verbSegments(command)) {
-    const seg = segment.trim().replace(VERB_PREFIX_RE, '');
-    if (!seg) continue;
-    for (const { re, label } of VERB_PATTERNS) {
-      if (re.test(seg) && !hits.includes(label)) hits.push(label);
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    // Both prefix readings, unioned — see `VERB_PREFIX_WS_RE` above. They agree on any segment
+    // without a quoted value holding a space, which is nearly all of them, so the second pass only
+    // runs when they differ.
+    const quoted = stripVerbPrefix(trimmed);
+    const spaced = trimmed.replace(VERB_PREFIX_WS_RE, '');
+    for (const seg of spaced === quoted ? [quoted] : [quoted, spaced]) {
+      if (!seg) continue;
+      for (const { re, label } of VERB_PATTERNS) {
+        if (re.test(seg) && !hits.includes(label)) hits.push(label);
+      }
+      const cluster = clusterLabel(seg) ?? ghLabel(seg) ?? hfLabel(seg);
+      if (cluster && !hits.includes(cluster)) hits.push(cluster);
     }
-    const cluster = clusterLabel(seg) ?? ghLabel(seg) ?? hfLabel(seg);
-    if (cluster && !hits.includes(cluster)) hits.push(cluster);
   }
   return hits;
 }
@@ -845,6 +1121,11 @@ const SHELL_C_RE = /\b(?:sh|bash|zsh|dash|ksh)\s+(?:-[\w-]+\s+)*-c(?![\w-])/g;
 const INTERPRETER_C_RE =
   /\b(python[\d.]*|ruby|perl|node|deno|php)\s+(?:-[\w-]+\s+)*(-[ce])(?![\w-])/g;
 const CONTAINER_EXEC_RE = /\b(kubectl|oc|docker|podman)\s+(?:exec|run)\b[^\n]*?\s--(?=\s)/g;
+// The assignment arm keeps its bare `\S*` where the verb reader went to a lexer (#752), and the
+// trailing `ssh` is why: a quoted value has two viable ends (up to the space, or at the closing
+// `"`) and an `ssh` that fails to appear makes the engine re-explore every earlier token's choice.
+// What a miss costs here is the `via ssh:` detail only: `stripVerbPrefix` still puts `ssh` itself
+// in verb position, so the remote command prompts as remote host access.
 const SSH_LEAD_RE =
   /(?:^|[\n;&|`(])\s*(?:(?:[A-Za-z_]\w*=\S*|sudo|command|nohup|env|time)\s+)*ssh(?![\w./-])/g;
 
@@ -906,12 +1187,12 @@ function* segmentsWithDir(
   const stripped = stripHeredocs(command);
   let dir = cwd;
   for (const raw of splitSegments(stripped, maskQuoted(stripped))) {
-    const words = (raw.trim().match(WORD_RE) ?? []).map(w => w.replace(/['"]/g, ''));
-    if (words[0] === 'cd') {
-      if (words[1]) dir = resolve(dir, expandHome(words[1]));
+    const ws = words(raw.trim());
+    if (ws[0] === 'cd') {
+      if (ws[1]) dir = resolve(dir, expandHome(ws[1]));
       continue;
     }
-    yield { dir, words };
+    yield { dir, words: ws };
   }
 }
 
@@ -1022,8 +1303,11 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
   for (const { re, label } of DANGER_PATTERNS) {
     if (re.test(command) && !hits.includes(label)) hits.push(label);
   }
+  // A shell's `-c` program pastes nothing: a heredoc there can be a `$(cat <<'EOF' …)` whose
+  // output IS the program, and the shell that runs it was named one level up, out of sight here.
+  const segments = verbSegments(command, depth === 0);
   for (const label of [
-    ...verbLabels(command),
+    ...verbLabels(segments),
     remoteExecLabel(command, cwd),
     checkoutPathLabel(command, cwd),
   ]) {
@@ -1033,7 +1317,7 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
   // reports one precise label instead of two overlapping ones. Every install/uninstall label
   // above contains the word, which is what makes this cheap test sufficient.
   if (!hits.some(h => /install/i.test(h))) {
-    const generic = genericPackageLabel(command);
+    const generic = genericPackageLabel(segments);
     if (generic) hits.push(generic);
   }
   // One level of recursion only: a model confused enough to nest two carriers is not the case
