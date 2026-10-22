@@ -19,6 +19,8 @@
 // Writes are only queued for a real TTY; a pipe (tests, CI) gets the stream back untouched.
 // `REIKA_SYNC_OUTPUT=0` is the kill switch for a terminal that misbehaves on mode 2026.
 
+import { recordFrame } from './framedrops.js';
+
 // Ink gives every code point its own grid cell, so `⏺︎` (U+23FA + VS15) spends two cells on a
 // glyph the terminal draws in one, and a bordered row comes up a column short (#450). Components
 // write a bare `⏺` — one cell, no phantom — and the selector goes back on here, after Ink has laid
@@ -44,7 +46,10 @@ export type FrameWriter = {
   close: () => void;
 };
 
-export function createFrameWriter(target: { write: (chunk: Chunk) => boolean }): FrameWriter {
+export function createFrameWriter(
+  target: { write: (chunk: Chunk) => boolean },
+  onFrame?: (frame: string) => void,
+): FrameWriter {
   let pending: string[] = [];
   let scheduled = false;
   let closed = false;
@@ -54,6 +59,7 @@ export function createFrameWriter(target: { write: (chunk: Chunk) => boolean }):
     if (pending.length === 0) return;
     const frame = pending.join('');
     pending = [];
+    onFrame?.(frame);
     target.write(BEGIN_SYNC + restoreTextPresentation(frame) + END_SYNC);
   };
 
@@ -94,8 +100,11 @@ export function createSyncedStdout(
   // The kill switch drops the frame batching, not the presentation fix: without it the dialog
   // marker would be a bare `⏺` some terminals draw as an emoji.
   let write: (chunk: Chunk) => boolean;
+  // Measured per frame only: unbatched, Ink's erase and its reprint arrive as separate writes, and
+  // the erase alone would read as a drop.
+  const onFrame = env.REIKA_DEBUG ? recordFrame : undefined;
   if (syncedOutputEnabled(env)) {
-    const writer = createFrameWriter(target);
+    const writer = createFrameWriter(target, onFrame);
     process.once('exit', writer.close);
     write = writer.write;
   } else {

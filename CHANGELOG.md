@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   every search's tab used to activate it. A bot check still brings its window to the front.
 - The Chrome search browser on macOS quits from the Dock again. The focus fix above had launched it
   in a mode where Chrome ignores Quit; it now launches hidden instead, which keeps focus just as well.
+- The input box no longer jumps up when a long-running command finishes. Its live output now shows
+  the same last 10 lines the finished result does, instead of growing to fill the screen and then
+  shrinking back.
 
 ### Contributors
 
