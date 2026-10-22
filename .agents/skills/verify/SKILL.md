@@ -54,6 +54,10 @@ then `data: [DONE]`) is enough for full turns. Log one JSON line per request
 
 ## Driving with expect
 
+- Size the pty before `spawn`: `set stty_init "rows 40 cols 100"`. Unsized, the app sees
+  `rows=0 cols=0`, and Ink takes every frame as viewport-tall and full-repaints it
+  (`clearTerminal`) — which reads as a rendering bug that no real terminal has. A `stty`
+  after `spawn` sizes expect's own tty, not the app's.
 - `set send_slow {1 .12}` and `send -s` — coalesced chunks read as paste and eat the `\r`.
 - Wait for the footer text `"attach files"` before the first keystroke (bootstrap gate),
   then drain a few seconds more.
