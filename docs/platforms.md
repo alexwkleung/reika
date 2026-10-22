@@ -29,6 +29,13 @@ Point `REIKA_BASE_URL` at it (see [Configuration](configuration.md)). Everything
 reading and editing files, running commands, the context bookkeeping — stays on the machine you are
 sitting at, and only the requests cross the network.
 
+**Ollama.** It works, but Reika cannot read the context window from it, so set
+`REIKA_CONTEXT_WINDOW` to the `num_ctx` the model actually runs with. Without a window Reika does no
+compaction and caps nothing, and Ollama's own default context is small and cuts a long prompt
+without an error, so a session can lose its earlier turns with nothing on screen saying so. The loop
+recovery's logit bias also has no effect there. llama.cpp and vLLM report their window, so neither
+needs this.
+
 ## What differs by platform
 
 Everything outside this table works the same everywhere.
