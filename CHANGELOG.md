@@ -29,8 +29,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   quote ran on every segment, so it cut that quoted argument at a space inside it and found a verb
   there too. The lead is now tested after the verb-prefix strip, which also brings a deep verb back
   into reach (`env A=1 sudo time conda install numpy` and `cat=1 make install` prompt where they did
-  not), and the whitespace reading answers only where a quote really was dropped, so the unterminated
-  `make CFLAGS="-O2 install` still prompts. What that gives up is an install carried inside a CLOSED
+  not), and the whitespace reading answers only where a quote really was dropped, and only for a verb
+  after it, so the unterminated `make CFLAGS="-O2 install` still prompts while `mv "old install" new
+  # it's fine` does not. The strip now skips a wrapper's own options as well (`sudo -u me grep …`,
+  `env -i`, `time -p`, `nohup --`), so those reads stop prompting and `sudo -u me curl …` gets the
+  network label it was missing; `command -v x` runs nothing and gets no label. What that gives up is an install carried inside a CLOSED
   quoted value — `A="make install" bash -c "$A"` is one expansion from running — and telling it from
   the false positive means expanding it, which is the shell's job and not the gate's (#757).
 

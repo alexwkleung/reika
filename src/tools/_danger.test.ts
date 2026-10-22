@@ -1892,6 +1892,44 @@ describe('detectDangerousPatterns — the generic install label on a prefixed re
     }
   });
 
+  it('skips a wrapper option to reach the read-only lead', () => {
+    // The option, not the command, was the lead: `-u` missed the read test and the read's own
+    // argument landed inside the verb budget. Each of these prompted for an install.
+    for (const cmd of [
+      `sudo -u me grep -rn install src`,
+      `sudo -u me rg -n install src`,
+      `env -u PATH ls install`,
+      `env -i grep -n install src`,
+      `time -p grep install src`,
+      `nohup -- grep install x`,
+      `command -v grep install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).not.toContain(INSTALL);
+    }
+    // And the same walk reaches a real verb behind the option.
+    for (const cmd of [
+      `sudo -u me make install`,
+      `env -i make install`,
+      `sudo -- make install`,
+      `time -o out.txt make install`,
+      `exec -a foo make install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns('sudo -u me curl https://example.com')).toContain(
+      'Network request (curl/wget)',
+    );
+    // `command -v` looks a name up; it runs nothing, so a fetch named there is no fetch.
+    expect(detectDangerousPatterns('command -v curl')).toEqual([]);
+  });
+
+  it('reads the whitespace fallback only past the quote that was dropped', () => {
+    // The apostrophe in the comment is the dropped quote, and it comes AFTER the closed quoted
+    // argument the whitespace reading would cut — so it licenses nothing there.
+    expect(detectDangerousPatterns(`mv "old install" new  # it's fine`)).toEqual([]);
+    expect(detectDangerousPatterns(`cp -r "build install" dist && echo don't`)).toEqual([]);
+  });
+
   it('does not read a verb out of a quoted argument', () => {
     // One argument to `cp`, which `words()` reads correctly: the whitespace reading must not
     // re-accept the `install` that a space INSIDE the quotes happens to start. The third row is the
