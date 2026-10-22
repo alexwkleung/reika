@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfigWithTheme } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './links';
-import { SITE_URL, pageDescriptions, socialHead } from './seo';
+import { SITE_URL, languageAlternates, pageDescriptions, socialHead } from './seo';
 import type { TranslationTheme } from './theme/translations';
 
 const DOCS_DIR = fileURLToPath(new URL('../', import.meta.url));
@@ -12,6 +12,15 @@ const englishPath = (relativePath: string) =>
   untranslatedSource(`${DOCS_DIR}${relativePath}`)
     ? relativePath.replace(/^zh\//, '')
     : relativePath;
+// The English path of a page that has a real zh translation, from either side of the pair.
+const translatedPair = (relativePath: string) => {
+  const english = relativePath.replace(/^zh\//, '');
+  const zh = `${DOCS_DIR}zh/${english}`;
+  return existsSync(zh) && !untranslatedSource(zh) ? english : null;
+};
+const zhPages = readdirSync(`${DOCS_DIR}zh`, { withFileTypes: true })
+  .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+  .map(entry => entry.name);
 
 export default defineConfigWithTheme<TranslationTheme>({
   title: 'Reika - A coding agent CLI for local and hosted models',
@@ -103,11 +112,15 @@ export default defineConfigWithTheme<TranslationTheme>({
   },
   transformHead({ pageData, title, description }) {
     if (pageData.isNotFound) return [];
-    return socialHead(
-      { ...pageData, relativePath: englishPath(pageData.relativePath) },
-      title,
-      description,
-    );
+    const pair = translatedPair(pageData.relativePath);
+    return [
+      ...socialHead(
+        { ...pageData, relativePath: englishPath(pageData.relativePath) },
+        title,
+        description,
+      ),
+      ...(pair ? languageAlternates(pair) : []),
+    ];
   },
   markdown: {
     anchor: { slugify: githubSlugify },
@@ -116,9 +129,7 @@ export default defineConfigWithTheme<TranslationTheme>({
   themeConfig: {
     // The custom language menus only route to pages that exist in docs/zh/, translated or included.
     i18nRouting: false,
-    translatedPages: readdirSync(new URL('../zh/', import.meta.url), { withFileTypes: true })
-      .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
-      .map(entry => entry.name.slice(0, -3)),
+    translatedPages: zhPages.map(name => name.slice(0, -3)),
     logo: '/favicon.svg',
     // Shown in the nav bar next to the logo, instead of falling back to the full
     // site `title` above; the document/tab title still uses `title`.
@@ -176,7 +187,15 @@ export default defineConfigWithTheme<TranslationTheme>({
     }
     const undescribed = sidebar
       .flatMap(group => group.items.map(item => `${item.link.slice(1)}.md`))
-      .filter(path => !pageDescriptions[path]);
+      .filter(path => !pageDescriptions[path])
+      // A zh translation needs its own; the landing page uses the zh locale's description.
+      .concat(
+        zhPages
+          .map(name => `zh/${name}`)
+          .filter(
+            path => path !== 'zh/index.md' && translatedPair(path) && !pageDescriptions[path],
+          ),
+      );
     if (undescribed.length > 0) {
       throw new Error(
         `Pages missing from pageDescriptions in seo.ts:\n  ${undescribed.join('\n  ')}`,
