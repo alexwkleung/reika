@@ -23,7 +23,7 @@ const docs = computed(() => (frontmatter.value.docs ?? []) as Item[]);
       </div>
 
       <section v-if="features.length" class="LandingSection">
-        <h2>{{ frontmatter.featuresTitle }}</h2>
+        <h2>{{ frontmatter.featuresTitle || 'What it does' }}</h2>
         <div class="LandingFeatures">
           <div v-for="item in features" :key="item.title" class="LandingFeature">
             <h3>{{ item.title }}</h3>
@@ -33,7 +33,7 @@ const docs = computed(() => (frontmatter.value.docs ?? []) as Item[]);
       </section>
 
       <section v-if="docs.length" class="LandingSection">
-        <h2>{{ frontmatter.docsTitle }}</h2>
+        <h2>{{ frontmatter.docsTitle || 'Documentation' }}</h2>
         <div class="LandingDocs">
           <a v-for="item in docs" :key="item.title" class="LandingDoc" :href="withBase(item.link!)">
             <span class="title">{{ item.title }}</span>

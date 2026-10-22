@@ -153,6 +153,20 @@ body:has(.Landing) {
   margin-top: 8px;
 }
 
+/* Longer Chinese fallback labels must leave the language menu reachable beside the sidebar. */
+@media (min-width: 768px) and (max-width: 1279px) {
+  html[lang='zh-CN'] .VPNavBarMenuLink {
+    padding: 0 4px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 959px) {
+  html[lang='zh-CN'] .VPNavBarMenuLink {
+    padding: 0 2px;
+    font-size: 13px;
+  }
+}
+
 /* The footer's link is the raw HTML the config inlines into the message, so it sits outside `.vp-doc`
    and gets none of the document link rules — it inherited the footer's near-white text instead. Give
    it the same pair a link on a docs page has. */

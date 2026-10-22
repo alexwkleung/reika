@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { defineConfig } from 'vitepress';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { defineConfigWithTheme } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
+import type { TranslationTheme } from './theme/translations';
 
-export default defineConfig({
+export default defineConfigWithTheme<TranslationTheme>({
   title: 'Reika - A coding agent CLI for local and hosted models',
   // Docs pages read "Page title | Reika" in the tab; the landing page opts out with
   // its own `titleTemplate: false` in index.md so it keeps the full site title.
@@ -11,6 +13,14 @@ export default defineConfig({
     'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
   appearance: 'force-dark',
+  vite: {
+    resolve: {
+      alias: ['VPNavBarTranslations', 'VPNavScreenTranslations', 'VPNavBarExtra'].map(name => ({
+        find: new RegExp(`^.*\\/${name}\\.vue$`),
+        replacement: fileURLToPath(new URL(`./theme/${name}.vue`, import.meta.url)),
+      })),
+    },
+  },
   locales: {
     root: { label: 'English', lang: 'en', link: '/' },
     zh: {
@@ -56,7 +66,6 @@ export default defineConfig({
         langMenuLabel: '切换语言',
         sidebarMenuLabel: '菜单',
         returnToTopLabel: '返回顶部',
-        darkModeSwitchLabel: '外观',
         footer: {
           message:
             '基于 Apache-2.0 许可证免费开源 · <a href="/support">支持项目（英文）</a> · <a href="/support#contact">联系（英文）</a>',
@@ -76,8 +85,11 @@ export default defineConfig({
     config: md => md.use(githubLinks),
   },
   themeConfig: {
-    // Untranslated pages have no /zh/ counterpart; the language menu goes to each locale's home.
+    // The custom language menus only route to translations that exist in docs/zh/.
     i18nRouting: false,
+    translatedPages: readdirSync(new URL('../zh/', import.meta.url), { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+      .map(entry => entry.name.slice(0, -3)),
     logo: '/favicon.svg',
     // Shown in the nav bar next to the logo, instead of falling back to the full
     // site `title` above; the document/tab title still uses `title`.
