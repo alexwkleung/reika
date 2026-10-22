@@ -22,6 +22,17 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The input box no longer jumps up when a long-running command finishes. Its live output now shows
   the same last 10 lines the finished result does, instead of growing to fill the screen and then
   shrinking back.
+- The gate's generic install fallback no longer prints an Install command dialog for a read or for a
+  filename. `LANG=C grep -rn install src` is a grep, and the test that skips reads like it ran on the
+  raw segment, so it saw the assignment and not the `grep` behind it, and grep's own argument read as
+  a verb. `cp -r "build install" dist` is a copy, and the whitespace reading kept for an unterminated
+  quote ran on every segment, so it cut that quoted argument at a space inside it and found a verb
+  there too. The lead is now tested after the verb-prefix strip, which also brings a deep verb back
+  into reach (`env A=1 sudo time conda install numpy` and `cat=1 make install` prompt where they did
+  not), and the whitespace reading answers only where a quote really was dropped, so the unterminated
+  `make CFLAGS="-O2 install` still prompts. What that gives up is an install carried inside a CLOSED
+  quoted value — `A="make install" bash -c "$A"` is one expansion from running — and telling it from
+  the false positive means expanding it, which is the shell's job and not the gate's (#757).
 
 ### Contributors
 
