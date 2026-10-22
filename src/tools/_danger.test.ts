@@ -1864,3 +1864,84 @@ describe('detectDangerousPatterns — a quoted value with spaces in it (#752)', 
     expect(Date.now() - start).toBeLessThan(1000);
   });
 });
+
+// #757. Two false positives in `genericPackageLabel`, both of which print "Install command (fetches
+// and runs third-party code)" for a command that fetches and runs nothing. The read-only lead was
+// tested on the raw segment, before any env prefix was stripped, and the whitespace reading — which
+// exists to rescue a quote `words()` had to split — was unioned with the word reading on EVERY
+// segment, so the same half-tokenizing that saved the unterminated run also cut a closed quoted
+// argument at the spaces inside it. A misleading label is the reflexive-approval cost this gate
+// cannot afford, which is the reason #644 exists.
+describe('detectDangerousPatterns — the generic install label on a prefixed read and a quoted argument (#757)', () => {
+  const UNINSTALL = 'Uninstall command (removes third-party code)';
+
+  it('tests the read-only lead after the verb prefix is stripped', () => {
+    // `grep` is what this segment runs, and `install` is its argument. The raw test saw `LANG=C`,
+    // fell through, and asked grep's own word list for a verb it never has.
+    for (const cmd of [
+      `LANG=C grep -rn install src`,
+      `FOO="a b" grep -rn install src`,
+      `LC_ALL=C sed -n install p`,
+      `time find . -name install`,
+      `nohup rg uninstall src`,
+      `sudo cat install.log`,
+      `A=pre"b c" head install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).not.toContain(INSTALL);
+      expect(detectDangerousPatterns(cmd), cmd).not.toContain(UNINSTALL);
+    }
+  });
+
+  it('does not read a verb out of a quoted argument', () => {
+    // One argument to `cp`, which `words()` reads correctly: the whitespace reading must not
+    // re-accept the `install` that a space INSIDE the quotes happens to start. The third row is the
+    // spelling that survives a lookahead fix (the word after `install` there is a space, not a
+    // quote), which is why the reading was gated on the dropped quote rather than tightened.
+    for (const cmd of [
+      `cp -r "build install" dist`,
+      `cp -r 'build uninstall' dist`,
+      `foo bar "x install y" baz`,
+      `mv "old install" new`,
+      `rsync -a "src install/" dist/`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('keeps the strip an addition, not only a subtraction', () => {
+    // The lead test is the same walk that puts a deep verb inside the three-word budget, and an
+    // assignment NAMED like a read verb is still an assignment, not a read.
+    expect(detectDangerousPatterns('env A=1 sudo time conda install numpy')).toContain(INSTALL);
+    expect(detectDangerousPatterns('cat=1 make install')).toContain(INSTALL);
+    expect(detectDangerousPatterns('LANG=C make install')).toContain(INSTALL);
+    expect(detectDangerousPatterns('LANG=C conda uninstall numpy')).toContain(UNINSTALL);
+    // The wrapper keeps a verb the strip alone would have walked past: `install` is word 0 for the
+    // stripped reading, which is past this reader by design, and word 1 for the raw one.
+    expect(detectDangerousPatterns('sudo install -m 644 x /etc/x')).toContain(INSTALL);
+    // A tool that covers itself is covered behind a prefix too: this used to collect the generic
+    // label on top of the accurate one, because the raw lead was `FOO=1`.
+    expect(detectDangerousPatterns('FOO=1 helm uninstall app')).toEqual([
+      'Helm release change (modifies a cluster)',
+    ]);
+  });
+
+  it('still consults the whitespace reading where a quote was actually dropped (#752)', () => {
+    // The one case the reading is kept for: `words()` cannot close the quote, so it splits the run
+    // and the extra words push the verb past the budget.
+    expect(detectDangerousPatterns(`make CFLAGS="-O2 install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make A="b c install`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`make CFLAGS="-O2 -g -Wall" install`)).toContain(INSTALL);
+    // And the over-report that goes with it stays on purpose: a quote the lexer cannot close leaves
+    // text it cannot place, and #752 chose the prompt as the direction that errs.
+    expect(detectDangerousPatterns(`cp -r "build install dist`)).toContain(INSTALL);
+    expect(detectDangerousPatterns(`cp -r 'build install dist`)).toContain(INSTALL);
+  });
+
+  it('trades an install carried inside a closed quoted value', () => {
+    // Deliberate, and the cost of the fix above: `words()` reads `A="make install"` as ONE
+    // assignment word, and no whitespace reading answers for it now that the value is balanced.
+    // Nothing here expands `$A` — telling this apart from `cp -r "build install" dist` is knowing
+    // which word the shell substitutes into, which is the shell's job.
+    expect(detectDangerousPatterns(`A="make install" bash -c "$A"`)).not.toContain(INSTALL);
+  });
+});
