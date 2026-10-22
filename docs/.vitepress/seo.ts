@@ -27,6 +27,7 @@ export const pageDescriptions: Record<string, string> = {
     'Reika is free and open source under Apache-2.0. Ways to fund the project, contribute, and get in touch.',
   // A translated zh page gets its own; one that shows the English text borrows the English one.
   'zh/models.md': 'Reika 已测试过的本地量化模型和托管 API 模型，并附有各模型表现的说明。',
+  'zh/support.md': 'Reika 以 Apache-2.0 许可免费开源。这里是资助项目、参与贡献和联系作者的方式。',
   'zh/platforms.md':
     '在 macOS、Linux 和 Windows（WSL）上运行 Reika：Node.js 要求、各平台差异，以及在性能较弱的机器上运行。',
   'zh/architecture.md':
