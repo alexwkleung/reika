@@ -1,9 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { defineConfig } from 'vitepress';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { defineConfigWithTheme } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify } from './links';
 import { SITE_URL, pageDescriptions, socialHead } from './seo';
+import type { TranslationTheme } from './theme/translations';
 
-export default defineConfig({
+export default defineConfigWithTheme<TranslationTheme>({
   title: 'Reika - A coding agent CLI for local and hosted models',
   // Docs pages read "Page title | Reika" in the tab; the landing page opts out with
   // its own `titleTemplate: false` in index.md so it keeps the full site title.
@@ -12,6 +14,67 @@ export default defineConfig({
     'Coding agent CLI for local and hosted models, designed around small local models first.',
   cleanUrls: true,
   appearance: 'force-dark',
+  vite: {
+    resolve: {
+      alias: ['VPNavBarTranslations', 'VPNavScreenTranslations', 'VPNavBarExtra'].map(name => ({
+        find: new RegExp(`^.*\\/${name}\\.vue$`),
+        replacement: fileURLToPath(new URL(`./theme/${name}.vue`, import.meta.url)),
+      })),
+    },
+  },
+  locales: {
+    root: { label: 'English', lang: 'en', link: '/' },
+    zh: {
+      label: '简体中文',
+      lang: 'zh-CN',
+      link: '/zh/',
+      title: 'Reika - 面向本地和托管模型的编程智能体 CLI',
+      description: '面向本地和托管模型的编程智能体 CLI，优先围绕小型本地模型设计。',
+      themeConfig: {
+        nav: [
+          { text: '安装（英文）', link: '/getting-started' },
+          { text: '使用（英文）', link: '/usage' },
+          { text: '配置（英文）', link: '/configuration' },
+          { text: '研究结果（英文）', link: '/findings' },
+          { text: '支持项目（英文）', link: '/support' },
+          {
+            text: '更新日志（英文）',
+            link: 'https://github.com/alexwkleung/reika/blob/main/CHANGELOG.md',
+          },
+        ],
+        sidebar: [
+          {
+            text: '指南',
+            items: [
+              { text: '安装（英文）', link: '/getting-started' },
+              { text: '使用（英文）', link: '/usage' },
+              { text: '配置（英文）', link: '/configuration' },
+              { text: '工具（英文）', link: '/tools' },
+              { text: '指令与技能（英文）', link: '/skills' },
+              { text: '模型', link: '/zh/models' },
+              { text: '平台', link: '/zh/platforms' },
+              { text: '架构', link: '/zh/architecture' },
+              { text: '研究结果（英文）', link: '/findings' },
+            ],
+          },
+          {
+            text: '项目',
+            items: [{ text: '支持项目（英文）', link: '/support' }],
+          },
+        ],
+        outline: { label: '本页目录' },
+        docFooter: { prev: '上一篇', next: '下一篇' },
+        langMenuLabel: '切换语言',
+        sidebarMenuLabel: '菜单',
+        returnToTopLabel: '返回顶部',
+        footer: {
+          message:
+            '基于 Apache-2.0 许可证免费开源 · <a href="/support">支持项目（英文）</a> · <a href="/support#contact">联系（英文）</a>',
+          copyright: 'Copyright 2026 Alex Leung',
+        },
+      },
+    },
+  },
   srcExclude: ['demo/**', 'node_modules/**'],
   sitemap: { hostname: SITE_URL },
   head: [
@@ -32,6 +95,11 @@ export default defineConfig({
     config: md => md.use(githubLinks),
   },
   themeConfig: {
+    // The custom language menus only route to translations that exist in docs/zh/.
+    i18nRouting: false,
+    translatedPages: readdirSync(new URL('../zh/', import.meta.url), { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
+      .map(entry => entry.name.slice(0, -3)),
     logo: '/favicon.svg',
     // Shown in the nav bar next to the logo, instead of falling back to the full
     // site `title` above; the document/tab title still uses `title`.
@@ -78,7 +146,7 @@ export default defineConfig({
     if (brokenLinks.size > 0) {
       throw new Error(`Broken links:\n  ${[...brokenLinks].join('\n  ')}`);
     }
-    // llms.txt is written by hand, so a page added to the sidebar has to be added there too.
+    // llms.txt covers the canonical English sidebar; translated sidebars are exempt.
     const llms = readFileSync(new URL('../public/llms.txt', import.meta.url), 'utf8');
     const sidebar = siteConfig.site.themeConfig.sidebar as { items: { link: string }[] }[];
     const missing = sidebar

@@ -65,7 +65,9 @@ function adaptHref(href: string, fromFile: string): string {
   if (target.startsWith(DOCS_DIR + sep)) return href;
 
   // The README is the repo's landing page and the site's home page summarizes it.
-  if (target === resolve(REPO_DIR, 'README.md')) return '/';
+  if (target === resolve(REPO_DIR, 'README.md')) {
+    return fromFile.startsWith(resolve(DOCS_DIR, 'zh') + sep) ? '/zh/' : '/';
+  }
   const base = statSync(target).isDirectory() ? REPO_TREE : REPO_BLOB;
   return `${base}/${relative(REPO_DIR, target).split(sep).join('/')}${hash ? `#${hash}` : ''}`;
 }
