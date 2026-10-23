@@ -51,6 +51,16 @@ llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
 template, which is what makes tool calling reliable. Sizing this is the model server's question, not
 Reika's; [Models](models.md) lists what Reika has been run against.
 
+For a thinking model, also check whether its template keeps earlier reasoning. Some (LFM2.5 and
+Qwen3.6 among them) drop every `<think>` block that comes before the newest user message, and Reika
+sends its per-round notes as one. Once a long turn starts shedding context, the model then sees none
+of its own earlier reasoning and tends to re-derive work it already did. If the template has the
+switch, turn it on at the server:
+
+```sh
+llama-server -m <model.gguf> -c 24576 --jinja --chat-template-kwargs '{"preserve_thinking":true}'
+```
+
 ### Hosted
 
 Any provider with an OpenAI-compatible endpoint works — a provider's own API, or a router such as
