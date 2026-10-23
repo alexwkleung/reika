@@ -100,7 +100,9 @@ import {
   COMPACTION_REPORT_RETRY,
   buildCompactionReportDirective,
   clampCompactionNote,
+  compactionNoteContent,
   compactionReportEnabled,
+  pickCompactionNote,
 } from './compactionreport.js';
 import {
   buildSubagentAffordance,
@@ -2357,7 +2359,7 @@ export async function runTurn(opts: {
                 }
               : undefined,
           });
-        let rep = await report(directive);
+        const rep = await report(directive);
         if (rep.usage) opts.onUsage?.(rep.usage);
         // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
         // is a cut-off fragment — never a note, and not a reason to fold.
@@ -2370,24 +2372,21 @@ export async function runTurn(opts: {
         const describe = (r: typeof rep): string =>
           `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
           `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
-        let retried = false;
-        if (!rep.content?.trim() && !opts.signal?.aborted) {
+        let retry: typeof rep | undefined;
+        if (!compactionNoteContent(rep) && !opts.signal?.aborted) {
           debugLog(
-            `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
+            `[reika:debug] round=${i} compaction-report n=${n} no-note ${describe(rep)}; retrying\n`,
           );
           opts.onReasoningReset?.();
-          retried = true;
-          const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
-          if (again.usage) opts.onUsage?.(again.usage);
+          retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
+          if (retry.usage) opts.onUsage?.(retry.usage);
           if (opts.signal?.aborted) {
             commitNoteRoundAbort();
             return;
           }
-          // Keep whichever reply has a note in the content channel; failing both, the first
-          // reasoning is the better fallback (it is the longer, less nagged thinking).
-          if (again.content?.trim()) rep = again;
         }
-        const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
+        const picked = pickCompactionNote(rep, retry);
+        const text = clampCompactionNote(picked.text);
         if (text) {
           note = { n, text };
           // UI only, never history: the note renders as markdown WITH its reasoning — the trace of
@@ -2396,14 +2395,13 @@ export async function runTurn(opts: {
           opts.onMessage({
             role: 'assistant',
             content: text,
-            reasoning: rep.reasoning?.trim() || undefined,
+            reasoning: picked.reasoning,
             compactionNote: true,
           } as Message);
         }
         debugLog(
-          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
-            `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
-            `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
+          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length} src=${picked.src}` +
+            `${retry ? ' retried=1' : ''} ${describe(retry ?? rep)}\n`,
         );
       } catch (err) {
         if (opts.signal?.aborted) {

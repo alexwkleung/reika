@@ -213,7 +213,7 @@ describe('compaction report round (#280)', () => {
 
   // An empty content channel gets ONE retry with the sharper directive (observed: the model
   // emitted an in-band tool call instead of the note at 91% context). The retry's note wins when
-  // it has one; failing both, the first reply's reasoning is the fallback.
+  // it has one; failing both, the longer reasoning is the fallback (#799).
   it('retries once on an empty note and takes the retry when it carries one', async () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     h.scripted.push(
@@ -247,11 +247,54 @@ describe('compaction report round (#280)', () => {
     expect(last.content).toBe('final');
   });
 
+  // #799: a text-format caller calls through `tool_choice: 'none'`, so content can be the call's
+  // preamble rather than empty. That must trigger the retry, and when the retry does the same, the
+  // longer reasoning — not the preamble — is the note.
+  it('treats a tool-call preamble as no note, and falls back to the longer reasoning', async () => {
+    process.env.REIKA_COMPACTION_REPORT = '1';
+    const messages: Message[] = [];
+    const findings = 'Change the failed branch in headless.ts to name the profile and base URL.';
+    h.scripted.push(
+      {
+        content: 'Let me look at headless.ts:',
+        reasoning: 'The context got folded.',
+        toolCalls: [{ id: 'x', name: 'read', args: { path: 'src/headless.ts' } }],
+      },
+      {
+        content: 'Let me examine `_net.ts` in detail:',
+        reasoning: findings,
+        toolCalls: [{ id: 'y', name: 'read', args: { path: 'src/tools/_net.ts' } }],
+      },
+      { content: 'final', toolCalls: undefined },
+    );
+    const history = bigHistory();
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: m => messages.push(m),
+    });
+    expect(h.captured).toHaveLength(3);
+    expect(directiveOf(h.captured[1])).toContain('your reply carried no note');
+    const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
+    expect(recap.content).toContain(compactionNoteHeader(1));
+    expect(recap.content).toContain(findings);
+    expect(recap.content).not.toContain('Let me examine');
+    expect(recap.content).not.toContain('Let me look at headless.ts');
+    const shown = messages.find(m => m.role === 'assistant' && m.compactionNote) as Message & {
+      role: 'assistant';
+    };
+    expect(shown.content).toBe(findings);
+  });
+
   it('falls back to the reasoning channel, and folds as before when the note is empty', async () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     h.scripted.push(
       { content: '', reasoning: 'reasoned note', toolCalls: undefined },
-      // The retry comes back empty too: the FIRST reasoning is the fallback.
+      // The retry comes back empty too: the longer reasoning (here the first) is the fallback.
       { content: '', reasoning: 'second try', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
