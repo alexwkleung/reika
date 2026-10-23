@@ -30,12 +30,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   there too. The lead is now tested after the verb-prefix strip, which also brings a deep verb back
   into reach (`env A=1 sudo time conda install numpy` and `cat=1 make install` prompt where they did
   not), and the whitespace reading answers only where a quote really was dropped, and only for a verb
-  after it, so the unterminated `make CFLAGS="-O2 install` still prompts while `mv "old install" new
-  # it's fine` does not. The strip now skips a wrapper's own options as well (`sudo -u me grep …`,
-  `env -i`, `time -p`, `nohup --`), so those reads stop prompting and `sudo -u me curl …` gets the
-  network label it was missing; `command -v x` runs nothing and gets no label. What that gives up is an install carried inside a CLOSED
-  quoted value — `A="make install" bash -c "$A"` is one expansion from running — and telling it from
-  the false positive means expanding it, which is the shell's job and not the gate's (#757).
+  after it, so the unterminated `make CFLAGS="-O2 install` still prompts while
+  `mv "old install" new # it's fine` does not. The strip now skips a wrapper's own options as well
+  (`sudo -u me grep …`, `env -i`, `time -p`, `nohup --`), so those reads stop prompting and
+  `sudo -u me curl …` gets the network label it was missing; `command -v x` runs nothing and gets no
+  label. What that gives up is an install carried inside a CLOSED quoted value —
+  `A="make install" bash -c "$A"` is one expansion from running — and telling it from the false
+  positive means expanding it, which is the shell's job and not the gate's (#757).
 
 ### Contributors
 
@@ -196,8 +197,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the value it compared), `+ mkdir: /path: Operation not permitted` (a diff's added or removed line,
   as `gh pr diff` prints one), `AssertionError: /bin/sh: /path: Operation not permitted` (Reika's own
   sandbox tests under a `grep -E "AssertionError|expected"`), at line start or behind a runner's own
-  column (`web:build: Expected: …`), or behind a bare `Error: ` header. A runner's own column still counts —
-  turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
+  column (`web:build: Expected: …`), or behind a bare `Error: ` header. A runner's own column still
+  counts — turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
   `name | `, indentation, and a go error chain — so a denial behind one is still reported; any other
   column shape now costs a footer rather than producing one for a write that never happened (#726).
 
@@ -205,18 +206,20 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - The sandbox refuses writes to git's `config` and `hooks`, and to the files that decide which
   config git reads (anything named `.git`, `commondir`, `gitdir`), wherever they are — matched by
-  name, so renaming or repointing `.git` does not get around it. Both name programs something else runs: `core.fsmonitor` was run
-  by Reika's own unsandboxed `git status` after every shell command, and a hook is run by your next
-  commit. Reika's own git calls now pass `-c core.fsmonitor=false` and `-c core.hooksPath=/dev/null`,
-  switch off any filter driver the repo's own config defines, and skip submodules, so a repo's
-  config or hooks cannot make it run a program either way; drivers from your global config, such as
-  Git LFS, still apply to the diffs it draws, but LFS never downloads a missing object for one
-  (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed. The `write`/`edit` tools now gate the same paths through the approval dialog instead of landing silently (below).
+  name, so renaming or repointing `.git` does not get around it. Both name programs something else
+  runs: `core.fsmonitor` was run by Reika's own unsandboxed `git status` after every shell command,
+  and a hook is run by your next commit. Reika's own git calls now pass `-c core.fsmonitor=false`
+  and `-c core.hooksPath=/dev/null`, switch off any filter driver the repo's own config defines, and
+  skip submodules, so a repo's config or hooks cannot make it run a program either way; drivers
+  from your global config, such as Git LFS, still apply to the diffs it draws, but LFS never
+  downloads a missing object for one (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed.
+  The `write`/`edit` tools now gate the same paths through the approval dialog instead of landing
+  silently (below).
 - The cost, and it is wider than a refused `git config`: `git init`, `git clone`,
   `git submodule add` and `git worktree add` write these paths, so creating a repository — in any
   directory, temp included — is now a command you run instead of the model, and a test suite that
-  creates repos in a temp dir fails when the model runs it. Everything else in `.git` — `add`, `commit`, `checkout`, `stash`, `fetch`, the index
-  lock — is unchanged.
+  creates repos in a temp dir fails when the model runs it. Everything else in `.git` — `add`,
+  `commit`, `checkout`, `stash`, `fetch`, the index lock — is unchanged.
 - The `write`/`edit` tools gate the same paths the sandbox refuses for shell commands: writing to a
   repo's `config` or `hooks` (or to the files that decide which config git reads) raises the same
   warning in the approval dialog an out-of-project write does, so under `safe` it cannot be
