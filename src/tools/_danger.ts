@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
+import { WORD_RE, maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
 import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
@@ -149,18 +149,41 @@ const PACKAGE_PATTERNS: Array<{ re: RegExp; label: string }> = [
 // makes this precise: `grep -rn install src/` passes `install` as an *argument*, and the
 // read-only leads below never install anything, so they are skipped outright.
 //
-// Position is read TWO ways and a segment needs only one of them (#752). On whitespace,
-// `GENERIC_PACKAGE_RE` counted `CFLAGS="-O2`, `-g` and `-Wall"` in `make CFLAGS="-O2 -g -Wall"
-// install` as three leading tokens, so the verb landed past the budget and the install ran
+// Position is read TWO ways, but only one of them reads every segment (#752, narrowed by #757). On
+// whitespace, `GENERIC_PACKAGE_RE` counted `CFLAGS="-O2`, `-g` and `-Wall"` in `make CFLAGS="-O2 -g
+// -Wall" install` as three leading tokens, so the verb landed past the budget and the install ran
 // unprompted; `genericVerbWord` reads the same shape off the shell's own words, where that value is
-// ONE token. The whitespace reading stays because `words()` drops a quote it cannot close and so
-// SPLITS an unterminated run (`FOO="a b` reads as `FOO=`, `a`, `b`), and the extra words can push
-// the verb past the budget — an under-report. Keeping both means quoting can add a label but never
-// cost one. A quote-aware token PATTERN was the rejected option: an anchored reader that also
-// tolerates an unterminated quote has two viable ends per token and re-explores every earlier one
-// (`GENERIC_PACKAGE_RE` ends in `install`, so a `""` run backtracks catastrophically). `words()` is
-// a lexer, so it costs one linear scan.
+// ONE token. The whitespace reading exists for exactly one case: `words()` DROPS a quote it cannot
+// close and so SPLITS an unterminated run (`FOO="a b` reads as `FOO=`, `a`, `b`), and the extra words
+// can push the verb past the budget — an under-report. Unioned with the word reading on every segment
+// it was also a false-positive machine, because the other half of the same weakness is that it cuts a
+// CLOSED quoted argument at the spaces inside it: `cp -r "build install" dist` is one quoted argument
+// to `cp`, which `words()` reads correctly and this reading re-accepted as a verb (#757). So it is
+// consulted only where `words()` actually dropped a quote — the whole difference it was paying for —
+// and nowhere else. The trade: an install carried in a CLOSED quoted value, `A="make install" bash -c
+// "$A"`, is now read only off words, which sees one assignment word and reports nothing. That shape
+// is indistinguishable from the false positive by any test cheaper than expanding the value, which is
+// `bash`'s job and not this file's. A quote-aware token PATTERN stays the rejected option: an anchored
+// reader that also tolerates an unterminated quote has two viable ends per token and re-explores every
+// earlier one (`GENERIC_PACKAGE_RE` ends in `install`, so a `""` run backtracks catastrophically).
+// `words()` is a lexer, so it costs one linear scan.
 const GENERIC_PACKAGE_RE = /^(?:\S+\s+){1,3}?(?:-{1,2}[\w-]+\s+)*(un)?install(?![\w./-])/;
+
+// Where `words()` first read this segment differently from the shell, or -1. A quote it cannot close
+// is dropped, not failed, so the only characters a word list cannot consume are the quotes
+// themselves. The position matters, not just the fact: a dropped quote only explains a verb the
+// whitespace reading finds AFTER it, and an apostrophe in a trailing comment (`mv "old install" new
+// # it's fine`) must not license a verb read out of the closed quote before it.
+function firstDroppedQuote(segment: string): number {
+  let at = 0;
+  for (const m of segment.matchAll(WORD_RE)) {
+    const gap = segment.slice(at, m.index).search(/["']/);
+    if (gap >= 0) return at + gap;
+    at = m.index + m[0].length;
+  }
+  const gap = segment.slice(at).search(/["']/);
+  return gap >= 0 ? at + gap : -1;
+}
 
 // A flag token: the gap between the leading words and the verb.
 const GENERIC_FLAG_RE = /^-{1,2}[\w-]+$/;
@@ -193,13 +216,35 @@ const READ_ONLY_LEAD_RE =
 const SELF_COVERED_LEAD_RE = /^(?:helm|kubectl|oc|docker|podman|terraform|tofu|pulumi)\b/;
 
 // Reads `verbSegments`' segments, so the two per-segment readers agree on what a segment is (#749).
+//
+// The lead is tested after the verb prefix is stripped, not on the raw segment (#757): what a
+// segment runs is the command behind its assignments and wrappers, and `LANG=C grep -rn install src`
+// runs `grep` — an argument, not a verb — while the raw test saw `LANG=C`, missed the read-only lead,
+// and asked `grep`'s own word list for an install it never had. `stripVerbPrefix` is `verbLabels`'
+// strip, so both per-segment readers agree on which command a segment runs. It skips a wrapper's
+// options too (`sudo -u me grep …`), and strips `command -v x` to nothing, since that runs nothing.
+//
+// The VERB is still read off the raw segment as well as the stripped one: the strip brings a deep
+// verb inside the budget (`env A=1 sudo time conda install numpy`) and can also move one out of it
+// (`sudo install -m 644 x /etc/x` has its verb at word 1, and word 0 is past this reader by design).
+// Both readings, unioned — the same rule that keeps a label at least as wide as it was.
 function genericPackageLabel(segments: string[]): string | undefined {
-  for (const seg of segments.map(s => s.trim())) {
-    if (!seg || READ_ONLY_LEAD_RE.test(seg) || SELF_COVERED_LEAD_RE.test(seg)) continue;
-    const word = genericVerbWord(words(seg));
-    const m = GENERIC_PACKAGE_RE.exec(seg);
-    if (word === 'uninstall' || m?.[1]) return 'Uninstall command (removes third-party code)';
-    if (word === 'install' || m) return 'Install command (fetches and runs third-party code)';
+  for (const segment of segments.map(s => s.trim())) {
+    if (!segment) continue;
+    const stripped = stripVerbPrefix(segment);
+    if (!stripped || READ_ONLY_LEAD_RE.test(stripped) || SELF_COVERED_LEAD_RE.test(stripped)) {
+      continue;
+    }
+    for (const seg of stripped === segment ? [segment] : [segment, stripped]) {
+      const word = genericVerbWord(words(seg));
+      // The whitespace reading only where `words()` split a quote it could not close, and only for a
+      // verb that quote comes before — see above.
+      const dropped = firstDroppedQuote(seg);
+      const ws = dropped >= 0 ? GENERIC_PACKAGE_RE.exec(seg) : null;
+      const m = ws && dropped < ws[0].length ? ws : undefined;
+      if (word === 'uninstall' || m?.[1]) return 'Uninstall command (removes third-party code)';
+      if (word === 'install' || m) return 'Install command (fetches and runs third-party code)';
+    }
   }
   return undefined;
 }
@@ -658,8 +703,24 @@ const NON_SPACE_RUN_RE = /\S*/y;
 const WORD_GAP_RE = /\s+/y;
 const ENV_ASSIGN_WORD_RE = /^[A-Za-z_]\w*=/;
 
+// A wrapper's own options sit between it and the command it runs (`sudo -u me grep …`, `env -i …`,
+// `time -p …`); left in place, the option became the lead and the command behind it read as an
+// argument (#757 review). These are the options that consume the next word as their value.
+const WRAPPER_VALUE_OPTIONS: Record<string, ReadonlySet<string>> = {
+  sudo: new Set(['-u', '-g', '-U', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-R']),
+  env: new Set(['-u', '-C']),
+  exec: new Set(['-a']),
+  time: new Set(['-o', '-f']),
+};
+const WRAPPER_WORDS = new Set(['sudo', 'command', 'nohup', 'exec', 'env', 'time']);
+
+// `command -v x` looks `x` up and runs nothing, so it has no verb at all.
+const COMMAND_LOOKUP_RE = /^-[a-zA-Z]*[vV]/;
+
 function stripVerbPrefix(segment: string): string {
   let at = 0;
+  let wrapper: string | undefined;
+  let takesValue = false;
   for (;;) {
     SHELL_WORD_RE.lastIndex = at;
     let end = SHELL_WORD_RE.exec(segment) ? SHELL_WORD_RE.lastIndex : at;
@@ -669,10 +730,23 @@ function stripVerbPrefix(segment: string): string {
       end = NON_SPACE_RUN_RE.lastIndex;
     }
     const word = segment.slice(at, end);
+    if (wrapper === 'command' && COMMAND_LOOKUP_RE.test(word)) return '';
+    const isOption = wrapper !== undefined && (takesValue || word.startsWith('-'));
     WORD_GAP_RE.lastIndex = end;
     const gap = WORD_GAP_RE.exec(segment);
-    if (!gap || !(VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))) {
+    if (!gap || !(isOption || VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))) {
       return segment.slice(at);
+    }
+    if (takesValue) {
+      takesValue = false;
+    } else if (isOption) {
+      // `--` ends the wrapper's options: the next word is the command, even one spelled `-x`.
+      if (word === '--') wrapper = undefined;
+      else takesValue = WRAPPER_VALUE_OPTIONS[wrapper!]?.has(word) ?? false;
+    } else if (WRAPPER_WORDS.has(word)) {
+      wrapper = word;
+    } else if (!ENV_ASSIGN_WORD_RE.test(word)) {
+      wrapper = undefined;
     }
     at = WORD_GAP_RE.lastIndex;
   }
