@@ -7,6 +7,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A model that re-reads the same file through the shell (`cat`, `head`, `tail`, `sed -n '1,120p'`)
+  instead of the read tool is now caught by the loop detector. Only the read tool counted, so a model
+  that read mostly through the shell could re-read one unchanged file for over a hundred rounds and
+  never be told to stop and act.
 - Thinking models whose template hides earlier reasoning (LFM2.5, Qwen3.6) no longer forget their own
   work once a long turn starts shedding context. Reika's per-round notes arrive as a user message,
   and those templates drop every `<think>` before the newest one, so the model kept re-deriving what
