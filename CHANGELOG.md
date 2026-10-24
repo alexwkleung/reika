@@ -7,6 +7,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Shell reads written as `cd <project> && cat file` or `head -n 100 file | tail -n 20` now count
+  toward reika's re-read loop detection, like a bare `cat` already did. A model that starts every
+  command with a `cd` could re-read the same file for hundreds of rounds without reika noticing.
 - When reika pauses a model's file reading to break a loop, the pause now lasts until the model
   changes something (or five rounds pass) instead of lifting after one round. It used to switch on
   and off every other round, and on a local server each switch reprocessed the whole prompt: in one
