@@ -3710,6 +3710,7 @@ export async function runTurn(opts: {
           shellRead.hash,
           i,
           shellRead.limit,
+          'bash',
         );
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} via=bash ${shellRead.path}\n`,

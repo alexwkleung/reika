@@ -231,3 +231,42 @@ describe('ReadTrace.loopingReads', () => {
     expect(t.loopingReads(5, 1, 3, 2)).toEqual([{ path: 'a.ts', offset: 1, repeats: 3 }]);
   });
 });
+
+describe('ReadTrace re-grounding after a shell read (#812)', () => {
+  it('does not repeat or deepen on the read that follows a shell read of the same bytes', () => {
+    const t = new ReadTrace();
+    t.record('a.ts', 666, 'h1', 0, 55, 'bash');
+    expect(t.record('a.ts', 666, 'h1', 1, 55)).toEqual({ cls: 'regrounded', repeats: 1 });
+    expect(t.loopingReads(2, 2, 3, 2)).toEqual([]);
+    expect(t.summary()).toContain('regrounded=1');
+  });
+
+  it('exempts one read per shell fetch, so the next read counts again', () => {
+    const t = new ReadTrace();
+    t.record('a.ts', 1, 'h1', 0, undefined, 'bash');
+    t.record('a.ts', 1, 'h1', 1);
+    expect(t.record('a.ts', 1, 'h1', 2)).toEqual({ cls: 'dup-live', repeats: 2 });
+  });
+
+  it('does not exempt a read after a read, or a shell read after a shell read', () => {
+    const t = new ReadTrace();
+    t.record('a.ts', 1, 'h1', 0);
+    expect(t.record('a.ts', 1, 'h1', 1).cls).toBe('dup-live');
+    const s = new ReadTrace();
+    s.record('a.ts', 1, 'h1', 0, undefined, 'bash');
+    expect(s.record('a.ts', 1, 'h1', 1, undefined, 'bash').cls).toBe('dup-live');
+  });
+
+  it('classifies a read after an edited shell read as changed', () => {
+    const t = new ReadTrace();
+    t.record('a.ts', 1, 'h1', 0, undefined, 'bash');
+    expect(t.record('a.ts', 1, 'h2', 1).cls).toBe('changed');
+  });
+
+  it('keeps a region run built by shell reads where it was', () => {
+    const t = new ReadTrace();
+    t.record('a.ts', 1, 'h1', 0, undefined, 'bash');
+    t.record('a.ts', 1, 'h1', 3, undefined, 'bash');
+    expect(t.record('a.ts', 1, 'h1', 4)).toEqual({ cls: 'regrounded', repeats: 2 });
+  });
+});
