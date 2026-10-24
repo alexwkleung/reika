@@ -15,9 +15,9 @@
  14  round   msgs= 21  chars= 24235  reprocess= 19355  system-changed
  15  round   msgs= 22  chars= 24441  reprocess=   685  tail-rewrite
  16  round   msgs= 25  chars= 27998  reprocess=  4087  tail-rewrite
- 17  report  msgs= 27  chars= 34275  reprocess=  6756  tail-rewrite
- 18  round   msgs= 27  chars= 32580  reprocess= 27700  system-changed
+ 17  report  msgs= 27  chars= 34254  reprocess=  6735  tail-rewrite
+ 18  round   msgs= 27  chars= 32561  reprocess= 27681  system-changed
 
-requests=19 sent=456479 reprocessed=138521
+requests=19 sent=456439 reprocessed=138481
 sheds=4 folds=3
 first=1 append-only=8 mid-history=1 tail-rewrite=6 system-changed=3

@@ -713,6 +713,7 @@ describe('batchAgePayloads', () => {
             toolMessageName: false,
             promptCacheKey: false,
             cacheControl: false,
+            chatTemplateKwargs: false,
           },
         });
 
