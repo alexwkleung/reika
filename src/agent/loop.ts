@@ -41,6 +41,7 @@ import {
   toolsToChatTools,
 } from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { traceBashRead, traceReadPath } from './bashread.js';
 import { PrefixTrace } from './prefixtrace.js';
 import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
@@ -3643,13 +3644,17 @@ export async function runTurn(opts: {
       // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
       // and the live/aged label depends on round order), but only emitted under the flag.
+      const shellRead =
+        !refused && call.name === 'bash' && exitCode === 0
+          ? await traceBashRead(String(call.args.command ?? ''), opts.bundle.cwd)
+          : undefined;
       if (!refused && call.name === 'read' && contentHash) {
         // Read-first (#72): the model now holds this file's bytes (or knows its true length, for an
         // offset-past-end read). Grounding is applied after the tool message is pushed, since it
         // keys on that message's index — the bytes ground edits only while they are still being sent.
         groundsPath = String(call.args.path ?? '');
         const { cls, repeats } = readTrace.record(
-          String(call.args.path ?? ''),
+          traceReadPath(opts.bundle.cwd, String(call.args.path ?? '')),
           Number(call.args.offset ?? 1),
           contentHash,
           i,
@@ -3659,6 +3664,18 @@ export async function runTurn(opts: {
         );
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
+        );
+      } else if (shellRead) {
+        // A one-file read through the shell deepens the same per-file count as `read` (#801).
+        const { cls, repeats } = readTrace.record(
+          shellRead.path,
+          shellRead.offset,
+          shellRead.hash,
+          i,
+          shellRead.limit,
+        );
+        debugLog(
+          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} via=bash ${shellRead.path}\n`,
         );
       } else if (debugEnabled() && !refused && call.name !== 'read') {
         // Non-read tool calls have no read-trace line, so a reasoning loop circling on grep/glob/list
