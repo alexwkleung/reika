@@ -1043,6 +1043,26 @@ export function shouldWithdrawInspection(opts: {
   return !opts.editRecovery;
 }
 
+// Rounds a withdrawal is held after the loop goes quiet (#808). Refused reads are not recorded, so a
+// complying model's loop leaves the recency window and the pause used to lift on the next round —
+// and since coverage depth never resets on an unchanged file, its next read re-flagged it. One round
+// without inspection, then the cycle again, each switch of the tool list a full re-prefill (~22 in
+// one 163-round run). Held until the tree changes instead, capped so a model that has declared
+// itself stuck gets reads back.
+export const WITHDRAW_HOLD_ROUNDS = 5;
+
+// Whether a withdrawal already in force stays on this round although the loop no longer reads as
+// active. `since` is the round it began; `mutated` is whether the tree has changed since then.
+export function holdWithdrawal(opts: {
+  round: number;
+  since: number | undefined;
+  mutated: boolean;
+  editRecovery: boolean;
+}): boolean {
+  if (opts.since === undefined || opts.mutated || opts.editRecovery) return false;
+  return opts.round - opts.since < WITHDRAW_HOLD_ROUNDS;
+}
+
 // Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
 // loop — either a tight read repeat (ReadTrace.loopingReads, which names the files via `looping`) or
 // cross-round reasoning rumination (caller passes an empty `looping`, so the message names the symptom
@@ -1527,6 +1547,9 @@ export async function runTurn(opts: {
   // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
   // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
   let loopActiveRounds = 0;
+  // The round the current withdrawal began, and whether the tree has changed since (#808).
+  let withdrawnSince: number | undefined;
+  let mutatedSinceWithdrawal = false;
   // Verbatim auto-abort bookkeeping: how many times this turn we've cut a degenerate reasoning stream
   // (bounded by MAX_VERBATIM_RECOVERIES so the cut→recover cycle can't loop), and a one-shot flag set
   // when a plan-mode cut should force the plan write on the next iteration. See VERBATIM_ABORT.
@@ -1939,10 +1962,24 @@ export async function runTurn(opts: {
       // Any confirmed loop that survives the ledger withdraws, regardless of type — UNLESS there's an
       // unresolved failed edit, where the model needs reading to recover and withdrawal would only
       // force more failing edits. See shouldWithdrawInspection.
-      withdrawInspection = shouldWithdrawInspection({
+      const withdrawNow = shouldWithdrawInspection({
         loopActiveRounds,
         editRecovery: lastEditFailed,
       });
+      const held =
+        !withdrawNow &&
+        holdWithdrawal({
+          round: i,
+          since: withdrawnSince,
+          mutated: mutatedSinceWithdrawal,
+          editRecovery: lastEditFailed,
+        });
+      withdrawInspection = withdrawNow || held;
+      if (!withdrawInspection) withdrawnSince = undefined;
+      else if (withdrawnSince === undefined) {
+        withdrawnSince = i;
+        mutatedSinceWithdrawal = false;
+      }
       // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
       // model retrying an edit it can't apply. It ignores the failure message (crossSim≈1.0) and
       // re-reading on its own never produces a matching old_string (observed: it oscillated
@@ -2079,7 +2116,7 @@ export async function runTurn(opts: {
       // ledger, so it replaces it for the one round it fires.
       if (editRecoveryGrounding) {
         suffixParts.push(buildEditRecoveryLedger(editRecoveryGrounding));
-      } else if (loopDetected) {
+      } else if (loopDetected || withdrawInspection) {
         suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection, toolNames));
       }
       // Last, so the strongest directive sits closest to generation. (Composed here rather than
@@ -2100,10 +2137,10 @@ export async function runTurn(opts: {
       } else {
         system = baseSystem + suffix;
       }
-      if (loopDetected) {
+      if (loopDetected || withdrawInspection) {
         debugLog(
           `[reika:debug] round=${i} loop-active reads=${looping.length} reasoning=${reasoningLoop} ` +
-            `loopActiveRounds=${loopActiveRounds} withdrawn=${withdrawInspection} ` +
+            `loopActiveRounds=${loopActiveRounds} withdrawn=${withdrawInspection} held=${held} ` +
             `editRecovery=${lastEditFailed}\n`,
         );
       }
@@ -3703,7 +3740,10 @@ export async function runTurn(opts: {
       // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
       // fields (old_string failures, args.path, a rendered diff) that a shell command has no
       // analogue for.
-      if (!bouncedBlindEdit && didMutate(call.name, changes)) editingStarted = true;
+      if (!bouncedBlindEdit && didMutate(call.name, changes)) {
+        editingStarted = true;
+        mutatedSinceWithdrawal = true;
+      }
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
