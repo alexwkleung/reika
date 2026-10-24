@@ -204,8 +204,9 @@ async function postWithRetry(
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    let res: Response;
     try {
-      const res = await fetch(url, {
+      res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -223,15 +224,6 @@ async function postWithRetry(
         signal,
         ...(dispatcher ? { dispatcher } : {}),
       });
-      if (res.ok && res.body) return res;
-      if (attempt < MAX_RETRIES && isRetryableStatus(res.status)) {
-        await sleep(backoffMs(attempt), signal);
-        continue;
-      }
-      const detail = await res.text().catch(() => '');
-      throw new Error(
-        `chat/completions failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
-      );
     } catch (e) {
       if (isAbort(e) || signal?.aborted) throw e;
       if (isStreamTimeout(e))
@@ -243,6 +235,17 @@ async function postWithRetry(
       }
       throw refusedAtDefaultPort(url, e) ?? e;
     }
+    if (res.ok && res.body) return res;
+    if (attempt < MAX_RETRIES && isRetryableStatus(res.status)) {
+      await sleep(backoffMs(attempt), signal);
+      continue;
+    }
+    // Outside the catch (#804): a 4xx is the server's answer, and caught there it was retried as a
+    // network error, so every degrade latch saw the same rejected request three times.
+    const detail = await res.text().catch(() => '');
+    throw new Error(
+      `chat/completions failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+    );
   }
   throw lastErr;
 }

@@ -7,6 +7,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A request the server rejects (a 400, 401, 403 or 404) is no longer sent three times. Only timeouts,
+  rate limits and server errors were meant to be retried, but a rejection was retried as if the
+  connection had dropped. A wrong API key or model name now reports at once, and a server that
+  rejects an optional field sees the request without it on the second try, not the fourth.
 - A model that re-reads the same file through the shell (`cat`, `head`, `tail`, `sed -n '1,120p'`)
   instead of the read tool is now caught by the loop detector. Only the read tool counted, so a model
   that read mostly through the shell could re-read one unchanged file for over a hundred rounds and
