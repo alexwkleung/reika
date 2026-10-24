@@ -13,6 +13,8 @@ import {
   buildConvergeSteer,
   buildSteadySystem,
   shouldWithdrawInspection,
+  holdWithdrawal,
+  WITHDRAW_HOLD_ROUNDS,
   buildPlanTransformInput,
 } from './loop.js';
 
@@ -500,6 +502,28 @@ describe('buildSteadySystem', () => {
       planSteps: null,
     });
     expect(s).toContain('Nothing examined yet');
+  });
+});
+
+describe('holdWithdrawal (#808)', () => {
+  const base = { since: 10, mutated: false, editRecovery: false };
+
+  it('holds a withdrawal after the loop goes quiet, until the cap', () => {
+    expect(holdWithdrawal({ ...base, round: 11 })).toBe(true);
+    expect(holdWithdrawal({ ...base, round: 10 + WITHDRAW_HOLD_ROUNDS - 1 })).toBe(true);
+    expect(holdWithdrawal({ ...base, round: 10 + WITHDRAW_HOLD_ROUNDS })).toBe(false);
+  });
+
+  it('lifts once the tree has changed', () => {
+    expect(holdWithdrawal({ ...base, round: 11, mutated: true })).toBe(false);
+  });
+
+  it('lifts for edit-recovery, which needs reads', () => {
+    expect(holdWithdrawal({ ...base, round: 11, editRecovery: true })).toBe(false);
+  });
+
+  it('holds nothing when no withdrawal is in force', () => {
+    expect(holdWithdrawal({ ...base, since: undefined, round: 11 })).toBe(false);
   });
 });
 

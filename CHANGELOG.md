@@ -7,6 +7,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- When reika pauses a model's file reading to break a loop, the pause now lasts until the model
+  changes something (or five rounds pass) instead of lifting after one round. It used to switch on
+  and off every other round, and on a local server each switch reprocessed the whole prompt: in one
+  long run that was about half of all prefill time.
 - A request the server rejects (a 400, 401, 403 or 404) is no longer sent three times. Only timeouts,
   rate limits and server errors were meant to be retried, but a rejection was retried as if the
   connection had dropped. A wrong API key or model name now reports at once, and a server that
