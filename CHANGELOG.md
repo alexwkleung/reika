@@ -3,6 +3,15 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- A compaction note is no longer just a line like "Let me examine `_net.ts`:". When the model
+  answered the note request by calling a tool anyway, the words before the call were kept as the note
+  and its actual findings, written in its reasoning, were dropped. A reply that calls a tool now gets
+  the retry, and if that also calls one, the note comes from the longer reasoning.
+
 ## [0.6.0] - 2026-10-23
 
 ### Added
@@ -13,10 +22,6 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
-- A compaction note is no longer just a line like "Let me examine `_net.ts`:". When the model
-  answered the note request by calling a tool anyway, the words before the call were kept as the note
-  and its actual findings, written in its reasoning, were dropped. A reply that calls a tool now gets
-  the retry, and if that also calls one, the note comes from the longer reasoning.
 - Web search through Chrome no longer reports a result's date ("May 8, 2026", "3 days ago") as its
   title. Brave puts the date last on some results, and the extractor took the last line.
 - Web search through Chrome on macOS no longer pulls focus to the search browser. Its launch and
