@@ -7,6 +7,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Reading a file with `read` after looking at it through the shell no longer counts as a repeated
+  read. reika asks for exactly that before an edit, and counting it could pause a model's file
+  reading on its next step.
 - Shell reads written as `cd <project> && cat file` or `head -n 100 file | tail -n 20` now count
   toward reika's re-read loop detection, like a bare `cat` already did. A model that starts every
   command with a `cd` could re-read the same file for hundreds of rounds without reika noticing.

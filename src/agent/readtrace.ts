@@ -20,7 +20,15 @@
 // hidden part". That recovery holds `offset` fixed and shrinks `limit` — the one axis this key
 // normalizes away — so without a carve-out the rational response to truncation is indistinguishable
 // from spinning, and confirms a loop on its second step (#184). See MAX_NARROWINGS.
-export type ReadClass = 'unique' | 'changed' | 'narrowed' | 'dup-live' | 'dup-aged';
+//
+// `regrounded` is the same kind of carve-out for the read-first gate (#72, #812): bash output never
+// grounds an edit, so a model that looked at lines through the shell must fetch them again with
+// `read` before it may edit them. That one `read` after a shell fetch neither repeats nor deepens;
+// counted, a `sed -n` then `read` of one region confirmed a live loop on a model doing as told.
+export type ReadClass = 'unique' | 'changed' | 'narrowed' | 'regrounded' | 'dup-live' | 'dup-aged';
+
+// Which tool fetched the bytes. Only a `read` grounds an edit (#72).
+export type ReadVia = 'read' | 'bash';
 
 // A region the model is stuck re-reading: same (path, offset), unchanged bytes, repeated. The
 // loop ledger names these so the stop signal is specific.
@@ -50,6 +58,8 @@ type FileEntry = {
   // Deepest coverage any line of the file has reached, and the round it last deepened.
   depth: number;
   lastRound: number;
+  // The tool of the latest fetch, so a `read` right after a shell fetch can be told apart (#812).
+  lastVia: ReadVia;
 };
 
 type Entry = {
@@ -87,6 +97,7 @@ export class ReadTrace {
     unique: 0,
     changed: 0,
     narrowed: 0,
+    regrounded: 0,
     'dup-live': 0,
     'dup-aged': 0,
   };
@@ -101,9 +112,11 @@ export class ReadTrace {
     hash: string,
     round: number,
     limit?: number,
+    via: ReadVia = 'read',
   ): { cls: ReadClass; repeats: number } {
     const key = `${path}\0${offset}`;
     const prior = this.seen.get(key);
+    const file = this.files.get(path);
     // An absent (or nonsensical) limit reads as unbounded, so it is never *narrower* than anything
     // and callers that don't track windows keep the pre-carve-out behaviour exactly.
     const window =
@@ -111,7 +124,12 @@ export class ReadTrace {
     let cls: ReadClass;
     let repeats: number;
     let narrowings: number;
-    if (!prior) {
+    if (via === 'read' && file?.hash === hash && file.lastVia === 'bash') {
+      // The read-first gate asked for these bytes again; the run stays where the shell read left it.
+      cls = 'regrounded';
+      repeats = prior?.hash === hash ? prior.repeats : 1;
+      narrowings = prior?.hash === hash ? prior.narrowings : 0;
+    } else if (!prior) {
       cls = 'unique';
       repeats = 1;
       narrowings = 0;
@@ -149,7 +167,7 @@ export class ReadTrace {
       lastLive: cls === 'dup-live',
     });
     this.counts[cls]++;
-    this.recordFile(path, offset, window, hash, round, cls);
+    this.recordFile(path, offset, window, hash, round, cls, via);
     return { cls, repeats };
   }
 
@@ -167,15 +185,17 @@ export class ReadTrace {
     hash: string,
     round: number,
     cls: ReadClass,
+    via: ReadVia,
   ): void {
     const lo = Math.max(1, offset);
     const hi = window === Infinity ? Infinity : lo + window - 1;
     let f = this.files.get(path);
     if (!f || f.hash !== hash) {
-      f = { hash, ranges: [], depth: 0, lastRound: round };
+      f = { hash, ranges: [], depth: 0, lastRound: round, lastVia: via };
       this.files.set(path, f);
     }
-    if (cls !== 'narrowed') {
+    f.lastVia = via;
+    if (cls !== 'narrowed' && cls !== 'regrounded') {
       const points = [lo, ...f.ranges.map(([a]) => a).filter(a => a >= lo && a <= hi)];
       let depth = 1;
       for (const p of points) {
@@ -229,7 +249,7 @@ export class ReadTrace {
 
   total(): number {
     const c = this.counts;
-    return c.unique + c.changed + c.narrowed + c['dup-live'] + c['dup-aged'];
+    return c.unique + c.changed + c.narrowed + c.regrounded + c['dup-live'] + c['dup-aged'];
   }
 
   summary(): string {
@@ -244,7 +264,8 @@ export class ReadTrace {
     for (const f of this.files.values()) if (f.depth >= FILE_OVERLAP_DEPTH) overlapped++;
     return (
       `unique=${c.unique} changed=${c.changed} dup-live=${c['dup-live']} dup-aged=${c['dup-aged']} ` +
-      `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped} overlapped=${overlapped}`
+      `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped} overlapped=${overlapped} ` +
+      `regrounded=${c.regrounded}`
     );
   }
 }
