@@ -1,0 +1,24 @@
+import { classifyPrivateHost } from '../tools/_hosts.js';
+
+// Thinking templates such as LFM2.5's and Qwen3.6's render an assistant message's `<think>` only
+// after the newest user message unless `preserve_thinking` is set (#798). Under prefix-stable the
+// per-round ledgers ride a trailing user message, so from the first shed on the model saw none of
+// its own reasoning in the turn and re-derived it (T2, lfm2.5-24b-a2b: restating in 70–75% of
+// rounds after the shed, against 3–17% with the switch on). Asking for it per request leaves
+// reasoning visibility to reika's own aging, which is what the estimate already bills.
+//
+// Local and private hosts only: a hosted API runs its own templates and has no use for the field,
+// and a strict one would 400 on it. A dotless name counts as local, since it cannot be public. A
+// local engine that rejects it is latched off by client.ts on an error naming the field.
+export function chatTemplateKwargsFor(baseURL: string): { preserve_thinking: true } | undefined {
+  let host: string;
+  try {
+    host = new URL(baseURL).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!host) return undefined;
+  const local =
+    classifyPrivateHost(host) !== undefined || (!host.includes('.') && !host.includes(':'));
+  return local ? { preserve_thinking: true } : undefined;
+}

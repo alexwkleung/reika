@@ -54,8 +54,10 @@ Reika's; [Models](models.md) lists what Reika has been run against.
 For a thinking model, also check whether its template keeps earlier reasoning. Some (LFM2.5 and
 Qwen3.6 among them) drop every `<think>` block that comes before the newest user message, and Reika
 sends its per-round notes as one. Once a long turn starts shedding context, the model then sees none
-of its own earlier reasoning and tends to re-derive work it already did. If the template has the
-switch, turn it on at the server:
+of its own earlier reasoning and tends to re-derive work it already did. Reika asks for the
+template's `preserve_thinking` switch on every request to a local or private address, so a server on
+this machine or your network needs nothing extra. For a server Reika reaches at a public address,
+turn it on at the server:
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja --chat-template-kwargs '{"preserve_thinking":true}'

@@ -4,6 +4,7 @@ import type { NativeImage } from '../agent/attachments.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
 import { cacheControlFor, promptCacheKeyFor } from './cachehints.js';
+import { chatTemplateKwargsFor } from './templatekwargs.js';
 import { latchesFor, resetEndpointLatches } from './latches.js';
 import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
@@ -145,6 +146,9 @@ export async function callModel(opts: {
   const cacheControl = latches.cacheControl
     ? undefined
     : cacheControlFor(opts.config.baseURL, opts.config.model);
+  const templateKwargs = latches.chatTemplateKwargs
+    ? undefined
+    : chatTemplateKwargsFor(opts.config.baseURL);
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -159,6 +163,7 @@ export async function callModel(opts: {
     ...(wantLogprobs ? { logprobs: true, top_logprobs: opts.logprobs } : {}),
     ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
     ...(cacheControl ? { cache_control: cacheControl } : {}),
+    ...(templateKwargs ? { chat_template_kwargs: templateKwargs } : {}),
   };
 
   // True once a single chunk has been consumed. Gates the logprobs degrade below: retrying after
@@ -321,6 +326,17 @@ export async function callModel(opts: {
             `[reika:debug] prompt_cache_key unsupported by backend — retrying without (${reason})\n`,
           );
           const { prompt_cache_key: _promptCacheKey, ...plain } = req;
+          req = plain;
+          continue;
+        }
+        // Name-keyed like the cache hints: logprobs below latches on any pre-chunk failure, and a
+        // server still loading at startup would otherwise cost the session its reasoning.
+        if (req.chat_template_kwargs !== undefined && reason.includes('chat_template_kwargs')) {
+          latches.chatTemplateKwargs = true;
+          debugLog(
+            `[reika:debug] chat_template_kwargs unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { chat_template_kwargs: _templateKwargs, ...plain } = req;
           req = plain;
           continue;
         }

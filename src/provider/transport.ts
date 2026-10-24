@@ -87,6 +87,9 @@ export type ChatCompletionRequest = {
   prompt_cache_key?: string;
   // Top-level cache breakpoint, sent only for Anthropic models on OpenRouter (provider/cachehints.ts).
   cache_control?: { type: 'ephemeral' };
+  // Template variables, sent only to local and private hosts (provider/templatekwargs.ts). Read by
+  // llama.cpp and vLLM; client.ts degrades from a rejection that names it.
+  chat_template_kwargs?: { preserve_thinking: true };
 };
 
 // A streamed delta chunk. Field unions cover provider variants:

@@ -7,6 +7,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Thinking models whose template hides earlier reasoning (LFM2.5, Qwen3.6) no longer forget their own
+  work once a long turn starts shedding context. Reika's per-round notes arrive as a user message,
+  and those templates drop every `<think>` before the newest one, so the model kept re-deriving what
+  it had already worked out. Requests to a local or private server now ask the template to keep it
+  (`chat_template_kwargs: {"preserve_thinking": true}`), and a server that rejects the field gets one
+  retry without it.
 - A compaction note is no longer just a line like "Let me examine `_net.ts`:". When the model
   answered the note request by calling a tool anyway, the words before the call were kept as the note
   and its actual findings, written in its reasoning, were dropped. A reply that calls a tool now gets
