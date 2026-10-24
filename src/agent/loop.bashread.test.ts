@@ -104,6 +104,20 @@ describe('shell reads feed the read-loop ladder (#801)', () => {
     expect(ran.length).toBeLessThan(spellings.length);
   });
 
+  // #810: the observed run anchored every command with `cd <project> &&`, and paged with head | tail.
+  it('withdraws inspection when every read is behind a leading cd', async () => {
+    const spellings = [
+      `cd ${cwd} && cat app.ts`,
+      `cd ${cwd} && cat -n app.ts`,
+      `cd ${cwd} && head -n 100 app.ts | tail -n 100`,
+      `cd ${cwd} && cat app.ts`,
+      `cd ${cwd} && cat -n app.ts`,
+      `cd ${cwd} && cat app.ts`,
+    ];
+    const ran = await run(spellings);
+    expect(ran.length).toBeLessThan(spellings.length);
+  });
+
   it('leaves reads of different files alone', async () => {
     const reads = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'].map(f => `cat ${f}`);
     expect(await run(reads)).toHaveLength(reads.length);
