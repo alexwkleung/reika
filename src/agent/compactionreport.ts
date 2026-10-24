@@ -38,6 +38,40 @@ export const COMPACTION_REPORT_RETRY =
   'withdrawn for this reply. Write the compaction note now, as your reply, not as a tool call: ' +
   'what you have established with file paths and function names, then what is still open.)';
 
+type NoteReply = {
+  content?: string;
+  reasoning?: string;
+  toolCalls?: unknown[];
+};
+
+// A reply that made a call has no note in its content, only the call's preamble ("Let me examine
+// `_net.ts` in detail:"): observed recapped as note 1 under the own-words header while that reply's
+// 970-char reasoning — the actual findings — was dropped (#799). Text-format callers (LFM) call
+// through `tool_choice: 'none'`, so this is not rare.
+export function compactionNoteContent(reply: NoteReply): string {
+  if (reply.toolCalls?.length) return '';
+  return reply.content?.trim() ?? '';
+}
+
+// Content from a call-free reply wins; otherwise the longer reasoning of the two replies. Longer
+// rather than first: the first was assumed the less nagged thinking, but a reply that bails into a
+// call early is short exactly because it stopped thinking (#799: 111 chars against 970).
+export function pickCompactionNote(
+  first: NoteReply,
+  retry?: NoteReply,
+): { text: string; reasoning?: string; src: 'content' | 'reasoning' | 'empty' } {
+  for (const r of [first, retry]) {
+    if (!r) continue;
+    const text = compactionNoteContent(r);
+    if (text) return { text, reasoning: r.reasoning?.trim() || undefined, src: 'content' };
+  }
+  const a = first.reasoning?.trim() ?? '';
+  const b = retry?.reasoning?.trim() ?? '';
+  const best = b.length > a.length ? b : a;
+  // No trace beside it: the note IS the reasoning, and the UI would draw the same text twice.
+  return best ? { text: best, src: 'reasoning' } : { text: '', src: 'empty' };
+}
+
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
 // the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to
 // be 2400 and bit first: a 2400+ char note was cut here while the recap still had room, and the
