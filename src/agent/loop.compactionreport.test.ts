@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   }[],
   rejectPrefill: false,
   rejectAll: false,
+  // Stream each reply's content in pieces this long; 0 sends it as one delta.
+  chunk: 0,
 }));
 vi.mock('../provider/client.js', () => ({
   callModel: vi.fn(
@@ -51,7 +53,10 @@ vi.mock('../provider/client.js', () => ({
         throw new Error('chat/completions failed: 400 Bad Request — final message must be user');
       }
       const next = h.scripted.shift() ?? { content: 'done', toolCalls: undefined };
-      if (next.content) opts.onContentDelta?.(next.content);
+      const step = h.chunk || next.content?.length || 1;
+      for (let at = 0; next.content && at < next.content.length; at += step) {
+        opts.onContentDelta?.(next.content.slice(at, at + step));
+      }
       h.captured.push({
         system: opts.system,
         tools: opts.tools.map(t => ({ name: t.name })),
@@ -419,6 +424,7 @@ describe('the note round starts the reply on a local engine (#806)', () => {
     h.captured.length = 0;
     h.rejectPrefill = false;
     h.rejectAll = false;
+    h.chunk = 0;
     resetEndpointLatches();
   });
   afterEach(() => {
@@ -474,6 +480,34 @@ describe('the note round starts the reply on a local engine (#806)', () => {
     const history = await fold();
     expect(h.captured.filter(c => c.toolChoice === 'none')).toHaveLength(1);
     expect(recapOf(history)).toContain('Established:\n- the gate is bashTool.run');
+  });
+
+  // #819: streamed raw, the thinking, the tag and the call drew and then vanished on commit.
+  it('streams only the note a prefilled reply commits', async () => {
+    const body = `- the gate is bashTool.run (src/tools/bash.ts). ${'detail '.repeat(40)}`;
+    h.chunk = 3;
+    h.scripted.push(
+      {
+        content: `${prefill}${body}\n\nNow let me read b.ts.\n</think>\n\n<tool_call>{"name":"noop"}</tool_call>`,
+        toolCalls: [{ id: 'c1', name: 'noop', args: {} }],
+      },
+      { content: 'final', toolCalls: undefined },
+    );
+    let streamed = '';
+    const history = bigHistory();
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(),
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+      onContentDelta: d => (streamed += d),
+    });
+    const note = `Established:\n${body}\n\nNow let me read b.ts.`;
+    expect(recapOf(history)).toContain(note);
+    expect(streamed).toBe(`${note}final`);
   });
 
   it('is off for a hosted API and under REIKA_NOTE_PREFILL=0', async () => {

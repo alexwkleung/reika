@@ -4,6 +4,7 @@ import {
   compactionNoteContent,
   compactionNotePrefill,
   PREFILLED_NOTE_MIN_CHARS,
+  prefilledNoteStream,
   prefilledReply,
   pickCompactionNote,
   refusedCallTurn,
@@ -134,5 +135,48 @@ describe('prefilledReply (#806)', () => {
     expect(r.toolCalls).toBeUndefined();
     expect(r.callsDropped).toBe(1);
     expect(compactionNoteContent(r)).toBe(`Established:\n${body}`);
+  });
+});
+
+describe('prefilledNoteStream (#819)', () => {
+  const prefill = compactionNotePrefill(2);
+  const run = (deltas: string[]) => {
+    let out = '';
+    const feed = prefilledNoteStream(prefill, t => (out += t));
+    for (const d of deltas) feed(d);
+    return out;
+  };
+  const chars = (s: string) => [...s];
+
+  it('drops the echoed title, as the committed note does', () => {
+    expect(run([prefill, '- a.ts: parse()'])).toBe('Established:\n- a.ts: parse()');
+    expect(run(chars(`${prefill}- a.ts`))).toBe('Established:\n- a.ts');
+  });
+
+  it('streams a continuation-only reply under the opener', () => {
+    expect(run(['- a.ts', ': parse()'])).toBe('Established:\n- a.ts: parse()');
+  });
+
+  it('stops at a think close tag or a call, even one split across deltas', () => {
+    const reply = `${prefill}- a.ts: parse()\n\nNext b.ts.\n</think>\n<tool_call>{}</tool_call>`;
+    const want = 'Established:\n- a.ts: parse()\n\nNext b.ts.';
+    expect(run(chars(reply))).toBe(want);
+    expect(run([reply])).toBe(want);
+    expect(run(chars(`${prefill}- a.ts\n<tool_call>{"name":"read"}`))).toBe('Established:\n- a.ts');
+  });
+
+  it('streams the note after a tag that opens the reply', () => {
+    expect(run(chars(`${prefill}</think>\n- a.ts`))).toBe('Established:\n- a.ts');
+    expect(run(chars(`${prefill}</think>\n`))).toBe('');
+  });
+
+  it('lets a held < through once it is not a tag', () => {
+    expect(run(chars(`${prefill}- a < b`))).toBe('Established:\n- a < b');
+    expect(run([`${prefill}- a <`])).toBe('Established:\n- a');
+  });
+
+  it('matches what prefilledReply commits', () => {
+    const reply = `${prefill}- x.ts: f()\n\nOpen:\n- y\n</think>\n\nstray`;
+    expect(run(chars(reply))).toBe(prefilledReply({ content: reply }, prefill).content);
   });
 });

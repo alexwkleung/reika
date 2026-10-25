@@ -102,6 +102,7 @@ import {
   COMPACTION_REPORT_RETRY,
   compactionNotePrefill,
   notePrefillEnabled,
+  prefilledNoteStream,
   prefilledReply,
   refusedCallTurn,
   buildCompactionReportDirective,
@@ -2362,7 +2363,12 @@ export async function runTurn(opts: {
             toolChoice: 'none',
             assistantPrefill,
             config: withGenReserve(opts.config, genReserve),
-            onContentDelta: opts.onContentDelta,
+            // Streamed through the reading the finished reply gets, or the thinking and call
+            // after the note draw and then vanish (#819).
+            onContentDelta:
+              assistantPrefill && opts.onContentDelta
+                ? prefilledNoteStream(assistantPrefill, opts.onContentDelta)
+                : opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
             signal: opts.signal,
             calibration,

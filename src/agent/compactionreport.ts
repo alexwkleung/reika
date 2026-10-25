@@ -153,6 +153,60 @@ export function prefilledReply<T extends NoteReply>(
   return { ...reply, content };
 }
 
+const NOTE_STREAM_STOPS = ['</think>', '<tool_call>'];
+
+// The live view of a prefilled reply, read the way `prefilledReply` reads the finished one (#819):
+// streamed raw, the next-step thinking, the `</think>` and the call after the note drew and then
+// vanished when the note committed, which read as a call the harness had hidden. A tail that could
+// still become a stop tag is held back until the next delta settles it. One filter per attempt.
+export function prefilledNoteStream(
+  prefill: string,
+  emit: (text: string) => void,
+): (delta: string) => void {
+  let raw = '';
+  let shown = 0;
+  let stopped = false;
+  return delta => {
+    if (stopped) return;
+    raw += delta;
+    // Still possibly the echo: wait until it is settled one way or the other.
+    if (prefill.startsWith(raw)) return;
+    let rest = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
+    let visible = rest;
+    for (;;) {
+      const hits = NOTE_STREAM_STOPS.map(t => [rest.indexOf(t), t.length] as const).filter(
+        ([i]) => i !== -1,
+      );
+      if (!hits.length) {
+        // Trailing whitespace is held too: the committed note is trimmed, and it may precede a tag.
+        visible = rest.slice(0, rest.length - partialStopTail(rest)).trimEnd();
+        break;
+      }
+      const [at, len] = hits.reduce((a, b) => (b[0] < a[0] ? b : a));
+      if (rest.slice(0, at).trim()) {
+        visible = rest.slice(0, at).trimEnd();
+        stopped = true;
+        break;
+      }
+      // A tag closed at once: the note comes after it.
+      rest = rest.slice(at + len).trimStart();
+    }
+    if (!visible) return;
+    const text = NOTE_PREFILL_BODY + visible;
+    if (text.length > shown) emit(text.slice(shown));
+    shown = Math.max(shown, text.length);
+  };
+}
+
+// How many trailing chars could be the start of a stop tag.
+function partialStopTail(text: string): number {
+  for (let n = Math.min(text.length, 10); n > 0; n--) {
+    const tail = text.slice(-n);
+    if (NOTE_STREAM_STOPS.some(t => t.startsWith(tail))) return n;
+  }
+  return 0;
+}
+
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
 // the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to
 // be 2400 and bit first: a 2400+ char note was cut here while the recap still had room, and the
