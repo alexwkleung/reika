@@ -113,6 +113,19 @@ describe('prefilledReply (#806)', () => {
     expect(compactionNoteContent(r)).toBe('');
   });
 
+  it('cuts the reply at a stray think close tag', () => {
+    expect(
+      prefilledReply(
+        { content: `${prefill}- a.ts: parse()\n\nLet me read b.ts next.\n</think>\n\nstray` },
+        prefill,
+      ).content,
+    ).toBe('Established:\n- a.ts: parse()\n\nLet me read b.ts next.');
+    expect(prefilledReply({ content: `${prefill}</think>\n- a.ts` }, prefill).content).toBe(
+      'Established:\n- a.ts',
+    );
+    expect(prefilledReply({ content: `${prefill}</think>\n` }, prefill).content).toBe('');
+  });
+
   // LFM2.5 at 16k: 1206 chars of note, then a call, on both attempts; the fold got no note.
   it('keeps a written note and drops the call that follows it', () => {
     const call = [{ id: 'x', name: 'read', args: {} }];

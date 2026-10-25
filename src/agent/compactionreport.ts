@@ -129,12 +129,21 @@ export const PREFILLED_NOTE_MIN_CHARS = 200;
 // note is dropped (`callsDropped`) rather than voiding it: LFM2.5 wrote 1206 chars of note and then
 // called, on both attempts, and #799's rule threw both notes away. That rule is about an
 // unprefilled reply, whose text is the call's preamble; here the text is the note by construction.
+//
+// The prefill skips the reasoning block, and LFM2.5 then writes its next-step thinking after the
+// note and closes it with a bare `</think>` (both folds of lfm16-prefill-2), so the reply is cut at
+// that tag. The thinking just before it stays: there is no reliable edge, and `fitNote` drops the
+// note's tail first.
 export function prefilledReply<T extends NoteReply>(
   reply: T,
   prefill: string,
 ): T & { callsDropped?: number } {
   const raw = reply.content ?? '';
-  const rest = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
+  const continued = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
+  const close = continued.indexOf('</think>');
+  const before = close === -1 ? continued : continued.slice(0, close).trimEnd();
+  // A tag closed at once puts the note after it instead.
+  const rest = before.trim() || close === -1 ? before : continued.slice(close + 8).trimStart();
   if (!rest.trim()) return { ...reply, content: '' };
   const content = NOTE_PREFILL_BODY + rest;
   const calls = reply.toolCalls?.length ?? 0;
