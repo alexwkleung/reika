@@ -91,6 +91,14 @@ describe('loadInstructions', () => {
     expect(out).toContain('PROJECT-CLAUDE');
   });
 
+  it('accepts AGENT.md, ranked after AGENTS.md and before CLAUDE.md', async () => {
+    writeFileSync(join(cwd, 'AGENT.md'), 'SINGULAR');
+    writeFileSync(join(cwd, 'CLAUDE.md'), 'CLAUDE');
+    expect(await loadInstructions(cwd, globalDir)).toBe('SINGULAR');
+    writeFileSync(join(cwd, 'AGENTS.md'), 'PLURAL');
+    expect(await loadInstructions(cwd, globalDir)).toBe('PLURAL');
+  });
+
   it('applies the size budget per file and points the global outline at its ~ path', async () => {
     const big = '# Prefs\n' + 'x'.repeat(13 * 1024) + '\n## More\n';
     writeFileSync(join(globalDir, 'AGENTS.md'), big);

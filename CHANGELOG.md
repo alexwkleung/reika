@@ -5,6 +5,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Added
+
+- `AGENT.md` is read as an instructions file when there is no `AGENTS.md`, ahead of `CLAUDE.md`. Some
+  repos use that older spelling, and reika loaded no instructions for them.
+
 ### Fixed
 
 - Reading a file with `read` after looking at it through the shell no longer counts as a repeated
