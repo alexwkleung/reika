@@ -5,6 +5,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Changed
+
+- On a local model server, reika now starts the compaction note for the model instead of only
+  asking for one. Small models such as LFM2.5 kept calling tools when asked to write the note, so
+  the note fell back to their reasoning; a started note they finish. A tool call the model adds
+  after a written note is dropped and the note kept. `REIKA_NOTE_PREFILL=0` turns it off.
+
 ### Added
 
 - `AGENT.md` is read as an instructions file when there is no `AGENTS.md`, ahead of `CLAUDE.md`. Some

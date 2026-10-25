@@ -17,6 +17,7 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
+import { isLocalEngine } from '../provider/templatekwargs.js';
 import { estimateRequestTokens, estimateTokens } from '../provider/tokens.js';
 import {
   computeMaxTokens,
@@ -99,6 +100,9 @@ import {
 } from './subagentreport.js';
 import {
   COMPACTION_REPORT_RETRY,
+  compactionNotePrefill,
+  notePrefillEnabled,
+  prefilledReply,
   refusedCallTurn,
   buildCompactionReportDirective,
   clampCompactionNote,
@@ -2338,8 +2342,15 @@ export async function runTurn(opts: {
         });
       };
       const noteTools = lastSentTools ?? callTools;
+      const noteLatches = latchesFor(opts.config);
+      // Local engines only: a hosted API rejects a final assistant message or answers after it, and
+      // the hosted models seen so far write the note when asked (#806).
+      const prefill =
+        notePrefillEnabled() && isLocalEngine(opts.config.baseURL) && !noteLatches.assistantPrefill
+          ? compactionNotePrefill(n)
+          : undefined;
       try {
-        const report = (suffix: string, appended: Message[] = []) =>
+        const send = (suffix: string, appended: Message[], assistantPrefill?: string) =>
           callModel({
             system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
             history: appended.length ? [...opts.history, ...appended] : opts.history,
@@ -2349,6 +2360,7 @@ export async function runTurn(opts: {
             // re-prefilled it again — two full prefills per fold, one of them for nothing.
             tools: noteTools,
             toolChoice: 'none',
+            assistantPrefill,
             config: withGenReserve(opts.config, genReserve),
             onContentDelta: opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
@@ -2404,6 +2416,23 @@ export async function runTurn(opts: {
                 }
               : undefined,
           });
+        // A failed prefilled request is asked again the plain way, and the prefill is latched off for
+        // the endpoint only if that one succeeds: a 400 the plain request shares (an over-long
+        // prompt) is not the prefill's, and latching on it would cost every later fold its note.
+        const report = async (suffix: string, appended: Message[] = []) => {
+          if (!prefill || noteLatches.assistantPrefill) return send(suffix, appended);
+          try {
+            return prefilledReply(await send(suffix, appended, prefill), prefill);
+          } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            const plain = await send(suffix, appended);
+            noteLatches.assistantPrefill = true;
+            debugLog(
+              `[reika:debug] round=${i} compaction-report prefill rejected, latched err=${String(err)}\n`,
+            );
+            return plain;
+          }
+        };
         const rep = await report(directive);
         if (rep.usage) opts.onUsage?.(rep.usage);
         // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
@@ -2416,7 +2445,8 @@ export async function runTurn(opts: {
         // model trying to read instead of writing; a `length` stop is the budget.
         const describe = (r: typeof rep): string =>
           `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
-          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
+          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}` +
+          ('callsDropped' in r && r.callsDropped ? ` dropped=${r.callsDropped}` : '');
         let retry: typeof rep | undefined;
         if (!compactionNoteContent(rep) && !opts.signal?.aborted) {
           debugLog(
@@ -2446,7 +2476,8 @@ export async function runTurn(opts: {
         }
         debugLog(
           `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length} src=${picked.src}` +
-            `${retry ? ' retried=1' : ''} ${describe(retry ?? rep)}\n`,
+            `${retry ? ' retried=1' : ''} prefill=${!prefill ? 'off' : noteLatches.assistantPrefill ? 'rejected' : 'on'}` +
+            ` ${describe(retry ?? rep)}\n`,
         );
       } catch (err) {
         if (opts.signal?.aborted) {

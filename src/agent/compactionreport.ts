@@ -102,6 +102,57 @@ export function pickCompactionNote(
   return best ? { text: best, src: 'reasoning' } : { text: '', src: 'empty' };
 }
 
+// The note round's reply is started for the model, on a local engine (#806). The round continues an
+// agent transcript, and a small model's strongest prior there is the next action: LFM2.5 called a
+// tool instead of writing the note on every T2 fold (0 of 21 notes from the reply), through the
+// directive, the sampler ban and the refused-call retry alike. Handed a reply that is already a
+// note, it continued it: 3 of 3 notes, 0 calls, on llama.cpp (the reasoning block is skipped).
+// Ends on a newline — ending on "- " started bullets with junk. `0` is the baseline arm.
+export function notePrefillEnabled(): boolean {
+  return process.env.REIKA_NOTE_PREFILL !== '0';
+}
+
+const NOTE_PREFILL_BODY = 'Established:\n';
+
+export function compactionNotePrefill(n: number): string {
+  return `Compaction note ${n}\n\n${NOTE_PREFILL_BODY}`;
+}
+
+// Below this, a prefilled reply that ends in a call is a lead-in ("Established:\nLet me check
+// X"), not a note, and stays a call.
+export const PREFILLED_NOTE_MIN_CHARS = 200;
+
+// A prefilled reply as the note it continues. llama.cpp returns the prefill inside `content`, an
+// engine that does not continue it returns only what came after, so both shapes are accepted. The
+// title line is dropped (the recap carries its own header), and a reply that wrote nothing after
+// the prefill is no note: the prefill alone would otherwise pass as one. A call after a written
+// note is dropped (`callsDropped`) rather than voiding it: LFM2.5 wrote 1206 chars of note and then
+// called, on both attempts, and #799's rule threw both notes away. That rule is about an
+// unprefilled reply, whose text is the call's preamble; here the text is the note by construction.
+//
+// The prefill skips the reasoning block, and LFM2.5 then writes its next-step thinking after the
+// note and closes it with a bare `</think>` (both folds of lfm16-prefill-2), so the reply is cut at
+// that tag. The thinking just before it stays: there is no reliable edge, and `fitNote` drops the
+// note's tail first.
+export function prefilledReply<T extends NoteReply>(
+  reply: T,
+  prefill: string,
+): T & { callsDropped?: number } {
+  const raw = reply.content ?? '';
+  const continued = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
+  const close = continued.indexOf('</think>');
+  const before = close === -1 ? continued : continued.slice(0, close).trimEnd();
+  // A tag closed at once puts the note after it instead.
+  const rest = before.trim() || close === -1 ? before : continued.slice(close + 8).trimStart();
+  if (!rest.trim()) return { ...reply, content: '' };
+  const content = NOTE_PREFILL_BODY + rest;
+  const calls = reply.toolCalls?.length ?? 0;
+  if (calls && rest.trim().length >= PREFILLED_NOTE_MIN_CHARS) {
+    return { ...reply, content, toolCalls: undefined, callsDropped: calls };
+  }
+  return { ...reply, content };
+}
+
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
 // the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to
 // be 2400 and bit first: a 2400+ char note was cut here while the recap still had room, and the

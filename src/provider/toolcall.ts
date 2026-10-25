@@ -319,6 +319,9 @@ export function messagesToChatParams(
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
     trailingNote?: string;
+    // The start of the reply, sent as a final assistant message for the engine to continue (#806).
+    // After the trailing note, so it is the last message. Never enters history.
+    assistantPrefill?: string;
     // Pasted images to hand to the model directly, for a profile whose model can already see
     // (VisionRoute 'native'). Each is attached to the one history user message whose text carries
     // its marker — the message the user actually pasted it into — and only that message. An image
@@ -562,6 +565,7 @@ export function messagesToChatParams(
   if (!out.some(m => m.role === 'user')) {
     out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
+  if (opts?.assistantPrefill) out.push({ role: 'assistant', content: opts.assistantPrefill });
   opts?.onCapStats?.(capStats);
   opts?.onAgedStats?.(agedStats);
   return out;

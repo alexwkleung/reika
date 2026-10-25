@@ -11,14 +11,18 @@ import { classifyPrivateHost } from '../tools/_hosts.js';
 // and a strict one would 400 on it. A dotless name counts as local, since it cannot be public. A
 // local engine that rejects it is latched off by client.ts on an error naming the field.
 export function chatTemplateKwargsFor(baseURL: string): { preserve_thinking: true } | undefined {
+  return isLocalEngine(baseURL) ? { preserve_thinking: true } : undefined;
+}
+
+// A loopback, private or dotless host: an inference engine on the user's own network rather than
+// a hosted API. The note round's assistant prefill (#806) is gated on it too.
+export function isLocalEngine(baseURL: string): boolean {
   let host: string;
   try {
     host = new URL(baseURL).hostname;
   } catch {
-    return undefined;
+    return false;
   }
-  if (!host) return undefined;
-  const local =
-    classifyPrivateHost(host) !== undefined || (!host.includes('.') && !host.includes(':'));
-  return local ? { preserve_thinking: true } : undefined;
+  if (!host) return false;
+  return classifyPrivateHost(host) !== undefined || (!host.includes('.') && !host.includes(':'));
 }

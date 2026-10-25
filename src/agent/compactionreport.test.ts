@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COMPACTION_CALL_REFUSED,
   compactionNoteContent,
+  compactionNotePrefill,
+  PREFILLED_NOTE_MIN_CHARS,
+  prefilledReply,
   pickCompactionNote,
   refusedCallTurn,
 } from './compactionreport.js';
@@ -75,5 +78,61 @@ describe('refusedCallTurn (#806)', () => {
   it('appends nothing for a reply that made no call', () => {
     expect(refusedCallTurn({ content: '', reasoning: 'thinking' })).toEqual([]);
     expect(refusedCallTurn({ content: '', toolCalls: [] })).toEqual([]);
+  });
+});
+
+describe('prefilledReply (#806)', () => {
+  const prefill = compactionNotePrefill(2);
+
+  it('reads the note out of a reply that echoes the prefill, as llama.cpp does', () => {
+    expect(
+      prefilledReply({ content: `${prefill}- a.ts: parse()\n\nOpen:\n- b` }, prefill).content,
+    ).toBe('Established:\n- a.ts: parse()\n\nOpen:\n- b');
+  });
+
+  it('reads the note out of a reply that carries only the continuation', () => {
+    expect(prefilledReply({ content: '- a.ts: parse()' }, prefill).content).toBe(
+      'Established:\n- a.ts: parse()',
+    );
+  });
+
+  it('is no note when nothing came after the prefill', () => {
+    expect(prefilledReply({ content: prefill }, prefill).content).toBe('');
+    expect(prefilledReply({ content: `${prefill}  \n` }, prefill).content).toBe('');
+    expect(prefilledReply({ content: '' }, prefill).content).toBe('');
+  });
+
+  it('keeps a short lead-in that ends in a call as a call, so it counts as no note', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const r = prefilledReply(
+      { content: `${prefill}Let me check a.ts`, reasoning: 'r', toolCalls: call },
+      prefill,
+    );
+    expect(r.reasoning).toBe('r');
+    expect(r.callsDropped).toBeUndefined();
+    expect(compactionNoteContent(r)).toBe('');
+  });
+
+  it('cuts the reply at a stray think close tag', () => {
+    expect(
+      prefilledReply(
+        { content: `${prefill}- a.ts: parse()\n\nLet me read b.ts next.\n</think>\n\nstray` },
+        prefill,
+      ).content,
+    ).toBe('Established:\n- a.ts: parse()\n\nLet me read b.ts next.');
+    expect(prefilledReply({ content: `${prefill}</think>\n- a.ts` }, prefill).content).toBe(
+      'Established:\n- a.ts',
+    );
+    expect(prefilledReply({ content: `${prefill}</think>\n` }, prefill).content).toBe('');
+  });
+
+  // LFM2.5 at 16k: 1206 chars of note, then a call, on both attempts; the fold got no note.
+  it('keeps a written note and drops the call that follows it', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const body = `- src/headlessargs.ts: parseHeadlessArgs. ${'y'.repeat(PREFILLED_NOTE_MIN_CHARS)}`;
+    const r = prefilledReply({ content: `${prefill}${body}`, toolCalls: call }, prefill);
+    expect(r.toolCalls).toBeUndefined();
+    expect(r.callsDropped).toBe(1);
+    expect(compactionNoteContent(r)).toBe(`Established:\n${body}`);
   });
 });

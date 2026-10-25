@@ -1648,4 +1648,18 @@ describe('messagesToChatParams prefix-stable', () => {
     expect(out.filter(m => m.role === 'user')).toHaveLength(1);
     expect((out[1] as { content: string }).content).toBe('note');
   });
+
+  // #806: the engine continues the request's last message, so the prefill must follow the note.
+  it('puts an assistant prefill last, after the trailing note', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+    const out = messagesToChatParams('sys', history, {
+      trailingNote: 'write the note',
+      assistantPrefill: 'Compaction note 1\n\nEstablished:\n',
+    });
+    expect(out.slice(-2)).toEqual([
+      { role: 'user', content: 'write the note' },
+      { role: 'assistant', content: 'Compaction note 1\n\nEstablished:\n' },
+    ]);
+    expect(messagesToChatParams('sys', history).at(-1)?.role).toBe('tool');
+  });
 });
