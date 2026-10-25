@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- While a local model writes its compaction note, reika no longer briefly shows the model's
+  next-step thinking and a tool call after the note. They were never part of the saved note, but
+  seeing them stream and then disappear made it look like a hidden tool call.
 - Writing a compaction note no longer reprocesses the whole prompt when reika pauses or resumes
   file reading on the same step. The note request now offers the same tools as the request before
   it, so on a local server it costs seconds instead of minutes (about 27k tokens on one 32k run).
