@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { compactionNoteContent, pickCompactionNote } from './compactionreport.js';
+import {
+  COMPACTION_CALL_REFUSED,
+  compactionNoteContent,
+  pickCompactionNote,
+  refusedCallTurn,
+} from './compactionreport.js';
 
 const call = [{ id: 'x', name: 'read', args: {} }];
 
@@ -51,5 +56,24 @@ describe('pickCompactionNote', () => {
       text: '',
       src: 'empty',
     });
+  });
+});
+
+describe('refusedCallTurn (#806)', () => {
+  it('answers each call the note reply made with a refusal, after the reply itself', () => {
+    const calls = [
+      { id: 'a', name: 'read', args: { path: 'x.ts' } },
+      { id: 'b', name: 'bash', args: { command: 'cat y.ts' } },
+    ];
+    expect(refusedCallTurn({ content: 'Let me look:', reasoning: 'r', toolCalls: calls })).toEqual([
+      { role: 'assistant', content: 'Let me look:', reasoning: 'r', toolCalls: calls },
+      { role: 'tool', callId: 'a', summary: COMPACTION_CALL_REFUSED },
+      { role: 'tool', callId: 'b', summary: COMPACTION_CALL_REFUSED },
+    ]);
+  });
+
+  it('appends nothing for a reply that made no call', () => {
+    expect(refusedCallTurn({ content: '', reasoning: 'thinking' })).toEqual([]);
+    expect(refusedCallTurn({ content: '', toolCalls: [] })).toEqual([]);
   });
 });

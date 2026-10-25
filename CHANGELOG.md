@@ -12,6 +12,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- When a model tries to call a tool while writing its compaction note, reika now tells it the call
+  was not run and asks again, instead of repeating the same request. Small local models that kept
+  calling tools there wrote a thin note, or none.
 - Reading a file with `read` after looking at it through the shell no longer counts as a repeated
   read. reika asks for exactly that before an edit, and counting it could pause a model's file
   reading on its next step.

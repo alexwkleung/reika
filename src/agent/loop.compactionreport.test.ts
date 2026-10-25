@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, ContextBundle, Message, Tool } from '../types.js';
-import { buildCompactionReportDirective, compactionNoteHeader } from './compactionreport.js';
+import {
+  COMPACTION_CALL_REFUSED,
+  buildCompactionReportDirective,
+  compactionNoteHeader,
+} from './compactionreport.js';
 
 // #280: the report round before a fold, driven through the real runTurn with a scripted model and
 // a window small enough that a seeded history folds on round 0.
@@ -22,6 +26,7 @@ const h = vi.hoisted(() => ({
     toolChoice?: 'none';
     trailingNote?: string;
     historyLen: number;
+    history: Message[];
   }[],
 }));
 vi.mock('../provider/client.js', () => ({
@@ -42,6 +47,7 @@ vi.mock('../provider/client.js', () => ({
         toolChoice: opts.toolChoice,
         trailingNote: opts.trailingNote,
         historyLen: opts.history.length,
+        history: opts.history,
       });
       return next;
     },
@@ -240,6 +246,21 @@ describe('compaction report round (#280)', () => {
     expect(directiveOf(h.captured[0])).not.toContain('your reply carried no note');
     expect(h.captured[1].toolChoice).toBe('none');
     expect(directiveOf(h.captured[1])).toContain('your reply carried no note');
+    // #806: the retry answers the call in its own dialect, appended after the history it read.
+    expect(h.captured[1].historyLen).toBe(h.captured[0].historyLen + 2);
+    expect(h.captured[1].history.slice(-2)).toEqual([
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'let me search for that',
+        toolCalls: [{ id: 'x', name: 'read', args: { path: 'a.ts' } }],
+      },
+      { role: 'tool', callId: 'x', summary: COMPACTION_CALL_REFUSED },
+    ]);
+    // Request-only: neither the call nor its refusal reaches the model history.
+    expect(history.some(m => m.role === 'tool' && m.summary === COMPACTION_CALL_REFUSED)).toBe(
+      false,
+    );
     const recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain('RETRY NOTE: established a');
     expect(recap.content).not.toContain('let me search');
@@ -310,6 +331,8 @@ describe('compaction report round (#280)', () => {
     });
     let recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain('reasoned note');
+    // A reply that made no call has nothing to refuse: the retry re-sends the same history.
+    expect(h.captured[1].historyLen).toBe(h.captured[0].historyLen);
 
     h.scripted.length = 0;
     h.captured.length = 0;
