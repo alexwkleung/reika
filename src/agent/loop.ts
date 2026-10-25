@@ -2445,7 +2445,8 @@ export async function runTurn(opts: {
         // model trying to read instead of writing; a `length` stop is the budget.
         const describe = (r: typeof rep): string =>
           `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
-          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
+          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}` +
+          ('callsDropped' in r && r.callsDropped ? ` dropped=${r.callsDropped}` : '');
         let retry: typeof rep | undefined;
         if (!compactionNoteContent(rep) && !opts.signal?.aborted) {
           debugLog(

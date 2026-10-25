@@ -118,15 +118,30 @@ export function compactionNotePrefill(n: number): string {
   return `Compaction note ${n}\n\n${NOTE_PREFILL_BODY}`;
 }
 
+// Below this, a prefilled reply that ends in a call is a lead-in ("Established:\nLet me check
+// X"), not a note, and stays a call.
+export const PREFILLED_NOTE_MIN_CHARS = 200;
+
 // A prefilled reply as the note it continues. llama.cpp returns the prefill inside `content`, an
 // engine that does not continue it returns only what came after, so both shapes are accepted. The
 // title line is dropped (the recap carries its own header), and a reply that wrote nothing after
-// the prefill is no note: the prefill alone would otherwise pass as one.
-export function prefilledReply<T extends NoteReply>(reply: T, prefill: string): T {
+// the prefill is no note: the prefill alone would otherwise pass as one. A call after a written
+// note is dropped (`callsDropped`) rather than voiding it: LFM2.5 wrote 1206 chars of note and then
+// called, on both attempts, and #799's rule threw both notes away. That rule is about an
+// unprefilled reply, whose text is the call's preamble; here the text is the note by construction.
+export function prefilledReply<T extends NoteReply>(
+  reply: T,
+  prefill: string,
+): T & { callsDropped?: number } {
   const raw = reply.content ?? '';
   const rest = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
   if (!rest.trim()) return { ...reply, content: '' };
-  return { ...reply, content: NOTE_PREFILL_BODY + rest };
+  const content = NOTE_PREFILL_BODY + rest;
+  const calls = reply.toolCalls?.length ?? 0;
+  if (calls && rest.trim().length >= PREFILLED_NOTE_MIN_CHARS) {
+    return { ...reply, content, toolCalls: undefined, callsDropped: calls };
+  }
+  return { ...reply, content };
 }
 
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes

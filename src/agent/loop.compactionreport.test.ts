@@ -461,6 +461,21 @@ describe('the note round starts the reply on a local engine (#806)', () => {
     expect(recapOf(await fold())).toContain('Established:\n- the gate is bashTool.run');
   });
 
+  // LFM2.5 at 16k: a written note, then a call, on both attempts, and the fold got no note.
+  it('keeps a written note that ends in a call, and asks no retry', async () => {
+    const body = `- the gate is bashTool.run (src/tools/bash.ts). ${'detail '.repeat(40)}`;
+    h.scripted.push(
+      {
+        content: `${prefill}${body}`,
+        toolCalls: [{ id: 'c1', name: 'noop', args: {} }],
+      },
+      { content: 'final', toolCalls: undefined },
+    );
+    const history = await fold();
+    expect(h.captured.filter(c => c.toolChoice === 'none')).toHaveLength(1);
+    expect(recapOf(history)).toContain('Established:\n- the gate is bashTool.run');
+  });
+
   it('is off for a hosted API and under REIKA_NOTE_PREFILL=0', async () => {
     h.scripted.push({ content: 'Established: a' }, { content: 'final' });
     await fold({ ...makeConfig(), baseURL: 'https://api.example.com/v1' });

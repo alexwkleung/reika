@@ -3,6 +3,7 @@ import {
   COMPACTION_CALL_REFUSED,
   compactionNoteContent,
   compactionNotePrefill,
+  PREFILLED_NOTE_MIN_CHARS,
   prefilledReply,
   pickCompactionNote,
   refusedCallTurn,
@@ -101,10 +102,24 @@ describe('prefilledReply (#806)', () => {
     expect(prefilledReply({ content: '' }, prefill).content).toBe('');
   });
 
-  it('leaves the rest of the reply alone, so a call still counts as no note', () => {
+  it('keeps a short lead-in that ends in a call as a call, so it counts as no note', () => {
     const call = [{ id: 'x', name: 'read', args: {} }];
-    const r = prefilledReply({ content: '- x', reasoning: 'r', toolCalls: call }, prefill);
+    const r = prefilledReply(
+      { content: `${prefill}Let me check a.ts`, reasoning: 'r', toolCalls: call },
+      prefill,
+    );
     expect(r.reasoning).toBe('r');
+    expect(r.callsDropped).toBeUndefined();
     expect(compactionNoteContent(r)).toBe('');
+  });
+
+  // LFM2.5 at 16k: 1206 chars of note, then a call, on both attempts; the fold got no note.
+  it('keeps a written note and drops the call that follows it', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const body = `- src/headlessargs.ts: parseHeadlessArgs. ${'y'.repeat(PREFILLED_NOTE_MIN_CHARS)}`;
+    const r = prefilledReply({ content: `${prefill}${body}`, toolCalls: call }, prefill);
+    expect(r.toolCalls).toBeUndefined();
+    expect(r.callsDropped).toBe(1);
+    expect(compactionNoteContent(r)).toBe(`Established:\n${body}`);
   });
 });
