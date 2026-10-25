@@ -714,6 +714,7 @@ describe('batchAgePayloads', () => {
             promptCacheKey: false,
             cacheControl: false,
             chatTemplateKwargs: false,
+            assistantPrefill: false,
           },
         });
 

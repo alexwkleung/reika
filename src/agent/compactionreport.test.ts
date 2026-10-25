@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   COMPACTION_CALL_REFUSED,
   compactionNoteContent,
+  compactionNotePrefill,
+  prefilledReply,
   pickCompactionNote,
   refusedCallTurn,
 } from './compactionreport.js';
@@ -75,5 +77,34 @@ describe('refusedCallTurn (#806)', () => {
   it('appends nothing for a reply that made no call', () => {
     expect(refusedCallTurn({ content: '', reasoning: 'thinking' })).toEqual([]);
     expect(refusedCallTurn({ content: '', toolCalls: [] })).toEqual([]);
+  });
+});
+
+describe('prefilledReply (#806)', () => {
+  const prefill = compactionNotePrefill(2);
+
+  it('reads the note out of a reply that echoes the prefill, as llama.cpp does', () => {
+    expect(
+      prefilledReply({ content: `${prefill}- a.ts: parse()\n\nOpen:\n- b` }, prefill).content,
+    ).toBe('Established:\n- a.ts: parse()\n\nOpen:\n- b');
+  });
+
+  it('reads the note out of a reply that carries only the continuation', () => {
+    expect(prefilledReply({ content: '- a.ts: parse()' }, prefill).content).toBe(
+      'Established:\n- a.ts: parse()',
+    );
+  });
+
+  it('is no note when nothing came after the prefill', () => {
+    expect(prefilledReply({ content: prefill }, prefill).content).toBe('');
+    expect(prefilledReply({ content: `${prefill}  \n` }, prefill).content).toBe('');
+    expect(prefilledReply({ content: '' }, prefill).content).toBe('');
+  });
+
+  it('leaves the rest of the reply alone, so a call still counts as no note', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const r = prefilledReply({ content: '- x', reasoning: 'r', toolCalls: call }, prefill);
+    expect(r.reasoning).toBe('r');
+    expect(compactionNoteContent(r)).toBe('');
   });
 });

@@ -102,6 +102,33 @@ export function pickCompactionNote(
   return best ? { text: best, src: 'reasoning' } : { text: '', src: 'empty' };
 }
 
+// The note round's reply is started for the model, on a local engine (#806). The round continues an
+// agent transcript, and a small model's strongest prior there is the next action: LFM2.5 called a
+// tool instead of writing the note on every T2 fold (0 of 21 notes from the reply), through the
+// directive, the sampler ban and the refused-call retry alike. Handed a reply that is already a
+// note, it continued it: 3 of 3 notes, 0 calls, on llama.cpp (the reasoning block is skipped).
+// Ends on a newline — ending on "- " started bullets with junk. `0` is the baseline arm.
+export function notePrefillEnabled(): boolean {
+  return process.env.REIKA_NOTE_PREFILL !== '0';
+}
+
+const NOTE_PREFILL_BODY = 'Established:\n';
+
+export function compactionNotePrefill(n: number): string {
+  return `Compaction note ${n}\n\n${NOTE_PREFILL_BODY}`;
+}
+
+// A prefilled reply as the note it continues. llama.cpp returns the prefill inside `content`, an
+// engine that does not continue it returns only what came after, so both shapes are accepted. The
+// title line is dropped (the recap carries its own header), and a reply that wrote nothing after
+// the prefill is no note: the prefill alone would otherwise pass as one.
+export function prefilledReply<T extends NoteReply>(reply: T, prefill: string): T {
+  const raw = reply.content ?? '';
+  const rest = raw.startsWith(prefill) ? raw.slice(prefill.length) : raw;
+  if (!rest.trim()) return { ...reply, content: '' };
+  return { ...reply, content: NOTE_PREFILL_BODY + rest };
+}
+
 // Hard cap on a note — a runaway guard only. The directive asks for ~1500 chars and the fold sizes
 // the note under NOTE_SHARE of the recap budget (`fitNote`), which is the real bound. This used to
 // be 2400 and bit first: a 2400+ char note was cut here while the recap still had room, and the

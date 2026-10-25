@@ -66,6 +66,9 @@ export async function callModel(opts: {
   // harness note as the final user message instead of a system suffix. See provider/toolcall.ts.
   prefixStable?: boolean;
   trailingNote?: string;
+  // The reply's opening, sent as a final assistant message for the engine to continue (#806). Set
+  // only by the compaction note round, on local hosts; see agent/compactionreport.ts.
+  assistantPrefill?: string;
   // Override the freeze-on-serialize default below. The speculative KV warm (agent/warm.ts)
   // passes false: only the turn's real call may stamp `rendered` bytes — a warm serializes the
   // same frozen bytes read-only, so a throwaway request can never mutate shared history.
@@ -112,6 +115,7 @@ export async function callModel(opts: {
       rerender,
       latches,
       trailingNote: opts.trailingNote,
+      assistantPrefill: opts.assistantPrefill,
       nativeImages: opts.nativeImages,
       onCapStats: opts.onCapStats,
       onAgedStats: opts.onAgedStats,
