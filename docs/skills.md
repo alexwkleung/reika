@@ -11,7 +11,8 @@ Standing guidance for the model, loaded into the system prompt once at startup:
 
 When both exist they are merged, global first, with the project file named as the winner where they
 disagree — so a personal "terse replies, no emoji" rides along without displacing the repo's build and
-test rules. `CLAUDE.md` is accepted as a fallback name in either location.
+test rules. `AGENT.md` and then `CLAUDE.md` are accepted as fallback names in either location; only
+the first one found is loaded.
 
 Each file is capped at 12KB (≈3k tokens). An oversized file is replaced by its heading outline plus a
 pointer to read the relevant section, so it can never crowd a small context window.

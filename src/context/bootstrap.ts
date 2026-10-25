@@ -77,7 +77,9 @@ async function summarizeProject(cwd: string): Promise<string> {
 // back to an outline + read pointer instead of the full text.
 const INSTRUCTIONS_BUDGET = 12 * 1024;
 
-const INSTRUCTIONS_NAMES = ['AGENTS.md', 'CLAUDE.md'];
+// First match wins. AGENT.md is an older spelling of the same tool-neutral convention; CLAUDE.md
+// goes last because it is often written for Claude Code's own commands and tools.
+const INSTRUCTIONS_NAMES = ['AGENTS.md', 'AGENT.md', 'CLAUDE.md'];
 const GLOBAL_INSTRUCTIONS_DIR = join(homedir(), '.config', 'reika');
 
 // Global (~/.config/reika/AGENTS.md) carries the user's personal preferences; the project
