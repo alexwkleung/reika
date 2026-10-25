@@ -1560,6 +1560,11 @@ export async function runTurn(opts: {
   // so the next round's plan force-write can bias off it (the block itself is discarded). Empty unless a
   // verbatim abort just set forceVerbatimPlanWrite. See the plan force-write branch + logitrecovery.ts.
   let verbatimRepeatedSpan: string[] = [];
+  // The tool list the last request of this turn actually sent. A round that forbids calls (the
+  // compaction note, a subagent's report) sends it rather than this round's: the template renders
+  // the list into the system turn, so a withdrawal starting or lifting on that round re-prefilled
+  // the whole prompt (#816: ~27k tokens on a 32k run) for a list the model could not call from.
+  let lastSentTools: Tool[] | undefined;
   // Whether the model has made any edit/write this turn. Tool withdrawal exists to force the
   // explore→act transition; once the model has acted, that job is done. After the first edit a
   // re-read is usually edit-recovery (re-fetching exact bytes to build old_string after the content
@@ -2332,6 +2337,7 @@ export async function runTurn(opts: {
           content: '/compact cancelled — nothing was folded.',
         });
       };
+      const noteTools = lastSentTools ?? callTools;
       try {
         const report = (suffix: string, appended: Message[] = []) =>
           callModel({
@@ -2341,7 +2347,7 @@ export async function runTurn(opts: {
             // Sending none rendered a different system turn: on the measured 24k runs the note
             // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
             // re-prefilled it again — two full prefills per fold, one of them for nothing.
-            tools: callTools,
+            tools: noteTools,
             toolChoice: 'none',
             config: withGenReserve(opts.config, genReserve),
             onContentDelta: opts.onContentDelta,
@@ -2380,13 +2386,13 @@ export async function runTurn(opts: {
               ? msgs => {
                   const d = prefixTrace.record(msgs, {
                     trailingNote: directiveAsTail,
-                    tools: toolsToChatTools(callTools),
+                    tools: toolsToChatTools(noteTools),
                   });
                   const pct =
                     d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
                   const tok = reprocessedTokens(
                     d,
-                    Math.round(rawEstimate(opts.history, callTools) * calibration),
+                    Math.round(rawEstimate(opts.history, noteTools) * calibration),
                   );
                   debugLog(
                     `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
@@ -2568,7 +2574,9 @@ export async function runTurn(opts: {
       opts.onContextEstimate?.(Math.round(rawEstimate() * calibration));
       return;
     }
-    const sentEstimate = rawEstimate(callHistory, callTools);
+    const sentTools = subagentForceReport && lastSentTools ? lastSentTools : callTools;
+    lastSentTools = sentTools;
+    const sentEstimate = rawEstimate(callHistory, sentTools);
     opts.onContextEstimate?.(Math.round(sentEstimate * calibration));
     // Live reasoning-spin hint (human-only): accumulate THIS round's reasoning and, debounced every
     // SPIN_DEBOUNCE chars, flag when it looks like it's spinning so the UI can prompt abort-or-wait.
@@ -2645,7 +2653,7 @@ export async function runTurn(opts: {
     const response = await callModel({
       system,
       history: callHistory,
-      tools: callTools,
+      tools: sentTools,
       config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
@@ -2709,7 +2717,7 @@ export async function runTurn(opts: {
             // churn — without it every append reads as `mid-history firstChanged=assistant` (#253).
             const d = prefixTrace.record(msgs, {
               trailingNote: !!roundSuffix,
-              tools: toolsToChatTools(callTools),
+              tools: toolsToChatTools(sentTools),
             });
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
             roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
