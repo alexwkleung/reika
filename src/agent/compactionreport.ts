@@ -1,3 +1,5 @@
+import type { Message, ToolCall } from '../types.js';
+
 // EXPERIMENT (#280, REIKA_COMPACTION_REPORT=1): a report round before each compaction fold.
 //
 // The recap a fold leaves behind is a ledger of reads — "Read src/ui/Approval.tsx lines 1-112" —
@@ -41,8 +43,36 @@ export const COMPACTION_REPORT_RETRY =
 type NoteReply = {
   content?: string;
   reasoning?: string;
-  toolCalls?: unknown[];
+  toolCalls?: ToolCall[];
 };
+
+// What a call made in the note round gets back (#806). Re-sending the same request with a longer
+// directive left the model never seeing its call refused, and LFM2.5, a pruned qwen3.6-35b-a3b
+// and qwen3.8-27b each called again; banning the call token at the sampler only moved the call
+// into other dialects. A refused call in its own dialect is what these models recover from (the
+// read-withdrawal refusal is the same move), and appended it costs no re-prefill.
+export const COMPACTION_CALL_REFUSED =
+  'Not run: tools are unavailable while the compaction note is written. Write the note as your ' +
+  'reply now.';
+
+// The turn the retry appends after a reply that called: that reply, and a refusal for each call.
+// Request-only — never pushed to history. Empty when the reply made no call.
+export function refusedCallTurn(reply: NoteReply): Message[] {
+  if (!reply.toolCalls?.length) return [];
+  return [
+    {
+      role: 'assistant',
+      content: reply.content ?? '',
+      reasoning: reply.reasoning,
+      toolCalls: reply.toolCalls,
+    },
+    ...reply.toolCalls.map((c): Message => ({
+      role: 'tool',
+      callId: c.id,
+      summary: COMPACTION_CALL_REFUSED,
+    })),
+  ];
+}
 
 // A reply that made a call has no note in its content, only the call's preamble ("Let me examine
 // `_net.ts` in detail:"): observed recapped as note 1 under the own-words header while that reply's

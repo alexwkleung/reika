@@ -99,6 +99,7 @@ import {
 } from './subagentreport.js';
 import {
   COMPACTION_REPORT_RETRY,
+  refusedCallTurn,
   buildCompactionReportDirective,
   clampCompactionNote,
   compactionNoteContent,
@@ -2332,10 +2333,10 @@ export async function runTurn(opts: {
         });
       };
       try {
-        const report = (suffix: string) =>
+        const report = (suffix: string, appended: Message[] = []) =>
           callModel({
             system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
-            history: opts.history,
+            history: appended.length ? [...opts.history, ...appended] : opts.history,
             // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
             // Sending none rendered a different system turn: on the measured 24k runs the note
             // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
@@ -2416,7 +2417,7 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} compaction-report n=${n} no-note ${describe(rep)}; retrying\n`,
           );
           opts.onReasoningReset?.();
-          retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
+          retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`, refusedCallTurn(rep));
           if (retry.usage) opts.onUsage?.(retry.usage);
           if (opts.signal?.aborted) {
             commitNoteRoundAbort();
