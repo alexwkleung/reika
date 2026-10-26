@@ -133,6 +133,7 @@ import {
   decideTypecheckGate,
   detectTsProject,
   runTypecheck,
+  stopTypecheckReport,
 } from '../check/typecheck.js';
 
 // Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
@@ -1727,6 +1728,19 @@ export async function runTurn(opts: {
   // project without a tsconfig even when the flag is on.
   const typecheckEnabled = opts.config.typecheck !== false;
 
+  // A turn the harness ends itself (loop stop, edit-recovery stop, round cap) never reaches the
+  // isFinal gate, and those are the turns likeliest to leave the tree broken (#830). Run the final
+  // check there too and report it: the returned text rides the stop message, the notice the UI.
+  const reportTypecheckAtStop = async (): Promise<string> => {
+    if (!typecheckEnabled || typecheckBaseline === null || opts.signal?.aborted) return '';
+    const report = stopTypecheckReport(typecheckBaseline, await typecheck());
+    debugLog(`[reika:debug] typecheck-at-stop tone=${report.tone ?? 'skipped'}\n`);
+    if (report.userNotice) {
+      opts.onMessage({ role: 'system', tone: report.tone ?? 'info', content: report.userNotice });
+    }
+    return report.addendum ?? '';
+  };
+
   // EXPERIMENT (plan→agent handoff): one-shot pre-pass before the round loop. Folds the plan-mode
   // exploration that produced the plan into a compact digest so the executing agent sees the plan
   // verbatim plus findings, not the full transcript. Operates on the per-turn opts.history copy
@@ -2031,7 +2045,8 @@ export async function runTurn(opts: {
               `I kept trying to edit ${file ? `\`${file}\`` : 'the file'} but the text I expected ` +
               `isn't in the file, so the change can't be applied as planned — the plan may reference ` +
               `code that doesn't exist there. I've stopped instead of looping. Please confirm the ` +
-              `change belongs in that file, or point me at the right location.`,
+              `change belongs in that file, or point me at the right location.` +
+              (await reportTypecheckAtStop()),
             durationMs: Date.now() - turnStart,
             ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
           };
@@ -2094,7 +2109,13 @@ export async function runTurn(opts: {
             // fall through: don't stop — the biased round runs below with the loop ledger still set.
           } else {
             debugLog(`[reika:debug] round=${i} logit-recovery unavailable — stopping\n`);
-            commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+            commitAgentLoopStop(
+              opts,
+              turnStart,
+              fetchedUrls,
+              editingStarted,
+              await reportTypecheckAtStop(),
+            );
             return;
           }
         } else {
@@ -2102,7 +2123,13 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
               `edited=${editingStarted}\n`,
           );
-          commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+          commitAgentLoopStop(
+            opts,
+            turnStart,
+            fetchedUrls,
+            editingStarted,
+            await reportTypecheckAtStop(),
+          );
           return;
         }
       }
@@ -3951,7 +3978,9 @@ export async function runTurn(opts: {
 
   const exhausted: Message = {
     role: 'assistant',
-    content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)`,
+    content:
+      `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)` +
+      (await reportTypecheckAtStop()),
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4043,6 +4072,7 @@ function commitAgentLoopStop(
   turnStart: number,
   fetchedUrls: Set<string>,
   edited: boolean,
+  typecheckAddendum = '',
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -4065,7 +4095,8 @@ function commitAgentLoopStop(
   const content = edited
     ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
       `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
-      `anything's off.`
+      `anything's off.` +
+      typecheckAddendum
     : `I kept repeating the same step without making progress, so I've stopped rather than loop. Let ` +
       `me know how you'd like to proceed.`;
   const m: Message = {

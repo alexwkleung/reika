@@ -259,4 +259,107 @@ describe('post-edit typecheck gate (integration)', () => {
     // Fail-open is silent: no send-back and no pass confirmation, since nothing actually ran.
     expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(false);
   });
+
+  // #830: a turn the harness ends itself never reaches the isFinal gate, so the stop reports it.
+  describe('at a harness stop', () => {
+    const noop: Tool = {
+      name: 'noop',
+      description: 'does nothing',
+      parameters: { type: 'object', properties: {}, required: [] },
+      run: async () => ({ summary: 'ok' }),
+    };
+    const noopResponse = (n: number, reasoning?: string): ModelResponse => ({
+      content: '',
+      ...(reasoning ? { reasoning } : {}),
+      toolCalls: [{ id: `n${n}`, name: 'noop', args: {} }],
+    });
+
+    it('names the errors a capped turn left behind in its stop message', async () => {
+      await installTsc();
+      h.scripted.push(
+        writeResponse('src/app.ts', 'export const n = "BREAKME";\n'),
+        noopResponse(1),
+        noopResponse(2),
+      );
+
+      const { history, messages } = await run(
+        cwd,
+        [editTool, writeTool, noop],
+        makeConfig({ maxTurns: 3 }),
+      );
+
+      const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toContain('reached max turns of 3');
+      expect(last.content).toContain('introduced 1 new type error');
+      expect(last.content).toContain('src/app.ts:1 TS2322');
+      expect(
+        messages.some(
+          m => m.role === 'system' && m.tone === 'warn' && m.content.includes('left unfixed'),
+        ),
+      ).toBe(true);
+      // Reported, never sent back: no harness user message carries the errors.
+      expect(history.some(m => m.role === 'user' && m.content.includes('BREAKME'))).toBe(false);
+    });
+
+    it('leaves the stop message as it was when the edits typecheck', async () => {
+      await installTsc();
+      h.scripted.push(
+        writeResponse('src/app.ts', 'export const n = 0;\n'),
+        noopResponse(1),
+        noopResponse(2),
+      );
+
+      const { history, messages } = await run(
+        cwd,
+        [editTool, writeTool, noop],
+        makeConfig({ maxTurns: 3 }),
+      );
+
+      const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toBe(
+        '(reached max turns of 3; ask me to continue or raise the turn limit)',
+      );
+      expect(
+        messages.some(m => m.role === 'system' && m.content.startsWith('Typecheck passed')),
+      ).toBe(true);
+    });
+
+    it('adds nothing when Config.typecheck is false', async () => {
+      await installTsc();
+      h.scripted.push(
+        writeResponse('src/app.ts', 'export const n = "BREAKME";\n'),
+        noopResponse(1),
+        noopResponse(2),
+      );
+
+      const { history, messages } = await run(
+        cwd,
+        [editTool, writeTool, noop],
+        makeConfig({ maxTurns: 3, typecheck: false }),
+      );
+
+      const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toBe(
+        '(reached max turns of 3; ask me to continue or raise the turn limit)',
+      );
+      expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(
+        false,
+      );
+    });
+
+    it('names the errors in the agent loop stop', async () => {
+      await installTsc();
+      const rumination =
+        'I need to check whether the helper is exported before I can change the call site, and ' +
+        'to do that I should verify the module boundary once more before committing to anything.';
+      h.scripted.push(writeResponse('src/app.ts', 'export const n = "BREAKME";\n'));
+      for (let n = 0; n < 12; n++) h.scripted.push(noopResponse(n, rumination));
+
+      const { history } = await run(cwd, [editTool, writeTool, noop], makeConfig({ maxTurns: 14 }));
+
+      const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toContain('kept repeating the same checks');
+      expect(last.content).toContain('introduced 1 new type error');
+    });
+  });
 });

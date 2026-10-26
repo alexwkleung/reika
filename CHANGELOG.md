@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A turn that reika stopped itself — after the model kept looping, or at the turn limit — now says
+  when its edits introduced type errors, naming the first ones. Before, the stop only said the edits
+  were saved, even when they no longer compiled.
 - An edit made right after the model read the file with `cat`, `head` or `sed -n` is no longer held
   back with "read the file first". Models that read through the shell lost a step on nearly every
   file, and one rewrote a whole file from memory when the read it was told to make was then refused.

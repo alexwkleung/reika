@@ -17,6 +17,7 @@ import {
   runTscProcess,
   sandboxRefused,
   shellQuote,
+  stopTypecheckReport,
 } from './typecheck.js';
 
 function diag(over: Partial<Diagnostic> = {}): Diagnostic {
@@ -143,6 +144,38 @@ describe('formatIntroduced', () => {
     const block = formatIntroduced([diag({ message: 'x'.repeat(500) })]);
     expect(block).toContain('…');
     expect(block.length).toBeLessThan(300);
+  });
+});
+
+describe('stopTypecheckReport (#830)', () => {
+  it('quotes the first two introduced errors and counts the rest', () => {
+    const final: CheckOutcome = {
+      ran: true,
+      diagnostics: [
+        diag({ file: 'src/a.ts', line: 3 }),
+        diag({ file: 'src/b.ts', line: 7, code: 'TS2554', message: 'Expected 3 arguments.' }),
+        diag({ file: 'src/c.ts', message: 'Cannot find name x.' }),
+      ],
+    };
+    const r = stopTypecheckReport([], final);
+    expect(r.tone).toBe('warn');
+    expect(r.addendum).toContain('introduced 3 new type errors');
+    expect(r.addendum).toContain('`src/a.ts:3 TS2322');
+    expect(r.addendum).toContain('`src/b.ts:7 TS2554: Expected 3 arguments`');
+    expect(r.addendum).toContain('+1 more');
+    expect(r.addendum).not.toContain('src/c.ts');
+  });
+
+  it('ignores errors the baseline already had', () => {
+    const old = diag();
+    expect(stopTypecheckReport([old], { ran: true, diagnostics: [old] })).toEqual({
+      tone: 'info',
+      userNotice: 'Typecheck passed — no new type errors from your edits.',
+    });
+  });
+
+  it('reports nothing when the check did not run', () => {
+    expect(stopTypecheckReport([], { ran: false, reason: 'no tsc' })).toEqual({});
   });
 });
 
