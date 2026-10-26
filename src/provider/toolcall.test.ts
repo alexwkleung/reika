@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 
 // This file is the dedup-OFF baseline arm: several fixtures below use byte-identical payloads as
@@ -1647,6 +1647,36 @@ describe('messagesToChatParams prefix-stable', () => {
     const out = messagesToChatParams('sys', [], { trailingNote: 'note' });
     expect(out.filter(m => m.role === 'user')).toHaveLength(1);
     expect((out[1] as { content: string }).content).toBe('note');
+  });
+
+  describe('REIKA_NOTE_SLOT=tool (#827)', () => {
+    beforeEach(() => {
+      process.env.REIKA_NOTE_SLOT = 'tool';
+    });
+    afterEach(() => {
+      delete process.env.REIKA_NOTE_SLOT;
+    });
+
+    it('appends the note to the newest tool result instead of adding a user turn', () => {
+      const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+      const plain = messagesToChatParams('sys', history);
+      const out = messagesToChatParams('sys', history, { trailingNote: '--- reika status ---' });
+      expect(out).toHaveLength(plain.length);
+      expect(out.filter(m => m.role === 'user')).toHaveLength(1);
+      const last = out.at(-1) as { role: string; content: string };
+      expect(last.role).toBe('tool');
+      expect(last.content).toBe(
+        `${(plain.at(-1) as { content: string }).content}\n\n--- reika status ---`,
+      );
+      // Never stored: the next request without a note serializes the plain result again.
+      expect(messagesToChatParams('sys', history)).toEqual(plain);
+    });
+
+    it('still joins a user message at the tail on a round with no tool result', () => {
+      const history: Message[] = [{ role: 'user', content: 'plan issue 265' }];
+      const out = messagesToChatParams('sys', history, { trailingNote: 'note' });
+      expect(out.at(-1)).toEqual({ role: 'user', content: 'plan issue 265\n\nnote' });
+    });
   });
 
   // #806: the engine continues the request's last message, so the prefill must follow the note.

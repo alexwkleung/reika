@@ -72,6 +72,15 @@ describe('chatTemplateKwargsFor', () => {
     expect(chatTemplateKwargsFor('https://8.8.8.8/v1')).toBeUndefined();
     expect(chatTemplateKwargsFor('not a url')).toBeUndefined();
   });
+
+  it('sends nothing under REIKA_PRESERVE_THINKING=0, the #827 test bed', () => {
+    process.env.REIKA_PRESERVE_THINKING = '0';
+    try {
+      expect(chatTemplateKwargsFor('http://localhost:8080/v1')).toBeUndefined();
+    } finally {
+      delete process.env.REIKA_PRESERVE_THINKING;
+    }
+  });
 });
 
 describe('callModel chat_template_kwargs', () => {

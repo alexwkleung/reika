@@ -533,7 +533,15 @@ export function messagesToChatParams(
   // text stays first, so the next round still diverges only where the note sat.
   if (opts?.trailingNote) {
     const tail = out[out.length - 1];
-    if (tail?.role === 'user' && typeof tail.content === 'string') {
+    // #827 experiment: a user-role note makes thinking templates without preserve_thinking drop
+    // every <think> before it. On the tool result it is not a user turn, so they keep rendering.
+    const onToolResult =
+      process.env.REIKA_NOTE_SLOT === 'tool' &&
+      tail?.role === 'tool' &&
+      typeof tail.content === 'string';
+    if (onToolResult) {
+      out[out.length - 1] = { ...tail, content: `${tail.content}\n\n${opts.trailingNote}` };
+    } else if (tail?.role === 'user' && typeof tail.content === 'string') {
       out[out.length - 1] = { role: 'user', content: `${tail.content}\n\n${opts.trailingNote}` };
     } else {
       out.push({ role: 'user', content: opts.trailingNote });
