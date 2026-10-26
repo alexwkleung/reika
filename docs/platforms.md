@@ -36,6 +36,19 @@ without an error, so a session can lose its earlier turns with nothing on screen
 recovery's logit bias also has no effect there. llama.cpp and vLLM report their window, so neither
 needs this.
 
+**Thinking models on Ollama, MLX and some templates.** Once a context window is known, Reika puts its
+per-round notes in a short message at the end of each request so the prompt cache stays valid. Many
+thinking models' chat templates hide all earlier reasoning behind that message, so the model can't see
+its own earlier thinking and keeps working it out again. Reika asks the template to keep it
+(`preserve_thinking`). That works on llama.cpp, vLLM and SGLang running on your own machine or
+network, with a template that supports it: LFM2.5 and Qwen3.6, for example. It does not help when the
+engine ignores the request (mlx-vlm, and very likely Ollama), when the server is at a public address,
+or when the template has no such switch (Mellum2.1 Thinking, Ornith 1.5, Gemma 4 E4B, among the
+[tested models](models.md)). Setting `REIKA_PREFIX_STABLE=0` moves the notes back into the system
+prompt so the reasoning stays visible, but it gives up most prompt-cache reuse: on a slow machine
+that can cost minutes of reprocessing per round, which may be worse than the problem. Tracked in
+[#827](https://github.com/alexwkleung/reika/issues/827).
+
 ## What differs by platform
 
 Everything outside this table works the same everywhere.
