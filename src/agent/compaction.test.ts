@@ -58,6 +58,38 @@ describe('compactHistory', () => {
     expect(history).toHaveLength(before);
   });
 
+  // #822: the keep walk broke before ever setting keepFrom, which then indexed past the end.
+  it('keeps a newest user message larger than the keep budget and folds what precedes it', () => {
+    const big = 'x'.repeat(30000);
+    const history: Message[] = [
+      ...turn(1, 'a.ts'),
+      ...turn(2, 'b.ts'),
+      { role: 'user', content: big },
+    ];
+    expect(wouldFold(history, 24000, 1, 2048)).toBe(true);
+    expect(compactHistory(history, 24000, 1, 2048)).toBeGreaterThan(0);
+    expect(history[0]).toMatchObject({ role: 'user', content: 'q1' });
+    expect(history[1].role).toBe('compaction');
+    expect(history.at(-1)).toMatchObject({ role: 'user', content: big });
+  });
+
+  it('keeps an oversized assistant tool call with its results, never orphaning a tool message', () => {
+    const history: Message[] = [
+      ...turn(1, 'a.ts'),
+      ...turn(2, 'b.ts'),
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'r'.repeat(30000),
+        toolCalls: [{ id: 'big', name: 'read', args: { path: 'c.ts' } }],
+      },
+      { role: 'tool', callId: 'big', summary: 'Read c.ts lines 1-3 of 3', payload: 'c' },
+    ];
+    expect(compactHistory(history, 24000, 1, 2048)).toBeGreaterThan(0);
+    expect(history.at(-2)).toMatchObject({ role: 'assistant', toolCalls: [{ id: 'big' }] });
+    expect(history.at(-1)).toMatchObject({ role: 'tool', callId: 'big' });
+  });
+
   it('does nothing without a context window', () => {
     const history = [...turn(1, 'a.ts'), ...turn(2, 'b.ts'), ...turn(3, 'c.ts')];
     expect(compactHistory(history, 0)).toBe(0);

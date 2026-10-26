@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A very large message (a big paste, `@`-mention or skill) on a small context window no longer
+  fails the turn with `Cannot read properties of undefined (reading 'role')` when reika compacts.
+  The message is kept and the conversation before it is compacted.
 - While a local model writes its compaction note, reika no longer briefly shows the model's
   next-step thinking and a tool call after the note. They were never part of the saved note, but
   seeing them stream and then disappear made it look like a hidden tool call.
