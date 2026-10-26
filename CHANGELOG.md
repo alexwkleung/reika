@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- An edit made right after the model read the file with `cat`, `head` or `sed -n` is no longer held
+  back with "read the file first". Models that read through the shell lost a step on nearly every
+  file, and one rewrote a whole file from memory when the read it was told to make was then refused.
 - A very large message (a big paste, `@`-mention or skill) on a small context window no longer
   fails the turn with `Cannot read properties of undefined (reading 'role')` when reika compacts.
   The message is kept and the conversation before it is compacted.

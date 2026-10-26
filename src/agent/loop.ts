@@ -3749,7 +3749,10 @@ export async function runTurn(opts: {
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
         );
       } else if (shellRead) {
-        // A one-file read through the shell deepens the same per-file count as `read` (#801).
+        // A one-file read through the shell deepens the same per-file count as `read` (#801), and
+        // grounds the read-first gate like one (#825): its payload carries the file's bytes, and
+        // ignoring it bounced 12 of 14 edits on lfm2.5 T2 runs, 10 of 11 that would have landed.
+        groundsPath = shellRead.path;
         const { cls, repeats } = readTrace.record(
           shellRead.path,
           shellRead.offset,
