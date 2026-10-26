@@ -831,7 +831,9 @@ one amortized cache invalidation instead of one per round, with the active round
 protected. How deep that watermark should be is an open, measurable question (#253): each event
 re-processes most of the prompt, so shedding further means fewer events per run, at the cost of a
 smaller live working set between them — which #251 showed is what keeps the model on task. Measure
-it with `evals/prefixcost-report.ts`; don't argue it.
+it with `evals/prefixcost-report.ts`; don't argue it. A change to what an event sheds (order,
+floors, a new sweep) can be priced offline first with `evals/aging-replay.ts`, which replays saved
+sessions through the real shed and fold — #821's sweep measured null there without a model run.
 Aging sweeps twice, shedding bulk before crumbs (#257): a payload under `SMALL_PAYLOAD_CHARS` is
 skipped on the first sweep, because relief that small can't plausibly be what tips the estimate
 under the watermark while losing it can cost a whole re-read round — and the re-read puts the
