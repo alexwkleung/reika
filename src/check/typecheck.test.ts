@@ -161,7 +161,7 @@ describe('stopTypecheckReport (#830)', () => {
     expect(r.tone).toBe('warn');
     expect(r.addendum).toContain('introduced 3 new type errors');
     expect(r.addendum).toContain('`src/a.ts:3 TS2322');
-    expect(r.addendum).toContain('`src/b.ts:7 TS2554: Expected 3 arguments.`');
+    expect(r.addendum).toContain('`src/b.ts:7 TS2554: Expected 3 arguments`');
     expect(r.addendum).toContain('+1 more');
     expect(r.addendum).not.toContain('src/c.ts');
   });

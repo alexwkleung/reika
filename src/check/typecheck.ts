@@ -172,7 +172,11 @@ export function stopTypecheckReport(baseline: Diagnostic[], final: CheckOutcome)
   const word = n === 1 ? 'error' : 'errors';
   const shown = introduced
     .slice(0, STOP_REPORT_SHOWN)
-    .map(d => `\`${d.file}:${d.line} ${d.code}: ${d.message.slice(0, MAX_MESSAGE_CHARS)}\``);
+    // tsc's own period dropped: the sentence closes the list, so it would print `….`.
+    .map(d => {
+      const msg = d.message.slice(0, MAX_MESSAGE_CHARS).replace(/\.$/, '');
+      return `\`${d.file}:${d.line} ${d.code}: ${msg}\``;
+    });
   const more = n > shown.length ? `, +${n - shown.length} more` : '';
   return {
     addendum: ` The edits also introduced ${n} new type ${word}: ${shown.join(', ')}${more}.`,
