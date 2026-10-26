@@ -98,6 +98,10 @@ export function foldPoint(
     if (chars > keepBudget) break;
     keepFrom = i;
   }
+  // #822: a newest message larger than the whole keep budget (a big paste or @-mention on a small
+  // window) left keepFrom past the end. Keep it anyway and fold what precedes it: returning null
+  // instead would send the over-threshold request unshrunk.
+  if (keepFrom === history.length) keepFrom = history.length - 1;
   // Snap keepFrom back to the start of its tool-call group so a kept tool result is never orphaned
   // from the assistant tool_call it answers (a bare leading tool message is an API error). Walking
   // *back* to a group boundary — rather than the old *forward* snap to a user message — is what lets
