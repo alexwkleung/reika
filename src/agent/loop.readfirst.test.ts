@@ -5,7 +5,8 @@ import ignore from 'ignore';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
+import { bashTool } from '../tools/bash.js';
 import { editTool } from '../tools/edit.js';
 import { readTool } from '../tools/read.js';
 
@@ -43,6 +44,10 @@ const editResponse = (path: string, oldStr: string, newStr: string): ModelRespon
 const readResponse = (path: string): ModelResponse => ({
   content: '',
   toolCalls: [{ id: 'r1', name: 'read', args: { path } }],
+});
+const bashResponse = (command: string): ModelResponse => ({
+  content: '',
+  toolCalls: [{ id: 'b1', name: 'bash', args: { command } }],
 });
 const rangedReadResponse = (path: string, offset: number, limit: number): ModelResponse => ({
   content: '',
@@ -92,14 +97,18 @@ function makeConfig(): Config {
   };
 }
 
-async function run(cwd: string, history: Message[]): Promise<{ messages: Message[] }> {
+async function run(
+  cwd: string,
+  history: Message[],
+  tools: Tool[] = [readTool, editTool],
+): Promise<{ messages: Message[] }> {
   const messages: Message[] = [];
   await runTurn({
     userInput: 'execute the plan above',
     history,
     bundle: makeBundle(cwd),
     config: makeConfig(),
-    tools: [readTool, editTool],
+    tools,
     payloads: new PayloadStore(),
     promptMode: 'agent',
     onMessage: m => messages.push(m),
@@ -167,6 +176,36 @@ describe('read-first gate (integration)', () => {
       false,
     );
     expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
+  });
+
+  // #825: a model that reads through the shell holds the bytes too. Before, the edit after a `cat`
+  // was bounced, and when inspection was withdrawn the next round the directed read was refused.
+  it('never bounces an edit whose file was read through the shell', async () => {
+    h.scripted.push(
+      bashResponse('cat -n src/app.ts'),
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY], [readTool, editTool, bashTool]);
+
+    expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(
+      false,
+    );
+    expect(await readFile(app, 'utf8')).toBe('export const renamed = 1;\n');
+  });
+
+  it('still bounces after a shell command that is not a one-file read', async () => {
+    h.scripted.push(
+      bashResponse('cat src/app.ts | grep app'),
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY], [readTool, editTool, bashTool]);
+
+    expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(true);
   });
 
   it('is fail-open: a re-issued edit runs as-is without the read', async () => {

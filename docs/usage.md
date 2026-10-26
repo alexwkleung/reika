@@ -93,7 +93,7 @@ adjudicated once, never re-asked on later turns.
 #### Read-first edits
 
 On by default; `REIKA_READ_FIRST=0` turns it off. The first `edit` to a file whose contents are not in
-the model's context — never read, or the read has aged out — is withheld once, with a directive to read
+the model's context — never read (through `read` or a one-file `cat`/`sed -n`/`head`), or the read has aged out — is withheld once, with a directive to read
 the file and re-issue the edit from its actual bytes: reading first, instead of reasoning about an
 `old_string` failure after the fact. One bounce per file per turn, and a re-issued edit always runs.
 
