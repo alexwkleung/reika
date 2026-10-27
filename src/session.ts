@@ -223,8 +223,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const retryWindow = new Set<string>();
   if (probed && !probed.reached) retryWindow.add(profile);
   // #827: which slot the per-round note takes on this endpoint. Fired here so it overlaps startup,
-  // awaited at each submit before the turn so it never runs between rounds (a probe there would
-  // evict a single-slot server's cache), and asked again at a submit if the server was not up.
+  // awaited at each submit once the user's message is on screen and before the turn's first request,
+  // so it never runs between rounds (a probe there would evict a single-slot server's cache), and
+  // asked again at a submit if the server was not up.
   void ensureNoteSlot(resolveProfile(cfg, profile));
 
   // No route out → no web tools this session (#392). Checked once, here, because the tool list is
@@ -309,7 +310,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     const pending: Message[] = [];
     try {
       pending.push(...(await retryWindowProbe()));
-      await ensureNoteSlot(resolveProfile(cfg, profile), undefined, signal ?? undefined);
       await runTurn({
         ...events,
         userInput: text,
@@ -332,6 +332,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         // vibe) never refines, since its plan phase is a new task even when a plan sits right above.
         allowRefine: turnRefines(recorded),
         manualCompact: submit.manualCompact,
+        // After the user echo, so the prompt is on screen while a probe runs; still before the
+        // turn's first request, never between rounds.
+        beforeFirstRequest: () =>
+          ensureNoteSlot(resolveProfile(cfg, profile), undefined, signal ?? undefined),
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.
         onMessage: raw => {
