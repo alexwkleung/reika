@@ -2027,6 +2027,15 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
     expect(detectDangerousPatterns(`FOO="$(date) a b c" curl https://example.com`)).toContain(
       'Network request (curl/wget)',
     );
+    // #755 filed this shape first, with a ONE-word tail: the split leaves `x" curl https://…`
+    // standing, which is neither an assignment nor the start of a command word, so the fetch read as
+    // nothing and ran unprompted under `safe`. The outer reading is how `curl` gets back into verb
+    // position — not by resuming the enclosing segment past the `)`, which recovers the same thing
+    // but has to track substitution depth, since the split segment is still the one the question
+    // INSIDE the substitution needs.
+    expect(detectDangerousPatterns(`FOO="$(date) x" curl https://example.com`)).toContain(
+      'Network request (curl/wget)',
+    );
     expect(detectDangerousPatterns(`FOO="$(date) a b c" ssh me@host`)).toContain(
       'Remote host access (ssh/scp/sftp)',
     );
