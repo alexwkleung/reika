@@ -120,11 +120,50 @@ describe('prefilledReply (#806)', () => {
         { content: `${prefill}- a.ts: parse()\n\nLet me read b.ts next.\n</think>\n\nstray` },
         prefill,
       ).content,
-    ).toBe('Established:\n- a.ts: parse()\n\nLet me read b.ts next.');
+    ).toBe('Established:\n- a.ts: parse()');
     expect(prefilledReply({ content: `${prefill}</think>\n- a.ts` }, prefill).content).toBe(
       'Established:\n- a.ts',
     );
     expect(prefilledReply({ content: `${prefill}</think>\n` }, prefill).content).toBe('');
+  });
+
+  // #839, the T2 run-on: two bullets of note, then 11k chars of planning and 11 text-form calls.
+  it('ends the note before the next-step thinking that follows it', () => {
+    const calls = Array.from({ length: 11 }, (_, i) => ({ id: `c${i}`, name: 'bash', args: {} }));
+    const note =
+      '- `parseHeadlessArgs` tests exist in `src/headless.test.ts`.\n' +
+      '- The test file imports `parseHeadlessArgs` from `./headlessargs.js`.';
+    const plan =
+      'Now I understand the structure. Let me plan the implementation:\n\n' +
+      '**1. `src/headlessargs.ts`:**\n- Add `profile?: string` to `HeadlessArgs`.\n\n' +
+      `${'More planning. '.repeat(400)}`;
+    const r = prefilledReply(
+      { content: `${prefill}${note}\n\n${plan}`, toolCalls: calls },
+      prefill,
+    );
+    expect(r.content).toBe(`Established:\n${note}`);
+    expect(r.toolCalls).toBeUndefined();
+    expect(r.callsDropped).toBe(11);
+  });
+
+  it("cuts a trailing lead-in and keeps the note's own prose", () => {
+    const body =
+      '- `src/config.ts`: profiles come from loadProfiles.\n\n' +
+      'Still open: the error wording for an unreachable server.\n\n' +
+      'Next: read the failure branch in `src/headless.ts`.';
+    expect(
+      prefilledReply({ content: `${prefill}${body}\n\nLet me run the tests now:` }, prefill)
+        .content,
+    ).toBe(`Established:\n${body}`);
+    expect(prefilledReply({ content: `${prefill}${body}` }, prefill).content).toBe(
+      `Established:\n${body}`,
+    );
+  });
+
+  it('never cuts the first paragraph', () => {
+    expect(
+      prefilledReply({ content: `${prefill}Let me check src/a.ts first.` }, prefill).content,
+    ).toBe('Established:\nLet me check src/a.ts first.');
   });
 
   // LFM2.5 at 16k: 1206 chars of note, then a call, on both attempts; the fold got no note.
@@ -173,6 +212,22 @@ describe('prefilledNoteStream (#819)', () => {
   it('lets a held < through once it is not a tag', () => {
     expect(run(chars(`${prefill}- a < b`))).toBe('Established:\n- a < b');
     expect(run([`${prefill}- a <`])).toBe('Established:\n- a');
+  });
+
+  it('stops before next-step thinking, so a text-form call after it never draws (#839)', () => {
+    const reply =
+      `${prefill}- a.ts: parse()\n- b.ts: emit()\n\nNow I understand the structure. Let me plan:\n\n` +
+      '[bash(command="python3 -c \'print(1)\'")]';
+    expect(run(chars(reply))).toBe('Established:\n- a.ts: parse()\n- b.ts: emit()');
+    expect(run(chars(reply))).toBe(prefilledReply({ content: reply }, prefill).content);
+  });
+
+  it('holds a new paragraph until its opening words decide it', () => {
+    // Mid-stream, "\n\nLet" could still become a lead-in: nothing of it draws yet.
+    expect(run([`${prefill}- a.ts\n\nLet`])).toBe('Established:\n- a.ts');
+    expect(run(chars(`${prefill}- a.ts\n\nStill open: the wording of the error message.`))).toBe(
+      'Established:\n- a.ts\n\nStill open: the wording of the error message.',
+    );
   });
 
   it('matches what prefilledReply commits', () => {
