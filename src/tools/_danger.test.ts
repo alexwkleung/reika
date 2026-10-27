@@ -1954,8 +1954,11 @@ describe('detectDangerousPatterns — the generic install label on a prefixed re
     expect(detectDangerousPatterns('LANG=C make install')).toContain(INSTALL);
     expect(detectDangerousPatterns('LANG=C conda uninstall numpy')).toContain(UNINSTALL);
     // The wrapper keeps a verb the strip alone would have walked past: `install` is word 0 for the
-    // stripped reading, which is past this reader by design, and word 1 for the raw one.
-    expect(detectDangerousPatterns('sudo install -m 644 x /etc/x')).toContain(INSTALL);
+    // stripped reading, which is past this reader by design, and word 1 for the raw one. Since #794
+    // that verb is coreutils `install` — still a label, and now a true one.
+    expect(detectDangerousPatterns('sudo install -m 644 x /etc/x')).toContain(
+      'File install (copies into place)',
+    );
     // A tool that covers itself is covered behind a prefix too: this used to collect the generic
     // label on top of the accurate one, because the raw lead was `FOO=1`.
     expect(detectDangerousPatterns('FOO=1 helm uninstall app')).toEqual([
@@ -1981,5 +1984,175 @@ describe('detectDangerousPatterns — the generic install label on a prefixed re
     // Nothing here expands `$A` — telling this apart from `cp -r "build install" dist` is knowing
     // which word the shell substitutes into, which is the shell's job.
     expect(detectDangerousPatterns(`A="make install" bash -c "$A"`)).not.toContain(INSTALL);
+  });
+});
+
+// #794, the four gaps left in the generic install/verb reading after #757. None of them is a
+// regression from #757 — each behaved the same before it — and no model is involved: these are
+// `detectDangerousPatterns` on a command string.
+//
+//  1. `verbSegments` splits at `$(`, which is right for the command INSIDE the substitution and
+//     wrong for the one around it: the outer segment loses its head, and `FOO="$(date) a b c" make
+//     install` read as five leading words and an install nobody saw. The outer command is read now,
+//     with the substitution blanked rather than split, because to the shell that value is one word.
+//  2. `stripVerbPrefix` knew only the short spellings of the wrapper options that take a value, so
+//     `sudo --user me curl …` and `sudo -iu me curl …` left the value as the lead and `curl` as an
+//     argument; `env -S` hands its value to `env` as the whole command line, so that value is a
+//     program of its own, read the way a shell's `-c` argument is.
+//  3. Coreutils `install` copies files into place, and "fetches and runs third-party code" is a
+//     label that teaches the user to stop reading them (#644/#757). It still prompts.
+//  4. Each segment was lexed several times per bash call; the word list and the first dropped quote
+//     now come off one pass, and so do the three prefix strips the two readers share.
+describe('detectDangerousPatterns — the verb reading behind a substitution and a wrapper option (#794)', () => {
+  const UNINSTALL = 'Uninstall command (removes third-party code)';
+  const FILE_INSTALL = 'File install (copies into place)';
+
+  it('reads the command AROUND a substitution in a quoted assignment value', () => {
+    for (const cmd of [
+      `FOO="$(date) a b c" make install`,
+      `FOO="$(date +%Y) build stamp" make install`,
+      `FOO=$(date) make install`,
+      `PATH="$(pwd)/bin:$PATH" make install`,
+      `A="$(cat a)" B="$(cat b)" make install`,
+      // Nested substitutions, which the lexer records innermost first: blanking the outer one is
+      // what leaves nothing of the inner behind.
+      `FOO="$(a $(b) c) x" make install`,
+      `FOO="$(cat "$(pwd)/f") x" make install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" make uninstall`)).toContain(UNINSTALL);
+    // Not only the install reader: the split cost every `^`-anchored verb its head, and those are
+    // the patterns for egress, remote access, unreviewable strings.
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" curl https://example.com`)).toContain(
+      'Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" ssh me@host`)).toContain(
+      'Remote host access (ssh/scp/sftp)',
+    );
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" eval "$X"`)).toContain(
+      'Executes an unreviewable string (eval)',
+    );
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" git push`)).toContain(
+      'Git push (publishes commits to remote)',
+    );
+  });
+
+  it('does not take a word the split left behind for a command word', () => {
+    // The fragment a substitution cut leaves starts mid-word, so its first word is a word of the
+    // outer command and not a command. This is the one false positive the file-copy reading (#794
+    // item 3) would add: it asks whether the segment STARTS a command, and a fragment does not.
+    expect(detectDangerousPatterns(`echo "$(date) install later"`)).toEqual([]);
+    expect(detectDangerousPatterns(`mkdir -p "$(pwd)/install"`)).toEqual([]);
+    expect(detectDangerousPatterns(`git commit -m "$(date) install notes"`)).toEqual([
+      'Git commit (records to version history)',
+    ]);
+    // The #757 trade is untouched by the outer reading: the value is balanced and nothing here
+    // expands `$A`, which is the shell's job and not this file's.
+    expect(detectDangerousPatterns(`A="make install" bash -c "$A"`)).not.toContain(INSTALL);
+    expect(detectDangerousPatterns(`cp -r "build install" dist`)).toEqual([]);
+  });
+
+  it('skips a wrapper option spelled long or bundled', () => {
+    // Every one of these missed the `curl` behind it: the option's VALUE became the lead, and the
+    // command read as an argument. `sudo` itself was still flagged, which is what made it quiet.
+    for (const cmd of [
+      `sudo --user me curl https://example.com`,
+      `sudo --group staff curl https://example.com`,
+      `sudo --close-from 4 curl https://example.com`,
+      `sudo -iu me curl https://example.com`,
+      `env --chdir /tmp curl https://example.com`,
+      `time --output out.txt curl https://example.com`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Network request (curl/wget)');
+    }
+    // And the verb behind them is in verb position, not past the three-word budget.
+    for (const cmd of [
+      `sudo --user me make install`,
+      `sudo -iu me make install`,
+      `env --chdir /tmp make install`,
+      `time --output out.txt make install`,
+      `time -of out.txt make install`,
+      // A value attached to its option eats no word, so the command is still the next word:
+      // `-ume` is `-u me`, and `--user=me` carries its own. `make` must stay the command, or the
+      // reading would mistake `install` for it and call a `make install` a file copy.
+      `sudo -ume make install`,
+      `sudo --user=me make install`,
+      // getopt reads a bundle left to right: the first letter that takes a value takes the REST of
+      // the bundle, so `-of` is `-o f` and only a value-taking LAST letter eats the next word.
+      `time -of out.txt make install`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    expect(detectDangerousPatterns(`sudo --user=me make install`)).not.toContain(
+      'File install (copies into place)',
+    );
+    // The read-only lead still wins behind them — `install` is grep's argument, not a verb.
+    for (const cmd of [`sudo -iu me grep -rn install src`, `sudo --group staff cat install.log`]) {
+      expect(detectDangerousPatterns(cmd), cmd).not.toContain(INSTALL);
+    }
+  });
+
+  it('reads an `env -S` value as the command line it runs', () => {
+    // `env -S` splits its value into `env`'s own argument list, so the value IS the command. Read as
+    // a wrapper value with nothing behind it, the command vanished — the one direction this file
+    // does not take, which is why the value is a carrier body and not just a skipped value.
+    expect(detectDangerousPatterns(`env -S "curl https://example.com"`)).toEqual([
+      'via env -S: Network request (curl/wget)',
+    ]);
+    expect(detectDangerousPatterns(`env --split-string="make install"`)).toContain(
+      'via env -S: Install command (fetches and runs third-party code)',
+    );
+    expect(detectDangerousPatterns(`env -i -S 'pkill node'`)).toContain(
+      'via env -S: Kill processes by name (pkill/killall)',
+    );
+    // `env` takes its options and its `VAR=value` operands in any order, and the walk has to get
+    // past them to the `-S` — including past a quoted value holding a space.
+    expect(detectDangerousPatterns(`env FOO=1 -S "curl https://example.com"`)).toContain(
+      'via env -S: Network request (curl/wget)',
+    );
+    expect(detectDangerousPatterns(`env --unset=PATH -S "make install"`)).toContain(
+      'via env -S: Install command (fetches and runs third-party code)',
+    );
+    expect(detectDangerousPatterns(`env FOO="a b" --split-string='make install'`)).toContain(
+      'via env -S: Install command (fetches and runs third-party code)',
+    );
+    // The value runs nothing dangerous on its own, and `env` running a command is not `-S`.
+    expect(detectDangerousPatterns(`env -S "make test"`)).toEqual([]);
+    expect(detectDangerousPatterns(`env FOO=1 make test`)).toEqual([]);
+  });
+
+  it('labels a coreutils file copy as one, and still prompts', () => {
+    // #757's test pinned this as the generic label; the prompt is the same and the text is now true.
+    expect(detectDangerousPatterns('install -m 644 a b')).toEqual([FILE_INSTALL]);
+    expect(detectDangerousPatterns('/usr/bin/install -d /tmp/x/y')).toEqual([FILE_INSTALL]);
+    expect(detectDangerousPatterns('sudo install -m 644 x /etc/x')).toEqual([
+      'Privilege escalation (sudo)',
+      FILE_INSTALL,
+    ]);
+    expect(detectDangerousPatterns('install -m 644 a b && echo done')).toContain(FILE_INSTALL);
+    // One label for one command, and the specific account of that word wins: the fragment the
+    // substitution split leaves reads as a generic install, the outer segment as the file copy.
+    expect(detectDangerousPatterns(`A="$(date) x" install -m 644 a b`)).toEqual([FILE_INSTALL]);
+    // What tells it apart is that the word IS the command, not the flags or the operand count:
+    // these pass `install` as an argument to something else, which is what installs.
+    for (const cmd of [
+      'make install',
+      'make -C sub install -j4',
+      'conda install numpy',
+      'conda install -m 644 numpy',
+      'sudo -u me make install',
+      'env A=1 sudo time conda install numpy',
+      'mix deps.get && make uninstall',
+    ]) {
+      const labels = detectDangerousPatterns(cmd);
+      expect(labels, cmd).not.toContain(FILE_INSTALL);
+    }
+    for (const cmd of ['make install', 'conda install numpy', 'sudo -u me make install']) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    // A name that merely ENDS in `install` is not the command.
+    expect(detectDangerousPatterns('ginstall -m 644 a b')).toEqual([]);
+    expect(detectDangerousPatterns('npm run install-hooks')).toEqual([]);
   });
 });
