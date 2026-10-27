@@ -1398,6 +1398,9 @@ export async function runTurn(opts: {
   // the loop's own numbering (`shrink`) is the point of doing it here rather than beside the loop:
   // auto compaction and /compact stay in sync regardless of which fired last.
   manualCompact?: boolean;
+  // Awaited after the user message is emitted and before the first request: what must settle before
+  // the turn sends anything (the note-slot probe, #827), without leaving the screen blank meanwhile.
+  beforeFirstRequest?: () => Promise<void>;
 }): Promise<void> {
   if (!opts.manualCompact) {
     const userMsg: Message = {
@@ -1415,6 +1418,7 @@ export async function runTurn(opts: {
     opts.history.push(userMsg);
     opts.onMessage(userMsg);
   }
+  await opts.beforeFirstRequest?.();
 
   // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
   // diverges from round 0. A subagent is never warmed, so its report frame can't cause that drift.
