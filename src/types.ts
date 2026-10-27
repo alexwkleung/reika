@@ -602,26 +602,12 @@ export type Config = {
   anon: boolean;
 };
 
-// Two configs that differ only in whether a profile has been resolved onto them, and the brand is
-// what tells `tsc` which is which (#832). The trap it closes: `createSession` keeps the *raw*
-// config and re-resolves `profile` over it on every turn, so a caller that hands it
-// `resolveProfile`'s result gets its overlay silently undone and the run goes to the default
-// profile's server — a no-op that compiles, passes the tests, and shows only in text built from the
-// overlaid config naming a server the request never went to. Cheap to fall for, and the failure
-// mode of an LLM editing this code: the obvious move is the wrong one. It now fails the typecheck
-// gate instead, with the line that says what to pass.
+// #832: a session re-resolves its profile every turn, so an already-resolved config handed back
+// to it is silently undone. The literal type is what tsc prints; config.ts backs it at runtime.
 declare const resolvedBrand: unique symbol;
 
-// What `resolveProfile` returns: a config with the active profile's model, route, key and limits
-// overlaid on the top level. Reads fine anywhere a `Config` fits (a view of the active model —
-// App's image reader, the gauge, a turn), but `SessionOptions.config` refuses it, since a session
-// has to start from the unresolved config. The property's type is a sentence on purpose: it is
-// what `tsc` prints when someone ignores this.
 export type ResolvedConfig = Config & {
   readonly [resolvedBrand]: 'ResolvedConfig — pass the profile name to createSession, not this';
 };
 
-// The unresolved config: `loadConfig`'s result, every profile intact and the top level describing
-// the default one. `never` is the other half of the brand — it is what makes a `ResolvedConfig`
-// not assignable here, while any plain `Config` is.
 export type RawConfig = Config & { readonly [resolvedBrand]?: never };

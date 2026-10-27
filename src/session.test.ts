@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Config, ContextBundle, Message, Tool } from './types.js';
+import type { Config, ContextBundle, Message, RawConfig, ResolvedConfig, Tool } from './types.js';
 import type { ModelLimitsProbe } from './provider/modellimits.js';
 
 const CONFIG: Config = {
@@ -129,7 +129,7 @@ vi.mock('./agent/loop.js', async importActual => ({
 }));
 
 const { createSession, noWindowNotice } = await import('./session.js');
-const { resolveProfile } = await import('./config.js');
+const { resolveProfile, withProbedLimits } = await import('./config.js');
 
 const text = (m: Message | undefined): string | undefined =>
   m && 'content' in m ? (m.content ?? undefined) : undefined;
@@ -478,17 +478,6 @@ describe('createSession', () => {
       },
     };
 
-    it('runs the turn on the profile it was opened with', async () => {
-      const s = await createSession({ cwd: '/repo', config: TWO, profile: 'vl' });
-      // Only the name picks the profile. `resolveProfile` is applied per turn, which is why
-      // passing its result to `createSession` used to undo itself (#832).
-      expect(s.profile).toBe('vl');
-      expect(s.config.model).toBe('vl-model');
-      await s.submit('hi', { mode: 'agent' });
-      expect(calls[0].config.model).toBe('vl-model');
-      expect(calls[0].config.baseURL).toBe('http://127.0.0.1:2/v1');
-    });
-
     it('switches, tells subscribers, runs the next turn on it, and forgets the decode rate', async () => {
       const s = await createSession({ cwd: '/repo', config: TWO });
       await s.submit('warm up', { mode: 'agent' });
@@ -648,17 +637,25 @@ describe('MCP servers (#265)', () => {
   });
 });
 
-// #832: every turn re-resolves `profile` over the session's raw config, so a caller that hands
-// `createSession` an overlaid config has its overlay silently undone and the run goes to the
-// default profile — a no-op that compiles, passes the tests, and shows only in text built from the
-// caller's copy naming a server the request never reached. The brand on `ResolvedConfig` makes it a
-// type error, and this `@ts-expect-error` is what keeps the brand from quietly eroding: `tsc` runs
-// over this file as part of the gate, so it fails the day the two types meet again.
+// #832: a resolved config handed back to createSession has its overlay silently undone.
+type Assert<T extends true> = T;
+type _RawAcceptsConfig = Assert<Config extends RawConfig ? true : false>;
+type _RawRefusesResolved = Assert<ResolvedConfig extends RawConfig ? false : true>;
+
 describe('SessionOptions.config (#832)', () => {
-  it('refuses a config resolveProfile already overlaid onto a profile', () => {
-    const alreadyResolved = resolveProfile(CONFIG, 'default');
-    // @ts-expect-error — a ResolvedConfig is a view of a turn's route, never a session's config.
-    const boot = (): unknown => createSession({ cwd: '/repo', config: alreadyResolved });
-    expect(typeof boot).toBe('function');
+  it('rejects a resolved config even after a Config-typed hop erased the brand', async () => {
+    const viaAnnotation: Config = resolveProfile(CONFIG, 'default');
+    await expect(createSession({ cwd: '/repo', config: viaAnnotation })).rejects.toThrow(
+      /createSession was given resolveProfile/,
+    );
+    const viaHelper = withProbedLimits(resolveProfile(CONFIG, 'default'), 'default', {});
+    await expect(createSession({ cwd: '/repo', config: viaHelper })).rejects.toThrow(
+      /createSession/,
+    );
+  });
+
+  it('refuses to resolve an already-resolved config', () => {
+    const once: Config = resolveProfile(CONFIG, 'default');
+    expect(() => resolveProfile(once, 'default')).toThrow(/resolveProfile was given/);
   });
 });

@@ -11,6 +11,7 @@ import type {
   ModelMode,
   PasteFetchMode,
   Profile,
+  RawConfig,
   ResolvedConfig,
   SkillAutoMode,
   VisionRoute,
@@ -525,14 +526,20 @@ export function inheritProfile(from: Profile, model: string): Profile {
   };
 }
 
-// The active profile overlaid on the rest of the config: the view of what a turn actually runs
-// with, and what a `/model` switch changes. The branded return type (#832) is not decoration —
-// this value is a *view*, not a session's config, and handing it to `createSession` would have the
-// session re-resolve `profile` over the raw config and silently undo it. See ResolvedConfig.
-export function resolveProfile(config: Config, profileName: string): ResolvedConfig {
+// The type brand is erased by any `Config` annotation or helper on the way, so the tag is what
+// actually catches a resolved config reaching createSession (#832). Enumerable so a spread keeps it.
+const RESOLVED = Symbol('ResolvedConfig');
+
+export function assertRawConfig(config: Config, where: string): void {
+  if (RESOLVED in config) {
+    throw new Error(`${where} was given resolveProfile()'s result; pass the raw config instead`);
+  }
+}
+
+export function resolveProfile(config: RawConfig, profileName: string): ResolvedConfig {
+  assertRawConfig(config, 'resolveProfile');
   const profile = config.profiles[profileName];
-  // An unknown name fails open to the top level, as it always has: the name reaching here is the
-  // session's own, which is checked where it is set (App's picker, headless's headlessProfile).
+  // An unknown name falls back to the top level, i.e. the default profile.
   const overlaid: Config = profile
     ? {
         ...config,
@@ -551,7 +558,5 @@ export function resolveProfile(config: Config, profileName: string): ResolvedCon
         vision: profile.vision ?? config.vision,
       }
     : config;
-  // The one place the brand is minted (#832). Everything after this reads the overlay; nothing may
-  // hand it back to `createSession`, which is what `RawConfig` types.
-  return overlaid as ResolvedConfig;
+  return { ...overlaid, [RESOLVED]: true } as unknown as ResolvedConfig;
 }

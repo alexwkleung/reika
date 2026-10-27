@@ -1,4 +1,4 @@
-import { loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { assertRawConfig, loadConfig, resolveProfile, withProbedLimits } from './config.js';
 import { ensureNoteSlot } from './provider/noteslot.js';
 import { repoMapBudgetFor } from './context/repomap.js';
 import {
@@ -83,11 +83,7 @@ export type SessionEvents = Partial<
 
 export type SessionOptions = {
   cwd: string;
-  // Defaults to loadConfig(), the environment the TUI reads. The raw config — never
-  // `resolveProfile`'s result: every turn re-resolves `profile` over this, so an overlaid config
-  // has its overlay silently undone and the run goes to the default profile's model, while any
-  // text built from the caller's copy still names the profile it thought it picked (#832).
-  // `RawConfig` is what makes that a type error instead of a silent no-op.
+  // Defaults to loadConfig(). Unresolved: pick the profile with `profile` (#832).
   config?: RawConfig;
   profile?: string;
   // False when nobody can answer: a model that sees ask_user calls it and stalls, so it is not
@@ -150,8 +146,7 @@ type Side = 'agent' | 'chat';
 
 export type Session = {
   readonly bundle: ContextBundle;
-  // The active profile resolved onto the config — what a turn runs with. A view, not the session's
-  // own config: it cannot go back into `createSession`, whose `config` is the unresolved one.
+  // The active profile resolved onto the config — what a turn runs with.
   readonly config: ResolvedConfig;
   readonly profile: string;
   readonly offline: boolean;
@@ -199,9 +194,7 @@ export type Session = {
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  // Unresolved for the session's whole life: `profile` names which of `profiles` turns run on, and
-  // resolveProfile is applied per turn. Keeping one source of truth for the active model is what
-  // #403 settled, and what RawConfig keeps callers from working around (#832).
+  if (opts.config) assertRawConfig(opts.config, 'createSession');
   let cfg: Config = opts.config ?? loadConfig();
   let profile = opts.profile ?? 'default';
   // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git subprocesses cost
