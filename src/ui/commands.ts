@@ -126,6 +126,10 @@ export const COMMANDS: CommandSpec[] = [
     name: 'mcp',
     desc: 'list MCP servers and their tools (each tool is also a /<server>:<tool> command)',
   },
+  {
+    name: 'search',
+    desc: 'search the web for a query (needs a search provider; the model runs it and answers from the results)',
+  },
   { name: 'stats', desc: 'show full session summary' },
   {
     name: 'save',
@@ -154,6 +158,50 @@ export function buildImplementPrompt(extra: string): string {
     'Implement the plan above. Work through it step by step, making the edits to the files it names.';
   const trimmed = extra.trim();
   return trimmed ? `${base}\n\nAdditional guidance: ${trimmed}` : base;
+}
+
+// The model-facing prompt for /search (#829). Written like a shipped skill's body — the command
+// hands over instructions, not a bare query — because the thing it exists for is the model that
+// would otherwise answer a web question from memory: `search` is in every list the mode can reach,
+// and a weak model uses it only when the first line says to. The rest is the discipline the search
+// and fetch budgets already price: one query, the results as given, and no answer the results do not
+// support. Not a bundled skill (the other option the issue raised): a skill's `requires:` is checked
+// from files alone at load time (PATH, git remote) with no config in scope, so it could not be
+// hidden on a machine with no provider, nor refuse in minimal mode, whose list has no web tools at
+// all — it would offer a slash command whose first call cannot run.
+export function buildSearchPrompt(query: string): string {
+  return [
+    `Search the web for: ${query.trim()}`,
+    '',
+    'Your first action is a `search` tool call with that query. Answer from its results, not from memory.',
+    '',
+    '- Give each claim the URL the results returned, verbatim.',
+    '- Open the one or two most promising results with `fetch_url` before leaning on a snippet.',
+    '- If the results are off-topic, say so and stop — do not re-run the query in other words.',
+    '- If the search fails or is unavailable, say that in one line instead of answering from memory.',
+  ].join('\n');
+}
+
+// Why /search cannot run in this mode, or undefined when it can. Checked before the provider, since
+// the fix differs: shell has no model turn to hand the query to, and minimal mode's list is bash
+// only — the same structural exclusions that keep the web pair out of those two modes
+// (tools/index.ts).
+export function searchModeRefusal(mode: Mode): string | undefined {
+  const elsewhere = '/agent, /plan, /chat or /grind to search.';
+  if (mode === 'shell') return `/search needs a model turn, and shell mode has none — ${elsewhere}`;
+  if (mode === 'minimal')
+    return `/search needs the web tools, and minimal mode carries none — ${elsewhere}`;
+  return undefined;
+}
+
+// The other refusal: the mode could search, but this session registered no `search` tool. Two causes
+// with two different fixes, so they are named apart — and the provider one names the switches, the
+// only place the user can act (`search.ts` keeps its own remedy out of the model's context for the
+// same reason).
+export function searchUnavailableNotice(offline: boolean): string {
+  return offline
+    ? '/search is off for this session: it started with no route out, so the web tools were not loaded (#392).'
+    : 'No search provider is configured, so this session has no `search` tool. Set REIKA_SEARXNG_URL to a SearXNG instance, or REIKA_CDP_SEARCH=1 to search through Chrome.';
 }
 
 // Whether a turn produced a plan worth acting on. The `planFinal` marker alone is not that:

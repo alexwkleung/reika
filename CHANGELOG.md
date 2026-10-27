@@ -14,6 +14,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Added
 
+- `/search <query>` searches the web without waiting for the model to decide to. The command sends
+  one search's instructions with your query, so a model that would otherwise answer from memory runs
+  the search and answers from its results. It needs a search provider — without one, or in a session
+  with no route out, it says which setting is missing instead of spending a turn — and it refuses in
+  shell and minimal mode, whose tool lists carry no web tools. The name is `/search`, not
+  `/web-search`: it shares it with the tool it invokes.
 - `AGENT.md` is read as an instructions file when there is no `AGENTS.md`, ahead of `CLAUDE.md`. Some
   repos use that older spelling, and reika loaded no instructions for them.
 

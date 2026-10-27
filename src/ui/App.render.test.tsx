@@ -432,3 +432,81 @@ describe('the /help list', () => {
     app.unmount();
   });
 });
+
+// `/search` (#829) is listed in the menu like any other command, but what it does depends on where it
+// is typed: a mode whose tool list carries no web tools has nothing to hand the query to. Those
+// refusals are deterministic and are the part that would otherwise fail silently, so they are driven
+// through the real App; the prompt itself is a string, pinned in commands.test.ts.
+describe('/search', () => {
+  // The message log commits through <Static>, so the row may not be in the last frame yet; every
+  // write Ink made is in stdout.frames.
+  async function waitFor(app: { stdout: { frames: string[] } }, text: string): Promise<string> {
+    for (let i = 0; i < 200 && !plain(app.stdout.frames.join('')).includes(text); i++)
+      await tick(25);
+    return plain(app.stdout.frames.join(''));
+  }
+
+  it('asks for a query instead of submitting an empty one', async () => {
+    runTurn.mockClear();
+    const app = await mountApp();
+    await submit(app, '/search');
+    expect(await waitFor(app, 'Usage: /search <query>')).toContain('Usage: /search <query>');
+    expect(runTurn).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it('refuses in minimal mode, naming the modes that can search', async () => {
+    runTurn.mockClear();
+    const app = await mountApp();
+    await submit(app, '/minimal');
+    await submit(app, '/search react useState');
+    const printed = await waitFor(app, 'minimal mode carries none');
+    // The refusal's lead, which the frame does not wrap, plus a mode it points at.
+    expect(printed).toContain('/search needs the web tools');
+    expect(printed).toContain('/agent, /plan,');
+    // Refused before the turn — not after a model call that had no tool to make.
+    expect(runTurn).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it('refuses with the setting to change when the session has no search provider', async () => {
+    runTurn.mockClear();
+    // CONFIG carries neither `searxngUrl` nor `cdpSearch`, so `makeSearchProvider` returns nothing
+    // and the `search` tool never registers — the case this branch exists for. Which of its two
+    // causes is reported depends on the machine having a route out, so both are accepted.
+    const app = await mountApp();
+    await submit(app, '/search react useState');
+    for (let i = 0; i < 200; i++) {
+      if (/No search provider is configured|no route out/.test(plain(app.stdout.frames.join(''))))
+        break;
+      await tick(25);
+    }
+    expect(plain(app.stdout.frames.join(''))).toMatch(
+      /No search provider is configured|no route out/,
+    );
+    expect(runTurn).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it('submits the instructions with the query once a provider is configured', async () => {
+    runTurn.mockClear();
+    // A provider that never gets called: the turn is held open by the loop mock, so all this claims
+    // is that the tool registered and that what the model was handed is the instruction body with
+    // the user's query in it — the rest is the model's turn to take.
+    CONFIG.searxngUrl = 'http://127.0.0.1:1/search';
+    try {
+      const app = await mountApp();
+      await submit(app, '/search react useState');
+      for (let i = 0; i < 200 && runTurn.mock.calls.length === 0; i++) await tick(25);
+      expect(runTurn).toHaveBeenCalledTimes(1);
+      const sent = JSON.stringify(runTurn.mock.calls[0]);
+      expect(sent).toContain('Search the web for: react useState');
+      expect(sent).toContain('first action is a `search` tool call');
+      // The bubble echoes what was typed, not the expanded body (the skill rule, #398).
+      expect(plain(app.stdout.frames.join(''))).toContain('/search react useState');
+      app.unmount();
+    } finally {
+      delete CONFIG.searxngUrl;
+    }
+  });
+});
