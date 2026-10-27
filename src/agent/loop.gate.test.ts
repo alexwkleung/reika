@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -345,6 +346,27 @@ describe('post-edit typecheck gate (integration)', () => {
       expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(
         false,
       );
+    });
+
+    it('says nothing at a stop when the turn ran commands but never edited', async () => {
+      await installTsc();
+      // A redirect outside the project names a write target, so it captures the baseline, but the
+      // tree is unchanged (the shape of `npx vitest run > /tmp/test.log`).
+      const outside = join(tmpdir(), `reika-gate-out-${process.pid}.log`);
+      // A repo, as the bench worktree was: outside it, the redirect target is no change to the tree.
+      execFileSync('git', ['init', '-q'], { cwd });
+      h.scripted.push(bashResponse(`echo hi > ${outside}`), bashResponse(`echo hi > ${outside}`));
+
+      const { history, messages } = await run(cwd, [bashTool], makeConfig({ maxTurns: 2 }));
+
+      const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toBe(
+        '(reached max turns of 2; ask me to continue or raise the turn limit)',
+      );
+      expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(
+        false,
+      );
+      await rm(outside, { force: true });
     });
 
     it('names the errors in the agent loop stop', async () => {
