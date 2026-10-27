@@ -65,6 +65,7 @@ import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
+import { isOffline } from '../tools/_net.js';
 import { expandMentions } from '../agent/mentions.js';
 import {
   attachImageBlocks,
@@ -102,12 +103,15 @@ import {
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
+  buildSearchPrompt,
   IMPLEMENT_MODES,
   isImplementCommand,
   isMinimalPrompt,
   isGrindPrompt,
   isSaveCommand,
   nextMode,
+  searchModeRefusal,
+  searchUnavailableNotice,
   turnMode,
   turnPromptMode,
   turnRefines,
@@ -1547,6 +1551,37 @@ export function App() {
       );
       return;
     }
+    if (name === 'search') {
+      // `/search <query>` (#829): the direct road to the search tool. A mode's own prompt says to
+      // use `search` only when the answer needs current information, which leaves the decision to
+      // the model; this makes it the user's. Availability is read off the session's own tool lists
+      // rather than re-derived from config, so it agrees with the offline case too — that one is
+      // decided once at startup (`opts.offline` in tools/index.ts) and never revisited.
+      const query = args.trim();
+      const say = (content: string): void =>
+        setMessages(prev => [...prev, echo, { role: 'system', content }]);
+      if (!query) {
+        say('Usage: /search <query> — the model runs one web search and answers from the results.');
+        return;
+      }
+      const refusal = searchModeRefusal(mode);
+      if (refusal) {
+        say(refusal);
+        return;
+      }
+      // Vibe plans before it acts, and a search is a question, not a task: it runs as an agent turn,
+      // the same one-turn override /implement and /compact take out of vibe.
+      const target: Mode = mode === 'vibe' ? 'agent' : mode;
+      const lists = sessionRef.current?.lists;
+      if (!lists || !turnTools(target, lists).some(t => t.name === 'search')) {
+        say(searchUnavailableNotice(isOffline()));
+        return;
+      }
+      // No echo of its own, like a skill: runTurn emits the user message, rendered from `raw`, so
+      // the bubble reads `/search react 19` while the model receives the instructions.
+      await submitToModel(buildSearchPrompt(query), raw, target === mode ? undefined : target);
+      return;
+    }
     if (name === 'cd') {
       const target = args.trim();
       if (!target) {
@@ -1688,6 +1723,7 @@ export function App() {
           '  /skills            list available skills (loaded from your skill directories)',
           '  /mcp               list MCP servers and their tools (REIKA_MCP_SERVERS)',
           '  /<server>:<tool>   call an MCP tool directly (JSON args, or the bare string for a one-arg tool)',
+          '  /search <query>    search the web: the model runs one search and answers from the results',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
