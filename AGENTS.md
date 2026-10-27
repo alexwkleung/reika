@@ -868,7 +868,7 @@ the engine's own `prompt_tokens` for four tiny requests with and without a reaso
 and behind a note — counts that either move by the reasoning's size or don't, so `hides` /
 `renders` / `never-renders` with no tuned threshold (checked against LFM2.5 with and without the
 kwarg, Mellum2.1 and Hermes 3 on llama.cpp) — and caches the verdict a week in
-`~/.config/reika/note-slot.json`; and `agent/noteslotmonitor.ts` backs it up live where the probe
+`~/.config/reika/note-slot.json`, keyed by endpoint, model and whether the kwarg is actually sent (a verdict found with it withheld must not move the note on the same model with it on); and `agent/noteslotmonitor.ts` backs it up live where the probe
 could not answer, switching after two note rounds whose count is missing at least three quarters
 of the reasoning behind the note — for that session only, since its thresholds come from one
 model's runs and a wrong switch should not be cached for a week. The submit-time wait follows the

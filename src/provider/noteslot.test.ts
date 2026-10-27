@@ -99,6 +99,21 @@ describe('note-slot cache', () => {
     ).toBeUndefined();
   });
 
+  it('keeps a verdict found with the kwarg withheld apart from the kwarg-on setup', () => {
+    const path = cachePath();
+    const endpoint = { baseURL: 'http://gpu-box:8080/v1', model: 'lfm' };
+    process.env.REIKA_PRESERVE_THINKING = '0';
+    try {
+      applyNoteSlotVerdict(endpoint, 'hides', path);
+      expect(cachedNoteSlotVerdict(endpoint, path)).toBe('hides');
+    } finally {
+      delete process.env.REIKA_PRESERVE_THINKING;
+    }
+    expect(cachedNoteSlotVerdict(endpoint, path)).toBeUndefined();
+    applyNoteSlotVerdict(endpoint, 'renders', path);
+    expect(cachedNoteSlotVerdict(endpoint, path)).toBe('renders');
+  });
+
   it('reads a corrupt file as empty', () => {
     const path = cachePath();
     writeFileSync(path, '{not json');
