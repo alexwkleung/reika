@@ -1,4 +1,5 @@
 import { loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { ensureNoteSlot } from './provider/noteslot.js';
 import { repoMapBudgetFor } from './context/repomap.js';
 import {
   needsLimitsProbe,
@@ -221,6 +222,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   // submit on that profile, awaited so the window governs that turn rather than the one after.
   const retryWindow = new Set<string>();
   if (probed && !probed.reached) retryWindow.add(profile);
+  // #827: which slot the per-round note takes on this endpoint. Fired here so it overlaps startup,
+  // awaited at each submit before the turn so it never runs between rounds (a probe there would
+  // evict a single-slot server's cache), and asked again at a submit if the server was not up.
+  void ensureNoteSlot(resolveProfile(cfg, profile));
 
   // No route out → no web tools this session (#392). Checked once, here, because the tool list is
   // part of the cached prefix; the per-turn latch in the tools covers a drop later.
@@ -304,6 +309,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     const pending: Message[] = [];
     try {
       pending.push(...(await retryWindowProbe()));
+      await ensureNoteSlot(resolveProfile(cfg, profile), undefined, signal ?? undefined);
       await runTurn({
         ...events,
         userInput: text,
@@ -415,6 +421,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     decodeRate = undefined;
     genReserve = new GenReserve();
     changed();
+    void ensureNoteSlot(resolveProfile(cfg, name));
     if (!needsLimitsProbe(next)) return Promise.resolve([]);
     return probeModelLimits(next).then(probe => {
       if (!probe.reached) retryWindow.add(name);

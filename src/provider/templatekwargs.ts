@@ -11,6 +11,8 @@ import { classifyPrivateHost } from '../tools/_hosts.js';
 // and a strict one would 400 on it. A dotless name counts as local, since it cannot be public. A
 // local engine that rejects it is latched off by client.ts on an error naming the field.
 export function chatTemplateKwargsFor(baseURL: string): { preserve_thinking: true } | undefined {
+  // `0` reproduces an engine that never applies the field: the #827 test bed.
+  if (process.env.REIKA_PRESERVE_THINKING === '0') return undefined;
   return isLocalEngine(baseURL) ? { preserve_thinking: true } : undefined;
 }
 

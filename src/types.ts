@@ -573,6 +573,10 @@ export type Config = {
   // (REIKA_AUTOSAVE, default on — see store/sessions.ts). Optional so a hand-built Config (tests)
   // writes nothing to the home directory unless it asks to.
   autosave?: boolean;
+  // Probe a local engine for whether its template hides reasoning behind a user-role note, and move
+  // the note to the tool result if so (#827, provider/noteslot.ts). Set only by loadConfig, so a
+  // hand-built Config (tests) sends no probe requests to whatever server it names.
+  noteSlotProbe?: boolean;
   // Whether the harness runs the post-edit typecheck gate (`REIKA_TYPECHECK`, default on — see
   // src/check/typecheck.ts). Off entirely skips the baseline capture, the final re-check, and the
   // done-gate send-backs — not just the retries. The flag exists because not every TypeScript project

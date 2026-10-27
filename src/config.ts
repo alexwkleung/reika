@@ -177,6 +177,8 @@ export function loadConfig(): Config {
     // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
     // conversations to disk at all, which is the one reason to want it off.
     autosave: process.env.REIKA_AUTOSAVE !== '0',
+    // #827: REIKA_NOTE_SLOT=tool|user forces the slot instead, checked where the probe would run.
+    noteSlotProbe: true,
     // Rotating garden words on the busy indicator (#500). Default on; `0` keeps the plain
     // "Working…" for anyone who finds it noise.
     workingWords: process.env.REIKA_WORKING_WORDS !== '0',

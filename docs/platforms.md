@@ -38,16 +38,15 @@ needs this.
 
 **Thinking models on Ollama, MLX and some templates.** Once a context window is known, Reika puts its
 per-round notes in a short message at the end of each request so the prompt cache stays valid. Many
-thinking models' chat templates hide all earlier reasoning behind that message, so the model can't see
-its own earlier thinking and keeps working it out again. Reika asks the template to keep it
-(`preserve_thinking`). That works on llama.cpp, vLLM and SGLang running on your own machine or
-network, with a template that supports it: LFM2.5 and Qwen3.6, for example. It does not help when the
-engine ignores the request (mlx-vlm, and very likely Ollama), when the server is at a public address,
-or when the template has no such switch (Mellum2.1 Thinking, Ornith 1.5, Gemma 4 E4B, among the
-[tested models](models.md)). Setting `REIKA_PREFIX_STABLE=0` moves the notes back into the system
-prompt so the reasoning stays visible, but it gives up most prompt-cache reuse: on a slow machine
-that can cost minutes of reprocessing per round, which may be worse than the problem. Tracked in
-[#827](https://github.com/alexwkleung/reika/issues/827).
+thinking models' chat templates hide all earlier reasoning behind such a message, so the model can't
+see its own earlier thinking and keeps working it out again. Reika asks the template to keep it
+(`preserve_thinking`), which works on llama.cpp, vLLM and SGLang on your own machine or network with a
+template that supports it, such as LFM2.5 and Qwen3.6. Where it doesn't — an engine that ignores the
+request (mlx-vlm, and very likely Ollama), or a template with no such switch (Mellum2.1 Thinking,
+Ornith 1.5, Gemma 4 E4B) — Reika moves its notes onto the last tool result instead, where they hide
+nothing. It finds out which case it is in with a few tiny requests to a local server before the first
+turn, remembered for a week, and keeps an eye on it during the session. `REIKA_NOTE_SLOT=tool` or
+`user` overrides it.
 
 ## What differs by platform
 

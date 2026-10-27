@@ -851,10 +851,30 @@ and the per-round ledgers/nudges ride a transient trailing user message instead 
 suffix (their "auto-generated — not user input" headers carry the framing). A user-role message
 resets which reasoning a thinking template renders: LFM2.5's and Qwen3.6's drop every `<think>`
 before the newest user message, so from the first shed the model saw none of its own reasoning and
-re-derived it (#798: restating in 70–75% of rounds after the shed, 3–17% with the switch on). The
-ledgers stay user-role, since a note in a tool result loses its authority (#768); reasoning
-visibility comes from `chat_template_kwargs: {preserve_thinking: true}`, sent to local and private
-hosts (`provider/templatekwargs.ts`). Aging marks are set
+re-derived it (#798: restating in 70–75% of rounds after the shed, 3–17% with the switch on). Where
+the template honours it, reasoning visibility comes from `chat_template_kwargs: {preserve_thinking:
+true}`, sent to local and private hosts (`provider/templatekwargs.ts`). **Where it doesn't (#827)** —
+an engine that ignores the field (mlx-vlm, very likely Ollama), a public host, or a template with no
+switch (Mellum2.1 Thinking, Ornith 1.5, Gemma 4 E4B) — the note rides the newest tool result instead
+(`noteRidesToolResult`, `provider/toolcall.ts`), appended at serialization and never stored, which
+is the same near-tail displacement for the cache. Measured on T2 with the kwarg suppressed: restating
+after the shed 67% with the note in the user role against 6–19% on the tool result, and withdrawal
+ignored far less (79 refused calls against 7–14): #768's "a note in a tool result loses its
+authority" held for a decline reason the model must obey once, but here hidden reasoning was what
+made the model ignore directives. The slot is a per-endpoint latch (`noteOnToolResult`), one-way so
+it never flips back and forth, set two ways: `provider/noteslot.ts` probes a local engine before a
+turn starts (never between rounds, where it would evict a single-slot server's cache), comparing
+the engine's own `prompt_tokens` for four tiny requests with and without a reasoning block before
+and behind a note — counts that either move by the reasoning's size or don't, so `hides` /
+`renders` / `never-renders` with no tuned threshold (checked against LFM2.5 with and without the
+kwarg, Mellum2.1 and Hermes 3 on llama.cpp) — and caches the verdict a week in
+`~/.config/reika/note-slot.json`; and `agent/noteslotmonitor.ts` backs it up live where the probe
+could not answer, switching after two note rounds whose count is missing at least three quarters
+of the reasoning behind the note — for that session only, since its thresholds come from one
+model's runs and a wrong switch should not be cached for a week. The submit-time wait follows the
+turn's abort signal, so ctrl-c on a hung server ends it at once and costs the probe no attempt. Only `loadConfig` sessions do either (`Config.noteSlotProbe`), so
+a hand-built test Config sends nothing. `REIKA_NOTE_SLOT=tool|user` forces the slot, and
+`REIKA_PRESERVE_THINKING=0` withholds the kwarg to reproduce an affected engine. Aging marks are set
 on the shared message objects deliberately — like compaction's splice into the persistent model
 history — so liveness and frozen bytes carry across turns and the next turn's first request stays
 prefix-aligned.
