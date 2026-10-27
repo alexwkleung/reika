@@ -6,7 +6,7 @@ import type { Config, Message, Tool } from '../types.js';
 import { debugLog } from '../debug.js';
 import { callModel } from './client.js';
 import { latchesFor } from './latches.js';
-import { isLocalEngine } from './templatekwargs.js';
+import { chatTemplateKwargsFor, isLocalEngine } from './templatekwargs.js';
 
 // Under prefix-stable the per-round note is a trailing user message, and a thinking template that
 // ignores `preserve_thinking` (mlx-vlm, Ollama, a template with no switch) drops every earlier
@@ -45,8 +45,14 @@ const PROBE_TOOL: Tool = {
 
 type CacheEntry = { verdict: NoteSlotVerdict; at: number };
 
+// The verdict is a fact about the template AND whether `preserve_thinking` reaches it, so the key
+// carries both: a run with the kwarg withheld (REIKA_PRESERVE_THINKING=0, or an engine that 400'd it
+// and latched it off) correctly finds `hides`, and the same model with the kwarg on must not read
+// that back and move its note for a week.
 function endpointKey(config: Pick<Config, 'baseURL' | 'model'>): string {
-  return `${config.baseURL.replace(/\/+$/, '')}\n${config.model}`;
+  const kwargs =
+    chatTemplateKwargsFor(config.baseURL) !== undefined && !latchesFor(config).chatTemplateKwargs;
+  return `${config.baseURL.replace(/\/+$/, '')}\n${config.model}\n${kwargs ? 'kwargs' : 'no-kwargs'}`;
 }
 
 function readCache(path: string): Record<string, CacheEntry> {
