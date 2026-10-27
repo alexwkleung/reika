@@ -1,5 +1,6 @@
-import { readFile, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractUrl, fetchUrlTool } from './fetch.js';
 import { resetSpillDir } from './_spill.js';
@@ -544,18 +545,21 @@ describe('fetch_url tool — spill (#139)', () => {
       expect(result.payload).not.toMatch(/\bread\b/);
     });
 
-    it('owns an over-cap cut without naming a remedy it cannot offer', async () => {
+    // #379 changed what this footer may say. #377 left it owning the cut with no remedy, because
+    // the only remedy it knew was `read`; the tool's own `offset` is one chat can follow, so the
+    // dead end is gone and the refusal to name `read` stays.
+    it('owns an over-cap cut and names the offset continuation, not a tool it lacks', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(100_000)));
       const result = await fetchUrlTool.run({ url: 'https://example.com/long' }, chat);
       expect(result.summary).toMatch(
         /^Fetched https:\/\/example\.com\/long \(\d+ chars extracted\)$/,
       );
-      expect(result.payload).toContain('(Showing 65536 of ');
-      expect(result.payload).toContain('not reachable in this mode');
-      expect(result.payload).toContain('Do not re-run this fetch');
+      expect(result.payload).toContain('(Showing chars 0-65536 of ');
+      expect(result.payload).toContain('Call fetch_url again with the same url and offset: 65536');
       expect(result.payload).not.toContain('saved to');
       expect(result.payload).not.toContain('could not be saved');
       expect(result.payload).not.toContain('offset/limit');
+      expect(result.payload).not.toContain('reika-');
       expect(result.payload!.length).toBeLessThan(65_536 + 300);
     });
 
@@ -592,6 +596,157 @@ describe('fetch_url tool — spill (#139)', () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockOk(article(10_000)));
       const result = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
       locatorOf(result.summary);
+    });
+  });
+
+  // #379: the saved copy, paged by the one tool a read-less list has — `fetch_url` again with an
+  // `offset`. The window comes out of the file, so it costs no request and no fetch budget, and
+  // the head is what a plain re-fetch would have returned either way.
+  describe('paging a saved page through fetch_url (#379)', () => {
+    const chat = { cwd: '/tmp', toolNames: new Set(['fetch_url', 'search']) };
+
+    it('serves the next window from the file, with the next offset spelled out', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(200_000)));
+      const budget = makeBudget(1);
+      // Fetched in a read-capable list only to reach the file the whole session shares.
+      const first = await fetchUrlTool.run(
+        { url: 'https://example.com/long' },
+        { cwd: '/tmp', webBudget: budget },
+      );
+      const saved = await readFile(locatorOf(first.summary), 'utf8');
+      const total = Number(/\((\d+) chars extracted/.exec(first.summary)![1]);
+      const second = await fetchUrlTool.run(
+        { url: 'https://example.com/long', offset: 65536 },
+        { ...chat, webBudget: budget },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(budget.fetches.used).toBe(1);
+      // The window and the footer, byte for byte: the page from the offset asked for, and the
+      // exact call that continues it.
+      expect(second.payload).toBe(
+        UNTRUSTED_PAGE_HEADER +
+          saved.slice(65536, 131_072) +
+          `\n\n(Showing chars 65536-131072 of ${total}. Call fetch_url again with the same url ` +
+          `and offset: 131072 to continue.)`,
+      );
+      expect(second.summary).toContain('chars 65536-131072 of');
+      expect(second.summary).toContain('served from the saved copy');
+    });
+
+    it('ends cleanly on the last window, and refuses an offset past the end of the page', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(100_000)));
+      const first = await fetchUrlTool.run({ url: 'https://example.com/long' }, { cwd: '/tmp' });
+      locatorOf(first.summary);
+      const last = await fetchUrlTool.run({ url: 'https://example.com/long', offset: 70000 }, chat);
+      expect(last.summary).toContain('chars 70000-');
+      expect(last.payload).not.toContain('Call fetch_url again');
+      const past = await fetchUrlTool.run(
+        { url: 'https://example.com/long', offset: 999_999 },
+        chat,
+      );
+      expect(past.summary).toMatch(
+        /^Fetched https:\/\/example\.com\/long: offset 999999 past end of page \(\d+ chars\)$/,
+      );
+      expect(past.payload).toContain('past the end');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses an offset for a page nothing has saved, with no request and no budget slot', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      const budget = makeBudget(5);
+      const result = await fetchUrlTool.run(
+        { url: 'https://example.com/unseen', offset: 4096 },
+        { ...chat, webBudget: budget },
+      );
+      expect(result.summary).toContain(
+        'no saved copy of https://example.com/unseen to page through at offset 4096',
+      );
+      expect(result.payload).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(budget.fetches.used).toBe(0);
+    });
+
+    it('pages for a model that also has read: a window marker, and the path still named', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(200_000)));
+      const first = await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      const path = locatorOf(first.summary);
+      // A string offset, which is what a model that quotes its own arguments sends.
+      const sliced = await fetchUrlTool.run(
+        { url: 'https://example.com/doc', offset: '65536' },
+        { cwd: '/tmp' },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(sliced.summary).toContain('chars 65536-131072 of');
+      expect(sliced.summary).toContain(`full page saved to ${path}`);
+      expect(sliced.payload).toContain('(Showing 65536 of ');
+      expect(sliced.payload).toContain('Chars 65536-131072. ');
+      expect(sliced.payload).toContain(`Full page saved to ${path}`);
+    });
+
+    // The file exists for a page the *window* will chop, not only for one over the tool cap
+    // (#139): a page that fits the cap whole is still paged from it.
+    it('pages a page that was never over the cap', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      await fetchUrlTool.run({ url: 'https://example.com/doc' }, { cwd: '/tmp' });
+      const second = await fetchUrlTool.run({ url: 'https://example.com/doc', offset: 6000 }, chat);
+      expect(second.summary).toContain('chars 6000-');
+      expect(second.payload).toContain('word word');
+      // Nothing below the window, so there is no continuation — and still nothing chat can't open.
+      expect(second.payload).not.toContain('Call fetch_url again');
+      expect(second.payload).not.toContain('reika-');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats an absent, a zero and a "0" offset as the head it always was', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(10_000)));
+      const plain = await fetchUrlTool.run({ url: 'https://example.com/doc' }, chat);
+      const zero = await fetchUrlTool.run({ url: 'https://example.com/doc', offset: 0 }, chat);
+      const quoted = await fetchUrlTool.run({ url: 'https://example.com/doc', offset: '0' }, chat);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(zero.payload).toBe(plain.payload);
+      expect(quoted.payload).toBe(plain.payload);
+      // The whole-page shape, not a window: an offset of 0 asks for the head.
+      expect(zero.summary).toBe(quoted.summary);
+      expect(zero.summary).not.toMatch(/chars \d+-\d+ of/);
+    });
+
+    it('says why there is nothing to page when spilling is off', async () => {
+      process.env.REIKA_SPILL = '0';
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      const result = await fetchUrlTool.run({ url: 'https://example.com/doc', offset: 4096 }, chat);
+      expect(result.summary).toContain('REIKA_SPILL=0');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    // The loop's `referencesSpill` check sees a call that names an artifact's path. A paged fetch
+    // names no path, so without this the affordance this issue adds would be invisible to the
+    // ledger that exists to answer "is it ever followed?" (`tools/_spillstats.ts`).
+    it('records the paged call on the spill ledger', async () => {
+      const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValue(mockOk(article(100_000)));
+      const stats = join(await mkdtemp(join(tmpdir(), 'reika-page-')), 'stats.jsonl');
+      process.env.REIKA_SPILL_STATS = '1';
+      process.env.REIKA_SPILL_STATS_FILE = stats;
+      try {
+        await fetchUrlTool.run({ url: 'https://example.com/long' }, { cwd: '/tmp' });
+        await fetchUrlTool.run({ url: 'https://example.com/long' }, chat);
+        await fetchUrlTool.run({ url: 'https://example.com/long', offset: 65536 }, chat);
+        const events = (await readFile(stats, 'utf8'))
+          .split('\n')
+          .filter(Boolean)
+          .map(l => JSON.parse(l) as Record<string, unknown>);
+        expect(events.filter(e => e.event === 'followed')).toEqual([
+          expect.objectContaining({ by: 'fetch_url', how: 'offset' }),
+        ]);
+      } finally {
+        delete process.env.REIKA_SPILL_STATS;
+        delete process.env.REIKA_SPILL_STATS_FILE;
+      }
     });
   });
 });
