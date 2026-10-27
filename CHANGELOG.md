@@ -11,11 +11,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   "File install (copies into place)" instead of "Install command (fetches and runs third-party
   code)". It still asks before running, since writing into `/etc` under `sudo` is exactly what the
   gate is for; the label just says what the command does. `make install`, `conda install numpy` and
-  the rest keep the install label, because there `install` is an argument to something else.
+  the rest keep the install label, because there `install` is an argument to something else. (#843)
 - On a local model server, reika now starts the compaction note for the model instead of only
   asking for one. Small models such as LFM2.5 kept calling tools when asked to write the note, so
   the note fell back to their reasoning; a started note they finish. A tool call the model adds
-  after a written note is dropped and the note kept. `REIKA_NOTE_PREFILL=0` turns it off.
+  after a written note is dropped and the note kept. `REIKA_NOTE_PREFILL=0` turns it off. (#818)
 
 ### Added
 
@@ -24,9 +24,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the search and answers from its results. It needs a search provider — without one, or in a session
   with no route out, it says which setting is missing instead of spending a turn — and it refuses in
   shell and minimal mode, whose tool lists carry no web tools. The name is `/search`, not
-  `/web-search`: it shares it with the tool it invokes.
+  `/web-search`: it shares it with the tool it invokes. (#844)
 - `AGENT.md` is read as an instructions file when there is no `AGENTS.md`, ahead of `CLAUDE.md`. Some
-  repos use that older spelling, and reika loaded no instructions for them.
+  repos use that older spelling, and reika loaded no instructions for them. (#814)
 
 ### Fixed
 
@@ -34,68 +34,71 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   `FOO="$(date) a b c" make install` asks before installing. The gate splits a command at its
   substitutions to see what runs inside them, and the value's own words then pushed the command
   past the position it looks in: that install, and a `curl`, `ssh` or `eval` in the same place,
-  ran with no warning at all.
+  ran with no warning at all. (#843)
 - An install or a fetch behind a wrapper option spelled long or bundled is no longer hidden by
   it: `sudo --user me curl …`, `sudo -iu me make install`, `env --chdir /tmp make install`.
   `env -S "curl …"` (also `env -iS …` and `env -S'…'`) runs its value as a command line, and
-  that value is now read as one.
+  that value is now read as one. (#843)
 - The note a local model writes before the context is compacted no longer carries the model's plan
   for what to do next. Small models such as LFM2.5 kept writing "Let me run the tests now:" and
   sometimes pages of planning after the note, which then stood in for its findings; the note now
-  ends where that starts, and the stream stops there too.
+  ends where that starts, and the stream stops there too. (#840)
 - Thinking models whose chat template hides earlier reasoning behind Reika's per-round note — on
   Ollama or mlx-vlm, or with a template that has no `preserve_thinking` switch, such as Mellum2.1
   Thinking, Ornith 1.5 or Gemma 4 E4B — no longer lose sight of their own reasoning once the context
   starts shrinking. Reika checks with a few tiny requests before the first turn and moves the note
   onto the last tool result where needed. On LFM2.5 with the switch ignored, the model went from
   re-deriving its analysis in two thirds of rounds to about one in ten. `REIKA_NOTE_SLOT` overrides
-  the choice.
+  the choice. (#834, #837, #838)
 - A turn that reika stopped itself — after the model kept looping, or at the turn limit — now says
   when its edits introduced type errors, naming the first ones. Before, the stop only said the edits
-  were saved, even when they no longer compiled.
+  were saved, even when they no longer compiled. (#831, #835)
 - An edit made right after the model read the file with `cat`, `head` or `sed -n` is no longer held
   back with "read the file first". Models that read through the shell lost a step on nearly every
-  file, and one rewrote a whole file from memory when the read it was told to make was then refused.
+  file, and one rewrote a whole file from memory when the read it was told to make was then
+  refused. (#826)
 - A very large message (a big paste, `@`-mention or skill) on a small context window no longer
   fails the turn with `Cannot read properties of undefined (reading 'role')` when reika compacts.
-  The message is kept and the conversation before it is compacted.
+  The message is kept and the conversation before it is compacted. (#823)
 - While a local model writes its compaction note, reika no longer briefly shows the model's
   next-step thinking and a tool call after the note. They were never part of the saved note, but
-  seeing them stream and then disappear made it look like a hidden tool call.
+  seeing them stream and then disappear made it look like a hidden tool call. (#820)
 - Writing a compaction note no longer reprocesses the whole prompt when reika pauses or resumes
   file reading on the same step. The note request now offers the same tools as the request before
   it, so on a local server it costs seconds instead of minutes (about 27k tokens on one 32k run).
+  (#817)
 - When a model tries to call a tool while writing its compaction note, reika now tells it the call
   was not run and asks again, instead of repeating the same request. Small local models that kept
-  calling tools there wrote a thin note, or none.
+  calling tools there wrote a thin note, or none. (#815)
 - Reading a file with `read` after looking at it through the shell no longer counts as a repeated
   read. reika asks for exactly that before an edit, and counting it could pause a model's file
-  reading on its next step.
+  reading on its next step. (#813)
 - Shell reads written as `cd <project> && cat file` or `head -n 100 file | tail -n 20` now count
   toward reika's re-read loop detection, like a bare `cat` already did. A model that starts every
   command with a `cd` could re-read the same file for hundreds of rounds without reika noticing.
+  (#811)
 - When reika pauses a model's file reading to break a loop, the pause now lasts until the model
   changes something (or five rounds pass) instead of lifting after one round. It used to switch on
   and off every other round, and on a local server each switch reprocessed the whole prompt: in one
-  long run that was about half of all prefill time.
+  long run that was about half of all prefill time. (#809)
 - A request the server rejects (a 400, 401, 403 or 404) is no longer sent three times. Only timeouts,
   rate limits and server errors were meant to be retried, but a rejection was retried as if the
   connection had dropped. A wrong API key or model name now reports at once, and a server that
-  rejects an optional field sees the request without it on the second try, not the fourth.
+  rejects an optional field sees the request without it on the second try, not the fourth. (#807)
 - A model that re-reads the same file through the shell (`cat`, `head`, `tail`, `sed -n '1,120p'`)
   instead of the read tool is now caught by the loop detector. Only the read tool counted, so a model
   that read mostly through the shell could re-read one unchanged file for over a hundred rounds and
-  never be told to stop and act.
+  never be told to stop and act. (#805)
 - Thinking models whose template hides earlier reasoning (LFM2.5, Qwen3.6) no longer forget their own
   work once a long turn starts shedding context. Reika's per-round notes arrive as a user message,
   and those templates drop every `<think>` before the newest one, so the model kept re-deriving what
   it had already worked out. Requests to a local or private server now ask the template to keep it
   (`chat_template_kwargs: {"preserve_thinking": true}`), and a server that rejects the field gets one
-  retry without it.
+  retry without it. (#803)
 - A compaction note is no longer just a line like "Let me examine `_net.ts`:". When the model
   answered the note request by calling a tool anyway, the words before the call were kept as the note
   and its actual findings, written in its reasoning, were dropped. A reply that calls a tool now gets
-  the retry, and if that also calls one, the note comes from the longer reasoning.
+  the retry, and if that also calls one, the note comes from the longer reasoning. (#800)
 
 ## [0.6.0] - 2026-10-23
 
