@@ -7,6 +7,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- `install` copying files into place — `install -m 644 a b`, or the same behind `sudo` — is labelled
+  "File install (copies into place)" instead of "Install command (fetches and runs third-party
+  code)". It still asks before running, since writing into `/etc` under `sudo` is exactly what the
+  gate is for; the label just says what the command does. `make install`, `conda install numpy` and
+  the rest keep the install label, because there `install` is an argument to something else.
 - On a local model server, reika now starts the compaction note for the model instead of only
   asking for one. Small models such as LFM2.5 kept calling tools when asked to write the note, so
   the note fell back to their reasoning; a started note they finish. A tool call the model adds
@@ -25,6 +30,15 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A command named after a `$(…)` inside a quoted value is read again, so
+  `FOO="$(date) a b c" make install` asks before installing. The gate splits a command at its
+  substitutions to see what runs inside them, and the value's own words then pushed the command
+  past the position it looks in: that install, and a `curl`, `ssh` or `eval` in the same place,
+  ran with no warning at all.
+- An install or a fetch behind a wrapper option spelled long or bundled is no longer hidden by
+  it: `sudo --user me curl …`, `sudo -iu me make install`, `env --chdir /tmp make install`.
+  `env -S "curl …"` (also `env -iS …` and `env -S'…'`) runs its value as a command line, and
+  that value is now read as one.
 - The note a local model writes before the context is compacted no longer carries the model's plan
   for what to do next. Small models such as LFM2.5 kept writing "Let me run the tests now:" and
   sometimes pages of planning after the note, which then stood in for its findings; the note now
