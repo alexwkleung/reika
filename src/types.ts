@@ -601,3 +601,13 @@ export type Config = {
   // still receives everything verbatim. See ui/identity.ts.
   anon: boolean;
 };
+
+// #832: a session re-resolves its profile every turn, so an already-resolved config handed back
+// to it is silently undone. The literal type is what tsc prints; config.ts backs it at runtime.
+declare const resolvedBrand: unique symbol;
+
+export type ResolvedConfig = Config & {
+  readonly [resolvedBrand]: 'ResolvedConfig — pass the profile name to createSession, not this';
+};
+
+export type RawConfig = Config & { readonly [resolvedBrand]?: never };

@@ -1,4 +1,4 @@
-import { loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { assertRawConfig, loadConfig, resolveProfile, withProbedLimits } from './config.js';
 import { ensureNoteSlot } from './provider/noteslot.js';
 import { repoMapBudgetFor } from './context/repomap.js';
 import {
@@ -34,7 +34,17 @@ import {
   turnRefines,
   turnTools,
 } from './ui/commands.js';
-import type { Config, ContextBundle, Message, Mode, Profile, Tool, Usage } from './types.js';
+import type {
+  Config,
+  ContextBundle,
+  Message,
+  Mode,
+  Profile,
+  RawConfig,
+  ResolvedConfig,
+  Tool,
+  Usage,
+} from './types.js';
 
 // One session: boot plus the state a turn hands the next (#403). The loop was never UI-coupled, but
 // "a session" was — each consumer booted its own and threaded calibration, rates and shrink counts
@@ -73,8 +83,8 @@ export type SessionEvents = Partial<
 
 export type SessionOptions = {
   cwd: string;
-  // Defaults to loadConfig(), the environment the TUI reads.
-  config?: Config;
+  // Defaults to loadConfig(). Unresolved: pick the profile with `profile` (#832).
+  config?: RawConfig;
   profile?: string;
   // False when nobody can answer: a model that sees ask_user calls it and stalls, so it is not
   // offered at all, and the loop reads canAsk from the tool list so the prompt agrees.
@@ -137,7 +147,7 @@ type Side = 'agent' | 'chat';
 export type Session = {
   readonly bundle: ContextBundle;
   // The active profile resolved onto the config — what a turn runs with.
-  readonly config: Config;
+  readonly config: ResolvedConfig;
   readonly profile: string;
   readonly offline: boolean;
   // Which search provider won when both are configured; undefined otherwise, or when offline.
@@ -184,7 +194,8 @@ export type Session = {
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  let cfg = opts.config ?? loadConfig();
+  if (opts.config) assertRawConfig(opts.config, 'createSession');
+  let cfg: Config = opts.config ?? loadConfig();
   let profile = opts.profile ?? 'default';
   // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git subprocesses cost
   // ~28ms warm, pure added latency to first paint if serialized (measured: 29ms bootstrap + 28ms

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Config, ContextBundle, Message, Tool } from './types.js';
+import type { Config, ContextBundle, Message, RawConfig, ResolvedConfig, Tool } from './types.js';
 import type { ModelLimitsProbe } from './provider/modellimits.js';
 
 const CONFIG: Config = {
@@ -129,6 +129,7 @@ vi.mock('./agent/loop.js', async importActual => ({
 }));
 
 const { createSession, noWindowNotice } = await import('./session.js');
+const { resolveProfile, withProbedLimits } = await import('./config.js');
 
 const text = (m: Message | undefined): string | undefined =>
   m && 'content' in m ? (m.content ?? undefined) : undefined;
@@ -633,5 +634,28 @@ describe('MCP servers (#265)', () => {
     expect(s.mcpNotices[0]).toBe('REIKA_MCP_SERVERS: invalid JSON: unexpected token');
     expect(s.mcpNotices[1]).toContain('MCP server "broken" unavailable');
     expect(s.lists.agent.map(t => t.name).some(n => n.startsWith('mcp__'))).toBe(false);
+  });
+});
+
+// #832: a resolved config handed back to createSession has its overlay silently undone.
+type Assert<T extends true> = T;
+type _RawAcceptsConfig = Assert<Config extends RawConfig ? true : false>;
+type _RawRefusesResolved = Assert<ResolvedConfig extends RawConfig ? false : true>;
+
+describe('SessionOptions.config (#832)', () => {
+  it('rejects a resolved config even after a Config-typed hop erased the brand', async () => {
+    const viaAnnotation: Config = resolveProfile(CONFIG, 'default');
+    await expect(createSession({ cwd: '/repo', config: viaAnnotation })).rejects.toThrow(
+      /createSession was given resolveProfile/,
+    );
+    const viaHelper = withProbedLimits(resolveProfile(CONFIG, 'default'), 'default', {});
+    await expect(createSession({ cwd: '/repo', config: viaHelper })).rejects.toThrow(
+      /createSession/,
+    );
+  });
+
+  it('refuses to resolve an already-resolved config', () => {
+    const once: Config = resolveProfile(CONFIG, 'default');
+    expect(() => resolveProfile(once, 'default')).toThrow(/resolveProfile was given/);
   });
 });
