@@ -129,6 +129,7 @@ vi.mock('./agent/loop.js', async importActual => ({
 }));
 
 const { createSession, noWindowNotice } = await import('./session.js');
+const { resolveProfile } = await import('./config.js');
 
 const text = (m: Message | undefined): string | undefined =>
   m && 'content' in m ? (m.content ?? undefined) : undefined;
@@ -477,6 +478,17 @@ describe('createSession', () => {
       },
     };
 
+    it('runs the turn on the profile it was opened with', async () => {
+      const s = await createSession({ cwd: '/repo', config: TWO, profile: 'vl' });
+      // Only the name picks the profile. `resolveProfile` is applied per turn, which is why
+      // passing its result to `createSession` used to undo itself (#832).
+      expect(s.profile).toBe('vl');
+      expect(s.config.model).toBe('vl-model');
+      await s.submit('hi', { mode: 'agent' });
+      expect(calls[0].config.model).toBe('vl-model');
+      expect(calls[0].config.baseURL).toBe('http://127.0.0.1:2/v1');
+    });
+
     it('switches, tells subscribers, runs the next turn on it, and forgets the decode rate', async () => {
       const s = await createSession({ cwd: '/repo', config: TWO });
       await s.submit('warm up', { mode: 'agent' });
@@ -633,5 +645,20 @@ describe('MCP servers (#265)', () => {
     expect(s.mcpNotices[0]).toBe('REIKA_MCP_SERVERS: invalid JSON: unexpected token');
     expect(s.mcpNotices[1]).toContain('MCP server "broken" unavailable');
     expect(s.lists.agent.map(t => t.name).some(n => n.startsWith('mcp__'))).toBe(false);
+  });
+});
+
+// #832: every turn re-resolves `profile` over the session's raw config, so a caller that hands
+// `createSession` an overlaid config has its overlay silently undone and the run goes to the
+// default profile — a no-op that compiles, passes the tests, and shows only in text built from the
+// caller's copy naming a server the request never reached. The brand on `ResolvedConfig` makes it a
+// type error, and this `@ts-expect-error` is what keeps the brand from quietly eroding: `tsc` runs
+// over this file as part of the gate, so it fails the day the two types meet again.
+describe('SessionOptions.config (#832)', () => {
+  it('refuses a config resolveProfile already overlaid onto a profile', () => {
+    const alreadyResolved = resolveProfile(CONFIG, 'default');
+    // @ts-expect-error — a ResolvedConfig is a view of a turn's route, never a session's config.
+    const boot = (): unknown => createSession({ cwd: '/repo', config: alreadyResolved });
+    expect(typeof boot).toBe('function');
   });
 });

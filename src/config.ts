@@ -11,6 +11,7 @@ import type {
   ModelMode,
   PasteFetchMode,
   Profile,
+  ResolvedConfig,
   SkillAutoMode,
   VisionRoute,
 } from './types.js';
@@ -524,22 +525,33 @@ export function inheritProfile(from: Profile, model: string): Profile {
   };
 }
 
-export function resolveProfile(config: Config, profileName: string): Config {
+// The active profile overlaid on the rest of the config: the view of what a turn actually runs
+// with, and what a `/model` switch changes. The branded return type (#832) is not decoration —
+// this value is a *view*, not a session's config, and handing it to `createSession` would have the
+// session re-resolve `profile` over the raw config and silently undo it. See ResolvedConfig.
+export function resolveProfile(config: Config, profileName: string): ResolvedConfig {
   const profile = config.profiles[profileName];
-  if (!profile) return config;
-  return {
-    ...config,
-    model: profile.model,
-    baseURL: profile.baseURL,
-    apiKey: profile.apiKey,
-    maxTokens: profile.maxTokens,
-    contextWindow: profile.contextWindow,
-    maxOutputTokens: profile.maxOutputTokens,
-    minGenTokens: profile.minGenTokens ?? config.minGenTokens,
-    minGenAdaptive: profile.minGenTokens != null ? profile.minGenAdaptive : config.minGenAdaptive,
-    // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route is
-    // dead weight: `...config` above would carry the *default* profile's value straight over it, so
-    // a `/model <vl>` switch would keep describing while claiming to be native.
-    vision: profile.vision ?? config.vision,
-  };
+  // An unknown name fails open to the top level, as it always has: the name reaching here is the
+  // session's own, which is checked where it is set (App's picker, headless's headlessProfile).
+  const overlaid: Config = profile
+    ? {
+        ...config,
+        model: profile.model,
+        baseURL: profile.baseURL,
+        apiKey: profile.apiKey,
+        maxTokens: profile.maxTokens,
+        contextWindow: profile.contextWindow,
+        maxOutputTokens: profile.maxOutputTokens,
+        minGenTokens: profile.minGenTokens ?? config.minGenTokens,
+        minGenAdaptive:
+          profile.minGenTokens != null ? profile.minGenAdaptive : config.minGenAdaptive,
+        // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route
+        // is dead weight: `...config` above would carry the *default* profile's value straight over
+        // it, so a `/model <vl>` switch would keep describing while claiming to be native.
+        vision: profile.vision ?? config.vision,
+      }
+    : config;
+  // The one place the brand is minted (#832). Everything after this reads the overlay; nothing may
+  // hand it back to `createSession`, which is what `RawConfig` types.
+  return overlaid as ResolvedConfig;
 }
