@@ -19,6 +19,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- The note a local model writes before the context is compacted no longer carries the model's plan
+  for what to do next. Small models such as LFM2.5 kept writing "Let me run the tests now:" and
+  sometimes pages of planning after the note, which then stood in for its findings; the note now
+  ends where that starts, and the stream stops there too.
 - Thinking models whose chat template hides earlier reasoning behind Reika's per-round note — on
   Ollama or mlx-vlm, or with a template that has no `preserve_thinking` switch, such as Mellum2.1
   Thinking, Ornith 1.5 or Gemma 4 E4B — no longer lose sight of their own reasoning once the context

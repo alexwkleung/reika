@@ -505,7 +505,8 @@ describe('the note round starts the reply on a local engine (#806)', () => {
       onMessage: () => {},
       onContentDelta: d => (streamed += d),
     });
-    const note = `Established:\n${body}\n\nNow let me read b.ts.`;
+    // The lead-in before the tag goes too (#839): it is the next action, not a finding.
+    const note = `Established:\n${body.trimEnd()}`;
     expect(recapOf(history)).toContain(note);
     expect(streamed).toBe(`${note}final`);
   });

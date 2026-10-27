@@ -132,8 +132,29 @@ export const PREFILLED_NOTE_MIN_CHARS = 200;
 //
 // The prefill skips the reasoning block, and LFM2.5 then writes its next-step thinking after the
 // note and closes it with a bare `</think>` (both folds of lfm16-prefill-2), so the reply is cut at
-// that tag. The thinking just before it stays: there is no reliable edge, and `fitNote` drops the
-// note's tail first.
+// that tag. Thinking just before it is cut too when it opens like a next action (#839, above).
+// LFM2.5 also writes its next-step thinking into the note with no `</think>` after it (#839): 8 of
+// 10 notes on the T2 bench ended in a "Let me run the tests now:" lead-in, and one ran 11k chars of
+// planning and 11 text-form calls past two bullets of note, clamped to 4000 chars of mostly plan.
+// The note has no structural edge to cut at — its own prose paragraphs ("Still open: …", "Next:
+// read headless.ts …") are real findings — but the thinking opens with a first-person next action
+// and the note does not. Over all 50 prefilled notes in saved sessions, every prose paragraph after
+// the first such opener was thinking or a pasted file, never a finding. The first paragraph is
+// never cut: a reply that is only a lead-in is PREFILLED_NOTE_MIN_CHARS's case.
+const NEXT_ACTION_OPENER =
+  /^(?:Let me|Let's|Now,? (?:I|let)|I'll|I will|I need to|I should|I'm going to|First,? (?:let me|I)|Next,? (?:let me|I)|Okay|OK[,.]|Wait|Hmm|So I|Actually|Alright)\b/;
+
+// Where the note's own text ends: the start of the first paragraph after the first that opens with
+// a next action, or the text's length.
+export function noteEndBeforeNextAction(text: string): number {
+  const re = /\n[ \t]*\n[ \t]*/g;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const start = m.index + m[0].length;
+    if (NEXT_ACTION_OPENER.test(text.slice(start))) return m.index;
+  }
+  return text.length;
+}
+
 export function prefilledReply<T extends NoteReply>(
   reply: T,
   prefill: string,
@@ -145,8 +166,10 @@ export function prefilledReply<T extends NoteReply>(
   // A tag closed at once puts the note after it instead.
   const rest = before.trim() || close === -1 ? before : continued.slice(close + 8).trimStart();
   if (!rest.trim()) return { ...reply, content: '' };
-  const content = NOTE_PREFILL_BODY + rest;
+  const content = NOTE_PREFILL_BODY + rest.slice(0, noteEndBeforeNextAction(rest)).trimEnd();
   const calls = reply.toolCalls?.length ?? 0;
+  // Decided on the whole reply, before the cut: two bullets and a run-on is a note the model wrote,
+  // where a bare "Let me check X" is a lead-in, and the cut leaves the first paragraph either way.
   if (calls && rest.trim().length >= PREFILLED_NOTE_MIN_CHARS) {
     return { ...reply, content, toolCalls: undefined, callsDropped: calls };
   }
@@ -191,11 +214,27 @@ export function prefilledNoteStream(
       // A tag closed at once: the note comes after it.
       rest = rest.slice(at + len).trimStart();
     }
+    // The same edge the commit cuts at (#839). A paragraph whose opening words have not all arrived
+    // yet is held back until they settle it, so a lead-in never draws and then vanishes.
+    const end = noteEndBeforeNextAction(visible);
+    if (end < visible.length) {
+      visible = visible.slice(0, end).trimEnd();
+      stopped = true;
+    } else if (!stopped) {
+      visible = visible.slice(0, visible.length - undecidedParagraphTail(visible)).trimEnd();
+    }
     if (!visible) return;
     const text = NOTE_PREFILL_BODY + visible;
     if (text.length > shown) emit(text.slice(shown));
     shown = Math.max(shown, text.length);
   };
+}
+
+// How many trailing chars are a new paragraph too short yet to tell whether it opens with a next
+// action. 24 covers the longest opener ("I'm going to", "First, let me") with room for the word after.
+function undecidedParagraphTail(text: string): number {
+  const m = /\n[ \t]*\n[ \t]*([^\n]*)$/.exec(text);
+  return m && m[1].length < 24 ? text.length - m.index : 0;
 }
 
 // How many trailing chars could be the start of a stop tag.
