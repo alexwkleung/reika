@@ -152,8 +152,10 @@ async function countPromptTokens(
 
 type ProbeOutcome = { reached: true; verdict?: NoteSlotVerdict } | { reached: false };
 
-export async function probeNoteSlot(config: Config): Promise<ProbeOutcome> {
-  const controller = new AbortController();
+export async function probeNoteSlot(
+  config: Config,
+  controller = new AbortController(),
+): Promise<ProbeOutcome> {
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
     // Sequential on purpose: a single-slot server serves them one at a time anyway.
@@ -186,7 +188,13 @@ export async function probeNoteSlot(config: Config): Promise<ProbeOutcome> {
   }
 }
 
-type ProbeState = { attempts: number; inflight?: Promise<void>; done: boolean };
+type ProbeState = {
+  attempts: number;
+  inflight?: Promise<void>;
+  controller?: AbortController;
+  userAborted?: boolean;
+  done: boolean;
+};
 const probeStates = new Map<string, ProbeState>();
 
 // Settles which slot this endpoint's note takes before a turn starts. Idempotent and safe to call
@@ -194,7 +202,40 @@ const probeStates = new Map<string, ProbeState>();
 // that was not up is asked again. Never between rounds — on a single-slot server a probe there
 // would evict the conversation's cache. Only local engines: hosted APIs get no `preserve_thinking`
 // to fail and no `prompt_tokens` worth comparing. REIKA_NOTE_SLOT forces the slot, so no probe.
-export function ensureNoteSlot(config: Config, path = NOTE_SLOT_CACHE_PATH): Promise<void> {
+// `signal` is the turn's: ctrl-c ends the wait at once and stops the probe rather than holding the
+// turn until the probe's timeout on a hung server, and the probe is asked again at the next submit.
+export function ensureNoteSlot(
+  config: Config,
+  path = NOTE_SLOT_CACHE_PATH,
+  signal?: AbortSignal,
+): Promise<void> {
+  const settled = settleNoteSlot(config, path);
+  if (!signal || !probeStates.get(endpointKey(config))?.inflight) return settled;
+  if (signal.aborted) {
+    stopProbe(config);
+    return Promise.resolve();
+  }
+  return new Promise(resolve => {
+    const onAbort = () => {
+      stopProbe(config);
+      resolve();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void settled.then(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    });
+  });
+}
+
+function stopProbe(config: Config): void {
+  const state = probeStates.get(endpointKey(config));
+  if (!state?.controller) return;
+  state.userAborted = true;
+  state.controller.abort();
+}
+
+function settleNoteSlot(config: Config, path: string): Promise<void> {
   if (!config.noteSlotProbe || !isLocalEngine(config.baseURL)) return Promise.resolve();
   if (process.env.REIKA_NOTE_SLOT || process.env.REIKA_PREFIX_STABLE === '0') {
     return Promise.resolve();
@@ -213,14 +254,21 @@ export function ensureNoteSlot(config: Config, path = NOTE_SLOT_CACHE_PATH): Pro
   }
   if (state.attempts >= MAX_ATTEMPTS) return Promise.resolve();
   state.attempts++;
-  state.inflight = probeNoteSlot(config)
+  state.controller = new AbortController();
+  state.userAborted = false;
+  state.inflight = probeNoteSlot(config, state.controller)
     .then(outcome => {
-      if (!outcome.reached) return;
+      if (!outcome.reached) {
+        // A probe the user cut short says nothing about the server, so it costs no attempt.
+        if (state.userAborted) state.attempts--;
+        return;
+      }
       state.done = true;
       if (outcome.verdict) applyNoteSlotVerdict(config, outcome.verdict, path);
     })
     .finally(() => {
       state.inflight = undefined;
+      state.controller = undefined;
     });
   return state.inflight;
 }

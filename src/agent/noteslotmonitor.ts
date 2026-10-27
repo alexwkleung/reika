@@ -1,6 +1,5 @@
 import type { Config, Message } from '../types.js';
 import { latchesFor } from '../provider/latches.js';
-import { applyNoteSlotVerdict } from '../provider/noteslot.js';
 import { noteRidesToolResult } from '../provider/toolcall.js';
 
 // The live backstop for the note-slot probe (#827). The probe can be wrong or silent: an engine
@@ -58,8 +57,6 @@ export type NoteSlotObservation = {
   estimate: number;
   noteSent: boolean;
   reasoningChars: number;
-  // Where a switch is remembered for the next session; tests point it at a temp file.
-  cachePath?: string;
 };
 
 export type NoteSlotCheck =
@@ -89,7 +86,9 @@ export function observeNoteSlot(obs: NoteSlotObservation): NoteSlotCheck {
   const hidden = missing >= base * reasoningTokens * MISSING_SHARE;
   state.hiddenStreak = hidden ? state.hiddenStreak + 1 : 0;
   const switched = state.hiddenStreak >= HIDDEN_ROUNDS_TO_SWITCH;
-  if (switched) applyNoteSlotVerdict(obs.config, 'hides', obs.cachePath);
+  // Session-only: unlike the probe's exact counts, this rests on thresholds drawn from one model's
+  // runs, so a wrong switch is kept to the session that made it rather than written to the cache.
+  if (switched) latches.noteOnToolResult = true;
   return { kind: 'tested', hidden, streak: state.hiddenStreak, switched };
 }
 

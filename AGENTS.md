@@ -870,7 +870,9 @@ and behind a note — counts that either move by the reasoning's size or don't, 
 kwarg, Mellum2.1 and Hermes 3 on llama.cpp) — and caches the verdict a week in
 `~/.config/reika/note-slot.json`; and `agent/noteslotmonitor.ts` backs it up live where the probe
 could not answer, switching after two note rounds whose count is missing at least three quarters
-of the reasoning behind the note. Only `loadConfig` sessions do either (`Config.noteSlotProbe`), so
+of the reasoning behind the note — for that session only, since its thresholds come from one
+model's runs and a wrong switch should not be cached for a week. The submit-time wait follows the
+turn's abort signal, so ctrl-c on a hung server ends it at once and costs the probe no attempt. Only `loadConfig` sessions do either (`Config.noteSlotProbe`), so
 a hand-built test Config sends nothing. `REIKA_NOTE_SLOT=tool|user` forces the slot, and
 `REIKA_PRESERVE_THINKING=0` withholds the kwarg to reproduce an affected engine. Aging marks are set
 on the shared message objects deliberately — like compaction's splice into the persistent model

@@ -9,27 +9,39 @@ import type { ModelResponse } from './client.js';
 // prompt-token count is the request's characters / 4, minus the reasoning when a user message
 // follows it. `mode` switches it to a template that always renders, or never does.
 const h = vi.hoisted(() => ({
-  mode: 'hides' as 'hides' | 'renders' | 'never-renders' | 'no-usage' | 'down',
+  mode: 'hides' as 'hides' | 'renders' | 'never-renders' | 'no-usage' | 'down' | 'hang',
   calls: 0,
 }));
 vi.mock('./client.js', () => ({
-  callModel: vi.fn(async (opts: { system: string; history: Message[]; trailingNote?: string }) => {
-    h.calls++;
-    if (h.mode === 'down') throw new Error('fetch failed');
-    if (h.mode === 'no-usage') return { content: '' } as ModelResponse;
-    let chars = opts.system.length + (opts.trailingNote?.length ?? 0);
-    for (const m of opts.history) {
-      chars += 'content' in m && typeof m.content === 'string' ? m.content.length : 0;
-      if (m.role === 'tool') chars += (m.payload ?? m.summary).length;
-      if (m.role === 'assistant' && m.reasoning) {
-        const behindNote = !!opts.trailingNote;
-        const shown =
-          h.mode === 'renders' || (h.mode === 'hides' && !behindNote) ? m.reasoning.length : 0;
-        chars += shown;
+  callModel: vi.fn(
+    async (opts: {
+      system: string;
+      history: Message[];
+      trailingNote?: string;
+      signal?: AbortSignal;
+    }) => {
+      h.calls++;
+      if (h.mode === 'down') throw new Error('fetch failed');
+      if (h.mode === 'hang') {
+        await new Promise((_, reject) =>
+          opts.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+        );
       }
-    }
-    return { content: '', usage: { promptTokens: Math.round(chars / 4), completionTokens: 1 } };
-  }),
+      if (h.mode === 'no-usage') return { content: '' } as ModelResponse;
+      let chars = opts.system.length + (opts.trailingNote?.length ?? 0);
+      for (const m of opts.history) {
+        chars += 'content' in m && typeof m.content === 'string' ? m.content.length : 0;
+        if (m.role === 'tool') chars += (m.payload ?? m.summary).length;
+        if (m.role === 'assistant' && m.reasoning) {
+          const behindNote = !!opts.trailingNote;
+          const shown =
+            h.mode === 'renders' || (h.mode === 'hides' && !behindNote) ? m.reasoning.length : 0;
+          chars += shown;
+        }
+      }
+      return { content: '', usage: { promptTokens: Math.round(chars / 4), completionTokens: 1 } };
+    },
+  ),
 }));
 
 const {
@@ -165,6 +177,25 @@ describe('ensureNoteSlot', () => {
     expect(h.calls).toBe(4);
     expect(latchesFor(local).noteOnToolResult).toBe(false);
     expect(cachedNoteSlotVerdict(local, path)).toBeUndefined();
+  });
+
+  it('ends the wait on the turn abort, stops the probe, and spends no attempt', async () => {
+    h.mode = 'hang';
+    const path = cachePath();
+    // More aborted waits than MAX_ATTEMPTS: none of them may use up the probe's attempts.
+    for (let n = 0; n < 4; n++) {
+      const turn = new AbortController();
+      const waiting = ensureNoteSlot(local, path, turn.signal);
+      await Promise.resolve();
+      turn.abort();
+      await waiting;
+      // The aborted probe settles as unreached; give its .then a tick to run.
+      await new Promise(r => setTimeout(r, 0));
+    }
+    expect(latchesFor(local).noteOnToolResult).toBe(false);
+    h.mode = 'hides';
+    await ensureNoteSlot(local, path);
+    expect(latchesFor(local).noteOnToolResult).toBe(true);
   });
 
   it('shares one probe between concurrent callers', async () => {

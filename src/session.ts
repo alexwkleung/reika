@@ -309,7 +309,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     const pending: Message[] = [];
     try {
       pending.push(...(await retryWindowProbe()));
-      await ensureNoteSlot(resolveProfile(cfg, profile));
+      await ensureNoteSlot(resolveProfile(cfg, profile), undefined, signal ?? undefined);
       await runTurn({
         ...events,
         userInput: text,
