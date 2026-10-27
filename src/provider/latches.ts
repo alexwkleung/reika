@@ -7,7 +7,10 @@
 //   - toolMessageName: it refuses `name` on tool messages (OpenAI's wire shape);
 //   - promptCacheKey / cacheControl: it 400s on that cache hint despite a host that documents it;
 //   - chatTemplateKwargs: a local engine 400s on `chat_template_kwargs` (templatekwargs.ts);
-//   - assistantPrefill: it rejects a request ending in an assistant message (compactionreport.ts).
+//   - assistantPrefill: it rejects a request ending in an assistant message (compactionreport.ts);
+//   - noteOnToolResult: its template hides earlier reasoning behind a user-role trailing note, so
+//     the note rides the newest tool result instead (#827) — learned by a probe or the live check
+//     (provider/noteslot.ts, agent/noteslotmonitor.ts), not from a refusal.
 // Keyed by endpoint, not held per process, because each is a fact about one server and model: a
 // session switching `/model` between a strict router and a local llama.cpp — or a subagent on
 // REIKA_SUBAGENT_BASE_URL running inside the parent's turn — would otherwise apply one server's
@@ -23,6 +26,7 @@ export type EndpointLatches = {
   cacheControl: boolean;
   chatTemplateKwargs: boolean;
   assistantPrefill: boolean;
+  noteOnToolResult: boolean;
 };
 
 const latchesByEndpoint = new Map<string, EndpointLatches>();
@@ -48,6 +52,7 @@ export function latchesFor(endpoint: { baseURL: string; model: string }): Endpoi
       cacheControl: false,
       chatTemplateKwargs: false,
       assistantPrefill: false,
+      noteOnToolResult: false,
     };
     latchesByEndpoint.set(key, latches);
   }

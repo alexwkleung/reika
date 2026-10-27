@@ -19,6 +19,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Thinking models whose chat template hides earlier reasoning behind Reika's per-round note — on
+  Ollama or mlx-vlm, or with a template that has no `preserve_thinking` switch, such as Mellum2.1
+  Thinking, Ornith 1.5 or Gemma 4 E4B — no longer lose sight of their own reasoning once the context
+  starts shrinking. Reika checks with a few tiny requests before the first turn and moves the note
+  onto the last tool result where needed. On LFM2.5 with the switch ignored, the model went from
+  re-deriving its analysis in two thirds of rounds to about one in ten. `REIKA_NOTE_SLOT` overrides
+  the choice.
 - A turn that reika stopped itself — after the model kept looping, or at the turn limit — now says
   when its edits introduced type errors, naming the first ones. Before, the stop only said the edits
   were saved, even when they no longer compiled.

@@ -17,6 +17,7 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
+import { observeNoteSlot, reasoningCharsBehindNote } from './noteslotmonitor.js';
 import { isLocalEngine } from '../provider/templatekwargs.js';
 import { estimateRequestTokens, estimateTokens } from '../provider/tokens.js';
 import {
@@ -2820,6 +2821,25 @@ export async function runTurn(opts: {
       if (factor > 0.2 && factor < 8) {
         calibration = factor;
         opts.onCalibration?.(calibration);
+      }
+    }
+    // #827: the note-slot probe's live backstop. Compares this round's real count against what it
+    // would be if the reasoning behind a user-role note had rendered, and moves the note to the
+    // tool result from the next round when it clearly did not. loadConfig sessions only, like the
+    // probe: a hand-built Config never latches an endpoint another test shares.
+    if (opts.config.noteSlotProbe && prefixStable && response.usage?.promptTokens) {
+      const check = observeNoteSlot({
+        config: opts.config,
+        promptTokens: response.usage.promptTokens,
+        estimate: sentEstimate,
+        noteSent: !!roundSuffix,
+        reasoningChars: roundSuffix ? reasoningCharsBehindNote(callHistory) : 0,
+      });
+      if (check.kind === 'tested') {
+        debugLog(
+          `[reika:debug] round=${i} note-slot check hidden=${check.hidden} streak=${check.streak} ` +
+            `switched=${check.switched}\n`,
+        );
       }
     }
     // Same idea one layer down: time-to-first-token is what those reprocessed tokens cost, so the
