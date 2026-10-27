@@ -1733,6 +1733,9 @@ export async function runTurn(opts: {
   // isFinal gate, and those are the turns likeliest to leave the tree broken (#830). Run the final
   // check there too and report it: the returned text rides the stop message, the notice the UI.
   const reportTypecheckAtStop = async (): Promise<string> => {
+    // The baseline is captured at the first call that MIGHT mutate (a test run counts), so a turn
+    // that never edited could still reach here and print "no new type errors from your edits".
+    if (!editingStarted) return '';
     if (!typecheckEnabled || typecheckBaseline === null || opts.signal?.aborted) return '';
     const report = stopTypecheckReport(typecheckBaseline, await typecheck());
     debugLog(`[reika:debug] typecheck-at-stop tone=${report.tone ?? 'skipped'}\n`);
