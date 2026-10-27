@@ -31,7 +31,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   ran with no warning at all.
 - An install or a fetch behind a wrapper option spelled long or bundled is no longer hidden by
   it: `sudo --user me curl …`, `sudo -iu me make install`, `env --chdir /tmp make install`.
-  `env -S "curl …"` runs its value as a command line, and that value is now read as one.
+  `env -S "curl …"` (also `env -iS …` and `env -S'…'`) runs its value as a command line, and
+  that value is now read as one.
 - The note a local model writes before the context is compacted no longer carries the model's plan
   for what to do next. Small models such as LFM2.5 kept writing "Let me run the tests now:" and
   sometimes pages of planning after the note, which then stood in for its findings; the note now

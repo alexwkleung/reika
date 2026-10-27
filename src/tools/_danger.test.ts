@@ -2036,6 +2036,14 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
     expect(detectDangerousPatterns(`FOO="$(date) a b c" git push`)).toContain(
       'Git push (publishes commits to remote)',
     );
+    // A shell named elsewhere in the command keeps every heredoc body in the scan, and it used to
+    // drop the substitution spans with them, so the outer reading never ran (#843 review).
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" make install && bash build.sh`)).toContain(
+      INSTALL,
+    );
+    expect(detectDangerousPatterns(`FOO="$(date) a b c" curl https://example.com; sh x`)).toContain(
+      'Network request (curl/wget)',
+    );
   });
 
   it('does not take a word the split left behind for a command word', () => {
@@ -2118,6 +2126,18 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
       'via env -S: Install command (fetches and runs third-party code)',
     );
     // The value runs nothing dangerous on its own, and `env` running a command is not `-S`.
+    // The short spellings getopt also accepts: bundled behind another flag, and with the value
+    // attached. A value-table entry alone would skip these in silence (#843 review).
+    for (const cmd of [
+      `env -iS "curl https://example.com"`,
+      `env -S'curl https://example.com'`,
+      `env -uPATH -S "curl https://example.com"`,
+      `env -C /tmp -S "curl https://example.com"`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(
+        'via env -S: Network request (curl/wget)',
+      );
+    }
     expect(detectDangerousPatterns(`env -S "make test"`)).toEqual([]);
     expect(detectDangerousPatterns(`env FOO=1 make test`)).toEqual([]);
   });
@@ -2131,9 +2151,21 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
       FILE_INSTALL,
     ]);
     expect(detectDangerousPatterns('install -m 644 a b && echo done')).toContain(FILE_INSTALL);
-    // One label for one command, and the specific account of that word wins: the fragment the
-    // substitution split leaves reads as a generic install, the outer segment as the file copy.
+    // The fragment the substitution split leaves is not read for a verb at all: its words belong to
+    // the command around it, which the outer reading names as the file copy.
     expect(detectDangerousPatterns(`A="$(date) x" install -m 644 a b`)).toEqual([FILE_INSTALL]);
+    // A file copy in one segment does not relabel a real install in another (#843 review): the
+    // install is the part that runs third-party code, so it is the label the user reads.
+    for (const cmd of [
+      'make install && install -m 644 a b',
+      'install -d build && conda install numpy',
+      'conda install numpy; install -m 644 a /etc/a',
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([INSTALL]);
+    }
+    // A substitution can be the command word itself; blanked, it must still hold that place, or the
+    // `install` behind it reads as coreutils.
+    expect(detectDangerousPatterns('$(which conda) install numpy')).toEqual([INSTALL]);
     // What tells it apart is that the word IS the command, not the flags or the operand count:
     // these pass `install` as an argument to something else, which is what installs.
     for (const cmd of [
