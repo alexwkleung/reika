@@ -789,9 +789,9 @@ const ENV_ASSIGN_WORD_RE = /^[A-Za-z_]\w*=/;
 // `time -p …`); left in place, the option became the lead and the command behind it read as an
 // argument (#757 review). Which options those are — and how many operands the carrier itself takes
 // before the command (`timeout`'s DURATION) — is `_carriers.ts`'s table, read here and in
-// `_readonly.ts`'s `dropCarriers` (#756). Both are closed on purpose: an option nobody enumerated
-// costs a label, which is the direction this file errs in.
-const WRAPPER_WORDS = new Set(Object.keys(CARRIERS));
+// `_readonly.ts`'s `dropCarriers` (#756). Its lists are closed on purpose: an option nobody
+// enumerated costs a label, which is the direction this file errs in.
+const CARRIER_WORDS = new Set(Object.keys(CARRIERS));
 
 // `command -v x` looks `x` up and runs nothing, so it has no verb at all.
 const COMMAND_LOOKUP_RE = /^-[a-zA-Z]*[vV]/;
@@ -832,7 +832,7 @@ function stripVerbPrefix(segment: string): string {
       // An assignment is `env`'s own operand (`env FOO=1 -S …`) and leaves the carrier in place.
     } else if (operands > 0) {
       operands--;
-    } else if (WRAPPER_WORDS.has(word)) {
+    } else if (CARRIER_WORDS.has(word)) {
       carrier = word;
       operands = CARRIERS[word].operands;
     } else {
