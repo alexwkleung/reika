@@ -7,6 +7,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A fetch or an install behind a wrapper's own words is no longer missed: `timeout 5 curl …`,
+  `nice curl …`, `timeout -s KILL 30 make install`. The approval gate reads the verb in verb
+  position, but it did not know the words a carrier takes for itself — `timeout`'s duration,
+  `nice -n 10`, their flags — so the verb behind them never reached the place it looks in and,
+  under `safe`, ran with no prompt at all. Carriers now come off one table, shared with plan
+  mode's read-only gate and the sandbox's network reader, so `nice cat …` is admitted as the read
+  it is and `nice gh pr view …` keeps its network. (#853)
 - An approval or `ask_user` popup in a narrow pane no longer wipes the terminal's scrollback
   (iTerm2's "a control sequence attempted to clear scrollback history"). The dialog counted its own
   rows as one line each, so on a narrow pane the subject, the warnings, the option labels and the

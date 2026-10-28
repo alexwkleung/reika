@@ -2197,3 +2197,75 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
     expect(detectDangerousPatterns('npm run install-hooks')).toEqual([]);
   });
 });
+
+// #756. The verb strip knew the carrier WORDS but not their own words: `timeout 5 curl x` read as a
+// `timeout` line and `nice curl x` as a `nice` line, so the fetch behind either reported NOTHING and
+// ran unprompted under `safe`. `dropCarriers` in `_readonly.ts` already read `timeout` (for the
+// sandbox's verb reader and plan mode's gate), which is the drift #749/#752 were about one level up:
+// a carrier one reader knows is a hole in the other. Both now walk `_carriers.ts`'s table — the
+// carrier, its value-taking flags, and the operands it takes before the command (`timeout`'s
+// DURATION). `env -i` and `sudo -u me` from the same issue were already covered by #794's option
+// tables; they are pinned here so a rewrite of the walk cannot quietly lose them.
+describe('detectDangerousPatterns — the verb behind a carrier (#756)', () => {
+  const CURL = 'Network request (curl/wget)';
+  const INSTALL = 'Install command (fetches and runs third-party code)';
+
+  it('reaches the command behind `timeout` and `nice`', () => {
+    for (const cmd of [
+      'timeout 5 curl https://example.com',
+      'timeout 30s curl https://example.com',
+      'timeout -s KILL 5 curl https://example.com',
+      // GNU permutes: the flags may follow the duration as well as precede it.
+      'timeout -k 1s 5 curl https://example.com',
+      'timeout --signal=KILL 5 curl https://example.com',
+      'nice curl https://example.com',
+      'nice -n 10 curl https://example.com',
+      'nice --adjustment=10 curl https://example.com',
+      // The legacy spelling is one word, and it takes no value.
+      'nice -10 curl https://example.com',
+      // The issue's own shape: a quoted assignment ahead of the carrier, which is why the carrier is
+      // read off the shell's words rather than off the raw text.
+      'FOO="a b" timeout 5 curl https://example.com',
+      // Carriers nest, so the walk has to reach through all of them.
+      'env -i nice -n 5 timeout 2 curl https://example.com',
+      'timeout 5 sudo -u me curl https://example.com',
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(CURL);
+    }
+  });
+
+  it('keeps a carrier operand out of verb position', () => {
+    // `5` was the lead, and a read whose argument happens to be `install` prompted for it.
+    for (const cmd of [
+      'timeout 5 find . -name install',
+      'nice -n 10 cat install.log',
+      'timeout 5 echo install',
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it('puts a real install behind a carrier in verb position', () => {
+    for (const cmd of ['timeout 5 make install', 'nice -n 10 make install']) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
+    }
+    // A coreutils `install` behind one is still the file copy it is, not a package install — the
+    // stripped reading is what decides that, and it did not exist before the carrier was stripped.
+    for (const cmd of ['timeout 5 install -m 644 a b', 'nice install -m 644 a b']) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual(['File install (copies into place)']);
+    }
+  });
+
+  it('still flags what the carrier bounds', () => {
+    expect(detectDangerousPatterns('timeout 5 rm -rf build')).toContain(
+      'Recursive force delete (rm -rf)',
+    );
+    for (const cmd of ['timeout 5 pkill node', 'nice pkill node']) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Kill processes by name (pkill/killall)');
+    }
+    // A carrier with nothing behind it runs nothing, so nothing is reported.
+    for (const cmd of ['timeout 5', 'nice -n 10', 'nice']) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+});
