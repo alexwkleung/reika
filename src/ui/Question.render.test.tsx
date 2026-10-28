@@ -3,7 +3,13 @@ import React from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stripAnsi from 'strip-ansi';
-import { Question, OWN_ANSWER_LABEL, fitQuestionToHeight, layoutQuestion } from './Question.js';
+import {
+  Question,
+  OWN_ANSWER_LABEL,
+  fitOptionsToHeight,
+  fitQuestionToHeight,
+  layoutQuestion,
+} from './Question.js';
 import { clampToViewport } from './Input.js';
 import { restoreTextPresentation } from './syncframe.js';
 import type { QuestionRequest } from '../types.js';
@@ -153,12 +159,25 @@ describe('Question dialog', () => {
 });
 
 // A frame as tall as the viewport makes Ink repaint with `\x1b[3J` and strands the dialog in the
-// scrollback (#456). What the user acts on — every option and the own-answer row — always shows.
+// scrollback (#456). What the user acts on always shows: the own-answer row, and the option the
+// cursor is on. The rest of the list gives way, and says how much it gave away (#856).
 describe('Question dialog height (#456)', () => {
-  const sized = (request: QuestionRequest, rows: number, typing?: { forIndex?: number }) => {
+  const sized = (
+    request: QuestionRequest,
+    rows: number,
+    typing?: { forIndex?: number },
+    cols = 60,
+    selectedIndex = 0,
+  ) => {
     const { lastFrame } = render(
       <Box flexDirection="column" paddingX={1}>
-        <Question request={request} selectedIndex={0} typing={typing} width={60} rows={rows} />
+        <Question
+          request={request}
+          selectedIndex={selectedIndex}
+          typing={typing}
+          width={cols}
+          rows={rows}
+        />
       </Box>,
     );
     return stripAnsi(lastFrame() ?? '').split('\n');
@@ -207,17 +226,55 @@ describe('Question dialog height (#456)', () => {
 
   // App sizes the input's window off this number, so it has to be what the dialog draws.
   it('reports the height it renders', () => {
-    const cases: [QuestionRequest, number, { forIndex?: number } | undefined][] = [
+    const cases: [QuestionRequest, number, { forIndex?: number } | undefined, number?][] = [
       [tall, 80, undefined],
       [tall, 30, undefined],
       [{ ...tall, question: 'Which one?' }, 30, undefined],
       [tall, 20, {}],
       [tall, 40, { forIndex: 2 }],
       [req, 30, undefined],
+      // A windowed list: the height has to follow the window, or App leaves the input too much
+      // room and the frame overruns the pane with the options' own rows.
+      [tall, 24, undefined, 40],
+      [tall, 22, undefined, 80],
     ];
-    for (const [request, rows, typing] of cases) {
-      const drawn = sized(request, rows, typing).length;
-      expect(layoutQuestion(request, typing ?? null, 60, rows, 0).height).toBe(drawn);
+    for (const [request, rows, typing, cols = 60] of cases) {
+      for (const selectedIndex of [0, request.options.length]) {
+        const drawn = sized(request, rows, typing, cols, selectedIndex).length;
+        expect(
+          layoutQuestion(request, typing ?? null, cols, rows, 0, selectedIndex).height,
+          `${cols}x${rows} sel=${selectedIndex}`,
+        ).toBe(drawn);
+      }
+    }
+  });
+
+  // Labels that wrap to different heights gave each cursor position a different window height, so
+  // the dialog and the input under it moved by a row on every arrow key (#857). Only where every
+  // option fits the budget: a row taller than the whole budget still draws, and overruns.
+  it('holds one height while the cursor moves through a windowed list', () => {
+    const mixed: QuestionRequest = {
+      question: 'Which approach should the classifier take?',
+      options: [
+        { label: 'Flag only inline bodies', description: 'Keeps python3 script.py silent' },
+        { label: `Flag every interpreter: ${sentence}`, description: `Because ${sentence}` },
+        { label: 'Skip it' },
+        { label: `Ask each time: ${sentence} and also ${sentence}` },
+      ],
+    };
+    for (const [cols, rows] of [
+      [60, 24],
+      [80, 20],
+    ]) {
+      const at = `${cols}x${rows}`;
+      const heights = [0, 1, 2, 3, 4].map(sel => {
+        const layout = layoutQuestion(mixed, null, cols, rows, 0, sel);
+        expect(layout.height, `${at} sel=${sel}`).toBe(
+          sized(mixed, rows, undefined, cols, sel).length,
+        );
+        return layout.height;
+      });
+      expect(new Set(heights).size, `${at} ${heights}`).toBe(1);
     }
   });
 
@@ -246,8 +303,8 @@ describe('Question dialog height (#456)', () => {
       );
       return stripAnsi(lastFrame() ?? '').split('\n');
     };
-    // Every pane the options themselves fit in. Narrower than that is the floor case below: four
-    // full-sentence option labels cannot be shown in fewer rows than they take.
+    // Every pane the whole list fits in. Below that the labels alone outgrow the pane and the list
+    // is windowed — the case after this one.
     for (const [cols, rows] of [
       [100, 40],
       [100, 24],
@@ -266,12 +323,73 @@ describe('Question dialog height (#456)', () => {
     }
   });
 
-  // A pane shorter than the options alone: the dialog is at its floor — no descriptions, one row
-  // of question and its "more lines" note — because every option row always shows.
-  it('gives up everything else when the options alone outgrow the pane', () => {
+  // #856: a pane shorter than the options alone. The dialog is at its floor — no descriptions, one
+  // row of question and its "more lines" note — and the option list is windowed, because drawing
+  // every label is what reaches the viewport height and repaints the terminal.
+  it('windows the options when the option rows alone outgrow the pane', () => {
     const tight = layoutQuestion(tall, null, 40, 24, 0);
     expect(tight.fit).toEqual({ showDescriptions: false, questionRows: 1 });
     expect(tight.hiddenQuestionRows).toBe(11);
+    // Only the selected option is left with a row to spare; the other three are a marker.
+    expect(tight.options).toMatchObject({ start: 0, end: 1, moreAbove: 0, moreBelow: 3 });
+    expect(tight.height).toBeLessThanOrEqual(24 - 1 - 6);
+  });
+
+  // The window follows the cursor — including the 1-9 keys, which jump to a row that need not be
+  // in the window at all, and the own-answer row, which sits past the last option.
+  it('keeps the selected option in the window', () => {
+    for (const [cols, rows] of [
+      [40, 24],
+      [80, 22],
+      [60, 21],
+    ]) {
+      for (let selectedIndex = 0; selectedIndex <= tall.options.length; selectedIndex++) {
+        const at = `${cols}x${rows} sel=${selectedIndex}`;
+        const win = layoutQuestion(tall, null, cols, rows, 0, selectedIndex).options;
+        if (!win) throw new Error(`no option window at ${at}`);
+        // The own-answer row is index `options.length`: with it selected the window shows the end
+        // of the list, since the row the cursor is on is the one under the marker.
+        const last = Math.min(selectedIndex, tall.options.length - 1);
+        expect(win.start <= last && last < win.end, at).toBe(true);
+        // A window that hides something says so, and the rows it reports hold every row it draws.
+        expect(win.rows, at).toBeGreaterThanOrEqual(
+          win.end - win.start + (win.moreAbove > 0 ? 1 : 0) + (win.moreBelow > 0 ? 1 : 0),
+        );
+      }
+    }
+  });
+
+  // Nothing about the list's identity may change with the window: the numbers are the options'
+  // own (the 1-9 keys index them), and the escape hatch stays last.
+  it('numbers a windowed list by the real option index', () => {
+    const out = sized(tall, 24, undefined, 40, 3).join('\n');
+    expect(out).toContain('4: Keep');
+    expect(out).not.toContain('1: Keep');
+    expect(out).toMatch(/↑ 3 more/);
+    expect(out).not.toMatch(/↓ \d+ more/);
+    // The own-answer row always shows, at its own number, even when options are hidden.
+    expect(out).toMatch(/5\. Something else/);
+  });
+
+  // The whole list still shows whenever it fits, and there is nothing to mark up.
+  it('never windows a list that fits', () => {
+    for (const [cols, rows] of [
+      [100, 40],
+      [40, 40],
+      [60, 30],
+    ]) {
+      const at = `${cols}x${rows}`;
+      const win = layoutQuestion(tall, null, cols, rows, 0, 0).options;
+      if (!win) throw new Error(`no option window at ${at}`);
+      expect({ ...win, rows: 0 }, at).toEqual({
+        start: 0,
+        end: 4,
+        moreAbove: 0,
+        moreBelow: 0,
+        rows: 0,
+      });
+      expect(sized(tall, rows, undefined, cols).join('\n')).not.toMatch(/[↑↓] \d+ more/);
+    }
   });
 
   // The hint is the one block nothing else depends on, so a pane that cannot hold it and the
@@ -308,5 +426,95 @@ describe('Question dialog height (#456)', () => {
     expect(fitQuestionToHeight(2, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 2 });
     expect(fitQuestionToHeight(8, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 3 });
     expect(fitQuestionToHeight(8, 12, 4, 10)).toEqual({ showDescriptions: false, questionRows: 1 });
+  });
+});
+
+// #856: the window itself, without a terminal in the way.
+describe('option window (#856)', () => {
+  it('shows the whole list when it fits, and marks nothing', () => {
+    expect(fitOptionsToHeight([1, 1, 1], 3, 1)).toEqual({
+      start: 0,
+      end: 3,
+      moreAbove: 0,
+      moreBelow: 0,
+      rows: 3,
+    });
+    expect(fitOptionsToHeight([], 0, 0)).toEqual({
+      start: 0,
+      end: 0,
+      moreAbove: 0,
+      moreBelow: 0,
+      rows: 0,
+    });
+  });
+
+  // The markers come out of the same budget: three options in five rows keep one above and one
+  // below the selection and spend two rows saying so.
+  it('pays for its markers out of the budget it is given', () => {
+    const win = fitOptionsToHeight([1, 1, 1, 1, 1], 5, 2);
+    expect(win.end - win.start + (win.moreAbove > 0 ? 1 : 0) + (win.moreBelow > 0 ? 1 : 0)).toBe(
+      win.rows,
+    );
+    expect(win.rows).toBeLessThanOrEqual(5);
+    expect(win.start <= 2 && 2 < win.end).toBe(true);
+  });
+
+  it('follows the selection to either end of the list', () => {
+    const costs = [1, 1, 1, 1, 1, 1];
+    const first = fitOptionsToHeight(costs, 4, 0);
+    expect(first).toMatchObject({ start: 0, end: 3, moreAbove: 0, moreBelow: 3 });
+    const last = fitOptionsToHeight(costs, 4, 5);
+    expect(last).toMatchObject({ start: 3, end: 6, moreAbove: 3, moreBelow: 0 });
+  });
+
+  // The 1-9 keys can land on a row that is not in the window, and the own-answer row sits past the
+  // last option, so the window is recomputed from whatever the cursor says.
+  it('clamps a selection past the last option onto the end of the list', () => {
+    const win = fitOptionsToHeight([1, 1, 1, 1], 3, 4);
+    expect(win).toMatchObject({ end: 4, moreBelow: 0 });
+    // Two options and the "above" marker, not one option and two markers: a marker the window
+    // turns out not to need is a row the window gets back.
+    expect(win).toMatchObject({ start: 2, end: 4, moreAbove: 2 });
+    expect(win.rows).toBe(3);
+  });
+
+  // Labels wrap to different heights, and settling one marker reservation into the next swung
+  // 2 → 1 → 2 here and returned six rows for a five-row budget (#857).
+  it('stays within budget when option heights differ', () => {
+    expect(fitOptionsToHeight([1, 1, 3, 1], 5, 1)).toEqual({
+      start: 0,
+      end: 2,
+      moreAbove: 0,
+      moreBelow: 2,
+      rows: 3,
+    });
+  });
+
+  it('never overruns a budget that can hold the selection and both markers', () => {
+    const lists: number[][] = [[]];
+    for (let len = 1; len <= 5; len++) {
+      for (const prev of lists.filter(l => l.length === len - 1)) {
+        for (const c of [1, 2, 3]) lists.push([...prev, c]);
+      }
+    }
+    for (const costs of lists) {
+      for (let selected = 0; selected < costs.length; selected++) {
+        for (let budget = costs[selected] + 2; budget <= 12; budget++) {
+          const win = fitOptionsToHeight(costs, budget, selected);
+          expect(win.rows, `${costs} budget=${budget} sel=${selected}`).toBeLessThanOrEqual(budget);
+          expect(win.start <= selected && selected < win.end).toBe(true);
+        }
+      }
+    }
+  });
+
+  // Nothing smaller to draw: a row taller than the whole budget still shows, because hiding it
+  // would hide the row the cursor is on.
+  it('keeps the selected row even when it alone overruns the budget', () => {
+    const win = fitOptionsToHeight([4, 4, 4], 2, 1);
+    // The cursor's row and both markers: over the budget by more than the markers cost, so the
+    // window says the list is longer than the one row it can draw rather than going quiet.
+    expect(win).toMatchObject({ start: 1, end: 2, moreAbove: 1, moreBelow: 1 });
+    expect(win.rows).toBe(6);
   });
 });
