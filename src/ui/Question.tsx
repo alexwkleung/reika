@@ -89,17 +89,17 @@ export function fitOptionsToHeight(
     rows: rowCosts.reduce((a, c) => a + c, 0),
   };
   if (n === 0 || whole.rows <= budget) return whole;
-  // The markers are paid for out of the same budget they will be sized against, so reserve the
-  // worst case — a row on each side — and settle: a run that turns out to touch an end gives its
-  // marker back, and that row is one more the run can use. The reservation only ever shrinks, so
-  // it converges; the cap is belt and braces.
-  let reserved = 2;
-  let run = grow(rowCosts, Math.max(0, budget - reserved), selectedIndex);
-  for (let i = 0; i < 3; i++) {
-    const markers = (run.start > 0 ? 1 : 0) + (run.end < n ? 1 : 0);
-    if (markers === reserved) break;
-    reserved = markers;
-    run = grow(rowCosts, Math.max(0, budget - reserved), selectedIndex);
+  // The markers are paid for out of the same budget they will be sized against, so each possible
+  // reservation is tried and the widest run whose markers fit inside it wins. Settling one
+  // reservation into the next does not converge: a freed row can let the run grow past an option
+  // that then keeps it off the end, and the loop stopped on the run that overran (#857). Reserving
+  // both rows always fits its own markers, so there is always a candidate.
+  let run = grow(rowCosts, Math.max(0, budget - 2), selectedIndex);
+  for (const reserved of [0, 1]) {
+    const candidate = grow(rowCosts, Math.max(0, budget - reserved), selectedIndex);
+    const markers = (candidate.start > 0 ? 1 : 0) + (candidate.end < n ? 1 : 0);
+    if (markers > reserved) continue;
+    if (candidate.end - candidate.start > run.end - run.start) run = candidate;
   }
   const moreAbove = run.start;
   const moreBelow = n - run.end;

@@ -449,6 +449,36 @@ describe('option window (#856)', () => {
     expect(win.rows).toBe(3);
   });
 
+  // Labels wrap to different heights, and settling one marker reservation into the next swung
+  // 2 → 1 → 2 here and returned six rows for a five-row budget (#857).
+  it('stays within budget when option heights differ', () => {
+    expect(fitOptionsToHeight([1, 1, 3, 1], 5, 1)).toEqual({
+      start: 0,
+      end: 2,
+      moreAbove: 0,
+      moreBelow: 2,
+      rows: 3,
+    });
+  });
+
+  it('never overruns a budget that can hold the selection and both markers', () => {
+    const lists: number[][] = [[]];
+    for (let len = 1; len <= 5; len++) {
+      for (const prev of lists.filter(l => l.length === len - 1)) {
+        for (const c of [1, 2, 3]) lists.push([...prev, c]);
+      }
+    }
+    for (const costs of lists) {
+      for (let selected = 0; selected < costs.length; selected++) {
+        for (let budget = costs[selected] + 2; budget <= 12; budget++) {
+          const win = fitOptionsToHeight(costs, budget, selected);
+          expect(win.rows, `${costs} budget=${budget} sel=${selected}`).toBeLessThanOrEqual(budget);
+          expect(win.start <= selected && selected < win.end).toBe(true);
+        }
+      }
+    }
+  });
+
   // Nothing smaller to draw: a row taller than the whole budget still shows, because hiding it
   // would hide the row the cursor is on.
   it('keeps the selected row even when it alone overruns the budget', () => {
