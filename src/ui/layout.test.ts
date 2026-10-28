@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import wrapAnsi from 'wrap-ansi';
-import { contentWidth, hangingWrap, wrapStyledRows } from './layout.js';
+import { contentWidth, hangingWrap, sliceStyled, wrapStyledRows } from './layout.js';
 
 describe('contentWidth', () => {
   it('pays for the App’s paddingX and any block indent', () => {
@@ -118,5 +118,35 @@ describe('wrapStyledRows', () => {
 
   it('leaves unstyled text as wrap-ansi wraps it', () => {
     expect(wrapStyledRows('aaaa bbbb cccc', 5)).toEqual(['aaaa ', 'bbbb ', 'cccc']);
+  });
+});
+
+describe('sliceStyled', () => {
+  const GRAY = '\x1b[38;2;127;132;142m';
+  const line = `x ${GRAY}\x1b[3m// then the input\x1b[23m\x1b[39m`;
+
+  it('opens a slice from the middle of a span with every style active there', () => {
+    const mid = sliceStyled(line, 10, 17);
+    expect(stripAnsi(mid)).toBe('the input'.slice(0, 7));
+    expect(mid.startsWith(GRAY + '\x1b[3m')).toBe(true);
+  });
+
+  it('closes what is still open where the slice ends', () => {
+    const head = sliceStyled(line, 0, 6);
+    expect(stripAnsi(head)).toBe('x // t');
+    expect(head.endsWith('\x1b[39m\x1b[23m')).toBe(true);
+  });
+
+  it('cuts back into the whole line, slice by slice', () => {
+    const cuts = [0, 3, 9, stripAnsi(line).length];
+    const joined = cuts
+      .slice(1)
+      .map((end, i) => sliceStyled(line, cuts[i], end))
+      .join('');
+    expect(stripAnsi(joined)).toBe(stripAnsi(line));
+  });
+
+  it('returns plain text unchanged', () => {
+    expect(sliceStyled('plain words', 6, 11)).toBe('words');
   });
 });

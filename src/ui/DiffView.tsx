@@ -6,7 +6,8 @@ import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
-import { wrapStyledRows } from './layout.js';
+import { sliceStyled, wrapStyledRows } from './layout.js';
+import stripAnsi from 'strip-ansi';
 
 export function DiffView({
   diff,
@@ -482,18 +483,27 @@ function PairedLine({
   // Painted into one string rather than nested <Text> elements: wrapping needs a single run of
   // text to break, and chalk re-opens the outer style after each nested close, so the line's base
   // background survives every highlighted span the same way Ink's own nesting would.
+  //
+  // The line is highlighted whole and the unchanged parts cut out of it: highlighted alone, a part
+  // from the middle of a comment has no `//` and came out in the default color (#852).
+  const highlighted = highlightCode(line, language);
+  const sliceable = stripAnsi(highlighted) === line;
+  let offset = 0;
   const painted = parts
     .map(p => {
       // Skip segments that belong only to the other side.
       if (side === 'removed' && p.added) return '';
       if (side === 'added' && p.removed) return '';
+      const start = offset;
+      offset += p.value.length;
       const isChange = side === 'removed' ? p.removed : p.added;
       // Brighter background for the changed portion — stands out against the line's own.
-      return isChange
-        ? chalk.level === 1
+      if (isChange) {
+        return chalk.level === 1
           ? chalk[side === 'added' ? 'bgGreen' : 'bgRed'].whiteBright(p.value)
-          : chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value)
-        : highlightCode(p.value, language);
+          : chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value);
+      }
+      return sliceable ? sliceStyled(highlighted, start, offset) : highlightCode(p.value, language);
     })
     .join('');
 

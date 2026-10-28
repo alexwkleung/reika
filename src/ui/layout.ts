@@ -61,6 +61,34 @@ export function wrapStyledRows(text: string, width: number): string[] {
   });
 }
 
+// The styled text whose plain characters are `[start, end)`, opening with the styles active at
+// `start` and closing what is still open at `end`, so the slice stands on its own. Lets a caller
+// style a whole line in one pass and cut it afterwards: a fragment styled alone loses its context,
+// as a run of words from the middle of a comment does without the `//` that made it one (#852).
+export function sliceStyled(text: string, start: number, end: number): string {
+  const sgr = /\x1b\[[0-9;]*m/y;
+  let open = new Map<SgrSlot, string>();
+  let out = '';
+  let plain = 0;
+  let i = 0;
+  while (i < text.length && plain < end) {
+    sgr.lastIndex = i;
+    const code = sgr.exec(text);
+    if (code) {
+      if (plain < start) open = sgrStateAfter(code[0], open);
+      else out += code[0];
+      i += code[0].length;
+      continue;
+    }
+    if (plain === start) out = [...open.values()].join('') + out;
+    if (plain >= start) out += text[i];
+    plain++;
+    i++;
+  }
+  const after = sgrStateAfter(out, new Map());
+  return out + [...after.keys()].map(slot => SGR_CLOSE[slot]).join('');
+}
+
 type SgrSlot = 'fg' | 'bg' | 'weight' | 'italic' | 'underline' | 'inverse' | 'strike';
 const SGR_CLOSE: Record<SgrSlot, string> = {
   fg: '\x1b[39m',

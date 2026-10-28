@@ -91,3 +91,29 @@ describe('DiffView wrapping a syntax-highlighted comment', () => {
     for (const row of rows) expect(row).toContain('\x1b[38;2;127;132;142m');
   });
 });
+
+// A changed word inside a comment splits the line into parts, and each unchanged part used to be
+// highlighted on its own: a run from the middle of the comment has no `//`, so it came out in the
+// default color, on the first row as well as the wrapped ones (#852).
+describe('DiffView highlighting a changed word inside a comment', () => {
+  it('keeps the comment color on the unchanged text after the changed word', () => {
+    chalk.level = 3;
+    const frame = render(
+      <DiffView
+        diff={[
+          '- // above the question, the options and the hint, and the hint - then the input and status bar',
+          '+ // above the question, the options and the hint - then the input and status bar',
+        ].join('\n')}
+        path="a.ts"
+        maxWidth={40}
+      />,
+    ).lastFrame()!;
+    const rows = frame.split('\n').filter(l => /then|status|input/.test(stripAnsi(l)));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      const before = row.slice(0, row.search(/then|status|input/));
+      const fg = before.match(/\x1b\[(?:38;[0-9;]+|39)m/g) ?? [];
+      expect(fg.at(-1)).toBe('\x1b[38;2;127;132;142m');
+    }
+  });
+});
