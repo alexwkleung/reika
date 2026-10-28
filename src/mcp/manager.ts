@@ -14,10 +14,14 @@ export type McpServerStatus = {
   // The server announced a changed tool list. The list is part of the request prefix, so it cannot
   // change mid-session — this is surfaced, not acted on.
   changed: boolean;
-  // The child process is gone — it exited, or it never started — so every call to it fails. Any
-  // tools it did contribute stay in the request's tool list (that list is fixed at session start),
-  // which makes this the one place those failures are explained rather than retried blind.
+  // The child process is gone — it exited, or it never started. A server that exited after
+  // connecting is respawned on its next call (#592) until `gaveUp`; its tools stay in the request's
+  // tool list either way (that list is fixed at session start), so this is where it is explained.
   dead: boolean;
+  // Respawned this many times after exiting.
+  restarts?: number;
+  // The restart budget is spent: every call fails until reika restarts.
+  gaveUp?: boolean;
   // Every call asks first (`"approve": "always"`, #593).
   alwaysAsk?: boolean;
 };
@@ -119,6 +123,12 @@ export async function connectMcpServers(servers: McpServerConfig[]): Promise<Mcp
       get dead() {
         return entry.dead;
       },
+      get restarts() {
+        return entry.restarts;
+      },
+      get gaveUp() {
+        return entry.gaveUp;
+      },
     });
   }
 
@@ -189,9 +199,14 @@ export function formatMcpList(statuses: McpServerStatus[]): string {
       `  ${s.name} — ${s.tools} tool${s.tools === 1 ? '' : 's'} (${who})${s.alwaysAsk ? ' — asks before every call' : ''}`,
     );
     for (const c of s.commands) lines.push(`    /${c.name.padEnd(28)} ${c.description}`);
-    if (s.dead)
+    if (s.gaveUp)
       lines.push(
-        `    (this server has exited — its tools are still in the tool list, so calls fail until reika restarts)`,
+        `    (this server kept exiting and is not restarted again after ${plural(s.restarts ?? 0, 'restart')} — its tools are still in the tool list, so calls fail until reika restarts)`,
+      );
+    else if (s.dead) lines.push(`    (this server has exited — it is restarted on its next call)`);
+    else if (s.restarts)
+      lines.push(
+        `    (restarted ${s.restarts === 1 ? 'once' : `${s.restarts} times`} after exiting)`,
       );
     if (s.changed)
       lines.push(
@@ -199,4 +214,8 @@ export function formatMcpList(statuses: McpServerStatus[]): string {
       );
   }
   return lines.join('\n');
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
 }

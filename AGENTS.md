@@ -119,7 +119,10 @@ list — and returns errors instead of throwing, because a typo in one entry mus
   call resolved that call with nothing. A legacy server→client request is answered (`ping`,
   `roots/list` → no roots, anything else `-32601`) because an unanswered request is how a server
   decides its peer is gone; an abandoned call (abort or timeout) sends `notifications/cancelled`;
-  a child that dies fails every in-flight request rather than leaving the turn hanging. A server
+  a child that dies fails every in-flight request rather than leaving the turn hanging, and is
+  respawned lazily by the next call (#592, the stdio binding's SHOULD) — the lost call is never
+  retried, since it may have acted; `MAX_RESTARTS` per session, with a backoff, after which it stays
+  dead and `/mcp` says why. A different `tools/list` after a respawn sets `toolsChanged`. A server
   inherits only the SDKs' safe environment slice plus temp/locale (`serverEnv`), never reika's
   API keys — third-party code from `npx` has no business with them. The handshake
   carries its own bound (`connectTimeoutMs`, default 15s) rather than sharing the call's: it is paid

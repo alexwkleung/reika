@@ -13,7 +13,14 @@ const serverPath = join(dir, 'server.mjs');
 writeFileSync(
   serverPath,
   `
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+// One line per process start, so a test can count respawns (#592); with FIXTURE_CRASH_ON_RESTART
+// every start after the first dies before it can answer — a server that crashes on start.
+if (process.env.FIXTURE_START_LOG) {
+  appendFileSync(process.env.FIXTURE_START_LOG, 'start\\n');
+  const starts = readFileSync(process.env.FIXTURE_START_LOG, 'utf8').split('\\n').filter(Boolean).length;
+  if (process.env.FIXTURE_CRASH_ON_RESTART === '1' && starts > 1) process.exit(4);
+}
 // Records a natural exit (stdin EOF): a signal kill never runs 'exit' handlers (#594).
 if (process.env.FIXTURE_EXIT_MARK) process.on('exit', () => writeFileSync(process.env.FIXTURE_EXIT_MARK, 'clean'));
 let buf = '';
@@ -171,7 +178,7 @@ process.stdin.on('data', chunk => {
 const clients: McpClient[] = [];
 function makeClient(
   over: Partial<McpServerConfig> = {},
-  opts: { probeWaitMs?: number } = {},
+  opts: { probeWaitMs?: number; restartBackoffMs?: number[] } = {},
 ): McpClient {
   const client = new McpClient(
     {
@@ -261,11 +268,69 @@ describe('McpClient', () => {
     expect(replies.find(r => r.id === 'r2')?.error?.code).toBe(-32601);
   });
 
-  it('fails a call when the server dies, with the exit status', async () => {
-    const client = makeClient();
+  // #592: the call in flight is lost (and not retried — it may have acted), the next one respawns.
+  it('fails the call a server dies during, then restarts it for the next call', async () => {
+    const log = join(dir, 'starts-restart');
+    const client = makeClient({ env: { FIXTURE_START_LOG: log } });
     await client.connect();
     await expect(client.callTool('crash', {})).rejects.toThrow(/server exited \(code 3\)/);
-    await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow(/server exited/);
+    expect(client.dead).toBe(true);
+    expect((await client.callTool('echo', { text: 'x' })).content?.[0]).toEqual({
+      type: 'text',
+      text: 'echo: x',
+    });
+    expect(client.dead).toBe(false);
+    expect(client.restarts).toBe(1);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  it('respawns once for parallel calls that find the server gone', async () => {
+    const log = join(dir, 'starts-parallel');
+    const client = makeClient({ env: { FIXTURE_START_LOG: log } });
+    await client.connect();
+    await expect(client.callTool('crash', {})).rejects.toThrow(/server exited/);
+    const results = await Promise.all([
+      client.callTool('echo', { text: 'a' }),
+      client.callTool('echo', { text: 'b' }),
+    ]);
+    expect(results.map(r => r.content?.[0])).toEqual([
+      { type: 'text', text: 'echo: a' },
+      { type: 'text', text: 'echo: b' },
+    ]);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  it('stops restarting a server that dies on every start, at the cap', async () => {
+    const log = join(dir, 'starts-cap');
+    const client = makeClient(
+      { env: { FIXTURE_START_LOG: log, FIXTURE_CRASH_ON_RESTART: '1' } },
+      { restartBackoffMs: [0] },
+    );
+    await client.connect();
+    await expect(client.callTool('crash', {})).rejects.toThrow(/server exited \(code 3\)/);
+    for (let i = 0; i < 3; i++) {
+      await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow(
+        /server exited \(code 4\)/,
+      );
+    }
+    expect(client.gaveUp).toBe(false);
+    await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow(
+      /not restarted again after 3 restarts/,
+    );
+    expect(client.gaveUp).toBe(true);
+    // Given up for good: no further spawns, the same answer on every later call.
+    await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow(/not restarted again/);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(4);
+    expect(client.restarts).toBe(3);
+  });
+
+  it('does not restart a closed client', async () => {
+    const log = join(dir, 'starts-closed');
+    const client = makeClient({ env: { FIXTURE_START_LOG: log } });
+    await client.connect();
+    await client.close();
+    await expect(client.callTool('echo', { text: 'x' })).rejects.toThrow('closed');
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
   // #594: a server that exits on stdin EOF gets to, rather than taking an immediate SIGTERM.
