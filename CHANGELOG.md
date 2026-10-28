@@ -9,7 +9,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - An MCP server that exits mid-session is started again on its next call instead of staying dead
   until Reika restarts. The call it died during still fails and is not retried. A server that keeps
-  exiting is given up on after three restarts, and `/mcp` says so. (#592)
+  exiting is given up on after three restarts, and `/mcp` says so. (#860)
 
 ### Fixed
 
