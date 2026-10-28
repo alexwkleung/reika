@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: If you use Reika in your work, please cite it as below.
+type: software
+title: Reika
+abstract: A coding agent CLI for local and hosted models, designed around small local models first.
+authors:
+  - given-names: Alex
+    family-names: Leung
+repository-code: https://github.com/alexwkleung/reika
+url: https://github.com/alexwkleung/reika
+license: Apache-2.0
