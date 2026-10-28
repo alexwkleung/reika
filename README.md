@@ -148,9 +148,10 @@ Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kim
 If you use Reika in your work, you can cite it as:
 
 ```bibtex
-@software{leung_reika,
+@software{reika2026,
   author = {Leung, Alex},
   title  = {Reika},
+  year   = {2026},
   url    = {https://github.com/alexwkleung/reika}
 }
 ```

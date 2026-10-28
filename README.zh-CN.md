@@ -147,9 +147,10 @@ Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Co
 如果你在工作中使用了 Reika，可以这样引用：
 
 ```bibtex
-@software{leung_reika,
+@software{reika2026,
   author = {Leung, Alex},
   title  = {Reika},
+  year   = {2026},
   url    = {https://github.com/alexwkleung/reika}
 }
 ```
