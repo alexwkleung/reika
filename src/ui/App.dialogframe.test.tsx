@@ -81,12 +81,23 @@ const APPROVAL: ApprovalRequest = {
   preview: PREVIEW,
   warnings: ['Remote package execution (npx/bunx/uvx)'],
 };
-// ask_user's dialog has the other shape: every word in it is model-written and wraps.
+// ask_user's dialog has the other shape: every word in it is model-written and wraps. Two of these
+// questions: a short one (the panes where the list fits whole) and a four-option one whose labels
+// alone outgrow a 40x24 pane, which is what #856 windows.
 const QUESTION: QuestionRequest = {
   question: 'Which package manager should this repository use, and why?',
   options: [
     { label: 'pnpm, since the lockfile is pnpm-lock.yaml and CI installs with it' },
     { label: 'npm', description: 'only if you intend to switch the lockfile over' },
+  ],
+};
+const LONG_QUESTION: QuestionRequest = {
+  question: 'Which part of the README should the rewrite cover?',
+  options: [
+    { label: 'Only the opening pitch paragraph, leaving every section below it as it is' },
+    { label: 'The whole Quick start, including the install and the first-run instructions' },
+    { label: 'Quick start and the FAQ, but not the reference sections further down the page' },
+    { label: 'Every section, rewriting the reference material alongside the introduction' },
   ],
 };
 
@@ -99,11 +110,13 @@ type TurnOpts = {
 };
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'user', content: opts.userInput });
-  if (questionTurn) answers.push(await opts.requestQuestion!(QUESTION));
+  if (questionTurn) answers.push(await opts.requestQuestion!(asked));
   else await opts.requestApproval!(APPROVAL);
 });
 // Which dialog the mocked turn opens, set by the test that is driving the app.
 let questionTurn = false;
+// Which question the mocked ask_user asks: the short one unless a test wants the long one.
+let asked: QuestionRequest = QUESTION;
 vi.mock('../agent/loop.js', () => ({ runTurn: (...a: unknown[]) => runTurn(...(a as [never])) }));
 
 // `is-in-ci` reads the environment once, when Ink is first evaluated, and on a CI runner Ink then
@@ -226,8 +239,7 @@ describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
   it('holds for ask_user too', async () => {
     questionTurn = true;
     try {
-      // Panes where the question dialog's options fit. Narrower than this the options alone need
-      // more rows than the pane has (every option always shows), so no budget can save it.
+      // Panes where the question dialog's options fit whole.
       for (const [cols, rows] of [
         [100, 40],
         [60, 40],
@@ -240,8 +252,24 @@ describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
         expect(plain(out.writes.at(-1) ?? '')).toContain('Something else');
         app.unmount();
       }
+      // #856: a short, narrow pane where four full-sentence labels need more rows than the pane
+      // leaves. No budget can show them all, so the list is windowed around the cursor instead.
+      asked = LONG_QUESTION;
+      for (const [cols, rows] of [
+        [40, 24],
+        [40, 22],
+      ]) {
+        const { app, out, cleared } = await openDialog(cols, rows, 'Something else');
+        expect(cleared(), `${cols}x${rows}`).toBe(false);
+        const frame = plain(out.writes.at(-1) ?? '');
+        expect(frame).toContain('Something else');
+        // The marker says the rest are hidden rather than drawing them into the scrollback.
+        expect(frame, `${cols}x${rows}`).toMatch(/↓ \d+ more|↑ \d+ more/);
+        app.unmount();
+      }
     } finally {
       questionTurn = false;
+      asked = QUESTION;
     }
   }, 60_000);
 

@@ -13,6 +13,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   keyboard hint wrapped it past the height the preview had been sized against, and Ink repainted the
   whole terminal. It now measures those rows at the pane's width, and on a pane too short for
   everything gives up the hint before the preview. (#855)
+- `ask_user`'s option list no longer pushes the dialog past a short, narrow pane. When the option
+  labels alone need more rows than the pane leaves — a tmux or an iTerm quarter split, say — the
+  list is windowed around the selected row with `↑ N more` / `↓ N more` markers, instead of drawing
+  every option into a frame as tall as the viewport. Option numbers stay the list's own, so the 1-9
+  keys still jump to the row they name, and the "Something else — type your own answer" row always
+  shows. (#856)
 
 ## [0.7.0] - 2026-10-27
 
