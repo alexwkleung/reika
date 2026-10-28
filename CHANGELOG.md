@@ -3,6 +3,17 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- An approval or `ask_user` popup in a narrow pane no longer wipes the terminal's scrollback
+  (iTerm2's "a control sequence attempted to clear scrollback history"). The dialog counted its own
+  rows as one line each, so on a narrow pane the subject, the warnings, the option labels and the
+  keyboard hint wrapped it past the height the preview had been sized against, and Ink repainted the
+  whole terminal. It now measures those rows at the pane's width, and on a pane too short for
+  everything gives up the hint before the preview. (#855)
+
 ## [0.7.0] - 2026-10-27
 
 ### Changed
