@@ -303,6 +303,21 @@ describe('isProvablyReadOnly — gh reads', () => {
     expect(isProvablyReadOnly('timeout 30 grep -n foo src/a.ts | head -5')).toBe(true);
   });
 
+  // #756: `nice` bounds nothing and changes nothing about what runs, so it is read through the same
+  // way — and the two compose, since a model that wraps a read in either may wrap it in both. Both
+  // carriers come off one table shared with `_danger.ts`'s verb strip, so the gate and the approval
+  // labels cannot disagree about which wrapper a read hides behind.
+  it('reads through a `nice` carrier, and through two of them', () => {
+    expect(isProvablyReadOnly('nice cat package.json')).toBe(true);
+    expect(isProvablyReadOnly("nice -n 10 sed -n '1,5p' src/a.ts")).toBe(true);
+    expect(isProvablyReadOnly('timeout 30 nice gh pr view 621')).toBe(true);
+    // What a carrier bounds is still what gets read, and a carrier is no way past the gate: `sudo`
+    // is a wrapper that changes what running the command means, however it is reached.
+    expect(isProvablyReadOnly('nice rm -rf src')).toBe(false);
+    expect(isProvablyReadOnly('nice sudo cat f')).toBe(false);
+    expect(isProvablyReadOnly('timeout 5 nice')).toBe(false);
+  });
+
   // Plan mode's set must stay inside what agent mode already runs unprompted; a verb admitted here
   // but flagged there would make plan mode the looser of the two.
   it('admits nothing the danger scan flags', async () => {

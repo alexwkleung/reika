@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { WORD_RE, dequote, maskQuoted, maskShellData, splitSegments, words } from './_readonly.js';
+import { CARRIERS, carrierOptionValue } from './_carriers.js';
 import { type Heredoc, scanHeredocs, stripHeredocs } from './_heredoc.js';
 import { maskMarkdownData } from './_markdown.js';
 
@@ -759,22 +760,20 @@ const VERB_PATTERNS: Array<{ re: RegExp; label: string }> = [
 // reading, and the value is exactly what that `bash -c` runs. So `verbLabels` reads a segment both
 // ways and reports the union — quoting can add a label, and cannot cost one. Both readings strip the
 // same words, from one list, or the union would disagree about a wrapper only one of them knows.
-const VERB_PREFIX_WORDS = [
-  'sudo',
-  'command',
-  'nohup',
-  'exec',
-  'env',
-  'time',
-  'if',
-  'then',
-  'else',
-  'elif',
-  'do',
-  'while',
-  'until',
-  '!',
-];
+//
+// The words are `_carriers.ts`'s table plus the shell grammar a segment can open with (`if curl …
+// ; then`). The table is shared with `_readonly.ts`'s `dropCarriers` (#756) because a carrier only
+// one of the two knew is a fetch that runs unprompted on this side and a refused read on that one:
+// `timeout 5 curl x` and `nice curl x` each reported NOTHING here, so under `safe` the fetch ran.
+//
+// The whitespace reading is the blind half of that pair, and it can only see bare words: it has no
+// way to tell which of a carrier's tokens is an option's value, so it strips the carrier's NAME and
+// leaves its operands standing (`timeout 5 curl` reads as `5 curl`). Nothing is lost by that — a
+// leftover operand is a word no `^`-anchored pattern matches, and the union takes the label from
+// the quoted reading, which is the one that reaches the verb.
+const SHELL_PREFIX_KEYWORDS = ['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!'];
+const VERB_PREFIX_WORDS = [...Object.keys(CARRIERS), ...SHELL_PREFIX_KEYWORDS];
+
 const VERB_PREFIX_WORD_SET = new Set(VERB_PREFIX_WORDS);
 const VERB_PREFIX_WS_RE = new RegExp(
   String.raw`^(?:(?:[A-Za-z_]\w*=\S*|${VERB_PREFIX_WORDS.join('|')})\s+)+`,
@@ -788,60 +787,22 @@ const ENV_ASSIGN_WORD_RE = /^[A-Za-z_]\w*=/;
 
 // A wrapper's own options sit between it and the command it runs (`sudo -u me grep …`, `env -i …`,
 // `time -p …`); left in place, the option became the lead and the command behind it read as an
-// argument (#757 review). These are the options that consume the next word as their value, in their
-// SHORT spellings; the long ones are `WRAPPER_LONG_VALUE_OPTIONS` below and the bundled ones are
-// `wrapperOptionValue`'s last clause (#794). Both lists are closed on purpose: an option nobody
-// enumerated costs a label, which is the direction this file errs in.
-const WRAPPER_VALUE_OPTIONS: Record<string, ReadonlySet<string>> = {
-  sudo: new Set(['-u', '-g', '-U', '-C', '-D', '-h', '-p', '-r', '-t', '-T', '-R']),
-  env: new Set(['-u', '-C', '-S', '-P']),
-  exec: new Set(['-a']),
-  time: new Set(['-o', '-f']),
-};
-// The same options spelled out: `sudo --user me curl …` and `env --chdir /x make install` hid the
-// command behind them exactly as the short spellings did (#794).
-const WRAPPER_LONG_VALUE_OPTIONS: Record<string, ReadonlySet<string>> = {
-  sudo: new Set([
-    '--user',
-    '--group',
-    '--other-user',
-    '--close-from',
-    '--chdir',
-    '--host',
-    '--prompt',
-    '--role',
-    '--type',
-    '--command-timeout',
-  ]),
-  env: new Set(['--unset', '--chdir', '--split-string', '--path']),
-  exec: new Set(['--argv0']),
-  time: new Set(['--output', '--format']),
-};
-const WRAPPER_WORDS = new Set(['sudo', 'command', 'nohup', 'exec', 'env', 'time']);
+// argument (#757 review). Which options those are — and how many operands the carrier itself takes
+// before the command (`timeout`'s DURATION) — is `_carriers.ts`'s table, read here and in
+// `_readonly.ts`'s `dropCarriers` (#756). Both are closed on purpose: an option nobody enumerated
+// costs a label, which is the direction this file errs in.
+const WRAPPER_WORDS = new Set(Object.keys(CARRIERS));
 
 // `command -v x` looks `x` up and runs nothing, so it has no verb at all.
 const COMMAND_LOOKUP_RE = /^-[a-zA-Z]*[vV]/;
 
-// Whether a wrapper option consumes the NEXT word as its value. `word` has already been read as an
-// option. A long spelling carrying `=` (`--user=me`) keeps its value attached and eats nothing.
-function wrapperOptionValue(wrapper: string, word: string): boolean {
-  if (WRAPPER_VALUE_OPTIONS[wrapper]?.has(word)) return true;
-  if (WRAPPER_LONG_VALUE_OPTIONS[wrapper]?.has(word)) return true;
-  // A BUNDLED short spelling (`sudo -iu me`, `env -iu PATH …`) follows getopt: the letters are read
-  // left to right, and the FIRST one that takes a value takes the rest of the bundle as that value
-  // (`-ume` is `-u me`, `-of x` is `-o f`) unless it is the bundle's LAST letter, in which case the
-  // value is the next word (`-iu me` is `-i -u me`). Anything else is a flag that eats nothing.
-  if (!/^-[a-zA-Z]+$/.test(word)) return false;
-  for (let i = 1; i < word.length; i++) {
-    if (WRAPPER_VALUE_OPTIONS[wrapper]?.has(`-${word[i]}`)) return i === word.length - 1;
-  }
-  return false;
-}
-
 function stripVerbPrefix(segment: string): string {
   let at = 0;
-  let wrapper: string | undefined;
+  let carrier: string | undefined;
   let takesValue = false;
+  // Operands the carrier still takes before the command it runs: one for `timeout`, whose DURATION
+  // is not an option and used to land in verb position (`timeout 5 curl x` read as a `5`).
+  let operands = 0;
   for (;;) {
     SHELL_WORD_RE.lastIndex = at;
     let end = SHELL_WORD_RE.exec(segment) ? SHELL_WORD_RE.lastIndex : at;
@@ -851,23 +812,32 @@ function stripVerbPrefix(segment: string): string {
       end = NON_SPACE_RUN_RE.lastIndex;
     }
     const word = segment.slice(at, end);
-    if (wrapper === 'command' && COMMAND_LOOKUP_RE.test(word)) return '';
-    const isOption = wrapper !== undefined && (takesValue || word.startsWith('-'));
+    if (carrier === 'command' && COMMAND_LOOKUP_RE.test(word)) return '';
+    const isOption = carrier !== undefined && (takesValue || word.startsWith('-'));
     WORD_GAP_RE.lastIndex = end;
     const gap = WORD_GAP_RE.exec(segment);
-    if (!gap || !(isOption || VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))) {
+    if (
+      !gap ||
+      !(isOption || operands > 0 || VERB_PREFIX_WORD_SET.has(word) || ENV_ASSIGN_WORD_RE.test(word))
+    ) {
       return segment.slice(at);
     }
     if (takesValue) {
       takesValue = false;
     } else if (isOption) {
-      // `--` ends the wrapper's options: the next word is the command, even one spelled `-x`.
-      if (word === '--') wrapper = undefined;
-      else takesValue = wrapperOptionValue(wrapper!, word);
+      // `--` ends the carrier's options: the next word is the command, even one spelled `-x`.
+      if (word === '--') carrier = undefined;
+      else takesValue = carrierOptionValue(carrier!, word);
+    } else if (ENV_ASSIGN_WORD_RE.test(word)) {
+      // An assignment is `env`'s own operand (`env FOO=1 -S …`) and leaves the carrier in place.
+    } else if (operands > 0) {
+      operands--;
     } else if (WRAPPER_WORDS.has(word)) {
-      wrapper = word;
-    } else if (!ENV_ASSIGN_WORD_RE.test(word)) {
-      wrapper = undefined;
+      carrier = word;
+      operands = CARRIERS[word].operands;
+    } else {
+      // A shell keyword: it runs the word after it, and is no carrier itself.
+      carrier = undefined;
     }
     at = WORD_GAP_RE.lastIndex;
   }
