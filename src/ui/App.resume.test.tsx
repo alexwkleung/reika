@@ -225,6 +225,46 @@ describe('session auto-save and /resume', () => {
     app.unmount();
   });
 
+  it('draws a long session a slice at a time, with the label up between slices (#854)', async () => {
+    const agent: Message[] = [];
+    for (let i = 0; i < 60; i++) {
+      agent.push(
+        { role: 'user', content: `question ${i}` },
+        { role: 'assistant', content: `answer ${i}` },
+      );
+    }
+    await writeSession(
+      join(projectHistoryDir(BUNDLE.cwd), 'long.jsonl'),
+      { agent, chat: [] },
+      {
+        version: 1,
+        savedAt: '2026-09-01T00:00:00.000Z',
+        model: 'test-model',
+        baseURL: CONFIG.baseURL,
+        cwd: BUNDLE.cwd,
+        messageCount: agent.length,
+        mode: 'agent',
+      },
+    );
+    const app = await mountApp();
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.frames.length = 0;
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('Resumed "question 0"'), 'the resume');
+
+    // One commit for the whole session would go straight from the bare label to every message
+    // with no label; a frame holding both the first rows and the label is a slice the spinner
+    // outlived.
+    const partial = app.frames
+      .map(plain)
+      .find(f => f.includes('Resuming "question 0"') && f.includes('answer 0'));
+    expect(partial).toBeDefined();
+    expect(partial).not.toContain('answer 59');
+    expect(plain(app.lastFrame())).not.toContain('Resuming "question 0"');
+    app.unmount();
+  });
+
   it('says when there is nothing to resume', async () => {
     const app = await mountApp();
     await submit(app, '/resume');
