@@ -217,24 +217,26 @@ export function layoutQuestion(
   let showHint = true;
   // On a pane too short for the whole dialog, the HINT is what goes before the question is cut:
   // the options are what the user acts on and the question is what they are answering, while the
-  // hint is keyboard help they learn once. Only when dropping it is what makes the dialog fit
-  // whole — otherwise the shortfall is elsewhere and the hint is not the thing to blame.
+  // hint is keyboard help they learn once. It goes when dropping it shows the question whole, and
+  // also when the frame overflows with it: `fitQuestionToHeight` keeps a question row and its note
+  // past the budget, and keeping the hint there spends the scrollback on keyboard help.
   const cut = (f: ReturnType<typeof fitQuestionToHeight>): boolean =>
     f.questionRows < questionLines.length || (!f.showDescriptions && descriptionRows > 0);
+  const heightOf = (f: ReturnType<typeof fitQuestionToHeight>, fixedRows: number): number =>
+    fixedRows +
+    f.questionRows +
+    (f.questionRows < questionLines.length ? 1 : 0) +
+    labelRows +
+    (f.showDescriptions ? descriptionRows : 0);
   if (cut(fit)) {
     const without = fitAt(chrome);
-    if (!cut(without)) {
+    if (!cut(without) || heightOf(fit, fixed) > budget(0)) {
       showHint = false;
       fit = without;
     }
   }
   const hiddenQuestionRows = questionLines.length - fit.questionRows;
-  const height =
-    (showHint ? fixed : chrome) +
-    fit.questionRows +
-    (hiddenQuestionRows > 0 ? 1 : 0) +
-    labelRows +
-    (fit.showDescriptions ? descriptionRows : 0);
+  const height = heightOf(fit, showHint ? fixed : chrome);
   return {
     labels,
     descriptions,

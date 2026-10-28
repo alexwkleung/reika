@@ -116,9 +116,19 @@ const ciEnv = process.env.CI;
 process.env.CI = 'false';
 const { render: inkRender } = await import('ink');
 const { App } = await import('./App.js');
+// openDialog pins process.stdout's size for the App's own packing; put the real one back after.
+const stdoutColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+const stdoutRows = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
 afterAll(() => {
   if (ciEnv === undefined) delete process.env.CI;
   else process.env.CI = ciEnv;
+  for (const [key, desc] of [
+    ['columns', stdoutColumns],
+    ['rows', stdoutRows],
+  ] as const) {
+    if (desc) Object.defineProperty(process.stdout, key, desc);
+    else delete (process.stdout as unknown as Record<string, unknown>)[key];
+  }
 });
 
 // Both dialogs' answers: the mocked turn records whichever one it opened.
@@ -185,9 +195,13 @@ async function openDialog(cols: number, rows: number, want: string) {
     stdin.write('run it');
     await tick(20);
   }
+  // Every frame from the submit on is one the dialog may be in, opening frames included: a clear
+  // while it settles wipes the scrollback as surely as one in the frame it settles on.
+  const submitted = out.writes.length;
   stdin.write('\r');
   for (let i = 0; i < 200 && !plain(last()).includes(want); i++) await tick(20);
-  return { app, out };
+  const cleared = (): boolean => out.writes.slice(submitted).some(w => w.includes(CLEAR));
+  return { app, out, cleared };
 }
 
 describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
@@ -200,10 +214,10 @@ describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
       [40, 30],
       [40, 24],
     ]) {
-      const { app, out } = await openDialog(cols, rows, 'Decline, and say');
-      // The frame the dialog is in, as the terminal received it: `outputHeight >= rows` makes Ink
-      // write `clearTerminal` first, and that is the scrollback wipe the issue reports.
-      expect(out.writes.at(-1) ?? '', `${cols}x${rows}`).not.toContain(CLEAR);
+      const { app, out, cleared } = await openDialog(cols, rows, 'Decline, and say');
+      // The frames the dialog is in, as the terminal received them: `outputHeight >= rows` makes
+      // Ink write `clearTerminal` first, and that is the scrollback wipe the issue reports.
+      expect(cleared(), `${cols}x${rows}`).toBe(false);
       expect(plain(out.writes.at(-1) ?? '')).toContain('Decline, and say');
       app.unmount();
     }
@@ -221,8 +235,8 @@ describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
         [40, 40],
         [40, 30],
       ]) {
-        const { app, out } = await openDialog(cols, rows, 'Something else');
-        expect(out.writes.at(-1) ?? '', `${cols}x${rows}`).not.toContain(CLEAR);
+        const { app, out, cleared } = await openDialog(cols, rows, 'Something else');
+        expect(cleared(), `${cols}x${rows}`).toBe(false);
         expect(plain(out.writes.at(-1) ?? '')).toContain('Something else');
         app.unmount();
       }
@@ -234,8 +248,8 @@ describe('a dialog on a narrow pane stays under the viewport (#842)', () => {
   // The instrument above has to be able to see the bug it is guarding against: a pane with no room
   // for the dialog at all still makes Ink repaint, and this test would be vacuous if it didn't.
   it('sees the repaint on a pane with no room for anything', async () => {
-    const { app, out } = await openDialog(40, 8, 'Decline, and say');
-    expect(out.writes.at(-1) ?? '').toContain(CLEAR);
+    const { app, cleared } = await openDialog(40, 8, 'Decline, and say');
+    expect(cleared()).toBe(true);
     app.unmount();
   }, 30_000);
 });

@@ -283,6 +283,26 @@ describe('Question dialog height (#456)', () => {
     expect(tight.fit.questionRows).toBe(2);
   });
 
+  // A question too long to show whole even without the hint, on a pane where the cut question's
+  // first row and its note overrun the budget by a row: keeping the hint there is the repaint.
+  it('drops the hint when keeping it is what overflows the frame', () => {
+    const long: QuestionRequest = {
+      question: Array.from({ length: 12 }, (_, i) => `Line ${i} of a long question.`).join('\n'),
+      options: [{ label: 'pnpm, since the lockfile is pnpm-lock.yaml' }, { label: 'npm' }],
+    };
+    for (const [cols, rows] of [
+      [40, 21],
+      [40, 23],
+      [60, 19],
+      [60, 21],
+    ]) {
+      const fitted = layoutQuestion(long, null, cols, rows, 0);
+      expect(fitted.showHint, `${cols}x${rows}`).toBe(false);
+      expect(fitted.height, `${cols}x${rows}`).toBeLessThanOrEqual(rows - 1 - 6);
+      expect(fitted.hiddenQuestionRows, `${cols}x${rows}`).toBeGreaterThan(0);
+    }
+  });
+
   it('gives things up in order', () => {
     expect(fitQuestionToHeight(2, 6, 4, 12)).toEqual({ showDescriptions: true, questionRows: 2 });
     expect(fitQuestionToHeight(2, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 2 });
