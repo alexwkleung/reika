@@ -5,7 +5,14 @@ import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
-import { Approval, DIALOG_MARKER, approvalPreviewRows, fitCommandLines } from './Approval.js';
+import {
+  APPROVAL_HINT,
+  APPROVAL_OPTIONS,
+  Approval,
+  DIALOG_MARKER,
+  fitCommandLines,
+  layoutApproval,
+} from './Approval.js';
 import { contentWidth } from './layout.js';
 import { restoreTextPresentation } from './syncframe.js';
 import type { ApprovalRequest } from '../types.js';
@@ -192,10 +199,82 @@ describe('Approval dialog height (#447)', () => {
   });
 
   it('budgets warnings and reserved rows out of the preview', () => {
-    expect(approvalPreviewRows(0, 0, 40)).toBe(21);
-    expect(approvalPreviewRows(2, 0, 40)).toBe(18);
-    expect(approvalPreviewRows(0, 5, 40)).toBe(16);
-    expect(approvalPreviewRows(3, 0, 10)).toBe(3);
+    const at = (warnings: number, reserved: number, rows: number, cols = 100) => {
+      const request: ApprovalRequest = {
+        tool: 'bash',
+        subject: '~/repo',
+        preview: 'ls',
+        warnings: Array.from({ length: warnings }, (_, i) => `warning ${i}`),
+      };
+      return layoutApproval(request, false, cols, rows, reserved);
+    };
+    // The budget is one row short of the viewport (Ink repaints at `height >= rows`), and the hint
+    // block is measured on top of the chrome.
+    expect(at(0, 0, 40)).toEqual({
+      previewRows: 20,
+      showHint: true,
+      hint: APPROVAL_HINT,
+      height: 33,
+    });
+    expect(at(2, 0, 40).previewRows).toBe(17);
+    expect(at(0, 5, 40).previewRows).toBe(15);
+    // A viewport with no room for a preview and the hint: the hint is given up for the preview.
+    expect(at(3, 0, 10)).toMatchObject({ previewRows: 1, showHint: false });
+    expect(at(1, 0, 24, 34)).toMatchObject({ previewRows: 3, showHint: false });
+  });
+
+  // #842: the chrome is measured at the live width. On a narrow pane the option labels and the
+  // hint wrap, and a constant that counted one row each is what let the frame outgrow the budget
+  // the preview was sized against — all the way to the viewport height, where Ink repaints with
+  // `\x1b[3J` and iTerm2 warns about the scrollback.
+  it('measures the wrapped chrome instead of assuming one row each', () => {
+    const narrow = (cols: number) =>
+      layoutApproval({ tool: 'bash', subject: '~/repo', preview: 'ls' }, false, cols, 24, 0);
+    // A 100-column interior: every fixed row is one row, so the preview gets what is left of the
+    // 24-row viewport after the dialog's reserve underneath.
+    expect(narrow(100)).toMatchObject({ previewRows: 4, showHint: true });
+    expect(narrow(100).height).toBe(24 - 1 - 6);
+    // At 34 the option labels and the hint wrap; the wraps come out of the preview, and once that
+    // drops under three rows the hint goes instead of the evidence.
+    expect(narrow(34)).toMatchObject({ showHint: false });
+    expect(narrow(34).height).toBeLessThanOrEqual(24 - 1 - 6);
+  });
+
+  // #842: the same dialog on a small pane. The option labels and the hint wrap there, so the
+  // chrome is taller than the constants assumed — and the frame has to stay under the viewport
+  // whatever the width, or Ink repaints the terminal and the scrollback goes with it.
+  it('keeps the frame under a narrow viewport, wraps and all', () => {
+    const request: ApprovalRequest = {
+      tool: 'bash',
+      subject: '~/some/deep/project/directory/name',
+      preview: Array.from({ length: 40 }, (_, i) => `echo step-${i} && pnpm test`).join('\n'),
+      warnings: ['Remote package execution (npx/bunx/uvx)'],
+    };
+    for (const [width, rows] of [
+      [100, 40],
+      [100, 24],
+      [60, 40],
+      [40, 40],
+      [40, 24],
+      [34, 24],
+    ]) {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1}>
+          <Approval request={request} selectedIndex={0} width={width} rows={rows} />
+        </Box>,
+      );
+      const drawn = stripAnsi(lastFrame() ?? '').split('\n');
+      // The input box and the status bar underneath still have to fit.
+      expect(drawn.length, `${width}x${rows}`).toBeLessThanOrEqual(rows - 1 - 6);
+      // The options are what the user acts on: every one of them is still there to be chosen, in
+      // full — a wrapped label reads back as one run of text once the rows are joined and the
+      // border columns between them are dropped.
+      const text = drawn
+        .join(' ')
+        .replace(/[│╭╮╰╯─]+/g, ' ')
+        .replace(/\s+/g, ' ');
+      for (const option of APPROVAL_OPTIONS) expect(text, `${width}x${rows}`).toContain(option);
+    }
   });
 
   it('counts wrapped rows, not lines', () => {
@@ -206,6 +285,9 @@ describe('Approval dialog height (#447)', () => {
       hidden: 2,
     });
     expect(fitCommandLines([long, long], 6, 10)).toEqual({ lines: [long, long], hidden: 0 });
+    // A one-row budget is the footer alone: a kept line plus the footer would draw two rows where
+    // the layout counted one, and on a full pane that one row is the difference.
+    expect(fitCommandLines([long, long], 1, 10)).toEqual({ lines: [], hidden: 2 });
   });
 });
 

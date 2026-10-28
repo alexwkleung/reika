@@ -18,15 +18,24 @@ export const OWN_ANSWER_LABEL = 'Something else — type your own answer';
 // The dialog sits in Ink's live frame, and every word in it is model-written: a frame as tall as
 // the viewport makes Ink repaint with `\x1b[3J` and strands the dialog in the scrollback (#456,
 // the #447 shape). Fixed rows: marginTop, top border, both paddingY rows, the header, the margins
-// above the question, the options and the hint, and the hint — then the input and status bar
-// underneath, plus slack.
-const DIALOG_FIXED_ROWS = 9;
+// above the question, the options and the hint — then the input and status bar underneath, plus
+// slack. The hint rides ON TOP of that, measured at the live width (#842): it is one row on a wide
+// terminal and three on a narrow pane, and counting it as one is how the frame outgrew the budget
+// that sized the question and cleared the scrollback.
+const FRAME_ROWS = 4; // marginTop, top border, and both paddingY rows
+const LABEL_ROWS = 1; // the `⏺ Question` header
+const GAP_ROWS = 2; // the margins above the question and above the options
+const HINT_GAP_ROWS = 1; // … and the one above the hint, which goes with it
 const BELOW_DIALOG_ROWS = 6;
 // While the user types, the input under the dialog is live and scrolls its own window once the
 // answer outgrows the room the dialog leaves it (App passes `questionDialogHeight` to Input). That
 // window never goes below three lines plus its two "… lines above/below" markers, so the question
 // holds those rows back — the input can't be squeezed into overflowing the frame.
 const TYPING_INPUT_ROWS = 4;
+
+// The two hint lines, and what the dialog says while the reason field is open on the question.
+const QUESTION_HINT = '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort';
+const QUESTION_TYPING_HINT = 'enter submit  ·  ctrl-c back to the options';
 
 // What fits, in the order things are given up: the options are what the user acts on, so every
 // option row and the own-answer row always show; descriptions go first, then the question's tail.
@@ -71,8 +80,17 @@ export function Question({
   reservedRows?: number;
 }) {
   const liveWidth = useContentWidth(DIALOG_CHROME);
-  const { labels, descriptions, ownAnswer, questionLines, typingLine, fit, hiddenQuestionRows } =
-    layoutQuestion(request, typing ?? null, width ?? liveWidth, rows, reservedRows);
+  const {
+    labels,
+    descriptions,
+    ownAnswer,
+    questionLines,
+    typingLine,
+    fit,
+    hiddenQuestionRows,
+    hint,
+    showHint,
+  } = layoutQuestion(request, typing ?? null, width ?? liveWidth, rows, reservedRows);
   const hang = HANG;
   return (
     <Box
@@ -138,13 +156,11 @@ export function Question({
           </Text>
         </Box>
       )}
-      <Box marginTop={1}>
-        <Text color={theme.muted}>
-          {typing
-            ? 'enter submit  ·  ctrl-c back to the options'
-            : '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
-        </Text>
-      </Box>
+      {showHint ? (
+        <Box marginTop={1}>
+          <Text color={theme.muted}>{hint}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -185,19 +201,42 @@ export function layoutQuestion(
     : labels.reduce((n, l) => n + rowsOf(l.wrapped), 0) + rowsOf(ownAnswer);
   const descriptionRows = typing ? 0 : descriptions.reduce((n, d) => n + (d ? rowsOf(d) : 0), 0);
   const below = BELOW_DIALOG_ROWS + (typing ? TYPING_INPUT_ROWS : 0);
-  const fit = fitQuestionToHeight(
-    questionLines.length,
-    labelRows,
-    descriptionRows,
-    rows - DIALOG_FIXED_ROWS - below - reservedRows,
-  );
-  const hiddenQuestionRows = questionLines.length - fit.questionRows;
-  const height =
-    DIALOG_FIXED_ROWS +
-    fit.questionRows +
-    (hiddenQuestionRows > 0 ? 1 : 0) +
+  // Pre-wrapped, like the labels: the rows counted here are then the rows drawn at any width the
+  // frame is laid out in, not just the one this happened to measure at.
+  const hint = hangingWrap(typing ? QUESTION_TYPING_HINT : QUESTION_HINT, Math.max(1, cols), 0);
+  const hintRows = HINT_GAP_ROWS + hint.split('\n').length;
+  // Everything that does not depend on the question: the frame, the header and the margins.
+  const chrome = FRAME_ROWS + LABEL_ROWS + GAP_ROWS;
+  const fixed = chrome + hintRows;
+  // `rows - 1`: Ink repaints the whole terminal once the frame is AT LEAST as tall as the viewport
+  // (build/ink.js), so a budget that lands exactly on `rows` still clears the scrollback.
+  const budget = (fixedRows: number): number => rows - 1 - fixedRows - below - reservedRows;
+  const fitAt = (fixedRows: number) =>
+    fitQuestionToHeight(questionLines.length, labelRows, descriptionRows, budget(fixedRows));
+  let fit = fitAt(fixed);
+  let showHint = true;
+  // On a pane too short for the whole dialog, the HINT is what goes before the question is cut:
+  // the options are what the user acts on and the question is what they are answering, while the
+  // hint is keyboard help they learn once. It goes when dropping it shows the question whole, and
+  // also when the frame overflows with it: `fitQuestionToHeight` keeps a question row and its note
+  // past the budget, and keeping the hint there spends the scrollback on keyboard help.
+  const cut = (f: ReturnType<typeof fitQuestionToHeight>): boolean =>
+    f.questionRows < questionLines.length || (!f.showDescriptions && descriptionRows > 0);
+  const heightOf = (f: ReturnType<typeof fitQuestionToHeight>, fixedRows: number): number =>
+    fixedRows +
+    f.questionRows +
+    (f.questionRows < questionLines.length ? 1 : 0) +
     labelRows +
-    (fit.showDescriptions ? descriptionRows : 0);
+    (f.showDescriptions ? descriptionRows : 0);
+  if (cut(fit)) {
+    const without = fitAt(chrome);
+    if (!cut(without) || heightOf(fit, fixed) > budget(0)) {
+      showHint = false;
+      fit = without;
+    }
+  }
+  const hiddenQuestionRows = questionLines.length - fit.questionRows;
+  const height = heightOf(fit, showHint ? fixed : chrome);
   return {
     labels,
     descriptions,
@@ -207,6 +246,8 @@ export function layoutQuestion(
     fit,
     hiddenQuestionRows,
     height,
+    hint,
+    showHint,
   };
 }
 

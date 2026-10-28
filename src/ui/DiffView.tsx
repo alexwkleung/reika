@@ -105,7 +105,9 @@ export function fitRowsToHeight(
   );
   const total = heights.reduce((a, b) => a + b, 0);
   if (total <= maxRows) return { lines, hidden: 0 };
-  const budget = Math.max(1, maxRows - 1);
+  // As in the command preview: the footer costs a row, and the rows kept must stay inside
+  // `maxRows` — a one-row budget draws the footer alone.
+  const budget = Math.max(0, maxRows - 1);
   let used = 0;
   let kept = 0;
   while (kept < lines.length && used + heights[kept] <= budget) used += heights[kept++];
