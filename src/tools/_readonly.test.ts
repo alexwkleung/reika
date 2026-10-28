@@ -318,6 +318,14 @@ describe('isProvablyReadOnly — gh reads', () => {
     expect(isProvablyReadOnly('timeout 5 nice')).toBe(false);
   });
 
+  // `--` ends a carrier's options but not its operands, and an option after the DURATION is the
+  // command's own word: GNU runs `timeout 5 -k 1s cat f` as a command named `-k`.
+  it('reads a carrier the way its own option parser does', () => {
+    expect(isProvablyReadOnly('timeout -- 5 cat f')).toBe(true);
+    expect(isProvablyReadOnly('timeout -k 1s 5 cat f')).toBe(true);
+    expect(isProvablyReadOnly('timeout 5 -k 1s cat f')).toBe(false);
+  });
+
   // Plan mode's set must stay inside what agent mode already runs unprompted; a verb admitted here
   // but flagged there would make plan mode the looser of the two.
   it('admits nothing the danger scan flags', async () => {

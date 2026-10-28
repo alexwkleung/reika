@@ -74,9 +74,9 @@ export const CARRIERS: Record<string, Carrier> = {
   command: { values: [], operands: 0, transparent: false },
   nohup: { values: [], operands: 0, transparent: false },
   // `timeout [OPTION] DURATION COMMAND`: the DURATION is a positional operand, and `-s`/`-k` take
-  // values (`timeout -s KILL 5 curl`, `timeout 5 -k 1s curl` — GNU's parser permutes, so a flag may
-  // follow the duration as well as precede it). `--signal=KILL` carries its value attached and eats
-  // no word.
+  // values (`timeout -s KILL 5 curl`, `timeout -k 1s 5 curl`). GNU stops reading options at the
+  // first operand (`timeout 5 -k 1s curl` runs a command named `-k` — measured), so options are only
+  // read before it. `--signal=KILL` carries its value attached and eats no word.
   timeout: { values: ['-s', '--signal', '-k', '--kill-after'], operands: 1, transparent: true },
   // `nice [-n N | -N] COMMAND`, plus `--adjustment=N`. The legacy `nice -10 curl` is one word that
   // starts with `-` and takes no value, which the option arm below already reads correctly.
@@ -116,20 +116,23 @@ export function skipCarrier(
   if (!carrier || (transparentOnly && !carrier.transparent)) return -1;
   let i = start + 1;
   let operands = carrier.operands;
+  let optionsEnded = false;
   while (i < wordList.length) {
     const word = wordList[i];
-    // `--` ends the carrier's options: the next word is the command, even one spelled `-x`.
-    if (word === '--') {
+    // `--` ends the carrier's options, not its operands: `timeout -- 5 cat f` still has a DURATION.
+    if (!optionsEnded && word === '--') {
+      optionsEnded = true;
       i++;
-      break;
+      continue;
     }
     // A bare `-` is an operand, not an option, so it falls through to the operand count.
-    if (word.startsWith('-') && word !== '-') {
+    if (!optionsEnded && word.startsWith('-') && word !== '-') {
       i += carrierOptionValue(wordList[start], word) ? 2 : 1;
       continue;
     }
     if (operands <= 0) break;
     operands--;
+    optionsEnded = true;
     i++;
   }
   return Math.min(i, wordList.length);

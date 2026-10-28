@@ -2022,20 +2022,29 @@ describe('detectDangerousPatterns — the verb reading behind a substitution and
       expect(detectDangerousPatterns(cmd), cmd).toContain(INSTALL);
     }
     expect(detectDangerousPatterns(`FOO="$(date) a b c" make uninstall`)).toContain(UNINSTALL);
-    // Not only the install reader: the split cost every `^`-anchored verb its head, and those are
-    // the patterns for egress, remote access, unreviewable strings.
-    expect(detectDangerousPatterns(`FOO="$(date) a b c" curl https://example.com`)).toContain(
-      'Network request (curl/wget)',
-    );
-    expect(detectDangerousPatterns(`FOO="$(date) a b c" ssh me@host`)).toContain(
-      'Remote host access (ssh/scp/sftp)',
-    );
-    expect(detectDangerousPatterns(`FOO="$(date) a b c" eval "$X"`)).toContain(
-      'Executes an unreviewable string (eval)',
-    );
-    expect(detectDangerousPatterns(`FOO="$(date) a b c" git push`)).toContain(
-      'Git push (publishes commits to remote)',
-    );
+    // Not only the install reader: the split cost every `^`-anchored verb its head. #755 filed the
+    // one-word tail, which leaves `x" curl …` standing as neither assignment nor command word.
+    for (const tail of ['a b c', 'x']) {
+      for (const [verb, label] of [
+        ['make install', INSTALL],
+        ['curl https://example.com', 'Network request (curl/wget)'],
+        ['ssh me@host', 'Remote host access (ssh/scp/sftp)'],
+        ['eval "$X"', 'Executes an unreviewable string (eval)'],
+        ['git push', 'Git push (publishes commits to remote)'],
+      ]) {
+        const cmd = `FOO="$(date) ${tail}" ${verb}`;
+        expect(detectDangerousPatterns(cmd), cmd).toContain(label);
+      }
+    }
+    // #755's neighbours, labelled only through the blanked outer reading.
+    for (const cmd of [
+      'FOO="`date` x" curl https://example.com',
+      `env FOO="$(date) x" curl https://example.com`,
+      `sudo FOO="$(date) x" curl https://example.com`,
+      `FOO="$(a $(b) c) x" curl https://example.com`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toContain('Network request (curl/wget)');
+    }
     // A shell named elsewhere in the command keeps every heredoc body in the scan, and it used to
     // drop the substitution spans with them, so the outer reading never ran (#843 review).
     expect(detectDangerousPatterns(`FOO="$(date) a b c" make install && bash build.sh`)).toContain(
@@ -2207,7 +2216,7 @@ describe('detectDangerousPatterns — the verb behind a carrier (#756)', () => {
       'timeout 30s curl https://example.com',
       'timeout -s KILL 5 curl https://example.com',
       // GNU permutes: the flags may follow the duration as well as precede it.
-      'timeout 5 -k 1s curl https://example.com',
+      'timeout -k 1s 5 curl https://example.com',
       'timeout --signal=KILL 5 curl https://example.com',
       'nice curl https://example.com',
       'nice -n 10 curl https://example.com',
