@@ -268,6 +268,10 @@ To re-theme, edit `theme.ts` only. New UI must consult these names, not introduc
 
 `App.tsx` sets `paddingX={1}` on its outer Box for a uniform 1-column gutter. Don't add competing horizontal padding to top-level children — bordered boxes and inline content stay visually aligned because they all live inside that single gutter.
 
+**A live frame must stay STRICTLY under `stdout.rows`.** Ink's condition is `outputHeight >= stdout.rows`: at that height it stops erasing and prints `clearTerminal`, which wipes the native scrollback (iTerm2: "a control sequence attempted to clear scrollback history") and strands the rows that scrolled off. Everything in the dynamic region shares the budget — `Scrollback`'s live blocks (`liveRegionRows`), the plan checklist, the queue, a dialog, the input box, the status bar — so a component that sizes its own content has to reserve the rest, and target `rows - 1`.
+
+The modal dialogs (`Approval`, `Question`) are where this bit three times (#447, #456, #842). The rule they follow now: **measure the chrome at the live width, don't count constants.** On a narrow pane the subject, each warning, every option label and the hint all wrap, so a fixed row count undercounts the frame exactly by the wraps — the preview then sizes itself against a budget the dialog overspends. `layoutApproval`/`layoutQuestion` wrap the same strings with the same width the rows are drawn at (`wrappedRows`, `hangingWrap`) and hand back the preview budget and the `height` they come to; what gives way when a pane is too short is documented in each file (descriptions, then the question tail; for a popup, the hint). `App.dialogframe.test.tsx` drives the real App at pinned sizes and reads Ink's bytes, because a render test of the dialog alone cannot see the input and status bar underneath it — and `ink-testing-library`'s stdout has no `rows`, so the repaint branch never fires there at all.
+
 ## Modes (agent / plan / minimal / vibe / grind / chat / shell)
 
 Seven runtime modes, in `MODE_CYCLE`'s Shift+Tab order (`src/ui/commands.ts`). Each affects what

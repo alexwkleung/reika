@@ -234,6 +234,55 @@ describe('Question dialog height (#456)', () => {
     }
   });
 
+  // #842: on a small pane the option labels wrap and the hint takes two or three rows, so the
+  // dialog's own chrome is taller than the fixed row count assumed — and the frame has to stay
+  // under the viewport, or Ink repaints the terminal and the scrollback goes with it.
+  it('keeps the frame under a narrow viewport, wraps and all', () => {
+    const drawn = (cols: number, rows: number): string[] => {
+      const { lastFrame } = render(
+        <Box flexDirection="column" paddingX={1}>
+          <Question request={tall} selectedIndex={0} width={cols} rows={rows} />
+        </Box>,
+      );
+      return stripAnsi(lastFrame() ?? '').split('\n');
+    };
+    // Every pane the options themselves fit in. Narrower than that is the floor case below: four
+    // full-sentence option labels cannot be shown in fewer rows than they take.
+    for (const [cols, rows] of [
+      [100, 40],
+      [100, 24],
+      [60, 40],
+      [50, 40],
+      [40, 40],
+    ]) {
+      const height = layoutQuestion(tall, null, cols, rows, 0).height;
+      // The input box and the status bar underneath still have to fit …
+      expect(height, `${cols}x${rows}`).toBeLessThanOrEqual(rows - 1 - 6);
+      // … and the layout never claims fewer rows than it draws: App sizes the input's window off
+      // that claim, so an under-count is what pushes the frame past the viewport.
+      expect(drawn(cols, rows).length, `${cols}x${rows}`).toBeLessThanOrEqual(height);
+      for (const n of [1, 2, 3, 4]) expect(drawn(cols, rows).join('\n')).toContain(`${n}: `);
+      expect(drawn(cols, rows).join('\n')).toContain('Something else');
+    }
+  });
+
+  // A pane shorter than the options alone: the dialog is at its floor — no descriptions, one row
+  // of question and its "more lines" note — because every option row always shows.
+  it('gives up everything else when the options alone outgrow the pane', () => {
+    const tight = layoutQuestion(tall, null, 40, 24, 0);
+    expect(tight.fit).toEqual({ showDescriptions: false, questionRows: 1 });
+    expect(tight.hiddenQuestionRows).toBe(11);
+  });
+
+  // The hint is the one block nothing else depends on, so a pane that cannot hold it and the
+  // question it is asking drops the hint rather than cutting the question.
+  it('gives the hint up before the question on a narrow pane', () => {
+    expect(layoutQuestion(req, null, 40, 40, 0).showHint).toBe(true);
+    const tight = layoutQuestion(req, null, 40, 22, 0);
+    expect(tight.showHint).toBe(false);
+    expect(tight.fit.questionRows).toBe(2);
+  });
+
   it('gives things up in order', () => {
     expect(fitQuestionToHeight(2, 6, 4, 12)).toEqual({ showDescriptions: true, questionRows: 2 });
     expect(fitQuestionToHeight(2, 6, 4, 10)).toEqual({ showDescriptions: false, questionRows: 2 });
