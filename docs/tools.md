@@ -111,9 +111,12 @@ The `/<server>:<tool>` command you type yourself is the exception: it is never g
 shell mode runs under — nothing prompts you for a command you just wrote.
 
 **Failure.** A server that fails to start, or answers with an error, is reported at startup and skipped;
-a call that fails costs one round, not the turn. A server that exits mid-session keeps its tools in the
-request's tool list (that list is fixed at session start), so `/mcp` says so — the calls that follow fail
-with the exit status rather than silently.
+a call that fails costs one round, not the turn. A server that exits mid-session is started again on
+its next call — the call it died during fails and is not retried, since it may already have acted. One that
+keeps exiting is given up on after three restarts: its tools stay in the request's tool list (that list is
+fixed at session start), so `/mcp` says so, and the calls that follow fail with the exit status rather
+than silently. A restarted server whose tool list changed is reported the same way a `list_changed`
+announcement is, and the session keeps the list it started with.
 
 **Size and shutdown.** A result over 64K characters reaches the model cut to that size, the same cap
 `bash` and `fetch_url` use, with the rest saved to a spill file it can page with `read`. When Reika
