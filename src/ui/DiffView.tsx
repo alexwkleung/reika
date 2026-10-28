@@ -6,6 +6,8 @@ import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
+import { sliceStyled, wrapStyledRows } from './layout.js';
+import stripAnsi from 'strip-ansi';
 
 export function DiffView({
   diff,
@@ -280,9 +282,10 @@ const CONTINUATION = '  ';
 // Ink counts as one row while the screen spends two (the undercount the live-frame budget can't
 // afford). So wrap here, where the widths are known.
 //
-// wrap-ansi does the breaking because the content is already syntax-highlighted: it re-opens the
-// active SGR codes on each row instead of leaving the tail unstyled. `hard` breaks tokens with no
-// space in them — a long path or a base64 blob — which is the common case in code.
+// wrap-ansi does the breaking because the content is already syntax-highlighted, and
+// `wrapStyledRows` re-opens every active style on each row — wrap-ansi alone re-opens only the
+// innermost, which dropped a wrapped comment's gray (#852). `hard` breaks tokens with no space in
+// them — a long path or a base64 blob — which is the common case in code.
 function WrappedRow({
   content,
   prefix,
@@ -298,10 +301,7 @@ function WrappedRow({
   side?: Side;
 }) {
   const bg = side ? rowBg(side) : undefined;
-  const rows = wrapAnsi(content, Math.max(1, maxWidth - prefix.length), {
-    trim: false,
-    hard: true,
-  }).split('\n');
+  const rows = wrapStyledRows(content, maxWidth - prefix.length);
   // Columns the gutter holds: its digits plus the space between it and the code.
   const gutterCells = gutter ? gutter.length + 1 : 0;
   return (
@@ -483,18 +483,27 @@ function PairedLine({
   // Painted into one string rather than nested <Text> elements: wrapping needs a single run of
   // text to break, and chalk re-opens the outer style after each nested close, so the line's base
   // background survives every highlighted span the same way Ink's own nesting would.
+  //
+  // The line is highlighted whole and the unchanged parts cut out of it: highlighted alone, a part
+  // from the middle of a comment has no `//` and came out in the default color (#852).
+  const highlighted = highlightCode(line, language);
+  const sliceable = stripAnsi(highlighted) === line;
+  let offset = 0;
   const painted = parts
     .map(p => {
       // Skip segments that belong only to the other side.
       if (side === 'removed' && p.added) return '';
       if (side === 'added' && p.removed) return '';
+      const start = offset;
+      offset += p.value.length;
       const isChange = side === 'removed' ? p.removed : p.added;
       // Brighter background for the changed portion — stands out against the line's own.
-      return isChange
-        ? chalk.level === 1
+      if (isChange) {
+        return chalk.level === 1
           ? chalk[side === 'added' ? 'bgGreen' : 'bgRed'].whiteBright(p.value)
-          : chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value)
-        : highlightCode(p.value, language);
+          : chalk.bgHex(highlightBg).hex(HIGHLIGHT_FG)(p.value);
+      }
+      return sliceable ? sliceStyled(highlighted, start, offset) : highlightCode(p.value, language);
     })
     .join('');
 

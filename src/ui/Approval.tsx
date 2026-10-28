@@ -6,7 +6,13 @@ import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
 import { highlightCode } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
-import { hangingRows, hangingWrap, useContentWidth, wrappedRows } from './layout.js';
+import {
+  hangingRows,
+  hangingWrap,
+  useContentWidth,
+  wrappedRows,
+  wrapStyledRows,
+} from './layout.js';
 import { toolLabel } from './format.js';
 
 // The dialog's own border (1 column each side) plus its paddingX={1}, on top of the App padding
@@ -258,10 +264,7 @@ function CommandPreview({
   return (
     <>
       {lines.flatMap((line, i) => {
-        const rows = wrapAnsi(highlightCode(line, 'bash'), textWidth, {
-          trim: false,
-          hard: true,
-        }).split('\n');
+        const rows = wrapStyledRows(highlightCode(line, 'bash'), textWidth);
         return rows.map((row, j) => (
           <Box key={`${i}:${j}`}>
             <Text color={theme.success}>

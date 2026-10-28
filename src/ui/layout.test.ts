@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { contentWidth, hangingWrap } from './layout.js';
+import stripAnsi from 'strip-ansi';
+import wrapAnsi from 'wrap-ansi';
+import { contentWidth, hangingWrap, sliceStyled, wrapStyledRows } from './layout.js';
 
 describe('contentWidth', () => {
   it('pays for the App’s paddingX and any block indent', () => {
@@ -76,5 +78,75 @@ describe('hangingWrap', () => {
 
   it('is a no-op on text that already fits', () => {
     expect(hangingWrap('short', 40, 4)).toBe('short');
+  });
+});
+
+// wrap-ansi re-opens only the innermost code at a break, so a comment (gray, then italic) came back
+// italic in the default foreground on its continuation rows (#852).
+describe('wrapStyledRows', () => {
+  const GRAY = '\x1b[38;2;127;132;142m';
+  const comment = `x = 1; ${GRAY}\x1b[3m// a long comment that wraps across rows\x1b[23m\x1b[39m`;
+
+  it('re-opens every stacked style on each continuation row', () => {
+    const rows = wrapStyledRows(comment, 16);
+    expect(rows.length).toBeGreaterThan(2);
+    for (const row of rows.slice(1)) {
+      expect(row.startsWith(GRAY)).toBe(true);
+      expect(row).toContain('\x1b[3m');
+    }
+  });
+
+  it('closes what it opened, so a row leaks no style', () => {
+    for (const row of wrapStyledRows(comment, 16)) {
+      expect(row.lastIndexOf('\x1b[39m')).toBeGreaterThan(row.lastIndexOf(GRAY));
+    }
+  });
+
+  it('breaks where wrap-ansi breaks, so the row count is unchanged', () => {
+    const plain = wrapAnsi(comment, 16, { trim: false, hard: true })
+      .split('\n')
+      .map(r => stripAnsi(r));
+    expect(wrapStyledRows(comment, 16).map(r => stripAnsi(r))).toEqual(plain);
+  });
+
+  it('carries a background and a 256-color foreground, and drops a style once reset', () => {
+    const text = '\x1b[48;2;1;2;3m\x1b[38;5;109maaaa bbbb\x1b[0m cccc dddd';
+    const rows = wrapStyledRows(text, 5);
+    expect(rows[1].startsWith('\x1b[48;2;1;2;3m\x1b[38;5;109m')).toBe(true);
+    expect(rows.at(-1)).not.toContain('\x1b[48;2;');
+  });
+
+  it('leaves unstyled text as wrap-ansi wraps it', () => {
+    expect(wrapStyledRows('aaaa bbbb cccc', 5)).toEqual(['aaaa ', 'bbbb ', 'cccc']);
+  });
+});
+
+describe('sliceStyled', () => {
+  const GRAY = '\x1b[38;2;127;132;142m';
+  const line = `x ${GRAY}\x1b[3m// then the input\x1b[23m\x1b[39m`;
+
+  it('opens a slice from the middle of a span with every style active there', () => {
+    const mid = sliceStyled(line, 10, 17);
+    expect(stripAnsi(mid)).toBe('the input'.slice(0, 7));
+    expect(mid.startsWith(GRAY + '\x1b[3m')).toBe(true);
+  });
+
+  it('closes what is still open where the slice ends', () => {
+    const head = sliceStyled(line, 0, 6);
+    expect(stripAnsi(head)).toBe('x // t');
+    expect(head.endsWith('\x1b[39m\x1b[23m')).toBe(true);
+  });
+
+  it('cuts back into the whole line, slice by slice', () => {
+    const cuts = [0, 3, 9, stripAnsi(line).length];
+    const joined = cuts
+      .slice(1)
+      .map((end, i) => sliceStyled(line, cuts[i], end))
+      .join('');
+    expect(stripAnsi(joined)).toBe(stripAnsi(line));
+  });
+
+  it('returns plain text unchanged', () => {
+    expect(sliceStyled('plain words', 6, 11)).toBe('words');
   });
 });
