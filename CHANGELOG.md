@@ -7,6 +7,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- `/resume` no longer freezes its spinner while a long session loads. The resumed scrollback was
+  drawn in one pass, which held the screen still until all of it was on it; it now lands a slice at
+  a time with the spinner moving in between. A prompt typed during the load waits in the box until
+  the session is in. (#859)
+
 - A comment in a diff keeps its color. When it wrapped, its continuation rows dropped to the
   terminal's default text color, and on a line with a changed word highlighted, the text after that
   word lost the comment color even on the first row. A changed word's own highlight was also lost

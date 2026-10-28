@@ -178,6 +178,20 @@ function promptPlaceholder(): string {
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
+// A resumed session reaches the scrollback a slice at a time (#854): a commit renders its messages'
+// markdown, highlighting and wrap synchronously, and one commit for the whole session held the
+// event loop — the resuming spinner's timer included — for as long as that took (~2s at 460
+// messages). Slices are sized to about this long each, so the spinner ticks between them.
+const RESUME_SLICE_MS = 40;
+const RESUME_FIRST_SLICE = 4;
+
+// Scaled from how long the last slice took, so its cost does not depend on what the messages hold;
+// growth is held to doubling, since a run of tiny messages says little about the next ones.
+function nextResumeSliceSize(size: number, tookMs: number): number {
+  const scaled = Math.round((size * RESUME_SLICE_MS) / Math.max(tookMs, 1));
+  return Math.min(Math.max(scaled, 1), size * 2);
+}
+
 export function App() {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -353,6 +367,9 @@ export function App() {
   // the note on the label below), and without this the picker just vanished and the app sat on a
   // stale frame until it landed.
   const [resuming, setResuming] = useState<string | null>(null);
+  // Held for the whole resume, slices included: a submit or a mode switch between two slices would
+  // land its rows in the middle of the resumed scrollback, or swap it for the other side's.
+  const resumingRef = useRef(false);
   // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
@@ -1009,7 +1026,9 @@ export function App() {
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
-      if (statusRef.current === 'idle') transitionMode(nextMode(modeRef.current), []);
+      if (statusRef.current === 'idle' && !resumingRef.current) {
+        transitionMode(nextMode(modeRef.current), []);
+      }
       return;
     }
     const sug = suggestionStateRef.current;
@@ -1183,9 +1202,16 @@ export function App() {
   };
 
   const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
-    // Set before the first await, so the frame lands while the file is still being read: the
-    // commit below runs every message's markdown, syntax highlighting and wrap in one synchronous
-    // pass, and nothing the UI does after that point can paint until it finishes.
+    resumingRef.current = true;
+    try {
+      await loadResumedSession(entry, projectDir);
+    } finally {
+      resumingRef.current = false;
+    }
+  };
+
+  const loadResumedSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+    // Set before the first await, so the frame lands while the file is still being read.
     setResuming(`Resuming "${entry.title ?? 'untitled'}"`);
     let sides: SessionSides;
     try {
@@ -1219,15 +1245,26 @@ export function App() {
     const where = inChat ? 'chat' : 'agent';
     const otherNote =
       other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
-    setMessages([
+    const resumed: Message[] = [
       ...active,
       {
         role: 'system',
         content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
       },
-    ]);
-    // Same commit as the messages, not a frame later: the spinner's rows are the ones the first
-    // resumed frame takes, so clearing it in a separate update would flash the live frame twice.
+    ];
+    let size = RESUME_FIRST_SLICE;
+    for (let at = 0; at < resumed.length;) {
+      const slice = resumed.slice(at, at + size);
+      const started = performance.now();
+      // The first slice replaces the old conversation; the rest extend it.
+      setMessages(at === 0 ? slice : prev => [...prev, ...slice]);
+      at += slice.length;
+      if (at >= resumed.length) break;
+      // A timer, not a microtask: the spinner ticks on an interval, which only a yield to the timer
+      // phase lets fire. Measured past the yield, so the commit counts whenever React flushes it.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      size = nextResumeSliceSize(size, performance.now() - started);
+    }
     setResuming(null);
   };
 
@@ -2303,6 +2340,9 @@ export function App() {
   }, [status, pending, confirm, queue]);
 
   const onSubmit = async (input: string) => {
+    // Left in the box rather than queued: the resume replaces the conversation the prompt was
+    // typed against, and the user sees it land before deciding to send.
+    if (resumingRef.current) return;
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
     // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
     // be queued as the user's next prompt.
