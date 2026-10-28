@@ -143,6 +143,20 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 
 Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, DS4, and Ante.
 
+## Citation
+
+If you use Reika in your work, you can cite it as:
+
+```bibtex
+@software{leung_reika,
+  author = {Leung, Alex},
+  title  = {Reika},
+  url    = {https://github.com/alexwkleung/reika}
+}
+```
+
+GitHub's "Cite this repository" button gives the same entry in other formats, from [CITATION.cff](CITATION.cff).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

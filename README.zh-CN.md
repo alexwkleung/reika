@@ -142,6 +142,20 @@ cd your-project && reika
 
 Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie、DS4 和 Ante。
 
+## 引用
+
+如果你在工作中使用了 Reika，可以这样引用：
+
+```bibtex
+@software{leung_reika,
+  author = {Leung, Alex},
+  title  = {Reika},
+  url    = {https://github.com/alexwkleung/reika}
+}
+```
+
+GitHub 的 "Cite this repository" 按钮会根据 [CITATION.cff](CITATION.cff) 给出其他格式的同一条目。
+
 ## 许可
 
 Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
