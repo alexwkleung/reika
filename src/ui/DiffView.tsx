@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
+import { wrapStyledRows } from './layout.js';
 
 export function DiffView({
   diff,
@@ -280,9 +281,10 @@ const CONTINUATION = '  ';
 // Ink counts as one row while the screen spends two (the undercount the live-frame budget can't
 // afford). So wrap here, where the widths are known.
 //
-// wrap-ansi does the breaking because the content is already syntax-highlighted: it re-opens the
-// active SGR codes on each row instead of leaving the tail unstyled. `hard` breaks tokens with no
-// space in them — a long path or a base64 blob — which is the common case in code.
+// wrap-ansi does the breaking because the content is already syntax-highlighted, and
+// `wrapStyledRows` re-opens every active style on each row — wrap-ansi alone re-opens only the
+// innermost, which dropped a wrapped comment's gray (#852). `hard` breaks tokens with no space in
+// them — a long path or a base64 blob — which is the common case in code.
 function WrappedRow({
   content,
   prefix,
@@ -298,10 +300,7 @@ function WrappedRow({
   side?: Side;
 }) {
   const bg = side ? rowBg(side) : undefined;
-  const rows = wrapAnsi(content, Math.max(1, maxWidth - prefix.length), {
-    trim: false,
-    hard: true,
-  }).split('\n');
+  const rows = wrapStyledRows(content, maxWidth - prefix.length);
   // Columns the gutter holds: its digits plus the space between it and the code.
   const gutterCells = gutter ? gutter.length + 1 : 0;
   return (

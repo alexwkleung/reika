@@ -72,3 +72,22 @@ describe('DiffView rows carrying a pictograph the terminal draws narrow', () => 
     expect(drawn(changed)).toBe(60); // and what the screen spends
   });
 });
+
+// A comment is gray then italic, and wrap-ansi re-opened only the italic on each continuation row,
+// so a wrapped comment turned the default foreground after its first row (#852).
+describe('DiffView wrapping a syntax-highlighted comment', () => {
+  it('keeps the comment color on every row it wraps onto', () => {
+    chalk.level = 3;
+    const comment = '// a comment long enough to wrap across several rows of the diff view';
+    const frame = render(
+      <DiffView
+        diff={['  before', `+ ${comment}`, `  ${comment}`].join('\n')}
+        path="a.ts"
+        maxWidth={30}
+      />,
+    ).lastFrame()!;
+    const rows = frame.split('\n').filter(l => /comment|rows|diff|wrap|several/.test(stripAnsi(l)));
+    expect(rows.length).toBeGreaterThan(4);
+    for (const row of rows) expect(row).toContain('\x1b[38;2;127;132;142m');
+  });
+});
