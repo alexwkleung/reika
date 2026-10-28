@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { render as inkRender } from 'ink';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -107,9 +106,23 @@ const runTurn = vi.fn(async (opts: TurnOpts) => {
 let questionTurn = false;
 vi.mock('../agent/loop.js', () => ({ runTurn: (...a: unknown[]) => runTurn(...(a as [never])) }));
 
+// `is-in-ci` reads the environment once, when Ink is first evaluated, and on a CI runner Ink then
+// writes only the committed <Static> rows — the live frame never reaches stdout, so the bytes this
+// file is about never arrive and neither the dialog nor the repaint can be seen. The harness needs
+// the path a real terminal takes, so CI is cleared BEFORE anything pulls Ink in: a dynamic import
+// rather than a static one, since static imports are hoisted above this line, and `vi.mock` on
+// `is-in-ci` cannot reach a transitive dependency of an externalized node_modules package.
+const ciEnv = process.env.CI;
+process.env.CI = 'false';
+const { render: inkRender } = await import('ink');
+const { App } = await import('./App.js');
+afterAll(() => {
+  if (ciEnv === undefined) delete process.env.CI;
+  else process.env.CI = ciEnv;
+});
+
 // Both dialogs' answers: the mocked turn records whichever one it opened.
 const answers: (ApprovalAnswer | QuestionAnswer | null)[] = [];
-const { App } = await import('./App.js');
 
 // ink-testing-library's stdout has no `rows`, so Ink never takes its full-repaint branch and the
 // clear the issue reports cannot happen in a render test at all. This one writes to a stream with
