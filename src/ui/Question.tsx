@@ -168,6 +168,7 @@ export function Question({
     hint,
     showHint,
     options,
+    padRows,
   } = layoutQuestion(
     request,
     typing ?? null,
@@ -250,6 +251,7 @@ export function Question({
               {ownAnswer}
             </Text>
           </Text>
+          {padRows > 0 ? <Box height={padRows} /> : null}
         </Box>
       )}
       {showHint ? (
@@ -348,19 +350,25 @@ export function layoutQuestion(
     fit.questionRows -
     (hiddenQuestionRows > 0 ? 1 : 0) -
     rowsOf(ownAnswer);
-  const options = typing
-    ? null
-    : fitOptionsToHeight(
-        labels.map((l, i) => {
-          const d = fit.showDescriptions ? descriptions[i] : null;
-          return rowsOf(l.wrapped) + (d ? rowsOf(d) : 0);
-        }),
-        optionBudget,
-        selectedIndex,
-      );
+  const optionCosts = labels.map((l, i) => {
+    const d = fit.showDescriptions ? descriptions[i] : null;
+    return rowsOf(l.wrapped) + (d ? rowsOf(d) : 0);
+  });
+  const options = typing ? null : fitOptionsToHeight(optionCosts, optionBudget, selectedIndex);
+  // A windowed list is padded to the tallest window any cursor position gives (capped at the
+  // budget), or the dialog — and the input App sizes under it — grew and shrank by a row as the
+  // user arrowed past labels that wrap to different heights. A whole list never moves.
+  let padRows = 0;
+  if (options && options.moreAbove + options.moreBelow > 0) {
+    let steady = 0;
+    for (let i = 0; i <= request.options.length; i++) {
+      steady = Math.max(steady, fitOptionsToHeight(optionCosts, optionBudget, i).rows);
+    }
+    padRows = Math.max(0, Math.min(steady, optionBudget) - options.rows);
+  }
   // `options.rows` already carries the descriptions of the options on show, and while typing the
   // list is replaced by the prompt line, so neither term is added again here.
-  const optionRows = typing || !options ? labelRows : options.rows + rowsOf(ownAnswer);
+  const optionRows = typing || !options ? labelRows : options.rows + padRows + rowsOf(ownAnswer);
   const height = fixedRows + fit.questionRows + (hiddenQuestionRows > 0 ? 1 : 0) + optionRows;
   return {
     labels,
@@ -374,6 +382,7 @@ export function layoutQuestion(
     hint,
     showHint,
     options,
+    padRows,
   };
 }
 

@@ -249,6 +249,35 @@ describe('Question dialog height (#456)', () => {
     }
   });
 
+  // Labels that wrap to different heights gave each cursor position a different window height, so
+  // the dialog and the input under it moved by a row on every arrow key (#857). Only where every
+  // option fits the budget: a row taller than the whole budget still draws, and overruns.
+  it('holds one height while the cursor moves through a windowed list', () => {
+    const mixed: QuestionRequest = {
+      question: 'Which approach should the classifier take?',
+      options: [
+        { label: 'Flag only inline bodies', description: 'Keeps python3 script.py silent' },
+        { label: `Flag every interpreter: ${sentence}`, description: `Because ${sentence}` },
+        { label: 'Skip it' },
+        { label: `Ask each time: ${sentence} and also ${sentence}` },
+      ],
+    };
+    for (const [cols, rows] of [
+      [60, 24],
+      [80, 20],
+    ]) {
+      const at = `${cols}x${rows}`;
+      const heights = [0, 1, 2, 3, 4].map(sel => {
+        const layout = layoutQuestion(mixed, null, cols, rows, 0, sel);
+        expect(layout.height, `${at} sel=${sel}`).toBe(
+          sized(mixed, rows, undefined, cols, sel).length,
+        );
+        return layout.height;
+      });
+      expect(new Set(heights).size, `${at} ${heights}`).toBe(1);
+    }
+  });
+
   // The input under a typing-mode question scrolls its window instead of growing past the frame:
   // with a question at its full budget and a 40-line answer, dialog + input + status still fit.
   it('leaves the answer box room to scroll instead of overflowing', () => {
