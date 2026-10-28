@@ -35,6 +35,18 @@ export function useContentWidth(indent = 0): number {
   return width;
 }
 
+// Display rows `text` takes at `width` columns — the unit Ink measures a frame in when it decides
+// the frame is as tall as the viewport. Wrapped with the exact options Ink wraps with
+// (build/wrap-text.js), so a row count measured here is the row count that gets drawn.
+export function wrappedRows(text: string, width: number): number {
+  return wrapAnsi(text, Math.max(1, width), { trim: false, hard: true }).split('\n').length;
+}
+
+// `hangingWrap`'s row count for the same text at the same width.
+export function hangingRows(text: string, width: number, hang: number): number {
+  return hangingWrap(text, width, hang).split('\n').length;
+}
+
 // Wrap `text` so that a marker-prefixed line ("  ↳ Ran: …", "$ …", "⏺︎ Bash(…)") keeps a HANGING
 // INDENT: every row after the first lands under the text, not back at column 0.
 //

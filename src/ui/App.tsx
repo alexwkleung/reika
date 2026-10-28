@@ -2941,7 +2941,12 @@ export function App() {
             attachedBelow={suggestionState !== null}
             reservedRows={
               question
-                ? questionDialogHeight(question.request, questionTyping, dialogReservedRows)
+                ? questionDialogHeight(
+                    question.request,
+                    questionTyping,
+                    dialogReservedRows,
+                    questionSelected,
+                  )
                 : 0
             }
             suggesting={!!suggestionState && suggestionState.items.length > 0}

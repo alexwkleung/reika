@@ -14,6 +14,18 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   under `safe`, ran with no prompt at all. Carriers now come off one table, shared with plan
   mode's read-only gate and the sandbox's network reader, so `nice cat …` is admitted as the read
   it is and `nice gh pr view …` keeps its network. (#853)
+- An approval or `ask_user` popup in a narrow pane no longer wipes the terminal's scrollback
+  (iTerm2's "a control sequence attempted to clear scrollback history"). The dialog counted its own
+  rows as one line each, so on a narrow pane the subject, the warnings, the option labels and the
+  keyboard hint wrapped it past the height the preview had been sized against, and Ink repainted the
+  whole terminal. It now measures those rows at the pane's width, and on a pane too short for
+  everything gives up the hint before the preview. (#855)
+- `ask_user`'s option list no longer pushes the dialog past a short, narrow pane. When the option
+  labels alone need more rows than the pane leaves — a tmux or an iTerm quarter split, say — the
+  list is windowed around the selected row with `↑ N more` / `↓ N more` markers, instead of drawing
+  every option into a frame as tall as the viewport. Option numbers stay the list's own, so the 1-9
+  keys still jump to the row they name, and the "Something else — type your own answer" row always
+  shows. (#856)
 
 ## [0.7.0] - 2026-10-27
 
