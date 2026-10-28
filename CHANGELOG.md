@@ -7,6 +7,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A long comment in a diff keeps its color when it wraps. Its continuation rows used to drop to
+  the terminal's default text color, and a changed word's highlight was lost on a wrap the same
+  way; the approval dialog's command preview had the same fault. (#858)
 - A fetch or an install behind a wrapper's own words is no longer missed: `timeout 5 curl …`,
   `nice curl …`, `timeout -s KILL 30 make install`. The approval gate reads the verb in verb
   position, but it did not know the words a carrier takes for itself — `timeout`'s duration,
