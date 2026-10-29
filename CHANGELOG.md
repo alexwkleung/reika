@@ -30,14 +30,15 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
-- A program fed to an interpreter on stdin (`python3 - <<'PY'`, `node -`, `ruby -`, `perl -`) is now
-  read for the commands it hands to a shell, so a pasted script that runs `os.system("pkill node")`,
-  `subprocess.run(…)`, `child_process.execSync(…)` or Ruby/Perl's `system` prompts before it runs.
-  Nothing reads the whole body as a command: only the string argument of a shell-out call site is
-  scanned, so `print("x; pkill y")` stays quiet — the #699 false positive — and a command built at
-  runtime (`os.system(CMD)`) is still not seen. Replayed over 10,374 saved commands against `main`:
-  0 lost a label, 4 gained one, all four probes from the session that built this — one of them a
-  `python3 -` body writing a TypeScript file, where `fs.rmSync` sits in a Python string. (#750)
+- A program fed to an interpreter on stdin (`python3 <<'PY'`, `python3 - <<'PY'`, and the same for
+  `node`, `ruby` and `perl`) is now read for the commands it hands to a shell, so a pasted script
+  that runs `os.system("pkill node")`, `subprocess.run(["git", "push"])`,
+  `execFileSync("git", ["push"])` or Ruby/Perl's `system("git", "push")` prompts before it runs.
+  Nothing reads the whole body as a command: only the string or argv a shell-out call is handed, so
+  `print("x; pkill y")` stays quiet — the #699 false positive — and a command built at runtime
+  (`os.system(CMD)`) is still not seen. Replayed over 10,389 saved commands against `main`: 0 lost a
+  label, 6 gained one, all from the sessions that built this — probes, and `python3 -` scripts
+  editing source that quotes a shell-out call in a Python string. (#750, #866)
 
 - `/resume` no longer freezes its spinner while a long session loads. The resumed scrollback was
   drawn in one pass, which held the screen still until all of it was on it; it now lands a slice at
