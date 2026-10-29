@@ -33,6 +33,13 @@ export type Fixture = {
   // with no help; a migrated skill usually lives in the global dir, where nothing in the project
   // leads to it.
   globalSkills?: Record<string, string>;
+  // Files written into a fresh HOME outside the eval cwd, keyed relative to it, and HOME pointed at
+  // it for the turn only (config still loads from the real one). For a fixture about what a model
+  // finds under `~/.config/reika`: without it the model's `ls ~` lands on the developer's real
+  // history, so the result depends on whose machine ran it and real transcripts reach the run file.
+  // An mtime (ISO-8601) is set on the file, since a model sorting with `ls -t` would otherwise see
+  // every file written in the same instant.
+  home?: Record<string, string | { content: string; mtime: string }>;
   // Answers the approval gate, for a fixture about what a model does with an answer. A factory, so
   // each run gets a fresh approver and per-run state (which call it already declined) cannot leak
   // between runs. Without it the runner passes no approver and every gate is skipped, as `bypass`.
@@ -45,6 +52,8 @@ export type AssertCtx = {
   messages: Message[];
   elapsedMs: number;
   toolCallCount: number;
+  // The fake HOME, when the fixture brought one.
+  home?: string;
 };
 
 export type AssertResult = { pass: true; note?: string } | { pass: false; reason: string };

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
-import { formatExperimentFlags } from '../src/debug.js';
+import { debugLogPath, formatExperimentFlags } from '../src/debug.js';
 import { buildHeadlessInput } from '../src/headless.js';
 import { createSession } from '../src/session.js';
 
@@ -36,6 +36,7 @@ import {
 } from './fixtures/18-decline-feedback.js';
 import { agedFixture as f19b, liveFixture as f19 } from './fixtures/19-edit-recall.js';
 import { fixture as f20 } from './fixtures/20-skill-script.js';
+import { fixture as f21 } from './fixtures/21-self-history.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -62,6 +63,7 @@ const FIXTURES: Fixture[] = [
   f19,
   f19b,
   f20,
+  f21,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -133,6 +135,7 @@ async function runFixture(
 ): Promise<RunRecord> {
   const cwd = await mkdtemp(join(tmpdir(), 'reika-eval-'));
   let skillsDir: string | undefined;
+  let homeDir: string | undefined;
   try {
     for (const [relPath, content] of Object.entries(fix.setup)) {
       const full = join(cwd, relPath);
@@ -182,12 +185,32 @@ async function runFixture(
       else process.env.REIKA_SKILLS_DIR = priorSkillsDir;
     });
     const messages = session.history;
+    if (fix.home) {
+      // Real path, so `~` expands to the same string the assert matches and the sandbox sees.
+      homeDir = await realpath(await mkdtemp(join(tmpdir(), 'reika-eval-home-')));
+      for (const [relPath, file] of Object.entries(fix.home)) {
+        const full = join(homeDir, relPath);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, typeof file === 'string' ? file : file.content, 'utf8');
+        if (typeof file !== 'string')
+          await utimes(full, new Date(file.mtime), new Date(file.mtime));
+      }
+    }
 
     const start = Date.now();
     const timeout = fix.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+    // Swapped after createSession so config and keys load from the real HOME. The debug log path is
+    // derived from HOME on every line, so it is pinned first or the run's log would be deleted with
+    // the fake home.
+    const priorHome = process.env.HOME;
+    const priorDebugFile = process.env.REIKA_DEBUG_FILE;
+    if (homeDir) {
+      process.env.REIKA_DEBUG_FILE = debugLogPath();
+      process.env.HOME = homeDir;
+    }
     try {
       // Without `mode` every fixture ran as an agent turn regardless of its tool set, so plan-mode
       // behavior (the plan prompt, force-write, the `planFinal` stamp) was unreachable from an
@@ -210,6 +233,11 @@ async function runFixture(
       if (fix.followUp) await session.submit(fix.followUp, options);
     } finally {
       clearTimeout(timeoutId);
+      if (homeDir) {
+        process.env.HOME = priorHome;
+        if (priorDebugFile === undefined) delete process.env.REIKA_DEBUG_FILE;
+        else process.env.REIKA_DEBUG_FILE = priorDebugFile;
+      }
     }
 
     const elapsedMs = Date.now() - start;
@@ -221,7 +249,7 @@ async function runFixture(
 
     const result: AssertResult = timedOut
       ? { pass: false, reason: 'timeout' }
-      : await fix.assert({ cwd, messages, elapsedMs, toolCallCount });
+      : await fix.assert({ cwd, messages, elapsedMs, toolCallCount, home: homeDir });
     const savedTo = await saveRun({
       fix,
       mode: modeOverride ?? fix.mode ?? 'agent',
@@ -236,6 +264,7 @@ async function runFixture(
   } finally {
     await rm(cwd, { recursive: true, force: true });
     if (skillsDir) await rm(skillsDir, { recursive: true, force: true });
+    if (homeDir) await rm(homeDir, { recursive: true, force: true });
   }
 }
 
