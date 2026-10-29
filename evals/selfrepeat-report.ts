@@ -14,15 +14,15 @@
 // abort and the session's build/flags are recorded.
 //
 // Usage:
-//   npx tsx evals/selfrepeat-report.ts                       # every saved session
-//   npx tsx evals/selfrepeat-report.ts ~/.config/reika/history/2026-*.jsonl
+//   npx tsx evals/selfrepeat-report.ts                       # every saved session, projects/ and root
+//   npx tsx evals/selfrepeat-report.ts ~/.config/reika/history/projects/<name>-<hash>/*.jsonl
 //   npx tsx evals/selfrepeat-report.ts ~/.config/reika/logs/latest.log     # actual aborts + flags for one run
 //
 // Unlike readtrace-report.ts this is a breadth instrument, not a rate one: prefer one run each
 // across several DIFFERENT reasoning shapes (plan mode, an enumerative task, review, issue) over
 // repeated runs of the same task. Parallel reasoning — ticking through many similar items — is what
 // legitimately raises a self-repeat ratio, so that is the shape a false positive would come from.
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { selfRepeatRatio, verbatimAbortThreshold } from '../src/agent/reasoningtrace.js';
@@ -34,6 +34,19 @@ const MIN_BLOCK_CHARS = 2000;
 // Fraction of the bar at which a block stops being comfortable and starts being worth reading. Not a
 // threshold the harness uses — purely how this report decides what to draw attention to.
 const NEAR_MISS_FRACTION = 0.6;
+
+// TUI sessions auto-save under projects/<name>-<hash>/; the root holds only /save transcripts and
+// sessions from before auto-save, so a root-only listing misses most of the corpus.
+function collectFiles(target: string, out: string[]): string[] {
+  const st = statSync(target, { throwIfNoEntry: false });
+  if (!st) return out;
+  if (st.isFile()) {
+    if (target.endsWith('.jsonl')) out.push(target);
+    return out;
+  }
+  for (const name of readdirSync(target)) collectFiles(join(target, name), out);
+  return out;
+}
 
 type Block = { chars: number; ratio: number; bar: number };
 type Session = { label: string; task: string; blocks: Block[]; skipped: number };
@@ -120,14 +133,7 @@ function main(): void {
   for (const l of logs) reportLog(l);
 
   const jsonl = args.filter(a => a.endsWith('.jsonl'));
-  const paths =
-    jsonl.length > 0
-      ? jsonl
-      : logs.length > 0
-        ? []
-        : readdirSync(HISTORY_DIR)
-            .filter(f => f.endsWith('.jsonl'))
-            .map(f => join(HISTORY_DIR, f));
+  const paths = jsonl.length > 0 ? jsonl : logs.length > 0 ? [] : collectFiles(HISTORY_DIR, []);
   if (paths.length === 0) return;
 
   const sessions = paths.map(readSession).filter((s): s is Session => s !== null);
