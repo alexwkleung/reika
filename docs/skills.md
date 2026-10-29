@@ -88,6 +88,10 @@ Review the changes on this branch:
 Without frontmatter, the first non-empty line becomes the autocomplete description and the whole file is
 the prompt body.
 
+Reika reads `description`, `triggers` and `requires`. Frontmatter written for other harnesses
+(`allowed-tools`, `model`, …) is ignored. A skill never pre-approves a tool: the commands it leads to
+go through the approval prompt and the sandbox like any other.
+
 **Invocation:**
 
 - `/review` — sends the file body as your input
