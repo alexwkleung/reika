@@ -33,7 +33,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The debug log now records what each request's prefill actually cost where the server reports it:
   the `round=` line adds the provider's cached-token count, plus llama.cpp's `prompt_n`,
   `prompt_ms` and `cache_n`, and an `endpoint` line names the model and host at session start and on
-  every `/model` switch, so saved logs can be split by model. (#868)
+  every `/model` switch, so saved logs can be split by model. (#869)
 
 - A program fed to an interpreter on stdin (`python3 <<'PY'`, `python3 - <<'PY'`, and the same for
   `node`, `ruby` and `perl`) is now read for the commands it hands to a shell, so a pasted script
