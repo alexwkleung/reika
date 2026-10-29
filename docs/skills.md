@@ -26,6 +26,19 @@ A `*.md` file dropped in a skills directory becomes a slash command — useful f
 - **Global:** `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
 - **Project:** `<cwd>/.reika/skills/`
 
+Skills kept for other coding agents load too, from where they already are:
+
+- **Global:** `~/.agents/skills/`
+- **Project:** `<cwd>/.agents/skills/` and `<cwd>/.claude/skills/`
+
+Reika's own directories win over these on a name collision; among these, project wins over global
+and `.agents` over `.claude`. `/skills` labels each one with the directory it came from. Reika does
+not read `~/.claude/skills/`. To use skills kept there, link them in once:
+
+```sh
+ln -s ~/.claude/skills ~/.agents/skills
+```
+
 ### Skills Reika ships with
 
 | Skill     | What it does                                                                                      |

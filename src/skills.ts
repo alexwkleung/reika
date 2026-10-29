@@ -10,6 +10,9 @@ export type Skill = {
   description: string;
   body: string;
   source: 'bundled' | 'global' | 'project';
+  // The directory label `/skills` shows for a skill from another harness's directory (#861):
+  // `.agents/skills`, `.claude/skills`, `~/.agents/skills`. Unset for reika's own dirs.
+  from?: string;
   path: string;
   // Phrases that route a plain-English prompt to this skill (`triggers:` frontmatter).
   // Matching is deterministic and lives in skillmatch.ts — the model never picks a skill.
@@ -25,21 +28,30 @@ const PROJECT_RELATIVE = '.reika/skills';
 // module whether it runs as src/skills.ts or dist/skills.js.
 export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills');
 
+// Other harnesses' skill dirs (#861), so a skill folder works where it already is. Global is the
+// agent-agnostic `~/.agents/skills` only — never `~/.claude/skills`, another app's config dir; a
+// Claude Code user links it there. Read after `homedir()` at call time, so a test's HOME applies.
+const PROJECT_IMPORTED = ['.claude/skills', '.agents/skills'];
+const GLOBAL_IMPORTED = '.agents/skills';
+
 export async function loadSkills(cwd: string, bundledDir = BUNDLED_DIR): Promise<Skill[]> {
   const globalDir = process.env.REIKA_SKILLS_DIR
     ? expandHome(process.env.REIKA_SKILLS_DIR)
     : GLOBAL_DEFAULT;
   const projectDir = join(cwd, PROJECT_RELATIVE);
 
-  const [bundledSkills, globalSkills, projectSkills] = await Promise.all([
+  // Lowest precedence first; a later dir replaces an earlier one on a name collision. Reika's own
+  // dirs always win, then project over global, and `.agents` over `.claude`.
+  const layers = await Promise.all([
     loadFromDir(bundledDir, 'bundled'),
+    loadFromDir(join(homedir(), GLOBAL_IMPORTED), 'global', `~/${GLOBAL_IMPORTED}`),
+    ...PROJECT_IMPORTED.map(rel => loadFromDir(join(cwd, rel), 'project', rel)),
     loadFromDir(globalDir, 'global'),
     loadFromDir(projectDir, 'project'),
   ]);
 
-  // The user's own copy wins: project over global over bundled, on name collision.
   const byName = new Map<string, Skill>();
-  for (const s of [...bundledSkills, ...globalSkills, ...projectSkills]) byName.set(s.name, s);
+  for (const s of layers.flat()) byName.set(s.name, s);
   const env = await skillEnvironment(cwd, [...byName.values()]);
   return Array.from(byName.values())
     .filter(s => skillRequirementsMet(s, env))
@@ -121,7 +133,7 @@ async function findGitDir(start: string): Promise<string | null> {
   }
 }
 
-async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[]> {
+async function loadFromDir(dir: string, source: Skill['source'], from?: string): Promise<Skill[]> {
   let entries: Array<{ name: string; isDir: boolean }>;
   try {
     const raw = await readdir(dir, { withFileTypes: true });
@@ -153,7 +165,7 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
       const skillDir = resolve(dir, entry.name);
       const skillFile = await findCanonicalSkillFile(skillDir);
       if (!skillFile) continue;
-      const loaded = await readSkill(skillFile, name, source);
+      const loaded = await readSkill(skillFile, name, source, from);
       if (!loaded) continue;
       const files = await listSupportingFiles(skillDir, skillFile);
       if (files.length > 0) {
@@ -165,7 +177,7 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
       if (extname(entry.name).toLowerCase() !== '.md') continue;
       const name = entry.name.slice(0, -3).toLowerCase();
       if (!isValidName(name)) continue;
-      const loaded = await readSkill(join(dir, entry.name), name, source);
+      const loaded = await readSkill(join(dir, entry.name), name, source, from);
       if (loaded && !byName.has(name)) byName.set(name, loaded);
     }
   }
@@ -253,6 +265,7 @@ async function readSkill(
   path: string,
   name: string,
   source: Skill['source'],
+  from?: string,
 ): Promise<Skill | null> {
   try {
     const text = await readFile(path, 'utf8');
@@ -263,6 +276,7 @@ async function readSkill(
       description,
       body: body.trim(),
       source,
+      ...(from ? { from } : {}),
       path,
       triggers: parseTriggers(meta.triggers),
       requires: parseRequires(meta.requires),

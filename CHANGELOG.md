@@ -7,6 +7,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- Skills kept for other coding agents load from where they already are: `~/.agents/skills/`, and a
+  project's `.agents/skills/` and `.claude/skills/`. Reika's own skill directories still win on a
+  name collision, and `/skills` labels each skill with the directory it came from. To use skills from
+  `~/.claude/skills/`, link that directory to `~/.agents/skills/`. (#861)
+
 - A directory skill that carries supporting files (`scripts/`, reference docs) now tells the model
   where those files are. The body opens with the skill's directory and a list of the file names, and
   a reference to one of those files (`scripts/extract.py`) is rewritten to its full path, so it

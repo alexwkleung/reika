@@ -88,21 +88,64 @@ describe('parseTriggers', () => {
 
 describe('loadSkills', () => {
   let cwd: string;
+  let home: string;
   let originalEnv: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'reika-skills-'));
     originalEnv = process.env.REIKA_SKILLS_DIR;
+    originalHome = process.env.HOME;
     // Point global skills dir at a separate empty temp dir to isolate from user's actual config.
     process.env.REIKA_SKILLS_DIR = await mkdtemp(join(tmpdir(), 'reika-global-skills-'));
+    // And HOME, which `~/.agents/skills` is read under.
+    home = await mkdtemp(join(tmpdir(), 'reika-home-'));
+    process.env.HOME = home;
   });
 
   afterEach(async () => {
     await rm(cwd, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
     const dir = process.env.REIKA_SKILLS_DIR;
     if (dir) await rm(dir, { recursive: true, force: true });
     if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
     else process.env.REIKA_SKILLS_DIR = originalEnv;
+    process.env.HOME = originalHome;
+  });
+
+  const put = async (dir: string, name: string, body: string) => {
+    await mkdir(join(dir, name), { recursive: true });
+    await writeFile(join(dir, name, 'SKILL.md'), body, 'utf8');
+  };
+
+  it("loads other harnesses' skill dirs and labels where each came from", async () => {
+    await put(join(home, '.agents/skills'), 'a', 'from home agents');
+    await put(join(cwd, '.agents/skills'), 'b', 'from project agents');
+    await put(join(cwd, '.claude/skills'), 'c', 'from project claude');
+    await put(join(home, '.claude/skills'), 'd', 'never read');
+    const skills = await loadSkills(cwd);
+    expect(skills.map(s => [s.name, s.source, s.from])).toEqual([
+      ['a', 'global', '~/.agents/skills'],
+      ['b', 'project', '.agents/skills'],
+      ['c', 'project', '.claude/skills'],
+    ]);
+  });
+
+  it("lets reika's own dirs win, then project over global, then .agents over .claude", async () => {
+    const globalDir = process.env.REIKA_SKILLS_DIR as string;
+    for (const name of ['x', 'y', 'z']) {
+      await put(join(home, '.agents/skills'), name, `${name} home agents`);
+      await put(join(cwd, '.claude/skills'), name, `${name} project claude`);
+    }
+    for (const name of ['x', 'y'])
+      await put(join(cwd, '.agents/skills'), name, `${name} project agents`);
+    await put(globalDir, 'x', 'x reika global');
+    const bodies = Object.fromEntries((await loadSkills(cwd)).map(s => [s.name, s.body]));
+    expect(bodies).toEqual({
+      x: 'x reika global',
+      y: 'y project agents',
+      z: 'z project claude',
+    });
   });
 
   it('returns [] when no skills dirs exist', async () => {
@@ -379,12 +422,15 @@ describe('bundled skills and requirements', () => {
   let root: string;
   let originalEnv: string | undefined;
   let originalPath: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'reika-bundled-'));
     originalEnv = process.env.REIKA_SKILLS_DIR;
     originalPath = process.env.PATH;
+    originalHome = process.env.HOME;
     process.env.REIKA_SKILLS_DIR = join(root, 'global');
+    process.env.HOME = join(root, 'home');
     await mkdir(join(root, 'bundled'), { recursive: true });
     await mkdir(join(root, 'global'), { recursive: true });
     await mkdir(join(root, 'repo/.reika/skills'), { recursive: true });
@@ -395,6 +441,7 @@ describe('bundled skills and requirements', () => {
     if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
     else process.env.REIKA_SKILLS_DIR = originalEnv;
     process.env.PATH = originalPath;
+    process.env.HOME = originalHome;
   });
 
   const fakeGh = async () => {
