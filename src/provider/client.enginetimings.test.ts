@@ -108,3 +108,36 @@ describe('engine decode stats (issue #536)', () => {
     expect((await call()).engineTimings?.perSecond).toBe(19.5);
   });
 });
+
+// #868: the prefill half of the same object. Logged as reported, so each field stands alone.
+describe('engine prefill stats (issue #868)', () => {
+  beforeEach(() => {
+    h.scripted.length = 0;
+    resetLogprobSupport();
+  });
+
+  it('normalizes the prompt count, time and cache reuse', async () => {
+    h.scripted.push([
+      text('Read'),
+      finalChunk({
+        prompt_n: 812,
+        prompt_ms: 4100.5,
+        cache_n: 9200,
+        predicted_n: 600,
+        predicted_ms: 30_000,
+        predicted_per_second: 19.5,
+      }),
+    ]);
+    expect((await call()).enginePrompt).toEqual({ promptN: 812, promptMs: 4100.5, cacheN: 9200 });
+  });
+
+  it('keeps a field the engine sent without the others', async () => {
+    h.scripted.push([text('Read'), finalChunk({ prompt_n: 812, prompt_ms: null })]);
+    expect((await call()).enginePrompt).toEqual({ promptN: 812 });
+  });
+
+  it('leaves the field absent when the engine reported nothing', async () => {
+    h.scripted.push([text('Read'), finalChunk({ predicted_per_second: 19.5 })]);
+    expect((await call()).enginePrompt).toBeUndefined();
+  });
+});

@@ -45,7 +45,13 @@ import {
 import { ReadTrace, type LoopingRead } from './readtrace.js';
 import { traceBashRead, traceReadPath } from './bashread.js';
 import { PrefixTrace } from './prefixtrace.js';
-import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
+import {
+  PrefillRate,
+  formatMeasuredPrefill,
+  formatPrefillCost,
+  reprocessedTokens,
+  sampleTokens,
+} from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
 import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
@@ -2894,6 +2900,7 @@ export async function runTurn(opts: {
         `completion=${completion} finishReason=${response.finishReason ?? '?'} ` +
         `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
         `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source} ` +
+        `${formatMeasuredPrefill(response.usage, response.enginePrompt, roundReprocessTokens)} ` +
         // Process uptime, not turn time: on a fanless machine the rates sag with sustained load
         // and recover across idle gaps, so separating that from context growth needs wall clock.
         `t=${process.uptime().toFixed(0)}s\n`,

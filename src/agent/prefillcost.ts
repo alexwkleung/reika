@@ -1,3 +1,4 @@
+import type { EnginePrompt } from '../provider/client.js';
 import type { Usage } from '../types.js';
 import { formatRate } from './decoderate.js';
 import type { PrefixDivergence } from './prefixtrace.js';
@@ -85,4 +86,23 @@ export function formatPrefillCost(tokens: number, rate?: number, bounded = false
 
 function formatSeconds(s: number): string {
   return s >= 10 ? `${Math.round(s)}s` : `${s.toFixed(1)}s`;
+}
+
+// The `round=` line's measured half (#868): what the provider and the engine reported about this
+// request's prefill, beside the estimate the `prefix-cache` line printed before the call. `cached=?`
+// rather than `0` when the provider reports no cache accounting — zero would claim a cold cache. The
+// engine fields appear only when llama.cpp sent them, and `prompt_n` carries the estimate it should
+// be read against (`reprocessEst=`), since that line was written before the count existed.
+export function formatMeasuredPrefill(
+  usage: Usage | undefined,
+  engine: EnginePrompt | undefined,
+  reprocessEstimate: number,
+): string {
+  const parts = [`cached=${usage?.cachedTokens ?? '?'}`];
+  if (engine?.promptN != null) {
+    parts.push(`prompt_n=${engine.promptN}`, `reprocessEst=${reprocessEstimate}`);
+  }
+  if (engine?.promptMs != null) parts.push(`prompt_ms=${Math.round(engine.promptMs)}`);
+  if (engine?.cacheN != null) parts.push(`cache_n=${engine.cacheN}`);
+  return parts.join(' ');
 }

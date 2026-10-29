@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
+import {
+  PrefillRate,
+  formatMeasuredPrefill,
+  formatPrefillCost,
+  reprocessedTokens,
+  sampleTokens,
+} from './prefillcost.js';
 import type { PrefixDivergence } from './prefixtrace.js';
 
 const div = (stableChars: number, totalChars: number): PrefixDivergence => ({
@@ -126,5 +132,31 @@ describe('formatPrefillCost', () => {
 
   it('stays on one line', () => {
     expect(formatPrefillCost(8952, 22.95)).not.toContain('\n');
+  });
+});
+
+describe('formatMeasuredPrefill (#868)', () => {
+  // A hosted endpoint reports neither cache accounting nor engine stats: `?`, never a zero that
+  // would read as a cold cache.
+  it('prints ? for cached tokens nobody reported, and no engine fields', () => {
+    expect(
+      formatMeasuredPrefill({ promptTokens: 9000, completionTokens: 50 }, undefined, 400),
+    ).toBe('cached=?');
+    expect(formatMeasuredPrefill(undefined, undefined, 0)).toBe('cached=?');
+  });
+
+  it('reports the provider cache count, zero included', () => {
+    const usage = { promptTokens: 9000, completionTokens: 50, cachedTokens: 0 };
+    expect(formatMeasuredPrefill(usage, undefined, 400)).toBe('cached=0');
+  });
+
+  it('pairs the engine count with the estimate made before the call', () => {
+    expect(
+      formatMeasuredPrefill(undefined, { promptN: 812, promptMs: 4100.6, cacheN: 9200 }, 640),
+    ).toBe('cached=? prompt_n=812 reprocessEst=640 prompt_ms=4101 cache_n=9200');
+  });
+
+  it('prints only the engine fields that arrived', () => {
+    expect(formatMeasuredPrefill(undefined, { cacheN: 9200 }, 640)).toBe('cached=? cache_n=9200');
   });
 });

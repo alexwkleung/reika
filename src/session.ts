@@ -1,5 +1,6 @@
 import { assertRawConfig, loadConfig, resolveProfile, withProbedLimits } from './config.js';
 import { ensureNoteSlot } from './provider/noteslot.js';
+import { debugLog, formatEndpointLine } from './debug.js';
 import { repoMapBudgetFor } from './context/repomap.js';
 import {
   needsLimitsProbe,
@@ -238,6 +239,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   // so it never runs between rounds (a probe there would evict a single-slot server's cache), and
   // asked again at a submit if the server was not up.
   void ensureNoteSlot(resolveProfile(cfg, profile));
+  const logEndpoint = (): void => {
+    const p = resolveProfile(cfg, profile);
+    debugLog(formatEndpointLine(profile, p.model, p.baseURL));
+  };
+  logEndpoint();
 
   // No route out → no web tools this session (#392). Checked once, here, because the tool list is
   // part of the cached prefix; the per-turn latch in the tools covers a drop later.
@@ -436,6 +442,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     decodeRate = undefined;
     genReserve = new GenReserve();
     changed();
+    logEndpoint();
     void ensureNoteSlot(resolveProfile(cfg, name));
     if (!needsLimitsProbe(next)) return Promise.resolve([]);
     return probeModelLimits(next).then(probe => {
@@ -465,6 +472,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     if (profile !== 'default') {
       profile = 'default';
       changed();
+      logEndpoint();
     }
   };
 
