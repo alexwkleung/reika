@@ -5,6 +5,14 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Added
+
+- `REIKA_WITHDRAW_KEEP_TOOLS=1` (experimental, off by default): when Reika pauses reading and
+  searching to break a loop, the paused tools stay in the tool list and are refused when called,
+  rather than being removed. Removing them makes a local server re-process the whole prompt, both
+  when the pause starts and when it ends. The flag is there to measure whether keeping them costs
+  more than it saves. (#867)
+
 ### Changed
 
 - Asked about its past sessions, the model is now told both places they live: auto-saved sessions
