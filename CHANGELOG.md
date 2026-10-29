@@ -7,6 +7,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- Asked about its past sessions, the model is now told both places they live: auto-saved sessions
+  under `~/.config/reika/history/projects/`, one subdirectory per project, and `/save` transcripts at
+  `~/.config/reika/history/`. Told only the second, it often listed the `/save` files and never found
+  the auto-saved ones, which are most of them. (#865)
+
 - Skills kept for other coding agents load from where they already are: `~/.agents/skills/`, and a
   project's `.agents/skills/` and `.claude/skills/`. Reika's own skill directories still win on a
   name collision, and `/skills` labels each skill with the directory it came from. To use skills from
