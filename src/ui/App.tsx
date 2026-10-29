@@ -1968,13 +1968,13 @@ export function App() {
         const list = bundle?.skills ?? [];
         if (list.length === 0) {
           response =
-            'No skills loaded. Drop *.md files in ~/.config/reika/skills/ or <cwd>/.reika/skills/.';
+            'No skills loaded. Drop *.md files or SKILL.md folders in ~/.config/reika/skills/, <cwd>/.reika/skills/, ~/.agents/skills/ or <cwd>/.agents/skills/.';
         } else {
           response = [
             'Available skills (invoke as /<name>):',
             ...list.map(
               s =>
-                `  /${s.name.padEnd(16)} ${s.description} ${s.source === 'project' ? '(project)' : ''}`,
+                `  /${s.name.padEnd(16)} ${s.description} ${s.from ? `(${s.from})` : s.source === 'project' ? '(project)' : ''}`,
             ),
           ].join('\n');
         }
