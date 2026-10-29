@@ -5,6 +5,7 @@
 // it, because you would only put shapes in it you had already thought of. Hence: real transcripts.
 //
 //   npx tsx evals/agedoutline-report.ts                 # last 12 sessions in ~/.config/reika/history
+//                                                       #   (projects/ and the root, recursively)
 //   npx tsx evals/agedoutline-report.ts 30              # last 30
 //   npx tsx evals/agedoutline-report.ts ~/somewhere     # a different history directory
 //
@@ -15,9 +16,9 @@
 // The report is about SERIALIZATION, so it needs no model and no run: it replays saved payloads
 // through the real agedContentChars. Live rate — how often a payload ages at all — is the
 // `aged-payload` debug line's job, not this one's.
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { agedContentChars } from '../src/provider/toolcall.js';
 
 type Row = { outline: number; whole: number; nothing: number; nothingBytes: number };
@@ -30,17 +31,29 @@ function classOf(path: string): string {
   return path.includes('.') ? `${ext} source` : 'no extension';
 }
 
+// TUI sessions auto-save under projects/<name>-<hash>/; the root holds only /save transcripts and
+// sessions from before auto-save, so a root-only listing misses most of the corpus.
+function collectFiles(target: string, out: string[]): void {
+  const st = statSync(target, { throwIfNoEntry: false });
+  if (!st) return;
+  if (st.isFile()) {
+    if (target.endsWith('.jsonl')) out.push(target);
+    return;
+  }
+  for (const name of readdirSync(target)) collectFiles(join(target, name), out);
+}
+
 function main(): void {
   const arg = process.argv[2];
   const dir = arg && !/^\d+$/.test(arg) ? arg : join(homedir(), '.config/reika/history');
   const limit = arg && /^\d+$/.test(arg) ? Number(arg) : 12;
-  const files = readdirSync(dir)
-    .filter(f => f.endsWith('.jsonl'))
-    .sort()
-    .slice(-limit);
+  const files: string[] = [];
+  collectFiles(dir, files);
+  files.sort((a, b) => basename(a).localeCompare(basename(b)));
+  files.splice(0, Math.max(0, files.length - limit));
   const tally = new Map<string, Row>();
   for (const f of files) {
-    for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
+    for (const line of readFileSync(f, 'utf8').split('\n')) {
       if (!line.trim()) continue;
       let d: { role?: string; summary?: string; payload?: string };
       try {
