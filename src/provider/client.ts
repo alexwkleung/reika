@@ -17,6 +17,11 @@ import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 // for what they are rather than for llama.cpp's spelling, so nothing downstream reads a wire shape.
 export type EngineTimings = { predictedN: number; predictedMs: number; perSecond: number };
 
+// The engine's own prefill stats (#868): `promptN` tokens it actually processed, in `promptMs`,
+// after reusing `cacheN` from its prompt cache. Each optional on its own, unlike the decode trio —
+// nothing derives a rate from them, they are logged as reported. Debug-log only.
+export type EnginePrompt = { promptN?: number; promptMs?: number; cacheN?: number };
+
 export type ModelResponse = {
   content: string;
   reasoning?: string;
@@ -35,6 +40,8 @@ export type ModelResponse = {
   // derivation below; an OpenAI-compatible API reports nothing of the sort and keeps the
   // derivation (agent/decoderate.ts picks between the two). Absent on every hosted endpoint.
   engineTimings?: EngineTimings;
+  // The engine's own prefill stats, when it reported any (#868). Absent on every hosted endpoint.
+  enginePrompt?: EnginePrompt;
   // Per-token logprobs for the generated content, when they were requested AND the engine
   // returned them (issue #134). Absent otherwise — an absent array means "not measured", never
   // "the model was certain". Only the debug drift instrumentation reads it.
@@ -134,6 +141,7 @@ export async function callModel(opts: {
   // consume attempt: a retry only happens before any chunk arrived (the `received` gate below), so
   // there is never a stale one to clear.
   let engineTimings: EngineTimings | undefined;
+  let enginePrompt: EnginePrompt | undefined;
   // Reset per consume attempt: the logprobs degrade below re-sends from scratch, so a retry's
   // prefill must not be timed from the rejected request's start.
   let startedAt = Date.now();
@@ -216,6 +224,15 @@ export async function callModel(opts: {
           predictedMs: et.predicted_ms,
           perSecond: et.predicted_per_second,
         };
+      }
+      // Prefill stats ride the same object, cumulative the same way; each field is taken on its own.
+      if (et) {
+        const prompt: EnginePrompt = {
+          ...(typeof et.prompt_n === 'number' ? { promptN: et.prompt_n } : {}),
+          ...(typeof et.prompt_ms === 'number' ? { promptMs: et.prompt_ms } : {}),
+          ...(typeof et.cache_n === 'number' ? { cacheN: et.cache_n } : {}),
+        };
+        if (Object.keys(prompt).length > 0) enginePrompt = prompt;
       }
       // Logprobs ride the choice, not the delta, and a chunk can carry them with no delta at all
       // — so collect before the delta guard. Normalized to SampledToken here (the wire's null
@@ -379,6 +396,7 @@ export async function callModel(opts: {
         finishReason,
         timing: timing(),
         ...(engineTimings ? { engineTimings } : {}),
+        ...(enginePrompt ? { enginePrompt } : {}),
         ...(sampled.length > 0 ? { sampled } : {}),
       };
     }
@@ -408,6 +426,7 @@ export async function callModel(opts: {
     finishReason,
     timing: timing(),
     ...(engineTimings ? { engineTimings } : {}),
+    ...(enginePrompt ? { enginePrompt } : {}),
     ...(sampled.length > 0 ? { sampled } : {}),
   };
 }

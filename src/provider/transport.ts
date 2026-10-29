@@ -132,11 +132,15 @@ export type ChatCompletionChunk = {
   // llama.cpp's own stats for the call, at the top level next to `usage` (not inside it) on the
   // final chunk of a streaming response — and, under `timings_per_token`, on every chunk, where
   // they are the running totals and the last one is the round's. Only the fields the tok/s chip
-  // reads are modeled here; the server's spelling is kept and normalized in client.ts (#536).
+  // and the debug log read are modeled here; the server's spelling is kept and normalized in
+  // client.ts (#536, #868).
   timings?: {
     predicted_n?: number;
     predicted_ms?: number;
     predicted_per_second?: number;
+    prompt_n?: number;
+    prompt_ms?: number;
+    cache_n?: number;
   } | null;
 };
 

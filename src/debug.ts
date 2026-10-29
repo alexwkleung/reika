@@ -186,3 +186,18 @@ export function formatExperimentFlags(): string {
     });
   return `[reika:debug] flags version=${VERSION} ${flags.join(' ') || '(none set)'}`;
 }
+
+// Which model and server a log's rounds ran against (#868): once per session and on every switch,
+// so saved logs can be split by model. The host only — a base URL's path, query and userinfo stay
+// out, as the flags line keeps values out. A model id that is a filesystem path (llama.cpp names a
+// model by the file it loaded) is cut to its basename, so a home path cannot land in the log.
+export function formatEndpointLine(profile: string, model: string, baseURL: string): string {
+  let host = '?';
+  try {
+    host = new URL(baseURL).hostname || '?';
+  } catch {
+    // An unparseable base URL is logged as unknown rather than verbatim.
+  }
+  const id = /^([/~\\]|[A-Za-z]:[/\\])/.test(model) ? (model.split(/[/\\]/).pop() ?? '?') : model;
+  return `[reika:debug] endpoint profile=${profile} model=${id || '?'} host=${host}`;
+}
