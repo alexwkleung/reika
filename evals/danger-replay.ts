@@ -24,6 +24,14 @@
 // commands), `main` against #843's branch: 1,938 flagged → 1,939, 0 commands lost a label, 6 gained
 // one — five `env -S` probes inside pasted heredoc bodies from the session that built it, and a
 // `node -e` body holding the string `'install'`.
+//
+// Result of the run #750 shipped on (454 session files; 10,374 distinct commands), `main` against its
+// branch: 2,109 flagged → 2,110, 0 lost a label, 4 gained one — every one of them from the session
+// that built it (three probe files whose heredoc bodies spell out `python3 -c` cases, and a
+// `python3 - <<'PY'` body writing a TypeScript test file, where `fs.rmSync` sits in a Python string:
+// `INTERPRETER_BODY_PATTERNS` read the body TEXT, exactly as they already do for a `-c` body). Read
+// what remains: no change on a real history. Taken with the split done by hand, since the sandbox
+// forbids `git worktree add`.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';

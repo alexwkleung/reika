@@ -1478,6 +1478,225 @@ function nestedBodies(command: string): Array<{ context: string; body: string; i
   return found;
 }
 
+// An interpreter reading its PROGRAM from stdin rather than from an argument: `python3 -`, `node -`,
+// `ruby -`, `perl -`. The body arrives by heredoc, so the shell pastes it — nothing quote-parses a
+// body and the verb readers are blind to it (#699) — but the pasted text is code, not data, and a
+// script that shells out runs those commands for real. The sandbox does not cover that: signals are
+// not confined (`pkill`, `killall`), docker's socket is allowed, and a loopback cluster (kind,
+// minikube) is reachable by `kubectl` (#750).
+//
+// It is deliberately NOT read as a nested body the way a `-c` argument is. Handing the whole body to
+// `detectAtDepth` would re-open #699: a `;` in a string literal in a pasted body splits a segment
+// there as soon as nothing marks the body, which is what `verbData` suppresses for the outer pass.
+// So what is read here is narrow, and only in the direction that cannot hide anything:
+//
+//   - `INTERPRETER_BODY_PATTERNS` over the whole body (they are specific enough to run on text);
+//   - the verb readers over the STRING ARGUMENTS of a shell-out call site, and nothing else.
+//
+// Call sites only, not every string literal — `print("x; pkill y")` is data, and reading it is
+// exactly #699's false positive. The cost of the narrow reading is the other direction: a command
+// assembled at runtime (`os.system("pk" + "ill node")`) is still not seen.
+// A flag arm may carry `=value` (`node --input-type=module -`), which is otherwise a word past it.
+// The `-` is optional: with no script operand at all each of the four reads its program from stdin
+// too, and `python3 <<'PY'` is the spelling models write most. Bare, the flags must run to the end of
+// the command (a redirect, a separator, the line's end), or the next word is the script.
+const INTERPRETER_STDIN_RE =
+  /\b(python[\d.]*|ruby|perl|node)((?:\s+-[\w-]+(?:=[^\s]+)?)*)(?:\s+(-)(?![\w.=-])|(?=[ \t]*(?:[<>|;&)\n]|\d+>|$)))/g;
+// A last flag that takes the program (`-c`, `-e`) or a module (`-m`) as its value: the program is
+// not on stdin, and in the masked view the quoted value is blank, so it reads as a bare interpreter.
+const PROGRAM_FLAG_RE = /\s(?:-[cemEp]|--eval|--print)$/;
+// `stdinBodies`' pre-test: the two walks it needs (a quote mask, a heredoc scan) cost more than the
+// rest of the command's detection put together. A name alone is not rare enough — `node` is in every
+// `node_modules` path — but every body this reader finds is a heredoc, so a command with no `<<` has
+// none. Not the /g/ pattern above, whose `lastIndex` `matchAll` inherits.
+const INTERPRETER_NAME_RE = /\b(?:python|ruby|perl|node)/;
+
+// Where an interpreter hands a string to a shell. `os.popen` is `os.system` with a pipe, and
+// `system` alone is Ruby's and Perl's spelling of it; `subprocess.*` and `child_process.*` are the
+// whole module, since every entry point takes the same argv. A `node -` body usually reaches the
+// module through `require`, and a named import strips the qualifier entirely, so the spellings that
+// reach the same call are here too — the sync ones are Node's own names and appear nowhere else,
+// while bare `exec`/`spawn` also name a database client, and those keep their qualifier.
+const SHELL_OUT_CALL_RE =
+  /\b(?:os\s*\.\s*(?:system|popen)|subprocess\s*\.\s*[A-Za-z_]\w*|child_process\s*\.\s*\w+|childProcess\s*\.\s*\w+|require\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*\w+|execSync|execFileSync|spawnSync|system)\s*\(\s*/g;
+
+// The shell command a call hands over: a plain literal (`os.system("…")`), an `f`/`r`/`b`-prefixed
+// or triple-quoted one, or an argv — a list (`subprocess.run(["git", "push", "--force"])`), a
+// program followed by its list (`execFileSync("git", ["push"])`, `spawn`), or a program followed by
+// its words (Ruby's and Perl's `system("git", "push")`). An argv is joined back into the command it
+// spells, each element quoted, so `["sh", "-c", "pkill node"]` keeps its `-c` body one word. A
+// variable, a `.format` template or a concatenation is not text this file can read, and guessing at
+// one would put words in the command that the shell never sees; an argv stops at its first one.
+function callArgument(text: string, from: number): string | undefined {
+  let at = skipSpace(text, from);
+  const parts: string[] = [];
+  let argv = false;
+  const readList = () => {
+    argv = true;
+    at++;
+    for (;;) {
+      const lit = readLiteral(text, skipSpace(text, at));
+      if (!lit) return false;
+      parts.push(lit.value);
+      at = skipSpace(text, lit.end);
+      if (text[at] !== ',') return text[at] === ']' || text[at] === ')';
+      at++;
+    }
+  };
+  if (text[at] === '[' || text[at] === '(') {
+    readList();
+  } else {
+    const lit = readLiteral(text, at);
+    if (!lit) return undefined;
+    parts.push(lit.value);
+    at = skipSpace(text, lit.end);
+    // Further arguments are the program's words only while they are literals or a closed list.
+    while (text[at] === ',') {
+      at = skipSpace(text, at + 1);
+      if (text[at] === '[') {
+        readList();
+        break;
+      }
+      const next = readLiteral(text, at);
+      if (!next) break;
+      argv = true;
+      parts.push(next.value);
+      at = skipSpace(text, next.end);
+    }
+  }
+  if (!parts.length) return undefined;
+  if (!argv) return parts[0] || undefined;
+  // A shell's `-c` element IS the command, and a call argument is read one level deep, where the
+  // `-c` reader does not run — so it is handed over unwrapped.
+  if (parts.length >= 3 && SHELL_ARGV0_RE.test(parts[0]) && /^-\w*c$/.test(parts[1]))
+    return parts[2];
+  return parts.map(shellQuote).join(' ');
+}
+
+const SHELL_ARGV0_RE = /(?:^|\/)(?:ba|z|da|k)?sh$/;
+
+function skipSpace(text: string, at: number): number {
+  while (at < text.length && /\s/.test(text[at])) at++;
+  return at;
+}
+
+// One string literal at `at`, with the index past its closing quote. A triple quote opens a
+// Python block string, which a single `"` would read as an empty literal followed by text.
+function readLiteral(text: string, at: number): { value: string; end: number } | undefined {
+  const m = /^[A-Za-z]{0,2}("""|'''|['"`])/.exec(text.slice(at));
+  if (!m) return undefined;
+  const quote = m[1];
+  const start = at + m[0].length;
+  let i = start;
+  for (; i < text.length; i++) {
+    if (text[i] === '\\') i++;
+    else if (text.startsWith(quote, i)) break;
+  }
+  if (i >= text.length) return undefined;
+  // A raw literal (`r"…"`, `rb"…"`) keeps its backslashes: `\n` there is two characters, not a
+  // line break, and reading it as one would label a second command the shell never runs.
+  const raw = /r/i.test(m[0].slice(0, -quote.length));
+  const body = text.slice(start, i);
+  return { value: raw ? body : unescapeLiteral(body), end: i + quote.length };
+}
+
+// An argv element as the one shell word it was: a bare word stays bare, anything else is quoted.
+function shellQuote(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+// The escapes that change the command's SHAPE, so an argument spelled on one source line reads as
+// the two commands the shell will run: `os.system("curl x\npkill y")` is a `pkill` line. Everything
+// else is left alone — `\d` in a regex in the same string is not this file's business.
+function unescapeLiteral(s: string): string {
+  return s.replace(/\\(?:([nrt])|(['"\\`]))/g, (_m, esc: string | undefined, ch: string) =>
+    esc === 'n' ? '\n' : esc === 'r' ? '\r' : esc === 't' ? '\t' : ch,
+  );
+}
+
+// The commands a body hands to a shell, capped like the nested bodies themselves: a body with more
+// call sites than that is a script, and past a handful the labels say the same thing.
+function shellOutStrings(body: string): string[] {
+  const out: string[] = [];
+  for (const m of body.matchAll(SHELL_OUT_CALL_RE)) {
+    if (out.length >= MAX_NESTED_BODIES) break;
+    const arg = callArgument(body, m.index + m[0].length);
+    if (arg) out.push(arg);
+  }
+  return out;
+}
+
+// Whether the newline at `nl` is escaped by an odd run of backslashes before it.
+function continues(command: string, nl: number): boolean {
+  if (nl <= 0 || command[nl] !== '\n') return false;
+  let n = 0;
+  while (nl - 1 - n >= 0 && command[nl - 1 - n] === '\\') n++;
+  return n % 2 === 1;
+}
+
+// A `&` that ends a command, not one inside a redirect (`2>&1`, `&>f`, `<&3`).
+function isCommandAmpersand(view: string, i: number): boolean {
+  return view[i] === '&' && view[i - 1] !== '>' && view[i - 1] !== '<' && view[i + 1] !== '>';
+}
+
+// Where the pipeline holding `at` begins on its line: past the last `;`, `&`, `||` or `(` before it.
+function pipelineStart(view: string, lineStart: number, at: number): number {
+  for (let i = at - 1; i >= lineStart; i--) {
+    const c = view[i];
+    if (c === ';' || c === '(' || isCommandAmpersand(view, i)) return i + 1;
+    if (c === '|' && view[i - 1] === '|') return i + 1;
+  }
+  return lineStart;
+}
+
+// Where the command starting before `from` ends on its line: the first `;`, `&`, `|` or `)`.
+function commandEnd(view: string, from: number, lineEnd: number): number {
+  for (let i = from; i < lineEnd; i++) {
+    const c = view[i];
+    if (c === ';' || c === '|' || c === ')' || isCommandAmpersand(view, i)) return i;
+  }
+  return lineEnd;
+}
+
+// The stdin bodies of the interpreters above. Failures here go the same way as everywhere else in the
+// nested-body readers: a body that cannot be found costs nothing extra, and one that cannot be
+// bounded (an unreadable lexer) over-reports.
+function stdinBodies(command: string): Array<{ context: string; body: string }> {
+  if (!command.includes('<<') || !INTERPRETER_NAME_RE.test(command)) return [];
+  const found: Array<{ context: string; body: string }> = [];
+  // A `python3 -` inside a quoted argument runs no interpreter: it is another command's text.
+  const view = maskQuoted(command);
+  const scan = scanHeredocs(command);
+  for (const m of view.matchAll(INTERPRETER_STDIN_RE)) {
+    if (found.length >= MAX_NESTED_BODIES) break;
+    if (!m[3] && PROGRAM_FLAG_RE.test(m[2])) continue;
+    const at = m.index!;
+    const context = m[3] ? `${m[1]} -` : m[1];
+    const lineStart = command.lastIndexOf('\n', at - 1) + 1;
+    const nl = command.indexOf('\n', at);
+    // A line continued by a backslash puts the body after the NEXT newline (or the pipeline before
+    // the previous one), where the walk below cannot follow it. Like an unreadable lexer, that
+    // reads the whole command as the body: it can only add labels.
+    if (scan.uncertain || continues(command, nl) || continues(command, lineStart - 1)) {
+      if (command.includes('<<')) found.push({ context, body: command });
+      continue;
+    }
+    const lineEnd = nl === -1 ? command.length : nl;
+    // The body lands on the stdin of the command its operator sits on, and the interpreter reads it
+    // when that command is its own or one the pipe hands it on from (`cat <<'PY' | python3 -`). So
+    // every heredoc from the start of the interpreter's pipeline to the end of its own command
+    // counts, and none behind a `;` or `&&`, which is another command's input.
+    const from = pipelineStart(view, lineStart, at);
+    const to = commandEnd(view, at + m[0].length, lineEnd);
+    for (const h of scan.heredocs) {
+      if (h.opAt < from || h.opAt >= to) continue;
+      if (found.length >= MAX_NESTED_BODIES) break;
+      found.push({ context, body: command.slice(h.bodyStart, h.bodyEnd) });
+    }
+  }
+  return found;
+}
+
 // Two checks read the working tree, because the command text alone cannot answer them: whether
 // `npx vitest` fetches anything, and whether `git checkout App.tsx` names a branch or a file.
 // Without a cwd both fall back to the text — npx flags, checkout stays with the regexes above.
@@ -1633,15 +1852,45 @@ function detectAtDepth(rawCommand: string, depth: number, cwd: string | undefine
     for (const { context, body, interp } of nestedBodies(command)) {
       const inner = detectAtDepth(body, 1, cwd);
       if (interp) {
-        for (const { re, label } of INTERPRETER_BODY_PATTERNS) {
-          if (re.test(body) && !inner.includes(label)) inner.push(label);
+        for (const label of interpreterBodyLabels(body, cwd)) {
+          if (!inner.includes(label)) inner.push(label);
         }
       }
-      for (const label of inner) {
-        const prefixed = `via ${context}: ${label}`;
-        if (!hits.includes(label) && !hits.includes(prefixed)) hits.push(prefixed);
-      }
+      addNested(hits, context, inner);
+    }
+    // A program pasted onto an interpreter's stdin is the one nested body the outer pass refuses to
+    // read (#699), so it is read here instead — and ONLY through `interpreterBodyLabels`: the body
+    // itself is never handed to `detectAtDepth`, which is what keeps a `;` in one of its string
+    // literals from splitting a segment into a verb.
+    for (const { context, body } of stdinBodies(command)) {
+      addNested(hits, context, interpreterBodyLabels(body, cwd));
     }
   }
   return hits;
+}
+
+// What an interpreter's own body says on top of what its text says as a command: the stdlib patterns
+// above, and the commands the body actually hands to a shell. Both are read off the body text alone,
+// with no dependence on where its quote spans are — which is what makes this the one reading that is
+// safe on a PASTED body, where the shell has not quote-parsed anything and a `;` in a string literal
+// is not marked as data (#699).
+function interpreterBodyLabels(body: string, cwd: string | undefined): string[] {
+  const labels: string[] = [];
+  for (const { re, label } of INTERPRETER_BODY_PATTERNS) {
+    if (re.test(body)) labels.push(label);
+  }
+  for (const call of shellOutStrings(body)) {
+    for (const label of detectAtDepth(call, 1, cwd)) {
+      if (!labels.includes(label)) labels.push(label);
+    }
+  }
+  return labels;
+}
+
+// The prefixed form of every label a nested body earned.
+function addNested(hits: string[], context: string, inner: string[]): void {
+  for (const label of inner) {
+    const prefixed = `via ${context}: ${label}`;
+    if (!hits.includes(label) && !hits.includes(prefixed)) hits.push(prefixed);
+  }
 }
