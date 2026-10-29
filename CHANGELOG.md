@@ -11,7 +11,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   searching to break a loop, the paused tools stay in the tool list and are refused when called,
   rather than being removed. Removing them makes a local server re-process the whole prompt, both
   when the pause starts and when it ends. The flag is there to measure whether keeping them costs
-  more than it saves. (#867)
+  more than it saves. (#870)
 
 ### Changed
 
