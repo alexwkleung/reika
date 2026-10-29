@@ -12,7 +12,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   a reference to one of those files (`scripts/extract.py`) is rewritten to its full path, so it
   resolves to the skill rather than to your project. Skill folders from other harnesses work
   unchanged. Reika still never runs a script itself: the model runs it
-  through `bash`, behind the usual approval prompt and sandbox. (#861)
+  through `bash`, behind the usual approval prompt and sandbox. (#862)
 
 - An MCP server that exits mid-session is started again on its next call instead of staying dead
   until Reika restarts. The call it died during still fails and is not retried. A server that keeps
