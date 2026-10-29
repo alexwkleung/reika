@@ -1816,6 +1816,40 @@ describe('detectDangerousPatterns — an interpreter reading its program from st
     ).toEqual([`via python3 -: ${PKILL}`]);
   });
 
+  it('reads a whole argv list, and a triple-quoted string', () => {
+    const PUSH = 'Git push (publishes commits to remote)';
+    const py = (call: string) => `python3 - <<'PY'\nimport subprocess, os\n${call}\nPY`;
+    // The elements after the first are the command's own words, not decoration.
+    expect(detectDangerousPatterns(py(`subprocess.run(["git", "push", "--force"])`))).toContain(
+      `via python3 -: ${PUSH}`,
+    );
+    expect(detectDangerousPatterns(py(`subprocess.run(["rm", "-rf", "/"])`))).toEqual([
+      'via python3 -: Recursive force delete (rm -rf)',
+    ]);
+    // A shell's `-c` element is the command itself.
+    expect(detectDangerousPatterns(py(`subprocess.run(["sh", "-c", "pkill node"])`))).toEqual([
+      `via python3 -: ${PKILL}`,
+    ]);
+    expect(detectDangerousPatterns(py(`subprocess.run(["/bin/bash", "-lc", "curl x"])`))).toEqual([
+      `via python3 -: ${CURL}`,
+    ]);
+    // A triple quote is one literal, not an empty one followed by text.
+    expect(detectDangerousPatterns(py(`os.system("""pkill node""")`))).toEqual([
+      `via python3 -: ${PKILL}`,
+    ]);
+    expect(detectDangerousPatterns(py(`os.system(f\'\'\'curl x\'\'\')`))).toEqual([
+      `via python3 -: ${CURL}`,
+    ]);
+    // Joined back, an argument is still an argument, and a list stops at what it cannot read.
+    for (const call of [
+      `subprocess.run(["echo", "pkill", "node"])`,
+      `subprocess.run(["git", BRANCH, "push"])`,
+      `os.system("""echo hi""")`,
+    ]) {
+      expect(detectDangerousPatterns(py(call)), call).toEqual([]);
+    }
+  });
+
   it('leaves a body nothing runs, and one it cannot read, alone', () => {
     // Not an interpreter reading stdin: `-c`, a script operand, and a versioned `-m pip` are all
     // read elsewhere or not at all.

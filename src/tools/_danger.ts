@@ -1519,31 +1519,58 @@ const INTERPRETER_NAME_RE = /\b(?:python|ruby|perl|node)/;
 const SHELL_OUT_CALL_RE =
   /\b(?:os\s*\.\s*(?:system|popen)|subprocess\s*\.\s*[A-Za-z_]\w*|child_process\s*\.\s*\w+|childProcess\s*\.\s*\w+|require\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*\w+|execSync|execFileSync|spawnSync|system)\s*\(\s*/g;
 
-// The shell word a call hands over, read off its first argument: a plain literal (`os.system("…")`),
-// an `f`/`r`/`b`-prefixed one, or the first element of an argv list (`subprocess.run(["…"])`). A
+// The shell command a call hands over, read off its first argument: a plain literal
+// (`os.system("…")`), an `f`/`r`/`b`-prefixed or triple-quoted one, or an argv list
+// (`subprocess.run(["git", "push", "--force"])`), whose literal elements are joined back into the
+// command they spell — each quoted, so `["sh", "-c", "pkill node"]` keeps its `-c` body one word. A
 // variable, a `.format` template or a concatenation is not text this file can read, and guessing at
-// one would put words in the command that the shell never sees.
+// one would put words in the command that the shell never sees; a list stops at its first one.
 function callArgument(text: string, from: number): string | undefined {
-  let at = from;
-  const skipSpace = () => {
-    while (at < text.length && /\s/.test(text[at])) at++;
-  };
-  skipSpace();
-  if (text[at] === '[' || text[at] === '(') {
+  let at = skipSpace(text, from);
+  if (text[at] !== '[' && text[at] !== '(') return readLiteral(text, at)?.value || undefined;
+  const parts: string[] = [];
+  at++;
+  for (;;) {
+    const lit = readLiteral(text, skipSpace(text, at));
+    if (!lit) break;
+    parts.push(lit.value);
+    at = skipSpace(text, lit.end);
+    if (text[at] !== ',') break;
     at++;
-    skipSpace();
   }
-  const m = /^[A-Za-z]{0,2}(['"`])/.exec(text.slice(at));
+  // A shell's `-c` element IS the command, and a call argument is read one level deep, where the
+  // `-c` reader does not run — so it is handed over unwrapped.
+  if (parts.length >= 3 && SHELL_ARGV0_RE.test(parts[0]) && /^-\w*c$/.test(parts[1]))
+    return parts[2];
+  return parts.length ? parts.map(shellQuote).join(' ') : undefined;
+}
+
+const SHELL_ARGV0_RE = /(?:^|\/)(?:ba|z|da|k)?sh$/;
+
+function skipSpace(text: string, at: number): number {
+  while (at < text.length && /\s/.test(text[at])) at++;
+  return at;
+}
+
+// One string literal at `at`, with the index past its closing quote. A triple quote opens a
+// Python block string, which a single `"` would read as an empty literal followed by text.
+function readLiteral(text: string, at: number): { value: string; end: number } | undefined {
+  const m = /^[A-Za-z]{0,2}("""|'''|['"`])/.exec(text.slice(at));
   if (!m) return undefined;
   const quote = m[1];
   const start = at + m[0].length;
   let i = start;
   for (; i < text.length; i++) {
     if (text[i] === '\\') i++;
-    else if (text[i] === quote) break;
+    else if (text.startsWith(quote, i)) break;
   }
   if (i >= text.length) return undefined;
-  return unescapeLiteral(text.slice(start, i));
+  return { value: unescapeLiteral(text.slice(start, i)), end: i + quote.length };
+}
+
+// An argv element as the one shell word it was: a bare word stays bare, anything else is quoted.
+function shellQuote(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
 }
 
 // The escapes that change the command's SHAPE, so an argument spelled on one source line reads as
