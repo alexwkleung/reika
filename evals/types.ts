@@ -28,6 +28,11 @@ export type Fixture = {
   // Commit the setup files into a fresh git repo before the turn, for fixtures that grade whether
   // the model reviewed its own `git diff`.
   gitInit?: boolean;
+  // Files written into a fresh global skills dir (REIKA_SKILLS_DIR) outside the eval cwd, keyed
+  // relative to it. A skill under `.reika/skills` is inside the project, where `find .` turns it up
+  // with no help; a migrated skill usually lives in the global dir, where nothing in the project
+  // leads to it.
+  globalSkills?: Record<string, string>;
   // Answers the approval gate, for a fixture about what a model does with an answer. A factory, so
   // each run gets a fresh approver and per-run state (which call it already declined) cannot leak
   // between runs. Without it the runner passes no approver and every gate is skipped, as `bypass`.

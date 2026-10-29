@@ -150,10 +150,17 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
     if (entry.isDir) {
       const name = entry.name.toLowerCase();
       if (!isValidName(name)) continue;
-      const skillFile = await findCanonicalSkillFile(join(dir, entry.name));
+      const skillDir = resolve(dir, entry.name);
+      const skillFile = await findCanonicalSkillFile(skillDir);
       if (!skillFile) continue;
       const loaded = await readSkill(skillFile, name, source);
-      if (loaded) byName.set(name, loaded);
+      if (!loaded) continue;
+      const files = await listSupportingFiles(skillDir, skillFile);
+      if (files.length > 0) {
+        const body = rewriteSkillPaths(loaded.body, skillDir, files);
+        loaded.body = `${skillDirAnchor(skillDir, files)}\n\n${body}`;
+      }
+      byName.set(name, loaded);
     } else {
       if (extname(entry.name).toLowerCase() !== '.md') continue;
       const name = entry.name.slice(0, -3).toLowerCase();
@@ -163,6 +170,72 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
     }
   }
   return Array.from(byName.values());
+}
+
+// --- supporting files (#861) -----------------------------------------------------------------
+// A skill written for another harness names its files relative to its own directory ("run
+// `scripts/extract.py`"), and the body reaches the model with nothing saying where that is, so
+// the path resolved against the cwd. The anchor names the directory and what is in it — names
+// only, never contents. Nothing here runs a script: the model runs it through `bash`, behind the
+// same approval gate and sandbox as any other command.
+const MAX_LISTED_FILES = 20;
+const MAX_WALKED_FILES = 200;
+const MAX_WALK_DEPTH = 3;
+const SKIPPED_DIRS = new Set(['node_modules', '__pycache__']);
+
+export async function listSupportingFiles(skillDir: string, skillFile: string): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(dir: string, rel: string, depth: number): Promise<void> {
+    if (depth > MAX_WALK_DEPTH || files.length >= MAX_WALKED_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (files.length >= MAX_WALKED_FILES) return;
+      if (e.name.startsWith('.')) continue;
+      const path = join(dir, e.name);
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!SKIPPED_DIRS.has(e.name)) await walk(path, relPath, depth + 1);
+      } else if (path !== skillFile) {
+        files.push(relPath);
+      }
+    }
+  }
+  await walk(skillDir, '', 1);
+  return files;
+}
+
+export function skillDirAnchor(skillDir: string, files: string[]): string {
+  const shown = files.slice(0, MAX_LISTED_FILES);
+  const more = files.length - shown.length;
+  const tail =
+    more <= 0 ? '' : files.length >= MAX_WALKED_FILES ? ', and more' : `, and ${more} more`;
+  return [`This skill's files are in ${skillDir}.`, `Files: ${shown.join(', ')}${tail}`].join('\n');
+}
+
+// The anchor alone was not enough (#861, lfm2.5-24b, 1/3): the model found the script through it,
+// then ran the body's command as written — `sh scripts/tally.sh` from the project — and when that
+// failed, copied the script into the project. So a reference to a file that exists in the skill
+// directory is rewritten to its absolute path, and the command the model copies is already right.
+// Only exact names of real files, at a word start (not after `/`), so prose and the user's own
+// paths are left alone.
+export function rewriteSkillPaths(body: string, skillDir: string, files: string[]): string {
+  if (files.length === 0) return body;
+  const names = [...files].sort((a, b) => b.length - a.length).map(escapeRegExp);
+  const ref = new RegExp(
+    `(^|[\\s\`'"(=])(?:\\./)?(${names.join('|')})(?=$|[\\s\`'")\\],;:!?]|\\.(?:$|\\s))`,
+    'gm',
+  );
+  return body.replace(ref, (_, lead: string, file: string) => lead + join(skillDir, file));
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function findCanonicalSkillFile(dir: string): Promise<string | null> {

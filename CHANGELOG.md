@@ -7,6 +7,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- A directory skill that carries supporting files (`scripts/`, reference docs) now tells the model
+  where those files are. The body opens with the skill's directory and a list of the file names, and
+  a reference to one of those files (`scripts/extract.py`) is rewritten to its full path, so it
+  resolves to the skill rather than to your project. Skill folders from other harnesses work
+  unchanged. Reika still never runs a script itself: the model runs it
+  through `bash`, behind the usual approval prompt and sandbox. (#862)
+
 - An MCP server that exits mid-session is started again on its next call instead of staying dead
   until Reika restarts. The call it died during still fails and is not retried. A server that keeps
   exiting is given up on after three restarts, and `/mcp` says so. (#860)
