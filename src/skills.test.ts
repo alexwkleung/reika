@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   BUNDLED_DIR,
   hasGitHubRemote,
+  listSupportingFiles,
   loadSkills,
   onPath,
   parseFrontmatter,
   parseRequires,
   parseTriggers,
+  rewriteSkillPaths,
+  skillDirAnchor,
 } from './skills.js';
 
 describe('parseFrontmatter', () => {
@@ -208,16 +211,35 @@ describe('loadSkills', () => {
     expect(skills.map(s => s.name)).toContain('refactor');
   });
 
-  it('ignores supporting files alongside SKILL.md', async () => {
-    await mkdir(join(cwd, '.reika/skills/deploy'), { recursive: true });
-    await writeFile(join(cwd, '.reika/skills/deploy/SKILL.md'), 'Deploy body', 'utf8');
-    await writeFile(join(cwd, '.reika/skills/deploy/helper.sh'), '#!/bin/sh', 'utf8');
-    await writeFile(join(cwd, '.reika/skills/deploy/notes.md'), 'random doc', 'utf8');
+  it('anchors a skill with supporting files and rewrites its references to full paths', async () => {
+    const dir = join(cwd, '.reika/skills/deploy');
+    await mkdir(join(dir, 'scripts'), { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), 'Run `sh scripts/push.sh data.txt`.', 'utf8');
+    await writeFile(join(dir, 'scripts/push.sh'), '#!/bin/sh\necho secret-ish', 'utf8');
+    await writeFile(join(dir, 'reference.md'), 'random doc', 'utf8');
     const skills = await loadSkills(cwd);
     const deploy = skills.find(s => s.name === 'deploy');
-    expect(deploy?.body).toBe('Deploy body');
-    // Supporting files don't create separate skills
+    expect(deploy?.body).toBe(
+      [
+        `This skill's files are in ${dir}.`,
+        'Files: reference.md, scripts/push.sh',
+        '',
+        `Run \`sh ${join(dir, 'scripts/push.sh')} data.txt\`.`,
+      ].join('\n'),
+    );
+    expect(deploy?.body).not.toContain('echo secret-ish');
     expect(skills.filter(s => s.name.includes('deploy'))).toHaveLength(1);
+  });
+
+  it('leaves a lone SKILL.md and a flat skill byte-identical', async () => {
+    await mkdir(join(cwd, '.reika/skills/solo'), { recursive: true });
+    await writeFile(join(cwd, '.reika/skills/solo/SKILL.md'), 'Solo body', 'utf8');
+    await mkdir(join(cwd, '.reika/skills/solo/.hidden'), { recursive: true });
+    await writeFile(join(cwd, '.reika/skills/solo/.hidden/x'), 'x', 'utf8');
+    await writeFile(join(cwd, '.reika/skills/flat.md'), 'Flat body', 'utf8');
+    const skills = await loadSkills(cwd);
+    expect(skills.find(s => s.name === 'solo')?.body).toBe('Solo body');
+    expect(skills.find(s => s.name === 'flat')?.body).toBe('Flat body');
   });
 
   it('skips directories without a SKILL.md inside', async () => {
@@ -275,6 +297,50 @@ describe('loadSkills', () => {
 // The skills Reika ships in skills/ (bundled into the package). A frontmatter typo here ships a
 // skill with no description or no plain-English routing — invisible until someone types the prompt
 // and nothing fires — so they are read straight off disk, ungated.
+describe('listSupportingFiles / skillDirAnchor', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'reika-skilldir-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('skips dotfiles, node_modules and anything past the depth cap', async () => {
+    await mkdir(join(dir, 'node_modules/pkg'), { recursive: true });
+    await mkdir(join(dir, 'a/b/c'), { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), 'x', 'utf8');
+    await writeFile(join(dir, '.env'), 'x', 'utf8');
+    await writeFile(join(dir, 'node_modules/pkg/index.js'), 'x', 'utf8');
+    await writeFile(join(dir, 'a/b/two.txt'), 'x', 'utf8');
+    await writeFile(join(dir, 'a/b/c/deep.txt'), 'x', 'utf8');
+    expect(await listSupportingFiles(dir, join(dir, 'SKILL.md'))).toEqual(['a/b/two.txt']);
+  });
+
+  it('rewrites only exact names of real files, at a word start', () => {
+    const files = ['scripts/run.sh', 'scripts/run.sh.bak', 'reference.md'];
+    const body = [
+      'Run scripts/run.sh, then ./scripts/run.sh again.',
+      'Keep scripts/run.sh.bak. See (reference.md) or "reference.md".',
+      'Not other/scripts/run.sh, not scripts/run.shx, not my-reference.md, not scripts/other.sh.',
+    ].join('\n');
+    expect(rewriteSkillPaths(body, '/s', files)).toBe(
+      [
+        'Run /s/scripts/run.sh, then /s/scripts/run.sh again.',
+        'Keep /s/scripts/run.sh.bak. See (/s/reference.md) or "/s/reference.md".',
+        'Not other/scripts/run.sh, not scripts/run.shx, not my-reference.md, not scripts/other.sh.',
+      ].join('\n'),
+    );
+  });
+
+  it('caps the listed names and counts the rest', () => {
+    const files = Array.from({ length: 25 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
+    const anchor = skillDirAnchor('/skills/x', files);
+    expect(anchor).toContain('f19.txt, and 5 more');
+    expect(anchor).not.toContain('f20.txt');
+  });
+});
+
 describe('skills shipped in skills/', () => {
   const shipped = async () =>
     Promise.all(

@@ -46,9 +46,13 @@ frontmatter line (`requires: gh, github`). A requirement Reika does not recogniz
 
 - **Flat file:** `~/.config/reika/skills/review.md` → `/review`
 - **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry
-  supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files
-  are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in
-  verbatim.
+  supporting files (scripts, reference docs), the layout other harnesses use, so you can drop skill
+  folders in verbatim. `SKILL.md` is the prompt body. When the directory holds other files, the body
+  opens with a line naming the skill's directory and listing those files (names only, up to 20, no
+  dotfiles). A reference in the body to one of those files is rewritten to its full path, so
+  `sh scripts/extract.sh` runs the skill's script rather than looking in your project. Nothing
+  else in the body changes. Reika never runs a skill's scripts itself: the model runs them through
+  `bash`, behind the same approval prompt and sandbox as any other command.
 
 ### File format
 

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
 import { formatExperimentFlags } from '../src/debug.js';
+import { buildHeadlessInput } from '../src/headless.js';
 import { createSession } from '../src/session.js';
 
 import type { Message } from '../src/types.js';
@@ -34,6 +35,7 @@ import {
   terseFixture as f18d,
 } from './fixtures/18-decline-feedback.js';
 import { agedFixture as f19b, liveFixture as f19 } from './fixtures/19-edit-recall.js';
+import { fixture as f20 } from './fixtures/20-skill-script.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -59,6 +61,7 @@ const FIXTURES: Fixture[] = [
   f18d,
   f19,
   f19b,
+  f20,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -129,6 +132,7 @@ async function runFixture(
   profile?: string,
 ): Promise<RunRecord> {
   const cwd = await mkdtemp(join(tmpdir(), 'reika-eval-'));
+  let skillsDir: string | undefined;
   try {
     for (const [relPath, content] of Object.entries(fix.setup)) {
       const full = join(cwd, relPath);
@@ -156,11 +160,26 @@ async function runFixture(
     // brings one: the gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
     // calls it and stalls.
     const approve = fix.approver?.();
+    const priorSkillsDir = process.env.REIKA_SKILLS_DIR;
+    if (fix.globalSkills) {
+      skillsDir = await mkdtemp(join(tmpdir(), 'reika-eval-skills-'));
+      for (const [relPath, content] of Object.entries(fix.globalSkills)) {
+        const full = join(skillsDir, relPath);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, content, 'utf8');
+      }
+      process.env.REIKA_SKILLS_DIR = skillsDir;
+    }
+    // Skills load during bootstrap, so the override only has to last through createSession.
     const session = await createSession({
       cwd,
       canAsk: false,
       profile,
       requestApproval: approve && (async req => approve(req)),
+    }).finally(() => {
+      if (!fix.globalSkills) return;
+      if (priorSkillsDir === undefined) delete process.env.REIKA_SKILLS_DIR;
+      else process.env.REIKA_SKILLS_DIR = priorSkillsDir;
     });
     const messages = session.history;
 
@@ -179,7 +198,12 @@ async function runFixture(
         tools: fix.tools === 'plan' ? session.lists.plan : undefined,
         signal: controller.signal,
       };
-      await session.submit(fix.prompt, options);
+      // A `/skill` prompt goes through headless's own expansion, so a skill fixture measures exactly
+      // what `reika -p /skill` sends; any other prompt is submitted as written, as before.
+      const prompt = fix.prompt.startsWith('/')
+        ? (await buildHeadlessInput(fix.prompt, session.config, session.bundle, 'agent')).modelText
+        : fix.prompt;
+      await session.submit(prompt, options);
       // The follow-up runs in the same session, so the first turn's plan sits in the history the
       // loop reads — which is what makes that second turn a refinement (#46) rather than a fresh
       // planning pass. Same mode and tools; the timeout covers both turns.
@@ -211,6 +235,7 @@ async function runFixture(
     return { fixture: fix, result, elapsedMs, toolCallCount, savedTo };
   } finally {
     await rm(cwd, { recursive: true, force: true });
+    if (skillsDir) await rm(skillsDir, { recursive: true, force: true });
   }
 }
 
