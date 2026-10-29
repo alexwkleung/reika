@@ -1880,6 +1880,13 @@ describe('detectDangerousPatterns — an interpreter reading its program from st
     }
   });
 
+  it('keeps the backslashes of a raw literal', () => {
+    // In `r"…"` the `\n` is two characters, so the shell runs one `curl` with an odd argument.
+    expect(
+      detectDangerousPatterns(`python3 - <<'PY'\nimport os\nos.system(r"curl x\\npkill y")\nPY`),
+    ).toEqual([`via python3 -: ${CURL}`]);
+  });
+
   it('leaves a body nothing runs, and one it cannot read, alone', () => {
     // Not an interpreter reading stdin: `-c`, a script operand, and a versioned `-m pip` are all
     // read elsewhere or not at all.

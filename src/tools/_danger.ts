@@ -1506,8 +1506,9 @@ const INTERPRETER_STDIN_RE =
 // not on stdin, and in the masked view the quoted value is blank, so it reads as a bare interpreter.
 const PROGRAM_FLAG_RE = /\s(?:-[cemEp]|--eval|--print)$/;
 // `stdinBodies`' pre-test: the two walks it needs (a quote mask, a heredoc scan) cost more than the
-// rest of the command's detection put together, and almost no bash call names one of these at all.
-// Not the /g/ pattern above, whose `lastIndex` `matchAll` inherits.
+// rest of the command's detection put together. A name alone is not rare enough — `node` is in every
+// `node_modules` path — but every body this reader finds is a heredoc, so a command with no `<<` has
+// none. Not the /g/ pattern above, whose `lastIndex` `matchAll` inherits.
 const INTERPRETER_NAME_RE = /\b(?:python|ruby|perl|node)/;
 
 // Where an interpreter hands a string to a shell. `os.popen` is `os.system` with a pipe, and
@@ -1592,7 +1593,11 @@ function readLiteral(text: string, at: number): { value: string; end: number } |
     else if (text.startsWith(quote, i)) break;
   }
   if (i >= text.length) return undefined;
-  return { value: unescapeLiteral(text.slice(start, i)), end: i + quote.length };
+  // A raw literal (`r"…"`, `rb"…"`) keeps its backslashes: `\n` there is two characters, not a
+  // line break, and reading it as one would label a second command the shell never runs.
+  const raw = /r/i.test(m[0].slice(0, -quote.length));
+  const body = text.slice(start, i);
+  return { value: raw ? body : unescapeLiteral(body), end: i + quote.length };
 }
 
 // An argv element as the one shell word it was: a bare word stays bare, anything else is quoted.
@@ -1657,7 +1662,7 @@ function commandEnd(view: string, from: number, lineEnd: number): number {
 // nested-body readers: a body that cannot be found costs nothing extra, and one that cannot be
 // bounded (an unreadable lexer) over-reports.
 function stdinBodies(command: string): Array<{ context: string; body: string }> {
-  if (!INTERPRETER_NAME_RE.test(command)) return [];
+  if (!command.includes('<<') || !INTERPRETER_NAME_RE.test(command)) return [];
   const found: Array<{ context: string; body: string }> = [];
   // A `python3 -` inside a quoted argument runs no interpreter: it is another command's text.
   const view = maskQuoted(command);
