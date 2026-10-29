@@ -1519,30 +1519,57 @@ const INTERPRETER_NAME_RE = /\b(?:python|ruby|perl|node)/;
 const SHELL_OUT_CALL_RE =
   /\b(?:os\s*\.\s*(?:system|popen)|subprocess\s*\.\s*[A-Za-z_]\w*|child_process\s*\.\s*\w+|childProcess\s*\.\s*\w+|require\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*\w+|execSync|execFileSync|spawnSync|system)\s*\(\s*/g;
 
-// The shell command a call hands over, read off its first argument: a plain literal
-// (`os.system("…")`), an `f`/`r`/`b`-prefixed or triple-quoted one, or an argv list
-// (`subprocess.run(["git", "push", "--force"])`), whose literal elements are joined back into the
-// command they spell — each quoted, so `["sh", "-c", "pkill node"]` keeps its `-c` body one word. A
+// The shell command a call hands over: a plain literal (`os.system("…")`), an `f`/`r`/`b`-prefixed
+// or triple-quoted one, or an argv — a list (`subprocess.run(["git", "push", "--force"])`), a
+// program followed by its list (`execFileSync("git", ["push"])`, `spawn`), or a program followed by
+// its words (Ruby's and Perl's `system("git", "push")`). An argv is joined back into the command it
+// spells, each element quoted, so `["sh", "-c", "pkill node"]` keeps its `-c` body one word. A
 // variable, a `.format` template or a concatenation is not text this file can read, and guessing at
-// one would put words in the command that the shell never sees; a list stops at its first one.
+// one would put words in the command that the shell never sees; an argv stops at its first one.
 function callArgument(text: string, from: number): string | undefined {
   let at = skipSpace(text, from);
-  if (text[at] !== '[' && text[at] !== '(') return readLiteral(text, at)?.value || undefined;
   const parts: string[] = [];
-  at++;
-  for (;;) {
-    const lit = readLiteral(text, skipSpace(text, at));
-    if (!lit) break;
+  let argv = false;
+  const readList = () => {
+    argv = true;
+    at++;
+    for (;;) {
+      const lit = readLiteral(text, skipSpace(text, at));
+      if (!lit) return false;
+      parts.push(lit.value);
+      at = skipSpace(text, lit.end);
+      if (text[at] !== ',') return text[at] === ']' || text[at] === ')';
+      at++;
+    }
+  };
+  if (text[at] === '[' || text[at] === '(') {
+    readList();
+  } else {
+    const lit = readLiteral(text, at);
+    if (!lit) return undefined;
     parts.push(lit.value);
     at = skipSpace(text, lit.end);
-    if (text[at] !== ',') break;
-    at++;
+    // Further arguments are the program's words only while they are literals or a closed list.
+    while (text[at] === ',') {
+      at = skipSpace(text, at + 1);
+      if (text[at] === '[') {
+        readList();
+        break;
+      }
+      const next = readLiteral(text, at);
+      if (!next) break;
+      argv = true;
+      parts.push(next.value);
+      at = skipSpace(text, next.end);
+    }
   }
+  if (!parts.length) return undefined;
+  if (!argv) return parts[0] || undefined;
   // A shell's `-c` element IS the command, and a call argument is read one level deep, where the
   // `-c` reader does not run — so it is handed over unwrapped.
   if (parts.length >= 3 && SHELL_ARGV0_RE.test(parts[0]) && /^-\w*c$/.test(parts[1]))
     return parts[2];
-  return parts.length ? parts.map(shellQuote).join(' ') : undefined;
+  return parts.map(shellQuote).join(' ');
 }
 
 const SHELL_ARGV0_RE = /(?:^|\/)(?:ba|z|da|k)?sh$/;

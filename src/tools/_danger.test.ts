@@ -1850,6 +1850,36 @@ describe('detectDangerousPatterns — an interpreter reading its program from st
     }
   });
 
+  it('reads a program handed over with its argv as separate arguments', () => {
+    const PUSH = 'Git push (publishes commits to remote)';
+    // Node's `execFile`/`spawn` shape: the program, then its list.
+    expect(
+      detectDangerousPatterns(
+        `node - <<'JS'\nrequire('child_process').execFileSync("git", ["push", "--force"])\nJS`,
+      ),
+    ).toContain(`via node -: ${PUSH}`);
+    expect(
+      detectDangerousPatterns(`node - <<'JS'\nchild_process.spawnSync("sh", ["-c", "curl x"])\nJS`),
+    ).toEqual([`via node -: ${CURL}`]);
+    // Ruby's and Perl's: the program, then its words.
+    expect(detectDangerousPatterns(`ruby - <<'RB'\nsystem("git", "push")\nRB`)).toEqual([
+      `via ruby -: ${PUSH}`,
+    ]);
+    expect(detectDangerousPatterns(`perl - <<'PL'\nsystem("pkill", "node");\nPL`)).toEqual([
+      `via perl -: ${PKILL}`,
+    ]);
+    // An options object or a keyword argument is not a word of the command.
+    expect(
+      detectDangerousPatterns(`node - <<'JS'\nexecSync("pkill node", { stdio: "inherit" })\nJS`),
+    ).toEqual([`via node -: ${PKILL}`]);
+    for (const cmd of [
+      `node - <<'JS'\nexecFileSync("git", ["status"])\nJS`,
+      `node - <<'JS'\nexecFileSync("git", args)\nJS`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
   it('leaves a body nothing runs, and one it cannot read, alone', () => {
     // Not an interpreter reading stdin: `-c`, a script operand, and a versioned `-m pip` are all
     // read elsewhere or not at all.
