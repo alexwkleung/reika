@@ -379,6 +379,11 @@ describe('reika self line (#531)', () => {
     expect(reikaSelfLine(null)).toContain('~/.config/reika/skills/');
   });
 
+  it('names both history paths in full, since most sessions are under projects/', () => {
+    expect(line).toContain('~/.config/reika/history/projects/');
+    expect(line).toContain('/save transcripts in ~/.config/reika/history/');
+  });
+
   it('never names the env file, the browser profile or the binary', () => {
     expect(line).not.toContain('.env');
     expect(line).not.toContain('chrome');

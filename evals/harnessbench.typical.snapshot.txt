@@ -1,22 +1,22 @@
-  0  round   msgs=  2  chars=  7435  reprocess=  7435  first
-  1  round   msgs=  4  chars=  8711  reprocess=  1276  append-only
-  2  round   msgs=  6  chars=  9761  reprocess=  1050  append-only
-  3  round   msgs=  8  chars= 11050  reprocess=  1289  append-only
-  4  round   msgs= 10  chars= 11728  reprocess=   678  append-only
-  5  round   msgs= 12  chars= 12330  reprocess=   602  append-only
-  6  round   msgs= 14  chars= 12563  reprocess=   233  append-only
-  7  round   msgs= 16  chars= 13222  reprocess=   659  append-only
-  8  round   msgs= 18  chars= 14281  reprocess=  1059  append-only
-  9  round   msgs= 20  chars= 15587  reprocess=  1306  append-only
- 10  round   msgs= 22  chars= 15936  reprocess=   349  append-only
- 11  round   msgs= 24  chars= 16169  reprocess=   233  append-only
- 12  round   msgs= 26  chars= 16648  reprocess=   479  append-only
- 13  round   msgs= 28  chars= 18004  reprocess=  1356  append-only
- 14  round   msgs= 30  chars= 18351  reprocess=   347  append-only
- 15  round   msgs= 32  chars= 19404  reprocess=  1053  append-only
- 16  round   msgs= 34  chars= 20728  reprocess=  1324  append-only
- 17  round   msgs= 36  chars= 21790  reprocess=  1062  append-only
+  0  round   msgs=  2  chars=  7527  reprocess=  7527  first
+  1  round   msgs=  4  chars=  8803  reprocess=  1276  append-only
+  2  round   msgs=  6  chars=  9853  reprocess=  1050  append-only
+  3  round   msgs=  8  chars= 11142  reprocess=  1289  append-only
+  4  round   msgs= 10  chars= 11820  reprocess=   678  append-only
+  5  round   msgs= 12  chars= 12422  reprocess=   602  append-only
+  6  round   msgs= 14  chars= 12655  reprocess=   233  append-only
+  7  round   msgs= 16  chars= 13314  reprocess=   659  append-only
+  8  round   msgs= 18  chars= 14373  reprocess=  1059  append-only
+  9  round   msgs= 20  chars= 15679  reprocess=  1306  append-only
+ 10  round   msgs= 22  chars= 16028  reprocess=   349  append-only
+ 11  round   msgs= 24  chars= 16261  reprocess=   233  append-only
+ 12  round   msgs= 26  chars= 16740  reprocess=   479  append-only
+ 13  round   msgs= 28  chars= 18096  reprocess=  1356  append-only
+ 14  round   msgs= 30  chars= 18443  reprocess=   347  append-only
+ 15  round   msgs= 32  chars= 19496  reprocess=  1053  append-only
+ 16  round   msgs= 34  chars= 20820  reprocess=  1324  append-only
+ 17  round   msgs= 36  chars= 21882  reprocess=  1062  append-only
 
-requests=18 sent=263698 reprocessed=21790
+requests=18 sent=265354 reprocessed=21882
 sheds=0 folds=0
 first=1 append-only=17
