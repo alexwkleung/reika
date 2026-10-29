@@ -1497,8 +1497,14 @@ function nestedBodies(command: string): Array<{ context: string; body: string; i
 // exactly #699's false positive. The cost of the narrow reading is the other direction: a command
 // assembled at runtime (`os.system("pk" + "ill node")`) is still not seen.
 // A flag arm may carry `=value` (`node --input-type=module -`), which is otherwise a word past it.
+// The `-` is optional: with no script operand at all each of the four reads its program from stdin
+// too, and `python3 <<'PY'` is the spelling models write most. Bare, the flags must run to the end of
+// the command (a redirect, a separator, the line's end), or the next word is the script.
 const INTERPRETER_STDIN_RE =
-  /\b(python[\d.]*|ruby|perl|node)(?:\s+-[\w-]+(?:=[^\s]+)?)*\s+-(?![\w.=-])/g;
+  /\b(python[\d.]*|ruby|perl|node)((?:\s+-[\w-]+(?:=[^\s]+)?)*)(?:\s+(-)(?![\w.=-])|(?=[ \t]*(?:[<>|;&)\n]|\d+>|$)))/g;
+// A last flag that takes the program (`-c`, `-e`) or a module (`-m`) as its value: the program is
+// not on stdin, and in the masked view the quoted value is blank, so it reads as a bare interpreter.
+const PROGRAM_FLAG_RE = /\s(?:-[cemEp]|--eval|--print)$/;
 // `stdinBodies`' pre-test: the two walks it needs (a quote mask, a heredoc scan) cost more than the
 // rest of the command's detection put together, and almost no bash call names one of these at all.
 // Not the /g/ pattern above, whose `lastIndex` `matchAll` inherits.
@@ -1561,6 +1567,38 @@ function shellOutStrings(body: string): string[] {
   return out;
 }
 
+// Whether the newline at `nl` is escaped by an odd run of backslashes before it.
+function continues(command: string, nl: number): boolean {
+  if (nl <= 0 || command[nl] !== '\n') return false;
+  let n = 0;
+  while (nl - 1 - n >= 0 && command[nl - 1 - n] === '\\') n++;
+  return n % 2 === 1;
+}
+
+// A `&` that ends a command, not one inside a redirect (`2>&1`, `&>f`, `<&3`).
+function isCommandAmpersand(view: string, i: number): boolean {
+  return view[i] === '&' && view[i - 1] !== '>' && view[i - 1] !== '<' && view[i + 1] !== '>';
+}
+
+// Where the pipeline holding `at` begins on its line: past the last `;`, `&`, `||` or `(` before it.
+function pipelineStart(view: string, lineStart: number, at: number): number {
+  for (let i = at - 1; i >= lineStart; i--) {
+    const c = view[i];
+    if (c === ';' || c === '(' || isCommandAmpersand(view, i)) return i + 1;
+    if (c === '|' && view[i - 1] === '|') return i + 1;
+  }
+  return lineStart;
+}
+
+// Where the command starting before `from` ends on its line: the first `;`, `&`, `|` or `)`.
+function commandEnd(view: string, from: number, lineEnd: number): number {
+  for (let i = from; i < lineEnd; i++) {
+    const c = view[i];
+    if (c === ';' || c === '|' || c === ')' || isCommandAmpersand(view, i)) return i;
+  }
+  return lineEnd;
+}
+
 // The stdin bodies of the interpreters above. Failures here go the same way as everywhere else in the
 // nested-body readers: a body that cannot be found costs nothing extra, and one that cannot be
 // bounded (an unreadable lexer) over-reports.
@@ -1572,36 +1610,30 @@ function stdinBodies(command: string): Array<{ context: string; body: string }> 
   const scan = scanHeredocs(command);
   for (const m of view.matchAll(INTERPRETER_STDIN_RE)) {
     if (found.length >= MAX_NESTED_BODIES) break;
+    if (!m[3] && PROGRAM_FLAG_RE.test(m[2])) continue;
     const at = m.index!;
-    const context = `${m[1]} -`;
-    const after = at + m[0].length;
-    if (scan.uncertain) {
-      // The lexer could not read the command exactly, so there is no span to trust (`_heredoc.ts`).
-      // The rest of the command is the body then: it can only add labels.
-      const rest = command.slice(after);
-      if (rest.includes('<<')) found.push({ context, body: rest });
-      continue;
-    }
+    const context = m[3] ? `${m[1]} -` : m[1];
     const lineStart = command.lastIndexOf('\n', at - 1) + 1;
     const nl = command.indexOf('\n', at);
-    // A line continued by a backslash puts the body after the NEXT newline, where this cannot read
-    // it, so the pipeline may reach further than the walk below knows. Nothing is claimed then.
-    let trailing = 0;
-    while (nl > lineStart && command[nl - 1 - trailing] === '\\') trailing++;
-    if (nl >= 0 && trailing % 2 === 1) continue;
-    const stages = lineStages(command, view, lineStart, nl === -1 ? command.length : nl);
-    const mine = stages.findIndex(s => at >= s.start && at < s.end);
-    if (mine < 0) continue;
-    // The body lands on the stdin of the stage the operator sits in, and the interpreter reading it
-    // is that stage or one the pipe hands it on to (`cat <<'PY' | python3 -`). Coarse in the same
-    // direction `readsAsShell` is: a body that reaches a LATER stage counts, because a miss here is
-    // a `pkill` the user never sees.
-    const h = scan.heredocs.find(x => {
-      const si = stages.findIndex(s => x.opAt < s.end);
-      return x.opAt >= lineStart && si >= 0 && si <= mine;
-    });
-    if (!h) continue;
-    found.push({ context, body: command.slice(h.bodyStart, h.bodyEnd) });
+    // A line continued by a backslash puts the body after the NEXT newline (or the pipeline before
+    // the previous one), where the walk below cannot follow it. Like an unreadable lexer, that
+    // reads the whole command as the body: it can only add labels.
+    if (scan.uncertain || continues(command, nl) || continues(command, lineStart - 1)) {
+      if (command.includes('<<')) found.push({ context, body: command });
+      continue;
+    }
+    const lineEnd = nl === -1 ? command.length : nl;
+    // The body lands on the stdin of the command its operator sits on, and the interpreter reads it
+    // when that command is its own or one the pipe hands it on from (`cat <<'PY' | python3 -`). So
+    // every heredoc from the start of the interpreter's pipeline to the end of its own command
+    // counts, and none behind a `;` or `&&`, which is another command's input.
+    const from = pipelineStart(view, lineStart, at);
+    const to = commandEnd(view, at + m[0].length, lineEnd);
+    for (const h of scan.heredocs) {
+      if (h.opAt < from || h.opAt >= to) continue;
+      if (found.length >= MAX_NESTED_BODIES) break;
+      found.push({ context, body: command.slice(h.bodyStart, h.bodyEnd) });
+    }
   }
   return found;
 }

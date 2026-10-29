@@ -1765,6 +1765,57 @@ describe('detectDangerousPatterns — an interpreter reading its program from st
     expect(hits).toEqual(['Recursive force delete (rm -rf)']);
   });
 
+  it('reads a bare interpreter, which takes its program from stdin with no operand', () => {
+    // `python3 <<'PY'` is the spelling models write most; the `-` is optional to all four.
+    expect(
+      detectDangerousPatterns(`python3 <<'PY'\nimport os; os.system("pkill node")\nPY`),
+    ).toEqual([`via python3: ${PKILL}`]);
+    expect(detectDangerousPatterns(`node <<'JS'\nexecSync("pkill node")\nJS`)).toEqual([
+      `via node: ${PKILL}`,
+    ]);
+    expect(
+      detectDangerousPatterns(`cat <<'PY' | python3\nimport os; os.system("pkill node")\nPY`),
+    ).toEqual([`via python3: ${PKILL}`]);
+    // A redirect is not an operand, and `2>&1` ends no command.
+    expect(
+      detectDangerousPatterns(`python3 2>&1 <<'PY'\nimport os; os.system("pkill node")\nPY`),
+    ).toEqual([`via python3: ${PKILL}`]);
+    // A script operand, a module, or a program flag means the heredoc is the program's DATA.
+    for (const cmd of [
+      `python3 script.py <<'EOF'\nimport os; os.system("pkill node")\nEOF`,
+      `python3 -m json.tool <<'EOF'\nimport os; os.system("pkill node")\nEOF`,
+      `python3 -c "print(1)" <<'EOF'\nimport os; os.system("pkill node")\nEOF`,
+      `node -e "x" <<'EOF'\nexecSync("pkill node")\nEOF`,
+    ]) {
+      expect(detectDangerousPatterns(cmd), cmd).toEqual([]);
+    }
+  });
+
+  it("reads the interpreter's own heredoc, not an earlier command's", () => {
+    // Behind `&&` the first body is `cat`'s input; only the second reaches python.
+    expect(
+      detectDangerousPatterns(
+        `cat <<'A' > notes.txt && python3 - <<'PY'\nhi\nA\nimport os; os.system("pkill node")\nPY`,
+      ),
+    ).toEqual([`via python3 -: ${PKILL}`]);
+    // And the other way: an interpreter that only asks for its version reads no later body.
+    expect(
+      detectDangerousPatterns(
+        `python3 --version && cat <<'EOF' > x.py\nimport os; os.system("pkill node")\nEOF`,
+      ),
+    ).toEqual([]);
+  });
+
+  it('reads the whole command when a backslash continues the line', () => {
+    // The walk cannot follow the pipeline across the newline, so it over-reports, as for `uncertain`.
+    expect(
+      detectDangerousPatterns(`python3 - \\\n<<'PY'\nimport os; os.system("pkill node")\nPY`),
+    ).toEqual([`via python3 -: ${PKILL}`]);
+    expect(
+      detectDangerousPatterns(`cat <<'PY' \\\n| python3 -\nimport os; os.system("pkill node")\nPY`),
+    ).toEqual([`via python3 -: ${PKILL}`]);
+  });
+
   it('leaves a body nothing runs, and one it cannot read, alone', () => {
     // Not an interpreter reading stdin: `-c`, a script operand, and a versioned `-m pip` are all
     // read elsewhere or not at all.
