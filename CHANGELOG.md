@@ -5,6 +5,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Added
+
+- `reika -p -i` (`--interactive`) asks approvals, model questions and the skill and pasted-link
+  confirms on the terminal as numbered menus, instead of declining them. A headless run can now
+  reproduce a TUI session that hits a dialog without switching approvals off.
+
 ### Changed
 
 - When Reika pauses reading and searching to break a loop, the paused tools now stay in the tool

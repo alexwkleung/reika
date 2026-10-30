@@ -196,6 +196,7 @@ reika -p --json "count the tests" | jq '.[-1].content'   # every message the tur
 reika -p --stream "explain the build"                # print the reply as it is generated
 reika -p --json --stream "..." | jq -c .role         # one message per line (NDJSON) as each lands
 reika -p --save "..."                                # write the transcript like /save
+reika -p -i "..."                                    # ask approvals and questions on the terminal
 reika -p "/verify the input box"                     # run a skill, with the rest as guidance
 pnpm run dev -p "..."                                # from a checkout: pnpm forwards -p itself (npm: npm run dev -- -p); banner on stderr
 ```
@@ -204,6 +205,12 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   `safe` (the default) runs ordinary edits and commands and _declines_ anything the danger scan flags,
   and `off` declines every edit and command (the model is told). Set it explicitly for a run that must
   not write. `ask_user` is never offered.
+- **Interactive** (`-i`, `--interactive`): the dialogs the TUI would open are asked on the terminal
+  instead of declined — an approval (approve, decline, always for this run, or decline with what to do
+  instead), an `ask_user` question (which is then offered to the model), and the skill and pasted-link
+  confirms. Each is a numbered menu; Enter takes the marked default, the same row the TUI starts on.
+  The menus go to the terminal itself, so stdin can still carry the prompt and stderr can go to a log.
+  A run with no terminal (cron, CI) exits with an error rather than waiting on one.
 - **stdout is the reply only.** Notices the TUI would put in the scrollback — a fold, a declined command,
   a skill match — go to stderr, and `REIKA_DEBUG=1` still writes the log file.
 - **Streaming** (`--stream`): by default nothing prints until the turn ends. With `--stream` the reply

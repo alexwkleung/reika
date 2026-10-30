@@ -7,12 +7,12 @@ import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import {
   APPROVAL_HINT,
-  APPROVAL_OPTIONS,
   Approval,
   DIALOG_MARKER,
   fitCommandLines,
   layoutApproval,
 } from './Approval.js';
+import { APPROVAL_OPTIONS } from './dialogspecs.js';
 import { contentWidth } from './layout.js';
 import { restoreTextPresentation } from './syncframe.js';
 import type { ApprovalRequest } from '../types.js';
