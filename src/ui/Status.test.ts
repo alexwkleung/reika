@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { formatContext, formatCache, prChip, packChips, type Chip } from './Status.js';
+import { formatContext, formatCache, prChip, packChips, statusRows, type Chip } from './Status.js';
 import { theme } from './theme.js';
 import { contextFill, formatShrink, kFormat } from './format.js';
 
@@ -222,5 +222,30 @@ describe('packChips', () => {
       ['agent (hint)'],
       ['123k↑ 4.6k↓'],
     ]);
+  });
+});
+
+describe('statusRows', () => {
+  const props = {
+    model: 'test-model',
+    turns: 3,
+    status: 'thinking',
+    elapsed: 12,
+    usage: { promptTokens: 0, completionTokens: 0 },
+    autoApprove: 'safe' as const,
+    modeTag: 'agent',
+  };
+
+  it('is one row on a wide pane and grows as the pane narrows', () => {
+    expect(statusRows(props, 200)).toBe(1);
+    expect(statusRows(props, 60)).toBeGreaterThan(1);
+    expect(statusRows(props, 30)).toBeGreaterThan(statusRows(props, 60));
+  });
+
+  it('counts the rows Ink hard-wraps a chip wider than the pane onto', () => {
+    // `agent (shift+tab to cycle)` is 26 columns; at 10 it takes three rows on its own.
+    expect(statusRows({ ...props, autoApprove: undefined }, 10)).toBeGreaterThanOrEqual(
+      3 + packChips([[{ text: 'x', color: '' }]], 10).length,
+    );
   });
 });

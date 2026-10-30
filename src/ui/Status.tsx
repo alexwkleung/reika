@@ -14,25 +14,7 @@ import {
 } from './format.js';
 import { useContentWidth } from './layout.js';
 
-export function Status({
-  model,
-  turns,
-  status,
-  elapsed,
-  usage,
-  contextTokens,
-  contextWindow,
-  contextUsable,
-  sheds,
-  folds,
-  cachedTokens,
-  decodeRate,
-  pr,
-  autoApprove,
-  unattended,
-  modeTag,
-  exitArmed,
-}: {
+export type StatusProps = {
   model: string;
   turns: number;
   status: string;
@@ -62,8 +44,64 @@ export function Status({
   unattended?: boolean;
   modeTag?: string;
   exitArmed?: boolean;
-}) {
+};
+
+// Rows the status bar takes at `width` — App budgets the live region with it, since a narrow
+// pane wraps the bar onto several rows and an unbudgeted frame reaches the viewport height.
+// A chip wider than the pane gets a line of its own that Ink hard-wraps, so it counts its rows.
+export function statusRows(props: StatusProps, width: number): number {
+  return packChips(statusChips(props), width).reduce((n, line) => {
+    const w = line.reduce((sum, chip) => sum + chipWidth(chip), 0) + SEP.length * (line.length - 1);
+    return n + Math.max(1, Math.ceil(w / Math.max(1, width)));
+  }, 0);
+}
+
+export function Status(props: StatusProps) {
   const width = useContentWidth();
+  // One <Text> per packed line, chips as nested runs rather than siblings: a row Box of sibling
+  // <Text>s hands each its own column when the row overflows, and every chip wraps in place into
+  // a stack of two-to-four-character shards (#295). Packing here is what decides where the line
+  // breaks; Ink's own wrap only ever sees a line that already fits, except for a single chip
+  // wider than the terminal, which it hard-wraps as a last resort.
+  return (
+    <Box flexDirection="column">
+      {packChips(statusChips(props), width).map((line, i) => (
+        <Text key={i}>
+          {line.map((chip, j) => (
+            <Fragment key={j}>
+              {j > 0 ? <Text color={theme.muted}>{SEP}</Text> : null}
+              {chip.map((seg, k) => (
+                <Text key={k} color={seg.color} underline={seg.underline}>
+                  {seg.text}
+                </Text>
+              ))}
+            </Fragment>
+          ))}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+export function statusChips({
+  model,
+  turns,
+  status,
+  elapsed,
+  usage,
+  contextTokens,
+  contextWindow,
+  contextUsable,
+  sheds,
+  folds,
+  cachedTokens,
+  decodeRate,
+  pr,
+  autoApprove,
+  unattended,
+  modeTag,
+  exitArmed,
+}: StatusProps): Chip[] {
   const busy = elapsed !== null;
   const timer = busy ? ` · ${formatElapsed(elapsed)}` : '';
   const keys = busy ? 'ctrl-c to abort' : 'ctrl-c to exit';
@@ -123,30 +161,7 @@ export function Status({
       ? [{ text: 'press ctrl-c again to exit', color: theme.tool }]
       : [{ text: keys, color: theme.muted }],
   );
-
-  // One <Text> per packed line, chips as nested runs rather than siblings: a row Box of sibling
-  // <Text>s hands each its own column when the row overflows, and every chip wraps in place into
-  // a stack of two-to-four-character shards (#295). Packing here is what decides where the line
-  // breaks; Ink's own wrap only ever sees a line that already fits, except for a single chip
-  // wider than the terminal, which it hard-wraps as a last resort.
-  return (
-    <Box flexDirection="column">
-      {packChips(chips, width).map((line, i) => (
-        <Text key={i}>
-          {line.map((chip, j) => (
-            <Fragment key={j}>
-              {j > 0 ? <Text color={theme.muted}>{SEP}</Text> : null}
-              {chip.map((seg, k) => (
-                <Text key={k} color={seg.color} underline={seg.underline}>
-                  {seg.text}
-                </Text>
-              ))}
-            </Fragment>
-          ))}
-        </Text>
-      ))}
-    </Box>
-  );
+  return chips;
 }
 
 // `underline` is the one attribute a segment carries beyond its hue — the link underline, which
