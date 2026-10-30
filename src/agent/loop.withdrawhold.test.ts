@@ -10,8 +10,12 @@ import type { Config, Tool } from '../types.js';
 // #808: a withdrawal used to lift on the round after it began, because refused reads are not
 // recorded and the loop left the recency window. The tool list then toggled every other round, each
 // switch a full re-prefill. Driven through runTurn, since the hold lives in the loop's own state.
+// Pinned to the baseline arm (REIKA_WITHDRAW_KEEP_TOOLS=0), the one where the list toggles at all.
 
-const h = vi.hoisted(() => ({ scripted: [] as ModelResponse[], offered: [] as string[][] }));
+const h = vi.hoisted(() => {
+  process.env.REIKA_WITHDRAW_KEEP_TOOLS = '0';
+  return { scripted: [] as ModelResponse[], offered: [] as string[][] };
+});
 vi.mock('../provider/client.js', () => ({
   callModel: vi.fn(async (opts: { tools: { name: string }[] }) => {
     h.offered.push(opts.tools.map(t => t.name));

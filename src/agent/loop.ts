@@ -506,9 +506,10 @@ const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
 // EXPERIMENT (#867): keep the offered tool list unchanged while inspection is withdrawn, enforcing
 // the pause at dispatch and through the ledger only. The template renders the tools ahead of the
 // system prompt, so dropping them makes the withdrawal round and the lift round each a full
-// re-prefill (`cause=tools-changed`, 55% of estimated local prefill after #809). Off by default until
-// the A/B says whether a model that still sees read/grep spends enough refused rounds to lose that.
-const WITHDRAW_KEEP_TOOLS = process.env.REIKA_WITHDRAW_KEEP_TOOLS === '1';
+// re-prefill (`cause=tools-changed`). On by default since 2026-10-29 (`=0` is the baseline arm): on
+// T2 with lfm2.5 it cut engine prefill per round by a third and refused calls per pause went down,
+// not up — a model that still sees read/grep did not keep reaching for them.
+const WITHDRAW_KEEP_TOOLS = process.env.REIKA_WITHDRAW_KEEP_TOOLS !== '0';
 
 // EXPERIMENT (plan mode): the force-write turn is a *transformation*, not another exploration
 // round. Asking the exploring model to "stop and write prose" fights its action prior and lets
@@ -2204,12 +2205,11 @@ export async function runTurn(opts: {
       }
     }
     // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
-    // break, drop the inspection tools so the offered set steers a tool-list-respecting model
-    // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
+    // break the dispatch layer refuses inspection calls; with REIKA_WITHDRAW_KEEP_TOOLS=0 the
+    // inspection tools are also dropped from the offered set (the pre-#867 behaviour).
     // The subagent's report round keeps the list and forbids calls with `tool_choice` instead
     // (#426): the template renders the tool list into the system turn, so withholding it would
     // re-prefill the subagent's whole context on its last round.
-    // REIKA_WITHDRAW_KEEP_TOOLS keeps the list as-is and leaves the pause to dispatch (#867).
     const callTools = planForceWrite
       ? []
       : withdrawInspection && !WITHDRAW_KEEP_TOOLS

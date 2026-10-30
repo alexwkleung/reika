@@ -8,11 +8,16 @@ import type { Config, Message, Tool } from '../types.js';
 // list, and a template renders that list into the system turn, so the note round re-prefilled the
 // whole prompt (~27k tokens on a 32k run) for tools it could not call. Driven through runTurn: a
 // read loop withdraws on the same round a seeded history folds.
+// Pinned to REIKA_WITHDRAW_KEEP_TOOLS=0: since #867 the default keeps the list, so only the baseline
+// arm changes it.
 
-const h = vi.hoisted(() => ({
-  scripted: [] as ModelResponse[],
-  calls: [] as { tools: string[]; toolChoice?: 'none' }[],
-}));
+const h = vi.hoisted(() => {
+  process.env.REIKA_WITHDRAW_KEEP_TOOLS = '0';
+  return {
+    scripted: [] as ModelResponse[],
+    calls: [] as { tools: string[]; toolChoice?: 'none' }[],
+  };
+});
 vi.mock('../provider/client.js', () => ({
   callModel: vi.fn(async (opts: { tools: { name: string }[]; toolChoice?: 'none' }) => {
     h.calls.push({ tools: opts.tools.map(t => t.name), toolChoice: opts.toolChoice });

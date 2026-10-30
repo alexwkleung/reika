@@ -7,11 +7,11 @@ import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
 import type { Config, Tool } from '../types.js';
 
-// #867: under REIKA_WITHDRAW_KEEP_TOOLS the offered list never changes while inspection is
-// withdrawn (each change is a full re-prefill), so the pause must hold at dispatch alone.
+// #867: by default the offered list never changes while inspection is withdrawn (each change is a
+// full re-prefill), so the pause must hold at dispatch alone.
 
 const h = vi.hoisted(() => {
-  process.env.REIKA_WITHDRAW_KEEP_TOOLS = '1';
+  delete process.env.REIKA_WITHDRAW_KEEP_TOOLS;
   return { scripted: [] as ModelResponse[], offered: [] as string[][] };
 });
 vi.mock('../provider/client.js', () => ({
