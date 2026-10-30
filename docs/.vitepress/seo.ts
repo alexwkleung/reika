@@ -78,3 +78,17 @@ export function socialHead(pageData: PageData, title: string, description: strin
     ['meta', { name: 'twitter:image', content: image }],
   ];
 }
+
+// Google's site name (the line above the URL in results) reads this first; without it the result
+// falls back to the domain. Google only reads it on the home page.
+export function siteNameHead(relativePath: string): HeadConfig[] {
+  if (relativePath !== 'index.md') return [];
+  const site = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'Reika',
+    alternateName: ['reikacode.com'],
+    url: `${SITE_URL}/`,
+  };
+  return [['script', { type: 'application/ld+json' }, JSON.stringify(site)]];
+}
