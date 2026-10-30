@@ -9,7 +9,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - `reika -p -i` (`--interactive`) asks approvals, model questions and the skill and pasted-link
   confirms on the terminal as numbered menus, instead of declining them. A headless run can now
-  reproduce a TUI session that hits a dialog without switching approvals off.
+  reproduce a TUI session that hits a dialog without switching approvals off (#876).
 
 ### Changed
 
