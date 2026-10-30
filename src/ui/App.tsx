@@ -9,7 +9,7 @@ import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
-import { Status } from './Status.js';
+import { Status, statusRows, type StatusProps } from './Status.js';
 import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
@@ -86,6 +86,7 @@ import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { mcpStartupLine } from './format.js';
+import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
   countRealTurns,
@@ -2806,8 +2807,40 @@ export function App() {
         )
       : undefined;
 
-  // Live rows above a dialog (plan checklist, queued messages) it has to leave viewport room for.
+  const statusWidth = useContentWidth();
+  const statusProps: StatusProps = {
+    model: config?.profiles[activeProfile]?.model ?? config?.model ?? '',
+    turns: messages.filter(m => m.role === 'assistant').length,
+    status: status === 'busy' ? phase : status,
+    elapsed: status === 'busy' ? elapsed : null,
+    usage: totalUsage,
+    contextTokens: lastUsage?.promptTokens ?? estimatedContext,
+    contextWindow: statusWindow,
+    contextUsable: statusUsable,
+    sheds: shrink.sheds,
+    folds: shrink.folds,
+    cachedTokens: lastUsage?.cachedTokens,
+    decodeRate: decodeRate,
+    pr: pr,
+    autoApprove:
+      config?.autoApprove === 'bypass'
+        ? 'bypass'
+        : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
+          ? 'safe'
+          : undefined,
+    unattended: unattended,
+    modeTag: mode,
+    exitArmed: exitArmed && status === 'idle' && pending === null && inputValue === '',
+  };
+  // Status rows past the one the baseline chrome assumes: a narrow pane (three iTerm2 panes) wraps
+  // the bar onto several, and unbudgeted they push the live frame to viewport height, where Ink
+  // repaints with a scrollback clear on every chunk.
+  const statusExtraRows = Math.max(0, statusRows(statusProps, statusWidth) - 1);
+
+  // Live rows above a dialog (plan checklist, queued messages, a wrapped status bar) it has to
+  // leave viewport room for.
   const dialogReservedRows =
+    statusExtraRows +
     (planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0) +
     (queue.length > 0 ? queue.length + 1 : 0);
 
@@ -2987,7 +3020,7 @@ export function App() {
                     dialogReservedRows,
                     questionSelected,
                   )
-                : 0
+                : statusExtraRows
             }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
@@ -3012,31 +3045,7 @@ export function App() {
           {suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
-          <Status
-            model={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
-            turns={messages.filter(m => m.role === 'assistant').length}
-            status={status === 'busy' ? phase : status}
-            elapsed={status === 'busy' ? elapsed : null}
-            usage={totalUsage}
-            contextTokens={lastUsage?.promptTokens ?? estimatedContext}
-            contextWindow={statusWindow}
-            contextUsable={statusUsable}
-            sheds={shrink.sheds}
-            folds={shrink.folds}
-            cachedTokens={lastUsage?.cachedTokens}
-            decodeRate={decodeRate}
-            pr={pr}
-            autoApprove={
-              config?.autoApprove === 'bypass'
-                ? 'bypass'
-                : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
-                  ? 'safe'
-                  : undefined
-            }
-            unattended={unattended}
-            modeTag={mode}
-            exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
-          />
+          <Status {...statusProps} />
         </>
       )}
     </Box>

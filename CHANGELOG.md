@@ -36,6 +36,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- On a narrow pane, where the status bar wraps onto several rows, a streaming reply no longer
+  clears the terminal's scrollback on every update (iTerm2's "attempted to clear scrollback"
+  warning) or snaps the view back to the top. The rows the wrapped status bar takes are now kept
+  free of the live output. (#874)
+
 - The debug log now records what each request's prefill actually cost where the server reports it:
   the `round=` line adds the provider's cached-token count, plus llama.cpp's `prompt_n`,
   `prompt_ms` and `cache_n`, and an `endpoint` line names the model and host at session start and on
