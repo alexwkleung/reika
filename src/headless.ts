@@ -5,16 +5,24 @@ import { startProfiles } from './laststate.js';
 import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
 import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
-import { expandPastedUrls } from './agent/pastedurls.js';
-import { matchSkill, shouldAutoInject } from './skillmatch.js';
+import { expandPastedUrls, planPastedUrls } from './agent/pastedurls.js';
+import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { toolLabel } from './ui/format.js';
 import { debugLog } from './debug.js';
 import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
+import {
+  askApproval,
+  askConfirm,
+  askQuestion,
+  openTerminalPrompter,
+  type HeadlessPrompter,
+} from './headlessprompt.js';
+import { pastedUrlConfirmSpec, skillConfirmSpec, type ConfirmSpec } from './ui/dialogspecs.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
-import type { ApprovalRequest, Config, ContextBundle, Message } from './types.js';
+import type { ApprovalAnswer, ApprovalRequest, Config, ContextBundle, Message } from './types.js';
 
 // Headless mode (#52): `reika -p "<prompt>"` runs one turn with no TUI and prints the reply.
 // The session (boot, threaded state, the vibe chain) is session.ts, shared with the eval runner;
@@ -32,12 +40,15 @@ export type HeadlessIo = {
 // The model-facing text for a prompt, built the way App's submit path builds it: a leading
 // /<skill> is that skill's body (with the rest as extra guidance), otherwise @mentions and pasted
 // URLs expand and a `triggers:` match may auto-inject. Returns the notices those steps produced
-// so the caller can surface them; they never enter the model's context here either.
+// so the caller can surface them; they never enter the model's context here either. With `confirm`
+// (--interactive, #872) the skill and pasted-link questions are asked as the TUI asks them, before
+// any expansion, so no fetch precedes the question; null (EOF, ctrl-c) is "send as typed".
 export async function buildHeadlessInput(
   prompt: string,
   config: Config,
   bundle: ContextBundle,
   mode: HeadlessMode,
+  confirm?: (spec: ConfirmSpec) => Promise<boolean | null>,
 ): Promise<{ modelText: string; skill?: string; notices: string[] }> {
   const notices: string[] = [];
   if (prompt.startsWith('/')) {
@@ -54,23 +65,35 @@ export async function buildHeadlessInput(
       notices,
     };
   }
+  const match = matchSkill(prompt, bundle.skills);
+  // App.decideSkillRoute's gate: every mode but chat, and no word cap — a human is answering.
+  const applySkill =
+    confirm && match && config.skillAuto !== 'off' && mode !== 'chat'
+      ? shouldConfirmInject(match, config.contextWindow) &&
+        (await confirm(skillConfirmSpec(match))) === true
+      : undefined;
+  const urlPlan = planPastedUrls(prompt);
+  const incidental =
+    confirm && config.pasteFetch !== 'off' && urlPlan.urls.length > 0 && !urlPlan.request
+      ? (await confirm(pastedUrlConfirmSpec(urlPlan.urls))) === true
+      : undefined;
   const expansion = await expandMentions(prompt, bundle.cwd, { ocr: imageReader(config) });
   notices.push(...expansion.notices);
-  // No `incidental`: there is nobody to ask, so a link the prompt is not about is left alone
-  // under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.
-  const urls = await expandPastedUrls(prompt, { mode: config.pasteFetch });
+  // No `incidental` without --interactive: there is nobody to ask, so a link the prompt is not
+  // about is left alone under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.
+  const urls = await expandPastedUrls(prompt, { mode: config.pasteFetch, incidental });
   notices.push(...urls.notices.map(n => n.text));
   let modelText = expansion.augmented;
   if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
   // Same exclusion as App.routeSkill: a skill body landing in plan mode competes with the plan
   // prompt. Headless has no one to suggest it to, so a non-injecting match is silent — and no one
   // to ask, so only 'apply' injects; the interactive default 'ask' sends the prompt as typed.
-  const match = matchSkill(prompt, bundle.skills);
   const auto =
-    match &&
-    config.skillAuto === 'apply' &&
-    (mode === 'agent' || mode === 'vibe') &&
-    shouldAutoInject(match, config.contextWindow);
+    applySkill ??
+    (match &&
+      config.skillAuto === 'apply' &&
+      (mode === 'agent' || mode === 'vibe') &&
+      shouldAutoInject(match, config.contextWindow));
   if (match && auto) {
     notices.push(
       `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
@@ -113,9 +136,36 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     return 1;
   }
 
+  // Opened before the session, since it decides the tool list: ask_user is offered only when
+  // someone can answer it. Its reads end on the turn's abort, so ctrl-c at a menu stops the run.
+  const controller = new AbortController();
+  let prompter: HeadlessPrompter | null = null;
+  if (args.interactive) {
+    prompter = openTerminalPrompter(controller.signal);
+    if (!prompter) {
+      io.stderr('reika: --interactive needs a terminal to ask on, and this run has none\n');
+      return 1;
+    }
+  }
+  try {
+    return await runHeadlessTurn(args, io, prompt, controller, prompter);
+  } finally {
+    prompter?.close();
+  }
+}
+
+async function runHeadlessTurn(
+  args: HeadlessArgs,
+  io: HeadlessIo,
+  prompt: string,
+  controller: AbortController,
+  prompter: HeadlessPrompter | null,
+): Promise<number> {
   // autoApprove is session-wide, not per-profile, so the loaded config decides the policy.
-  // Always unattended: nobody can answer a prompt here, so a decline must not read as the user's.
-  const loaded = { ...loadConfig(), unattended: true };
+  // Unattended unless --interactive: with nobody to answer, a decline must not read as the user's.
+  const loaded = { ...loadConfig(), unattended: !prompter };
+  // "Always (this session)" lifts the policy to 'safe', as the TUI's toggle does.
+  let policy = loaded.autoApprove;
   // The mode is settled before the session is created, because it decides the model (#616): a mode
   // with its own model in REIKA_MODE_MODELS runs that one, `--mode` or not. Headless has no /model
   // and no saved state — its env is the whole answer — so an empty state is the whole of #365 here.
@@ -128,16 +178,22 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
     cwd: process.cwd(),
     config: loaded,
     profile,
-    canAsk: false,
+    canAsk: !!prompter,
+    requestQuestion: prompter ? req => askQuestion(prompter, req) : undefined,
     requestApproval:
       loaded.autoApprove === 'bypass'
         ? undefined
-        : (req: ApprovalRequest): Promise<boolean> => {
-            if (autoApproves(loaded.autoApprove, req)) return Promise.resolve(true);
+        : async (req: ApprovalRequest): Promise<ApprovalAnswer> => {
+            if (autoApproves(policy, req)) return true;
+            if (prompter) {
+              const { answer, always } = await askApproval(prompter, req);
+              if (always && policy === 'off') policy = 'safe';
+              return answer;
+            }
             io.stderr(
               `reika: declined ${toolLabel(req.tool)} (no prompt to ask at): ${firstLine(req.preview)}\n`,
             );
-            return Promise.resolve(false);
+            return false;
           },
     events: {
       ...stream?.events,
@@ -190,10 +246,15 @@ export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<n
       return failed ? 1 : 0;
     }
 
-    const input = await buildHeadlessInput(prompt, config, bundle, mode);
+    const input = await buildHeadlessInput(
+      prompt,
+      config,
+      bundle,
+      mode,
+      prompter ? spec => askConfirm(prompter, spec) : undefined,
+    );
     for (const n of input.notices) io.stderr(`reika: ${n}\n`);
 
-    const controller = new AbortController();
     const onSigint = () => controller.abort();
     process.once('SIGINT', onSigint);
 

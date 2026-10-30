@@ -41,6 +41,13 @@ describe('parseHeadlessArgs', () => {
     expect(parseHeadlessArgs(['-p', '--stream', 'x'])).toMatchObject({ prompt: 'x', stream: true });
   });
 
+  it('parses -i / --interactive, off by default, and only with -p', () => {
+    expect(parseHeadlessArgs(['-p', 'x'])?.interactive).toBe(false);
+    expect(parseHeadlessArgs(['-p', 'x', '-i'])?.interactive).toBe(true);
+    expect(parseHeadlessArgs(['--interactive', '-p', 'x'])?.interactive).toBe(true);
+    expect(() => parseHeadlessArgs(['--interactive'])).toThrow(/add -p/);
+  });
+
   it('rejects an unknown mode', () => {
     expect(() => parseHeadlessArgs(['-p', 'x', '--mode', 'shell'])).toThrow(/--mode/);
   });
@@ -183,6 +190,54 @@ describe('buildHeadlessInput', () => {
     );
     expect(out.modelText).toBe('please verify the change');
     expect(out.skill).toBeUndefined();
+  });
+
+  it('asks before applying a matched skill with --interactive, in plan mode too', async () => {
+    const asked: string[] = [];
+    const out = await buildHeadlessInput(
+      'please verify the change',
+      { ...config, skillAuto: 'ask' } as Config,
+      bundleWith([verify]),
+      'plan',
+      async spec => (asked.push(spec.title), true),
+    );
+    expect(asked).toEqual(['Skill']);
+    expect(out.modelText.startsWith('VERIFY BODY\n\n')).toBe(true);
+    expect(out.skill).toBe('verify');
+  });
+
+  it('sends as typed when the interactive confirm is declined, even under apply', async () => {
+    const out = await buildHeadlessInput(
+      'please verify the change',
+      config,
+      bundleWith([verify]),
+      'agent',
+      async () => false,
+    );
+    expect(out.modelText).toBe('please verify the change');
+    expect(out.skill).toBeUndefined();
+  });
+
+  it('asks about an incidental pasted link and leaves it on a decline, with no receipt', async () => {
+    const asked: string[][] = [];
+    const out = await buildHeadlessInput(
+      'the build failed:\nError: see https://example.com/x for details',
+      { ...config, pasteFetch: 'ask' } as Config,
+      bundleWith([]),
+      'agent',
+      async spec => (asked.push(spec.details), false),
+    );
+    expect(asked).toEqual([['https://example.com/x']]);
+    expect(out.notices).toEqual([]);
+  });
+
+  it('asks nothing for a plain prompt with --interactive', async () => {
+    let calls = 0;
+    await buildHeadlessInput('what does this do', config, bundleWith([]), 'agent', async () => {
+      calls++;
+      return true;
+    });
+    expect(calls).toBe(0);
   });
 
   it('passes a plain prompt through untouched', async () => {

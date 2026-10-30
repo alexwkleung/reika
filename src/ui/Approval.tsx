@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import type { ApprovalRequest } from '../types.js';
+import { APPROVAL_OPTIONS } from './dialogspecs.js';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { DiffView } from './DiffView.js';
@@ -91,16 +92,6 @@ export function layoutApproval(
   const previewRows = Math.max(1, room);
   return { previewRows, showHint: false, hint, height: chrome + previewRows };
 }
-
-// The last row declines with a reason the user types into the input box below. Last, not beside
-// Decline, so the rows Approval-trained fingers already know keep their places.
-export const APPROVAL_OPTIONS = [
-  'Approve',
-  'Decline',
-  'Always (this session)',
-  'Decline, and say what to do instead',
-] as const;
-export const APPROVAL_FEEDBACK_INDEX = 3;
 
 // The popup renders as the top half of one continuous frame whose bottom half is
 // the input box (see Input's `attachedAbove`): `borderBottom={false}` + the input

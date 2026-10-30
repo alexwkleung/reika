@@ -14,18 +14,22 @@ import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
-import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, Approval } from './Approval.js';
+import { Approval } from './Approval.js';
 import {
+  APPROVAL_FEEDBACK_INDEX,
+  APPROVAL_OPTIONS,
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
-  Confirm,
   type ConfirmSpec,
+  pastedUrlConfirmSpec,
+  skillConfirmSpec,
+} from './dialogspecs.js';
+import {
+  Confirm,
   TOGGLE_CANCEL,
   TOGGLE_OFF,
   TOGGLE_ON,
   implementModeConfirmSpec,
-  pastedUrlConfirmSpec,
-  skillConfirmSpec,
   toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';

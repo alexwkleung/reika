@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
+import { Confirm, implementModeConfirmSpec } from './Confirm.js';
 import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
-  Confirm,
   type ConfirmSpec,
-  implementModeConfirmSpec,
   pastedUrlConfirmSpec,
   skillConfirmSpec,
-} from './Confirm.js';
+} from './dialogspecs.js';
 import { matchSkill } from '../skillmatch.js';
 import type { Skill } from '../skills.js';
 
