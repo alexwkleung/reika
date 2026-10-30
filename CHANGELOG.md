@@ -7,6 +7,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- When Reika pauses reading and searching to break a loop, the paused tools now stay in the tool
+  list and are refused when called, rather than being removed. Removing them made a local server
+  re-process the whole prompt, both when the pause started and when it ended. On a 24B local model
+  this cut prompt processing per round by about a third. `REIKA_WITHDRAW_KEEP_TOOLS=0` restores the
+  old behaviour. (#870)
+
 - Asked about its past sessions, the model is now told both places they live: auto-saved sessions
   under `~/.config/reika/history/projects/`, one subdirectory per project, and `/save` transcripts at
   `~/.config/reika/history/`. Told only the second, it often listed the `/save` files and never found
