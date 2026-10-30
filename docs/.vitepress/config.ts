@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfigWithTheme } from 'vitepress';
 import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './links';
-import { SITE_URL, languageAlternates, pageDescriptions, socialHead } from './seo';
+import { SITE_URL, languageAlternates, pageDescriptions, siteNameHead, socialHead } from './seo';
 import type { TranslationTheme } from './theme/translations';
 
 const DOCS_DIR = fileURLToPath(new URL('../', import.meta.url));
@@ -28,7 +28,7 @@ export default defineConfigWithTheme<TranslationTheme>({
   // its own `titleTemplate: false` in index.md so it keeps the full site title.
   titleTemplate: ':title | Reika',
   description:
-    'Coding agent CLI for local and hosted models, designed around small local models first.',
+    "Reika is an open-source coding agent CLI for local and hosted models, built for small local models first: careful with context, and says when it's stuck.",
   cleanUrls: true,
   appearance: 'force-dark',
   vite: {
@@ -120,6 +120,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         description,
       ),
       ...(pair ? languageAlternates(pair) : []),
+      ...siteNameHead(pageData.relativePath),
     ];
   },
   markdown: {
