@@ -80,7 +80,7 @@ import {
   type NativeImageBytes,
 } from '../agent/attachments.js';
 import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
+import { matchSkill, shouldConfirmInject } from '../skills/skillmatch.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { sniffImageMime } from '../ocr/vision.js';

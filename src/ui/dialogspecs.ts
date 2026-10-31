@@ -1,4 +1,4 @@
-import type { SkillMatch } from '../skillmatch.js';
+import type { SkillMatch } from '../skills/skillmatch.js';
 
 // The dialogs' rows and specs, apart from the Ink components that draw them: headless asks the
 // same questions on a terminal line (#872) and must not load Ink to do it.
