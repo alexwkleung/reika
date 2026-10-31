@@ -141,9 +141,12 @@
   font-family: var(--reika-mono);
 }
 
-/* The landing page has no sidebar for a rule to separate, so its nav and footer carry none. Set on
-   the variable rather than on the elements: the nav's own rules out-rank any selector here. */
-body:has(.Landing) {
+/* The landing page and the blog have no sidebar for a rule to separate, so their nav and footer carry
+   none. Set on the variable rather than on the elements: the nav's own rules out-rank any selector
+   here. */
+body:has(.Landing),
+body:has(.blog-list),
+body:has(.post-meta) {
   --vp-c-gutter: transparent;
 }
 
@@ -193,4 +196,85 @@ body:has(.Landing) {
   background-color: currentColor;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'/%3E%3C/svg%3E")
     center / contain no-repeat;
+}
+
+/* Blog: a plain dated list, its date and kind set as a byline in the body font. */
+.vp-doc ul.blog-list {
+  list-style: none;
+  padding: 0;
+  margin-top: 32px;
+}
+
+.vp-doc .blog-item {
+  margin: 0 0 28px;
+  padding-left: 14px;
+  border-left: 2px solid transparent;
+  border-image: var(--reika-ramp) 1;
+}
+
+.blog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--vp-c-text-3);
+}
+
+.blog-meta > * + *::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--vp-c-text-3);
+}
+
+.blog-kind,
+.blog-draft {
+  text-transform: capitalize;
+}
+
+.blog-kind {
+  color: var(--vp-c-brand-1);
+}
+
+.blog-draft {
+  color: var(--vp-c-warning-1);
+}
+
+/* The whole entry is the link; only the title takes the hover color, so the block still reads as
+   text rather than as one big underlined anchor. */
+.vp-doc a.blog-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.blog-title {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+  transition: color 0.2s;
+}
+
+.vp-doc a.blog-card:hover .blog-title,
+.vp-doc a.blog-card:focus-visible .blog-title {
+  color: var(--vp-c-brand-1);
+}
+
+.vp-doc .blog-summary {
+  margin: 4px 0 0;
+  color: var(--vp-c-text-2);
+}
+
+.post-meta {
+  margin-bottom: 16px;
+}
+
+.post-meta .post-back {
+  color: var(--vp-c-text-2);
+  text-decoration: none;
+}
+
+.post-meta .post-back:hover {
+  color: var(--vp-c-brand-1);
 }

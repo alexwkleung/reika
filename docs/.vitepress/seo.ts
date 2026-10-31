@@ -23,6 +23,8 @@ export const pageDescriptions: Record<string, string> = {
     'How a Reika turn is put together: bootstrap, repo map, context management, prompt caching and what the harness does at each step.',
   'findings.md':
     'What running 8–35B models at Q2–Q4 on small context windows taught: what broke, what was tried and what held, with measurements.',
+  'blog/index.md':
+    'Engineering notes and measured findings from building Reika, a coding agent harness for small local models.',
   'support.md':
     'Reika is free and open source under Apache-2.0. Ways to fund the project, contribute, and get in touch.',
   // A translated zh page gets its own; one that shows the English text borrows the English one.
