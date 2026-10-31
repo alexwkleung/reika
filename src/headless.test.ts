@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHeadlessInput,
   createHeadlessAutosave,
+  createHeadlessStatus,
   createStreamPrinter,
   finalReply,
   formatTurnFailure,
@@ -441,4 +442,41 @@ describe('createHeadlessAutosave', () => {
       await saver.finish();
       expect(errors).toHaveLength(1);
     }));
+});
+
+describe('createHeadlessStatus', () => {
+  const session = {
+    config: { contextWindow: 8000, minGenTokens: 1024 },
+    totals: { promptTokens: 10, completionTokens: 2 },
+    shrink: { sheds: 0, folds: 1 },
+  };
+
+  it('tracks the estimate and the last call as App does', () => {
+    const t = createHeadlessStatus(() => []);
+    t.events.onContextEstimate?.(42);
+    expect(t.status(session)).toMatchObject({ estimatedContext: 42, lastUsage: null });
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    expect(t.status(session)).toMatchObject({
+      lastUsage: { promptTokens: 50 },
+      contextWindow: 8000,
+      minGenTokens: 1024,
+    });
+  });
+
+  it('stamps a shrink with the turn it landed in and drops the stale last call', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'reading' },
+    ];
+    const t = createHeadlessStatus(() => msgs);
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    t.events.onShrink?.(
+      { kind: 'fold', round: 3, removed: 4, recapChars: 900 },
+      { sheds: 0, folds: 1 },
+    );
+    expect(t.status(session)).toMatchObject({
+      lastUsage: null,
+      shrinkEvents: [{ kind: 'fold', turn: 2, round: 3 }],
+    });
+  });
 });

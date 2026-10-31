@@ -3,8 +3,10 @@ import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message } from '../types.js';
+import { compactThreshold } from '../agent/compaction.js';
 import {
   TITLE_MAX_CHARS,
+  buildTranscriptMeta,
   TRANSCRIPT_VERSION,
   deriveTitle,
   formatModeRuns,
@@ -521,5 +523,62 @@ describe('mid-turn marker in the saved record', () => {
   it('is absent from a save taken between turns', () => {
     expect(JSON.parse(serializeJsonl(MIXED_MODES, META).split('\n')[0]).midTurn).toBeUndefined();
     expect(renderTxt(MIXED_MODES, META)).not.toContain('# state:');
+  });
+});
+
+describe('buildTranscriptMeta', () => {
+  const base = {
+    msgs: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'done' },
+    ] as Message[],
+    model: 'm',
+    baseURL: 'http://localhost:1/v1',
+    cwd: '/repo',
+    mode: 'agent' as const,
+    midTurn: false,
+  };
+  const status = {
+    totals: { promptTokens: 100, completionTokens: 20, cachedTokens: 40 },
+    lastUsage: { promptTokens: 60, completionTokens: 5, cachedTokens: 30 },
+    estimatedContext: 55,
+    shrink: { sheds: 0, folds: 0 },
+    shrinkEvents: [],
+  };
+
+  it('carries the status line: last call, cache, window and the shed ceiling', () => {
+    const meta = buildTranscriptMeta({
+      ...base,
+      status: { ...status, contextWindow: 10_000, minGenTokens: 2048 },
+    });
+    expect(meta.usage).toEqual({
+      turns: 1,
+      promptTokens: 100,
+      completionTokens: 20,
+      cachedTokens: 40,
+      contextTokens: 60,
+      contextWindow: 10_000,
+      contextUsable: Math.round(compactThreshold(10_000, 2048)),
+      lastCachedTokens: 30,
+    });
+    expect(meta.midTurn).toBeUndefined();
+    expect(meta.messageCount).toBe(2);
+  });
+
+  it('falls back to the estimate, says so, and records shrink events', () => {
+    const events = [{ kind: 'fold' as const, turn: 2, round: 1, removed: 4, recapChars: 900 }];
+    const meta = buildTranscriptMeta({
+      ...base,
+      midTurn: true,
+      status: { ...status, lastUsage: null, shrink: { sheds: 0, folds: 1 }, shrinkEvents: events },
+    });
+    expect(meta.usage).toMatchObject({
+      contextTokens: 55,
+      contextEstimated: true,
+      folds: 1,
+      shrinkEvents: events,
+    });
+    expect(meta.usage).not.toHaveProperty('lastCachedTokens');
+    expect(meta.midTurn).toBe(true);
   });
 });

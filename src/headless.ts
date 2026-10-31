@@ -2,14 +2,20 @@ import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig, resolveDefaultMode } from './config.js';
 import { startProfiles } from './laststate.js';
-import { saveTranscript, TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
+import {
+  buildTranscriptMeta,
+  saveTranscript,
+  type TranscriptMeta,
+  type TranscriptShrinkEvent,
+  type TranscriptStatus,
+} from './store/transcript.js';
 import {
   countRealTurns,
   newSessionPath,
   projectHistoryDir,
   writeSession,
 } from './store/sessions.js';
-import { createSession, type Session, type SessionEvents } from './session.js';
+import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls, planPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
@@ -28,7 +34,14 @@ import {
 import { pastedUrlConfirmSpec, skillConfirmSpec, type ConfirmSpec } from './ui/dialogspecs.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
-import type { ApprovalAnswer, ApprovalRequest, Config, ContextBundle, Message } from './types.js';
+import type {
+  ApprovalAnswer,
+  ApprovalRequest,
+  Config,
+  ContextBundle,
+  Message,
+  Usage,
+} from './types.js';
 
 // Headless mode (#52): `reika -p "<prompt>"` runs one turn with no TUI and prints the reply.
 // The session (boot, threaded state, the vibe chain) is session.ts, shared with the eval runner;
@@ -183,6 +196,9 @@ async function runHeadlessTurn(
   if (chosen.notice) io.stderr(`reika: ${chosen.notice}\n`);
   const profile = chosen.profile;
   const stream = args.stream ? createStreamPrinter(io, args.json) : null;
+  // Read lazily: the transcript belongs to the session created below.
+  let transcript: () => Message[] = () => [];
+  const tracked = createHeadlessStatus(() => transcript());
   // Assigned once the session exists: the file lives under the bundle's cwd.
   let autosave: HeadlessAutosave | null = null;
   const session = await createSession({
@@ -208,6 +224,7 @@ async function runHeadlessTurn(
           },
     events: {
       ...stream?.events,
+      ...tracked.events,
       // The persistent receipts App puts in the scrollback — a fold, a declined URL, the
       // typecheck gate bouncing the model — are the ones a human watching a pipe should see.
       onMessage: msg => {
@@ -217,12 +234,21 @@ async function runHeadlessTurn(
       },
     },
   });
+  transcript = () => session.transcript;
   // MCP servers are this run's children: closed on every way out, so each gets its stdin EOF and a
   // moment to exit before `process.exit` would kill it outright (#594).
   try {
     const { config, bundle } = session;
     const meta = (midTurn: boolean): TranscriptMeta =>
-      headlessMeta(session, mode, session.transcript, midTurn);
+      buildTranscriptMeta({
+        msgs: session.transcript,
+        model: config.model,
+        baseURL: config.baseURL,
+        cwd: bundle.cwd,
+        mode,
+        status: tracked.status(session),
+        midTurn,
+      });
     if (config.autosave) {
       autosave = createHeadlessAutosave(
         newSessionPath(projectHistoryDir(bundle.cwd), new Date(), processSessionStem()),
@@ -332,31 +358,39 @@ async function runHeadlessTurn(
   }
 }
 
-// The header --save and the auto-save both write: the status line's numbers as the TUI's header
-// carries them, minus what headless never measures (no pre-send estimate is kept here).
-export function headlessMeta(
-  session: Pick<Session, 'config' | 'bundle' | 'totals' | 'lastUsage' | 'shrink'>,
-  mode: HeadlessMode,
-  msgs: Message[],
-  midTurn: boolean,
-): TranscriptMeta {
-  const { config, shrink } = session;
+// The status-line operands the session does not keep itself, tracked the way App tracks them so the
+// saved header is the TUI's (#871): the pre-send estimate, each shed or fold stamped with its turn,
+// and the last call's usage dropped once a shrink has made it stale.
+export function createHeadlessStatus(messages: () => Message[]): {
+  events: Pick<SessionEvents, 'onUsage' | 'onContextEstimate' | 'onShrink'>;
+  status: (session: {
+    config: Pick<Config, 'contextWindow' | 'minGenTokens'>;
+    totals: Usage;
+    shrink: TranscriptStatus['shrink'];
+  }) => TranscriptStatus;
+} {
+  let lastUsage: Usage | null = null;
+  let estimatedContext: number | null = null;
+  const shrinkEvents: TranscriptShrinkEvent[] = [];
   return {
-    version: TRANSCRIPT_VERSION,
-    savedAt: new Date().toISOString(),
-    model: config.model,
-    baseURL: config.baseURL,
-    cwd: session.bundle.cwd,
-    messageCount: msgs.length,
-    mode,
-    usage: {
-      turns: msgs.filter(m => m.role === 'assistant').length,
-      ...session.totals,
-      contextTokens: session.lastUsage?.promptTokens ?? null,
-      ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
-      ...(shrink.sheds > 0 || shrink.folds > 0 ? shrink : {}),
+    events: {
+      onUsage: u => (lastUsage = u),
+      onContextEstimate: t => (estimatedContext = t),
+      onShrink: event => {
+        lastUsage = null;
+        const turn = messages().filter(m => m.role === 'assistant').length + 1;
+        shrinkEvents.push({ turn, ...event });
+      },
     },
-    ...(midTurn ? { midTurn: true as const } : {}),
+    status: session => ({
+      totals: session.totals,
+      lastUsage,
+      estimatedContext,
+      shrink: session.shrink,
+      shrinkEvents: [...shrinkEvents],
+      contextWindow: session.config.contextWindow,
+      minGenTokens: session.config.minGenTokens,
+    }),
   };
 }
 

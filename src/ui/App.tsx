@@ -60,10 +60,9 @@ import { noteFrameState } from './framedrops.js';
 import { addFileToIndex } from '../context/files.js';
 import {
   saveTranscript,
-  TRANSCRIPT_VERSION,
+  buildTranscriptMeta,
   type TranscriptShrinkEvent,
   type TranscriptMeta,
-  type TranscriptUsage,
 } from '../store/transcript.js';
 import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
@@ -1075,44 +1074,26 @@ export function App() {
   // The header both /save and the auto-save write. `msgs` is what the file's body holds.
   const transcriptMeta = (msgs: Message[], cwd: string, midTurn: boolean): TranscriptMeta => {
     // Use the active profile's model/base so the saved meta reflects what was actually running,
-    // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
+    // not the default.
     const profile = config!.profiles[activeProfileRef.current] ?? config!.profiles.default;
-    // Everything the status line shows, frozen at save time (#199). Computed exactly as the
-    // status bar computes it — same turn count, same last-call-else-estimate context — so the
-    // header and a screenshot of the footer can never disagree.
-    const last = lastUsageRef.current;
-    const totals = usageRef.current;
-    const shrink = sessionRef.current?.shrink ?? { sheds: 0, folds: 0 };
-    const window = profile.contextWindow ?? config!.contextWindow;
-    // The session's reserve is the learned one (#551), the number the next round compacts at.
-    const minGen = sessionRef.current?.config.minGenTokens ?? profile.minGenTokens;
-    const usable = window ? Math.round(compactThreshold(window, minGen)) : undefined;
-    const usage: TranscriptUsage = {
-      turns: msgs.filter(m => m.role === 'assistant').length,
-      promptTokens: totals.promptTokens,
-      completionTokens: totals.completionTokens,
-      ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
-      contextTokens: last?.promptTokens ?? estimatedContextRef.current,
-      // No call has landed yet, so the context size above is the pre-send estimate.
-      ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
-      ...(window ? { contextWindow: window } : {}),
-      ...(usable ? { contextUsable: usable } : {}),
-      ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
-      ...(shrink.sheds > 0 || shrink.folds > 0
-        ? { ...shrink, shrinkEvents: shrinkEventsRef.current }
-        : {}),
-    };
-    return {
-      version: TRANSCRIPT_VERSION,
-      savedAt: new Date().toISOString(),
+    return buildTranscriptMeta({
+      msgs,
       model: profile.model,
       baseURL: profile.baseURL,
       cwd,
-      messageCount: msgs.length,
       mode: modeRef.current,
-      usage,
-      ...(midTurn ? { midTurn: true as const } : {}),
-    };
+      midTurn,
+      status: {
+        totals: usageRef.current,
+        lastUsage: lastUsageRef.current,
+        estimatedContext: estimatedContextRef.current,
+        shrink: sessionRef.current?.shrink ?? { sheds: 0, folds: 0 },
+        shrinkEvents: shrinkEventsRef.current,
+        contextWindow: profile.contextWindow ?? config!.contextWindow,
+        // The session's reserve is the learned one (#551), the number the next round compacts at.
+        minGenTokens: sessionRef.current?.config.minGenTokens ?? profile.minGenTokens,
+      },
+    });
   };
 
   // Both sides of the chat boundary, wherever each currently lives.
