@@ -141,7 +141,22 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 
 ## Inspired by
 
-Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, and DS4.
+Claude Code, Codex, Crush, OpenCode, Pi, Aider, DeepSeek Harness, Qwen Code, Kimi Code CLI, Gemini CLI, Junie, DS4, and Ante.
+
+## Citation
+
+If you use Reika in your work, you can cite it as:
+
+```bibtex
+@software{reika2026,
+  author = {Leung, Alex},
+  title  = {Reika},
+  year   = {2026},
+  url    = {https://github.com/alexwkleung/reika}
+}
+```
+
+GitHub's "Cite this repository" button gives the same entry in other formats, from [CITATION.cff](CITATION.cff).
 
 ## License
 

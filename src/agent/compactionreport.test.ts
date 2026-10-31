@@ -1,0 +1,237 @@
+import { describe, expect, it } from 'vitest';
+import {
+  COMPACTION_CALL_REFUSED,
+  compactionNoteContent,
+  compactionNotePrefill,
+  PREFILLED_NOTE_MIN_CHARS,
+  prefilledNoteStream,
+  prefilledReply,
+  pickCompactionNote,
+  refusedCallTurn,
+} from './compactionreport.js';
+
+const call = [{ id: 'x', name: 'read', args: {} }];
+
+describe('compactionNoteContent', () => {
+  it('takes the content of a call-free reply', () => {
+    expect(compactionNoteContent({ content: '  Established: a. Open: b.  ' })).toBe(
+      'Established: a. Open: b.',
+    );
+  });
+
+  it('treats the content of a reply that made a call as no note (#799)', () => {
+    expect(
+      compactionNoteContent({ content: 'Let me examine `_net.ts` in detail:', toolCalls: call }),
+    ).toBe('');
+  });
+});
+
+describe('pickCompactionNote', () => {
+  // The observed shape: both replies called a tool, the retry's content was the call's preamble and
+  // its reasoning held the findings.
+  it('falls back to the longer reasoning when both replies made a call (#799)', () => {
+    const findings = 'Need to change the failed branch in headless.ts; '.repeat(10);
+    const picked = pickCompactionNote(
+      { content: '', reasoning: 'Let me look.', toolCalls: call },
+      { content: 'Let me examine `_net.ts` in detail:', reasoning: findings, toolCalls: call },
+    );
+    expect(picked.src).toBe('reasoning');
+    expect(picked.text).toBe(findings.trim());
+  });
+
+  it('prefers the first reasoning when it is the longer one', () => {
+    const picked = pickCompactionNote(
+      { content: '', reasoning: 'reasoned note' },
+      { content: '', reasoning: 'second' },
+    );
+    expect(picked).toEqual({ text: 'reasoned note', src: 'reasoning' });
+  });
+
+  it('takes content from a call-free reply over any reasoning', () => {
+    const picked = pickCompactionNote(
+      { content: 'preamble', reasoning: 'x'.repeat(500), toolCalls: call },
+      { content: 'RETRY NOTE', reasoning: 'short' },
+    );
+    expect(picked).toEqual({ text: 'RETRY NOTE', reasoning: 'short', src: 'content' });
+  });
+
+  it('reports empty when neither reply carries anything', () => {
+    expect(pickCompactionNote({ content: '' }, { content: '  ' })).toEqual({
+      text: '',
+      src: 'empty',
+    });
+  });
+});
+
+describe('refusedCallTurn (#806)', () => {
+  it('answers each call the note reply made with a refusal, after the reply itself', () => {
+    const calls = [
+      { id: 'a', name: 'read', args: { path: 'x.ts' } },
+      { id: 'b', name: 'bash', args: { command: 'cat y.ts' } },
+    ];
+    expect(refusedCallTurn({ content: 'Let me look:', reasoning: 'r', toolCalls: calls })).toEqual([
+      { role: 'assistant', content: 'Let me look:', reasoning: 'r', toolCalls: calls },
+      { role: 'tool', callId: 'a', summary: COMPACTION_CALL_REFUSED },
+      { role: 'tool', callId: 'b', summary: COMPACTION_CALL_REFUSED },
+    ]);
+  });
+
+  it('appends nothing for a reply that made no call', () => {
+    expect(refusedCallTurn({ content: '', reasoning: 'thinking' })).toEqual([]);
+    expect(refusedCallTurn({ content: '', toolCalls: [] })).toEqual([]);
+  });
+});
+
+describe('prefilledReply (#806)', () => {
+  const prefill = compactionNotePrefill(2);
+
+  it('reads the note out of a reply that echoes the prefill, as llama.cpp does', () => {
+    expect(
+      prefilledReply({ content: `${prefill}- a.ts: parse()\n\nOpen:\n- b` }, prefill).content,
+    ).toBe('Established:\n- a.ts: parse()\n\nOpen:\n- b');
+  });
+
+  it('reads the note out of a reply that carries only the continuation', () => {
+    expect(prefilledReply({ content: '- a.ts: parse()' }, prefill).content).toBe(
+      'Established:\n- a.ts: parse()',
+    );
+  });
+
+  it('is no note when nothing came after the prefill', () => {
+    expect(prefilledReply({ content: prefill }, prefill).content).toBe('');
+    expect(prefilledReply({ content: `${prefill}  \n` }, prefill).content).toBe('');
+    expect(prefilledReply({ content: '' }, prefill).content).toBe('');
+  });
+
+  it('keeps a short lead-in that ends in a call as a call, so it counts as no note', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const r = prefilledReply(
+      { content: `${prefill}Let me check a.ts`, reasoning: 'r', toolCalls: call },
+      prefill,
+    );
+    expect(r.reasoning).toBe('r');
+    expect(r.callsDropped).toBeUndefined();
+    expect(compactionNoteContent(r)).toBe('');
+  });
+
+  it('cuts the reply at a stray think close tag', () => {
+    expect(
+      prefilledReply(
+        { content: `${prefill}- a.ts: parse()\n\nLet me read b.ts next.\n</think>\n\nstray` },
+        prefill,
+      ).content,
+    ).toBe('Established:\n- a.ts: parse()');
+    expect(prefilledReply({ content: `${prefill}</think>\n- a.ts` }, prefill).content).toBe(
+      'Established:\n- a.ts',
+    );
+    expect(prefilledReply({ content: `${prefill}</think>\n` }, prefill).content).toBe('');
+  });
+
+  // #839, the T2 run-on: two bullets of note, then 11k chars of planning and 11 text-form calls.
+  it('ends the note before the next-step thinking that follows it', () => {
+    const calls = Array.from({ length: 11 }, (_, i) => ({ id: `c${i}`, name: 'bash', args: {} }));
+    const note =
+      '- `parseHeadlessArgs` tests exist in `src/headless.test.ts`.\n' +
+      '- The test file imports `parseHeadlessArgs` from `./headlessargs.js`.';
+    const plan =
+      'Now I understand the structure. Let me plan the implementation:\n\n' +
+      '**1. `src/headlessargs.ts`:**\n- Add `profile?: string` to `HeadlessArgs`.\n\n' +
+      `${'More planning. '.repeat(400)}`;
+    const r = prefilledReply(
+      { content: `${prefill}${note}\n\n${plan}`, toolCalls: calls },
+      prefill,
+    );
+    expect(r.content).toBe(`Established:\n${note}`);
+    expect(r.toolCalls).toBeUndefined();
+    expect(r.callsDropped).toBe(11);
+  });
+
+  it("cuts a trailing lead-in and keeps the note's own prose", () => {
+    const body =
+      '- `src/config.ts`: profiles come from loadProfiles.\n\n' +
+      'Still open: the error wording for an unreachable server.\n\n' +
+      'Next: read the failure branch in `src/headless.ts`.';
+    expect(
+      prefilledReply({ content: `${prefill}${body}\n\nLet me run the tests now:` }, prefill)
+        .content,
+    ).toBe(`Established:\n${body}`);
+    expect(prefilledReply({ content: `${prefill}${body}` }, prefill).content).toBe(
+      `Established:\n${body}`,
+    );
+  });
+
+  it('never cuts the first paragraph', () => {
+    expect(
+      prefilledReply({ content: `${prefill}Let me check src/a.ts first.` }, prefill).content,
+    ).toBe('Established:\nLet me check src/a.ts first.');
+  });
+
+  // LFM2.5 at 16k: 1206 chars of note, then a call, on both attempts; the fold got no note.
+  it('keeps a written note and drops the call that follows it', () => {
+    const call = [{ id: 'x', name: 'read', args: {} }];
+    const body = `- src/headlessargs.ts: parseHeadlessArgs. ${'y'.repeat(PREFILLED_NOTE_MIN_CHARS)}`;
+    const r = prefilledReply({ content: `${prefill}${body}`, toolCalls: call }, prefill);
+    expect(r.toolCalls).toBeUndefined();
+    expect(r.callsDropped).toBe(1);
+    expect(compactionNoteContent(r)).toBe(`Established:\n${body}`);
+  });
+});
+
+describe('prefilledNoteStream (#819)', () => {
+  const prefill = compactionNotePrefill(2);
+  const run = (deltas: string[]) => {
+    let out = '';
+    const feed = prefilledNoteStream(prefill, t => (out += t));
+    for (const d of deltas) feed(d);
+    return out;
+  };
+  const chars = (s: string) => [...s];
+
+  it('drops the echoed title, as the committed note does', () => {
+    expect(run([prefill, '- a.ts: parse()'])).toBe('Established:\n- a.ts: parse()');
+    expect(run(chars(`${prefill}- a.ts`))).toBe('Established:\n- a.ts');
+  });
+
+  it('streams a continuation-only reply under the opener', () => {
+    expect(run(['- a.ts', ': parse()'])).toBe('Established:\n- a.ts: parse()');
+  });
+
+  it('stops at a think close tag or a call, even one split across deltas', () => {
+    const reply = `${prefill}- a.ts: parse()\n\nNext b.ts.\n</think>\n<tool_call>{}</tool_call>`;
+    const want = 'Established:\n- a.ts: parse()\n\nNext b.ts.';
+    expect(run(chars(reply))).toBe(want);
+    expect(run([reply])).toBe(want);
+    expect(run(chars(`${prefill}- a.ts\n<tool_call>{"name":"read"}`))).toBe('Established:\n- a.ts');
+  });
+
+  it('streams the note after a tag that opens the reply', () => {
+    expect(run(chars(`${prefill}</think>\n- a.ts`))).toBe('Established:\n- a.ts');
+    expect(run(chars(`${prefill}</think>\n`))).toBe('');
+  });
+
+  it('lets a held < through once it is not a tag', () => {
+    expect(run(chars(`${prefill}- a < b`))).toBe('Established:\n- a < b');
+    expect(run([`${prefill}- a <`])).toBe('Established:\n- a');
+  });
+
+  it('stops before next-step thinking, so a text-form call after it never draws (#839)', () => {
+    const reply =
+      `${prefill}- a.ts: parse()\n- b.ts: emit()\n\nNow I understand the structure. Let me plan:\n\n` +
+      '[bash(command="python3 -c \'print(1)\'")]';
+    expect(run(chars(reply))).toBe('Established:\n- a.ts: parse()\n- b.ts: emit()');
+    expect(run(chars(reply))).toBe(prefilledReply({ content: reply }, prefill).content);
+  });
+
+  it('holds a new paragraph until its opening words decide it', () => {
+    // Mid-stream, "\n\nLet" could still become a lead-in: nothing of it draws yet.
+    expect(run([`${prefill}- a.ts\n\nLet`])).toBe('Established:\n- a.ts');
+    expect(run(chars(`${prefill}- a.ts\n\nStill open: the wording of the error message.`))).toBe(
+      'Established:\n- a.ts\n\nStill open: the wording of the error message.',
+    );
+  });
+
+  it('matches what prefilledReply commits', () => {
+    const reply = `${prefill}- x.ts: f()\n\nOpen:\n- y\n</think>\n\nstray`;
+    expect(run(chars(reply))).toBe(prefilledReply({ content: reply }, prefill).content);
+  });
+});

@@ -1,12 +1,19 @@
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildHeadlessInput,
+  createHeadlessAutosave,
+  createHeadlessStatus,
   createStreamPrinter,
   finalReply,
   formatTurnFailure,
   headlessProfile,
 } from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
+import { listSessions, loadSession } from './store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { Config, ContextBundle, Message } from './types.js';
 
 describe('parseHeadlessArgs', () => {
@@ -39,6 +46,13 @@ describe('parseHeadlessArgs', () => {
   it('parses --stream, off by default', () => {
     expect(parseHeadlessArgs(['-p', 'x'])?.stream).toBe(false);
     expect(parseHeadlessArgs(['-p', '--stream', 'x'])).toMatchObject({ prompt: 'x', stream: true });
+  });
+
+  it('parses -i / --interactive, off by default, and only with -p', () => {
+    expect(parseHeadlessArgs(['-p', 'x'])?.interactive).toBe(false);
+    expect(parseHeadlessArgs(['-p', 'x', '-i'])?.interactive).toBe(true);
+    expect(parseHeadlessArgs(['--interactive', '-p', 'x'])?.interactive).toBe(true);
+    expect(() => parseHeadlessArgs(['--interactive'])).toThrow(/add -p/);
   });
 
   it('rejects an unknown mode', () => {
@@ -185,6 +199,54 @@ describe('buildHeadlessInput', () => {
     expect(out.skill).toBeUndefined();
   });
 
+  it('asks before applying a matched skill with --interactive, in plan mode too', async () => {
+    const asked: string[] = [];
+    const out = await buildHeadlessInput(
+      'please verify the change',
+      { ...config, skillAuto: 'ask' } as Config,
+      bundleWith([verify]),
+      'plan',
+      async spec => (asked.push(spec.title), true),
+    );
+    expect(asked).toEqual(['Skill']);
+    expect(out.modelText.startsWith('VERIFY BODY\n\n')).toBe(true);
+    expect(out.skill).toBe('verify');
+  });
+
+  it('sends as typed when the interactive confirm is declined, even under apply', async () => {
+    const out = await buildHeadlessInput(
+      'please verify the change',
+      config,
+      bundleWith([verify]),
+      'agent',
+      async () => false,
+    );
+    expect(out.modelText).toBe('please verify the change');
+    expect(out.skill).toBeUndefined();
+  });
+
+  it('asks about an incidental pasted link and leaves it on a decline, with no receipt', async () => {
+    const asked: string[][] = [];
+    const out = await buildHeadlessInput(
+      'the build failed:\nError: see https://example.com/x for details',
+      { ...config, pasteFetch: 'ask' } as Config,
+      bundleWith([]),
+      'agent',
+      async spec => (asked.push(spec.details), false),
+    );
+    expect(asked).toEqual([['https://example.com/x']]);
+    expect(out.notices).toEqual([]);
+  });
+
+  it('asks nothing for a plain prompt with --interactive', async () => {
+    let calls = 0;
+    await buildHeadlessInput('what does this do', config, bundleWith([]), 'agent', async () => {
+      calls++;
+      return true;
+    });
+    expect(calls).toBe(0);
+  });
+
   it('passes a plain prompt through untouched', async () => {
     const out = await buildHeadlessInput('what does this do', config, bundleWith([]), 'agent');
     expect(out).toEqual({ modelText: 'what does this do', notices: [] });
@@ -298,5 +360,150 @@ describe('formatTurnFailure', () => {
     ).toBe(
       'reika: turn failed (profile "kimi" at https://api.example.com/v1): This operation was aborted',
     );
+  });
+});
+
+describe('createHeadlessAutosave', () => {
+  const meta = (midTurn: boolean): TranscriptMeta => ({
+    version: TRANSCRIPT_VERSION,
+    savedAt: new Date().toISOString(),
+    model: 'm',
+    baseURL: 'http://localhost:1/v1',
+    cwd: '/repo',
+    messageCount: 0,
+    mode: 'agent',
+    ...(midTurn ? { midTurn: true as const } : {}),
+  });
+
+  const withDir = async (run: (dir: string) => Promise<void>): Promise<void> => {
+    const dir = await mkdtemp(join(tmpdir(), 'reika-headless-autosave-'));
+    try {
+      await run(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('writes the session where /resume lists it, and the final save is not mid-turn', () =>
+    withDir(async dir => {
+      const path = join(dir, 'projects', 'repo-1', 's.jsonl');
+      const msgs: Message[] = [{ role: 'user', content: 'fix the bug' }];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        'agent',
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      msgs.push({ role: 'assistant', content: 'done' });
+      saver.onMessage();
+      await saver.finish();
+      expect((await loadSession(path)).agent.map(m => ('content' in m ? m.content : null))).toEqual(
+        ['fix the bug', 'done'],
+      );
+      const [entry] = await listSessions(join(dir, 'projects', 'repo-1'));
+      expect(entry?.title).toBe('fix the bug');
+      const header = JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!) as TranscriptMeta;
+      expect(header.midTurn).toBeUndefined();
+    }));
+
+  it('files a chat run on the chat side, so a resume keeps it out of agent history', () =>
+    withDir(async dir => {
+      const path = join(dir, 's.jsonl');
+      const msgs: Message[] = [
+        { role: 'user', content: 'what is a monad' },
+        { role: 'assistant', content: 'a monoid in…' },
+      ];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        'chat',
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      const sides = await loadSession(path);
+      expect(sides.agent).toEqual([]);
+      expect(sides.chat).toHaveLength(2);
+      const [entry] = await listSessions(dir);
+      expect(entry?.title).toBe('what is a monad');
+    }));
+
+  it('writes nothing for a run with no real prompt', () =>
+    withDir(async dir => {
+      const path = join(dir, 's.jsonl');
+      const msgs: Message[] = [{ role: 'user', content: '/srv:tool', meta: true }];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        'agent',
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      await expect(stat(path)).rejects.toThrow();
+    }));
+
+  it('reports a failed write once', () =>
+    withDir(async dir => {
+      // A path whose parent is a file cannot be created.
+      const blocker = join(dir, 'file');
+      await writeFile(blocker, 'x');
+      const errors: string[] = [];
+      const msgs: Message[] = [{ role: 'user', content: 'hi' }];
+      const saver = createHeadlessAutosave(
+        join(blocker, 's.jsonl'),
+        () => msgs,
+        'agent',
+        meta,
+        e => errors.push(e),
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      expect(errors).toHaveLength(1);
+    }));
+});
+
+describe('createHeadlessStatus', () => {
+  const session = {
+    config: { contextWindow: 8000, minGenTokens: 1024 },
+    totals: { promptTokens: 10, completionTokens: 2 },
+    shrink: { sheds: 0, folds: 1 },
+  };
+
+  it('tracks the estimate and the last call as App does', () => {
+    const t = createHeadlessStatus(() => []);
+    t.events.onContextEstimate?.(42);
+    expect(t.status(session)).toMatchObject({ estimatedContext: 42, lastUsage: null });
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    expect(t.status(session)).toMatchObject({
+      lastUsage: { promptTokens: 50 },
+      contextWindow: 8000,
+      minGenTokens: 1024,
+    });
+  });
+
+  it('stamps a shrink with the turn it landed in and drops the stale last call', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'reading' },
+    ];
+    const t = createHeadlessStatus(() => msgs);
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    t.events.onShrink?.(
+      { kind: 'fold', round: 3, removed: 4, recapChars: 900 },
+      { sheds: 0, folds: 1 },
+    );
+    expect(t.status(session)).toMatchObject({
+      lastUsage: null,
+      shrinkEvents: [{ kind: 'fold', turn: 2, round: 3 }],
+    });
   });
 });

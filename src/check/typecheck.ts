@@ -148,6 +148,43 @@ export function decideTypecheckGate(args: {
   };
 }
 
+// How many introduced errors a stop message quotes. The full list is the next turn's gate's job;
+// the stop only has to say the tree is broken and where to start.
+const STOP_REPORT_SHOWN = 2;
+
+export type StopReport = {
+  // Appended to the stop message, which the next turn also reads.
+  addendum?: string;
+  tone?: 'info' | 'warn';
+  userNotice?: string;
+};
+
+// The gate's final check, reported rather than enforced, for a turn the harness ended itself (a
+// loop stop, the round cap — #830). No send-back: a stop fires because the model stopped acting on
+// directives, so a typecheck retry would land on the same loop. Empty when the check didn't run.
+export function stopTypecheckReport(baseline: Diagnostic[], final: CheckOutcome): StopReport {
+  if (!final.ran) return {};
+  const introduced = introducedDiagnostics(baseline, final.diagnostics);
+  const n = introduced.length;
+  if (n === 0) {
+    return { tone: 'info', userNotice: 'Typecheck passed — no new type errors from your edits.' };
+  }
+  const word = n === 1 ? 'error' : 'errors';
+  const shown = introduced
+    .slice(0, STOP_REPORT_SHOWN)
+    // tsc's own period dropped: the sentence closes the list, so it would print `….`.
+    .map(d => {
+      const msg = d.message.slice(0, MAX_MESSAGE_CHARS).replace(/\.$/, '');
+      return `\`${d.file}:${d.line} ${d.code}: ${msg}\``;
+    });
+  const more = n > shown.length ? `, +${n - shown.length} more` : '';
+  return {
+    addendum: ` The edits also introduced ${n} new type ${word}: ${shown.join(', ')}${more}.`,
+    tone: 'warn',
+    userNotice: `Typecheck: the edits introduced ${n} new type ${word}, left unfixed by the stop.`,
+  };
+}
+
 // ── impure shell ──────────────────────────────────────────────────────────────────────────────
 
 // Resolve the tsconfig that governs an edit. Three layers, every one fail-open — any uncertainty

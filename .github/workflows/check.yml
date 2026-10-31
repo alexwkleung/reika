@@ -43,3 +43,12 @@ jobs:
       - run: pnpm run release:check
       - if: ${{ matrix.docs }}
         run: pnpm run docs:build
+
+  # The one job the main-flow ruleset requires: a fixed name, so changing the matrix never
+  # strands a required check. always() so a failed matrix job fails this instead of skipping it.
+  check-ok:
+    if: ${{ always() }}
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.check.result }}" = "success"

@@ -9,23 +9,27 @@ import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
-import { Status } from './Status.js';
+import { Status, statusRows, type StatusProps } from './Status.js';
 import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import {
+  APPROVAL_FEEDBACK_INDEX,
+  APPROVAL_OPTIONS,
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
-  Confirm,
   type ConfirmSpec,
+  pastedUrlConfirmSpec,
+  skillConfirmSpec,
+} from './dialogspecs.js';
+import {
+  Confirm,
   TOGGLE_CANCEL,
   TOGGLE_OFF,
   TOGGLE_ON,
   implementModeConfirmSpec,
-  pastedUrlConfirmSpec,
-  skillConfirmSpec,
   toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
@@ -51,19 +55,20 @@ import {
 } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugLog, processSessionStem } from '../debug.js';
+import { debugEnabled, debugLog, processSessionStem } from '../debug.js';
+import { noteFrameState } from './framedrops.js';
 import { addFileToIndex } from '../context/files.js';
 import {
   saveTranscript,
-  TRANSCRIPT_VERSION,
+  buildTranscriptMeta,
   type TranscriptShrinkEvent,
   type TranscriptMeta,
-  type TranscriptUsage,
 } from '../store/transcript.js';
 import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { execStream } from '../tools/bash.js';
+import { isOffline } from '../tools/_net.js';
 import { expandMentions } from '../agent/mentions.js';
 import {
   attachImageBlocks,
@@ -84,6 +89,7 @@ import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
 import { mcpStartupLine } from './format.js';
+import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
   countRealTurns,
@@ -101,12 +107,15 @@ import {
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
   buildImplementPrompt,
+  buildSearchPrompt,
   IMPLEMENT_MODES,
   isImplementCommand,
   isMinimalPrompt,
   isGrindPrompt,
   isSaveCommand,
   nextMode,
+  searchModeRefusal,
+  searchUnavailableNotice,
   turnMode,
   turnPromptMode,
   turnRefines,
@@ -127,7 +136,14 @@ import {
   type ShellRun,
 } from '../agent/shellruns.js';
 import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
-import type { ApprovalRequest, Message, QuestionAnswer, QuestionRequest, Usage } from '../types.js';
+import type {
+  ApprovalAnswer,
+  ApprovalRequest,
+  Message,
+  QuestionAnswer,
+  QuestionRequest,
+  Usage,
+} from '../types.js';
 
 type Phase = 'thinking' | 'tool';
 type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
@@ -165,6 +181,20 @@ function promptPlaceholder(): string {
 }
 
 const AUTOSAVE_INTERVAL_MS = 3000;
+
+// A resumed session reaches the scrollback a slice at a time (#854): a commit renders its messages'
+// markdown, highlighting and wrap synchronously, and one commit for the whole session held the
+// event loop — the resuming spinner's timer included — for as long as that took (~2s at 460
+// messages). Slices are sized to about this long each, so the spinner ticks between them.
+const RESUME_SLICE_MS = 40;
+const RESUME_FIRST_SLICE = 4;
+
+// Scaled from how long the last slice took, so its cost does not depend on what the messages hold;
+// growth is held to doubling, since a run of tiny messages says little about the next ones.
+function nextResumeSliceSize(size: number, tookMs: number): number {
+  const scaled = Math.round((size * RESUME_SLICE_MS) / Math.max(tookMs, 1));
+  return Math.min(Math.max(scaled, 1), size * 2);
+}
 
 export function App() {
   const { exit } = useApp();
@@ -236,9 +266,11 @@ export function App() {
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
-    resolve: (allow: boolean) => void;
+    resolve: (answer: ApprovalAnswer) => void;
   } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
+  // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
+  const [approvalTyping, setApprovalTyping] = useState(false);
   // An `ask_user` question waiting on the user (#198). Modal like Approval, with one difference: the
   // input box stays LIVE underneath once `questionTyping` is set, because the free-text row hands the
   // answer to Input rather than to a field rebuilt in the dialog.
@@ -339,6 +371,9 @@ export function App() {
   // the note on the label below), and without this the picker just vanished and the app sat on a
   // stale frame until it landed.
   const [resuming, setResuming] = useState<string | null>(null);
+  // Held for the whole resume, slices included: a submit or a mode switch between two slices would
+  // land its rows in the middle of the resumed scrollback, or swap it for the other side's.
+  const resumingRef = useRef(false);
   // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
@@ -379,6 +414,8 @@ export function App() {
   questionTypingRef.current = questionTyping;
   const approvalSelectedRef = useRef(0);
   approvalSelectedRef.current = approvalSelected;
+  const approvalTypingRef = useRef(false);
+  approvalTypingRef.current = approvalTyping;
   const confirmRef = useRef<typeof confirm>(null);
   confirmRef.current = confirm;
   const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
@@ -761,6 +798,14 @@ export function App() {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       const hadPending = pendingRef.current !== null;
+      // Typing a decline's reason: back out to the options, as the question's field does (#651).
+      // Nothing is decided yet, so neither the approval nor the turn may end here.
+      if (hadPending && approvalTypingRef.current) {
+        setInputValue(preAnswerDraftRef.current);
+        setSuggestionState(null);
+        setApprovalTyping(false);
+        return;
+      }
       // Interrupt anything in flight: decline a pending approval, drop an unanswered question,
       // abort a turn.
       if (hadPending) {
@@ -829,16 +874,25 @@ export function App() {
       return;
     }
     if (pendingRef.current) {
+      // Input owns the keyboard while the reason is typed; a key consumed here is a lost character.
+      if (approvalTypingRef.current) return;
       if (key.upArrow) {
         setApprovalSelected(i => Math.max(0, i - 1));
         return;
       }
       if (key.downArrow) {
-        setApprovalSelected(i => Math.min(2, i + 1));
+        setApprovalSelected(i => Math.min(APPROVAL_OPTIONS.length - 1, i + 1));
         return;
       }
       if (key.return) {
         const sel = approvalSelectedRef.current;
+        if (sel === APPROVAL_FEEDBACK_INDEX) {
+          // Deferred like the question's field: enabling Input synchronously hands it this Enter.
+          preAnswerDraftRef.current = inputValueRef.current;
+          setInputValue('');
+          queueMicrotask(() => setApprovalTyping(true));
+          return;
+        }
         const resolve = pendingRef.current.resolve;
         setPending(null);
         if (sel === 0) resolve(true);
@@ -976,7 +1030,9 @@ export function App() {
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
-      if (statusRef.current === 'idle') transitionMode(nextMode(modeRef.current), []);
+      if (statusRef.current === 'idle' && !resumingRef.current) {
+        transitionMode(nextMode(modeRef.current), []);
+      }
       return;
     }
     const sug = suggestionStateRef.current;
@@ -1018,44 +1074,26 @@ export function App() {
   // The header both /save and the auto-save write. `msgs` is what the file's body holds.
   const transcriptMeta = (msgs: Message[], cwd: string, midTurn: boolean): TranscriptMeta => {
     // Use the active profile's model/base so the saved meta reflects what was actually running,
-    // not the default. Stamp savedAt here (the serializer is pure and takes no clock).
+    // not the default.
     const profile = config!.profiles[activeProfileRef.current] ?? config!.profiles.default;
-    // Everything the status line shows, frozen at save time (#199). Computed exactly as the
-    // status bar computes it — same turn count, same last-call-else-estimate context — so the
-    // header and a screenshot of the footer can never disagree.
-    const last = lastUsageRef.current;
-    const totals = usageRef.current;
-    const shrink = sessionRef.current?.shrink ?? { sheds: 0, folds: 0 };
-    const window = profile.contextWindow ?? config!.contextWindow;
-    // The session's reserve is the learned one (#551), the number the next round compacts at.
-    const minGen = sessionRef.current?.config.minGenTokens ?? profile.minGenTokens;
-    const usable = window ? Math.round(compactThreshold(window, minGen)) : undefined;
-    const usage: TranscriptUsage = {
-      turns: msgs.filter(m => m.role === 'assistant').length,
-      promptTokens: totals.promptTokens,
-      completionTokens: totals.completionTokens,
-      ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
-      contextTokens: last?.promptTokens ?? estimatedContextRef.current,
-      // No call has landed yet, so the context size above is the pre-send estimate.
-      ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
-      ...(window ? { contextWindow: window } : {}),
-      ...(usable ? { contextUsable: usable } : {}),
-      ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
-      ...(shrink.sheds > 0 || shrink.folds > 0
-        ? { ...shrink, shrinkEvents: shrinkEventsRef.current }
-        : {}),
-    };
-    return {
-      version: TRANSCRIPT_VERSION,
-      savedAt: new Date().toISOString(),
+    return buildTranscriptMeta({
+      msgs,
       model: profile.model,
       baseURL: profile.baseURL,
       cwd,
-      messageCount: msgs.length,
       mode: modeRef.current,
-      usage,
-      ...(midTurn ? { midTurn: true as const } : {}),
-    };
+      midTurn,
+      status: {
+        totals: usageRef.current,
+        lastUsage: lastUsageRef.current,
+        estimatedContext: estimatedContextRef.current,
+        shrink: sessionRef.current?.shrink ?? { sheds: 0, folds: 0 },
+        shrinkEvents: shrinkEventsRef.current,
+        contextWindow: profile.contextWindow ?? config!.contextWindow,
+        // The session's reserve is the learned one (#551), the number the next round compacts at.
+        minGenTokens: sessionRef.current?.config.minGenTokens ?? profile.minGenTokens,
+      },
+    });
   };
 
   // Both sides of the chat boundary, wherever each currently lives.
@@ -1150,9 +1188,16 @@ export function App() {
   };
 
   const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
-    // Set before the first await, so the frame lands while the file is still being read: the
-    // commit below runs every message's markdown, syntax highlighting and wrap in one synchronous
-    // pass, and nothing the UI does after that point can paint until it finishes.
+    resumingRef.current = true;
+    try {
+      await loadResumedSession(entry, projectDir);
+    } finally {
+      resumingRef.current = false;
+    }
+  };
+
+  const loadResumedSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+    // Set before the first await, so the frame lands while the file is still being read.
     setResuming(`Resuming "${entry.title ?? 'untitled'}"`);
     let sides: SessionSides;
     try {
@@ -1175,6 +1220,24 @@ export function App() {
       logSessionFile(entry.path);
     }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
+    // A session with only one side opens on that side (#875): resumed from the other, it would
+    // land on an empty screen, its messages one /chat or /agent away. A session with both stays
+    // put. Leaving chat goes to agent rather than the session's last mode, which could be plan or
+    // shell. The conversation was just reset, so there is no screen to stash — only the session's
+    // side and the mode move.
+    const agentTurns = countRealTurns(sides.agent);
+    const chatTurns = countRealTurns(sides.chat);
+    const switchedTo: Mode | null =
+      modeRef.current !== 'chat' && agentTurns === 0 && chatTurns > 0
+        ? 'chat'
+        : modeRef.current === 'chat' && chatTurns === 0 && agentTurns > 0
+          ? 'agent'
+          : null;
+    if (switchedTo) {
+      sessionRef.current?.switchSide(switchedTo === 'chat' ? 'chat' : 'agent');
+      modeRef.current = switchedTo;
+      setMode(switchedTo);
+    }
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
@@ -1186,15 +1249,26 @@ export function App() {
     const where = inChat ? 'chat' : 'agent';
     const otherNote =
       other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
-    setMessages([
+    const resumed: Message[] = [
       ...active,
       {
         role: 'system',
-        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedTo ? `, switched to ${switchedTo} mode,` : ''} from ${entry.path}`,
       },
-    ]);
-    // Same commit as the messages, not a frame later: the spinner's rows are the ones the first
-    // resumed frame takes, so clearing it in a separate update would flash the live frame twice.
+    ];
+    let size = RESUME_FIRST_SLICE;
+    for (let at = 0; at < resumed.length;) {
+      const slice = resumed.slice(at, at + size);
+      const started = performance.now();
+      // The first slice replaces the old conversation; the rest extend it.
+      setMessages(at === 0 ? slice : prev => [...prev, ...slice]);
+      at += slice.length;
+      if (at >= resumed.length) break;
+      // A timer, not a microtask: the spinner ticks on an interval, which only a yield to the timer
+      // phase lets fire. Measured past the yield, so the commit counts whenever React flushes it.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      size = nextResumeSliceSize(size, performance.now() - started);
+    }
     setResuming(null);
   };
 
@@ -1264,7 +1338,7 @@ export function App() {
     setSuggestionSelected(0);
   };
 
-  const requestApproval = (req: ApprovalRequest): Promise<boolean> => {
+  const requestApproval = (req: ApprovalRequest): Promise<ApprovalAnswer> => {
     // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
     // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
     // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
@@ -1282,12 +1356,13 @@ export function App() {
       return Promise.resolve(false);
     }
     setApprovalSelected(0);
+    setApprovalTyping(false);
     return new Promise(resolve => {
-      const wrappedResolve = (allow: boolean): void => {
+      const wrappedResolve = (answer: ApprovalAnswer): void => {
         setApprovals(a =>
-          allow ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
+          answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
-        resolve(allow);
+        resolve(answer);
       };
       setPending({ request: req, resolve: wrappedResolve });
     });
@@ -1517,6 +1592,37 @@ export function App() {
       );
       return;
     }
+    if (name === 'search') {
+      // `/search <query>` (#829): the direct road to the search tool. A mode's own prompt says to
+      // use `search` only when the answer needs current information, which leaves the decision to
+      // the model; this makes it the user's. Availability is read off the session's own tool lists
+      // rather than re-derived from config, so it agrees with the offline case too — that one is
+      // decided once at startup (`opts.offline` in tools/index.ts) and never revisited.
+      const query = args.trim();
+      const say = (content: string): void =>
+        setMessages(prev => [...prev, echo, { role: 'system', content }]);
+      if (!query) {
+        say('Usage: /search <query> — the model runs one web search and answers from the results.');
+        return;
+      }
+      const refusal = searchModeRefusal(mode);
+      if (refusal) {
+        say(refusal);
+        return;
+      }
+      // Vibe plans before it acts, and a search is a question, not a task: it runs as an agent turn,
+      // the same one-turn override /implement and /compact take out of vibe.
+      const target: Mode = mode === 'vibe' ? 'agent' : mode;
+      const lists = sessionRef.current?.lists;
+      if (!lists || !turnTools(target, lists).some(t => t.name === 'search')) {
+        say(searchUnavailableNotice(isOffline()));
+        return;
+      }
+      // No echo of its own, like a skill: runTurn emits the user message, rendered from `raw`, so
+      // the bubble reads `/search react 19` while the model receives the instructions.
+      await submitToModel(buildSearchPrompt(query), raw, target === mode ? undefined : target);
+      return;
+    }
     if (name === 'cd') {
       const target = args.trim();
       if (!target) {
@@ -1552,18 +1658,32 @@ export function App() {
         return;
       }
       const target = args.trim().toLowerCase();
-      if (target !== '' && target !== 'root') {
-        say('Usage: /resume (this project) or /resume root (manual /save files).');
+      if (target !== '' && target !== 'all' && target !== 'root') {
+        say(
+          'Usage: /resume (this project; chats only in chat mode), /resume all, or /resume root (manual /save files).',
+        );
         return;
       }
       const projectDir = projectHistoryDir(bundle.cwd);
       // The session in progress is not something to resume into.
       const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
+      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A file
+      // saved before the header counted chat turns is not listed here; /resume all still has it.
+      const chatsOnly = target === '' && modeRef.current === 'chat';
       let entries: SessionEntry[] = [];
       let heading = 'saved with /save';
-      if (target === '') {
+      if (target !== 'root') {
         entries = (await listSessions(projectDir)).filter(notCurrent);
         heading = 'this project';
+      }
+      if (chatsOnly) {
+        entries = entries.filter(e => e.chatTurns !== undefined);
+        // No root fallback: /save files carry no chat count, so it would list agent sessions here.
+        if (entries.length === 0) {
+          say('No saved chats for this project. /resume all lists every session.');
+          return;
+        }
+        heading = 'chats in this project';
       }
       // A project with no sessions yet falls back to the manual saves.
       if (entries.length === 0) {
@@ -1654,10 +1774,11 @@ export function App() {
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
           '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
-          '  /resume [root]     resume a saved session of this project (root: the /save files)',
+          '  /resume [all|root] resume a saved session of this project (chat mode: chats only; all: every session; root: the /save files)',
           '  /skills            list available skills (loaded from your skill directories)',
           '  /mcp               list MCP servers and their tools (REIKA_MCP_SERVERS)',
           '  /<server>:<tool>   call an MCP tool directly (JSON args, or the bare string for a one-arg tool)',
+          '  /search <query>    search the web: the model runs one search and answers from the results',
           '  /exit, /quit       exit reika (prints summary)',
           '  @<path>            in agent mode, inline a file as context',
           '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
@@ -1865,13 +1986,13 @@ export function App() {
         const list = bundle?.skills ?? [];
         if (list.length === 0) {
           response =
-            'No skills loaded. Drop *.md files in ~/.config/reika/skills/ or <cwd>/.reika/skills/.';
+            'No skills loaded. Drop *.md files or SKILL.md folders in ~/.config/reika/skills/, <cwd>/.reika/skills/, ~/.agents/skills/ or <cwd>/.agents/skills/.';
         } else {
           response = [
             'Available skills (invoke as /<name>):',
             ...list.map(
               s =>
-                `  /${s.name.padEnd(16)} ${s.description} ${s.source === 'project' ? '(project)' : ''}`,
+                `  /${s.name.padEnd(16)} ${s.description} ${s.from ? `(${s.from})` : s.source === 'project' ? '(project)' : ''}`,
             ),
           ].join('\n');
         }
@@ -2237,9 +2358,25 @@ export function App() {
   }, [status, pending, confirm, queue]);
 
   const onSubmit = async (input: string) => {
+    // Left in the box rather than queued: the resume replaces the conversation the prompt was
+    // typed against, and the user sees it land before deciding to send.
+    if (resumingRef.current) return;
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
     // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
     // be queued as the user's next prompt.
+    // A decline's reason, likewise not a message for the model's next turn. An empty one is not a
+    // reason; the field stays open, and ctrl-c is the way back to a plain Decline.
+    const ap = pendingRef.current;
+    if (ap && approvalTypingRef.current) {
+      const text = input.trim();
+      if (!text) return;
+      setInputValue(preAnswerDraftRef.current);
+      setSuggestionState(null);
+      setPending(null);
+      setApprovalTyping(false);
+      ap.resolve({ feedback: text });
+      return;
+    }
     const q = questionRef.current;
     const typing = questionTypingRef.current;
     if (q && typing) {
@@ -2687,8 +2824,40 @@ export function App() {
         )
       : undefined;
 
-  // Live rows above a dialog (plan checklist, queued messages) it has to leave viewport room for.
+  const statusWidth = useContentWidth();
+  const statusProps: StatusProps = {
+    model: config?.profiles[activeProfile]?.model ?? config?.model ?? '',
+    turns: messages.filter(m => m.role === 'assistant').length,
+    status: status === 'busy' ? phase : status,
+    elapsed: status === 'busy' ? elapsed : null,
+    usage: totalUsage,
+    contextTokens: lastUsage?.promptTokens ?? estimatedContext,
+    contextWindow: statusWindow,
+    contextUsable: statusUsable,
+    sheds: shrink.sheds,
+    folds: shrink.folds,
+    cachedTokens: lastUsage?.cachedTokens,
+    decodeRate: decodeRate,
+    pr: pr,
+    autoApprove:
+      config?.autoApprove === 'bypass'
+        ? 'bypass'
+        : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
+          ? 'safe'
+          : undefined,
+    unattended: unattended,
+    modeTag: mode,
+    exitArmed: exitArmed && status === 'idle' && pending === null && inputValue === '',
+  };
+  // Status rows past the one the baseline chrome assumes: a narrow pane (three iTerm2 panes) wraps
+  // the bar onto several, and unbudgeted they push the live frame to viewport height, where Ink
+  // repaints with a scrollback clear on every chunk.
+  const statusExtraRows = Math.max(0, statusRows(statusProps, statusWidth) - 1);
+
+  // Live rows above a dialog (plan checklist, queued messages, a wrapped status bar) it has to
+  // leave viewport room for.
   const dialogReservedRows =
+    statusExtraRows +
     (planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0) +
     (queue.length > 0 ? queue.length + 1 : 0);
 
@@ -2698,6 +2867,31 @@ export function App() {
         <Text>Error</Text>
         <Text>{error}</Text>
       </Box>
+    );
+  }
+
+  if (debugEnabled()) {
+    const live = [
+      streamingReasoning && 'reasoning',
+      streaming && 'content',
+      streamingTool && `tool:${streamingToolName}`,
+    ].filter(Boolean);
+    const dialog = pending
+      ? 'approval'
+      : question
+        ? 'question'
+        : modelSelect
+          ? 'model'
+          : resumeSelect
+            ? 'resume'
+            : confirm
+              ? 'confirm'
+              : '-';
+    noteFrameState(
+      `${status === 'busy' ? phase : status} msgs=${messages.length} live=${live.join(',') || '-'}` +
+        ` pending=${pendingTool || '-'} dialog=${dialog} queue=${queue.length}` +
+        ` plan=${planSteps ? planSteps.length : 0} suggest=${suggestionState ? 1 : 0}` +
+        `${subagentLive ? ' subagent' : ''}`,
     );
   }
 
@@ -2785,6 +2979,7 @@ export function App() {
             <Approval
               request={pending.request}
               selectedIndex={approvalSelected}
+              typing={approvalTyping}
               reservedRows={dialogReservedRows}
             />
           ) : question ? (
@@ -2820,7 +3015,7 @@ export function App() {
             // The question dialog is modal only while its list is up; once the user is typing an
             // answer the input has to be live, since it IS the answer field.
             disabled={
-              pending !== null ||
+              (pending !== null && !approvalTyping) ||
               modelSelect !== null ||
               resumeSelect !== null ||
               confirm !== null ||
@@ -2836,8 +3031,13 @@ export function App() {
             attachedBelow={suggestionState !== null}
             reservedRows={
               question
-                ? questionDialogHeight(question.request, questionTyping, dialogReservedRows)
-                : 0
+                ? questionDialogHeight(
+                    question.request,
+                    questionTyping,
+                    dialogReservedRows,
+                    questionSelected,
+                  )
+                : statusExtraRows
             }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
             history={inputHistory}
@@ -2848,41 +3048,21 @@ export function App() {
             onPasteImage={onPasteImageSafely}
             onPasteText={onPasteText}
             placeholder={
-              mode === 'shell'
-                ? 'Run a shell command'
-                : mode === 'vibe'
-                  ? 'Describe a change — it plans first, then implements'
-                  : promptPlaceholder()
+              // A reason that should stop the model has to say so: "tell me the script" read as
+              // run-then-tell and drew retries, "don't run anything" did not (decline-terse/-ask).
+              approvalTyping
+                ? 'e.g. "use pnpm instead", or "don\'t run anything, just tell me …"'
+                : mode === 'shell'
+                  ? 'Run a shell command'
+                  : mode === 'vibe'
+                    ? 'Describe a change — it plans first, then implements'
+                    : promptPlaceholder()
             }
           />
           {suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
-          <Status
-            model={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
-            turns={messages.filter(m => m.role === 'assistant').length}
-            status={status === 'busy' ? phase : status}
-            elapsed={status === 'busy' ? elapsed : null}
-            usage={totalUsage}
-            contextTokens={lastUsage?.promptTokens ?? estimatedContext}
-            contextWindow={statusWindow}
-            contextUsable={statusUsable}
-            sheds={shrink.sheds}
-            folds={shrink.folds}
-            cachedTokens={lastUsage?.cachedTokens}
-            decodeRate={decodeRate}
-            pr={pr}
-            autoApprove={
-              config?.autoApprove === 'bypass'
-                ? 'bypass'
-                : effectiveAutoApprove(config, sessionAutoApprove) === 'safe'
-                  ? 'safe'
-                  : undefined
-            }
-            unattended={unattended}
-            modeTag={mode}
-            exitArmed={exitArmed && status === 'idle' && pending === null && inputValue === ''}
-          />
+          <Status {...statusProps} />
         </>
       )}
     </Box>

@@ -280,6 +280,19 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('timeout -k 5')).toBe(false);
   });
 
+  // #756: `nice` is the other carrier that changes nothing about what runs, and it composes with
+  // `timeout`. Both are read off `_carriers.ts`'s table, so the network reader and the approval
+  // labels cannot disagree about which wrapper a `gh` read hides behind.
+  it('reads the verb through a `nice` carrier', () => {
+    expect(networkAllowedFor('nice gh pr view 620 --json title,state')).toBe(true);
+    expect(networkAllowedFor('nice -n 10 git ls-remote origin')).toBe(true);
+    expect(networkAllowedFor('timeout 120 nice --adjustment=5 gh issue view 1 --json body')).toBe(
+      true,
+    );
+    // Not a way past the allow: what the carrier bounds is still what gets read.
+    expect(networkAllowedFor('nice -n 10 curl https://x.example')).toBe(false);
+  });
+
   it('keeps the allow through the wait a poll needs and the loop a multi-read needs', () => {
     expect(networkAllowedFor('sleep 5 && gh pr view 609 --json mergeable,mergeStateStatus')).toBe(
       true,

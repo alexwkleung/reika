@@ -17,6 +17,9 @@ export type HeadlessArgs = {
   stream: boolean;
   // Write the transcript to the history dir, the way /save does.
   save: boolean;
+  // Ask the dialogs the TUI would open — approvals, ask_user, the skill and pasted-link confirms —
+  // on the controlling terminal instead of declining them (#872).
+  interactive: boolean;
   help: boolean;
   version: boolean;
 };
@@ -31,6 +34,8 @@ export const USAGE = `usage: reika                  start the interactive TUI in
   --stream              print as the turn runs: the reply as it is generated, tool calls on
                         stderr; with --json, one message per line (NDJSON) as each is committed
   --save                save the transcript to ~/.config/reika/history like /save
+  -i, --interactive     with -p: ask approvals, ask_user and confirms on the terminal
+                        instead of declining them (needs a terminal; stdin may still be piped)
   -v, --version         print the version
   -h, --help            show this
 
@@ -39,8 +44,9 @@ is required and REIKA_BASE_URL defaults to http://localhost:9931/v1.
 
 With -p: a prompt starting with /<skill> runs that skill. Approvals follow REIKA_AUTO_APPROVE
 (default 'safe'): with no prompt to fall back on, anything 'safe' would have asked about is
-declined, and 'off' declines every edit and command. ask_user is never offered. Exit status: 0 on
-a reply, 1 on an error, 130 when interrupted.`;
+declined, and 'off' declines every edit and command. ask_user is never offered. With -i each of
+those is asked instead, as a numbered menu on the terminal. Exit status: 0 on a reply, 1 on an
+error, 130 when interrupted.`;
 
 const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 'grind', 'chat']);
 
@@ -52,6 +58,7 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
     json: false,
     stream: false,
     save: false,
+    interactive: false,
     help: false,
     version: false,
   };
@@ -82,6 +89,8 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
       args.stream = true;
     } else if (a === '--save') {
       args.save = true;
+    } else if (a === '-i' || a === '--interactive') {
+      args.interactive = true;
     } else if (a === '-h' || a === '--help') {
       args.help = true;
       headless = true;
@@ -108,6 +117,9 @@ export function parseHeadlessArgs(argv: string[]): HeadlessArgs | null {
   // The TUI does not read it, so starting one would drop the flag without a word.
   if (!headless && args.profile !== undefined) {
     throw new Error(`--profile applies to a headless run; add -p\n${USAGE}`);
+  }
+  if (!headless && args.interactive) {
+    throw new Error(`--interactive applies to a headless run; add -p\n${USAGE}`);
   }
   return headless ? args : null;
 }

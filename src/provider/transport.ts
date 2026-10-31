@@ -87,6 +87,9 @@ export type ChatCompletionRequest = {
   prompt_cache_key?: string;
   // Top-level cache breakpoint, sent only for Anthropic models on OpenRouter (provider/cachehints.ts).
   cache_control?: { type: 'ephemeral' };
+  // Template variables, sent only to local and private hosts (provider/templatekwargs.ts). Read by
+  // llama.cpp and vLLM; client.ts degrades from a rejection that names it.
+  chat_template_kwargs?: { preserve_thinking: true };
 };
 
 // A streamed delta chunk. Field unions cover provider variants:
@@ -129,11 +132,15 @@ export type ChatCompletionChunk = {
   // llama.cpp's own stats for the call, at the top level next to `usage` (not inside it) on the
   // final chunk of a streaming response — and, under `timings_per_token`, on every chunk, where
   // they are the running totals and the last one is the round's. Only the fields the tok/s chip
-  // reads are modeled here; the server's spelling is kept and normalized in client.ts (#536).
+  // and the debug log read are modeled here; the server's spelling is kept and normalized in
+  // client.ts (#536, #868).
   timings?: {
     predicted_n?: number;
     predicted_ms?: number;
     predicted_per_second?: number;
+    prompt_n?: number;
+    prompt_ms?: number;
+    cache_n?: number;
   } | null;
 };
 
@@ -201,8 +208,9 @@ async function postWithRetry(
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    let res: Response;
     try {
-      const res = await fetch(url, {
+      res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -220,15 +228,6 @@ async function postWithRetry(
         signal,
         ...(dispatcher ? { dispatcher } : {}),
       });
-      if (res.ok && res.body) return res;
-      if (attempt < MAX_RETRIES && isRetryableStatus(res.status)) {
-        await sleep(backoffMs(attempt), signal);
-        continue;
-      }
-      const detail = await res.text().catch(() => '');
-      throw new Error(
-        `chat/completions failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
-      );
     } catch (e) {
       if (isAbort(e) || signal?.aborted) throw e;
       if (isStreamTimeout(e))
@@ -240,6 +239,17 @@ async function postWithRetry(
       }
       throw refusedAtDefaultPort(url, e) ?? e;
     }
+    if (res.ok && res.body) return res;
+    if (attempt < MAX_RETRIES && isRetryableStatus(res.status)) {
+      await sleep(backoffMs(attempt), signal);
+      continue;
+    }
+    // Outside the catch (#804): a 4xx is the server's answer, and caught there it was retried as a
+    // network error, so every degrade latch saw the same rejected request three times.
+    const detail = await res.text().catch(() => '');
+    throw new Error(
+      `chat/completions failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+    );
   }
   throw lastErr;
 }

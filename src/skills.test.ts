@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   BUNDLED_DIR,
   hasGitHubRemote,
+  listSupportingFiles,
   loadSkills,
   onPath,
   parseFrontmatter,
   parseRequires,
   parseTriggers,
+  rewriteSkillPaths,
+  skillDirAnchor,
 } from './skills.js';
 
 describe('parseFrontmatter', () => {
@@ -85,21 +88,64 @@ describe('parseTriggers', () => {
 
 describe('loadSkills', () => {
   let cwd: string;
+  let home: string;
   let originalEnv: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'reika-skills-'));
     originalEnv = process.env.REIKA_SKILLS_DIR;
+    originalHome = process.env.HOME;
     // Point global skills dir at a separate empty temp dir to isolate from user's actual config.
     process.env.REIKA_SKILLS_DIR = await mkdtemp(join(tmpdir(), 'reika-global-skills-'));
+    // And HOME, which `~/.agents/skills` is read under.
+    home = await mkdtemp(join(tmpdir(), 'reika-home-'));
+    process.env.HOME = home;
   });
 
   afterEach(async () => {
     await rm(cwd, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
     const dir = process.env.REIKA_SKILLS_DIR;
     if (dir) await rm(dir, { recursive: true, force: true });
     if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
     else process.env.REIKA_SKILLS_DIR = originalEnv;
+    process.env.HOME = originalHome;
+  });
+
+  const put = async (dir: string, name: string, body: string) => {
+    await mkdir(join(dir, name), { recursive: true });
+    await writeFile(join(dir, name, 'SKILL.md'), body, 'utf8');
+  };
+
+  it("loads other harnesses' skill dirs and labels where each came from", async () => {
+    await put(join(home, '.agents/skills'), 'a', 'from home agents');
+    await put(join(cwd, '.agents/skills'), 'b', 'from project agents');
+    await put(join(cwd, '.claude/skills'), 'c', 'from project claude');
+    await put(join(home, '.claude/skills'), 'd', 'never read');
+    const skills = await loadSkills(cwd);
+    expect(skills.map(s => [s.name, s.source, s.from])).toEqual([
+      ['a', 'global', '~/.agents/skills'],
+      ['b', 'project', '.agents/skills'],
+      ['c', 'project', '.claude/skills'],
+    ]);
+  });
+
+  it("lets reika's own dirs win, then project over global, then .agents over .claude", async () => {
+    const globalDir = process.env.REIKA_SKILLS_DIR as string;
+    for (const name of ['x', 'y', 'z']) {
+      await put(join(home, '.agents/skills'), name, `${name} home agents`);
+      await put(join(cwd, '.claude/skills'), name, `${name} project claude`);
+    }
+    for (const name of ['x', 'y'])
+      await put(join(cwd, '.agents/skills'), name, `${name} project agents`);
+    await put(globalDir, 'x', 'x reika global');
+    const bodies = Object.fromEntries((await loadSkills(cwd)).map(s => [s.name, s.body]));
+    expect(bodies).toEqual({
+      x: 'x reika global',
+      y: 'y project agents',
+      z: 'z project claude',
+    });
   });
 
   it('returns [] when no skills dirs exist', async () => {
@@ -208,16 +254,35 @@ describe('loadSkills', () => {
     expect(skills.map(s => s.name)).toContain('refactor');
   });
 
-  it('ignores supporting files alongside SKILL.md', async () => {
-    await mkdir(join(cwd, '.reika/skills/deploy'), { recursive: true });
-    await writeFile(join(cwd, '.reika/skills/deploy/SKILL.md'), 'Deploy body', 'utf8');
-    await writeFile(join(cwd, '.reika/skills/deploy/helper.sh'), '#!/bin/sh', 'utf8');
-    await writeFile(join(cwd, '.reika/skills/deploy/notes.md'), 'random doc', 'utf8');
+  it('anchors a skill with supporting files and rewrites its references to full paths', async () => {
+    const dir = join(cwd, '.reika/skills/deploy');
+    await mkdir(join(dir, 'scripts'), { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), 'Run `sh scripts/push.sh data.txt`.', 'utf8');
+    await writeFile(join(dir, 'scripts/push.sh'), '#!/bin/sh\necho secret-ish', 'utf8');
+    await writeFile(join(dir, 'reference.md'), 'random doc', 'utf8');
     const skills = await loadSkills(cwd);
     const deploy = skills.find(s => s.name === 'deploy');
-    expect(deploy?.body).toBe('Deploy body');
-    // Supporting files don't create separate skills
+    expect(deploy?.body).toBe(
+      [
+        `This skill's files are in ${dir}.`,
+        'Files: reference.md, scripts/push.sh',
+        '',
+        `Run \`sh ${join(dir, 'scripts/push.sh')} data.txt\`.`,
+      ].join('\n'),
+    );
+    expect(deploy?.body).not.toContain('echo secret-ish');
     expect(skills.filter(s => s.name.includes('deploy'))).toHaveLength(1);
+  });
+
+  it('leaves a lone SKILL.md and a flat skill byte-identical', async () => {
+    await mkdir(join(cwd, '.reika/skills/solo'), { recursive: true });
+    await writeFile(join(cwd, '.reika/skills/solo/SKILL.md'), 'Solo body', 'utf8');
+    await mkdir(join(cwd, '.reika/skills/solo/.hidden'), { recursive: true });
+    await writeFile(join(cwd, '.reika/skills/solo/.hidden/x'), 'x', 'utf8');
+    await writeFile(join(cwd, '.reika/skills/flat.md'), 'Flat body', 'utf8');
+    const skills = await loadSkills(cwd);
+    expect(skills.find(s => s.name === 'solo')?.body).toBe('Solo body');
+    expect(skills.find(s => s.name === 'flat')?.body).toBe('Flat body');
   });
 
   it('skips directories without a SKILL.md inside', async () => {
@@ -275,6 +340,50 @@ describe('loadSkills', () => {
 // The skills Reika ships in skills/ (bundled into the package). A frontmatter typo here ships a
 // skill with no description or no plain-English routing — invisible until someone types the prompt
 // and nothing fires — so they are read straight off disk, ungated.
+describe('listSupportingFiles / skillDirAnchor', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'reika-skilldir-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('skips dotfiles, node_modules and anything past the depth cap', async () => {
+    await mkdir(join(dir, 'node_modules/pkg'), { recursive: true });
+    await mkdir(join(dir, 'a/b/c'), { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), 'x', 'utf8');
+    await writeFile(join(dir, '.env'), 'x', 'utf8');
+    await writeFile(join(dir, 'node_modules/pkg/index.js'), 'x', 'utf8');
+    await writeFile(join(dir, 'a/b/two.txt'), 'x', 'utf8');
+    await writeFile(join(dir, 'a/b/c/deep.txt'), 'x', 'utf8');
+    expect(await listSupportingFiles(dir, join(dir, 'SKILL.md'))).toEqual(['a/b/two.txt']);
+  });
+
+  it('rewrites only exact names of real files, at a word start', () => {
+    const files = ['scripts/run.sh', 'scripts/run.sh.bak', 'reference.md'];
+    const body = [
+      'Run scripts/run.sh, then ./scripts/run.sh again.',
+      'Keep scripts/run.sh.bak. See (reference.md) or "reference.md".',
+      'Not other/scripts/run.sh, not scripts/run.shx, not my-reference.md, not scripts/other.sh.',
+    ].join('\n');
+    expect(rewriteSkillPaths(body, '/s', files)).toBe(
+      [
+        'Run /s/scripts/run.sh, then /s/scripts/run.sh again.',
+        'Keep /s/scripts/run.sh.bak. See (/s/reference.md) or "/s/reference.md".',
+        'Not other/scripts/run.sh, not scripts/run.shx, not my-reference.md, not scripts/other.sh.',
+      ].join('\n'),
+    );
+  });
+
+  it('caps the listed names and counts the rest', () => {
+    const files = Array.from({ length: 25 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`);
+    const anchor = skillDirAnchor('/skills/x', files);
+    expect(anchor).toContain('f19.txt, and 5 more');
+    expect(anchor).not.toContain('f20.txt');
+  });
+});
+
 describe('skills shipped in skills/', () => {
   const shipped = async () =>
     Promise.all(
@@ -313,12 +422,15 @@ describe('bundled skills and requirements', () => {
   let root: string;
   let originalEnv: string | undefined;
   let originalPath: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'reika-bundled-'));
     originalEnv = process.env.REIKA_SKILLS_DIR;
     originalPath = process.env.PATH;
+    originalHome = process.env.HOME;
     process.env.REIKA_SKILLS_DIR = join(root, 'global');
+    process.env.HOME = join(root, 'home');
     await mkdir(join(root, 'bundled'), { recursive: true });
     await mkdir(join(root, 'global'), { recursive: true });
     await mkdir(join(root, 'repo/.reika/skills'), { recursive: true });
@@ -329,6 +441,7 @@ describe('bundled skills and requirements', () => {
     if (originalEnv === undefined) delete process.env.REIKA_SKILLS_DIR;
     else process.env.REIKA_SKILLS_DIR = originalEnv;
     process.env.PATH = originalPath;
+    process.env.HOME = originalHome;
   });
 
   const fakeGh = async () => {

@@ -1,4 +1,5 @@
 import { scanQuotes, type QuoteSpan } from './_heredoc.js';
+import { skipCarrier } from './_carriers.js';
 
 // Shell commands that only READ — asked as TWO questions, because the two callers pull in opposite
 // directions and collapsing them costs whichever one is on the losing side.
@@ -374,21 +375,20 @@ function readAnsiC(word: string, start: number, emit: (s: string) => void): numb
 // (#621) — while `_danger.ts`, which matches a command's own patterns through an unlisted carrier
 // (`timeout 5 rm` still gates), saw the gh read and did not flag it. (`xargs` is the other carrier,
 // read in `_sandbox.ts`'s verb reader, where the command it runs is known to be the argument.)
-// Flags and the DURATION operand are skipped; `-s`/`-k` take the next word as their value,
-// `--signal=KILL` does not.
-const CARRIER_VALUE_FLAGS = new Set(['-s', '--signal', '-k', '--kill-after']);
-
-export function dropCarriers(wordList: string[]): string[] {
+//
+// Which carriers are read through, and what their own options and operands are, is
+// `_carriers.ts`'s table (#756): `_danger.ts`'s verb strip walks the same entries, and a carrier
+// only one of the two knew was a fetch left ungated on one side and a refused read on the other.
+// Only the TRANSPARENT entry of the table is skipped here — `nice` and `timeout` bound or
+// deprioritize the command, while `sudo`/`env`/`nohup` change what running it means — and the walk
+// loops, so `timeout 30 nice gh pr view 1` is still the `gh` read.
+export function dropCarriers(wordList: readonly string[]): string[] {
   let i = 0;
-  while (wordList[i] === 'timeout') {
-    i++;
-    while (wordList[i]?.startsWith('-')) {
-      if (CARRIER_VALUE_FLAGS.has(wordList[i])) i++;
-      i++;
-    }
-    i++; // the DURATION operand
+  for (;;) {
+    const next = skipCarrier(wordList, i, true);
+    if (next < 0) return wordList.slice(i);
+    i = next;
   }
-  return wordList.slice(i);
 }
 
 // Plan mode's sed: a line-range or pattern-range print (`sed -n '120,180p' f`,

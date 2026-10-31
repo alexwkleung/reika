@@ -1,56 +1,8 @@
 import { Box, Text } from 'ink';
-import type { SkillMatch } from '../skillmatch.js';
+import { type ConfirmSpec } from './dialogspecs.js';
 import { IMPLEMENT_MODES, type ImplementMode } from './commands.js';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
-
-// Row 0 is "send as typed" and starts selected — the inverse of Approval, where Approve is row 0.
-// There the model has already committed to an action; here nothing has happened yet and the
-// literal prompt is what was asked for. A wrong default that acts costs a turn (or a request
-// nobody meant); a wrong default that doesn't costs a keystroke.
-export const CONFIRM_DECLINE = 0;
-export const CONFIRM_ACCEPT = 1;
-
-// What the harness is asking about. Three askers share the dialog: a strongly matched skill
-// (#425), a pasted link the prompt is not obviously about (#448), and the mode /implement runs in
-// (#561). Same frame, same keys, row 0 the default — the user learns one widget.
-export type ConfirmSpec = {
-  // `• <title>` in the tool color, `<subtitle>` beside it in secondary.
-  title: string;
-  subtitle: string;
-  // Muted lines under the header: the matched phrases, the links.
-  details: string[];
-  options: string[];
-  // The footer's "y = <accept>" word, for a yes/no ask whose accepting row is CONFIRM_ACCEPT. A
-  // pick among peers has no "yes", so it binds no y/n.
-  accept?: string;
-};
-
-export function skillConfirmSpec(match: SkillMatch): ConfirmSpec {
-  return {
-    title: 'Skill',
-    subtitle: `/${match.skill.name} — ${match.skill.description}`,
-    details: [`matched: ${match.matched.join(', ')}`],
-    options: ['Send as typed', `Apply /${match.skill.name}`],
-    accept: 'apply',
-  };
-}
-
-// A long URL wraps the frame; the user just typed it, so the head is enough to recognize it.
-const URL_DISPLAY_CHARS = 90;
-
-export function pastedUrlConfirmSpec(urls: string[]): ConfirmSpec {
-  const n = urls.length;
-  return {
-    title: n > 1 ? 'Pasted links' : 'Pasted link',
-    subtitle: `the prompt doesn't read as a request to open ${n > 1 ? 'them' : 'it'} — fetch before the turn?`,
-    details: urls.map(u =>
-      u.length > URL_DISPLAY_CHARS ? `${u.slice(0, URL_DISPLAY_CHARS)}…` : u,
-    ),
-    options: ['Send as typed', `Fetch ${n > 1 ? `${n} links` : 'the link'}`],
-    accept: 'fetch',
-  };
-}
 
 const IMPLEMENT_MODE_LABELS: Record<ImplementMode, string> = {
   agent: 'Agent — full tool set',

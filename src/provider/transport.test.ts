@@ -275,6 +275,59 @@ describe('refused connection at the default base URL', () => {
   });
 });
 
+describe('retries (#804)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  async function outcome(): Promise<string> {
+    vi.useFakeTimers();
+    const run = drain('http://x/v1').then(
+      text => `ok:${text}`,
+      (e: Error) => e.message,
+    );
+    await vi.runAllTimersAsync();
+    return run;
+  }
+
+  it('sends a rejected request once, with the status and body in the error', async () => {
+    const fetchMock = vi.fn(async () => new Response('unknown field', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await outcome()).toMatch(/chat\/completions failed: 400 .*unknown field/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries a 503, and succeeds when the server comes back', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('loading', { status: 503 }))
+      .mockResolvedValueOnce(new Response('loading', { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await outcome()).toBe('ok:hi');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up on a 503 after the last retry', async () => {
+    const fetchMock = vi.fn(async () => new Response('loading', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await outcome()).toMatch(/failed: 503/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('still retries a network error', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await outcome()).toBe('fetch failed');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('silent-stream timeout', () => {
   const PRIOR = process.env.REIKA_REQUEST_TIMEOUT_MS;
   afterEach(() => {

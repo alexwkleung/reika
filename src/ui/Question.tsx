@@ -18,9 +18,14 @@ export const OWN_ANSWER_LABEL = 'Something else — type your own answer';
 // The dialog sits in Ink's live frame, and every word in it is model-written: a frame as tall as
 // the viewport makes Ink repaint with `\x1b[3J` and strands the dialog in the scrollback (#456,
 // the #447 shape). Fixed rows: marginTop, top border, both paddingY rows, the header, the margins
-// above the question, the options and the hint, and the hint — then the input and status bar
-// underneath, plus slack.
-const DIALOG_FIXED_ROWS = 9;
+// above the question, the options and the hint — then the input and status bar underneath, plus
+// slack. The hint rides ON TOP of that, measured at the live width (#842): it is one row on a wide
+// terminal and three on a narrow pane, and counting it as one is how the frame outgrew the budget
+// that sized the question and cleared the scrollback.
+const FRAME_ROWS = 4; // marginTop, top border, and both paddingY rows
+const LABEL_ROWS = 1; // the `⏺ Question` header
+const GAP_ROWS = 2; // the margins above the question and above the options
+const HINT_GAP_ROWS = 1; // … and the one above the hint, which goes with it
 const BELOW_DIALOG_ROWS = 6;
 // While the user types, the input under the dialog is live and scrolls its own window once the
 // answer outgrows the room the dialog leaves it (App passes `questionDialogHeight` to Input). That
@@ -28,8 +33,13 @@ const BELOW_DIALOG_ROWS = 6;
 // holds those rows back — the input can't be squeezed into overflowing the frame.
 const TYPING_INPUT_ROWS = 4;
 
-// What fits, in the order things are given up: the options are what the user acts on, so every
-// option row and the own-answer row always show; descriptions go first, then the question's tail.
+// The two hint lines, and what the dialog says while the reason field is open on the question.
+const QUESTION_HINT = '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort';
+const QUESTION_TYPING_HINT = 'enter submit  ·  ctrl-c back to the options';
+
+// What fits, in the order things are given up: the options are what the user acts on, so the
+// own-answer row always shows and an option row is the last thing to go; descriptions go first,
+// then the hint (see below), then the question's tail.
 // Exported for unit tests.
 export function fitQuestionToHeight(
   questionRows: number,
@@ -43,6 +53,82 @@ export function fitQuestionToHeight(
   if (questionRows + labelRows <= budget) return { showDescriptions: false, questionRows };
   // One row goes to the "more lines" note, and the question keeps at least its first row.
   return { showDescriptions: false, questionRows: Math.max(1, budget - labelRows - 1) };
+}
+
+// The run of options a short pane can draw: `start`..`end` of `request.options`, with a marker row
+// on each side that hides something. `rows` covers those option rows and the markers, not the
+// own-answer row — that one always shows and the caller budgets for it separately.
+export type OptionWindow = {
+  start: number;
+  end: number;
+  moreAbove: number;
+  moreBelow: number;
+  rows: number;
+};
+
+// For the typing state, where the option list is not drawn: nothing visible, nothing hidden.
+const EMPTY_WINDOW: OptionWindow = { start: 0, end: 0, moreAbove: 0, moreBelow: 0, rows: 0 };
+
+// Which options show when the option rows alone outgrow the pane (#856). Every option row can no
+// longer always show — a dialog whose labels overflow is a frame as tall as the viewport, which is
+// the scrollback wipe — but truncating a label to one row is worse than hiding options: these are
+// full sentences, and the words that tell two of them apart sit past the first row. So the list is
+// windowed around the selection, and the markers say how many are out of sight. Exported for unit
+// tests.
+export function fitOptionsToHeight(
+  rowCosts: number[],
+  budget: number,
+  selectedIndex: number,
+): OptionWindow {
+  const n = rowCosts.length;
+  const whole: OptionWindow = {
+    start: 0,
+    end: n,
+    moreAbove: 0,
+    moreBelow: 0,
+    rows: rowCosts.reduce((a, c) => a + c, 0),
+  };
+  if (n === 0 || whole.rows <= budget) return whole;
+  // The markers are paid for out of the same budget they will be sized against, so each possible
+  // reservation is tried and the widest run whose markers fit inside it wins. Settling one
+  // reservation into the next does not converge: a freed row can let the run grow past an option
+  // that then keeps it off the end, and the loop stopped on the run that overran (#857). Reserving
+  // both rows always fits its own markers, so there is always a candidate.
+  let run = grow(rowCosts, Math.max(0, budget - 2), selectedIndex);
+  for (const reserved of [0, 1]) {
+    const candidate = grow(rowCosts, Math.max(0, budget - reserved), selectedIndex);
+    const markers = (candidate.start > 0 ? 1 : 0) + (candidate.end < n ? 1 : 0);
+    if (markers > reserved) continue;
+    if (candidate.end - candidate.start > run.end - run.start) run = candidate;
+  }
+  const moreAbove = run.start;
+  const moreBelow = n - run.end;
+  return {
+    start: run.start,
+    end: run.end,
+    moreAbove,
+    moreBelow,
+    rows: run.rows + (moreAbove > 0 ? 1 : 0) + (moreBelow > 0 ? 1 : 0),
+  };
+}
+
+// The longest run of options containing the selection that fits in `avail` rows: downward first,
+// so the list reads in order from the row the cursor is on, then upward to fill what is left. A
+// run always holds its selection, even when that row alone overruns: there is nothing smaller to
+// draw, and the window is derived from the cursor's index every render — the 1-9 keys land wherever
+// they name — so it never has to scroll a stale run into view.
+function grow(
+  rowCosts: number[],
+  avail: number,
+  selectedIndex: number,
+): { start: number; end: number; rows: number } {
+  const n = rowCosts.length;
+  let start = Math.min(Math.max(selectedIndex, 0), n - 1);
+  let end = start + 1;
+  let rows = rowCosts[start];
+  while (end < n && rows + rowCosts[end] <= avail) rows += rowCosts[end++];
+  while (start > 0 && rows + rowCosts[start - 1] <= avail) rows += rowCosts[--start];
+  return { start, end, rows };
 }
 
 // Typing state, mirrored from App. `forIndex` set means the user picked that option and is adding a
@@ -71,8 +157,28 @@ export function Question({
   reservedRows?: number;
 }) {
   const liveWidth = useContentWidth(DIALOG_CHROME);
-  const { labels, descriptions, ownAnswer, questionLines, typingLine, fit, hiddenQuestionRows } =
-    layoutQuestion(request, typing ?? null, width ?? liveWidth, rows, reservedRows);
+  const {
+    labels,
+    descriptions,
+    ownAnswer,
+    questionLines,
+    typingLine,
+    fit,
+    hiddenQuestionRows,
+    hint,
+    showHint,
+    options,
+    padRows,
+  } = layoutQuestion(
+    request,
+    typing ?? null,
+    width ?? liveWidth,
+    rows,
+    reservedRows,
+    selectedIndex,
+  );
+  // Null only while typing, where the list is not drawn at all.
+  const shown = options ?? EMPTY_WINDOW;
   const hang = HANG;
   return (
     <Box
@@ -100,7 +206,13 @@ export function Question({
         // Numbered so a row with a description reads as one entry and the list as a list — four
         // full-sentence labels with indented sub-lines otherwise ran together as a paragraph.
         <Box flexDirection="column" marginTop={1}>
-          {request.options.map((o, i) => {
+          {/* The numbers are the options' own, not the window's: the 1-9 keys jump to them, so a
+              row numbered from the window would send the cursor somewhere else entirely. */}
+          {shown.moreAbove > 0 ? (
+            <Text color={theme.muted}>{`  ↑ ${shown.moreAbove} more`}</Text>
+          ) : null}
+          {request.options.slice(shown.start, shown.end).map((o, at) => {
+            const i = shown.start + at;
             const selected = i === selectedIndex;
             const num = `${i + 1}. `;
             // Wrapped as one string so the tag can't be pushed onto its own flush-left row, then
@@ -125,6 +237,9 @@ export function Question({
               </Box>
             );
           })}
+          {shown.moreBelow > 0 ? (
+            <Text color={theme.muted}>{`  ↓ ${shown.moreBelow} more`}</Text>
+          ) : null}
           <Text>
             <Text color={selectedIndex === request.options.length ? theme.accent : undefined}>
               {selectedIndex === request.options.length ? '› ' : '  '}
@@ -136,15 +251,14 @@ export function Question({
               {ownAnswer}
             </Text>
           </Text>
+          {padRows > 0 ? <Box height={padRows} /> : null}
         </Box>
       )}
-      <Box marginTop={1}>
-        <Text color={theme.muted}>
-          {typing
-            ? 'enter submit  ·  ctrl-c back to the options'
-            : '↑↓ or 1-9 navigate  ·  enter select  ·  tab add a note  ·  ctrl-c abort'}
-        </Text>
-      </Box>
+      {showHint ? (
+        <Box marginTop={1}>
+          <Text color={theme.muted}>{hint}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -162,6 +276,9 @@ export function layoutQuestion(
   cols: number,
   rows: number,
   reservedRows: number,
+  // Which row the cursor is on, so the option window on a short pane follows it. The own-answer row
+  // is index `options.length`.
+  selectedIndex = 0,
 ) {
   const hang = HANG;
   const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
@@ -185,19 +302,74 @@ export function layoutQuestion(
     : labels.reduce((n, l) => n + rowsOf(l.wrapped), 0) + rowsOf(ownAnswer);
   const descriptionRows = typing ? 0 : descriptions.reduce((n, d) => n + (d ? rowsOf(d) : 0), 0);
   const below = BELOW_DIALOG_ROWS + (typing ? TYPING_INPUT_ROWS : 0);
-  const fit = fitQuestionToHeight(
-    questionLines.length,
-    labelRows,
-    descriptionRows,
-    rows - DIALOG_FIXED_ROWS - below - reservedRows,
-  );
-  const hiddenQuestionRows = questionLines.length - fit.questionRows;
-  const height =
-    DIALOG_FIXED_ROWS +
-    fit.questionRows +
-    (hiddenQuestionRows > 0 ? 1 : 0) +
+  // Pre-wrapped, like the labels: the rows counted here are then the rows drawn at any width the
+  // frame is laid out in, not just the one this happened to measure at.
+  const hint = hangingWrap(typing ? QUESTION_TYPING_HINT : QUESTION_HINT, Math.max(1, cols), 0);
+  const hintRows = HINT_GAP_ROWS + hint.split('\n').length;
+  // Everything that does not depend on the question: the frame, the header and the margins.
+  const chrome = FRAME_ROWS + LABEL_ROWS + GAP_ROWS;
+  const fixed = chrome + hintRows;
+  // `rows - 1`: Ink repaints the whole terminal once the frame is AT LEAST as tall as the viewport
+  // (build/ink.js), so a budget that lands exactly on `rows` still clears the scrollback.
+  const budget = (fixedRows: number): number => rows - 1 - fixedRows - below - reservedRows;
+  const fitAt = (fixedRows: number) =>
+    fitQuestionToHeight(questionLines.length, labelRows, descriptionRows, budget(fixedRows));
+  let fit = fitAt(fixed);
+  let showHint = true;
+  // On a pane too short for the whole dialog, the HINT is what goes before the question is cut:
+  // the options are what the user acts on and the question is what they are answering, while the
+  // hint is keyboard help they learn once. It goes when dropping it shows the question whole, and
+  // also when the frame overflows with it: `fitQuestionToHeight` keeps a question row and its note
+  // past the budget, and keeping the hint there spends the scrollback on keyboard help.
+  const cut = (f: ReturnType<typeof fitQuestionToHeight>): boolean =>
+    f.questionRows < questionLines.length || (!f.showDescriptions && descriptionRows > 0);
+  const heightOf = (f: ReturnType<typeof fitQuestionToHeight>, fixedRows: number): number =>
+    fixedRows +
+    f.questionRows +
+    (f.questionRows < questionLines.length ? 1 : 0) +
     labelRows +
-    (fit.showDescriptions ? descriptionRows : 0);
+    (f.showDescriptions ? descriptionRows : 0);
+  if (cut(fit)) {
+    const without = fitAt(chrome);
+    if (!cut(without) || heightOf(fit, fixed) > budget(0)) {
+      showHint = false;
+      fit = without;
+    }
+  }
+  const hiddenQuestionRows = questionLines.length - fit.questionRows;
+  const fixedRows = showHint ? fixed : chrome;
+  // What is left for the options once the fixed rows, the question and its note have taken theirs.
+  // The own-answer row is always drawn, so it comes off the budget before the window is picked —
+  // what is left is the option rows (descriptions included) plus their markers.
+  const optionBudget =
+    rows -
+    1 -
+    fixedRows -
+    below -
+    reservedRows -
+    fit.questionRows -
+    (hiddenQuestionRows > 0 ? 1 : 0) -
+    rowsOf(ownAnswer);
+  const optionCosts = labels.map((l, i) => {
+    const d = fit.showDescriptions ? descriptions[i] : null;
+    return rowsOf(l.wrapped) + (d ? rowsOf(d) : 0);
+  });
+  const options = typing ? null : fitOptionsToHeight(optionCosts, optionBudget, selectedIndex);
+  // A windowed list is padded to the tallest window any cursor position gives (capped at the
+  // budget), or the dialog — and the input App sizes under it — grew and shrank by a row as the
+  // user arrowed past labels that wrap to different heights. A whole list never moves.
+  let padRows = 0;
+  if (options && options.moreAbove + options.moreBelow > 0) {
+    let steady = 0;
+    for (let i = 0; i <= request.options.length; i++) {
+      steady = Math.max(steady, fitOptionsToHeight(optionCosts, optionBudget, i).rows);
+    }
+    padRows = Math.max(0, Math.min(steady, optionBudget) - options.rows);
+  }
+  // `options.rows` already carries the descriptions of the options on show, and while typing the
+  // list is replaced by the prompt line, so neither term is added again here.
+  const optionRows = typing || !options ? labelRows : options.rows + padRows + rowsOf(ownAnswer);
+  const height = fixedRows + fit.questionRows + (hiddenQuestionRows > 0 ? 1 : 0) + optionRows;
   return {
     labels,
     descriptions,
@@ -207,6 +379,10 @@ export function layoutQuestion(
     fit,
     hiddenQuestionRows,
     height,
+    hint,
+    showHint,
+    options,
+    padRows,
   };
 }
 
@@ -215,6 +391,7 @@ export function questionDialogHeight(
   request: QuestionRequest,
   typing: QuestionTyping | null,
   reservedRows: number,
+  selectedIndex = 0,
 ): number {
   return layoutQuestion(
     request,
@@ -222,5 +399,6 @@ export function questionDialogHeight(
     contentWidth(DIALOG_CHROME),
     process.stdout.rows || 24,
     reservedRows,
+    selectedIndex,
   ).height;
 }

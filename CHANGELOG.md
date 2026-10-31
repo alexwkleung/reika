@@ -3,6 +3,243 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Added
+
+- `/resume` in chat mode lists only chats, and every `/resume` list tags a session holding a chat
+  with `chat`. `/resume all` lists every session in any mode. Sessions saved before this release
+  are not tagged and appear only under `/resume all`. Resuming a session that holds only a chat
+  switches to chat mode, and resuming one with no chat from chat mode switches to agent mode, so
+  its messages are on screen. (#879)
+- `reika -p -i` (`--interactive`) asks approvals, model questions and the skill and pasted-link
+  confirms on the terminal as numbered menus, instead of declining them. A headless run can now
+  reproduce a TUI session that hits a dialog without switching approvals off (#876).
+- Headless runs (`reika -p`) are auto-saved like TUI sessions, so `/resume` lists them.
+  `REIKA_AUTOSAVE=0` turns it off. (#878)
+
+### Changed
+
+- When Reika pauses reading and searching to break a loop, the paused tools now stay in the tool
+  list and are refused when called, rather than being removed. Removing them made a local server
+  re-process the whole prompt, both when the pause started and when it ended. On a 24B local model
+  this cut prompt processing per round by about a third. `REIKA_WITHDRAW_KEEP_TOOLS=0` restores the
+  old behaviour. (#870)
+
+- Asked about its past sessions, the model is now told both places they live: auto-saved sessions
+  under `~/.config/reika/history/projects/`, one subdirectory per project, and `/save` transcripts at
+  `~/.config/reika/history/`. Told only the second, it often listed the `/save` files and never found
+  the auto-saved ones, which are most of them. (#865)
+
+- Skills kept for other coding agents load from where they already are: `~/.agents/skills/`, and a
+  project's `.agents/skills/` and `.claude/skills/`. Reika's own skill directories still win on a
+  name collision, and `/skills` labels each skill with the directory it came from. To use skills from
+  `~/.claude/skills/`, link that directory to `~/.agents/skills/`. (#863)
+
+- A directory skill that carries supporting files (`scripts/`, reference docs) now tells the model
+  where those files are. The body opens with the skill's directory and a list of the file names, and
+  a reference to one of those files (`scripts/extract.py`) is rewritten to its full path, so it
+  resolves to the skill rather than to your project. Skill folders from other harnesses work
+  unchanged. Reika still never runs a script itself: the model runs it
+  through `bash`, behind the usual approval prompt and sandbox. (#862)
+
+- An MCP server that exits mid-session is started again on its next call instead of staying dead
+  until Reika restarts. The call it died during still fails and is not retried. A server that keeps
+  exiting is given up on after three restarts, and `/mcp` says so. (#860)
+
+### Fixed
+
+- A `/save` made in chat mode resumes as a chat. The file carried no chat marker, so `/resume` read
+  it as an agent session and put the chat into agent history — and, since a one-sided session opens
+  on its side, switched to agent mode. A file with no marker whose prompts were all sent in chat
+  mode is now read as the chat side, so the saves made before this fix open correctly too. (#881)
+
+- On a narrow pane, where the status bar wraps onto several rows, a streaming reply no longer
+  clears the terminal's scrollback on every update (iTerm2's "attempted to clear scrollback"
+  warning) or snaps the view back to the top. The rows the wrapped status bar takes are now kept
+  free of the live output. (#874)
+
+- The debug log now records what each request's prefill actually cost where the server reports it:
+  the `round=` line adds the provider's cached-token count, plus llama.cpp's `prompt_n`,
+  `prompt_ms` and `cache_n`, and an `endpoint` line names the model and host at session start and on
+  every `/model` switch, so saved logs can be split by model. (#869)
+
+- A program fed to an interpreter on stdin (`python3 <<'PY'`, `python3 - <<'PY'`, and the same for
+  `node`, `ruby` and `perl`) is now read for the commands it hands to a shell, so a pasted script
+  that runs `os.system("pkill node")`, `subprocess.run(["git", "push"])`,
+  `execFileSync("git", ["push"])` or Ruby/Perl's `system("git", "push")` prompts before it runs.
+  Nothing reads the whole body as a command: only the string or argv a shell-out call is handed, so
+  `print("x; pkill y")` stays quiet — the #699 false positive — and a command built at runtime
+  (`os.system(CMD)`) is still not seen. Replayed over 10,389 saved commands against `main`: 0 lost a
+  label, 6 gained one, all from the sessions that built this — probes, and `python3 -` scripts
+  editing source that quotes a shell-out call in a Python string. (#750, #866)
+
+- `/resume` no longer freezes its spinner while a long session loads. The resumed scrollback was
+  drawn in one pass, which held the screen still until all of it was on it; it now lands a slice at
+  a time with the spinner moving in between. A prompt typed during the load waits in the box until
+  the session is in. (#859)
+
+- A comment in a diff keeps its color. When it wrapped, its continuation rows dropped to the
+  terminal's default text color, and on a line with a changed word highlighted, the text after that
+  word lost the comment color even on the first row. A changed word's own highlight was also lost
+  on a wrap, and the approval dialog's command preview wrapped with the same fault. (#858)
+- A fetch or an install behind a wrapper's own words is no longer missed: `timeout 5 curl …`,
+  `nice curl …`, `timeout -s KILL 30 make install`. The approval gate reads the verb in verb
+  position, but it did not know the words a carrier takes for itself — `timeout`'s duration,
+  `nice -n 10`, their flags — so the verb behind them never reached the place it looks in and,
+  under `safe`, ran with no prompt at all. Carriers now come off one table, shared with plan
+  mode's read-only gate and the sandbox's network reader, so `nice cat …` is admitted as the read
+  it is and `nice gh pr view …` keeps its network. (#853)
+- An approval or `ask_user` popup in a narrow pane no longer wipes the terminal's scrollback
+  (iTerm2's "a control sequence attempted to clear scrollback history"). The dialog counted its own
+  rows as one line each, so on a narrow pane the subject, the warnings, the option labels and the
+  keyboard hint wrapped it past the height the preview had been sized against, and Ink repainted the
+  whole terminal. It now measures those rows at the pane's width, and on a pane too short for
+  everything gives up the hint before the preview. (#855)
+- `ask_user`'s option list no longer pushes the dialog past a short, narrow pane. When the option
+  labels alone need more rows than the pane leaves — a tmux or an iTerm quarter split, say — the
+  list is windowed around the selected row with `↑ N more` / `↓ N more` markers, instead of drawing
+  every option into a frame as tall as the viewport. Option numbers stay the list's own, so the 1-9
+  keys still jump to the row they name, and the "Something else — type your own answer" row always
+  shows. (#856)
+
+## [0.7.0] - 2026-10-27
+
+### Changed
+
+- `install` copying files into place — `install -m 644 a b`, or the same behind `sudo` — is labelled
+  "File install (copies into place)" instead of "Install command (fetches and runs third-party
+  code)". It still asks before running, since writing into `/etc` under `sudo` is exactly what the
+  gate is for; the label just says what the command does. `make install`, `conda install numpy` and
+  the rest keep the install label, because there `install` is an argument to something else. (#843)
+- On a local model server, reika now starts the compaction note for the model instead of only
+  asking for one. Small models such as LFM2.5 kept calling tools when asked to write the note, so
+  the note fell back to their reasoning; a started note they finish. A tool call the model adds
+  after a written note is dropped and the note kept. `REIKA_NOTE_PREFILL=0` turns it off. (#818)
+
+### Added
+
+- `/search <query>` searches the web without waiting for the model to decide to. The command sends
+  one search's instructions with your query, so a model that would otherwise answer from memory runs
+  the search and answers from its results. It needs a search provider — without one, or in a session
+  with no route out, it says which setting is missing instead of spending a turn — and it refuses in
+  shell and minimal mode, whose tool lists carry no web tools. The name is `/search`, not
+  `/web-search`: it shares it with the tool it invokes. (#844)
+- `AGENT.md` is read as an instructions file when there is no `AGENTS.md`, ahead of `CLAUDE.md`. Some
+  repos use that older spelling, and reika loaded no instructions for them. (#814)
+
+### Fixed
+
+- A command named after a `$(…)` inside a quoted value is read again, so
+  `FOO="$(date) a b c" make install` asks before installing. The gate splits a command at its
+  substitutions to see what runs inside them, and the value's own words then pushed the command
+  past the position it looks in: that install, and a `curl`, `ssh` or `eval` in the same place,
+  ran with no warning at all. (#843)
+- An install or a fetch behind a wrapper option spelled long or bundled is no longer hidden by
+  it: `sudo --user me curl …`, `sudo -iu me make install`, `env --chdir /tmp make install`.
+  `env -S "curl …"` (also `env -iS …` and `env -S'…'`) runs its value as a command line, and
+  that value is now read as one. (#843)
+- The note a local model writes before the context is compacted no longer carries the model's plan
+  for what to do next. Small models such as LFM2.5 kept writing "Let me run the tests now:" and
+  sometimes pages of planning after the note, which then stood in for its findings; the note now
+  ends where that starts, and the stream stops there too. (#840)
+- Thinking models whose chat template hides earlier reasoning behind Reika's per-round note — on
+  Ollama or mlx-vlm, or with a template that has no `preserve_thinking` switch, such as Mellum2.1
+  Thinking, Ornith 1.5 or Gemma 4 E4B — no longer lose sight of their own reasoning once the context
+  starts shrinking. Reika checks with a few tiny requests before the first turn and moves the note
+  onto the last tool result where needed. On LFM2.5 with the switch ignored, the model went from
+  re-deriving its analysis in two thirds of rounds to about one in ten. `REIKA_NOTE_SLOT` overrides
+  the choice. (#834, #837, #838)
+- A turn that reika stopped itself — after the model kept looping, or at the turn limit — now says
+  when its edits introduced type errors, naming the first ones. Before, the stop only said the edits
+  were saved, even when they no longer compiled. (#831, #835)
+- An edit made right after the model read the file with `cat`, `head` or `sed -n` is no longer held
+  back with "read the file first". Models that read through the shell lost a step on nearly every
+  file, and one rewrote a whole file from memory when the read it was told to make was then
+  refused. (#826)
+- A very large message (a big paste, `@`-mention or skill) on a small context window no longer
+  fails the turn with `Cannot read properties of undefined (reading 'role')` when reika compacts.
+  The message is kept and the conversation before it is compacted. (#823)
+- While a local model writes its compaction note, reika no longer briefly shows the model's
+  next-step thinking and a tool call after the note. They were never part of the saved note, but
+  seeing them stream and then disappear made it look like a hidden tool call. (#820)
+- Writing a compaction note no longer reprocesses the whole prompt when reika pauses or resumes
+  file reading on the same step. The note request now offers the same tools as the request before
+  it, so on a local server it costs seconds instead of minutes (about 27k tokens on one 32k run).
+  (#817)
+- When a model tries to call a tool while writing its compaction note, reika now tells it the call
+  was not run and asks again, instead of repeating the same request. Small local models that kept
+  calling tools there wrote a thin note, or none. (#815)
+- Reading a file with `read` after looking at it through the shell no longer counts as a repeated
+  read. reika asks for exactly that before an edit, and counting it could pause a model's file
+  reading on its next step. (#813)
+- Shell reads written as `cd <project> && cat file` or `head -n 100 file | tail -n 20` now count
+  toward reika's re-read loop detection, like a bare `cat` already did. A model that starts every
+  command with a `cd` could re-read the same file for hundreds of rounds without reika noticing.
+  (#811)
+- When reika pauses a model's file reading to break a loop, the pause now lasts until the model
+  changes something (or five rounds pass) instead of lifting after one round. It used to switch on
+  and off every other round, and on a local server each switch reprocessed the whole prompt: in one
+  long run that was about half of all prefill time. (#809)
+- A request the server rejects (a 400, 401, 403 or 404) is no longer sent three times. Only timeouts,
+  rate limits and server errors were meant to be retried, but a rejection was retried as if the
+  connection had dropped. A wrong API key or model name now reports at once, and a server that
+  rejects an optional field sees the request without it on the second try, not the fourth. (#807)
+- A model that re-reads the same file through the shell (`cat`, `head`, `tail`, `sed -n '1,120p'`)
+  instead of the read tool is now caught by the loop detector. Only the read tool counted, so a model
+  that read mostly through the shell could re-read one unchanged file for over a hundred rounds and
+  never be told to stop and act. (#805)
+- Thinking models whose template hides earlier reasoning (LFM2.5, Qwen3.6) no longer forget their own
+  work once a long turn starts shedding context. Reika's per-round notes arrive as a user message,
+  and those templates drop every `<think>` before the newest one, so the model kept re-deriving what
+  it had already worked out. Requests to a local or private server now ask the template to keep it
+  (`chat_template_kwargs: {"preserve_thinking": true}`), and a server that rejects the field gets one
+  retry without it. (#803)
+- A compaction note is no longer just a line like "Let me examine `_net.ts`:". When the model
+  answered the note request by calling a tool anyway, the words before the call were kept as the note
+  and its actual findings, written in its reasoning, were dropped. A reply that calls a tool now gets
+  the retry, and if that also calls one, the note comes from the longer reasoning. (#800)
+
+## [0.6.0] - 2026-10-23
+
+### Added
+
+- The approval prompt has a fourth row, **Decline, and say what to do instead**. It opens the input box
+  for a reason, and the model gets that reason as a message from you instead of a bare "declined by
+  user", which small models often answer by trying the same call again.
+
+### Fixed
+
+- Web search through Chrome no longer reports a result's date ("May 8, 2026", "3 days ago") as its
+  title. Brave puts the date last on some results, and the extractor took the last line.
+- Web search through Chrome on macOS no longer pulls focus to the search browser. Its launch and
+  every search's tab used to activate it. A bot check still brings its window to the front.
+- The Chrome search browser on macOS quits from the Dock again. The focus fix above had launched it
+  in a mode where Chrome ignores Quit; it now launches hidden instead, which keeps focus just as well.
+- The input box no longer jumps up when a long-running command finishes. Its live output now shows
+  the same last 10 lines the finished result does, instead of growing to fill the screen and then
+  shrinking back.
+- The gate's generic install fallback no longer prints an Install command dialog for a read or for a
+  filename. `LANG=C grep -rn install src` is a grep, and the test that skips reads like it ran on the
+  raw segment, so it saw the assignment and not the `grep` behind it, and grep's own argument read as
+  a verb. `cp -r "build install" dist` is a copy, and the whitespace reading kept for an unterminated
+  quote ran on every segment, so it cut that quoted argument at a space inside it and found a verb
+  there too. The lead is now tested after the verb-prefix strip, which also brings a deep verb back
+  into reach (`env A=1 sudo time conda install numpy` and `cat=1 make install` prompt where they did
+  not), and the whitespace reading answers only where a quote really was dropped, and only for a verb
+  after it, so the unterminated `make CFLAGS="-O2 install` still prompts while
+  `mv "old install" new # it's fine` does not. The strip now skips a wrapper's own options as well
+  (`sudo -u me grep …`, `env -i`, `time -p`, `nohup --`), so those reads stop prompting and
+  `sudo -u me curl …` gets the network label it was missing; `command -v x` runs nothing and gets no
+  label. What that gives up is an install carried inside a CLOSED quoted value —
+  `A="make install" bash -c "$A"` is one expansion from running — and telling it from the false
+  positive means expanding it, which is the shell's job and not the gate's (#757).
+
+### Contributors
+
+- @xiaoyu607: Simplified Chinese translations of the pre-install pages and the localized docs site (#700)
+- @zlc-131: Simplified Chinese translation of the support page (#784)
+
 ## [0.5.0] - 2026-10-19
 
 ### Changed
@@ -157,8 +394,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the value it compared), `+ mkdir: /path: Operation not permitted` (a diff's added or removed line,
   as `gh pr diff` prints one), `AssertionError: /bin/sh: /path: Operation not permitted` (Reika's own
   sandbox tests under a `grep -E "AssertionError|expected"`), at line start or behind a runner's own
-  column (`web:build: Expected: …`), or behind a bare `Error: ` header. A runner's own column still counts —
-  turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
+  column (`web:build: Expected: …`), or behind a bare `Error: ` header. A runner's own column still
+  counts — turbo's `web:build: `, pnpm -r's `packages/web build: `, a `[0] ` job number, concurrently's
   `name | `, indentation, and a go error chain — so a denial behind one is still reported; any other
   column shape now costs a footer rather than producing one for a write that never happened (#726).
 
@@ -166,18 +403,20 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - The sandbox refuses writes to git's `config` and `hooks`, and to the files that decide which
   config git reads (anything named `.git`, `commondir`, `gitdir`), wherever they are — matched by
-  name, so renaming or repointing `.git` does not get around it. Both name programs something else runs: `core.fsmonitor` was run
-  by Reika's own unsandboxed `git status` after every shell command, and a hook is run by your next
-  commit. Reika's own git calls now pass `-c core.fsmonitor=false` and `-c core.hooksPath=/dev/null`,
-  switch off any filter driver the repo's own config defines, and skip submodules, so a repo's
-  config or hooks cannot make it run a program either way; drivers from your global config, such as
-  Git LFS, still apply to the diffs it draws, but LFS never downloads a missing object for one
-  (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed. The `write`/`edit` tools now gate the same paths through the approval dialog instead of landing silently (below).
+  name, so renaming or repointing `.git` does not get around it. Both name programs something else
+  runs: `core.fsmonitor` was run by Reika's own unsandboxed `git status` after every shell command,
+  and a hook is run by your next commit. Reika's own git calls now pass `-c core.fsmonitor=false`
+  and `-c core.hooksPath=/dev/null`, switch off any filter driver the repo's own config defines, and
+  skip submodules, so a repo's config or hooks cannot make it run a program either way; drivers
+  from your global config, such as Git LFS, still apply to the diffs it draws, but LFS never
+  downloads a missing object for one (#706). Deleting a nested repo still works; the project's own `.git` cannot be deleted or renamed.
+  The `write`/`edit` tools now gate the same paths through the approval dialog instead of landing
+  silently (below).
 - The cost, and it is wider than a refused `git config`: `git init`, `git clone`,
   `git submodule add` and `git worktree add` write these paths, so creating a repository — in any
   directory, temp included — is now a command you run instead of the model, and a test suite that
-  creates repos in a temp dir fails when the model runs it. Everything else in `.git` — `add`, `commit`, `checkout`, `stash`, `fetch`, the index
-  lock — is unchanged.
+  creates repos in a temp dir fails when the model runs it. Everything else in `.git` — `add`,
+  `commit`, `checkout`, `stash`, `fetch`, the index lock — is unchanged.
 - The `write`/`edit` tools gate the same paths the sandbox refuses for shell commands: writing to a
   repo's `config` or `hooks` (or to the files that decide which config git reads) raises the same
   warning in the approval dialog an out-of-project write does, so under `safe` it cannot be

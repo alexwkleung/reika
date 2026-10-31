@@ -154,7 +154,15 @@ describe('connectMcpServers', () => {
       expect(runtime.list()).not.toContain('has exited');
       await expect(runtime.call('good', 'crash', {})).rejects.toThrow(/server exited \(code 9\)/);
       expect(runtime.servers[0].dead).toBe(true);
-      expect(runtime.list()).toContain('this server has exited');
+      expect(runtime.list()).toContain('it is restarted on its next call');
+      // #592: the next call respawns it.
+      expect((await runtime.call('good', 'echo', { text: 'hi' })).content?.[0]).toEqual({
+        type: 'text',
+        text: 'ok:hi',
+      });
+      expect(runtime.servers[0].dead).toBe(false);
+      expect(runtime.servers[0].restarts).toBe(1);
+      expect(runtime.list()).toContain('restarted once after exiting');
     } finally {
       runtime.close();
     }

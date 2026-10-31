@@ -4,6 +4,7 @@ import type { NativeImage } from '../agent/attachments.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
 import { cacheControlFor, promptCacheKeyFor } from './cachehints.js';
+import { chatTemplateKwargsFor } from './templatekwargs.js';
 import { latchesFor, resetEndpointLatches } from './latches.js';
 import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
@@ -15,6 +16,11 @@ import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
 // what let `agent/decoderate.ts` bound the rate as a measurement rather than trust it — and named
 // for what they are rather than for llama.cpp's spelling, so nothing downstream reads a wire shape.
 export type EngineTimings = { predictedN: number; predictedMs: number; perSecond: number };
+
+// The engine's own prefill stats (#868): `promptN` tokens it actually processed, in `promptMs`,
+// after reusing `cacheN` from its prompt cache. Each optional on its own, unlike the decode trio —
+// nothing derives a rate from them, they are logged as reported. Debug-log only.
+export type EnginePrompt = { promptN?: number; promptMs?: number; cacheN?: number };
 
 export type ModelResponse = {
   content: string;
@@ -34,6 +40,8 @@ export type ModelResponse = {
   // derivation below; an OpenAI-compatible API reports nothing of the sort and keeps the
   // derivation (agent/decoderate.ts picks between the two). Absent on every hosted endpoint.
   engineTimings?: EngineTimings;
+  // The engine's own prefill stats, when it reported any (#868). Absent on every hosted endpoint.
+  enginePrompt?: EnginePrompt;
   // Per-token logprobs for the generated content, when they were requested AND the engine
   // returned them (issue #134). Absent otherwise — an absent array means "not measured", never
   // "the model was certain". Only the debug drift instrumentation reads it.
@@ -65,6 +73,9 @@ export async function callModel(opts: {
   // harness note as the final user message instead of a system suffix. See provider/toolcall.ts.
   prefixStable?: boolean;
   trailingNote?: string;
+  // The reply's opening, sent as a final assistant message for the engine to continue (#806). Set
+  // only by the compaction note round, on local hosts; see agent/compactionreport.ts.
+  assistantPrefill?: string;
   // Override the freeze-on-serialize default below. The speculative KV warm (agent/warm.ts)
   // passes false: only the turn's real call may stamp `rendered` bytes — a warm serializes the
   // same frozen bytes read-only, so a throwaway request can never mutate shared history.
@@ -111,6 +122,7 @@ export async function callModel(opts: {
       rerender,
       latches,
       trailingNote: opts.trailingNote,
+      assistantPrefill: opts.assistantPrefill,
       nativeImages: opts.nativeImages,
       onCapStats: opts.onCapStats,
       onAgedStats: opts.onAgedStats,
@@ -129,6 +141,7 @@ export async function callModel(opts: {
   // consume attempt: a retry only happens before any chunk arrived (the `received` gate below), so
   // there is never a stale one to clear.
   let engineTimings: EngineTimings | undefined;
+  let enginePrompt: EnginePrompt | undefined;
   // Reset per consume attempt: the logprobs degrade below re-sends from scratch, so a retry's
   // prefill must not be timed from the rejected request's start.
   let startedAt = Date.now();
@@ -145,6 +158,9 @@ export async function callModel(opts: {
   const cacheControl = latches.cacheControl
     ? undefined
     : cacheControlFor(opts.config.baseURL, opts.config.model);
+  const templateKwargs = latches.chatTemplateKwargs
+    ? undefined
+    : chatTemplateKwargsFor(opts.config.baseURL);
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -159,6 +175,7 @@ export async function callModel(opts: {
     ...(wantLogprobs ? { logprobs: true, top_logprobs: opts.logprobs } : {}),
     ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
     ...(cacheControl ? { cache_control: cacheControl } : {}),
+    ...(templateKwargs ? { chat_template_kwargs: templateKwargs } : {}),
   };
 
   // True once a single chunk has been consumed. Gates the logprobs degrade below: retrying after
@@ -207,6 +224,15 @@ export async function callModel(opts: {
           predictedMs: et.predicted_ms,
           perSecond: et.predicted_per_second,
         };
+      }
+      // Prefill stats ride the same object, cumulative the same way; each field is taken on its own.
+      if (et) {
+        const prompt: EnginePrompt = {
+          ...(typeof et.prompt_n === 'number' ? { promptN: et.prompt_n } : {}),
+          ...(typeof et.prompt_ms === 'number' ? { promptMs: et.prompt_ms } : {}),
+          ...(typeof et.cache_n === 'number' ? { cacheN: et.cache_n } : {}),
+        };
+        if (Object.keys(prompt).length > 0) enginePrompt = prompt;
       }
       // Logprobs ride the choice, not the delta, and a chunk can carry them with no delta at all
       // — so collect before the delta guard. Normalized to SampledToken here (the wire's null
@@ -324,6 +350,17 @@ export async function callModel(opts: {
           req = plain;
           continue;
         }
+        // Name-keyed like the cache hints: logprobs below latches on any pre-chunk failure, and a
+        // server still loading at startup would otherwise cost the session its reasoning.
+        if (req.chat_template_kwargs !== undefined && reason.includes('chat_template_kwargs')) {
+          latches.chatTemplateKwargs = true;
+          debugLog(
+            `[reika:debug] chat_template_kwargs unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { chat_template_kwargs: _templateKwargs, ...plain } = req;
+          req = plain;
+          continue;
+        }
         if (req.logprobs !== undefined) {
           latches.logprobs = true;
           debugLog(
@@ -359,6 +396,7 @@ export async function callModel(opts: {
         finishReason,
         timing: timing(),
         ...(engineTimings ? { engineTimings } : {}),
+        ...(enginePrompt ? { enginePrompt } : {}),
         ...(sampled.length > 0 ? { sampled } : {}),
       };
     }
@@ -388,6 +426,7 @@ export async function callModel(opts: {
     finishReason,
     timing: timing(),
     ...(engineTimings ? { engineTimings } : {}),
+    ...(enginePrompt ? { enginePrompt } : {}),
     ...(sampled.length > 0 ? { sampled } : {}),
   };
 }

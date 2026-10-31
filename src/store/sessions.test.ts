@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Message } from '../types.js';
+import type { Message, Mode } from '../types.js';
 import { serializeJsonl, TRANSCRIPT_VERSION, type TranscriptMeta } from './transcript.js';
 import {
   countRealTurns,
@@ -15,14 +15,14 @@ import {
   writeSession,
 } from './sessions.js';
 
-const meta = (savedAt: string, messageCount = 0): TranscriptMeta => ({
+const meta = (savedAt: string, messageCount = 0, mode: Mode = 'agent'): TranscriptMeta => ({
   version: TRANSCRIPT_VERSION,
   savedAt,
   model: 'test-model',
   baseURL: 'http://127.0.0.1:1/v1',
   cwd: '/repo/app',
   messageCount,
-  mode: 'agent',
+  mode,
 });
 
 let dir: string;
@@ -65,7 +65,49 @@ describe('writeSession / loadSession', () => {
       { agent: [], chat: [{ role: 'user', content: 'what is a monad' }] },
       meta('2026-09-22T10:00:00Z'),
     );
-    expect(await listSessions(dir)).toMatchObject([{ title: 'what is a monad', messageCount: 1 }]);
+    expect(await listSessions(dir)).toMatchObject([
+      { title: 'what is a monad', messageCount: 1, chatTurns: 1 },
+    ]);
+  });
+
+  it('counts the chat side in the header, since the mode timeline covers the agent side only', async () => {
+    const path = join(dir, 'mixed.jsonl');
+    await writeSession(
+      path,
+      {
+        agent: [{ role: 'user', content: 'fix the bug', mode: 'agent' }],
+        chat: [
+          { role: 'user', content: '/model kimi', meta: true },
+          { role: 'user', content: 'what is a monad', mode: 'chat' },
+          { role: 'assistant', content: 'a monoid in…' },
+          { role: 'user', content: 'and a functor', mode: 'chat' },
+        ],
+      },
+      meta('2026-09-22T10:00:00Z'),
+    );
+    const header = JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!) as {
+      title?: string;
+      chatTurns?: number;
+      modes?: unknown[];
+    };
+    expect(header).toMatchObject({
+      title: 'fix the bug',
+      chatTurns: 2,
+      modes: [{ mode: 'agent', from: 1, to: 1 }],
+    });
+    expect(await listSessions(dir)).toMatchObject([{ chatTurns: 2 }]);
+  });
+
+  it('leaves the count out of a session with no chat side', async () => {
+    const path = join(dir, 'agent.jsonl');
+    await writeSession(
+      path,
+      { agent: [{ role: 'user', content: 'fix the bug' }], chat: [] },
+      meta('2026-09-22T10:00:00Z'),
+    );
+    expect((await readFile(path, 'utf8')).split('\n')[0]).not.toContain('chatTurns');
+    const [entry] = await listSessions(dir);
+    expect(entry).not.toHaveProperty('chatTurns');
   });
 
   it('reads a /save transcript as the agent side', async () => {
@@ -73,6 +115,45 @@ describe('writeSession / loadSession', () => {
     const msgs: Message[] = [{ role: 'user', content: 'hi' }];
     await writeFile(path, serializeJsonl(msgs, meta('2026-09-22T10:00:00Z', 1)));
     expect(await loadSession(path)).toEqual({ agent: msgs, chat: [] });
+  });
+
+  it('reads a /save made in chat mode as the chat side, marker or not (#880)', async () => {
+    // What /save writes in chat mode before and after the fix: the chat scrollback through the
+    // plain transcript serializer, no segment marker, the header's mode the only clue.
+    const msgs: Message[] = [
+      { role: 'user', content: 'what is a monad', mode: 'chat' },
+      { role: 'assistant', content: 'a monoid in…' },
+    ];
+    const path = join(dir, 'chat-save.jsonl');
+    await writeFile(path, serializeJsonl(msgs, meta('2026-09-22T10:00:00Z', 2, 'chat')));
+    expect(await loadSession(path)).toEqual({ agent: [], chat: msgs });
+  });
+
+  it('keeps an unmarked agent-only auto-save on the agent side when its header says chat', async () => {
+    // Shift+Tab into chat adds nothing to the chat side, so the auto-save it triggers has no
+    // marker, the agent session's messages, and `mode: "chat"` from the save-time mode.
+    const agent: Message[] = [
+      { role: 'user', content: 'fix the bug', mode: 'agent' },
+      { role: 'assistant', content: 'done' },
+    ];
+    const path = join(dir, 'shift-tab.jsonl');
+    await writeSession(path, { agent, chat: [] }, meta('2026-09-22T10:00:00Z', 2, 'chat'));
+    expect(await loadSession(path)).toEqual({ agent, chat: [] });
+  });
+
+  it('keeps an unmarked file whose prompts carry no mode on the agent side', async () => {
+    const msgs: Message[] = [{ role: 'user', content: 'fix the bug' }];
+    const path = join(dir, 'old.jsonl');
+    await writeFile(path, serializeJsonl(msgs, meta('2026-09-22T10:00:00Z', 1, 'chat')));
+    expect(await loadSession(path)).toEqual({ agent: msgs, chat: [] });
+  });
+
+  it('splits on the marker even when the header says chat, since that is just the save-time mode', async () => {
+    const agent: Message[] = [{ role: 'user', content: 'fix the bug' }];
+    const chat: Message[] = [{ role: 'user', content: 'what is a monad' }];
+    const path = join(dir, 'mixed.jsonl');
+    await writeSession(path, { agent, chat }, meta('2026-09-22T10:00:00Z', 2, 'chat'));
+    expect(await loadSession(path)).toEqual({ agent, chat });
   });
 });
 

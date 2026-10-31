@@ -93,7 +93,7 @@ adjudicated once, never re-asked on later turns.
 #### Read-first edits
 
 On by default; `REIKA_READ_FIRST=0` turns it off. The first `edit` to a file whose contents are not in
-the model's context — never read, or the read has aged out — is withheld once, with a directive to read
+the model's context — never read (through `read` or a one-file `cat`/`sed -n`/`head`), or the read has aged out — is withheld once, with a directive to read
 the file and re-issue the edit from its actual bytes: reading first, instead of reasoning about an
 `old_string` failure after the fact. One bounce per file per turn, and a re-issued edit always runs.
 
@@ -196,6 +196,7 @@ reika -p --json "count the tests" | jq '.[-1].content'   # every message the tur
 reika -p --stream "explain the build"                # print the reply as it is generated
 reika -p --json --stream "..." | jq -c .role         # one message per line (NDJSON) as each lands
 reika -p --save "..."                                # write the transcript like /save
+reika -p -i "..."                                    # ask approvals and questions on the terminal
 reika -p "/verify the input box"                     # run a skill, with the rest as guidance
 pnpm run dev -p "..."                                # from a checkout: pnpm forwards -p itself (npm: npm run dev -- -p); banner on stderr
 ```
@@ -204,6 +205,12 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   `safe` (the default) runs ordinary edits and commands and _declines_ anything the danger scan flags,
   and `off` declines every edit and command (the model is told). Set it explicitly for a run that must
   not write. `ask_user` is never offered.
+- **Interactive** (`-i`, `--interactive`): the dialogs the TUI would open are asked on the terminal
+  instead of declined — an approval (approve, decline, always for this run, or decline with what to do
+  instead), an `ask_user` question (which is then offered to the model), and the skill and pasted-link
+  confirms. Each is a numbered menu; Enter takes the marked default, the same row the TUI starts on.
+  The menus go to the terminal itself, so stdin can still carry the prompt and stderr can go to a log.
+  A run with no terminal (cron, CI) exits with an error rather than waiting on one.
 - **stdout is the reply only.** Notices the TUI would put in the scrollback — a fold, a declined command,
   a skill match — go to stderr, and `REIKA_DEBUG=1` still writes the log file.
 - **Streaming** (`--stream`): by default nothing prints until the turn ends. With `--stream` the reply
@@ -220,6 +227,9 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   the mode's own model in `REIKA_MODE_MODELS`. Names match case-insensitively; a name no profile
   defines prints a notice on stderr listing the defined ones and runs on the profile it would have
   used without the flag. A failed turn names the profile and base URL it was on.
+- **Auto-save**: a run is saved where the TUI saves its sessions, so `/resume` lists it beside them
+  and a TUI can pick it up where the run left off. `REIKA_AUTOSAVE=0` turns it off. `--save` still
+  writes its own `/save`-style transcript too.
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
 ### Unattended sessions
@@ -241,24 +251,26 @@ guarantees it won't wait on you.
 
 Type `/` in the input to see suggestions. Highlights:
 
-| Command                                           | What                                                                                                                                                                                                                |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/help`                                           | List all commands                                                                                                                                                                                                   |
-| `/new` / `/clear`                                 | Reset conversation, tokens, mode                                                                                                                                                                                    |
-| `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                                                                                                      |
-| `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                                                                                                           |
-| `/implement [guidance]`                           | From plan mode: pick agent, minimal or grind (agent preselected), switch to it and execute the plan above (optional guidance)                                                                                       |
-| `/compact`                                        | Compact older context now, without a prompt: the model writes a compaction note, then older turns fold into the recap it feeds. Folds number across manual and automatic compaction alike.                          |
-| `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                                                                                                                 |
-| `/approvals [on\|off]`                            | Show or toggle session auto-approve (bare command opens the on/off/cancel picker). `REIKA_AUTO_APPROVE` env var still wins.                                                                                         |
-| `/unattended [on\|off]`                           | Show or toggle unattended (bare command opens the on/off/cancel picker): anything that would prompt is declined and listed at turn end, and questions go unanswered. `REIKA_UNATTENDED=1` sets the starting state.  |
-| `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                                                                                                            |
-| `/save [--raw]`                                   | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim.                                                                                     |
-| `/mcp`                                            | List the MCP servers this session started and every tool they offer, as the `/<server>:<tool>` commands below                                                                                                       |
-| `/<server>:<tool> [args]`                         | Call an MCP tool yourself, without a model turn: JSON arguments (`/gh:search {"q":"x"}`), or the bare string when the tool takes exactly one. Output lands as a shell-style block and never enters the conversation |
-| `/skills`                                         | List available skills (loaded from skill dirs at startup)                                                                                                                                                           |
-| `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                                                                                                                 |
-| `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                                                                                                     |
+| Command                                           | What                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`                                           | List all commands                                                                                                                                                                                                                                                                                                                                             |
+| `/new` / `/clear`                                 | Reset conversation, tokens, mode                                                                                                                                                                                                                                                                                                                              |
+| `/cd <path>`                                      | Change cwd (re-indexes repo map). Tilde works.                                                                                                                                                                                                                                                                                                                |
+| `/shell` / `/chat` / `/plan` / `/vibe` / `/agent` | Switch modes (shell / chat / plan / vibe / back to agent)                                                                                                                                                                                                                                                                                                     |
+| `/implement [guidance]`                           | From plan mode: pick agent, minimal or grind (agent preselected), switch to it and execute the plan above (optional guidance)                                                                                                                                                                                                                                 |
+| `/compact`                                        | Compact older context now, without a prompt: the model writes a compaction note, then older turns fold into the recap it feeds. Folds number across manual and automatic compaction alike.                                                                                                                                                                    |
+| `/model` / `/cwd` / `/tokens`                     | Show current values                                                                                                                                                                                                                                                                                                                                           |
+| `/approvals [on\|off]`                            | Show or toggle session auto-approve (bare command opens the on/off/cancel picker). `REIKA_AUTO_APPROVE` env var still wins.                                                                                                                                                                                                                                   |
+| `/unattended [on\|off]`                           | Show or toggle unattended (bare command opens the on/off/cancel picker): anything that would prompt is declined and listed at turn end, and questions go unanswered. `REIKA_UNATTENDED=1` sets the starting state.                                                                                                                                            |
+| `/stats`                                          | Full session summary (duration, turns, tools, files modified, approvals)                                                                                                                                                                                                                                                                                      |
+| `/save [--raw]`                                   | Save the full conversation to `~/.config/reika/history` (`.jsonl` + `.txt`). Secrets are redacted; `--raw` keeps them verbatim.                                                                                                                                                                                                                               |
+| `/resume [all\|root]`                             | Resume a saved session of this project — each session auto-saves as it runs. In chat mode the list holds only chats; `all` lists every session, and every list tags a session holding a chat with `chat`. A session that holds only a chat opens in chat mode, and one with no chat opened from chat mode opens in agent mode. `root` lists the `/save` files |
+| `/mcp`                                            | List the MCP servers this session started and every tool they offer, as the `/<server>:<tool>` commands below                                                                                                                                                                                                                                                 |
+| `/<server>:<tool> [args]`                         | Call an MCP tool yourself, without a model turn: JSON arguments (`/gh:search {"q":"x"}`), or the bare string when the tool takes exactly one. Output lands as a shell-style block and never enters the conversation                                                                                                                                           |
+| `/skills`                                         | List available skills (loaded from skill dirs at startup)                                                                                                                                                                                                                                                                                                     |
+| `/search <query>`                                 | Search the web for the query: the model runs one `search` and answers from the results. Needs a provider (`REIKA_SEARXNG_URL` / `REIKA_CDP_SEARCH=1`); without one it says which setting is missing                                                                                                                                                           |
+| `/exit` / `/quit`                                 | Exit (prints session summary first)                                                                                                                                                                                                                                                                                                                           |
+| `@<path>`                                         | In agent mode, inlines a file as context. Tab autocomplete from the file index.                                                                                                                                                                                                                                                                               |
 
 ## Session transcripts
 

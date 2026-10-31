@@ -254,6 +254,11 @@ export type ApprovalRequest = {
   warnings?: string[];
 };
 
+// What a front end answers an approval with. `{ feedback }` is a decline that carries the user's
+// reason; the loop folds it into the tool's summary and hands the tool a plain `false`, so no tool
+// can mistake the (truthy) object for an approval.
+export type ApprovalAnswer = boolean | { feedback: string };
+
 // One choice in an `ask_user` question. `label` is the whole answer as far as the model is
 // concerned — it is what comes back when the user picks this row, so it must stand alone as a
 // sentence. `description` is optional on purpose: a weak model that emits bare labels still
@@ -568,6 +573,10 @@ export type Config = {
   // (REIKA_AUTOSAVE, default on — see store/sessions.ts). Optional so a hand-built Config (tests)
   // writes nothing to the home directory unless it asks to.
   autosave?: boolean;
+  // Probe a local engine for whether its template hides reasoning behind a user-role note, and move
+  // the note to the tool result if so (#827, provider/noteslot.ts). Set only by loadConfig, so a
+  // hand-built Config (tests) sends no probe requests to whatever server it names.
+  noteSlotProbe?: boolean;
   // Whether the harness runs the post-edit typecheck gate (`REIKA_TYPECHECK`, default on — see
   // src/check/typecheck.ts). Off entirely skips the baseline capture, the final re-check, and the
   // done-gate send-backs — not just the retries. The flag exists because not every TypeScript project
@@ -592,3 +601,13 @@ export type Config = {
   // still receives everything verbatim. See ui/identity.ts.
   anon: boolean;
 };
+
+// #832: a session re-resolves its profile every turn, so an already-resolved config handed back
+// to it is silently undone. The literal type is what tsc prints; config.ts backs it at runtime.
+declare const resolvedBrand: unique symbol;
+
+export type ResolvedConfig = Config & {
+  readonly [resolvedBrand]: 'ResolvedConfig — pass the profile name to createSession, not this';
+};
+
+export type RawConfig = Config & { readonly [resolvedBrand]?: never };

@@ -10,6 +10,9 @@ export type Skill = {
   description: string;
   body: string;
   source: 'bundled' | 'global' | 'project';
+  // The directory label `/skills` shows for a skill from another harness's directory (#861):
+  // `.agents/skills`, `.claude/skills`, `~/.agents/skills`. Unset for reika's own dirs.
+  from?: string;
   path: string;
   // Phrases that route a plain-English prompt to this skill (`triggers:` frontmatter).
   // Matching is deterministic and lives in skillmatch.ts — the model never picks a skill.
@@ -25,21 +28,30 @@ const PROJECT_RELATIVE = '.reika/skills';
 // module whether it runs as src/skills.ts or dist/skills.js.
 export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills');
 
+// Other harnesses' skill dirs (#861), so a skill folder works where it already is. Global is the
+// agent-agnostic `~/.agents/skills` only — never `~/.claude/skills`, another app's config dir; a
+// Claude Code user links it there. Read after `homedir()` at call time, so a test's HOME applies.
+const PROJECT_IMPORTED = ['.claude/skills', '.agents/skills'];
+const GLOBAL_IMPORTED = '.agents/skills';
+
 export async function loadSkills(cwd: string, bundledDir = BUNDLED_DIR): Promise<Skill[]> {
   const globalDir = process.env.REIKA_SKILLS_DIR
     ? expandHome(process.env.REIKA_SKILLS_DIR)
     : GLOBAL_DEFAULT;
   const projectDir = join(cwd, PROJECT_RELATIVE);
 
-  const [bundledSkills, globalSkills, projectSkills] = await Promise.all([
+  // Lowest precedence first; a later dir replaces an earlier one on a name collision. Reika's own
+  // dirs always win, then project over global, and `.agents` over `.claude`.
+  const layers = await Promise.all([
     loadFromDir(bundledDir, 'bundled'),
+    loadFromDir(join(homedir(), GLOBAL_IMPORTED), 'global', `~/${GLOBAL_IMPORTED}`),
+    ...PROJECT_IMPORTED.map(rel => loadFromDir(join(cwd, rel), 'project', rel)),
     loadFromDir(globalDir, 'global'),
     loadFromDir(projectDir, 'project'),
   ]);
 
-  // The user's own copy wins: project over global over bundled, on name collision.
   const byName = new Map<string, Skill>();
-  for (const s of [...bundledSkills, ...globalSkills, ...projectSkills]) byName.set(s.name, s);
+  for (const s of layers.flat()) byName.set(s.name, s);
   const env = await skillEnvironment(cwd, [...byName.values()]);
   return Array.from(byName.values())
     .filter(s => skillRequirementsMet(s, env))
@@ -121,7 +133,7 @@ async function findGitDir(start: string): Promise<string | null> {
   }
 }
 
-async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[]> {
+async function loadFromDir(dir: string, source: Skill['source'], from?: string): Promise<Skill[]> {
   let entries: Array<{ name: string; isDir: boolean }>;
   try {
     const raw = await readdir(dir, { withFileTypes: true });
@@ -150,19 +162,92 @@ async function loadFromDir(dir: string, source: Skill['source']): Promise<Skill[
     if (entry.isDir) {
       const name = entry.name.toLowerCase();
       if (!isValidName(name)) continue;
-      const skillFile = await findCanonicalSkillFile(join(dir, entry.name));
+      const skillDir = resolve(dir, entry.name);
+      const skillFile = await findCanonicalSkillFile(skillDir);
       if (!skillFile) continue;
-      const loaded = await readSkill(skillFile, name, source);
-      if (loaded) byName.set(name, loaded);
+      const loaded = await readSkill(skillFile, name, source, from);
+      if (!loaded) continue;
+      const files = await listSupportingFiles(skillDir, skillFile);
+      if (files.length > 0) {
+        const body = rewriteSkillPaths(loaded.body, skillDir, files);
+        loaded.body = `${skillDirAnchor(skillDir, files)}\n\n${body}`;
+      }
+      byName.set(name, loaded);
     } else {
       if (extname(entry.name).toLowerCase() !== '.md') continue;
       const name = entry.name.slice(0, -3).toLowerCase();
       if (!isValidName(name)) continue;
-      const loaded = await readSkill(join(dir, entry.name), name, source);
+      const loaded = await readSkill(join(dir, entry.name), name, source, from);
       if (loaded && !byName.has(name)) byName.set(name, loaded);
     }
   }
   return Array.from(byName.values());
+}
+
+// --- supporting files (#861) -----------------------------------------------------------------
+// A skill written for another harness names its files relative to its own directory ("run
+// `scripts/extract.py`"), and the body reaches the model with nothing saying where that is, so
+// the path resolved against the cwd. The anchor names the directory and what is in it — names
+// only, never contents. Nothing here runs a script: the model runs it through `bash`, behind the
+// same approval gate and sandbox as any other command.
+const MAX_LISTED_FILES = 20;
+const MAX_WALKED_FILES = 200;
+const MAX_WALK_DEPTH = 3;
+const SKIPPED_DIRS = new Set(['node_modules', '__pycache__']);
+
+export async function listSupportingFiles(skillDir: string, skillFile: string): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(dir: string, rel: string, depth: number): Promise<void> {
+    if (depth > MAX_WALK_DEPTH || files.length >= MAX_WALKED_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (files.length >= MAX_WALKED_FILES) return;
+      if (e.name.startsWith('.')) continue;
+      const path = join(dir, e.name);
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!SKIPPED_DIRS.has(e.name)) await walk(path, relPath, depth + 1);
+      } else if (path !== skillFile) {
+        files.push(relPath);
+      }
+    }
+  }
+  await walk(skillDir, '', 1);
+  return files;
+}
+
+export function skillDirAnchor(skillDir: string, files: string[]): string {
+  const shown = files.slice(0, MAX_LISTED_FILES);
+  const more = files.length - shown.length;
+  const tail =
+    more <= 0 ? '' : files.length >= MAX_WALKED_FILES ? ', and more' : `, and ${more} more`;
+  return [`This skill's files are in ${skillDir}.`, `Files: ${shown.join(', ')}${tail}`].join('\n');
+}
+
+// The anchor alone was not enough (#861, lfm2.5-24b, 1/3): the model found the script through it,
+// then ran the body's command as written — `sh scripts/tally.sh` from the project — and when that
+// failed, copied the script into the project. So a reference to a file that exists in the skill
+// directory is rewritten to its absolute path, and the command the model copies is already right.
+// Only exact names of real files, at a word start (not after `/`), so prose and the user's own
+// paths are left alone.
+export function rewriteSkillPaths(body: string, skillDir: string, files: string[]): string {
+  if (files.length === 0) return body;
+  const names = [...files].sort((a, b) => b.length - a.length).map(escapeRegExp);
+  const ref = new RegExp(
+    `(^|[\\s\`'"(=])(?:\\./)?(${names.join('|')})(?=$|[\\s\`'")\\],;:!?]|\\.(?:$|\\s))`,
+    'gm',
+  );
+  return body.replace(ref, (_, lead: string, file: string) => lead + join(skillDir, file));
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function findCanonicalSkillFile(dir: string): Promise<string | null> {
@@ -180,6 +265,7 @@ async function readSkill(
   path: string,
   name: string,
   source: Skill['source'],
+  from?: string,
 ): Promise<Skill | null> {
   try {
     const text = await readFile(path, 'utf8');
@@ -190,6 +276,7 @@ async function readSkill(
       description,
       body: body.trim(),
       source,
+      ...(from ? { from } : {}),
       path,
       triggers: parseTriggers(meta.triggers),
       requires: parseRequires(meta.requires),

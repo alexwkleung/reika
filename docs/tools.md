@@ -22,7 +22,13 @@ The agent has these tools. Optional ones register only when their config is pres
 ## Approvals
 
 An approval prompt shows a unified diff (or, for `bash`, the command), with **Approve / Decline /
-Always (this session)** selectable by `↑↓` + `Enter` or by the direct `y`/`n` shortcuts.
+Always (this session) / Decline, and say what to do instead** selectable by `↑↓` + `Enter` or by the
+direct `y`/`n` shortcuts. The last row turns the input box into a field for your reason: `Enter`
+sends it, an empty one sends nothing, and `ctrl-c` goes back to the options. The model gets the reason
+as a message from you right after the decline, so it has your next instruction rather than a bare
+"declined", and it can be a question ("why that file?") as well as a different command. If the
+model should stop rather than try something else, say so: "tell me the script" reads to a small model
+as run-then-tell, where "don't run anything, just tell me the script" does not.
 
 Two tools ask about more than the obvious:
 
@@ -105,9 +111,12 @@ The `/<server>:<tool>` command you type yourself is the exception: it is never g
 shell mode runs under — nothing prompts you for a command you just wrote.
 
 **Failure.** A server that fails to start, or answers with an error, is reported at startup and skipped;
-a call that fails costs one round, not the turn. A server that exits mid-session keeps its tools in the
-request's tool list (that list is fixed at session start), so `/mcp` says so — the calls that follow fail
-with the exit status rather than silently.
+a call that fails costs one round, not the turn. A server that exits mid-session is started again on
+its next call — the call it died during fails and is not retried, since it may already have acted. One that
+keeps exiting is given up on after three restarts: its tools stay in the request's tool list (that list is
+fixed at session start), so `/mcp` says so, and the calls that follow fail with the exit status rather
+than silently. A restarted server whose tool list changed is reported the same way a `list_changed`
+announcement is, and the session keeps the list it started with.
 
 **Size and shutdown.** A result over 64K characters reaches the model cut to that size, the same cap
 `bash` and `fetch_url` use, with the rest saved to a spill file it can page with `read`. When Reika

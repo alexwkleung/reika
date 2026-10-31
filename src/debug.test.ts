@@ -220,3 +220,30 @@ describe('formatExperimentFlags', () => {
     expect(formatExperimentFlags()).toContain('version=');
   });
 });
+
+describe('formatEndpointLine (#868)', () => {
+  it('names the profile, model and host, never the path or key', async () => {
+    const { formatEndpointLine } = await freshDebug();
+    expect(
+      formatEndpointLine('default', 'qwen3.8-27b', 'https://user:secret@api.example.com/v1?k=x'),
+    ).toBe('[reika:debug] endpoint profile=default model=qwen3.8-27b host=api.example.com');
+  });
+
+  it('keeps a hub-style id whole', async () => {
+    const { formatEndpointLine } = await freshDebug();
+    expect(formatEndpointLine('kimi', 'Qwen/Qwen3-30B', 'http://localhost:8080/v1')).toBe(
+      '[reika:debug] endpoint profile=kimi model=Qwen/Qwen3-30B host=localhost',
+    );
+  });
+
+  // llama.cpp names a model by the file it loaded, often an absolute path under the home dir.
+  it('cuts a filesystem-path model id to its basename', async () => {
+    const { formatEndpointLine } = await freshDebug();
+    expect(formatEndpointLine('default', '/repo/models/q.gguf', 'http://127.0.0.1:8080/v1')).toBe(
+      '[reika:debug] endpoint profile=default model=q.gguf host=127.0.0.1',
+    );
+    expect(formatEndpointLine('default', '~/models/q.gguf', 'not a url')).toBe(
+      '[reika:debug] endpoint profile=default model=q.gguf host=?',
+    );
+  });
+});

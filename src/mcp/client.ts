@@ -70,6 +70,14 @@ const MAX_STDOUT_LINE_CHARS = 8 * 1024 * 1024;
 // immediate SIGTERM. The process-exit hook below stays an immediate kill: there is no time to wait.
 const CLOSE_GRACE_MS = 2000;
 const TERM_GRACE_MS = 1000;
+// The stdio binding's SHOULD for a server that exits unexpectedly: restart it (#592). Lazily, on
+// the next call — a server nobody calls again costs nothing — and bounded, so one that crashes on
+// start or on every call is given up on rather than respawned forever. Per session, never reset:
+// a server that keeps dying after a quiet spell is still one that keeps dying.
+const MAX_RESTARTS = 3;
+// Waited before each respawn, by its index. The first is immediate (one crash is the common case
+// and the call is waiting); the rest give a server that dies on start time to stop flapping.
+const RESTART_BACKOFF_MS = [0, 1000, 3000];
 
 // Every spawned server, killed when reika exits whatever route it leaves by. A stdio server's
 // parent dying closes its pipes — which most servers treat as EOF and exit on — but one mid-call
@@ -152,10 +160,23 @@ export class McpClient {
   private discardingLine = false;
   private stderrTail = '';
   private exitError: Error | undefined;
+  private connectedOnce = false;
+  private closed = false;
+  private readonly restartBackoffMs: number[];
+  // How many times the server was respawned after exiting, for `/mcp`.
+  restarts = 0;
+  // Set once the restart budget is spent: the reason every later call fails with.
+  private gaveUpError: Error | undefined;
+  // One respawn shared by every call that finds the server gone, so two parallel calls start one.
+  private restarting: Promise<void> | undefined;
 
-  constructor(config: McpServerConfig, opts: { probeWaitMs?: number } = {}) {
+  constructor(
+    config: McpServerConfig,
+    opts: { probeWaitMs?: number; restartBackoffMs?: number[] } = {},
+  ) {
     this.config = config;
     this.probeWaitMs = opts.probeWaitMs ?? PROBE_WAIT_MS;
+    this.restartBackoffMs = opts.restartBackoffMs ?? RESTART_BACKOFF_MS;
   }
 
   get name(): string {
@@ -178,6 +199,11 @@ export class McpClient {
     return this.exitError !== undefined;
   }
 
+  // Dead for the rest of the session: the restart budget is spent.
+  get gaveUp(): boolean {
+    return this.gaveUpError !== undefined;
+  }
+
   // The handshake's own bound: a server that is slow to start costs a session's first paint, which
   // a per-call timeout has no reason to govern (see McpServerConfig.connectTimeoutMs).
   private get connectTimeoutMs(): number {
@@ -187,14 +213,56 @@ export class McpClient {
   // Spawn + handshake + tool discovery. Resolves only on a server that answered the handshake AND
   // `tools/list`: a server that started but says nothing is a failure the user has to see.
   async connect(): Promise<void> {
+    this.tools = await this.spawnAndHandshake();
+    this.connectedOnce = true;
+  }
+
+  private async spawnAndHandshake(): Promise<McpToolDef[]> {
     await this.start();
     try {
       await this.handshake();
-      this.tools = await this.listTools();
+      return await this.listTools();
     } catch (e) {
-      void this.close();
-      throw new Error(this.explain(e));
+      const err = new Error(this.explain(e));
+      // Kept as the reason the server is down, ahead of the exit the kill below causes.
+      this.exitError ??= err;
+      this.stopChild();
+      throw err;
     }
+  }
+
+  // A server that exited after a successful connect is respawned here, before the call that needs
+  // it. The call that was in flight when it died is NOT retried: it may have acted before the crash.
+  private async ensureRunning(signal: AbortSignal | undefined): Promise<void> {
+    if (this.gaveUpError) throw this.gaveUpError;
+    this.restarting ??= this.restart().finally(() => {
+      this.restarting = undefined;
+    });
+    await raceAbort(this.restarting, signal);
+  }
+
+  private async restart(): Promise<void> {
+    const last = this.exitError?.message ?? 'server exited';
+    if (this.restarts >= MAX_RESTARTS) {
+      this.gaveUpError = new Error(
+        `${last}; not restarted again after ${MAX_RESTARTS} restarts this session`,
+      );
+      throw this.gaveUpError;
+    }
+    const wait = this.restartBackoffMs[this.restarts] ?? this.restartBackoffMs.at(-1) ?? 0;
+    this.restarts++;
+    debugLog(`[reika:debug] mcp ${this.name}: restart ${this.restarts} after: ${last}\n`);
+    if (wait > 0) await delay(wait);
+    // Per-process state; the era is probed again since the binary may have changed under us.
+    this.era = undefined;
+    this.stdoutBuffer = '';
+    this.discardingLine = false;
+    this.stderrTail = '';
+    this.exitError = undefined;
+    const tools = await this.spawnAndHandshake();
+    // The tool list is fixed at session start (round-0 prefix), so a different one is surfaced the
+    // way list_changed is rather than adopted.
+    if (JSON.stringify(tools) !== JSON.stringify(this.tools)) this.toolsChanged = true;
   }
 
   // The spec's stdio probe: `server/discover` first; a result or a spec-range error is a modern
@@ -315,6 +383,9 @@ export class McpClient {
     opts: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<McpCallResult> {
     const timeoutMs = opts.timeoutMs ?? this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // Only awaited when a restart is due: a tick's yield here would let an abort land before the
+    // request is even sent, and the server would never hear it was cancelled.
+    if (this.exitError && this.connectedOnce && !this.closed) await this.ensureRunning(opts.signal);
     let state: string | undefined;
     for (let attempt = 0; ; attempt++) {
       const res = await this.request(
@@ -345,6 +416,11 @@ export class McpClient {
   // Resolves once the child is gone. Callers that are leaving anyway need not await it: the
   // pending exit keeps the event loop alive until the server has had its chance to exit on EOF.
   close(): Promise<void> {
+    this.closed = true;
+    return this.stopChild();
+  }
+
+  private stopChild(): Promise<void> {
     this.rejectInFlight(new Error('closed'));
     const child = this.child;
     this.child = undefined;
@@ -396,13 +472,15 @@ export class McpClient {
       // A child that dies takes every in-flight request with it. The error surfaces here rather
       // than as a hang: a server that exits mid-call is exactly the bug the user must be told.
       child.on('error', (e: Error) => {
-        this.exitError = new Error(`could not start ${command}: ${e.message}`);
+        this.exitError ??= new Error(`could not start ${command}: ${e.message}`);
         this.rejectInFlight(this.exitError);
         reject(this.exitError);
       });
       child.on('exit', (code, signal) => {
         liveChildren.delete(child);
-        this.exitError = new Error(
+        // A process already replaced by a restart says nothing about the one running now.
+        if (this.child !== undefined && this.child !== child) return;
+        this.exitError ??= new Error(
           `server exited (${signal ? `signal ${signal}` : `code ${code}`})${this.stderrSuffix()}`,
         );
         this.rejectInFlight(this.exitError);
@@ -496,6 +574,7 @@ export class McpClient {
     opts: RequestOptions = {},
   ): Promise<unknown> {
     const { signal } = opts;
+    if (this.closed) return Promise.reject(new Error('closed'));
     if (this.exitError) return Promise.reject(this.exitError);
     if (signal?.aborted) return Promise.reject(new Error('aborted'));
     const id = this.nextId++;
@@ -616,6 +695,25 @@ function modernVersionError(e: RpcError): Error {
 
 function unsupportedVersionsText(versions: string[]): string {
   return `server speaks protocol ${versions.join(', ') || '(none listed)'}; reika speaks ${MODERN_PROTOCOL_VERSION} and ${[...LEGACY_VERSIONS].join(', ')}`;
+}
+
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error('aborted'));
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      v => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 function delay(ms: number): Promise<undefined> {

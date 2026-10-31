@@ -1,4 +1,5 @@
 import type {
+  ApprovalAnswer,
   ApprovalRequest,
   Config,
   ContextBundle,
@@ -16,6 +17,8 @@ import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
+import { observeNoteSlot, reasoningCharsBehindNote } from './noteslotmonitor.js';
+import { isLocalEngine } from '../provider/templatekwargs.js';
 import { estimateRequestTokens, estimateTokens } from '../provider/tokens.js';
 import {
   computeMaxTokens,
@@ -40,8 +43,15 @@ import {
   toolsToChatTools,
 } from '../provider/toolcall.js';
 import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { traceBashRead, traceReadPath } from './bashread.js';
 import { PrefixTrace } from './prefixtrace.js';
-import { PrefillRate, formatPrefillCost, reprocessedTokens, sampleTokens } from './prefillcost.js';
+import {
+  PrefillRate,
+  formatMeasuredPrefill,
+  formatPrefillCost,
+  reprocessedTokens,
+  sampleTokens,
+} from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
 import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
@@ -60,6 +70,7 @@ import {
   buildGroundingNote,
   shouldSuppressGrounding,
 } from './groundcheck.js';
+import { withDeclineFeedback } from '../approval.js';
 import { collectSourcedUrls } from '../tools/_exfil.js';
 import { groundUrlsForPlan } from '../tools/_urls.js';
 import { referencesSpill } from '../tools/_spill.js';
@@ -96,9 +107,16 @@ import {
 } from './subagentreport.js';
 import {
   COMPACTION_REPORT_RETRY,
+  compactionNotePrefill,
+  notePrefillEnabled,
+  prefilledNoteStream,
+  prefilledReply,
+  refusedCallTurn,
   buildCompactionReportDirective,
   clampCompactionNote,
+  compactionNoteContent,
   compactionReportEnabled,
+  pickCompactionNote,
 } from './compactionreport.js';
 import {
   buildSubagentAffordance,
@@ -122,6 +140,7 @@ import {
   decideTypecheckGate,
   detectTsProject,
   runTypecheck,
+  stopTypecheckReport,
 } from '../check/typecheck.js';
 
 // Navigation/inspection tools whose repeats we watch for loops. Re-issuing one and getting
@@ -484,6 +503,13 @@ const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
 // runs as-is), suspended while inspection tools are withdrawn (the directed read would be refused).
 // The `would-land=` field on the bounce debug line is the measurement. See agent/readfirst.ts.
 const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
+// EXPERIMENT (#867): keep the offered tool list unchanged while inspection is withdrawn, enforcing
+// the pause at dispatch and through the ledger only. The template renders the tools ahead of the
+// system prompt, so dropping them makes the withdrawal round and the lift round each a full
+// re-prefill (`cause=tools-changed`). On by default since 2026-10-29 (`=0` is the baseline arm): on
+// T2 with lfm2.5 it cut engine prefill per round by a third and refused calls per pause went down,
+// not up — a model that still sees read/grep did not keep reaching for them.
+const WITHDRAW_KEEP_TOOLS = process.env.REIKA_WITHDRAW_KEEP_TOOLS !== '0';
 
 // EXPERIMENT (plan mode): the force-write turn is a *transformation*, not another exploration
 // round. Asking the exploring model to "stop and write prose" fights its action prior and lets
@@ -1038,6 +1064,26 @@ export function shouldWithdrawInspection(opts: {
   return !opts.editRecovery;
 }
 
+// Rounds a withdrawal is held after the loop goes quiet (#808). Refused reads are not recorded, so a
+// complying model's loop leaves the recency window and the pause used to lift on the next round —
+// and since coverage depth never resets on an unchanged file, its next read re-flagged it. One round
+// without inspection, then the cycle again, each switch of the tool list a full re-prefill (~22 in
+// one 163-round run). Held until the tree changes instead, capped so a model that has declared
+// itself stuck gets reads back.
+export const WITHDRAW_HOLD_ROUNDS = 5;
+
+// Whether a withdrawal already in force stays on this round although the loop no longer reads as
+// active. `since` is the round it began; `mutated` is whether the tree has changed since then.
+export function holdWithdrawal(opts: {
+  round: number;
+  since: number | undefined;
+  mutated: boolean;
+  editRecovery: boolean;
+}): boolean {
+  if (opts.since === undefined || opts.mutated || opts.editRecovery) return false;
+  return opts.round - opts.since < WITHDRAW_HOLD_ROUNDS;
+}
+
 // Agent-mode counterpart to the plan ledger: a persistent, non-aging stop signal for a confirmed
 // loop — either a tight read repeat (ReadTrace.loopingReads, which names the files via `looping`) or
 // cross-round reasoning rumination (caller passes an empty `looping`, so the message names the symptom
@@ -1336,7 +1382,7 @@ export async function runTurn(opts: {
   // file the step names). Drives the UI checklist; never model-facing (the model-facing ledger and
   // done-gate are gated behind REIKA_PLAN_ALIGN). The array is the loop's live tracker — copy it.
   onPlanProgress?: (steps: PlanStep[]) => void;
-  requestApproval?: (req: ApprovalRequest) => Promise<boolean>;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalAnswer>;
   requestQuestion?: (req: QuestionRequest) => Promise<QuestionAnswer | null>;
   // Whether the session is unattended right now (#526): `/unattended` toggles it mid-turn, so tools
   // read it per call. Absent, `config.unattended` (launch state, and headless's constant) decides.
@@ -1365,6 +1411,9 @@ export async function runTurn(opts: {
   // the loop's own numbering (`shrink`) is the point of doing it here rather than beside the loop:
   // auto compaction and /compact stay in sync regardless of which fired last.
   manualCompact?: boolean;
+  // Awaited after the user message is emitted and before the first request: what must settle before
+  // the turn sends anything (the note-slot probe, #827), without leaving the screen blank meanwhile.
+  beforeFirstRequest?: () => Promise<void>;
 }): Promise<void> {
   if (!opts.manualCompact) {
     const userMsg: Message = {
@@ -1382,6 +1431,7 @@ export async function runTurn(opts: {
     opts.history.push(userMsg);
     opts.onMessage(userMsg);
   }
+  await opts.beforeFirstRequest?.();
 
   // The gates and minimal must match what buildRoundZeroPrefix passes, or the warm prefix
   // diverges from round 0. A subagent is never warmed, so its report frame can't cause that drift.
@@ -1522,6 +1572,9 @@ export async function runTurn(opts: {
   // LOOP_WITHDRAW_AFTER the directive has demonstrably been ignored, so we escalate to withdrawing
   // the inspection tools. Resets the moment the loop clears, restoring normal exploration.
   let loopActiveRounds = 0;
+  // The round the current withdrawal began, and whether the tree has changed since (#808).
+  let withdrawnSince: number | undefined;
+  let mutatedSinceWithdrawal = false;
   // Verbatim auto-abort bookkeeping: how many times this turn we've cut a degenerate reasoning stream
   // (bounded by MAX_VERBATIM_RECOVERIES so the cut→recover cycle can't loop), and a one-shot flag set
   // when a plan-mode cut should force the plan write on the next iteration. See VERBATIM_ABORT.
@@ -1531,6 +1584,11 @@ export async function runTurn(opts: {
   // so the next round's plan force-write can bias off it (the block itself is discarded). Empty unless a
   // verbatim abort just set forceVerbatimPlanWrite. See the plan force-write branch + logitrecovery.ts.
   let verbatimRepeatedSpan: string[] = [];
+  // The tool list the last request of this turn actually sent. A round that forbids calls (the
+  // compaction note, a subagent's report) sends it rather than this round's: the template renders
+  // the list into the system turn, so a withdrawal starting or lifting on that round re-prefilled
+  // the whole prompt (#816: ~27k tokens on a 32k run) for a list the model could not call from.
+  let lastSentTools: Tool[] | undefined;
   // Whether the model has made any edit/write this turn. Tool withdrawal exists to force the
   // explore→act transition; once the model has acted, that job is done. After the first edit a
   // re-read is usually edit-recovery (re-fetching exact bytes to build old_string after the content
@@ -1687,6 +1745,22 @@ export async function runTurn(opts: {
   // else about the gate is unchanged: non-TS projects still fail open, and tsc never runs for a
   // project without a tsconfig even when the flag is on.
   const typecheckEnabled = opts.config.typecheck !== false;
+
+  // A turn the harness ends itself (loop stop, edit-recovery stop, round cap) never reaches the
+  // isFinal gate, and those are the turns likeliest to leave the tree broken (#830). Run the final
+  // check there too and report it: the returned text rides the stop message, the notice the UI.
+  const reportTypecheckAtStop = async (): Promise<string> => {
+    // The baseline is captured at the first call that MIGHT mutate (a test run counts), so a turn
+    // that never edited could still reach here and print "no new type errors from your edits".
+    if (!editingStarted) return '';
+    if (!typecheckEnabled || typecheckBaseline === null || opts.signal?.aborted) return '';
+    const report = stopTypecheckReport(typecheckBaseline, await typecheck());
+    debugLog(`[reika:debug] typecheck-at-stop tone=${report.tone ?? 'skipped'}\n`);
+    if (report.userNotice) {
+      opts.onMessage({ role: 'system', tone: report.tone ?? 'info', content: report.userNotice });
+    }
+    return report.addendum ?? '';
+  };
 
   // EXPERIMENT (plan→agent handoff): one-shot pre-pass before the round loop. Folds the plan-mode
   // exploration that produced the plan into a compact digest so the executing agent sees the plan
@@ -1934,10 +2008,24 @@ export async function runTurn(opts: {
       // Any confirmed loop that survives the ledger withdraws, regardless of type — UNLESS there's an
       // unresolved failed edit, where the model needs reading to recover and withdrawal would only
       // force more failing edits. See shouldWithdrawInspection.
-      withdrawInspection = shouldWithdrawInspection({
+      const withdrawNow = shouldWithdrawInspection({
         loopActiveRounds,
         editRecovery: lastEditFailed,
       });
+      const held =
+        !withdrawNow &&
+        holdWithdrawal({
+          round: i,
+          since: withdrawnSince,
+          mutated: mutatedSinceWithdrawal,
+          editRecovery: lastEditFailed,
+        });
+      withdrawInspection = withdrawNow || held;
+      if (!withdrawInspection) withdrawnSince = undefined;
+      else if (withdrawnSince === undefined) {
+        withdrawnSince = i;
+        mutatedSinceWithdrawal = false;
+      }
       // Edit-recovery dead-end: a persistent reasoning loop on top of an unresolved failed edit is the
       // model retrying an edit it can't apply. It ignores the failure message (crossSim≈1.0) and
       // re-reading on its own never produces a matching old_string (observed: it oscillated
@@ -1978,7 +2066,8 @@ export async function runTurn(opts: {
               `I kept trying to edit ${file ? `\`${file}\`` : 'the file'} but the text I expected ` +
               `isn't in the file, so the change can't be applied as planned — the plan may reference ` +
               `code that doesn't exist there. I've stopped instead of looping. Please confirm the ` +
-              `change belongs in that file, or point me at the right location.`,
+              `change belongs in that file, or point me at the right location.` +
+              (await reportTypecheckAtStop()),
             durationMs: Date.now() - turnStart,
             ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
           };
@@ -2041,7 +2130,13 @@ export async function runTurn(opts: {
             // fall through: don't stop — the biased round runs below with the loop ledger still set.
           } else {
             debugLog(`[reika:debug] round=${i} logit-recovery unavailable — stopping\n`);
-            commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+            commitAgentLoopStop(
+              opts,
+              turnStart,
+              fetchedUrls,
+              editingStarted,
+              await reportTypecheckAtStop(),
+            );
             return;
           }
         } else {
@@ -2049,7 +2144,13 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} agent-loop-stop loopActiveRounds=${loopActiveRounds} ` +
               `edited=${editingStarted}\n`,
           );
-          commitAgentLoopStop(opts, turnStart, fetchedUrls, editingStarted);
+          commitAgentLoopStop(
+            opts,
+            turnStart,
+            fetchedUrls,
+            editingStarted,
+            await reportTypecheckAtStop(),
+          );
           return;
         }
       }
@@ -2074,7 +2175,7 @@ export async function runTurn(opts: {
       // ledger, so it replaces it for the one round it fires.
       if (editRecoveryGrounding) {
         suffixParts.push(buildEditRecoveryLedger(editRecoveryGrounding));
-      } else if (loopDetected) {
+      } else if (loopDetected || withdrawInspection) {
         suffixParts.push(buildAgentLoopLedger(looping, withdrawInspection, toolNames));
       }
       // Last, so the strongest directive sits closest to generation. (Composed here rather than
@@ -2095,23 +2196,23 @@ export async function runTurn(opts: {
       } else {
         system = baseSystem + suffix;
       }
-      if (loopDetected) {
+      if (loopDetected || withdrawInspection) {
         debugLog(
           `[reika:debug] round=${i} loop-active reads=${looping.length} reasoning=${reasoningLoop} ` +
-            `loopActiveRounds=${loopActiveRounds} withdrawn=${withdrawInspection} ` +
+            `loopActiveRounds=${loopActiveRounds} withdrawn=${withdrawInspection} held=${held} ` +
             `editRecovery=${lastEditFailed}\n`,
         );
       }
     }
     // Empty tool lists are already a supported path (chat mode with no search provider). On a loop
-    // break, drop the inspection tools so the offered set steers a tool-list-respecting model
-    // straight to edit/write; the dispatch layer enforces it for one that emits reads in-band.
+    // break the dispatch layer refuses inspection calls; with REIKA_WITHDRAW_KEEP_TOOLS=0 the
+    // inspection tools are also dropped from the offered set (the pre-#867 behaviour).
     // The subagent's report round keeps the list and forbids calls with `tool_choice` instead
     // (#426): the template renders the tool list into the system turn, so withholding it would
     // re-prefill the subagent's whole context on its last round.
     const callTools = planForceWrite
       ? []
-      : withdrawInspection
+      : withdrawInspection && !WITHDRAW_KEEP_TOOLS
         ? opts.tools.filter(t => !INSPECTION_TOOLS.has(t.name))
         : opts.tools;
     const planTransformBudget = window ? planTransformBudgetChars(window) : Number.MAX_SAFE_INTEGER;
@@ -2289,19 +2390,33 @@ export async function runTurn(opts: {
           content: '/compact cancelled — nothing was folded.',
         });
       };
+      const noteTools = lastSentTools ?? callTools;
+      const noteLatches = latchesFor(opts.config);
+      // Local engines only: a hosted API rejects a final assistant message or answers after it, and
+      // the hosted models seen so far write the note when asked (#806).
+      const prefill =
+        notePrefillEnabled() && isLocalEngine(opts.config.baseURL) && !noteLatches.assistantPrefill
+          ? compactionNotePrefill(n)
+          : undefined;
       try {
-        const report = (suffix: string) =>
+        const send = (suffix: string, appended: Message[], assistantPrefill?: string) =>
           callModel({
             system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
-            history: opts.history,
+            history: appended.length ? [...opts.history, ...appended] : opts.history,
             // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
             // Sending none rendered a different system turn: on the measured 24k runs the note
             // round re-prefilled the entire request (~7–11k tokens) immediately before the fold
             // re-prefilled it again — two full prefills per fold, one of them for nothing.
-            tools: callTools,
+            tools: noteTools,
             toolChoice: 'none',
+            assistantPrefill,
             config: withGenReserve(opts.config, genReserve),
-            onContentDelta: opts.onContentDelta,
+            // Streamed through the reading the finished reply gets, or the thinking and call
+            // after the note draw and then vanish (#819).
+            onContentDelta:
+              assistantPrefill && opts.onContentDelta
+                ? prefilledNoteStream(assistantPrefill, opts.onContentDelta)
+                : opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
             signal: opts.signal,
             calibration,
@@ -2337,13 +2452,13 @@ export async function runTurn(opts: {
               ? msgs => {
                   const d = prefixTrace.record(msgs, {
                     trailingNote: directiveAsTail,
-                    tools: toolsToChatTools(callTools),
+                    tools: toolsToChatTools(noteTools),
                   });
                   const pct =
                     d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
                   const tok = reprocessedTokens(
                     d,
-                    Math.round(rawEstimate(opts.history, callTools) * calibration),
+                    Math.round(rawEstimate(opts.history, noteTools) * calibration),
                   );
                   debugLog(
                     `[reika:debug] prefix-cache round=${i} phase=report cause=${d.cause} ` +
@@ -2355,7 +2470,24 @@ export async function runTurn(opts: {
                 }
               : undefined,
           });
-        let rep = await report(directive);
+        // A failed prefilled request is asked again the plain way, and the prefill is latched off for
+        // the endpoint only if that one succeeds: a 400 the plain request shares (an over-long
+        // prompt) is not the prefill's, and latching on it would cost every later fold its note.
+        const report = async (suffix: string, appended: Message[] = []) => {
+          if (!prefill || noteLatches.assistantPrefill) return send(suffix, appended);
+          try {
+            return prefilledReply(await send(suffix, appended, prefill), prefill);
+          } catch (err) {
+            if (opts.signal?.aborted) throw err;
+            const plain = await send(suffix, appended);
+            noteLatches.assistantPrefill = true;
+            debugLog(
+              `[reika:debug] round=${i} compaction-report prefill rejected, latched err=${String(err)}\n`,
+            );
+            return plain;
+          }
+        };
+        const rep = await report(directive);
         if (rep.usage) opts.onUsage?.(rep.usage);
         // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
         // is a cut-off fragment — never a note, and not a reason to fold.
@@ -2367,25 +2499,23 @@ export async function runTurn(opts: {
         // model trying to read instead of writing; a `length` stop is the budget.
         const describe = (r: typeof rep): string =>
           `finish=${r.finishReason ?? '?'} content=${r.content?.trim().length ?? 0}c ` +
-          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}`;
-        let retried = false;
-        if (!rep.content?.trim() && !opts.signal?.aborted) {
+          `reasoning=${r.reasoning?.trim().length ?? 0}c inband=${r.toolCalls?.length ?? 0}` +
+          ('callsDropped' in r && r.callsDropped ? ` dropped=${r.callsDropped}` : '');
+        let retry: typeof rep | undefined;
+        if (!compactionNoteContent(rep) && !opts.signal?.aborted) {
           debugLog(
-            `[reika:debug] round=${i} compaction-report n=${n} empty ${describe(rep)}; retrying\n`,
+            `[reika:debug] round=${i} compaction-report n=${n} no-note ${describe(rep)}; retrying\n`,
           );
           opts.onReasoningReset?.();
-          retried = true;
-          const again = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`);
-          if (again.usage) opts.onUsage?.(again.usage);
+          retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`, refusedCallTurn(rep));
+          if (retry.usage) opts.onUsage?.(retry.usage);
           if (opts.signal?.aborted) {
             commitNoteRoundAbort();
             return;
           }
-          // Keep whichever reply has a note in the content channel; failing both, the first
-          // reasoning is the better fallback (it is the longer, less nagged thinking).
-          if (again.content?.trim()) rep = again;
         }
-        const text = clampCompactionNote(rep.content?.trim() || rep.reasoning?.trim() || '');
+        const picked = pickCompactionNote(rep, retry);
+        const text = clampCompactionNote(picked.text);
         if (text) {
           note = { n, text };
           // UI only, never history: the note renders as markdown WITH its reasoning — the trace of
@@ -2394,14 +2524,14 @@ export async function runTurn(opts: {
           opts.onMessage({
             role: 'assistant',
             content: text,
-            reasoning: rep.reasoning?.trim() || undefined,
+            reasoning: picked.reasoning,
             compactionNote: true,
           } as Message);
         }
         debugLog(
-          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length}` +
-            `${rep.content?.trim() ? '' : rep.reasoning?.trim() ? ' src=reasoning' : ' src=empty'}` +
-            `${retried ? ' retried=1' : ''} ${describe(rep)}\n`,
+          `[reika:debug] round=${i} compaction-report n=${n} chars=${text.length} src=${picked.src}` +
+            `${retry ? ' retried=1' : ''} prefill=${!prefill ? 'off' : noteLatches.assistantPrefill ? 'rejected' : 'on'}` +
+            ` ${describe(retry ?? rep)}\n`,
         );
       } catch (err) {
         if (opts.signal?.aborted) {
@@ -2529,7 +2659,9 @@ export async function runTurn(opts: {
       opts.onContextEstimate?.(Math.round(rawEstimate() * calibration));
       return;
     }
-    const sentEstimate = rawEstimate(callHistory, callTools);
+    const sentTools = subagentForceReport && lastSentTools ? lastSentTools : callTools;
+    lastSentTools = sentTools;
+    const sentEstimate = rawEstimate(callHistory, sentTools);
     opts.onContextEstimate?.(Math.round(sentEstimate * calibration));
     // Live reasoning-spin hint (human-only): accumulate THIS round's reasoning and, debounced every
     // SPIN_DEBOUNCE chars, flag when it looks like it's spinning so the UI can prompt abort-or-wait.
@@ -2606,7 +2738,7 @@ export async function runTurn(opts: {
     const response = await callModel({
       system,
       history: callHistory,
-      tools: callTools,
+      tools: sentTools,
       config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
@@ -2670,7 +2802,7 @@ export async function runTurn(opts: {
             // churn — without it every append reads as `mid-history firstChanged=assistant` (#253).
             const d = prefixTrace.record(msgs, {
               trailingNote: !!roundSuffix,
-              tools: toolsToChatTools(callTools),
+              tools: toolsToChatTools(sentTools),
             });
             const pct = d.totalChars > 0 ? Math.round((d.stableChars / d.totalChars) * 100) : 100;
             roundReprocessTokens = reprocessedTokens(d, Math.round(sentEstimate * calibration));
@@ -2709,6 +2841,25 @@ export async function runTurn(opts: {
       if (factor > 0.2 && factor < 8) {
         calibration = factor;
         opts.onCalibration?.(calibration);
+      }
+    }
+    // #827: the note-slot probe's live backstop. Compares this round's real count against what it
+    // would be if the reasoning behind a user-role note had rendered, and moves the note to the
+    // tool result from the next round when it clearly did not. loadConfig sessions only, like the
+    // probe: a hand-built Config never latches an endpoint another test shares.
+    if (opts.config.noteSlotProbe && prefixStable && response.usage?.promptTokens) {
+      const check = observeNoteSlot({
+        config: opts.config,
+        promptTokens: response.usage.promptTokens,
+        estimate: sentEstimate,
+        noteSent: !!roundSuffix,
+        reasoningChars: roundSuffix ? reasoningCharsBehindNote(callHistory) : 0,
+      });
+      if (check.kind === 'tested') {
+        debugLog(
+          `[reika:debug] round=${i} note-slot check hidden=${check.hidden} streak=${check.streak} ` +
+            `switched=${check.switched}\n`,
+        );
       }
     }
     // Same idea one layer down: time-to-first-token is what those reprocessed tokens cost, so the
@@ -2756,6 +2907,7 @@ export async function runTurn(opts: {
         `completion=${completion} finishReason=${response.finishReason ?? '?'} ` +
         `decode=${formatRate(sample?.rate)} smoothed=${formatRate(decodeThroughput.get())} ` +
         `src=${sample?.source ?? '?'} reserve=${reserve.tokens} reserveSrc=${reserve.source} ` +
+        `${formatMeasuredPrefill(response.usage, response.enginePrompt, roundReprocessTokens)} ` +
         // Process uptime, not turn time: on a fanless machine the rates sag with sustained load
         // and recover across idle gaps, so separating that from context growth needs wall clock.
         `t=${process.uptime().toFixed(0)}s\n`,
@@ -3395,6 +3547,8 @@ export async function runTurn(opts: {
       subagentCalls.inRound = 0;
     }
     const subagentInRound = roundHasSubagent && subagentCalls.rounds <= MAX_SUBAGENTS_PER_TURN;
+    // Reasons the user typed while declining this round's calls, sent after its results (below).
+    const roundDeclineFeedback: string[] = [];
     for (const call of toolCalls) {
       if (opts.signal?.aborted) return;
       const tool = opts.tools.find(t => t.name === call.name);
@@ -3449,6 +3603,8 @@ export async function runTurn(opts: {
       let contentHash: string | undefined;
       let toolNotice: ToolResult['notice'];
       let editFailure: EditFailure | undefined;
+      // The reason a user typed when declining this call, appended to its summary after the run.
+      let declineFeedback: string | undefined;
       // Read-first (#72): path this call put file bytes in front of the model for, and whether the
       // model authored them (`write`) rather than being handed them. Applied once the tool message
       // exists, since handed-back grounding keys on its history index. See readfirst.ts.
@@ -3552,7 +3708,14 @@ export async function runTurn(opts: {
             groundedUrls,
             sourcedUrls: () => collectSourcedUrls(opts.history),
             askedQuestions,
-            requestApproval: opts.requestApproval,
+            requestApproval:
+              opts.requestApproval &&
+              (async req => {
+                const answer = await opts.requestApproval!(req);
+                if (typeof answer === 'boolean') return answer;
+                declineFeedback = answer.feedback;
+                return false;
+              }),
             requestQuestion,
             onProgress: opts.onToolProgress && (chunk => opts.onToolProgress!(chunk, tool.name)),
             spawnSubagent: makeSpawnSubagent(opts, subagentCalls, decodeThroughput, genReserve),
@@ -3562,8 +3725,11 @@ export async function runTurn(opts: {
             unattended: opts.isUnattended?.() ?? opts.config.unattended,
             signal: opts.signal,
           });
-          summary = result.summary;
+          summary = declineFeedback
+            ? withDeclineFeedback(result.summary, declineFeedback)
+            : result.summary;
           payload = result.payload;
+          if (declineFeedback) roundDeclineFeedback.push(declineFeedback);
           diff = result.diff;
           command = result.command;
           changes = result.changes;
@@ -3629,13 +3795,17 @@ export async function runTurn(opts: {
       // Instrument re-reads (debug only): is this a fresh read, a redundant loop, or a rational
       // refetch of content that aged out? Recorded for every read regardless of REIKA_DEBUG (cheap,
       // and the live/aged label depends on round order), but only emitted under the flag.
+      const shellRead =
+        !refused && call.name === 'bash' && exitCode === 0
+          ? await traceBashRead(String(call.args.command ?? ''), opts.bundle.cwd)
+          : undefined;
       if (!refused && call.name === 'read' && contentHash) {
         // Read-first (#72): the model now holds this file's bytes (or knows its true length, for an
         // offset-past-end read). Grounding is applied after the tool message is pushed, since it
         // keys on that message's index — the bytes ground edits only while they are still being sent.
         groundsPath = String(call.args.path ?? '');
         const { cls, repeats } = readTrace.record(
-          String(call.args.path ?? ''),
+          traceReadPath(opts.bundle.cwd, String(call.args.path ?? '')),
           Number(call.args.offset ?? 1),
           contentHash,
           i,
@@ -3645,6 +3815,22 @@ export async function runTurn(opts: {
         );
         debugLog(
           `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
+        );
+      } else if (shellRead) {
+        // A one-file read through the shell deepens the same per-file count as `read` (#801), and
+        // grounds the read-first gate like one (#825): its payload carries the file's bytes, and
+        // ignoring it bounced 12 of 14 edits on lfm2.5 T2 runs, 10 of 11 that would have landed.
+        groundsPath = shellRead.path;
+        const { cls, repeats } = readTrace.record(
+          shellRead.path,
+          shellRead.offset,
+          shellRead.hash,
+          i,
+          shellRead.limit,
+          'bash',
+        );
+        debugLog(
+          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} via=bash ${shellRead.path}\n`,
         );
       } else if (debugEnabled() && !refused && call.name !== 'read') {
         // Non-read tool calls have no read-trace line, so a reasoning loop circling on grep/glob/list
@@ -3672,7 +3858,10 @@ export async function runTurn(opts: {
       // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
       // fields (old_string failures, args.path, a rendered diff) that a shell command has no
       // analogue for.
-      if (!bouncedBlindEdit && didMutate(call.name, changes)) editingStarted = true;
+      if (!bouncedBlindEdit && didMutate(call.name, changes)) {
+        editingStarted = true;
+        mutatedSinceWithdrawal = true;
+      }
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
@@ -3808,6 +3997,19 @@ export async function runTurn(opts: {
         opts.onMessage({ role: 'system', tone: 'info', content: planCheckoff });
       }
     }
+    // The user's own words, as a user message rather than inside the declined call's result: in a
+    // tool result even a framed quote read to lfm2.5-24b as the environment refusing ("maybe the
+    // environment doesn't support it"), 0/3 on a reason asking for an answer instead of a command.
+    // `harness`: not a turn boundary, so the task-spec pin stays put (#287). History only — the
+    // declined call's row already shows the quote. The words go verbatim: opening with "I declined
+    // `<command>`." gained nothing on a terse reason and buried an explicit one behind a long `cd`.
+    if (roundDeclineFeedback.length > 0) {
+      opts.history.push({
+        role: 'user',
+        content: roundDeclineFeedback.join('\n\n'),
+        harness: true,
+      });
+    }
     // A round that added no new keys (all re-reads of already-seen sections / repeat searches) is a
     // stall; enough consecutive stalls trip the adaptive force-write on the next iteration.
     const roundLearned =
@@ -3817,7 +4019,9 @@ export async function runTurn(opts: {
 
   const exhausted: Message = {
     role: 'assistant',
-    content: `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)`,
+    content:
+      `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)` +
+      (await reportTypecheckAtStop()),
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -3909,6 +4113,7 @@ function commitAgentLoopStop(
   turnStart: number,
   fetchedUrls: Set<string>,
   edited: boolean,
+  typecheckAddendum = '',
 ): void {
   const files = new Set<string>();
   for (const m of opts.history) {
@@ -3931,7 +4136,8 @@ function commitAgentLoopStop(
   const content = edited
     ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
       `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
-      `anything's off.`
+      `anything's off.` +
+      typecheckAddendum
     : `I kept repeating the same step without making progress, so I've stopped rather than loop. Let ` +
       `me know how you'd like to proceed.`;
   const m: Message = {

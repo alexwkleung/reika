@@ -20,7 +20,8 @@
 // "what would the run have been". The re-read term (`dup-aged`) still needs live runs.
 //
 // Usage:
-//   npx tsx evals/agefraction-replay.ts ~/.config/reika/history/*.jsonl
+//   npx tsx evals/agefraction-replay.ts ~/.config/reika/history/projects/<name>-<hash>/*.jsonl
+//   (TUI sessions auto-save under projects/; the history root holds only /save transcripts)
 //   npx tsx evals/agefraction-replay.ts --f=0.5,0.6,0.7,0.8 run.jsonl
 //   npx tsx evals/agefraction-replay.ts --rate=22.9 --system=8235 run.jsonl
 //

@@ -1,4 +1,6 @@
-import { loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { assertRawConfig, loadConfig, resolveProfile, withProbedLimits } from './config.js';
+import { ensureNoteSlot } from './provider/noteslot.js';
+import { debugLog, formatEndpointLine } from './debug.js';
 import { repoMapBudgetFor } from './context/repomap.js';
 import {
   needsLimitsProbe,
@@ -33,7 +35,17 @@ import {
   turnRefines,
   turnTools,
 } from './ui/commands.js';
-import type { Config, ContextBundle, Message, Mode, Profile, Tool, Usage } from './types.js';
+import type {
+  Config,
+  ContextBundle,
+  Message,
+  Mode,
+  Profile,
+  RawConfig,
+  ResolvedConfig,
+  Tool,
+  Usage,
+} from './types.js';
 
 // One session: boot plus the state a turn hands the next (#403). The loop was never UI-coupled, but
 // "a session" was — each consumer booted its own and threaded calibration, rates and shrink counts
@@ -72,8 +84,8 @@ export type SessionEvents = Partial<
 
 export type SessionOptions = {
   cwd: string;
-  // Defaults to loadConfig(), the environment the TUI reads.
-  config?: Config;
+  // Defaults to loadConfig(). Unresolved: pick the profile with `profile` (#832).
+  config?: RawConfig;
   profile?: string;
   // False when nobody can answer: a model that sees ask_user calls it and stalls, so it is not
   // offered at all, and the loop reads canAsk from the tool list so the prompt agrees.
@@ -136,7 +148,7 @@ type Side = 'agent' | 'chat';
 export type Session = {
   readonly bundle: ContextBundle;
   // The active profile resolved onto the config — what a turn runs with.
-  readonly config: Config;
+  readonly config: ResolvedConfig;
   readonly profile: string;
   readonly offline: boolean;
   // Which search provider won when both are configured; undefined otherwise, or when offline.
@@ -183,7 +195,8 @@ export type Session = {
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  let cfg = opts.config ?? loadConfig();
+  if (opts.config) assertRawConfig(opts.config, 'createSession');
+  let cfg: Config = opts.config ?? loadConfig();
   let profile = opts.profile ?? 'default';
   // Identity detection runs CONCURRENTLY with bootstrap, not before it. Four git subprocesses cost
   // ~28ms warm, pure added latency to first paint if serialized (measured: 29ms bootstrap + 28ms
@@ -221,6 +234,16 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   // submit on that profile, awaited so the window governs that turn rather than the one after.
   const retryWindow = new Set<string>();
   if (probed && !probed.reached) retryWindow.add(profile);
+  // #827: which slot the per-round note takes on this endpoint. Fired here so it overlaps startup,
+  // awaited at each submit once the user's message is on screen and before the turn's first request,
+  // so it never runs between rounds (a probe there would evict a single-slot server's cache), and
+  // asked again at a submit if the server was not up.
+  void ensureNoteSlot(resolveProfile(cfg, profile));
+  const logEndpoint = (): void => {
+    const p = resolveProfile(cfg, profile);
+    debugLog(formatEndpointLine(profile, p.model, p.baseURL));
+  };
+  logEndpoint();
 
   // No route out → no web tools this session (#392). Checked once, here, because the tool list is
   // part of the cached prefix; the per-turn latch in the tools covers a drop later.
@@ -326,6 +349,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         // vibe) never refines, since its plan phase is a new task even when a plan sits right above.
         allowRefine: turnRefines(recorded),
         manualCompact: submit.manualCompact,
+        // After the user echo, so the prompt is on screen while a probe runs; still before the
+        // turn's first request, never between rounds.
+        beforeFirstRequest: () =>
+          ensureNoteSlot(resolveProfile(cfg, profile), undefined, signal ?? undefined),
         // The prompt carries the turn's mode from here on (the loop has no notion of one), so a
         // saved transcript can say what each turn was.
         onMessage: raw => {
@@ -415,6 +442,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     decodeRate = undefined;
     genReserve = new GenReserve();
     changed();
+    logEndpoint();
+    void ensureNoteSlot(resolveProfile(cfg, name));
     if (!needsLimitsProbe(next)) return Promise.resolve([]);
     return probeModelLimits(next).then(probe => {
       if (!probe.reached) retryWindow.add(name);
@@ -443,6 +472,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     if (profile !== 'default') {
       profile = 'default';
       changed();
+      logEndpoint();
     }
   };
 

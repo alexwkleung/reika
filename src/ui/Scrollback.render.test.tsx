@@ -619,6 +619,21 @@ describe('Scrollback live command tail indent', () => {
     }
   });
 
+  // The committed chip shows the run's last OUTPUT_TAIL_LINES; a live tail taller than that made
+  // the frame drop by the difference when the chip replaced it, lifting the input box.
+  it('holds a running command’s tail to the rows its committed chip shows', () => {
+    const output = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n');
+    const live = liveToolFrame(output)
+      .split('\n')
+      .filter(l => l.trim());
+    expect(live.length).toBeLessThanOrEqual(10);
+    expect(live.at(-1)).toContain('line 39');
+    const shell = liveToolFrame(output, false)
+      .split('\n')
+      .filter(l => l.trim());
+    expect(shell.length).toBeGreaterThan(10);
+  });
+
   it('leaves shell mode’s live tail at the left edge, where its shell message prints it', () => {
     const rows = liveToolFrame('total 8\ndrwxr-xr-x 1 octocat staff', false)
       .split('\n')

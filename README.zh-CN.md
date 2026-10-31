@@ -11,10 +11,10 @@
 </p>
 
 <p align="center">
-  <a href="https://reikacode.com">网站</a> ·
+  <a href="https://reikacode.com/zh/">网站</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#文档">文档</a> ·
-  <a href="docs/models.md">测试过的模型</a> ·
+  <a href="docs/zh/models.md">测试过的模型</a> ·
   <a href="README.md">English</a>
 </p>
 
@@ -51,7 +51,7 @@ Reika 还处于 1.0 之前，命令、设置和行为在不同版本之间仍可
 
 ## 要求
 
-- Node.js 22 或更新版本（macOS 11+，或 glibc 2.28+ 的 Linux —— 见[平台](docs/platforms.md)）。
+- Node.js 22 或更新版本（macOS 11+，或 glibc 2.28+ 的 Linux —— 见[平台](docs/zh/platforms.md)）。
 - 一个 OpenAI 兼容的模型服务器：llama.cpp、MLX、vLLM 或云端 API。
 - macOS 是主要平台。Linux 可用，但没有 shell 沙箱和图片粘贴 OCR（可以设置 `REIKA_VISION_MODEL`，改用视觉模型读取粘贴的图片）。Windows 或许能在 WSL2 下运行。
 - 现代终端（iTerm2、Ghostty、Kitty 等）。想要正确的 TUI 渲染，建议使用它们。
@@ -123,24 +123,39 @@ cd your-project && reika
 
 ## 文档
 
-这些页面也在网站 [reikacode.com](https://reikacode.com) 上（英文）。
+这些页面也在网站 [reikacode.com/zh](https://reikacode.com/zh/) 上。模型、平台和架构已翻译为中文，其余页面暂为英文。
 
-| 文档                                   | 内容                                                             |
-| -------------------------------------- | ---------------------------------------------------------------- |
-| [配置](docs/configuration.md)          | 每一个 `.env` 键、实验性开关、具名 profile、上次会话状态         |
-| [模式、无头与命令](docs/usage.md)      | 各模式详解、`reika -p`、斜杠命令、`/save` 会话记录               |
-| [工具](docs/tools.md)                  | 模型可用的工具、审批提示、网络搜索设置、MCP 服务器、`.gitignore` |
-| [指令与技能](docs/skills.md)           | `AGENTS.md`、作为斜杠命令的技能、自然语言路由、粘贴的链接        |
-| [测试过的模型](docs/models.md)         | Reika 实际跑过的本地量化版本和 API                               |
-| [测量结果](docs/findings.md)           | 实测记录：什么坏了、什么撑住了，以及每个数字是怎么得到的         |
-| [平台](docs/platforms.md)              | 运行要求、在弱机器上运行、Linux 和 Windows 上的差异              |
-| [架构与注意事项](docs/architecture.md) | 框架如何工作，以及已知限制                                       |
-| [贡献](CONTRIBUTING.md)                | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
-| [更新日志](CHANGELOG.md)（英文）       | 每个版本的变更                                                   |
+| 文档                                      | 内容                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------- |
+| [配置](docs/configuration.md)             | 每一个 `.env` 键、实验性开关、具名 profile、上次会话状态         |
+| [模式、无头与命令](docs/usage.md)         | 各模式详解、`reika -p`、斜杠命令、`/save` 会话记录               |
+| [工具](docs/tools.md)                     | 模型可用的工具、审批提示、网络搜索设置、MCP 服务器、`.gitignore` |
+| [指令与技能](docs/skills.md)              | `AGENTS.md`、作为斜杠命令的技能、自然语言路由、粘贴的链接        |
+| [测试过的模型](docs/zh/models.md)         | Reika 实际跑过的本地量化版本和 API                               |
+| [测量结果](docs/findings.md)              | 实测记录：什么坏了、什么撑住了，以及每个数字是怎么得到的         |
+| [平台](docs/zh/platforms.md)              | 运行要求、在弱机器上运行、Linux 和 Windows 上的差异              |
+| [架构与注意事项](docs/zh/architecture.md) | 框架如何工作，以及已知限制                                       |
+| [贡献](CONTRIBUTING.md)                   | 脚本、设计理念、`AGENTS.md` 指引，以及外部贡献者指南             |
+| [更新日志](CHANGELOG.md)（英文）          | 每个版本的变更                                                   |
 
 ## 灵感来自
 
-Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie 和 DS4。
+Claude Code、Codex、Crush、OpenCode、Pi、Aider、DeepSeek Harness、Qwen Code、Kimi Code CLI、Gemini CLI、Junie、DS4 和 Ante。
+
+## 引用
+
+如果你在工作中使用了 Reika，可以这样引用：
+
+```bibtex
+@software{reika2026,
+  author = {Leung, Alex},
+  title  = {Reika},
+  year   = {2026},
+  url    = {https://github.com/alexwkleung/reika}
+}
+```
+
+GitHub 的 "Cite this repository" 按钮会根据 [CITATION.cff](CITATION.cff) 给出其他格式的同一条目。
 
 ## 许可
 

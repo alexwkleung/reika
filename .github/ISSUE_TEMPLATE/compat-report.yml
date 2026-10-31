@@ -1,0 +1,105 @@
+name: Compatibility report
+description: How Reika ran on your OS, terminal, inference engine or model — working or not
+title: '[Compat] <model> on <engine>, <OS>'
+labels: [triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Reika on something other than the maintainers' setup. A report that says
+        "it all worked" is as useful as one that found a bug: it is what goes into the
+        [tested models](https://github.com/alexwkleung/reika/blob/main/docs/models.md) and
+        [platforms](https://github.com/alexwkleung/reika/blob/main/docs/platforms.md) pages.
+
+        Fill in what you know and skip the rest.
+
+  - type: input
+    id: version
+    attributes:
+      label: Reika version
+      description: '`reika --version`, or `main` at a commit if you run from source'
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: With version and architecture, e.g. `Ubuntu 24.04 x86_64`, `macOS 26 arm64`, `Windows 11 / WSL2 Debian`
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: e.g. `Ghostty 1.2`, `iTerm2`, `Windows Terminal`, `tmux in Alacritty`, `ssh from …`
+
+  - type: input
+    id: engine
+    attributes:
+      label: Inference engine or API provider
+      description: With version, e.g. `llama.cpp b6123`, `Ollama 0.12`, `vLLM 0.11`, `LM Studio`, `OpenRouter`
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model and quantization
+      description: The repo or file you ran, e.g. `unsloth/Qwen3.8-27B-GGUF UD-IQ3_XXS`
+    validations:
+      required: true
+
+  - type: input
+    id: context
+    attributes:
+      label: Context window
+      description: '`REIKA_CONTEXT_WINDOW` if you set it, the server''s `-c` / `num_ctx` otherwise, or "unknown"'
+
+  - type: checkboxes
+    id: modes
+    attributes:
+      label: Modes you used
+      options:
+        - label: agent
+        - label: plan
+        - label: minimal
+        - label: vibe
+        - label: grind
+        - label: chat
+        - label: shell
+
+  - type: dropdown
+    id: runs
+    attributes:
+      label: How many times did you try it?
+      description: Small and heavily quantized models vary a lot from run to run — the same task can go fine once and spiral the next.
+      options:
+        - Once
+        - 2–3 times
+        - More than 3, or daily use
+
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+      description: The kind of tasks you gave it and how they went. Short is fine.
+
+  - type: textarea
+    id: broke
+    attributes:
+      label: What didn't
+      description: |
+        Rendering problems, tool calls that failed or showed up as text, loops, errors from the
+        server, features that were missing on your platform. The prompt and what you saw help most.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log excerpt (optional)
+      description: |
+        Run with `REIKA_DEBUG=1`; the log is at `~/.config/reika/logs/latest.log`.
+        **Check it before pasting** — it quotes your prompts, file paths and code. A few lines
+        around the problem beat the whole file.
+      render: text

@@ -30,7 +30,8 @@ const DEFAULT_IDLE_MS = 5 * 60_000;
 const KILL_GRACE_MS = 2_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const OUTPUT_TAIL_BYTES = 2 * 1024;
-const OUTPUT_TAIL_LINES = 10;
+// Exported for the live tail (ui/Scrollback.tsx), which must never draw more rows than this chip.
+export const OUTPUT_TAIL_LINES = 10;
 // Retained for the UI chip's last-lines view. Larger than OUTPUT_TAIL_BYTES so the slice to 10
 // lines always has enough to work with even when lines are long, and small enough to be free.
 const UI_TAIL_BYTES = 4 * 1024;

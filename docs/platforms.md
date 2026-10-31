@@ -29,6 +29,25 @@ Point `REIKA_BASE_URL` at it (see [Configuration](configuration.md)). Everything
 reading and editing files, running commands, the context bookkeeping — stays on the machine you are
 sitting at, and only the requests cross the network.
 
+**Ollama.** It works, but Reika cannot read the context window from it, so set
+`REIKA_CONTEXT_WINDOW` to the `num_ctx` the model actually runs with. Without a window Reika does no
+compaction and caps nothing, and Ollama's own default context is small and cuts a long prompt
+without an error, so a session can lose its earlier turns with nothing on screen saying so. The loop
+recovery's logit bias also has no effect there. llama.cpp and vLLM report their window, so neither
+needs this.
+
+**Thinking models on Ollama, MLX and some templates.** Once a context window is known, Reika puts its
+per-round notes in a short message at the end of each request so the prompt cache stays valid. Many
+thinking models' chat templates hide all earlier reasoning behind such a message, so the model can't
+see its own earlier thinking and keeps working it out again. Reika asks the template to keep it
+(`preserve_thinking`), which works on llama.cpp, vLLM and SGLang on your own machine or network with a
+template that supports it, such as LFM2.5 and Qwen3.6. Where it doesn't — an engine that ignores the
+request (mlx-vlm, and very likely Ollama), or a template with no such switch (Mellum2.1 Thinking,
+Ornith 1.5, Gemma 4 E4B) — Reika moves its notes onto the last tool result instead, where they hide
+nothing. It finds out which case it is in with a few tiny requests to a local server before the first
+turn, remembered for a week, and keeps an eye on it during the session. `REIKA_NOTE_SLOT=tool` or
+`user` overrides it.
+
 ## What differs by platform
 
 Everything outside this table works the same everywhere.

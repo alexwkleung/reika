@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
 
 // This file is the dedup-OFF baseline arm: several fixtures below use byte-identical payloads as
@@ -1647,5 +1647,66 @@ describe('messagesToChatParams prefix-stable', () => {
     const out = messagesToChatParams('sys', [], { trailingNote: 'note' });
     expect(out.filter(m => m.role === 'user')).toHaveLength(1);
     expect((out[1] as { content: string }).content).toBe('note');
+  });
+
+  describe('note slot (#827)', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+    const toolLatch = { reasoningRoundtrip: false, toolMessageName: false, noteOnToolResult: true };
+    afterEach(() => {
+      delete process.env.REIKA_NOTE_SLOT;
+    });
+
+    it('appends the note to the newest tool result on a latched endpoint', () => {
+      const plain = messagesToChatParams('sys', history);
+      const out = messagesToChatParams('sys', history, {
+        trailingNote: 'NOTE',
+        latches: toolLatch,
+      });
+      expect(out).toHaveLength(plain.length);
+      expect(out.filter(m => m.role === 'user')).toHaveLength(1);
+      const last = out.at(-1) as { role: string; content: string };
+      expect(last.role).toBe('tool');
+      expect(last.content).toBe(`${(plain.at(-1) as { content: string }).content}\n\nNOTE`);
+      // Never stored: the next request without a note serializes the plain result again.
+      expect(messagesToChatParams('sys', history, { latches: toolLatch })).toEqual(plain);
+    });
+
+    it('keeps the user slot on an endpoint with no latch', () => {
+      const out = messagesToChatParams('sys', history, { trailingNote: 'NOTE' });
+      expect(out.at(-1)).toEqual({ role: 'user', content: 'NOTE' });
+    });
+
+    it('still joins a user message at the tail on a round with no tool result', () => {
+      const out = messagesToChatParams('sys', [{ role: 'user', content: 'plan it' }], {
+        trailingNote: 'NOTE',
+        latches: toolLatch,
+      });
+      expect(out.at(-1)).toEqual({ role: 'user', content: 'plan it\n\nNOTE' });
+    });
+
+    it('lets REIKA_NOTE_SLOT force either side', () => {
+      process.env.REIKA_NOTE_SLOT = 'tool';
+      expect(messagesToChatParams('sys', history, { trailingNote: 'NOTE' }).at(-1)?.role).toBe(
+        'tool',
+      );
+      process.env.REIKA_NOTE_SLOT = 'user';
+      expect(
+        messagesToChatParams('sys', history, { trailingNote: 'NOTE', latches: toolLatch }).at(-1),
+      ).toEqual({ role: 'user', content: 'NOTE' });
+    });
+  });
+
+  // #806: the engine continues the request's last message, so the prefill must follow the note.
+  it('puts an assistant prefill last, after the trailing note', () => {
+    const history: Message[] = [{ role: 'user', content: 'go' }, ...toolRound('a', 'P')];
+    const out = messagesToChatParams('sys', history, {
+      trailingNote: 'write the note',
+      assistantPrefill: 'Compaction note 1\n\nEstablished:\n',
+    });
+    expect(out.slice(-2)).toEqual([
+      { role: 'user', content: 'write the note' },
+      { role: 'assistant', content: 'Compaction note 1\n\nEstablished:\n' },
+    ]);
+    expect(messagesToChatParams('sys', history).at(-1)?.role).toBe('tool');
   });
 });

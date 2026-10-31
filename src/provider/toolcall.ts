@@ -5,7 +5,8 @@ import { imageContentPart } from './transport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from './budget.js';
 import type { EndpointLatches } from './latches.js';
 
-type ShapeLatches = Pick<EndpointLatches, 'reasoningRoundtrip' | 'toolMessageName'>;
+type ShapeLatches = Pick<EndpointLatches, 'reasoningRoundtrip' | 'toolMessageName'> &
+  Partial<Pick<EndpointLatches, 'noteOnToolResult'>>;
 
 // Keep in sync with CHARS_PER_TOKEN in ./tokens.ts — the heuristic that maps the
 // token-denominated window to the char-denominated payload length.
@@ -286,6 +287,18 @@ export function shapeRejection(reason: string): ShapeRejection | null {
 
 // The request shape is the OpenAI-compatible `/v1/chat/completions` protocol (`ChatMessageParam`,
 // transport.ts) that every backend we talk to speaks — llama.cpp, vLLM, Ollama — not OpenAI itself.
+// Where the per-round note goes on this endpoint (#827): the newest tool result once the probe or the
+// live check has latched it (noteOnToolResult), else the trailing user slot. REIKA_NOTE_SLOT
+// forces either side, for an A/B or for an engine the detection gets wrong.
+export function noteRidesToolResult(
+  latches?: Partial<Pick<EndpointLatches, 'noteOnToolResult'>>,
+): boolean {
+  const forced = process.env.REIKA_NOTE_SLOT;
+  if (forced === 'tool') return true;
+  if (forced === 'user') return false;
+  return latches?.noteOnToolResult === true;
+}
+
 export function messagesToChatParams(
   system: string,
   history: Message[],
@@ -319,6 +332,9 @@ export function messagesToChatParams(
     // instead of mutating the system prompt — a system-suffix change invalidates the prefix cache
     // from token 0; a tail message costs nothing. Never enters history.
     trailingNote?: string;
+    // The start of the reply, sent as a final assistant message for the engine to continue (#806).
+    // After the trailing note, so it is the last message. Never enters history.
+    assistantPrefill?: string;
     // Pasted images to hand to the model directly, for a profile whose model can already see
     // (VisionRoute 'native'). Each is attached to the one history user message whose text carries
     // its marker — the message the user actually pasted it into — and only that message. An image
@@ -530,7 +546,15 @@ export function messagesToChatParams(
   // text stays first, so the next round still diverges only where the note sat.
   if (opts?.trailingNote) {
     const tail = out[out.length - 1];
-    if (tail?.role === 'user' && typeof tail.content === 'string') {
+    // A user-role note makes a thinking template that ignores preserve_thinking drop every <think>
+    // before it (#827). On the tool result it is not a user turn, so the reasoning keeps rendering.
+    const onToolResult =
+      noteRidesToolResult(opts.latches) &&
+      tail?.role === 'tool' &&
+      typeof tail.content === 'string';
+    if (onToolResult) {
+      out[out.length - 1] = { ...tail, content: `${tail.content}\n\n${opts.trailingNote}` };
+    } else if (tail?.role === 'user' && typeof tail.content === 'string') {
       out[out.length - 1] = { role: 'user', content: `${tail.content}\n\n${opts.trailingNote}` };
     } else {
       out.push({ role: 'user', content: opts.trailingNote });
@@ -562,6 +586,7 @@ export function messagesToChatParams(
   if (!out.some(m => m.role === 'user')) {
     out.splice(1, 0, { role: 'user', content: '(continue)' });
   }
+  if (opts?.assistantPrefill) out.push({ role: 'assistant', content: opts.assistantPrefill });
   opts?.onCapStats?.(capStats);
   opts?.onAgedStats?.(agedStats);
   return out;

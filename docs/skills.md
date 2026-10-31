@@ -11,7 +11,8 @@ Standing guidance for the model, loaded into the system prompt once at startup:
 
 When both exist they are merged, global first, with the project file named as the winner where they
 disagree — so a personal "terse replies, no emoji" rides along without displacing the repo's build and
-test rules. `CLAUDE.md` is accepted as a fallback name in either location.
+test rules. `AGENT.md` and then `CLAUDE.md` are accepted as fallback names in either location; only
+the first one found is loaded.
 
 Each file is capped at 12KB (≈3k tokens). An oversized file is replaced by its heading outline plus a
 pointer to read the relevant section, so it can never crowd a small context window.
@@ -24,6 +25,19 @@ A `*.md` file dropped in a skills directory becomes a slash command — useful f
 - **Bundled:** the skills that ship with Reika (below)
 - **Global:** `$REIKA_SKILLS_DIR` if set, otherwise `~/.config/reika/skills/`
 - **Project:** `<cwd>/.reika/skills/`
+
+Skills kept for other coding agents load too, from where they already are:
+
+- **Global:** `~/.agents/skills/`
+- **Project:** `<cwd>/.agents/skills/` and `<cwd>/.claude/skills/`
+
+Reika's own directories win over these on a name collision; among these, project wins over global
+and `.agents` over `.claude`. `/skills` labels each one with the directory it came from. Reika does
+not read `~/.claude/skills/`. To use skills kept there, link them in once:
+
+```sh
+ln -s ~/.claude/skills ~/.agents/skills
+```
 
 ### Skills Reika ships with
 
@@ -45,9 +59,13 @@ frontmatter line (`requires: gh, github`). A requirement Reika does not recogniz
 
 - **Flat file:** `~/.config/reika/skills/review.md` → `/review`
 - **Directory with `SKILL.md`:** `~/.config/reika/skills/review/SKILL.md` → `/review`. Lets a skill carry
-  supporting files (scripts, reference docs) — only `SKILL.md` is used as the prompt body; other files
-  are ignored. Matches the Claude Code skill packaging convention, so you can drop skill folders in
-  verbatim.
+  supporting files (scripts, reference docs), the layout other harnesses use, so you can drop skill
+  folders in verbatim. `SKILL.md` is the prompt body. When the directory holds other files, the body
+  opens with a line naming the skill's directory and listing those files (names only, up to 20, no
+  dotfiles). A reference in the body to one of those files is rewritten to its full path, so
+  `sh scripts/extract.sh` runs the skill's script rather than looking in your project. Nothing
+  else in the body changes. Reika never runs a skill's scripts itself: the model runs them through
+  `bash`, behind the same approval prompt and sandbox as any other command.
 
 ### File format
 
@@ -69,6 +87,10 @@ Review the changes on this branch:
 
 Without frontmatter, the first non-empty line becomes the autocomplete description and the whole file is
 the prompt body.
+
+Reika reads `description`, `triggers` and `requires`. Frontmatter written for other harnesses
+(`allowed-tools`, `model`, …) is ignored. A skill never pre-approves a tool: the commands it leads to
+go through the approval prompt and the sandbox like any other.
 
 **Invocation:**
 

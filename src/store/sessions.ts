@@ -47,11 +47,17 @@ export function serializeSession(sides: SessionSides, meta: TranscriptMeta): str
   const body = serializeJsonl(sides.agent, count, { redact: false });
   if (sides.chat.length === 0) return body;
   // The header's title is derived from the agent side; a session spent in chat takes the chat's.
+  // `modes` covers the agent side only, so the chat side is counted here (#875): without it a
+  // chat-only file read as an empty timeline, and a listing could not tell it held a chat.
   const nl = body.indexOf('\n');
   const header = JSON.parse(body.slice(0, nl)) as { title?: string };
   const chatTitle = header.title === undefined ? deriveTitle(sides.chat) : undefined;
-  const head =
-    chatTitle === undefined ? body.slice(0, nl) : JSON.stringify({ ...header, title: chatTitle });
+  const chatTurns = countRealTurns(sides.chat);
+  const head = JSON.stringify({
+    ...header,
+    ...(chatTitle !== undefined ? { title: chatTitle } : {}),
+    ...(chatTurns > 0 ? { chatTurns } : {}),
+  });
   const chat = sides.chat.map(m => JSON.stringify(m)).join('\n');
   return `${head}${body.slice(nl)}${JSON.stringify(CHAT_SEGMENT)}\n${chat}\n`;
 }
@@ -77,6 +83,9 @@ export type SessionEntry = {
   savedAt: string;
   messageCount: number;
   model?: string;
+  // Real chat turns in the file (#875). Absent for a file with no chat side, and for one saved
+  // before the header carried the count, which a listing cannot tell apart from the header alone.
+  chatTurns?: number;
 };
 
 // Newest first. Only the header line is read — a session with its tool payloads can run to
@@ -100,6 +109,9 @@ export async function listSessions(dir: string): Promise<SessionEntry[]> {
       savedAt: meta.savedAt,
       messageCount: typeof meta.messageCount === 'number' ? meta.messageCount : 0,
       ...(typeof meta.model === 'string' ? { model: meta.model } : {}),
+      ...(typeof meta.chatTurns === 'number' && meta.chatTurns > 0
+        ? { chatTurns: meta.chatTurns }
+        : {}),
     });
   }
   return entries.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
@@ -129,16 +141,32 @@ export async function loadSession(path: string): Promise<SessionSides> {
   const lines = (await readFile(path, 'utf8')).split('\n').filter(l => l.trim().length > 0);
   const sides: SessionSides = { agent: [], chat: [] };
   let side: Message[] = sides.agent;
+  let marked = false;
   // Line 0 is the meta header.
   for (const line of lines.slice(1)) {
     const rec = JSON.parse(line) as Message | typeof CHAT_SEGMENT;
     if ('segment' in rec) {
+      marked = true;
       side = sides.chat;
       continue;
     }
     side.push(rec);
   }
+  // A /save made in chat mode writes the chat scrollback through the plain transcript serializer,
+  // so it carries no segment marker (#880). Its prompts are what say so, not the header's `mode`:
+  // an auto-save taken right after Shift+Tab into chat is agent-only, unmarked, with `mode: "chat"`
+  // in its header too. Reading the prompts also fixes the chat saves made before this rule.
+  if (!marked && isChatOnly(sides.agent)) {
+    sides.chat = sides.agent;
+    sides.agent = [];
+  }
   return sides;
+}
+
+// Every prompt was sent in chat mode — the session stamps each user message with its mode.
+function isChatOnly(messages: Message[]): boolean {
+  const prompts = messages.filter(m => m.role === 'user' && !m.meta);
+  return prompts.length > 0 && prompts.every(m => m.role === 'user' && m.mode === 'chat');
 }
 
 // The model-facing history a resumed session continues from, rebuilt from its scrollback: what

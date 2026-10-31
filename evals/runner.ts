@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
-import { formatExperimentFlags } from '../src/debug.js';
+import { debugLogPath, formatExperimentFlags } from '../src/debug.js';
+import { buildHeadlessInput } from '../src/headless.js';
 import { createSession } from '../src/session.js';
 
 import type { Message } from '../src/types.js';
@@ -27,6 +28,15 @@ import { fixture as f14 } from './fixtures/14-self-docs.js';
 import { fixture as f15 } from './fixtures/15-self-attractor.js';
 import { fixture as f16 } from './fixtures/16-grind-chunk-guard.js';
 import { fixture as f17 } from './fixtures/17-grind-chunk-hidden.js';
+import {
+  askFixture as f18c,
+  bareFixture as f18b,
+  feedbackFixture as f18,
+  terseFixture as f18d,
+} from './fixtures/18-decline-feedback.js';
+import { agedFixture as f19b, liveFixture as f19 } from './fixtures/19-edit-recall.js';
+import { fixture as f20 } from './fixtures/20-skill-script.js';
+import { fixture as f21 } from './fixtures/21-self-history.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -46,6 +56,14 @@ const FIXTURES: Fixture[] = [
   f15,
   f16,
   f17,
+  f18,
+  f18b,
+  f18c,
+  f18d,
+  f19,
+  f19b,
+  f20,
+  f21,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -116,6 +134,8 @@ async function runFixture(
   profile?: string,
 ): Promise<RunRecord> {
   const cwd = await mkdtemp(join(tmpdir(), 'reika-eval-'));
+  let skillsDir: string | undefined;
+  let homeDir: string | undefined;
   try {
     for (const [relPath, content] of Object.entries(fix.setup)) {
       const full = join(cwd, relPath);
@@ -139,17 +159,58 @@ async function runFixture(
 
     // The TUI's boot, not a copy of it: a runner that booted on its own never probed the window,
     // so with REIKA_CONTEXT_WINDOW unset every fixture ran with no compaction, no prefix-stable and
-    // no payload cap — a configuration no interactive session runs. No approver, as before: the
-    // gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
+    // no payload cap — a configuration no interactive session runs. No approver unless the fixture
+    // brings one: the gate is skipped (bypass). No ask_user either: nobody answers it, and a model that sees it
     // calls it and stalls.
-    const session = await createSession({ cwd, canAsk: false, profile });
+    const approve = fix.approver?.();
+    const priorSkillsDir = process.env.REIKA_SKILLS_DIR;
+    if (fix.globalSkills) {
+      skillsDir = await mkdtemp(join(tmpdir(), 'reika-eval-skills-'));
+      for (const [relPath, content] of Object.entries(fix.globalSkills)) {
+        const full = join(skillsDir, relPath);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, content, 'utf8');
+      }
+      process.env.REIKA_SKILLS_DIR = skillsDir;
+    }
+    // Skills load during bootstrap, so the override only has to last through createSession.
+    const session = await createSession({
+      cwd,
+      canAsk: false,
+      profile,
+      requestApproval: approve && (async req => approve(req)),
+    }).finally(() => {
+      if (!fix.globalSkills) return;
+      if (priorSkillsDir === undefined) delete process.env.REIKA_SKILLS_DIR;
+      else process.env.REIKA_SKILLS_DIR = priorSkillsDir;
+    });
     const messages = session.history;
+    if (fix.home) {
+      // Real path, so `~` expands to the same string the assert matches and the sandbox sees.
+      homeDir = await realpath(await mkdtemp(join(tmpdir(), 'reika-eval-home-')));
+      for (const [relPath, file] of Object.entries(fix.home)) {
+        const full = join(homeDir, relPath);
+        await mkdir(dirname(full), { recursive: true });
+        await writeFile(full, typeof file === 'string' ? file : file.content, 'utf8');
+        if (typeof file !== 'string')
+          await utimes(full, new Date(file.mtime), new Date(file.mtime));
+      }
+    }
 
     const start = Date.now();
     const timeout = fix.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
+    // Swapped after createSession so config and keys load from the real HOME. The debug log path is
+    // derived from HOME on every line, so it is pinned first or the run's log would be deleted with
+    // the fake home.
+    const priorHome = process.env.HOME;
+    const priorDebugFile = process.env.REIKA_DEBUG_FILE;
+    if (homeDir) {
+      process.env.REIKA_DEBUG_FILE = debugLogPath();
+      process.env.HOME = homeDir;
+    }
     try {
       // Without `mode` every fixture ran as an agent turn regardless of its tool set, so plan-mode
       // behavior (the plan prompt, force-write, the `planFinal` stamp) was unreachable from an
@@ -160,13 +221,23 @@ async function runFixture(
         tools: fix.tools === 'plan' ? session.lists.plan : undefined,
         signal: controller.signal,
       };
-      await session.submit(fix.prompt, options);
+      // A `/skill` prompt goes through headless's own expansion, so a skill fixture measures exactly
+      // what `reika -p /skill` sends; any other prompt is submitted as written, as before.
+      const prompt = fix.prompt.startsWith('/')
+        ? (await buildHeadlessInput(fix.prompt, session.config, session.bundle, 'agent')).modelText
+        : fix.prompt;
+      await session.submit(prompt, options);
       // The follow-up runs in the same session, so the first turn's plan sits in the history the
       // loop reads — which is what makes that second turn a refinement (#46) rather than a fresh
       // planning pass. Same mode and tools; the timeout covers both turns.
       if (fix.followUp) await session.submit(fix.followUp, options);
     } finally {
       clearTimeout(timeoutId);
+      if (homeDir) {
+        process.env.HOME = priorHome;
+        if (priorDebugFile === undefined) delete process.env.REIKA_DEBUG_FILE;
+        else process.env.REIKA_DEBUG_FILE = priorDebugFile;
+      }
     }
 
     const elapsedMs = Date.now() - start;
@@ -178,7 +249,7 @@ async function runFixture(
 
     const result: AssertResult = timedOut
       ? { pass: false, reason: 'timeout' }
-      : await fix.assert({ cwd, messages, elapsedMs, toolCallCount });
+      : await fix.assert({ cwd, messages, elapsedMs, toolCallCount, home: homeDir });
     const savedTo = await saveRun({
       fix,
       mode: modeOverride ?? fix.mode ?? 'agent',
@@ -192,6 +263,8 @@ async function runFixture(
     return { fixture: fix, result, elapsedMs, toolCallCount, savedTo };
   } finally {
     await rm(cwd, { recursive: true, force: true });
+    if (skillsDir) await rm(skillsDir, { recursive: true, force: true });
+    if (homeDir) await rm(homeDir, { recursive: true, force: true });
   }
 }
 

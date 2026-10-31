@@ -11,6 +11,8 @@ import type {
   ModelMode,
   PasteFetchMode,
   Profile,
+  RawConfig,
+  ResolvedConfig,
   SkillAutoMode,
   VisionRoute,
 } from './types.js';
@@ -177,6 +179,8 @@ export function loadConfig(): Config {
     // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
     // conversations to disk at all, which is the one reason to want it off.
     autosave: process.env.REIKA_AUTOSAVE !== '0',
+    // #827: REIKA_NOTE_SLOT=tool|user forces the slot instead, checked where the probe would run.
+    noteSlotProbe: true,
     // Rotating garden words on the busy indicator (#500). Default on; `0` keeps the plain
     // "Working…" for anyone who finds it noise.
     workingWords: process.env.REIKA_WORKING_WORDS !== '0',
@@ -522,22 +526,37 @@ export function inheritProfile(from: Profile, model: string): Profile {
   };
 }
 
-export function resolveProfile(config: Config, profileName: string): Config {
+// The type brand is erased by any `Config` annotation or helper on the way, so the tag is what
+// actually catches a resolved config reaching createSession (#832). Enumerable so a spread keeps it.
+const RESOLVED = Symbol('ResolvedConfig');
+
+export function assertRawConfig(config: Config, where: string): void {
+  if (RESOLVED in config) {
+    throw new Error(`${where} was given resolveProfile()'s result; pass the raw config instead`);
+  }
+}
+
+export function resolveProfile(config: RawConfig, profileName: string): ResolvedConfig {
+  assertRawConfig(config, 'resolveProfile');
   const profile = config.profiles[profileName];
-  if (!profile) return config;
-  return {
-    ...config,
-    model: profile.model,
-    baseURL: profile.baseURL,
-    apiKey: profile.apiKey,
-    maxTokens: profile.maxTokens,
-    contextWindow: profile.contextWindow,
-    maxOutputTokens: profile.maxOutputTokens,
-    minGenTokens: profile.minGenTokens ?? config.minGenTokens,
-    minGenAdaptive: profile.minGenTokens != null ? profile.minGenAdaptive : config.minGenAdaptive,
-    // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route is
-    // dead weight: `...config` above would carry the *default* profile's value straight over it, so
-    // a `/model <vl>` switch would keep describing while claiming to be native.
-    vision: profile.vision ?? config.vision,
-  };
+  // An unknown name falls back to the top level, i.e. the default profile.
+  const overlaid: Config = profile
+    ? {
+        ...config,
+        model: profile.model,
+        baseURL: profile.baseURL,
+        apiKey: profile.apiKey,
+        maxTokens: profile.maxTokens,
+        contextWindow: profile.contextWindow,
+        maxOutputTokens: profile.maxOutputTokens,
+        minGenTokens: profile.minGenTokens ?? config.minGenTokens,
+        minGenAdaptive:
+          profile.minGenTokens != null ? profile.minGenAdaptive : config.minGenAdaptive,
+        // Same `?? config.x` fallback shape as minGenTokens. Without this line the profile's route
+        // is dead weight: `...config` above would carry the *default* profile's value straight over
+        // it, so a `/model <vl>` switch would keep describing while claiming to be native.
+        vision: profile.vision ?? config.vision,
+      }
+    : config;
+  return { ...overlaid, [RESOLVED]: true } as unknown as ResolvedConfig;
 }

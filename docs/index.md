@@ -26,6 +26,7 @@ hero:
       text: Blog
       link: /blog/
 
+featuresTitle: What it does
 features:
   - title: Context discipline
     details: Old tool output collapses to short summaries and requests stay append-only, so a slow local engine's prompt cache survives.
@@ -40,6 +41,7 @@ features:
   - title: Measured
     details: Default-on features keep an off switch for A/B runs, and what they did and didn't fix is published.
 
+docsTitle: Documentation
 docs:
   - title: Install
     details: Requirements and first run
