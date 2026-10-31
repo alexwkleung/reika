@@ -1,12 +1,18 @@
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildHeadlessInput,
+  createHeadlessAutosave,
   createStreamPrinter,
   finalReply,
   formatTurnFailure,
   headlessProfile,
 } from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
+import { listSessions, loadSession } from './store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { Config, ContextBundle, Message } from './types.js';
 
 describe('parseHeadlessArgs', () => {
@@ -354,4 +360,85 @@ describe('formatTurnFailure', () => {
       'reika: turn failed (profile "kimi" at https://api.example.com/v1): This operation was aborted',
     );
   });
+});
+
+describe('createHeadlessAutosave', () => {
+  const meta = (midTurn: boolean): TranscriptMeta => ({
+    version: TRANSCRIPT_VERSION,
+    savedAt: new Date().toISOString(),
+    model: 'm',
+    baseURL: 'http://localhost:1/v1',
+    cwd: '/repo',
+    messageCount: 0,
+    mode: 'agent',
+    ...(midTurn ? { midTurn: true as const } : {}),
+  });
+
+  const withDir = async (run: (dir: string) => Promise<void>): Promise<void> => {
+    const dir = await mkdtemp(join(tmpdir(), 'reika-headless-autosave-'));
+    try {
+      await run(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('writes the session where /resume lists it, and the final save is not mid-turn', () =>
+    withDir(async dir => {
+      const path = join(dir, 'projects', 'repo-1', 's.jsonl');
+      const msgs: Message[] = [{ role: 'user', content: 'fix the bug' }];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      msgs.push({ role: 'assistant', content: 'done' });
+      saver.onMessage();
+      await saver.finish();
+      expect((await loadSession(path)).agent.map(m => ('content' in m ? m.content : null))).toEqual(
+        ['fix the bug', 'done'],
+      );
+      const [entry] = await listSessions(join(dir, 'projects', 'repo-1'));
+      expect(entry?.title).toBe('fix the bug');
+      const header = JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!) as TranscriptMeta;
+      expect(header.midTurn).toBeUndefined();
+    }));
+
+  it('writes nothing for a run with no real prompt', () =>
+    withDir(async dir => {
+      const path = join(dir, 's.jsonl');
+      const msgs: Message[] = [{ role: 'user', content: '/srv:tool', meta: true }];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      await expect(stat(path)).rejects.toThrow();
+    }));
+
+  it('reports a failed write once', () =>
+    withDir(async dir => {
+      // A path whose parent is a file cannot be created.
+      const blocker = join(dir, 'file');
+      await writeFile(blocker, 'x');
+      const errors: string[] = [];
+      const msgs: Message[] = [{ role: 'user', content: 'hi' }];
+      const saver = createHeadlessAutosave(
+        join(blocker, 's.jsonl'),
+        () => msgs,
+        meta,
+        e => errors.push(e),
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      expect(errors).toHaveLength(1);
+    }));
 });

@@ -1,16 +1,22 @@
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig, resolveDefaultMode } from './config.js';
 import { startProfiles } from './laststate.js';
-import { saveTranscript, TRANSCRIPT_VERSION } from './store/transcript.js';
-import { createSession, type SessionEvents } from './session.js';
+import { saveTranscript, TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
+import {
+  countRealTurns,
+  newSessionPath,
+  projectHistoryDir,
+  writeSession,
+} from './store/sessions.js';
+import { createSession, type Session, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls, planPastedUrls } from './agent/pastedurls.js';
 import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { toolLabel } from './ui/format.js';
-import { debugLog } from './debug.js';
+import { debugLog, processSessionStem } from './debug.js';
 import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
 import {
   askApproval,
@@ -30,6 +36,9 @@ import type { ApprovalAnswer, ApprovalRequest, Config, ContextBundle, Message } 
 // expansion, skill routing) and the approval policy. Those are deliberately the same modules App
 // calls, in the same order: a headless run must be the run the TUI would have made, or it is
 // useless as the debugging instrument the issue asks for.
+
+// The TUI's mid-turn auto-save cadence.
+const AUTOSAVE_INTERVAL_MS = 3000;
 
 export type HeadlessIo = {
   stdout: (text: string) => void;
@@ -174,6 +183,8 @@ async function runHeadlessTurn(
   if (chosen.notice) io.stderr(`reika: ${chosen.notice}\n`);
   const profile = chosen.profile;
   const stream = args.stream ? createStreamPrinter(io, args.json) : null;
+  // Assigned once the session exists: the file lives under the bundle's cwd.
+  let autosave: HeadlessAutosave | null = null;
   const session = await createSession({
     cwd: process.cwd(),
     config: loaded,
@@ -202,6 +213,7 @@ async function runHeadlessTurn(
       onMessage: msg => {
         if (msg.role === 'system') io.stderr(`reika: ${msg.content}\n`);
         stream?.onMessage(msg);
+        autosave?.onMessage();
       },
     },
   });
@@ -209,6 +221,16 @@ async function runHeadlessTurn(
   // moment to exit before `process.exit` would kill it outright (#594).
   try {
     const { config, bundle } = session;
+    const meta = (midTurn: boolean): TranscriptMeta =>
+      headlessMeta(session, mode, session.transcript, midTurn);
+    if (config.autosave) {
+      autosave = createHeadlessAutosave(
+        newSessionPath(projectHistoryDir(bundle.cwd), new Date(), processSessionStem()),
+        () => session.transcript,
+        meta,
+        message => io.stderr(`reika: auto-save failed: ${message}\n`),
+      );
+    }
     if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
     if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
     if (session.offline)
@@ -273,28 +295,14 @@ async function runHeadlessTurn(
       stream?.finish();
     }
     const appended = session.transcript;
+    await autosave?.finish();
 
     if (args.save) {
       try {
         const { jsonlPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
           appended,
-          {
-            version: TRANSCRIPT_VERSION,
-            savedAt: new Date().toISOString(),
-            model: config.model,
-            baseURL: config.baseURL,
-            cwd: bundle.cwd,
-            messageCount: appended.length,
-            mode,
-            usage: {
-              turns: appended.filter(m => m.role === 'assistant').length,
-              ...session.totals,
-              contextTokens: session.lastUsage?.promptTokens ?? null,
-              ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
-              ...(session.shrink.sheds > 0 || session.shrink.folds > 0 ? session.shrink : {}),
-            },
-          },
+          meta(false),
         );
         io.stderr(`reika: saved ${appended.length} messages → ${jsonlPath}\n`);
       } catch (e) {
@@ -322,6 +330,87 @@ async function runHeadlessTurn(
   } finally {
     await session.mcp.close();
   }
+}
+
+// The header --save and the auto-save both write: the status line's numbers as the TUI's header
+// carries them, minus what headless never measures (no pre-send estimate is kept here).
+export function headlessMeta(
+  session: Pick<Session, 'config' | 'bundle' | 'totals' | 'lastUsage' | 'shrink'>,
+  mode: HeadlessMode,
+  msgs: Message[],
+  midTurn: boolean,
+): TranscriptMeta {
+  const { config, shrink } = session;
+  return {
+    version: TRANSCRIPT_VERSION,
+    savedAt: new Date().toISOString(),
+    model: config.model,
+    baseURL: config.baseURL,
+    cwd: session.bundle.cwd,
+    messageCount: msgs.length,
+    mode,
+    usage: {
+      turns: msgs.filter(m => m.role === 'assistant').length,
+      ...session.totals,
+      contextTokens: session.lastUsage?.promptTokens ?? null,
+      ...(config.contextWindow ? { contextWindow: config.contextWindow } : {}),
+      ...(shrink.sheds > 0 || shrink.folds > 0 ? shrink : {}),
+    },
+    ...(midTurn ? { midTurn: true as const } : {}),
+  };
+}
+
+export type HeadlessAutosave = { onMessage: () => void; finish: () => Promise<void> };
+
+// Auto-save for a headless run (#871): the TUI's file, in the TUI's place, so /resume lists a
+// `reika -p` run beside the interactive ones. Written on the first real prompt, at most once per
+// interval while the turn runs (a long unattended turn is exactly the one a crash should not take
+// whole), and once more at the end. Writes are chained so an older snapshot never lands last.
+export function createHeadlessAutosave(
+  path: string,
+  messages: () => Message[],
+  meta: (midTurn: boolean) => TranscriptMeta,
+  onError: (message: string) => void,
+  intervalMs = AUTOSAVE_INTERVAL_MS,
+): HeadlessAutosave {
+  let chain: Promise<void> = Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let written = false;
+  let failed = false;
+  const save = (midTurn: boolean): Promise<void> => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const msgs = messages();
+    // An MCP command or a turn that never reached its user echo is not a session worth listing.
+    if (countRealTurns(msgs) === 0) return chain;
+    if (!written) debugLog(`[reika:debug] session file=${basename(path)}`);
+    written = true;
+    const sides = { agent: [...msgs], chat: [] };
+    const header = meta(midTurn);
+    chain = chain
+      .then(() => writeSession(path, sides, header))
+      .catch((e: unknown) => {
+        // Said once: a full disk fails every save the same way.
+        if (failed) return;
+        failed = true;
+        onError((e as Error).message);
+      });
+    return chain;
+  };
+  return {
+    onMessage: () => {
+      if (!written) {
+        void save(true);
+        return;
+      }
+      if (timer !== null) return;
+      timer = setTimeout(() => void save(true), intervalMs);
+      timer.unref?.();
+    },
+    finish: () => save(false),
+  };
 }
 
 // --stream (#566). Text: the content channel goes to stdout as it arrives and each tool call's
