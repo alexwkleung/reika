@@ -12,9 +12,9 @@ import {
   headlessProfile,
 } from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
-import { listSessions, loadSession } from './store/sessions.js';
-import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
-import type { Config, ContextBundle, Message } from './types.js';
+import { listSessions, loadSession } from '../store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from '../store/transcript.js';
+import type { Config, ContextBundle, Message } from '../types.js';
 
 describe('parseHeadlessArgs', () => {
   it('returns null with no headless flag, so the TUI starts', () => {

@@ -9,8 +9,8 @@ import {
   createPrompter,
   parseChoice,
 } from './headlessprompt.js';
-import { skillConfirmSpec } from './ui/dialogspecs.js';
-import type { ApprovalRequest } from './types.js';
+import { skillConfirmSpec } from '../ui/dialogspecs.js';
+import type { ApprovalRequest } from '../types.js';
 
 // Feeds `answers` one line at a time, each once the prompter has asked for it, and records the
 // terminal output, so a test reads what the user would have seen.
