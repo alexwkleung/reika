@@ -1685,9 +1685,10 @@ export function App() {
         }
         heading = 'chats in this project';
       }
-      // A project with no sessions yet falls back to the manual saves.
+      // A project with no sessions yet falls back to the manual saves. When in chat mode the
+      // heuristic (mode: "chat") also applies so chat-mode /save files are included.
       if (entries.length === 0) {
-        entries = await listSessions(ROOT_HISTORY_DIR);
+        entries = await listSessions(ROOT_HISTORY_DIR, true);
         if (target === '' && entries.length > 0)
           heading = 'none for this project — saved with /save';
       }
@@ -1729,7 +1730,7 @@ export function App() {
           join(homedir(), '.config', 'reika', 'history'),
           msgs,
           transcriptMeta(msgs, bundle.cwd, midTurn),
-          { redact: !raw },
+          { redact: !raw, chatTurns: modeRef.current === 'chat' ? countRealTurns(msgs) : undefined },
         );
         setMessages(prev => [
           ...prev,

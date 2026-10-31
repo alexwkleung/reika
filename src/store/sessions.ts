@@ -91,7 +91,9 @@ export type SessionEntry = {
 // Newest first. Only the header line is read — a session with its tool payloads can run to
 // megabytes, and the list needs a title and a date. Unreadable or foreign files are skipped: a
 // listing is never an error.
-export async function listSessions(dir: string): Promise<SessionEntry[]> {
+// When `root` is true, files with `mode: "chat"` but no `chatTurns` are treated as chat entries
+// (the root holds only /save transcripts, so the header is reliable there — issue #882).
+export async function listSessions(dir: string, root = false): Promise<SessionEntry[]> {
   let names: string[];
   try {
     names = (await readdir(dir)).filter(n => n.endsWith('.jsonl'));
@@ -111,7 +113,9 @@ export async function listSessions(dir: string): Promise<SessionEntry[]> {
       ...(typeof meta.model === 'string' ? { model: meta.model } : {}),
       ...(typeof meta.chatTurns === 'number' && meta.chatTurns > 0
         ? { chatTurns: meta.chatTurns }
-        : {}),
+        : root && meta.mode === 'chat'
+          ? { chatTurns: 0 }
+          : {}),
     });
   }
   return entries.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
