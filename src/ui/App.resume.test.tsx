@@ -348,6 +348,46 @@ describe('session auto-save and /resume', () => {
     app.unmount();
   });
 
+  it('opens a /save made in chat mode on the chat side (#880)', async () => {
+    // What a chat-mode /save writes: the chat scrollback, no segment marker, `mode: "chat"` in the
+    // header. Before #880 this opened as an agent session with the chat in agent history.
+    await writeSession(
+      join(ROOT, 'chat-save.jsonl'),
+      {
+        agent: [
+          { role: 'user', content: 'what is a monad', mode: 'chat' },
+          { role: 'assistant', content: 'a monoid in…' },
+        ],
+        chat: [],
+      },
+      {
+        version: 1,
+        savedAt: '2026-09-02T00:00:00.000Z',
+        model: 'test-model',
+        baseURL: CONFIG.baseURL,
+        cwd: BUNDLE.cwd,
+        messageCount: 2,
+        mode: 'chat',
+      },
+    );
+    const app = await mountApp();
+    await submit(app, '/resume root');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('switched to chat mode'), 'the switch');
+    expect(plain(app.lastFrame())).toContain('2 chat messages');
+    expect(inputLine(app)).toContain('? ');
+
+    // The chat is what the next prompt continues from.
+    await submit(app, 'and a functor');
+    await waitFor(() => runTurn.mock.calls.length === 1, 'the turn');
+    expect(historiesSeen[0]?.map(m => ('content' in m ? m.content : ''))).toEqual([
+      'what is a monad',
+      'a monoid in…',
+    ]);
+    app.unmount();
+  });
+
   it('keeps a session with agent history in agent mode', async () => {
     await saveFixture(
       'm.jsonl',
