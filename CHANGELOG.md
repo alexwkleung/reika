@@ -9,7 +9,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - `/resume` in chat mode lists only chats, and every `/resume` list tags a session holding a chat
   with `chat`. `/resume all` lists every session in any mode. Sessions saved before this release
-  are not tagged and appear only under `/resume all`. (#879)
+  are not tagged and appear only under `/resume all`. Resuming a session that holds only a chat
+  switches to chat mode, so its messages are on screen. (#879)
 - `reika -p -i` (`--interactive`) asks approvals, model questions and the skill and pasted-link
   confirms on the terminal as numbered menus, instead of declining them. A headless run can now
   reproduce a TUI session that hits a dialog without switching approvals off (#876).

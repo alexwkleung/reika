@@ -1220,6 +1220,19 @@ export function App() {
       logSessionFile(entry.path);
     }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
+    // A session that is only a chat opens in chat mode (#875): resumed from another mode it would
+    // otherwise land on an empty screen, its messages one /chat away. A session with any agent
+    // history stays put, since that is the work the user came back to. The conversation was just
+    // reset, so there is no screen to stash — only the session's side and the mode move.
+    const switchedToChat =
+      modeRef.current !== 'chat' &&
+      countRealTurns(sides.agent) === 0 &&
+      countRealTurns(sides.chat) > 0;
+    if (switchedToChat) {
+      sessionRef.current?.switchSide('chat');
+      modeRef.current = 'chat';
+      setMode('chat');
+    }
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
@@ -1235,7 +1248,7 @@ export function App() {
       ...active,
       {
         role: 'system',
-        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedToChat ? ', switched to chat mode,' : ''} from ${entry.path}`,
       },
     ];
     let size = RESUME_FIRST_SLICE;

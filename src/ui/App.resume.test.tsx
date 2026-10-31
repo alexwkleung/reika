@@ -315,6 +315,63 @@ describe('session auto-save and /resume', () => {
     app.unmount();
   });
 
+  it('opens a chat-only session in chat mode, and says so', async () => {
+    await saveFixture(
+      'c.jsonl',
+      {
+        agent: [],
+        chat: [
+          { role: 'user', content: 'what is a monad', mode: 'chat' },
+          { role: 'assistant', content: 'a monoid in…' },
+        ],
+      },
+      '2026-09-02T00:00:00.000Z',
+    );
+    const app = await mountApp();
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('switched to chat mode'), 'the switch');
+    const frame = plain(app.lastFrame());
+    expect(frame).toContain('2 chat messages');
+    expect(frame).toContain('a monoid in…');
+    // The prompt is chat mode's.
+    expect(inputLine(app)).toContain('? ');
+
+    // The model history moved with the mode: the next prompt continues the chat.
+    await submit(app, 'and a functor');
+    await waitFor(() => runTurn.mock.calls.length === 1, 'the turn');
+    expect(historiesSeen[0]?.map(m => ('content' in m ? m.content : ''))).toEqual([
+      'what is a monad',
+      'a monoid in…',
+    ]);
+    app.unmount();
+  });
+
+  it('keeps a session with agent history in agent mode', async () => {
+    await saveFixture(
+      'm.jsonl',
+      {
+        agent: [
+          { role: 'user', content: 'fix the parser', mode: 'agent' },
+          { role: 'assistant', content: 'fixed' },
+        ],
+        chat: [{ role: 'user', content: 'what is a monad', mode: 'chat' }],
+      },
+      '2026-09-02T00:00:00.000Z',
+    );
+    const app = await mountApp();
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('Resumed "fix the parser"'), 'the resume');
+    const frame = plain(app.lastFrame());
+    expect(frame).toContain('2 agent messages (+ 1 on the chat side)');
+    expect(frame).not.toContain('switched to chat mode');
+    expect(inputLine(app)).toContain('> ');
+    app.unmount();
+  });
+
   it('says so in chat mode when the project has sessions but no chats', async () => {
     await saveFixture(
       'a.jsonl',
