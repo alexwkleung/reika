@@ -141,16 +141,39 @@ export async function loadSession(path: string): Promise<SessionSides> {
   const lines = (await readFile(path, 'utf8')).split('\n').filter(l => l.trim().length > 0);
   const sides: SessionSides = { agent: [], chat: [] };
   let side: Message[] = sides.agent;
+  let marked = false;
   // Line 0 is the meta header.
   for (const line of lines.slice(1)) {
     const rec = JSON.parse(line) as Message | typeof CHAT_SEGMENT;
     if ('segment' in rec) {
+      marked = true;
       side = sides.chat;
       continue;
     }
     side.push(rec);
   }
+  // A /save made in chat mode writes the chat scrollback through the plain transcript serializer,
+  // so it carries no segment marker: its header's `mode` is the only thing saying which side it is
+  // (#880). Read it as the chat side, which also fixes the files saved before that was honoured.
+  // Only for a marker-less file: an auto-save always marks a session that used chat, and its
+  // header's `mode` is merely the mode at save time — its agent messages come first, unmarked.
+  if (!marked && headerMode(lines[0]) === 'chat') {
+    sides.chat = sides.agent;
+    sides.agent = [];
+  }
   return sides;
+}
+
+// The header's `mode`, tolerant of a header a hand-edited or foreign file left unparsable — the
+// message lines are what `loadSession` is really after, and one bad line 0 shouldn't sink them.
+function headerMode(line: string | undefined): unknown {
+  if (line === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(line);
+    return parsed && typeof parsed === 'object' ? (parsed as { mode?: unknown }).mode : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // The model-facing history a resumed session continues from, rebuilt from its scrollback: what

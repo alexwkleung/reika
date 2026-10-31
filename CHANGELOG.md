@@ -49,6 +49,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A `/save` made in chat mode resumes as a chat. The file carried no chat marker, so `/resume` read
+  it as an agent session and put the chat into agent history — and, since a one-sided session opens
+  on its side, switched to agent mode. A file with no marker whose header says `mode: "chat"` is now
+  read as the chat side, so the saves made before this fix open correctly too. (#880)
+
 - On a narrow pane, where the status bar wraps onto several rows, a streaming reply no longer
   clears the terminal's scrollback on every update (iTerm2's "attempted to clear scrollback"
   warning) or snaps the view back to the top. The rows the wrapped status bar takes are now kept
