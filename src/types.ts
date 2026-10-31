@@ -1,6 +1,6 @@
 import type { Ignore } from 'ignore';
 import type { McpServerConfig } from './mcp/config.js';
-import type { Skill } from './skills.js';
+import type { Skill } from './skills/skills.js';
 
 export type ToolCall = {
   id: string;

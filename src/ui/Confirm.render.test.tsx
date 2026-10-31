@@ -9,8 +9,8 @@ import {
   pastedUrlConfirmSpec,
   skillConfirmSpec,
 } from './dialogspecs.js';
-import { matchSkill } from '../skillmatch.js';
-import type { Skill } from '../skills.js';
+import { matchSkill } from '../skills/skillmatch.js';
+import type { Skill } from '../skills/skills.js';
 
 const review: Skill = {
   name: 'review',
