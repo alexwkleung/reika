@@ -1,30 +1,30 @@
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
-import { loadConfig, resolveDefaultMode } from './config.js';
-import { startProfiles } from './laststate.js';
+import { loadConfig, resolveDefaultMode } from '../config.js';
+import { startProfiles } from '../laststate.js';
 import {
   buildTranscriptMeta,
   saveTranscript,
   type TranscriptMeta,
   type TranscriptShrinkEvent,
   type TranscriptStatus,
-} from './store/transcript.js';
+} from '../store/transcript.js';
 import {
   countRealTurns,
   newSessionPath,
   projectHistoryDir,
   writeSession,
   type SessionSides,
-} from './store/sessions.js';
-import { createSession, type SessionEvents } from './session.js';
-import { expandMentions } from './agent/mentions.js';
-import { expandPastedUrls, planPastedUrls } from './agent/pastedurls.js';
-import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
-import { imageReader } from './ocr/select.js';
-import { autoApproves } from './approval.js';
-import { toolLabel } from './ui/format.js';
-import { debugLog, processSessionStem } from './debug.js';
-import { callMcpTool, findMcpCommand, parseMcpArgs } from './mcp/tools.js';
+} from '../store/sessions.js';
+import { createSession, type SessionEvents } from '../session.js';
+import { expandMentions } from '../agent/mentions.js';
+import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
+import { matchSkill, shouldAutoInject, shouldConfirmInject } from '../skillmatch.js';
+import { imageReader } from '../ocr/select.js';
+import { autoApproves } from '../approval.js';
+import { toolLabel } from '../ui/format.js';
+import { debugLog, processSessionStem } from '../debug.js';
+import { callMcpTool, findMcpCommand, parseMcpArgs } from '../mcp/tools.js';
 import {
   askApproval,
   askConfirm,
@@ -32,7 +32,7 @@ import {
   openTerminalPrompter,
   type HeadlessPrompter,
 } from './headlessprompt.js';
-import { pastedUrlConfirmSpec, skillConfirmSpec, type ConfirmSpec } from './ui/dialogspecs.js';
+import { pastedUrlConfirmSpec, skillConfirmSpec, type ConfirmSpec } from '../ui/dialogspecs.js';
 import type { HeadlessArgs, HeadlessMode } from './headlessargs.js';
 
 import type {
@@ -42,7 +42,7 @@ import type {
   ContextBundle,
   Message,
   Usage,
-} from './types.js';
+} from '../types.js';
 
 // Headless mode (#52): `reika -p "<prompt>"` runs one turn with no TUI and prints the reply.
 // The session (boot, threaded state, the vibe chain) is session.ts, shared with the eval runner;

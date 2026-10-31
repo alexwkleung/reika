@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
 import { debugLogPath, formatExperimentFlags } from '../src/debug.js';
-import { buildHeadlessInput } from '../src/headless.js';
+import { buildHeadlessInput } from '../src/headless/headless.js';
 import { createSession } from '../src/session.js';
 
 import type { Message } from '../src/types.js';

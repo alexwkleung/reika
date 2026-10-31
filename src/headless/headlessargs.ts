@@ -1,4 +1,4 @@
-import type { DefaultMode } from './types.js';
+import type { DefaultMode } from '../types.js';
 
 // The command line (#52), kept apart from the runner so cli.tsx can decide which front-end to
 // start without loading the agent loop for a TUI session or Ink for a headless one.
