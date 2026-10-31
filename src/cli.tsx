@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { sweepDebugLogs } from './debug.js';
 import { sweepStaleSpills } from './tools/_spill.js';
-import { USAGE, parseHeadlessArgs } from './headlessargs.js';
+import { USAGE, parseHeadlessArgs } from './headless/headlessargs.js';
 import { VERSION } from './version.js';
 
 // Lowercase like the command: ps/top/Activity Monitor otherwise list every session as `node`, and
@@ -39,7 +39,7 @@ if (headless?.help) {
 }
 
 if (headless) {
-  const { runHeadless } = await import('./headless.js');
+  const { runHeadless } = await import('./headless/headless.js');
   const code = await runHeadless(headless, {
     stdout: text => process.stdout.write(text),
     stderr: text => process.stderr.write(text),

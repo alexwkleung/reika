@@ -1,9 +1,9 @@
 import { openSync, createReadStream, createWriteStream } from 'node:fs';
 import { createInterface, type Interface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, type ConfirmSpec } from './ui/dialogspecs.js';
-import { toolLabel } from './ui/format.js';
-import type { ApprovalAnswer, ApprovalRequest, QuestionAnswer, QuestionRequest } from './types.js';
+import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, type ConfirmSpec } from '../ui/dialogspecs.js';
+import { toolLabel } from '../ui/format.js';
+import type { ApprovalAnswer, ApprovalRequest, QuestionAnswer, QuestionRequest } from '../types.js';
 
 // Headless dialogs (#872): `reika -p -i` asks what the TUI would have opened a dialog for, as a
 // numbered menu on the controlling terminal. The terminal, not stdin/stderr: stdin may be the piped
