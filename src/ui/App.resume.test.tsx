@@ -372,6 +372,38 @@ describe('session auto-save and /resume', () => {
     app.unmount();
   });
 
+  it('opens an agent-only session from chat mode in agent mode, and says so', async () => {
+    await saveFixture(
+      'a.jsonl',
+      {
+        agent: [
+          { role: 'user', content: 'fix the parser', mode: 'plan' },
+          { role: 'assistant', content: 'fixed' },
+        ],
+        chat: [],
+      },
+      '2026-09-02T00:00:00.000Z',
+    );
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, '/resume all');
+    await waitFor(() => plain(app.lastFrame()).includes('• Resume'), 'the picker');
+    app.stdin.write('\r');
+    await waitFor(() => plain(app.lastFrame()).includes('switched to agent mode'), 'the switch');
+    expect(plain(app.lastFrame())).toContain('2 agent messages');
+    // Agent, not the plan mode the session last ran in.
+    expect(inputLine(app)).toContain('> ');
+    expect(plain(app.lastFrame())).toMatch(/agent \(shift\+tab/);
+
+    await submit(app, 'keep going');
+    await waitFor(() => runTurn.mock.calls.length === 1, 'the turn');
+    expect(historiesSeen[0]?.map(m => ('content' in m ? m.content : ''))).toEqual([
+      'fix the parser',
+      'fixed',
+    ]);
+    app.unmount();
+  });
+
   it('says so in chat mode when the project has sessions but no chats', async () => {
     await saveFixture(
       'a.jsonl',

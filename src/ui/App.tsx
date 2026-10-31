@@ -1220,18 +1220,23 @@ export function App() {
       logSessionFile(entry.path);
     }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
-    // A session that is only a chat opens in chat mode (#875): resumed from another mode it would
-    // otherwise land on an empty screen, its messages one /chat away. A session with any agent
-    // history stays put, since that is the work the user came back to. The conversation was just
-    // reset, so there is no screen to stash — only the session's side and the mode move.
-    const switchedToChat =
-      modeRef.current !== 'chat' &&
-      countRealTurns(sides.agent) === 0 &&
-      countRealTurns(sides.chat) > 0;
-    if (switchedToChat) {
-      sessionRef.current?.switchSide('chat');
-      modeRef.current = 'chat';
-      setMode('chat');
+    // A session with only one side opens on that side (#875): resumed from the other, it would
+    // land on an empty screen, its messages one /chat or /agent away. A session with both stays
+    // put. Leaving chat goes to agent rather than the session's last mode, which could be plan or
+    // shell. The conversation was just reset, so there is no screen to stash — only the session's
+    // side and the mode move.
+    const agentTurns = countRealTurns(sides.agent);
+    const chatTurns = countRealTurns(sides.chat);
+    const switchedTo: Mode | null =
+      modeRef.current !== 'chat' && agentTurns === 0 && chatTurns > 0
+        ? 'chat'
+        : modeRef.current === 'chat' && chatTurns === 0 && agentTurns > 0
+          ? 'agent'
+          : null;
+    if (switchedTo) {
+      sessionRef.current?.switchSide(switchedTo === 'chat' ? 'chat' : 'agent');
+      modeRef.current = switchedTo;
+      setMode(switchedTo);
     }
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
@@ -1248,7 +1253,7 @@ export function App() {
       ...active,
       {
         role: 'system',
-        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedToChat ? ', switched to chat mode,' : ''} from ${entry.path}`,
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedTo ? `, switched to ${switchedTo} mode,` : ''} from ${entry.path}`,
       },
     ];
     let size = RESUME_FIRST_SLICE;
