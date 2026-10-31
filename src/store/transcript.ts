@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import type { Message, Mode, ToolCall } from '../types.js';
+import type { Message, Mode, ToolCall, Usage } from '../types.js';
+import { compactThreshold } from '../agent/compaction.js';
 import { scrubDisplay } from '../ui/scrub.js';
 import { changeLabel, contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
 import { foldedAssistantFields } from '../ui/reasoningfold.js';
@@ -82,6 +83,64 @@ export type TranscriptMeta = {
   // asked to diagnose the run — should know that is the snapshot, not a truncation.
   midTurn?: true;
 };
+
+// What a front end tracks between saves to fill the usage block: the status line's own operands.
+// The TUI and headless both keep these and both build the header here (#871), so a headless run
+// saved for debugging carries the same record a TUI session would.
+export type TranscriptStatus = {
+  totals: Usage;
+  // The last call's usage — null once a shed or fold has made it stale, as the gauge treats it.
+  lastUsage: Usage | null;
+  estimatedContext: number | null;
+  shrink: { sheds: number; folds: number };
+  shrinkEvents: TranscriptShrinkEvent[];
+  contextWindow?: number;
+  // The learned generation reserve (#551), the number the next round compacts at.
+  minGenTokens?: number;
+};
+
+export function buildTranscriptMeta(opts: {
+  msgs: Message[];
+  model: string;
+  baseURL: string;
+  cwd: string;
+  mode: Mode;
+  status: TranscriptStatus;
+  midTurn: boolean;
+}): TranscriptMeta {
+  const { msgs, status } = opts;
+  const { totals, lastUsage: last, shrink, contextWindow: window } = status;
+  const usable = window ? Math.round(compactThreshold(window, status.minGenTokens)) : undefined;
+  // Computed exactly as the status bar computes it — same turn count, same last-call-else-estimate
+  // context — so the header and a screenshot of the footer can never disagree (#199).
+  const usage: TranscriptUsage = {
+    turns: msgs.filter(m => m.role === 'assistant').length,
+    promptTokens: totals.promptTokens,
+    completionTokens: totals.completionTokens,
+    ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+    contextTokens: last?.promptTokens ?? status.estimatedContext,
+    // No call has landed yet, so the context size above is the pre-send estimate.
+    ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
+    ...(window ? { contextWindow: window } : {}),
+    ...(usable ? { contextUsable: usable } : {}),
+    ...(last?.cachedTokens != null ? { lastCachedTokens: last.cachedTokens } : {}),
+    ...(shrink.sheds > 0 || shrink.folds > 0
+      ? { ...shrink, shrinkEvents: status.shrinkEvents }
+      : {}),
+  };
+  return {
+    version: TRANSCRIPT_VERSION,
+    // Stamped here: the serializers below are pure and take no clock.
+    savedAt: new Date().toISOString(),
+    model: opts.model,
+    baseURL: opts.baseURL,
+    cwd: opts.cwd,
+    messageCount: msgs.length,
+    mode: opts.mode,
+    usage,
+    ...(opts.midTurn ? { midTurn: true as const } : {}),
+  };
+}
 
 // One unbroken run of turns in the same mode. `from`/`to` are inclusive 1-based turn numbers over
 // the transcript's model turns and shell commands (the things that count as a turn), so a reader

@@ -227,6 +227,9 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   the mode's own model in `REIKA_MODE_MODELS`. Names match case-insensitively; a name no profile
   defines prints a notice on stderr listing the defined ones and runs on the profile it would have
   used without the flag. A failed turn names the profile and base URL it was on.
+- **Auto-save**: a run is saved where the TUI saves its sessions, so `/resume` lists it beside them
+  and a TUI can pick it up where the run left off. `REIKA_AUTOSAVE=0` turns it off. `--save` still
+  writes its own `/save`-style transcript too.
 - One turn per process; `--mode vibe` still chains plan → implement inside it.
 
 ### Unattended sessions
