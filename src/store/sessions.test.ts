@@ -129,6 +129,25 @@ describe('writeSession / loadSession', () => {
     expect(await loadSession(path)).toEqual({ agent: [], chat: msgs });
   });
 
+  it('keeps an unmarked agent-only auto-save on the agent side when its header says chat', async () => {
+    // Shift+Tab into chat adds nothing to the chat side, so the auto-save it triggers has no
+    // marker, the agent session's messages, and `mode: "chat"` from the save-time mode.
+    const agent: Message[] = [
+      { role: 'user', content: 'fix the bug', mode: 'agent' },
+      { role: 'assistant', content: 'done' },
+    ];
+    const path = join(dir, 'shift-tab.jsonl');
+    await writeSession(path, { agent, chat: [] }, meta('2026-09-22T10:00:00Z', 2, 'chat'));
+    expect(await loadSession(path)).toEqual({ agent, chat: [] });
+  });
+
+  it('keeps an unmarked file whose prompts carry no mode on the agent side', async () => {
+    const msgs: Message[] = [{ role: 'user', content: 'fix the bug' }];
+    const path = join(dir, 'old.jsonl');
+    await writeFile(path, serializeJsonl(msgs, meta('2026-09-22T10:00:00Z', 1, 'chat')));
+    expect(await loadSession(path)).toEqual({ agent: msgs, chat: [] });
+  });
+
   it('splits on the marker even when the header says chat, since that is just the save-time mode', async () => {
     const agent: Message[] = [{ role: 'user', content: 'fix the bug' }];
     const chat: Message[] = [{ role: 'user', content: 'what is a monad' }];

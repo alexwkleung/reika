@@ -153,27 +153,20 @@ export async function loadSession(path: string): Promise<SessionSides> {
     side.push(rec);
   }
   // A /save made in chat mode writes the chat scrollback through the plain transcript serializer,
-  // so it carries no segment marker: its header's `mode` is the only thing saying which side it is
-  // (#880). Read it as the chat side, which also fixes the files saved before that was honoured.
-  // Only for a marker-less file: an auto-save always marks a session that used chat, and its
-  // header's `mode` is merely the mode at save time — its agent messages come first, unmarked.
-  if (!marked && headerMode(lines[0]) === 'chat') {
+  // so it carries no segment marker (#880). Its prompts are what say so, not the header's `mode`:
+  // an auto-save taken right after Shift+Tab into chat is agent-only, unmarked, with `mode: "chat"`
+  // in its header too. Reading the prompts also fixes the chat saves made before this rule.
+  if (!marked && isChatOnly(sides.agent)) {
     sides.chat = sides.agent;
     sides.agent = [];
   }
   return sides;
 }
 
-// The header's `mode`, tolerant of a header a hand-edited or foreign file left unparsable — the
-// message lines are what `loadSession` is really after, and one bad line 0 shouldn't sink them.
-function headerMode(line: string | undefined): unknown {
-  if (line === undefined) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(line);
-    return parsed && typeof parsed === 'object' ? (parsed as { mode?: unknown }).mode : undefined;
-  } catch {
-    return undefined;
-  }
+// Every prompt was sent in chat mode — the session stamps each user message with its mode.
+function isChatOnly(messages: Message[]): boolean {
+  const prompts = messages.filter(m => m.role === 'user' && !m.meta);
+  return prompts.length > 0 && prompts.every(m => m.role === 'user' && m.mode === 'chat');
 }
 
 // The model-facing history a resumed session continues from, rebuilt from its scrollback: what
