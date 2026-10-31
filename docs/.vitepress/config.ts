@@ -5,6 +5,8 @@ import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './l
 import { SITE_URL, languageAlternates, pageDescriptions, siteNameHead, socialHead } from './seo';
 import type { TranslationTheme } from './theme/translations';
 
+// Drafts render under `docs:dev` so a post can be previewed in place, and never reach the built site.
+const isBuild = process.argv.includes('build');
 const DOCS_DIR = fileURLToPath(new URL('../', import.meta.url));
 const zhFile = (url: string) => `${DOCS_DIR}${url.replace(/^\/|\/$/g, '') || 'index'}.md`;
 // An untranslated zh page canonicalizes to, and borrows the description of, the English page it shows.
@@ -95,7 +97,7 @@ export default defineConfigWithTheme<TranslationTheme>({
       },
     },
   },
-  srcExclude: ['demo/**', 'node_modules/**'],
+  srcExclude: ['demo/**', 'node_modules/**', ...(isBuild ? ['blog/drafts/**'] : [])],
   sitemap: {
     hostname: SITE_URL,
     // A zh page that only includes the English text is the English page's duplicate, not its own.
@@ -109,6 +111,15 @@ export default defineConfigWithTheme<TranslationTheme>({
   transformPageData(pageData) {
     const description = pageDescriptions[englishPath(pageData.relativePath)];
     if (description) pageData.description = description;
+    // Blog pages are read on their own, not as part of the guide, so they drop its sidebar and
+    // prev/next links. A post carries its description in frontmatter, since it is not a docs page
+    // GitHub renders.
+    if (pageData.relativePath.startsWith('blog/')) {
+      pageData.frontmatter.sidebar = false;
+      pageData.frontmatter.prev = false;
+      pageData.frontmatter.next = false;
+      if (pageData.frontmatter.summary) pageData.description = pageData.frontmatter.summary;
+    }
   },
   transformHead({ pageData, title, description }) {
     if (pageData.isNotFound) return [];
@@ -140,6 +151,7 @@ export default defineConfigWithTheme<TranslationTheme>({
       { text: 'Usage', link: '/usage' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Findings', link: '/findings' },
+      { text: 'Blog', link: '/blog/' },
       { text: 'Support', link: '/support' },
       {
         text: 'Changelog',
