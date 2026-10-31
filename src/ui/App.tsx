@@ -1730,7 +1730,10 @@ export function App() {
           join(homedir(), '.config', 'reika', 'history'),
           msgs,
           transcriptMeta(msgs, bundle.cwd, midTurn),
-          { redact: !raw, chatTurns: modeRef.current === 'chat' ? countRealTurns(msgs) : undefined },
+          {
+            redact: !raw,
+            chatTurns: modeRef.current === 'chat' ? countRealTurns(msgs) : undefined,
+          },
         );
         setMessages(prev => [
           ...prev,
