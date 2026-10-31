@@ -11,7 +11,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   confirms on the terminal as numbered menus, instead of declining them. A headless run can now
   reproduce a TUI session that hits a dialog without switching approvals off (#876).
 - Headless runs (`reika -p`) are auto-saved like TUI sessions, so `/resume` lists them.
-  `REIKA_AUTOSAVE=0` turns it off. (#871)
+  `REIKA_AUTOSAVE=0` turns it off. (#878)
 
 ### Changed
 
