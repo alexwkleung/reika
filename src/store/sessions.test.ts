@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message } from '../types.js';
@@ -65,7 +65,49 @@ describe('writeSession / loadSession', () => {
       { agent: [], chat: [{ role: 'user', content: 'what is a monad' }] },
       meta('2026-09-22T10:00:00Z'),
     );
-    expect(await listSessions(dir)).toMatchObject([{ title: 'what is a monad', messageCount: 1 }]);
+    expect(await listSessions(dir)).toMatchObject([
+      { title: 'what is a monad', messageCount: 1, chatTurns: 1 },
+    ]);
+  });
+
+  it('counts the chat side in the header, since the mode timeline covers the agent side only', async () => {
+    const path = join(dir, 'mixed.jsonl');
+    await writeSession(
+      path,
+      {
+        agent: [{ role: 'user', content: 'fix the bug', mode: 'agent' }],
+        chat: [
+          { role: 'user', content: '/model kimi', meta: true },
+          { role: 'user', content: 'what is a monad', mode: 'chat' },
+          { role: 'assistant', content: 'a monoid in…' },
+          { role: 'user', content: 'and a functor', mode: 'chat' },
+        ],
+      },
+      meta('2026-09-22T10:00:00Z'),
+    );
+    const header = JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!) as {
+      title?: string;
+      chatTurns?: number;
+      modes?: unknown[];
+    };
+    expect(header).toMatchObject({
+      title: 'fix the bug',
+      chatTurns: 2,
+      modes: [{ mode: 'agent', from: 1, to: 1 }],
+    });
+    expect(await listSessions(dir)).toMatchObject([{ chatTurns: 2 }]);
+  });
+
+  it('leaves the count out of a session with no chat side', async () => {
+    const path = join(dir, 'agent.jsonl');
+    await writeSession(
+      path,
+      { agent: [{ role: 'user', content: 'fix the bug' }], chat: [] },
+      meta('2026-09-22T10:00:00Z'),
+    );
+    expect((await readFile(path, 'utf8')).split('\n')[0]).not.toContain('chatTurns');
+    const [entry] = await listSessions(dir);
+    expect(entry).not.toHaveProperty('chatTurns');
   });
 
   it('reads a /save transcript as the agent side', async () => {
