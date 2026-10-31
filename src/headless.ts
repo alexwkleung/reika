@@ -19,7 +19,7 @@ import {
 import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
 import { expandPastedUrls, planPastedUrls } from './agent/pastedurls.js';
-import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skillmatch.js';
+import { matchSkill, shouldAutoInject, shouldConfirmInject } from './skills/skillmatch.js';
 import { imageReader } from './ocr/select.js';
 import { autoApproves } from './approval.js';
 import { toolLabel } from './ui/format.js';

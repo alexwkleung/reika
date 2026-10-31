@@ -8,7 +8,7 @@ import { formatBundleSize } from './bundlesize.js';
 import { DEFAULT_BUDGET, packRepoMap, rankRepoMap } from './repomap.js';
 import { buildFileIndex } from './files.js';
 import { loadGitignore } from './gitignore.js';
-import { loadSkills } from '../skills.js';
+import { loadSkills } from '../skills/skills.js';
 
 export async function bootstrap(
   cwd: string,
