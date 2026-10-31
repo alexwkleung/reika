@@ -391,6 +391,7 @@ describe('createHeadlessAutosave', () => {
       const saver = createHeadlessAutosave(
         path,
         () => msgs,
+        'agent',
         meta,
         () => {},
         60_000,
@@ -408,6 +409,30 @@ describe('createHeadlessAutosave', () => {
       expect(header.midTurn).toBeUndefined();
     }));
 
+  it('files a chat run on the chat side, so a resume keeps it out of agent history', () =>
+    withDir(async dir => {
+      const path = join(dir, 's.jsonl');
+      const msgs: Message[] = [
+        { role: 'user', content: 'what is a monad' },
+        { role: 'assistant', content: 'a monoid in…' },
+      ];
+      const saver = createHeadlessAutosave(
+        path,
+        () => msgs,
+        'chat',
+        meta,
+        () => {},
+        60_000,
+      );
+      saver.onMessage();
+      await saver.finish();
+      const sides = await loadSession(path);
+      expect(sides.agent).toEqual([]);
+      expect(sides.chat).toHaveLength(2);
+      const [entry] = await listSessions(dir);
+      expect(entry?.title).toBe('what is a monad');
+    }));
+
   it('writes nothing for a run with no real prompt', () =>
     withDir(async dir => {
       const path = join(dir, 's.jsonl');
@@ -415,6 +440,7 @@ describe('createHeadlessAutosave', () => {
       const saver = createHeadlessAutosave(
         path,
         () => msgs,
+        'agent',
         meta,
         () => {},
         60_000,
@@ -434,6 +460,7 @@ describe('createHeadlessAutosave', () => {
       const saver = createHeadlessAutosave(
         join(blocker, 's.jsonl'),
         () => msgs,
+        'agent',
         meta,
         e => errors.push(e),
         60_000,

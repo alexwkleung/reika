@@ -14,6 +14,7 @@ import {
   newSessionPath,
   projectHistoryDir,
   writeSession,
+  type SessionSides,
 } from './store/sessions.js';
 import { createSession, type SessionEvents } from './session.js';
 import { expandMentions } from './agent/mentions.js';
@@ -253,6 +254,7 @@ async function runHeadlessTurn(
       autosave = createHeadlessAutosave(
         newSessionPath(projectHistoryDir(bundle.cwd), new Date(), processSessionStem()),
         () => session.transcript,
+        mode === 'chat' ? 'chat' : 'agent',
         meta,
         message => io.stderr(`reika: auto-save failed: ${message}\n`),
       );
@@ -400,9 +402,12 @@ export type HeadlessAutosave = { onMessage: () => void; finish: () => Promise<vo
 // `reika -p` run beside the interactive ones. Written on the first real prompt, at most once per
 // interval while the turn runs (a long unattended turn is exactly the one a crash should not take
 // whole), and once more at the end. Writes are chained so an older snapshot never lands last.
+// A chat run is the chat side of the file, as the TUI writes it: chat history is isolated from
+// the other modes, and a /resume of it must not land in agent history.
 export function createHeadlessAutosave(
   path: string,
   messages: () => Message[],
+  side: keyof SessionSides,
   meta: (midTurn: boolean) => TranscriptMeta,
   onError: (message: string) => void,
   intervalMs = AUTOSAVE_INTERVAL_MS,
@@ -421,7 +426,7 @@ export function createHeadlessAutosave(
     if (countRealTurns(msgs) === 0) return chain;
     if (!written) debugLog(`[reika:debug] session file=${basename(path)}`);
     written = true;
-    const sides = { agent: [...msgs], chat: [] };
+    const sides: SessionSides = { agent: [], chat: [], [side]: [...msgs] };
     const header = meta(midTurn);
     chain = chain
       .then(() => writeSession(path, sides, header))
