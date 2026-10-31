@@ -1220,6 +1220,24 @@ export function App() {
       logSessionFile(entry.path);
     }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
+    // A session with only one side opens on that side (#875): resumed from the other, it would
+    // land on an empty screen, its messages one /chat or /agent away. A session with both stays
+    // put. Leaving chat goes to agent rather than the session's last mode, which could be plan or
+    // shell. The conversation was just reset, so there is no screen to stash — only the session's
+    // side and the mode move.
+    const agentTurns = countRealTurns(sides.agent);
+    const chatTurns = countRealTurns(sides.chat);
+    const switchedTo: Mode | null =
+      modeRef.current !== 'chat' && agentTurns === 0 && chatTurns > 0
+        ? 'chat'
+        : modeRef.current === 'chat' && chatTurns === 0 && agentTurns > 0
+          ? 'agent'
+          : null;
+    if (switchedTo) {
+      sessionRef.current?.switchSide(switchedTo === 'chat' ? 'chat' : 'agent');
+      modeRef.current = switchedTo;
+      setMode(switchedTo);
+    }
     const inChat = modeRef.current === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
@@ -1235,7 +1253,7 @@ export function App() {
       ...active,
       {
         role: 'system',
-        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote} from ${entry.path}`,
+        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedTo ? `, switched to ${switchedTo} mode,` : ''} from ${entry.path}`,
       },
     ];
     let size = RESUME_FIRST_SLICE;
@@ -1640,18 +1658,32 @@ export function App() {
         return;
       }
       const target = args.trim().toLowerCase();
-      if (target !== '' && target !== 'root') {
-        say('Usage: /resume (this project) or /resume root (manual /save files).');
+      if (target !== '' && target !== 'all' && target !== 'root') {
+        say(
+          'Usage: /resume (this project; chats only in chat mode), /resume all, or /resume root (manual /save files).',
+        );
         return;
       }
       const projectDir = projectHistoryDir(bundle.cwd);
       // The session in progress is not something to resume into.
       const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
+      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A file
+      // saved before the header counted chat turns is not listed here; /resume all still has it.
+      const chatsOnly = target === '' && modeRef.current === 'chat';
       let entries: SessionEntry[] = [];
       let heading = 'saved with /save';
-      if (target === '') {
+      if (target !== 'root') {
         entries = (await listSessions(projectDir)).filter(notCurrent);
         heading = 'this project';
+      }
+      if (chatsOnly) {
+        entries = entries.filter(e => e.chatTurns !== undefined);
+        // No root fallback: /save files carry no chat count, so it would list agent sessions here.
+        if (entries.length === 0) {
+          say('No saved chats for this project. /resume all lists every session.');
+          return;
+        }
+        heading = 'chats in this project';
       }
       // A project with no sessions yet falls back to the manual saves.
       if (entries.length === 0) {
@@ -1742,7 +1774,7 @@ export function App() {
           '  /tokens            show token usage this session',
           '  /stats             show full session summary',
           '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
-          '  /resume [root]     resume a saved session of this project (root: the /save files)',
+          '  /resume [all|root] resume a saved session of this project (chat mode: chats only; all: every session; root: the /save files)',
           '  /skills            list available skills (loaded from your skill directories)',
           '  /mcp               list MCP servers and their tools (REIKA_MCP_SERVERS)',
           '  /<server>:<tool>   call an MCP tool directly (JSON args, or the bare string for a one-arg tool)',
