@@ -111,7 +111,8 @@ async function mountApp() {
 function inputLine(app: { lastFrame: () => string | undefined }): string {
   const rows = plain(app.lastFrame())
     .split('\n')
-    .filter(l => l.includes('│') && l.includes('> '));
+    // Chat mode's prompt is `? `.
+    .filter(l => l.includes('│') && (l.includes('> ') || l.includes('? ')));
   return rows[rows.length - 1] ?? '';
 }
 
@@ -271,6 +272,61 @@ describe('session auto-save and /resume', () => {
     await waitFor(
       () => plain(app.lastFrame()).includes('No saved sessions for this project yet.'),
       'the empty notice',
+    );
+    app.unmount();
+  });
+
+  const saveFixture = (name: string, sides: { agent: Message[]; chat: Message[] }, at: string) =>
+    writeSession(join(projectDir, name), sides, {
+      version: 1,
+      savedAt: at,
+      model: 'test-model',
+      baseURL: CONFIG.baseURL,
+      cwd: BUNDLE.cwd,
+      messageCount: 0,
+      mode: 'agent',
+    });
+
+  it('lists only chats in chat mode, tagged, and every session under /resume all', async () => {
+    await saveFixture(
+      'a.jsonl',
+      { agent: [{ role: 'user', content: 'fix the parser' }], chat: [] },
+      '2026-09-01T00:00:00.000Z',
+    );
+    await saveFixture(
+      'c.jsonl',
+      { agent: [], chat: [{ role: 'user', content: 'what is a monad' }] },
+      '2026-09-02T00:00:00.000Z',
+    );
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, '/resume');
+    await waitFor(() => plain(app.lastFrame()).includes('chats in this project · 1'), 'chats');
+    const frame = plain(app.lastFrame());
+    expect(frame).toContain('what is a monad');
+    expect(frame).toMatch(/what is a monad\s+1 msgs · chat/);
+    expect(frame).not.toContain('fix the parser');
+    app.stdin.write('\x1b');
+    await tick(150);
+
+    await submit(app, '/resume all');
+    await waitFor(() => plain(app.lastFrame()).includes('this project · 2'), 'every session');
+    expect(plain(app.lastFrame())).toContain('fix the parser');
+    app.unmount();
+  });
+
+  it('says so in chat mode when the project has sessions but no chats', async () => {
+    await saveFixture(
+      'a.jsonl',
+      { agent: [{ role: 'user', content: 'fix the parser' }], chat: [] },
+      '2026-09-01T00:00:00.000Z',
+    );
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, '/resume');
+    await waitFor(
+      () => plain(app.lastFrame()).includes('No saved chats for this project.'),
+      'the no-chats notice',
     );
     app.unmount();
   });

@@ -137,7 +137,7 @@ export const COMMANDS: CommandSpec[] = [
   },
   {
     name: 'resume',
-    desc: 'resume a saved session — this project auto-saves as you go (root: the /save files)',
+    desc: 'resume a saved session — this project auto-saves as you go (chat mode: chats; all; root: the /save files)',
   },
   { name: 'exit', desc: 'exit Reika' },
   { name: 'quit', desc: 'alias of /exit' },
