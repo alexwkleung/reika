@@ -53,6 +53,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   it as an agent session and put the chat into agent history — and, since a one-sided session opens
   on its side, switched to agent mode. A file with no marker whose prompts were all sent in chat
   mode is now read as the chat side, so the saves made before this fix open correctly too. (#881)
+- `/resume` in chat mode lists a `/save` made in chat mode, falling back to those saves when the
+  project has no chats, as it does for every session outside chat mode. Saves made before this fix
+  are listed too. (#887)
 
 - On a narrow pane, where the status bar wraps onto several rows, a streaming reply no longer
   clears the terminal's scrollback on every update (iTerm2's "attempted to clear scrollback"

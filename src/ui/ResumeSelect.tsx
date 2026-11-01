@@ -50,7 +50,7 @@ export function ResumeSelect({
           const label = e.title ?? '(untitled)';
           // The model is what tells apart two sessions opened with the same prompt; `chat` marks a
           // session holding a chat (#875), which otherwise reads like any other.
-          const tail = `  ${e.messageCount} msgs${e.chatTurns ? ' · chat' : ''}${e.model ? ` · ${e.model}` : ''}`;
+          const tail = `  ${e.messageCount} msgs${e.chat ? ' · chat' : ''}${e.model ? ` · ${e.model}` : ''}`;
           const budget = Math.max(10, maxDisplay - when.length - tail.length - 2);
           // One Text with nested runs: on wrap Ink drops the char at a sibling boundary.
           return (

@@ -82,6 +82,10 @@ export type TranscriptMeta = {
   // last completed round rather than at a reply, and whoever reads it — typically another agent
   // asked to diagnose the run — should know that is the snapshot, not a truncation.
   midTurn?: true;
+  // Real turns in the chat side, absent when there are none: the field a listing reads to tell a
+  // chat apart (#875). Auto-save counts the chat segment; a chat-mode /save counts its scrollback
+  // (#882).
+  chatTurns?: number;
 };
 
 // What a front end tracks between saves to fill the usage block: the status line's own operands.

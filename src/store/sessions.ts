@@ -86,12 +86,18 @@ export type SessionEntry = {
   // Real chat turns in the file (#875). Absent for a file with no chat side, and for one saved
   // before the header carried the count, which a listing cannot tell apart from the header alone.
   chatTurns?: number;
+  // The file holds a chat: a counted chat side, or (root only) a /save made in chat mode before
+  // /save wrote the count (#882), whose turn count the header does not carry.
+  chat?: true;
 };
 
 // Newest first. Only the header line is read — a session with its tool payloads can run to
 // megabytes, and the list needs a title and a date. Unreadable or foreign files are skipped: a
 // listing is never an error.
-export async function listSessions(dir: string): Promise<SessionEntry[]> {
+// `root` reads a header's `mode: "chat"` as a chat (#882): every file there is a /save, and a
+// chat-mode /save writes the chat scrollback. Never in a project dir, where an auto-save taken
+// right after Shift+Tab into chat says `chat` while holding only the agent side (#880).
+export async function listSessions(dir: string, root = false): Promise<SessionEntry[]> {
   let names: string[];
   try {
     names = (await readdir(dir)).filter(n => n.endsWith('.jsonl'));
@@ -103,15 +109,16 @@ export async function listSessions(dir: string): Promise<SessionEntry[]> {
     const path = join(dir, name);
     const meta = await readHeader(path);
     if (!meta || typeof meta.savedAt !== 'string') continue;
+    const chatTurns =
+      typeof meta.chatTurns === 'number' && meta.chatTurns > 0 ? meta.chatTurns : undefined;
     entries.push({
       path,
       ...(typeof meta.title === 'string' ? { title: meta.title } : {}),
       savedAt: meta.savedAt,
       messageCount: typeof meta.messageCount === 'number' ? meta.messageCount : 0,
       ...(typeof meta.model === 'string' ? { model: meta.model } : {}),
-      ...(typeof meta.chatTurns === 'number' && meta.chatTurns > 0
-        ? { chatTurns: meta.chatTurns }
-        : {}),
+      ...(chatTurns !== undefined ? { chatTurns } : {}),
+      ...(chatTurns !== undefined || (root && meta.mode === 'chat') ? { chat: true as const } : {}),
     });
   }
   return entries.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
@@ -187,6 +194,15 @@ export function modelHistoryFromScrollback(messages: Message[]): Message[] {
         return false;
     }
   });
+}
+
+// The header for a /save. In chat mode the saved scrollback is the chat side, so it carries the
+// chat count the listing filters on (#882) — counted here rather than in buildTranscriptMeta,
+// whose auto-save callers pass the agent side under whatever mode is current.
+export function saveHeader(meta: TranscriptMeta, msgs: Message[]): TranscriptMeta {
+  if (meta.mode !== 'chat') return meta;
+  const chatTurns = countRealTurns(msgs);
+  return chatTurns > 0 ? { ...meta, chatTurns } : meta;
 }
 
 // Real prompts and shell commands — what makes a scrollback worth a file, as opposed to the

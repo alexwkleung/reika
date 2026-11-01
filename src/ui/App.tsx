@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Box, Static, Text, useApp, useInput } from 'ink';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -100,6 +100,7 @@ import {
   newSessionPath,
   projectHistoryDir,
   ROOT_HISTORY_DIR,
+  saveHeader,
   writeSession,
   type SessionEntry,
   type SessionSides,
@@ -1667,29 +1668,30 @@ export function App() {
       const projectDir = projectHistoryDir(bundle.cwd);
       // The session in progress is not something to resume into.
       const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
-      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A file
-      // saved before the header counted chat turns is not listed here; /resume all still has it.
+      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A
+      // project file saved before the header counted chat turns is not listed here; /resume all
+      // still has it.
       const chatsOnly = target === '' && modeRef.current === 'chat';
       let entries: SessionEntry[] = [];
       let heading = 'saved with /save';
       if (target !== 'root') {
         entries = (await listSessions(projectDir)).filter(notCurrent);
-        heading = 'this project';
+        if (chatsOnly) entries = entries.filter(e => e.chat);
+        heading = chatsOnly ? 'chats in this project' : 'this project';
       }
-      if (chatsOnly) {
-        entries = entries.filter(e => e.chatTurns !== undefined);
-        // No root fallback: /save files carry no chat count, so it would list agent sessions here.
-        if (entries.length === 0) {
-          say('No saved chats for this project. /resume all lists every session.');
-          return;
-        }
-        heading = 'chats in this project';
-      }
-      // A project with no sessions yet falls back to the manual saves.
+      // A project with nothing to list falls back to the manual saves — in chat mode, the ones that
+      // hold a chat (#882).
       if (entries.length === 0) {
-        entries = await listSessions(ROOT_HISTORY_DIR);
+        entries = await listSessions(ROOT_HISTORY_DIR, true);
+        if (chatsOnly) entries = entries.filter(e => e.chat);
         if (target === '' && entries.length > 0)
-          heading = 'none for this project — saved with /save';
+          heading = chatsOnly
+            ? 'no chats for this project — saved with /save'
+            : 'none for this project — saved with /save';
+      }
+      if (entries.length === 0 && chatsOnly) {
+        say('No saved chats for this project. /resume all lists every session.');
+        return;
       }
       if (entries.length === 0) {
         say(
@@ -1726,9 +1728,9 @@ export function App() {
       }
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
-          join(homedir(), '.config', 'reika', 'history'),
+          ROOT_HISTORY_DIR,
           msgs,
-          transcriptMeta(msgs, bundle.cwd, midTurn),
+          saveHeader(transcriptMeta(msgs, bundle.cwd, midTurn), msgs),
           { redact: !raw },
         );
         setMessages(prev => [
