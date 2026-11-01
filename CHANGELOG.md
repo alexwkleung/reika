@@ -3,6 +3,14 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- A turn that had already recovered from one failed edit no longer stops on the first attempt at a
+  second, unrelated one. When the stop does fire on an edit whose target is in the file but one
+  line differs, it names that line instead of saying the code may not exist (#891).
+
 ## [0.8.0] - 2026-10-31
 
 ### Added
