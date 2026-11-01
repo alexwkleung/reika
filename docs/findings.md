@@ -9,9 +9,9 @@ recurring is that a harness does little for how often a small model succeeds, an
 its failures cost and how clearly they show.
 
 The numbers come from real sessions and from the eval fixtures, instrumented with `REIKA_DEBUG` log
-lines and with A/B arms behind environment flags. [`AGENTS.md`](../AGENTS.md) holds the same record in
-the form the agent editing this repo reads it, with file paths, flag names and issue numbers; this page
-is the shorter version for people. [How these were measured](#how-these-were-measured) is at the end.
+lines and with A/B arms behind environment flags. [`AGENTS.md`](../AGENTS.md) holds the rules that came
+out of them, in the form the agent editing this repo reads them, with file paths, flag names and issue
+numbers; the full evidence is in those issues and PRs, and this page is the shorter version for people. [How these were measured](#how-these-were-measured) is at the end.
 
 **Setup.** Most local runs are on an M2 MacBook with 16GB of unified memory, through llama.cpp, on the
 quants in [Tested models](models.md) — mostly Qwen3.6 35B A3B at IQ2 and Qwen3.8 27B at IQ3. A few
