@@ -85,26 +85,69 @@ Q2 model have produced 52, 16 and 6 tool calls.
 
 Each of these cost a debugging session to learn. They apply to any harness, whatever its model.
 
-- **Forbid tool calls with `tool_choice: 'none'`, not `tools: []`.** Chat templates render the tool
-  list into the system turn (Qwen's puts it _before_ the system prompt), so dropping the tools
-  re-prefills the whole request.
-- **Don't send a model's reasoning back in the user role.** LFM2.5 and Qwen3.6 templates drop every
-  `<think>` that comes before the newest user message. A harness note sent as a user message
-  therefore hides all of the model's earlier reasoning from it, and the model re-derives it. Send
-  `chat_template_kwargs: {preserve_thinking: true}` where the template supports it, and attach the
-  note to the newest tool result where it doesn't.
-- **A note meant to carry authority goes in a user message, not a tool result**, for one-shot
-  instructions such as a user's reason for declining. Inside a tool result, a small model read the
-  reason as the environment refusing, and retried.
-- **Search Brave, not Google or Bing, when driving a browser.** On live results pages, Google and
-  Bing launder every outbound link through a tracker (0 of 53 and 0 of 46 usable). Brave returns real
-  links and runs its own index.
-- **Don't rely on a fresh headless browser profile.** That's the shape search engines CAPTCHA. A
-  persistent profile is the anti-bot mechanism, and a bot check is something a human solves once.
-- **Gate the network-denial footer on the output, not the command name.** Gating on names fired on
-  every red `npm test` and taught the model to blame the sandbox for real failures.
-- **Undici's default 300s timeouts abort long prefills.** A prefilling server sends zero bytes, which
-  looks exactly like a hang.
+### Forbid tool calls at the sampler, not by dropping the tools
+
+To get a reply with no tool call (a summary round, a report at a budget cap), send
+`tool_choice: 'none'` and keep the tool list. Chat templates render the tool list into the system
+turn, so `tools: []` changes the prompt from its first bytes. Qwen3.8's template puts the tools
+_before_ the system prompt: rendered with and without them, the two prompts shared 228 bytes. Reika's
+compaction note round first shipped with `tools: []` and re-prefilled the entire request (7–11k
+tokens on a 24k window, 6–9 minutes at 20 tok/s) right before the fold re-prefilled it again. Keeping
+the tools leaves the rendered prompt byte-identical, and llama.cpp gates only the sampling grammar on
+`tool_choice`. Send the tool list of the last request actually sent, too: a list that changed since
+then is the same full re-prefill.
+
+### Don't send a harness note in the user role on a thinking model
+
+LFM2.5 and Qwen3.6 templates drop every `<think>` block before the newest user message. A
+per-round harness note sent as a user message therefore hides all of the model's earlier reasoning
+from it, and the model re-derives it: after the first context shed, it restated earlier analysis in
+70–75% of rounds, against 3–17% once its reasoning was visible again. Send
+`chat_template_kwargs: {preserve_thinking: true}` where the template honours it. Where it doesn't (an
+engine that ignores the field, or a template with no switch), attach the note to the newest tool
+result instead. With the kwarg suppressed, that took restating from 67% to 6–19%, and cut the calls
+the model made to withdrawn tools from 79 to 7–14.
+
+### A one-off instruction the model must obey goes in a user message
+
+This looks like it contradicts the previous point, and the difference is what is at stake. When a
+user declines an action and says why, a small model given the reason inside the tool result read it
+as the environment refusing and reran the command: 0 of 3 runs complied with the reason in the
+result, 0 of 3 with it reworded as "the user's own words", and 3 of 3 with it sent as a user message.
+For a per-round note, hidden reasoning is the bigger cost. For a single instruction, authority is.
+
+### Search Brave, not Google or Bing, when driving a browser
+
+On live results pages, Google and Bing launder every outbound link through a tracker
+(`google.com/goto?url=…`, `bing.com/ck/a?…`): 0 of 53 and 0 of 46 visible links survived to a usable
+URL, and `cite` is a display string, not a fallback. Brave and DuckDuckGo return real links. Brave
+also runs its own index rather than reselling Bing, so it isn't correlated with the engine most
+likely to block you next.
+
+### Use a persistent browser profile, not a fresh headless one
+
+A fresh headless profile is the shape search engines CAPTCHA. A persistent `--user-data-dir` is the
+anti-bot mechanism, and a bot check is something a human solves once: after one manual solve, the
+profile has been served normally since. Raise the window and wait for the human rather than retrying
+with backoff, since the check does not clear on its own.
+
+### Gate a sandbox's network-denial message on the output, not the command
+
+A network denial never says "permission". Under a sandbox that denies the network, `curl` reports
+`Could not resolve host` (and nothing at all under `-s`), `git push` says to check your access
+rights, and `npm install` says to check your proxy config. Each points at a real but wrong repair,
+which is how a model starts a spiral, so a denied command needs a note saying it was the sandbox.
+Gating that note on the command's name fired on every red `npm test`, every failing `cargo test` and
+`git diff --exit-code`'s exit 1, which taught the model to blame the sandbox for real failures.
+Match the texts each client actually prints under denial instead.
+
+### Lift undici's 300-second timeouts for local engines
+
+A server that is prefilling sends zero bytes, which looks exactly like a hang. Node's `fetch` is
+undici, whose 300-second header and body timeouts abort any turn whose prefill runs longer: about
+6.5k prompt tokens at 23 tok/s on a 16 GB M2 is already over. Reika borrows the running undici's
+`Agent` off its global symbol, so no new dependency, and defaults to no stream timeout at all, since
+the user can cancel a server that really is hung.
 
 The full record, with the A/B arms behind each default, is in [`AGENTS.md`](../AGENTS.md) and
 [Findings](findings.md).
