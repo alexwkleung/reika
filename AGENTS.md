@@ -38,6 +38,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 - **Style**: functions over classes when state is minimal; classes only for things with real lifecycle (e.g. `PayloadStore`)
 - **Comments**: only when explaining _why_ (constraints, non-obvious choices). Never explain _what_ — well-named identifiers do that. Never multi-paragraph.
 - **Dependencies**: minimal. Adding one needs a clear reason.
+- **What goes in AGENTS.md**: the rule, the constraint an editing agent must not undo, and the `#issue` it came from. The evidence behind it (A/B counts, replays, what a first cut got wrong) goes in that PR or issue; when it is worth publishing, in `docs/findings.md` (model behavior) or `docs/building-on-reika.md` (a decision any harness would face), linked from here. If a sentence would stop a regression, it stays; if it only proves the rule, it moves.
 
 ## Where things live
 
