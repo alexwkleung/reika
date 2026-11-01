@@ -17,6 +17,7 @@ Install with `npm i -g @alexwkleung/reika`, `pnpm add -g @alexwkleung/reika` or 
 ## Background
 
 - [Architecture](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/architecture.md): how a turn is put together and what the harness does at each step
+- [Building on Reika](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/building-on-reika.md): for harness builders, which modules lift out, what is small-model tuning, and the decisions that were measured
 - [Findings](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/findings.md): what broke, what was tried and what held, with the measurements
 
 ## Optional
