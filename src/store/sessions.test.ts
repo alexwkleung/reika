@@ -12,6 +12,7 @@ import {
   modelHistoryFromScrollback,
   newSessionPath,
   projectHistoryDir,
+  saveHeader,
   writeSession,
 } from './sessions.js';
 
@@ -179,6 +180,29 @@ describe('listSessions', () => {
     expect(entries[0]).toMatchObject({ path: newer, messageCount: 1, model: 'test-model' });
   });
 
+  it('reads a header saying chat as a chat in the root only (#882)', async () => {
+    // A /save made in chat mode before /save wrote the count: the header's mode is the only clue.
+    const msgs: Message[] = [{ role: 'user', content: 'what is a monad', mode: 'chat' }];
+    await writeFile(
+      join(dir, 'c.jsonl'),
+      serializeJsonl(msgs, meta('2026-09-22T10:00:00Z', 1, 'chat')),
+    );
+    const [root] = await listSessions(dir, true);
+    expect(root).toMatchObject({ chat: true });
+    expect(root).not.toHaveProperty('chatTurns');
+    // In a project dir the same header is an agent-only auto-save taken after Shift+Tab (#880).
+    expect(await listSessions(dir)).toEqual([expect.not.objectContaining({ chat: true })]);
+  });
+
+  it('marks a counted chat as a chat in any dir', async () => {
+    await writeSession(
+      join(dir, 'c.jsonl'),
+      { agent: [], chat: [{ role: 'user', content: 'what is a monad' }] },
+      meta('2026-09-22T10:00:00Z'),
+    );
+    expect(await listSessions(dir)).toMatchObject([{ chatTurns: 1, chat: true }]);
+  });
+
   it('is empty for a directory that does not exist', async () => {
     expect(await listSessions(join(dir, 'nope'))).toEqual([]);
   });
@@ -204,6 +228,30 @@ describe('modelHistoryFromScrollback', () => {
       { role: 'error', content: 'boom' },
     ];
     expect(modelHistoryFromScrollback(scroll)).toEqual([user, reply, tool, nudge]);
+  });
+});
+
+describe('saveHeader', () => {
+  const chat: Message[] = [
+    { role: 'user', content: 'what is a monad', mode: 'chat' },
+    { role: 'assistant', content: 'a monoid in…' },
+    { role: 'system', content: 'a notice' },
+  ];
+
+  it('counts the chat turns of a chat-mode /save (#882)', () => {
+    expect(saveHeader(meta('2026-09-22T10:00:00Z', 3, 'chat'), chat)).toMatchObject({
+      chatTurns: 1,
+    });
+  });
+
+  it('leaves the count out outside chat mode and when nothing was asked', () => {
+    expect(saveHeader(meta('2026-09-22T10:00:00Z', 3, 'agent'), chat)).not.toHaveProperty(
+      'chatTurns',
+    );
+    const notices: Message[] = [{ role: 'system', content: 'a notice' }];
+    expect(saveHeader(meta('2026-09-22T10:00:00Z', 1, 'chat'), notices)).not.toHaveProperty(
+      'chatTurns',
+    );
   });
 });
 

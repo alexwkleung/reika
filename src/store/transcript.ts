@@ -82,8 +82,9 @@ export type TranscriptMeta = {
   // last completed round rather than at a reply, and whoever reads it — typically another agent
   // asked to diagnose the run — should know that is the snapshot, not a truncation.
   midTurn?: true;
-  // Real turns in the chat side. Written by a chat-mode save so the chat listing can find it
-  // (issue #882). Old readers ignore it; absent from agent-only saves.
+  // Real turns in the chat side, absent when there are none: the field a listing reads to tell a
+  // chat apart (#875). Auto-save counts the chat segment; a chat-mode /save counts its scrollback
+  // (#882).
   chatTurns?: number;
 };
 
@@ -341,22 +342,19 @@ export type SavedTranscript = { jsonlPath: string; txtPath: string };
 // Write both the canonical .jsonl and the human .txt into `dir`, creating it if absent. Returns
 // the two paths so the caller can surface them in scrollback. The base name is the (filesystem-
 // safe) save timestamp plus a short random suffix, so two saves in the same second don't collide.
-// When `chatTurns` is set, the header carries it so chat mode's `/resume` can find the file
-// (issue #882).
 export async function saveTranscript(
   dir: string,
   messages: Message[],
   meta: TranscriptMeta,
-  opts: SerializeOptions & { chatTurns?: number } = {},
+  opts: SerializeOptions = {},
 ): Promise<SavedTranscript> {
   await mkdir(dir, { recursive: true });
   const stamp = meta.savedAt.replace(/[:.]/g, '-');
   const base = `${stamp}-${randomBytes(3).toString('hex')}`;
   const jsonlPath = join(dir, `${base}.jsonl`);
   const txtPath = join(dir, `${base}.txt`);
-  const header = opts.chatTurns != null ? { ...meta, chatTurns: opts.chatTurns } : meta;
-  await writeFile(jsonlPath, serializeJsonl(messages, header, opts), 'utf8');
-  await writeFile(txtPath, renderTxt(messages, header, opts), 'utf8');
+  await writeFile(jsonlPath, serializeJsonl(messages, meta, opts), 'utf8');
+  await writeFile(txtPath, renderTxt(messages, meta, opts), 'utf8');
   return { jsonlPath, txtPath };
 }
 

@@ -13,6 +13,7 @@ import {
   countRealTurns,
   newSessionPath,
   projectHistoryDir,
+  saveHeader,
   writeSession,
   type SessionSides,
 } from '../store/sessions.js';
@@ -330,7 +331,7 @@ async function runHeadlessTurn(
         const { jsonlPath } = await saveTranscript(
           join(homedir(), '.config', 'reika', 'history'),
           appended,
-          meta(false),
+          saveHeader(meta(false), appended),
         );
         io.stderr(`reika: saved ${appended.length} messages → ${jsonlPath}\n`);
       } catch (e) {
