@@ -1224,6 +1224,27 @@ export function buildEditRecoveryLedger(failure: EditFailure): string {
   ].join('\n');
 }
 
+// The edit-recovery dead-end's report. A `diverged` failure names the line that differs: the
+// target is there, so "the plan may reference code that doesn't exist" would send the user hunting
+// for a problem the file does not have.
+export function buildEditRecoveryStopMessage(failure: EditFailure | undefined): string {
+  const file = failure ? `\`${failure.path}\`` : 'the file';
+  if (failure?.kind === 'diverged') {
+    return (
+      `My edit to ${file} didn't apply: line ${failure.divergentLine} differs from the text I ` +
+      `expected (expected \`${failure.expected}\`, the file has \`${failure.actual}\`). I've ` +
+      `stopped instead of looping. Ask me to continue and I'll re-read that part of the file and ` +
+      `retry the edit from its current text.`
+    );
+  }
+  return (
+    `I kept trying to edit ${file} but the text I expected isn't in the file, so the change can't ` +
+    `be applied as planned — the plan may reference code that doesn't exist there. I've stopped ` +
+    `instead of looping. Please confirm the change belongs in that file, or point me at the right ` +
+    `location.`
+  );
+}
+
 // Payload attached to an `absent` edit failure when the file's bytes are not in the model's context
 // (see the call site). Rides the tool result rather than the system suffix: unlike the diverged
 // recovery ledger — which must survive several rounds to reach a period-2 loop — this is consumed by
@@ -1609,6 +1630,8 @@ export async function runTurn(opts: {
   // line off) gets exactly ONE round with the divergence lifted into the system suffix before the
   // dead-end stop — the same "each tier gets one round" discipline as the rumination ladder. Set when
   // that round fires so a still-looping turn falls through to the stop instead of grounding forever.
+  // Per failure, not per turn: a landed edit clears it, so a later failure on other code gets its own
+  // round (a turn-wide guard stopped a second, unrelated failure on its first attempt).
   let editRecoveryGroundingTried = false;
   // One-shot guard for the Tier 2 logit-recovery round (REIKA_LOGIT_RECOVERY): the rumination
   // dead-end gets exactly ONE biased round before the terminal stop. Set when it fires so a
@@ -2063,11 +2086,7 @@ export async function runTurn(opts: {
           const stuck: Message = {
             role: 'assistant',
             content:
-              `I kept trying to edit ${file ? `\`${file}\`` : 'the file'} but the text I expected ` +
-              `isn't in the file, so the change can't be applied as planned — the plan may reference ` +
-              `code that doesn't exist there. I've stopped instead of looping. Please confirm the ` +
-              `change belongs in that file, or point me at the right location.` +
-              (await reportTypecheckAtStop()),
+              buildEditRecoveryStopMessage(lastEditFailure) + (await reportTypecheckAtStop()),
             durationMs: Date.now() - turnStart,
             ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
           };
@@ -3869,6 +3888,7 @@ export async function runTurn(opts: {
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
           lastEditFailure = undefined;
+          editRecoveryGroundingTried = false;
           // Read-first (#72): a successful edit/write grounds its path, but by different routes. An
           // edit grounds only through the post-edit echo it hands back (tools/edit.ts refreshedFile),
           // which is size-capped and absent on a large file — so it keys on the message index and
