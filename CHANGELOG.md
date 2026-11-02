@@ -15,6 +15,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   relative to the project, not as full absolute paths (#893).
 - Reika no longer freezes for several seconds when a long session sheds old tool output, which
   happened most on the first prompt after `/resume`-ing a long session (#895).
+- The input box no longer jumps up when Reika stops a reasoning loop or retries a compaction note.
+  The cut-off thought now stays on screen above the notice instead of vanishing (#896).
 
 ## [0.8.0] - 2026-10-31
 
