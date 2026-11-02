@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { Box, Static, Text, measureElement, useApp, useInput, type DOMElement } from 'ink';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -246,20 +253,22 @@ export function App() {
   // is the status bar's one-second tick (below) — a state of its own would repaint the live region
   // a second time every second for a value that changes on no other edge.
   const pendingToolAtRef = useRef<number>(0);
-  // An answered approval keeps its rows for a moment: closing a 13-row dialog in one frame dropped
-  // the input 13 rows, and output arriving in the grace window fills that space instead. Whatever
-  // is still blank after it eases out (HOLD_*). Keyed by the call's start stamp so the next call
-  // never inherits it.
-  const [approvalHold, setApprovalHold] = useState<{
+  // An answered approval or question keeps its rows for a moment: closing a 13-row dialog in one
+  // frame dropped the input 13 rows, and output arriving in the grace window fills that space
+  // instead. Whatever is still blank after it eases out (HOLD_*). An approval's hold is keyed to its
+  // call's start stamp (`forCall`), so the next call never inherits it; a question's lasts past its
+  // call, whose answer commits at once, into the model's next round.
+  const [dialogHold, setDialogHold] = useState<{
     rows: number;
     at: number;
+    forCall: boolean;
     command?: string;
   } | null>(null);
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
   const holdSpacerRef = useRef<DOMElement>(null);
-  const lastToolOutputAtRef = useRef(0);
+  const lastLiveOutputAtRef = useRef(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -1394,9 +1403,10 @@ export function App() {
         // Only for the call that is running: a subagent's approval names a nested call, and the
         // parent's row (`subagent`) would hold these rows for the whole delegated run.
         if (req.tool === pendingToolRef.current) {
-          setApprovalHold({
+          setDialogHold({
             rows: heldFrameRowsRef.current,
             at: pendingToolAtRef.current,
+            forCall: true,
             command: answer === true && req.tool === 'bash' ? req.preview : undefined,
           });
         }
@@ -1412,7 +1422,15 @@ export function App() {
   const requestQuestion = (req: QuestionRequest): Promise<QuestionAnswer | null> => {
     setQuestionSelected(0);
     setQuestionTyping(null);
-    return new Promise(resolve => setQuestion({ request: req, resolve }));
+    return new Promise(resolve =>
+      setQuestion({
+        request: req,
+        resolve: answer => {
+          setDialogHold({ rows: heldFrameRowsRef.current, at: Date.now(), forCall: false });
+          resolve(answer);
+        },
+      }),
+    );
   };
 
   // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
@@ -2780,15 +2798,17 @@ export function App() {
           setMessages(prev => [...prev, msg]);
         },
         onContentDelta: delta => {
+          lastLiveOutputAtRef.current = Date.now();
           streamingRef.current += delta;
           scheduleFlush();
         },
         onReasoningDelta: delta => {
+          lastLiveOutputAtRef.current = Date.now();
           reasoningRef.current += delta;
           scheduleReasoningFlush();
         },
         onToolProgress: (chunk, tool) => {
-          lastToolOutputAtRef.current = Date.now();
+          lastLiveOutputAtRef.current = Date.now();
           toolRef.current += chunk;
           toolNameRef.current = tool;
           scheduleToolFlush();
@@ -2929,35 +2949,44 @@ export function App() {
     (queue.length > 0 ? queue.length + 1 : 0);
 
   const holdActive =
-    approvalHold !== null &&
+    dialogHold !== null &&
     status === 'busy' &&
     pending === null &&
     question === null &&
-    pendingTool !== '' &&
-    pendingToolAtRef.current === approvalHold.at;
-  const heldRows = holdActive && approvalHold.rows > 0 ? approvalHold.rows : undefined;
-  const holdAt = holdActive ? approvalHold.at : undefined;
+    (!dialogHold.forCall || (pendingTool !== '' && pendingToolAtRef.current === dialogHold.at));
+  const heldRows = holdActive && dialogHold.rows > 0 ? dialogHold.rows : undefined;
+  const holdAt = holdActive ? dialogHold.at : undefined;
   // Measured after every frame the dialog is in, so the answer can hold exactly what it drew.
   useEffect(() => {
-    if (pending && heldFrameRef.current) {
+    if ((pending || question) && heldFrameRef.current) {
       heldFrameRowsRef.current = measureElement(heldFrameRef.current).height;
     }
   });
   useEffect(() => {
-    if (approvalHold && !holdActive && pending === null) setApprovalHold(null);
-  }, [approvalHold, holdActive, pending]);
+    if (dialogHold && !holdActive && pending === null && question === null) setDialogHold(null);
+  }, [dialogHold, holdActive, pending, question]);
+  // A row committed while the hold is up lands above the held frame and would push the input down
+  // by its height (a question's answer row, the round's next message), so the hold gives those rows
+  // back. Ink lays out only the rows being committed in this render under its static node; a layout
+  // effect's update re-renders inside the same tick, so the two renders paint as one frame.
+  useLayoutEffect(() => {
+    if (heldRows === undefined) return;
+    const root = heldFrameRef.current?.parentNode as { staticNode?: DOMElement } | undefined;
+    const committed = root?.staticNode?.yogaNode?.getComputedHeight() ?? 0;
+    if (committed > 0) setDialogHold(h => h && { ...h, rows: Math.max(0, h.rows - committed) });
+  }, [messages, heldRows]);
   // A short timer of its own, unlike the rest of the live region: the ease is a few frames long,
   // and the status bar's one-second tick is far too coarse to animate it.
   useEffect(() => {
     if (holdAt === undefined) return;
     let timer = setTimeout(function step() {
-      const sinceOutput = Date.now() - lastToolOutputAtRef.current;
-      if (lastToolOutputAtRef.current >= holdAt && sinceOutput < HOLD_QUIET_MS) {
+      const sinceOutput = Date.now() - lastLiveOutputAtRef.current;
+      if (lastLiveOutputAtRef.current >= holdAt && sinceOutput < HOLD_QUIET_MS) {
         timer = setTimeout(step, HOLD_QUIET_MS - sinceOutput);
         return;
       }
       const blank = holdSpacerRef.current ? measureElement(holdSpacerRef.current).height : 0;
-      setApprovalHold(h =>
+      setDialogHold(h =>
         h && h.at === holdAt
           ? { ...h, rows: blank > 0 ? h.rows - Math.max(1, Math.ceil(blank * HOLD_EASE)) : 0 }
           : h,
@@ -3032,7 +3061,7 @@ export function App() {
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
             pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
-            pendingCommand={holdActive ? approvalHold.command : undefined}
+            pendingCommand={holdActive ? dialogHold.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the
@@ -3040,7 +3069,7 @@ export function App() {
             // height, where Ink repaints with a scrollback clear on every chunk (#470).
             chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
           />
-          {/* An answered approval's held rows (see approvalHold): the slack sits under the live
+          {/* An answered approval's held rows (see dialogHold): the slack sits under the live
               stream, so the spinner, checklist and input stay put while output fills it. */}
           {heldRows !== undefined ? <Box ref={holdSpacerRef} flexGrow={1} /> : null}
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
