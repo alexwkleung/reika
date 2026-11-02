@@ -374,12 +374,14 @@ describe('post-edit typecheck gate (integration)', () => {
       const rumination =
         'I need to check whether the helper is exported before I can change the call site, and ' +
         'to do that I should verify the module boundary once more before committing to anything.';
-      h.scripted.push(writeResponse('src/app.ts', 'export const n = "BREAKME";\n'));
+      // Absolute, as a model often writes it: the stop names it project-relative, as inline code.
+      h.scripted.push(writeResponse(join(cwd, 'src/app.ts'), 'export const n = "BREAKME";\n'));
       for (let n = 0; n < 12; n++) h.scripted.push(noopResponse(n, rumination));
 
       const { history } = await run(cwd, [editTool, writeTool, noop], makeConfig({ maxTurns: 14 }));
 
       const last = history.at(-1) as Message & { content: string };
+      expect(last.content).toContain('I made changes to `src/app.ts` but');
       expect(last.content).toContain('kept repeating the same checks');
       expect(last.content).toContain('introduced 1 new type error');
     });

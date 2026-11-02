@@ -3,11 +3,10 @@ import { Lexer, type MarkedToken, type Token, type Tokens } from 'marked';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import { supportsHyperlink } from 'supports-hyperlinks';
-import wrapAnsi from 'wrap-ansi';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
-import { contentWidth } from './layout.js';
+import { contentWidth, wrapStyledRows } from './layout.js';
 
 // marked only parses here: the terminal rendering is ours, a walk over its token tree. Each block
 // renders at the width it actually has — `width` shrinks by a list's tab and marker or a quote's
@@ -32,9 +31,11 @@ function proseWidth(ctx: Ctx): number {
   return Math.max(MIN_PROSE_WIDTH, ctx.width);
 }
 
-// `hard` splits a bare URL longer than the line instead of letting it overflow.
+// `hard` splits a bare URL longer than the line instead of letting it overflow. Styled rows, not
+// bare wrap-ansi: it re-opens a named color at a break but not a hex one, so an inline code span
+// that wrapped lost its color from the second row on.
 function wrapProse(text: string, ctx: Ctx): string {
-  return wrapAnsi(text, proseWidth(ctx), { hard: true });
+  return wrapStyledRows(text, proseWidth(ctx), true).join('\n');
 }
 
 function renderBlocks(tokens: Token[], ctx: Ctx): string {
@@ -140,7 +141,7 @@ function renderTable(table: Tokens.Table, ctx: Ctx): string {
     border(left + widths.map(w => '─'.repeat(w)).join(mid) + right);
   const drawRow = (row: string[], paint: (s: string) => string) => {
     const wrapped = widths.map((w, col) =>
-      wrapAnsi(row[col] ?? '', Math.max(1, w - 2), { hard: true }).split('\n'),
+      wrapStyledRows(row[col] ?? '', Math.max(1, w - 2), true),
     );
     const height = Math.max(...wrapped.map(lines => lines.length));
     const lines: string[] = [];
