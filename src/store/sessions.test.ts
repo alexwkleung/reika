@@ -223,6 +223,7 @@ describe('modelHistoryFromScrollback', () => {
       { role: 'assistant', content: 'sub', nested: true },
       { role: 'tool', callId: 'c2', summary: 'sub read', nested: true },
       { role: 'assistant', content: 'note', compactionNote: true, nested: true },
+      { role: 'assistant', content: '', reasoning: 'loop loop', discarded: 'stream' },
       nudge,
       { role: 'shell', command: 'ls', output: 'a' },
       { role: 'error', content: 'boom' },

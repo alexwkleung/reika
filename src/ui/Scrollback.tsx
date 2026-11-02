@@ -451,6 +451,60 @@ const liveContentRows = lastCall(streamingContentRows, paintKey);
 const liveNoteRows = lastCall(streamingNoteRows, paintKey);
 const liveToolRows = lastCall(streamingToolRows, paintKey);
 
+// A discarded stream, drawn as its live tail was: the same builders and row split, so the committed
+// rows take the live rows' place one for one and the input stays where it was. At least as tall as
+// what was on screen, since the live region it was split against also paid for any dialog chrome.
+function FrozenStream({
+  reasoning,
+  content,
+  note,
+  indent,
+}: {
+  reasoning: string;
+  content: string;
+  note: boolean;
+  indent: number;
+}) {
+  const region = liveRegionRows();
+  const folded = note ? { reasoning, content } : foldedLiveFields(reasoning, content);
+  const blocks: { kind: 'reasoning' | 'content'; live: LiveRows; fixed: number }[] = [];
+  if (folded.reasoning) {
+    const columns = process.stdout.columns || 80;
+    const live = streamingReasoningRows(folded.reasoning, indent, region, columns);
+    blocks.push({ kind: 'reasoning', live, fixed: 2 });
+  }
+  if (folded.content.trim()) {
+    const width = liveContentWidth(indent);
+    const live = note
+      ? streamingNoteRows(folded.content, width, region)
+      : streamingContentRows(folded.content, width, region);
+    blocks.push({ kind: 'content', live, fixed: note ? 3 : 1 });
+  }
+  const pool = region - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const shares = allocateLiveRows(
+    blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
+    pool,
+  );
+  return (
+    <Box flexDirection="column">
+      {blocks.map((b, i) =>
+        b.kind === 'reasoning' ? (
+          <Box key={b.kind} marginTop={1}>
+            <ReasoningBlock
+              lines={b.live.rows.slice(-shares[i])}
+              barColor={note ? theme.info : undefined}
+            />
+          </Box>
+        ) : note ? (
+          <NoteBody key={b.kind} tail={fitTail(b.live, shares[i])} joined={i > 0} />
+        ) : (
+          <StreamingTail key={b.kind} tail={fitTail(b.live, shares[i])} />
+        ),
+      )}
+    </Box>
+  );
+}
+
 // `offset` is how far inside the live wrapper the committed row will sit (the command chip's
 // margin), so the tail doesn't jump sideways when it commits (#461).
 function StreamingTail({
@@ -853,6 +907,16 @@ function renderMessage(
           </Text>
         ) : null}
       </Box>
+    );
+  }
+  if (msg.role === 'assistant' && msg.discarded) {
+    return (
+      <FrozenStream
+        reasoning={msg.reasoning ?? ''}
+        content={msg.content}
+        note={msg.discarded === 'note'}
+        indent={indent}
+      />
     );
   }
   if (msg.role === 'assistant' && msg.compactionNote) {

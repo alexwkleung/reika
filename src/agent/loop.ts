@@ -2560,10 +2560,11 @@ export async function runTurn(opts: {
         }
         debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
       } finally {
-        opts.onCompactionNote?.(false);
         // The live region held the note; if the reply was empty no assistant commit cleared it,
-        // so the UI is told explicitly before the round's real reply streams.
+        // so the UI is told explicitly before the round's real reply streams. Ahead of the note
+        // flag, so the UI still knows the stream it is ending was a note's.
         opts.onReasoningReset?.();
+        opts.onCompactionNote?.(false);
       }
     }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in

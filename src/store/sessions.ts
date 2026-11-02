@@ -187,7 +187,7 @@ export function modelHistoryFromScrollback(messages: Message[]): Message[] {
       case 'user':
         return !m.meta;
       case 'assistant':
-        return !m.nested && !m.compactionNote;
+        return !m.nested && !m.compactionNote && !m.discarded;
       case 'tool':
         return !m.nested;
       default:
