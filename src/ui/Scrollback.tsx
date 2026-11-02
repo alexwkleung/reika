@@ -26,6 +26,7 @@ export function Scrollback({
   streamingCommand = false,
   pendingTool = '',
   pendingToolMs = 0,
+  pendingCommand = '',
   chromeRows = 0,
   showHeldWorked = true,
 }: {
@@ -55,6 +56,9 @@ export function Scrollback({
   // tools `toolTimer` times, once it passes its threshold. The App reads it off the render clock
   // the status bar's one-second tick already drives, so nothing here keeps a timer.
   pendingToolMs?: number;
+  // The command a just-answered approval cleared, drawn under that row as the `$ command` block
+  // its chip commits with, so the dialog's rows collapse into the command instead of blank space.
+  pendingCommand?: string;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -103,8 +107,21 @@ export function Scrollback({
   }
   const { log: scrollback, held } = useScrollbackLog(messages);
   const pendingGap = pendingTool ? pendingToolGap(pendingTool, scrollback.at(-1)) : 0;
-  const pool =
+  const commandWidth = contentWidth(COMMAND_MARGIN + indent);
+  const commandLines =
+    pendingTool && pendingCommand
+      ? hangingWrap(scrubOutput(pendingCommand), commandWidth, SHELL_MARKER.length).split('\n')
+      : [];
+  const poolBeforeCommand =
     region - (pendingTool ? 1 + pendingGap : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  // The output tail keeps its room (the rows the chip will show), and a long command gives up
+  // its rows past that, ending in `…` — the chip draws all of it once it commits.
+  const commandRows =
+    commandLines.length === 0
+      ? 0
+      : Math.min(commandLines.length, Math.max(1, poolBeforeCommand - 1 - OUTPUT_TAIL_LINES));
+  const commandCut = commandRows < commandLines.length;
+  const pool = poolBeforeCommand - (commandRows ? 1 + commandRows : 0);
   // A running command's tail is held to the rows its committed chip shows: grown to the pool, it
   // pushed the input to the bottom and then dropped it by the difference when the chip replaced it.
   const shares = allocateLiveRows(
@@ -130,6 +147,18 @@ export function Scrollback({
                 on one row lose the boundary char between them when the row wraps. */}
             <Text color={theme.muted}>{toolTimer(pendingTool, pendingToolMs)}</Text>
           </Text>
+        </Box>
+      ) : null}
+      {commandRows ? (
+        // The committed chip's `$ command` block, same margin and wrap (MessageView).
+        <Box flexDirection="column" marginTop={1} marginLeft={COMMAND_MARGIN}>
+          <Text>
+            <Text color={theme.success}>{SHELL_MARKER}</Text>
+            <Text>
+              {commandLines.slice(0, commandCut ? commandRows - 1 : commandRows).join('\n')}
+            </Text>
+          </Text>
+          {commandCut ? <Text color={theme.muted}>…</Text> : null}
         </Box>
       ) : null}
       {blocks.map((b, i) =>
