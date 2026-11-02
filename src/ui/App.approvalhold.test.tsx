@@ -223,7 +223,7 @@ const blankUnderCommand = (frame: string): number => {
 describe('answering an approval holds the input (#897)', () => {
   it('lets output that arrives in the grace window fill the dialog rows', async () => {
     const { app, out, last } = await answerApproval();
-    await tick(150);
+    await tick(50);
     let mark = out.writes.length;
     gates.shift()!();
     for (let i = 0; i < 100 && !last().includes('progress line 9'); i++) await tick(20);

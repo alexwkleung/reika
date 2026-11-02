@@ -187,7 +187,7 @@ const AUTOSAVE_INTERVAL_MS = 3000;
 const FROZEN_STREAM_CHARS = 16000;
 // An answered approval's rows: held this long for output to fill them, then whatever is still blank
 // shrinks by this fraction a frame (at least a row), so the input slides up rather than snapping.
-const HOLD_GRACE_MS = 600;
+const HOLD_GRACE_MS = 300;
 const HOLD_FRAME_MS = 32;
 const HOLD_EASE = 0.35;
 
