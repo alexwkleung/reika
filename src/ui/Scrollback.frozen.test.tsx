@@ -1,9 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { Box, render, Text } from 'ink';
 import { Scrollback } from './Scrollback.js';
 import { frameRise } from './framedrops.js';
 import type { Message } from '../types.js';
+
+// Ink reads `CI` once, at import, and in CI never erases the live frame — every rise reads 0 there,
+// so the jump this file measures cannot happen and the holding tests would pass for nothing.
+const ciAtLoad = vi.hoisted(() => {
+  const prev = process.env.CI;
+  process.env.CI = '0';
+  return prev;
+});
+afterAll(() => {
+  if (ciAtLoad === undefined) delete process.env.CI;
+  else process.env.CI = ciAtLoad;
+});
 
 // Driven through Ink's real writes, because a rise is the erase of the live frame against the rows
 // a commit prints in its place, and only the bytes the terminal gets hold both.
