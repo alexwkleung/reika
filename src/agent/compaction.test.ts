@@ -587,6 +587,37 @@ describe('batchAgePayloads', () => {
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
+  it('stops at the first mark that reaches the watermark and restores the probed rest (#894)', () => {
+    // threshold 1800, target 1260; estimate 50 + 7 × 300 = 2150, and each mark sheds 299. The spec
+    // is exempt and g is the protected tail, so a..f are the marks: two leave 1552, three 1253.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].flatMap(id => round(id, id.repeat(300))),
+    ];
+    const estimate = estimateOf(history);
+    let calls = 0;
+    const aged = batchAgePayloads(history, () => (calls++, estimate()), 2000, 0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    expect(tools.map(t => t.aged === true)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(aged).toMatchObject({ marked: 3, bulk: 0, crumbs: 3, short: 0 });
+    // The search applied d..f to probe past the stop; undoing them must leave no trace.
+    for (const t of tools.slice(4)) {
+      expect('aged' in t).toBe(false);
+      expect(t.rendered).toBe(`${t.callId}\n\n${t.payload}`);
+    }
+    expect(calls).toBeLessThan(6);
+  });
+
   it('reports short=0 when the event reaches its watermark', () => {
     const history: Message[] = [
       { role: 'user', content: 'go' },

@@ -257,7 +257,7 @@ export type AgeResult = {
 
 export function batchAgePayloads(
   history: Message[],
-  estimate: () => number, // calibrated request-token estimate; re-read after each mark
+  estimate: () => number, // calibrated request-token estimate; read at each probe of the stop point
   contextWindow: number,
   minGen = DEFAULT_MIN_GEN_TOKENS,
   // Whether marking reasoning can still move the estimate this sweep is chasing. False once the
@@ -312,44 +312,99 @@ export function batchAgePayloads(
   // the tail IS that message and this loop never reaches it. Promoting the tail into `content` is
   // what makes it visible to the chat template; this is what keeps that promotion from becoming a
   // standing window cost only a fold could clear.
-  for (let i = 0; i < protect; i++) {
-    if (estimate() <= target) {
-      out.kept = survivingCrumbs();
-      return out;
+  const marks = shedOrder(history, protect, specIdx, shedReasoning);
+  let applied = 0;
+  const applyTo = (k: number): void => {
+    while (applied < k) marks[applied++].apply();
+    while (applied > k) marks[--applied].undo();
+  };
+  // #894: the marks fall in a fixed order and the estimate only decides where to stop, so the stop
+  // is searched for rather than walked to. Re-estimating at every index cost a full serialization
+  // per message — about 1,400 of them, ~5s with the UI frozen, when a resumed session shed whole.
+  // Search finds the first stop only while marking never grows the request, which holds unless a
+  // fit-to-window cap gives freed room back to another live payload.
+  applyTo(marks.length);
+  const floor = estimate();
+  if (floor > target) {
+    out.short = Math.max(0, Math.round(floor - target));
+  } else {
+    let lo = 0;
+    let hi = marks.length;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >>> 1;
+      applyTo(mid);
+      if (estimate() <= target) hi = mid;
+      else lo = mid;
     }
+    applyTo(hi);
+  }
+  for (let i = 0; i < applied; i++) {
+    out.marked++;
+    if (marks[i].kind === 'bulk') out.bulk++;
+    else if (marks[i].kind === 'crumb') out.crumbs++;
+  }
+  out.kept = survivingCrumbs();
+  return out;
+}
+
+type ShedMark = { kind: 'tail' | 'reasoning' | 'bulk' | 'crumb'; apply(): void; undo(): void };
+
+// The marks batchAgePayloads would make if it never reached its watermark, in the order it makes
+// them: spent continuation tails, then reasoning and bulk payloads oldest-first, then crumbs.
+function shedOrder(
+  history: Message[],
+  protect: number,
+  specIdx: number,
+  shedReasoning: boolean,
+): ShedMark[] {
+  const marks: ShedMark[] = [];
+  for (let i = 0; i < protect; i++) {
     const m = history[i];
     if (m.role === 'assistant' && m.continuationTail && m.content !== CONTINUATION_SHED_NOTE) {
-      m.content = CONTINUATION_SHED_NOTE;
-      out.marked++;
+      const content = m.content;
+      marks.push({
+        kind: 'tail',
+        apply: () => (m.content = CONTINUATION_SHED_NOTE),
+        undo: () => (m.content = content),
+      });
     }
   }
   for (const takeCrumbs of [false, true]) {
     for (let i = 0; i < protect; i++) {
-      if (estimate() <= target) {
-        out.kept = survivingCrumbs();
-        return out;
-      }
       if (i === specIdx) continue;
       const m = history[i];
-      if (m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
+      if (!takeCrumbs && m.role === 'assistant' && m.reasoning && !m.reasoningAged) {
         if (!shedReasoning) continue;
-        m.reasoningAged = true;
-        out.marked++;
+        const had = 'reasoningAged' in m;
+        const was = m.reasoningAged;
+        marks.push({
+          kind: 'reasoning',
+          apply: () => (m.reasoningAged = true),
+          undo: () => (had ? (m.reasoningAged = was) : delete m.reasoningAged),
+        });
       } else if (m.role === 'tool' && m.payload && !m.aged) {
-        if (!takeCrumbs && m.payload.length < SMALL_PAYLOAD_CHARS) continue;
-        m.aged = true;
-        delete m.rendered;
-        out.marked++;
-        if (takeCrumbs) out.crumbs++;
-        else out.bulk++;
+        const small = m.payload.length < SMALL_PAYLOAD_CHARS;
+        if (small !== takeCrumbs) continue;
+        const hadAged = 'aged' in m;
+        const wasAged = m.aged;
+        const hadRendered = 'rendered' in m;
+        const rendered = m.rendered;
+        marks.push({
+          kind: takeCrumbs ? 'crumb' : 'bulk',
+          apply: () => {
+            m.aged = true;
+            delete m.rendered;
+          },
+          undo: () => {
+            if (hadAged) m.aged = wasAged;
+            else delete m.aged;
+            if (hadRendered) m.rendered = rendered;
+          },
+        });
       }
     }
   }
-  out.kept = survivingCrumbs();
-  // Ran out of candidates while still over: everything sheddable outside the protected tail is
-  // aged, and what remains is the active round plus whatever the floors hold.
-  out.short = Math.max(0, Math.round(estimate() - target));
-  return out;
+  return marks;
 }
 
 // Index of the assistant message that issued the trailing tool block's calls (or the final
