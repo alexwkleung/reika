@@ -17,6 +17,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   happened most on the first prompt after `/resume`-ing a long session (#895).
 - The input box no longer jumps up when Reika stops a reasoning loop or retries a compaction note.
   The cut-off thought now stays on screen above the notice instead of vanishing (#896).
+- The input box no longer jumps up when you answer an approval prompt. The space the prompt took
+  stays in place until the command's result lands, and its output fills it as it streams (#897).
 
 ## [0.8.0] - 2026-10-31
 
