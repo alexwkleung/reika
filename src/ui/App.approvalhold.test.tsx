@@ -78,12 +78,17 @@ type TurnOpts = {
 // The test opens each gate when it has read the frames of the phase before it.
 const gates: (() => void)[] = [];
 const gate = (): Promise<void> => new Promise(r => gates.push(r));
+// Delay between output lines, for a command that prints one line at a time.
+let trickleMs = 0;
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'user', content: opts.userInput });
   opts.onToolStart?.('bash');
   await opts.requestApproval!(APPROVAL);
   await gate();
-  for (const line of OUTPUT) opts.onToolProgress?.(line + '\n', 'bash');
+  for (const line of OUTPUT) {
+    opts.onToolProgress?.(line + '\n', 'bash');
+    if (trickleMs) await new Promise(r => setTimeout(r, trickleMs));
+  }
   await gate();
   opts.onMessage({
     role: 'tool',
@@ -261,5 +266,26 @@ describe('answering an approval holds the input (#897)', () => {
     expect(blankUnderCommand(out.writes.at(-1)!)).toBeLessThanOrEqual(1);
     await finishCall(out, last);
     app.unmount();
+  }, 30_000);
+
+  // `for i in …; do echo line $i; sleep 0.5; done`: each line lands after the grace window has
+  // passed. Easing between lines slid the input up and then had every line push it back down.
+  it('holds for a command that prints one line at a time', async () => {
+    trickleMs = 400;
+    try {
+      const { app, out, last, mark } = await answerApproval();
+      gates.shift()!();
+      for (let i = 0; i < 300 && !last().includes('progress line 9'); i++) await tick(20);
+      expect(maxRise(out.writes.slice(mark)), 'lines arriving one at a time').toBe(0);
+      for (let i = 0; i < 100 && gates.length === 0; i++) await tick(20);
+      const done = out.writes.length;
+      gates.shift()!();
+      for (let i = 0; i < 200 && /Running/.test(last()); i++) await tick(20);
+      await tick(200);
+      expect(maxRise(out.writes.slice(done)), 'the commit').toBeLessThanOrEqual(2);
+      app.unmount();
+    } finally {
+      trickleMs = 0;
+    }
   }, 30_000);
 });

@@ -187,7 +187,11 @@ const AUTOSAVE_INTERVAL_MS = 3000;
 const FROZEN_STREAM_CHARS = 16000;
 // An answered approval's rows: held this long for output to fill them, then whatever is still blank
 // shrinks by this fraction a frame (at least a row), so the input slides up rather than snapping.
+// Once the command has printed, the ease waits for it to go quiet this long instead: a command
+// printing a line every half second fills the rows, where easing them out between lines slid the
+// input up and then had each line push it back down.
 const HOLD_GRACE_MS = 300;
+const HOLD_QUIET_MS = 1500;
 const HOLD_FRAME_MS = 32;
 const HOLD_EASE = 0.35;
 
@@ -255,6 +259,7 @@ export function App() {
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
   const holdSpacerRef = useRef<DOMElement>(null);
+  const lastToolOutputAtRef = useRef(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
@@ -2783,6 +2788,7 @@ export function App() {
           scheduleReasoningFlush();
         },
         onToolProgress: (chunk, tool) => {
+          lastToolOutputAtRef.current = Date.now();
           toolRef.current += chunk;
           toolNameRef.current = tool;
           scheduleToolFlush();
@@ -2945,6 +2951,11 @@ export function App() {
   useEffect(() => {
     if (holdAt === undefined) return;
     let timer = setTimeout(function step() {
+      const sinceOutput = Date.now() - lastToolOutputAtRef.current;
+      if (lastToolOutputAtRef.current >= holdAt && sinceOutput < HOLD_QUIET_MS) {
+        timer = setTimeout(step, HOLD_QUIET_MS - sinceOutput);
+        return;
+      }
       const blank = holdSpacerRef.current ? measureElement(holdSpacerRef.current).height : 0;
       setApprovalHold(h =>
         h && h.at === holdAt
