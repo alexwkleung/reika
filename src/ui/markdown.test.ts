@@ -537,3 +537,25 @@ describe('renderMarkdown wraps to the content width', () => {
     expect(renderMarkdown(LONG)).toBe(renderMarkdown(LONG, CONTENT));
   });
 });
+
+describe('renderMarkdown inline code that wraps', () => {
+  const savedLevel = chalk.level;
+  afterEach(() => {
+    chalk.level = savedLevel;
+  });
+
+  // wrap-ansi re-opens a named color at a break but not a hex one, so a wrapped code span drew
+  // its first row in the code color and the rest as plain prose.
+  it('keeps the code color on every row the span wraps onto', () => {
+    chalk.level = 3;
+    const open = chalk.hex(theme.inlineCode)('x').split('x')[0];
+    const out = renderMarkdown(
+      'errors: `src/ui/Approval.tsx:263 TS2345: Argument of type Span is not assignable to string` end',
+      30,
+    );
+    const rows = out.split('\n');
+    expect(rows.length).toBeGreaterThan(2);
+    for (const row of rows.slice(1, -1)) expect(row.startsWith(open)).toBe(true);
+    expect(stripAnsi(rows[1]).startsWith(' ')).toBe(false);
+  });
+});

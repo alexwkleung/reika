@@ -49,9 +49,10 @@ export function wrappedRows(text: string, width: number): number {
 // default foreground; a changed word in a diff is a background then a foreground, and lost its
 // highlight the same way. So the state at each row's end is replayed at the next row's start, and
 // closed at the row's end so a row never leaks a style into whatever Ink draws after it. Same
-// options as Ink's own wrap, so the break points and row count are unchanged.
-export function wrapStyledRows(text: string, width: number): string[] {
-  const rows = wrapAnsi(text, Math.max(1, width), { trim: false, hard: true }).split('\n');
+// options as Ink's own wrap, so the break points and row count are unchanged. `trim` is for a caller
+// that wraps prose itself (markdown), where wrap-ansi's default drops the space a break lands on.
+export function wrapStyledRows(text: string, width: number, trim = false): string[] {
+  const rows = wrapAnsi(text, Math.max(1, width), { trim, hard: true }).split('\n');
   let open = new Map<SgrSlot, string>();
   return rows.map(row => {
     const lead = [...open.values()].join('');

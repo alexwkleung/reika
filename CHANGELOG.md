@@ -10,6 +10,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - A turn that had already recovered from one failed edit no longer stops on the first attempt at a
   second, unrelated one. When the stop does fire on an edit whose target is in the file but one
   line differs, it names that line instead of saying the code may not exist (#891).
+- Inline code in a reply keeps its color when it wraps onto more than one line; it used to fall back
+  to plain text from the second line on. A loop stop names the files it changed as inline code
+  relative to the project, not as full absolute paths (#893).
 
 ## [0.8.0] - 2026-10-31
 

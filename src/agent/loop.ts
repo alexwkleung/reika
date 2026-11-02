@@ -1,3 +1,4 @@
+import { isAbsolute, relative } from 'node:path';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -4084,12 +4085,24 @@ function commitAborted(
   opts.onMessage(m);
 }
 
+// The files a stop message names, as inline code and project-relative: an edit's `path` arg is
+// often absolute, and a bare `/Users/…/src/a.ts, …` list read as prose and wrapped mid-path.
+function stopFileList(files: Set<string>, cwd: string, max: number): string {
+  return [...files]
+    .slice(0, max)
+    .map(f => {
+      const rel = isAbsolute(f) ? relative(cwd, f) : f;
+      return `\`${rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : f}\``;
+    })
+    .join(', ');
+}
+
 // Honest terminal stop when reasoning keeps spiraling even through recovery (the force-write looped,
 // or the recovery budget is spent). Better than committing spiral garbage as a "plan" or running to
 // the token wall. Names the files examined so the user has a handle on what was done. Deliberately
 // not marked planFinal — it isn't a plan, so the plan→agent handoff won't treat it as one.
 function commitSpiralStop(
-  opts: { history: Message[]; onMessage: (m: Message) => void },
+  opts: { history: Message[]; onMessage: (m: Message) => void; bundle: { cwd: string } },
   turnStart: number,
   fetchedUrls: Set<string>,
   // Why the turn ran out of recoveries. 'loop' is the genuine spiral; 'length' is a coherent thought
@@ -4106,7 +4119,7 @@ function commitSpiralStop(
     }
   }
   const examined =
-    files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
+    files.size > 0 ? ` Files I examined: ${stopFileList(files, opts.bundle.cwd, 12)}.` : '';
   const m: Message = {
     role: 'assistant',
     content:
@@ -4129,7 +4142,7 @@ function commitSpiralStop(
 // already on disk — frame it as "done but stopped re-checking" and name the edited files; otherwise
 // it's a stuck-without-progress stop. Mirrors commitSpiralStop (plan mode).
 function commitAgentLoopStop(
-  opts: { history: Message[]; onMessage: (m: Message) => void },
+  opts: { history: Message[]; onMessage: (m: Message) => void; bundle: { cwd: string } },
   turnStart: number,
   fetchedUrls: Set<string>,
   edited: boolean,
@@ -4152,7 +4165,7 @@ function commitAgentLoopStop(
       }
     }
   }
-  const fileList = files.size > 0 ? ` to ${[...files].slice(0, 8).join(', ')}` : '';
+  const fileList = files.size > 0 ? ` to ${stopFileList(files, opts.bundle.cwd, 8)}` : '';
   const content = edited
     ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
       `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
