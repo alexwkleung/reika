@@ -733,6 +733,70 @@ describe('Scrollback pending tool row', () => {
     );
   });
 
+  // An answered approval collapses into the command it cleared (#897): the `$ command` block and the
+  // tail under it are drawn as the chip commits them, so the swap changes only the verb.
+  it('draws an approved command where its chip will commit it', () => {
+    const command = 'npm run format:check';
+    const live = inApp(
+      <Scrollback
+        messages={[]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool="ok"
+        streamingCommand
+        pendingTool="bash"
+        pendingCommand={command}
+      />,
+    );
+    const committed = inApp(
+      <Scrollback
+        messages={[
+          {
+            role: 'tool',
+            callId: 't1',
+            summary: 'Ran: npm run format:check',
+            command: { text: command, outputTail: 'ok', outputTruncated: false },
+          },
+        ]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    );
+    const block = (frame: string): string[] => {
+      const rows = frame.split('\n').map(r => r.trimEnd());
+      return rows.slice(rows.findIndex(r => r.includes('↳')) + 1);
+    };
+    expect(block(live).join('\n').trimEnd()).toBe(block(committed).join('\n').trimEnd());
+  });
+
+  // A long heredoc must not push the live frame to the viewport: it gives up its rows past the
+  // tail's and ends in `…`, and the chip draws all of it on commit.
+  it('cuts a long approved command to the live budget', () => {
+    const prevRows = process.stdout.rows;
+    Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
+    try {
+      const command = Array.from({ length: 80 }, (_, i) => `echo step-${i}`).join('\n');
+      const frame = inApp(
+        <Scrollback
+          messages={[]}
+          streaming=""
+          streamingReasoning=""
+          streamingTool=""
+          streamingCommand
+          pendingTool="bash"
+          pendingCommand={command}
+        />,
+      );
+      expect(frame).toContain('$ echo step-0');
+      expect(frame).not.toContain('echo step-79');
+      expect(frame).toMatch(/^ {5}…$/m);
+      expect(frame.split('\n').length).toBeLessThan(30 - 8);
+    } finally {
+      Object.defineProperty(process.stdout, 'rows', { value: prevRows, configurable: true });
+    }
+  });
+
   // The second call of a round: its result gets a gap when either row carries a block (#492), so
   // the in-flight row has to take it too or the gap only appears at the swap.
   it('takes the gap its committed result will get', () => {

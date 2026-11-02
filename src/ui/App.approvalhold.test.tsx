@@ -194,6 +194,8 @@ describe('answering an approval holds the input (#897)', () => {
     for (let i = 0; i < 100 && !last().includes('Running'); i++) await tick(20);
     await tick(200);
     expect(last()).not.toContain('Decline, and say');
+    // The dialog collapses into the command it cleared, drawn where its chip will commit it.
+    expect(last()).toMatch(/↳ Running…\n\n {5}\$ pnpm install\n/);
     expect(maxRise(out.writes.slice(mark)), 'the answer').toBe(0);
 
     mark = out.writes.length;

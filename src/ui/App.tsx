@@ -241,7 +241,11 @@ export function App() {
   // dialog in one frame dropped the input 13 rows, and the bash output streaming in and the chip
   // it commits as fill about that space back. Keyed by the call's start stamp so the next call
   // never inherits it.
-  const [approvalHold, setApprovalHold] = useState<{ rows: number; at: number } | null>(null);
+  const [approvalHold, setApprovalHold] = useState<{
+    rows: number;
+    at: number;
+    command?: string;
+  } | null>(null);
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
@@ -418,6 +422,8 @@ export function App() {
   };
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
+  const pendingToolRef = useRef('');
+  pendingToolRef.current = pendingTool;
   const pendingRef = useRef<typeof pending>(null);
   pendingRef.current = pending;
   const questionRef = useRef<typeof question>(null);
@@ -1373,10 +1379,15 @@ export function App() {
     setApprovalTyping(false);
     return new Promise(resolve => {
       const wrappedResolve = (answer: ApprovalAnswer): void => {
-        setApprovalHold({
-          rows: heldFrameRowsRef.current,
-          at: pendingToolAtRef.current,
-        });
+        // Only for the call that is running: a subagent's approval names a nested call, and the
+        // parent's row (`subagent`) would hold these rows for the whole delegated run.
+        if (req.tool === pendingToolRef.current) {
+          setApprovalHold({
+            rows: heldFrameRowsRef.current,
+            at: pendingToolAtRef.current,
+            command: answer === true && req.tool === 'bash' ? req.preview : undefined,
+          });
+        }
         setApprovals(a =>
           answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
@@ -2773,6 +2784,7 @@ export function App() {
           // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
           // this is the call's own start — the same instant the row it ages appears (#585).
           pendingToolAtRef.current = Date.now();
+          pendingToolRef.current = name;
           setPendingTool(name);
         },
         onPhase: p => {
@@ -2987,6 +2999,7 @@ export function App() {
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
             pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
+            pendingCommand={heldRows !== undefined ? approvalHold?.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the
