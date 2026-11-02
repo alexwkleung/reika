@@ -13,6 +13,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - Inline code in a reply keeps its color when it wraps onto more than one line; it used to fall back
   to plain text from the second line on. A loop stop names the files it changed as inline code
   relative to the project, not as full absolute paths (#893).
+- Reika no longer freezes for several seconds when a long session sheds old tool output, which
+  happened most on the first prompt after `/resume`-ing a long session (#895).
 
 ## [0.8.0] - 2026-10-31
 
