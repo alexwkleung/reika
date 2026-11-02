@@ -162,43 +162,69 @@ const dialogRows = (frame: string): number =>
     .split('\n')
     .filter(l => /Approve|Decline|pnpm install|Run a command|─/.test(l)).length;
 
+// Sends a prompt, waits for the approval dialog and answers it. Each write is one frame the
+// terminal paints: rendered through the same per-tick batching the CLI uses, since unbatched a
+// commit's erase and its reprint arrive as separate writes.
+async function answerApproval() {
+  const out = new Out();
+  const stdin = new In();
+  Object.defineProperty(process.stdout, 'columns', { value: out.columns, configurable: true });
+  Object.defineProperty(process.stdout, 'rows', { value: out.rows, configurable: true });
+  const app = inkRender(<App />, {
+    stdout: createSyncedStdout(out as never, {}),
+    stdin: stdin as never,
+    stderr: new Out() as never,
+    debug: false,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const last = (): string => plain(out.writes.at(-1) ?? '');
+  for (let i = 0; i < 400 && !last().includes('╭'); i++) await tick(25);
+  for (let i = 0; i < 200 && !last().includes('run it'); i++) {
+    stdin.write('run it');
+    await tick(20);
+  }
+  stdin.write('\r');
+  for (let i = 0; i < 200 && !last().includes('Decline, and say'); i++) await tick(20);
+  // A dialog tall enough that a drop would show.
+  expect(dialogRows(out.writes.at(-1) ?? '')).toBeGreaterThan(5);
+  const mark = out.writes.length;
+  stdin.write('\r');
+  // A frame written after the answer: the one before the dialog opened already showed the row.
+  for (let i = 0; i < 100 && (out.writes.length === mark || !last().includes('Running')); i++)
+    await tick(20);
+  expect(last()).not.toContain('Decline, and say');
+  // The dialog collapses into the command it cleared, drawn where its chip will commit it.
+  expect(last()).toMatch(/↳ Running…\n\n {5}\$ pnpm install\n/);
+  // The frame the answer lands in holds: the dialog's rows are kept for the grace window.
+  expect(frameRise(out.writes[mark]!) ?? 0, 'the answer').toBe(0);
+  return { app, out, last, mark };
+}
+
+async function finishCall(out: Out, last: () => string): Promise<number> {
+  gates.shift()!();
+  for (let i = 0; i < 100 && !last().includes('progress line 9'); i++) await tick(20);
+  const mark = out.writes.length;
+  gates.shift()!();
+  for (let i = 0; i < 200 && /Running/.test(last()); i++) await tick(20);
+  await tick(200);
+  return mark;
+}
+
+// Blank rows between the approved command (or its output) and the spinner.
+const blankUnderCommand = (frame: string): number => {
+  const lines = plain(frame).split('\n');
+  const spinner = lines.findIndex(l => l.includes('Working'));
+  let n = 0;
+  for (let i = spinner - 1; i >= 0 && lines[i]!.trim() === ''; i--) n++;
+  return n;
+};
+
 describe('answering an approval holds the input (#897)', () => {
-  it('keeps the dialog rows until the result commits', async () => {
-    const out = new Out();
-    const stdin = new In();
-    Object.defineProperty(process.stdout, 'columns', { value: out.columns, configurable: true });
-    Object.defineProperty(process.stdout, 'rows', { value: out.rows, configurable: true });
-    // Through the same per-tick batching the CLI renders through, so each write is one frame the
-    // terminal paints: unbatched, a commit's erase and its reprint arrive as separate writes.
-    const app = inkRender(<App />, {
-      stdout: createSyncedStdout(out as never, {}),
-      stdin: stdin as never,
-      stderr: new Out() as never,
-      debug: false,
-      exitOnCtrlC: false,
-      patchConsole: false,
-    });
-    const last = (): string => plain(out.writes.at(-1) ?? '');
-    for (let i = 0; i < 400 && !last().includes('╭'); i++) await tick(25);
-    for (let i = 0; i < 200 && !last().includes('run it'); i++) {
-      stdin.write('run it');
-      await tick(20);
-    }
-    stdin.write('\r');
-    for (let i = 0; i < 200 && !last().includes('Decline, and say'); i++) await tick(20);
-    // A dialog tall enough that a drop would show.
-    expect(dialogRows(out.writes.at(-1) ?? '')).toBeGreaterThan(5);
-
+  it('lets output that arrives in the grace window fill the dialog rows', async () => {
+    const { app, out, last } = await answerApproval();
+    await tick(150);
     let mark = out.writes.length;
-    stdin.write('\r');
-    for (let i = 0; i < 100 && !last().includes('Running'); i++) await tick(20);
-    await tick(200);
-    expect(last()).not.toContain('Decline, and say');
-    // The dialog collapses into the command it cleared, drawn where its chip will commit it.
-    expect(last()).toMatch(/↳ Running…\n\n {5}\$ pnpm install\n/);
-    expect(maxRise(out.writes.slice(mark)), 'the answer').toBe(0);
-
-    mark = out.writes.length;
     gates.shift()!();
     for (let i = 0; i < 100 && !last().includes('progress line 9'); i++) await tick(20);
     await tick(200);
@@ -207,8 +233,7 @@ describe('answering an approval holds the input (#897)', () => {
 
     mark = out.writes.length;
     gates.shift()!();
-    for (let i = 0; i < 200 && !last().includes('Ran: pnpm install'); i++) await tick(20);
-    for (let i = 0; i < 200 && out.writes.length > 0 && /Running/.test(last()); i++) await tick(20);
+    for (let i = 0; i < 200 && /Running/.test(last()); i++) await tick(20);
     await tick(200);
     // The committed chip takes back about what the stream held; a row or two is the chip's own
     // shape (its `$ command` row), not the dialog's height.
@@ -218,6 +243,23 @@ describe('answering an approval holds the input (#897)', () => {
     // Committed rows keep the App's one-column gutter: <Static> places them by its parent's
     // padding, so the hold must not put a box between them and the root.
     expect(plain(out.writes.join(''))).toMatch(/^ ▎ run it/m);
+    app.unmount();
+  }, 30_000);
+
+  it('eases the blank out when the command stays silent', async () => {
+    const { app, out, last, mark } = await answerApproval();
+    const held = blankUnderCommand(out.writes[mark]!);
+    expect(held, 'blank the dialog left').toBeGreaterThan(5);
+    await tick(1200);
+    const silent = out.writes.slice(mark);
+    // A slide, not a snap: no frame moves the input by more than a few rows, the frames together
+    // take back the whole blank, and none of it is left under the command.
+    expect(maxRise(silent), 'one frame of the ease').toBeLessThanOrEqual(Math.ceil(held * 0.35));
+    expect(silent.reduce((sum, w) => sum + (frameRise(w) ?? 0), 0)).toBeGreaterThanOrEqual(
+      held - 1,
+    );
+    expect(blankUnderCommand(out.writes.at(-1)!)).toBeLessThanOrEqual(1);
+    await finishCall(out, last);
     app.unmount();
   }, 30_000);
 });
