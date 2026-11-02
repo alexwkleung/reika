@@ -183,6 +183,9 @@ function promptPlaceholder(): string {
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
+// A frozen stream's kept tail: well past what a viewport-tall live block can draw.
+const FROZEN_STREAM_CHARS = 16000;
+
 // A resumed session reaches the scrollback a slice at a time (#854): a commit renders its messages'
 // markdown, highlighting and wrap synchronously, and one commit for the whole session held the
 // event loop — the resuming spinner's timer included — for as long as that took (~2s at 460
@@ -238,6 +241,9 @@ export function App() {
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
   const [noteLive, setNoteLive] = useState<boolean>(false);
+  // Read by onReasoningReset, which runs inside the loop's callbacks rather than a render.
+  const subagentLiveRef = useRef(false);
+  const noteLiveRef = useRef(false);
   // The session owns the config, the active profile, the bundle and everything a turn threads to
   // the next (#403); App renders from its snapshot and never keeps a copy of its own.
   const [session, setSession] = useState<Session | null>(null);
@@ -2682,6 +2688,8 @@ export function App() {
         setStreamingReasoning('');
         setStreamingTool('');
         setPendingTool('');
+        subagentLiveRef.current = false;
+        noteLiveRef.current = false;
         setSubagentLive(false);
         setNoteLive(false);
         resetTypecheck();
@@ -2761,8 +2769,14 @@ export function App() {
           if (p !== 'thinking') setReasoningSpin(false);
           setPhase(p);
         },
-        onSubagent: setSubagentLive,
-        onCompactionNote: setNoteLive,
+        onSubagent: live => {
+          subagentLiveRef.current = live;
+          setSubagentLive(live);
+        },
+        onCompactionNote: live => {
+          noteLiveRef.current = live;
+          setNoteLive(live);
+        },
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
@@ -2770,9 +2784,24 @@ export function App() {
         onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
         onReasoningStatus: setReasoningSpin,
         onReasoningReset: () => {
-          // Loop-break recovery: drop the degenerate looped reasoning's live preview so the
+          // Loop-break recovery: end the degenerate looped reasoning's live preview so the
           // recovery notice is visible and the next round streams into a fresh Thinking block
-          // instead of appending onto the looped text (#55).
+          // instead of appending onto the looped text (#55). Frozen into the scrollback where it
+          // stood rather than erased: erased, the frame dropped by the block's height under a
+          // one-line notice and the input jumped up. The tail is all that is kept, since a cut
+          // spiral can run to tens of thousands of chars and the block only ever drew its end.
+          const reasoning = reasoningRef.current.trim();
+          const content = streamingRef.current.trim();
+          if (reasoning || content) {
+            const frozen: Message = {
+              role: 'assistant',
+              content: content.slice(-FROZEN_STREAM_CHARS),
+              ...(reasoning ? { reasoning: reasoning.slice(-FROZEN_STREAM_CHARS) } : {}),
+              discarded: noteLiveRef.current ? 'note' : 'stream',
+              ...(subagentLiveRef.current ? { nested: true } : {}),
+            };
+            setMessages(prev => [...prev, frozen]);
+          }
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);

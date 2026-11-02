@@ -58,6 +58,11 @@ export type Message =
       // fold, drawn at the left edge as one info-barred block (reasoning, then the note) so it reads
       // as a harness aside — not the answer, and not a subagent (#498). Never enters model history.
       compactionNote?: boolean;
+      // UI-only: a live stream the harness threw away (a reasoning loop cut, a compaction-note
+      // attempt with no note), frozen where it stood instead of erased. Erased, the frame dropped by
+      // the block's height and the input jumped up under a one-line notice. 'note' draws it in the
+      // note's colors, as it streamed. Never enters model history.
+      discarded?: 'stream' | 'note';
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
