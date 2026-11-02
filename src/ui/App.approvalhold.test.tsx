@@ -149,6 +149,14 @@ const plain = (frame: string): string => frame.replace(/\x1b\[[0-9;]*m/g, '');
 const tick = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 
 const maxRise = (frames: string[]): number => Math.max(0, ...frames.map(f => frameRise(f) ?? 0));
+// Rows between the spinner and the input's top border: the slack goes under the live stream, so
+// the spinner stays where it sits on any other frame instead of riding down the held space.
+const spinnerGap = (frame: string): number => {
+  const lines = plain(frame).split('\n');
+  const spinner = lines.findIndex(l => l.includes('Working'));
+  const input = lines.findIndex(l => l.startsWith('╭'));
+  return spinner === -1 || input === -1 ? 0 : input - spinner;
+};
 const dialogRows = (frame: string): number =>
   plain(frame)
     .split('\n')
@@ -193,6 +201,7 @@ describe('answering an approval holds the input (#897)', () => {
     for (let i = 0; i < 100 && !last().includes('progress line 9'); i++) await tick(20);
     await tick(200);
     expect(maxRise(out.writes.slice(mark)), 'output streaming in').toBe(0);
+    for (const w of out.writes.slice(mark)) expect(spinnerGap(w)).toBeLessThanOrEqual(2);
 
     mark = out.writes.length;
     gates.shift()!();
@@ -204,6 +213,9 @@ describe('answering an approval holds the input (#897)', () => {
     expect(maxRise(out.writes.slice(mark)), 'the commit').toBeLessThanOrEqual(2);
     // Released: nothing is left holding blank rows over the input once the call is done.
     expect(last()).not.toMatch(/\n(\s*\n){4,}/);
+    // Committed rows keep the App's one-column gutter: <Static> places them by its parent's
+    // padding, so the hold must not put a box between them and the root.
+    expect(plain(out.writes.join(''))).toMatch(/^ ▎ run it/m);
     app.unmount();
   }, 30_000);
 });

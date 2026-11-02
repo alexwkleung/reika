@@ -2957,7 +2957,7 @@ export function App() {
   }
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box ref={heldFrameRef} flexDirection="column" paddingX={1} minHeight={heldRows}>
       <Static items={headerItems}>
         {(h, i) => (
           <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
@@ -2970,165 +2970,159 @@ export function App() {
       {status === 'loading' && loadingNote ? <Text color={theme.muted}>{loadingNote}</Text> : null}
       {status === 'loading' ? null : (
         <>
-          {/* The held rows go to the region above the input, so the input stays where the dialog
-              left it and streamed output fills the gap from the top. */}
-          <Box ref={heldFrameRef} flexDirection="column" minHeight={heldRows}>
-            <Box flexDirection="column" flexGrow={heldRows === undefined ? 0 : 1}>
-              <Scrollback
-                messages={messages}
-                streaming={status === 'busy' ? streaming : ''}
-                streamingReasoning={status === 'busy' ? streamingReasoning : ''}
-                streamingTool={status === 'busy' ? streamingTool : ''}
-                streamingNested={subagentLive}
-                streamingCommand={streamingToolName === 'bash'}
-                // Hidden while a dialog is up: the approval a tool asks for happens *inside* the call
-                // (after the loop announced it), so an "Editing…" row behind the prompt would name work
-                // that has not been permitted yet. Same condition the spinner uses.
-                pendingTool={
-                  status === 'busy' && pending === null && question === null ? pendingTool : ''
-                }
-                // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
-                // one-second `elapsed` interval re-renders this component for the whole of a call, so
-                // the row's timer advances off that instead of an interval of its own.
-                pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
-                streamingNote={noteLive}
-                showHeldWorked={status !== 'busy'}
-                // Everything the live frame draws besides the stream and the baseline chrome — the
-                // suggestion list and queue grow it mid-turn, and unbudgeted they push it to viewport
-                // height, where Ink repaints with a scrollback clear on every chunk (#470).
-                chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
-              />
-              {planSteps && (mode === 'agent' || mode === 'vibe') ? (
-                <PlanProgress steps={planSteps} />
-              ) : null}
-              {/* Spinner and queue sit *above* any overlay, not between it and the input: the
+          <Scrollback
+            messages={messages}
+            streaming={status === 'busy' ? streaming : ''}
+            streamingReasoning={status === 'busy' ? streamingReasoning : ''}
+            streamingTool={status === 'busy' ? streamingTool : ''}
+            streamingNested={subagentLive}
+            streamingCommand={streamingToolName === 'bash'}
+            // Hidden while a dialog is up: the approval a tool asks for happens *inside* the call
+            // (after the loop announced it), so an "Editing…" row behind the prompt would name work
+            // that has not been permitted yet. Same condition the spinner uses.
+            pendingTool={
+              status === 'busy' && pending === null && question === null ? pendingTool : ''
+            }
+            // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
+            // one-second `elapsed` interval re-renders this component for the whole of a call, so
+            // the row's timer advances off that instead of an interval of its own.
+            pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
+            streamingNote={noteLive}
+            showHeldWorked={status !== 'busy'}
+            // Everything the live frame draws besides the stream and the baseline chrome — the
+            // suggestion list and queue grow it mid-turn, and unbudgeted they push it to viewport
+            // height, where Ink repaints with a scrollback clear on every chunk (#470).
+            chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
+          />
+          {/* An answered approval's held rows (see approvalHold): the slack sits under the live
+              stream, so the spinner, checklist and input stay put while output fills it. */}
+          {heldRows !== undefined ? <Box flexGrow={1} /> : null}
+          {planSteps && (mode === 'agent' || mode === 'vibe') ? (
+            <PlanProgress steps={planSteps} />
+          ) : null}
+          {/* Spinner and queue sit *above* any overlay, not between it and the input: the
               overlay drops its bottom border and the input its top one so the two merge into
               one frame, and anything rendered in that gap lands inside the frame. */}
-              {status === 'busy' && pending === null && question === null ? (
-                <Working
-                  // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
-                  // hint — they're things the harness is actively doing, not a maybe.
-                  label={
-                    typechecking
-                      ? 'Typechecking'
-                      : recovering
-                        ? 'Recovering from a loop'
-                        : reasoningSpin
-                          ? 'Thinking — may be looping (ctrl-c to abort)'
-                          : noteLive
-                            ? 'Writing compaction note'
-                            : subagentLive
-                              ? 'Subagent working'
-                              : undefined
-                  }
-                  words={config?.workingWords ? WORKING_WORDS : undefined}
-                  accent={
-                    typechecking || recovering || noteLive
-                      ? theme.info
-                      : reasoningSpin
-                        ? theme.warning
+          {status === 'busy' && pending === null && question === null ? (
+            <Working
+              // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
+              // hint — they're things the harness is actively doing, not a maybe.
+              label={
+                typechecking
+                  ? 'Typechecking'
+                  : recovering
+                    ? 'Recovering from a loop'
+                    : reasoningSpin
+                      ? 'Thinking — may be looping (ctrl-c to abort)'
+                      : noteLive
+                        ? 'Writing compaction note'
                         : subagentLive
-                          ? theme.subagent
+                          ? 'Subagent working'
                           : undefined
-                  }
-                />
-              ) : (pasting ?? expanding ?? resuming) ? (
-                // Same spinner while idle: a paste, a submit that has to fetch a pasted link, or a
-                // resume whose scrollback is still being built is a harness action with a visible
-                // wait — it should read like the typecheck gate rather than like the app having
-                // stalled.
-                <Working
-                  label={pasting ?? expanding ?? resuming ?? undefined}
-                  accent={theme.info}
-                />
-              ) : null}
-              <QueuedList queue={queue} />
-              {pending ? (
-                <Approval
-                  request={pending.request}
-                  selectedIndex={approvalSelected}
-                  typing={approvalTyping}
-                  reservedRows={dialogReservedRows}
-                />
-              ) : question ? (
-                <Question
-                  request={question.request}
-                  selectedIndex={questionSelected}
-                  typing={questionTyping}
-                  reservedRows={dialogReservedRows}
-                />
-              ) : modelSelect ? (
-                <ModelSelect
-                  targets={modelSelect}
-                  selectedIndex={modelSelected}
-                  currentModel={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
-                  baseURL={config?.baseURL ?? ''}
-                  subagent={
-                    config?.subagentModel &&
-                    config.subagentModel !== (config.profiles[activeProfile]?.model ?? config.model)
-                      ? config.subagentModel
+              }
+              words={config?.workingWords ? WORKING_WORDS : undefined}
+              accent={
+                typechecking || recovering || noteLive
+                  ? theme.info
+                  : reasoningSpin
+                    ? theme.warning
+                    : subagentLive
+                      ? theme.subagent
                       : undefined
-                  }
-                />
-              ) : resumeSelect ? (
-                <ResumeSelect
-                  entries={resumeSelect.entries}
-                  selectedIndex={resumeSelected}
-                  heading={resumeSelect.heading}
-                />
-              ) : confirm ? (
-                <Confirm spec={confirm.spec} selectedIndex={confirmSelected} />
-              ) : null}
-            </Box>
-            <Input
-              // The question dialog is modal only while its list is up; once the user is typing an
-              // answer the input has to be live, since it IS the answer field.
-              disabled={
-                (pending !== null && !approvalTyping) ||
-                modelSelect !== null ||
-                resumeSelect !== null ||
-                confirm !== null ||
-                (question !== null && questionTyping === null)
-              }
-              attachedAbove={
-                pending !== null ||
-                question !== null ||
-                modelSelect !== null ||
-                resumeSelect !== null ||
-                confirm !== null
-              }
-              attachedBelow={suggestionState !== null}
-              reservedRows={
-                question
-                  ? questionDialogHeight(
-                      question.request,
-                      questionTyping,
-                      dialogReservedRows,
-                      questionSelected,
-                    )
-                  : statusExtraRows
-              }
-              suggesting={!!suggestionState && suggestionState.items.length > 0}
-              history={inputHistory}
-              mode={mode}
-              value={inputValue}
-              onChange={onInputChange}
-              onSubmit={onSubmit}
-              onPasteImage={onPasteImageSafely}
-              onPasteText={onPasteText}
-              placeholder={
-                // A reason that should stop the model has to say so: "tell me the script" read as
-                // run-then-tell and drew retries, "don't run anything" did not (decline-terse/-ask).
-                approvalTyping
-                  ? 'e.g. "use pnpm instead", or "don\'t run anything, just tell me …"'
-                  : mode === 'shell'
-                    ? 'Run a shell command'
-                    : mode === 'vibe'
-                      ? 'Describe a change — it plans first, then implements'
-                      : promptPlaceholder()
               }
             />
-          </Box>
+          ) : (pasting ?? expanding ?? resuming) ? (
+            // Same spinner while idle: a paste, a submit that has to fetch a pasted link, or a
+            // resume whose scrollback is still being built is a harness action with a visible
+            // wait — it should read like the typecheck gate rather than like the app having
+            // stalled.
+            <Working label={pasting ?? expanding ?? resuming ?? undefined} accent={theme.info} />
+          ) : null}
+          <QueuedList queue={queue} />
+          {pending ? (
+            <Approval
+              request={pending.request}
+              selectedIndex={approvalSelected}
+              typing={approvalTyping}
+              reservedRows={dialogReservedRows}
+            />
+          ) : question ? (
+            <Question
+              request={question.request}
+              selectedIndex={questionSelected}
+              typing={questionTyping}
+              reservedRows={dialogReservedRows}
+            />
+          ) : modelSelect ? (
+            <ModelSelect
+              targets={modelSelect}
+              selectedIndex={modelSelected}
+              currentModel={config?.profiles[activeProfile]?.model ?? config?.model ?? ''}
+              baseURL={config?.baseURL ?? ''}
+              subagent={
+                config?.subagentModel &&
+                config.subagentModel !== (config.profiles[activeProfile]?.model ?? config.model)
+                  ? config.subagentModel
+                  : undefined
+              }
+            />
+          ) : resumeSelect ? (
+            <ResumeSelect
+              entries={resumeSelect.entries}
+              selectedIndex={resumeSelected}
+              heading={resumeSelect.heading}
+            />
+          ) : confirm ? (
+            <Confirm spec={confirm.spec} selectedIndex={confirmSelected} />
+          ) : null}
+          <Input
+            // The question dialog is modal only while its list is up; once the user is typing an
+            // answer the input has to be live, since it IS the answer field.
+            disabled={
+              (pending !== null && !approvalTyping) ||
+              modelSelect !== null ||
+              resumeSelect !== null ||
+              confirm !== null ||
+              (question !== null && questionTyping === null)
+            }
+            attachedAbove={
+              pending !== null ||
+              question !== null ||
+              modelSelect !== null ||
+              resumeSelect !== null ||
+              confirm !== null
+            }
+            attachedBelow={suggestionState !== null}
+            reservedRows={
+              question
+                ? questionDialogHeight(
+                    question.request,
+                    questionTyping,
+                    dialogReservedRows,
+                    questionSelected,
+                  )
+                : statusExtraRows
+            }
+            suggesting={!!suggestionState && suggestionState.items.length > 0}
+            history={inputHistory}
+            mode={mode}
+            value={inputValue}
+            onChange={onInputChange}
+            onSubmit={onSubmit}
+            onPasteImage={onPasteImageSafely}
+            onPasteText={onPasteText}
+            placeholder={
+              // A reason that should stop the model has to say so: "tell me the script" read as
+              // run-then-tell and drew retries, "don't run anything" did not (decline-terse/-ask).
+              approvalTyping
+                ? 'e.g. "use pnpm instead", or "don\'t run anything, just tell me …"'
+                : mode === 'shell'
+                  ? 'Run a shell command'
+                  : mode === 'vibe'
+                    ? 'Describe a change — it plans first, then implements'
+                    : promptPlaceholder()
+            }
+          />
           {suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
