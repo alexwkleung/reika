@@ -22,6 +22,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   the space slide away instead of leaving it blank (#897).
 - The input box no longer jumps up when you answer a question Reika asked, and the answer line no
   longer pushes it back down. The model's next thinking fills the space the question took (#898).
+- Moving through the `/resume` list no longer slows down in a project with hundreds of saved
+  sessions (#899).
 
 ## [0.8.0] - 2026-10-31
 
