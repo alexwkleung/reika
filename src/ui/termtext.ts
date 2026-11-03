@@ -98,10 +98,13 @@ const ASKS_FOR_TEXT = /\uFE0E/;
 const segmenter = new Intl.Segmenter();
 
 export function drawnWidth(text: string): number {
+  const plain = stripAnsi(text);
+  // Printable ASCII is one cell a character on every path below; skip the segmenter for it.
+  if (/^[\x20-\x7e]*$/.test(plain)) return plain.length;
   let width = 0;
   // Grapheme by grapheme, the way string-width counts: a ZWJ sequence is one glyph on screen and
   // a combining mark spends no cell of its own.
-  for (const { segment } of segmenter.segment(stripAnsi(text))) {
+  for (const { segment } of segmenter.segment(plain)) {
     const measured = stringWidth(segment);
     const textPresentation =
       measured === 2 &&

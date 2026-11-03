@@ -2,7 +2,6 @@ import type { ReactElement } from 'react';
 import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
 import chalk from 'chalk';
-import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message, PlanChecks } from '../types.js';
 import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
@@ -12,7 +11,7 @@ import { scrubGeneration } from './identity.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
-import { contentWidth, hangingWrap } from './layout.js';
+import { contentWidth, hangingWrap, wrapLines } from './layout.js';
 import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
 import { OUTPUT_TAIL_LINES } from '../tools/bash.js';
 
@@ -293,7 +292,7 @@ function liveContentWidth(indent = 0): number {
 // exceeds the viewport. Wrapped with the exact wrap-ansi options Ink uses (build/wrap-text.js), so
 // the count matches and Ink's own re-wrap of a row is a no-op (rows are already ≤ width).
 export function displayRows(text: string, width: number): string[] {
-  return wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
+  return wrapLines(text, width).split('\n');
 }
 
 // A live block's rows before they are fitted to its share of the region. `cut` means the cheap
@@ -1294,7 +1293,7 @@ function UserBubble({
 function wrapText(text: string, width: number): string[] {
   const out: string[] = [];
   for (const raw of text.split('\n')) {
-    const rows = wrapAnsi(raw, width, { trim: false, hard: true }).split('\n');
+    const rows = wrapLines(raw, width).split('\n');
     // The space a break landed on heads the next row; a leading space on a real line is content.
     rows.forEach((row, i) => out.push(i === 0 ? row : row.replace(/^ +/, '')));
   }

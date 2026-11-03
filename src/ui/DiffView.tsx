@@ -1,12 +1,11 @@
 import { Box, Text } from 'ink';
 import { diffWordsWithSpace } from 'diff';
 import stringWidth from 'string-width';
-import wrapAnsi from 'wrap-ansi';
 import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
-import { sliceStyled, wrapStyledRows } from './layout.js';
+import { sliceStyled, wrapLines, wrapStyledRows } from './layout.js';
 import stripAnsi from 'strip-ansi';
 
 export function DiffView({
@@ -102,9 +101,7 @@ export function fitRowsToHeight(
   contentWidth: number,
 ): { lines: RenderRow[]; hidden: number } {
   const wrapWidth = Math.max(1, contentWidth - CONTINUATION.length);
-  const heights = lines.map(
-    row => wrapAnsi(row.text, wrapWidth, { trim: false, hard: true }).split('\n').length,
-  );
+  const heights = lines.map(row => wrapLines(row.text, wrapWidth).split('\n').length);
   const total = heights.reduce((a, b) => a + b, 0);
   if (total <= maxRows) return { lines, hidden: 0 };
   // As in the command preview: the footer costs a row, and the rows kept must stay inside
