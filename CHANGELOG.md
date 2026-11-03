@@ -24,6 +24,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   longer pushes it back down. The model's next thinking fills the space the question took (#898).
 - Moving through the `/resume` list no longer slows down in a project with hundreds of saved
   sessions (#899).
+- Long replies and resumed sessions draw faster: `/resume` on a 320-message session spends about a
+  fifth less time drawing it (#900).
 
 ## [0.8.0] - 2026-10-31
 
