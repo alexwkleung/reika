@@ -20,7 +20,7 @@ like a small one in some ways, but it does not reproduce Q2 quantization loss.
 
 **Three words used throughout.** When the request nears the context window, the harness first
 _sheds_ old tool output, collapsing each payload to a one-line summary, down to a _watermark_ (a target
-fill, 70% of the window). If that is not enough it _folds_: the oldest turns are replaced by one recap
+fill, 70% of the point where shedding starts, so about 58% of a 24k window). If that is not enough it _folds_: the oldest turns are replaced by one recap
 message.
 
 ## The harness's own context management cost more than anything the model did
@@ -213,6 +213,26 @@ The detectors are simple statistics, and what makes them usable is how far apart
 ![Saved reasoning blocks by length and self-repeat: nearly all sit near zero at every length, and one 4,001-character block at 0.549 is above the abort threshold](./selfrepeat-scatter.svg)
 
 <sup>Every reasoning block of 1,500+ characters in the saved sessions up to 2026-10-18: 2,843 blocks, plotted by length against 8-gram self-repeat. Healthy reasoning stays near zero at every length, which is why the abort threshold keys on repetition rather than length. This is not a loop rate or a model comparison: 2,499 of the blocks are from API models, the 35B A3B runs predate saved sessions, and spirals Reika cut on its own had their reasoning discarded. The one loop shown is a qwen3.8-27b block aborted by hand.</sup>
+
+**The statistics, exactly.** Let $S$ be the list of word 8-grams in a block of text, with repeats, and
+$A$ and $B$ the sets of 8-grams in two rounds. A block's self-repeat ratio $r$ is the share of its
+8-grams that have already appeared in it, and cross-round similarity $J$ is the Jaccard index:
+
+$$
+r = 1 - \frac{|\mathrm{set}(S)|}{|S|}
+\qquad
+J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+$$
+
+Drift compares two rounds' word distributions, $p$ and $q$, over the words $V$ either one used. Without
+smoothing, KL divergence is infinite the moment a round uses a new word, which every healthy round
+does, so each word's count $c(w)$ out of $N$ words gets $\alpha = 0.5$ added:
+
+$$
+D_{\mathrm{KL}}(p \parallel q) = \sum_{w \in V} p(w) \ln \frac{p(w)}{q(w)}
+\qquad
+p(w) = \frac{c(w) + \alpha}{N + \alpha |V|}
+$$
 
 ## What a feature buys is what the baseline fails to do
 

@@ -21,6 +21,8 @@ export const pageDescriptions: Record<string, string> = {
     'Running Reika on macOS, Linux and Windows (WSL): Node.js requirements, what differs per platform, and running on a weak machine.',
   'architecture.md':
     'How a Reika turn is put together: bootstrap, repo map, context management, prompt caching and what the harness does at each step.',
+  'context.md':
+    'How Reika divides a context window: the generation reserve, the shed point and target, folds, what survives them, and what changes with no known window.',
   'building-on-reika.md':
     "For harness builders: which of Reika's modules lift out whole, which ideas transfer as designs, what is small-model tuning, and the decisions that were measured.",
   'findings.md':
