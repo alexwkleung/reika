@@ -7,6 +7,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A compaction note no longer drops a row when it finishes streaming, which left an extra blank line
+  above it (#903).
 - A long session resumed on a smaller context window no longer sends the whole conversation to the
   model for a compaction note it could not fit, before folding without one (#902).
 - The terminal UI runs on React's production build, so resuming a long session and drawing replies
