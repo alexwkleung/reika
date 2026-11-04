@@ -126,6 +126,7 @@ export default defineConfigWithTheme<TranslationTheme>({
     ];
   },
   markdown: {
+    math: true,
     anchor: { slugify: githubSlugify },
     config: md => md.use(githubLinks),
   },

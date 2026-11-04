@@ -33,6 +33,12 @@ recap       = usable × 0.1      everything older
 max_tokens  = window − prompt − 384
 ```
 
+Everything in the shed cycle comes down to one quantity, the window $W$ minus the reserve $G$:
+
+$$
+\underbrace{0.9\,(W - G)}_{\text{shed point}} \;\longrightarrow\; \underbrace{0.63\,(W - G)}_{\text{shed target}}
+$$
+
 In tokens, with the default reserve unless noted:
 
 | Window | Reserve | Shed point | Shed target | Fold keeps | Recap budget | Repo map (chars) |
@@ -42,6 +48,10 @@ In tokens, with the default reserve unless noted:
 | 24k    | 6144    | 16.1k      | 11.2k       | 5.4k       | 1.8k         | 4800             |
 | 32k    | 2048    | 27.0k      | 18.9k       | 9.0k       | 3.0k         | 6400             |
 | 128k   | 2048    | 113.4k     | 79.4k       | 37.8k      | 12.6k        | 12000            |
+
+![A 24k window as two bars. With a 2048 reserve, the request sheds at 19.8k back to 13.8k. With a 6144 reserve, it sheds at 16.1k back to 11.2k.](./context-window-bar.svg)
+
+<sup>A 24k window at two reserves. The fixed system prompt and bootstrap context sit at the left of every bar, so what is left for history is smaller than the colored span.</sup>
 
 A larger reserve gives the model more room to think, and the shed point moves down to pay for it. The
 reserve caps nothing: `max_tokens` is whatever the window has left, so it only binds on a spiral. It is

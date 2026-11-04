@@ -214,6 +214,26 @@ The detectors are simple statistics, and what makes them usable is how far apart
 
 <sup>Every reasoning block of 1,500+ characters in the saved sessions up to 2026-10-18: 2,843 blocks, plotted by length against 8-gram self-repeat. Healthy reasoning stays near zero at every length, which is why the abort threshold keys on repetition rather than length. This is not a loop rate or a model comparison: 2,499 of the blocks are from API models, the 35B A3B runs predate saved sessions, and spirals Reika cut on its own had their reasoning discarded. The one loop shown is a qwen3.8-27b block aborted by hand.</sup>
 
+**The statistics, exactly.** Let $S$ be the list of word 8-grams in a block of text, with repeats, and
+$A$ and $B$ the sets of 8-grams in two rounds. A block's self-repeat ratio $r$ is the share of its
+8-grams that have already appeared in it, and cross-round similarity $J$ is the Jaccard index:
+
+$$
+r = 1 - \frac{|\mathrm{set}(S)|}{|S|}
+\qquad
+J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+$$
+
+Drift compares two rounds' word distributions, $p$ and $q$, over the words $V$ either one used. Without
+smoothing, KL divergence is infinite the moment a round uses a new word, which every healthy round
+does, so each word's count $c(w)$ out of $N$ words gets $\alpha = 0.5$ added:
+
+$$
+D_{\mathrm{KL}}(p \parallel q) = \sum_{w \in V} p(w) \ln \frac{p(w)}{q(w)}
+\qquad
+p(w) = \frac{c(w) + \alpha}{N + \alpha |V|}
+$$
+
 ## What a feature buys is what the baseline fails to do
 
 The bash spill fixtures (3 runs each on one model) are the clearest example of measuring the baseline
