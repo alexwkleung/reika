@@ -521,6 +521,31 @@ describe('Scrollback nested (subagent) messages', () => {
     expect(live).toEqual(committed);
   });
 
+  // Blank rows count here: a note with no Thinking above it took the block's margin and the body's,
+  // so it dropped a row on commit, under the notice that announced it.
+  it('keeps one gap above a compaction note, live and committed', () => {
+    const notice: Message = { role: 'system', tone: 'info', content: 'Writing a compaction note.' };
+    const committed = framePlusApp([
+      notice,
+      { role: 'assistant', content: NOTE, compactionNote: true },
+    ]);
+    const rows = committed.split('\n');
+    const label = rows.findIndex(r => r.includes('Compaction note'));
+    expect(rows[label - 1].trim()).toBe('');
+    expect(rows[label - 2]).toContain('Writing a compaction note.');
+    const live = liveFrame({ streaming: NOTE, streamingNote: true });
+    expect(live.split('\n').findIndex(r => r.includes('Compaction note'))).toBe(1);
+
+    const reasoning = 'deriving it';
+    const thinking = framePlusApp([
+      notice,
+      { role: 'assistant', content: NOTE, reasoning, compactionNote: true },
+    ]).split('\n');
+    const top = thinking.findIndex(r => r.includes('Thinking'));
+    expect(thinking[top - 1].trim()).toBe('');
+    expect(thinking[top - 2]).toContain('Writing a compaction note.');
+  });
+
   it('leaves the top-level live region byte-identical when not nested', () => {
     const text = 'I should look at the config loader before touching any call sites at all.';
     expect(liveFrame({ streamingReasoning: text, streamingNested: false })).toBe(

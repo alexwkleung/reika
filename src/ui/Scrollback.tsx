@@ -611,7 +611,8 @@ function CompactionNoteBlock({
   indent: number;
 }) {
   return (
-    <Box flexDirection="column" marginTop={1}>
+    // Without Thinking the body is the first row and brings its own margin.
+    <Box flexDirection="column" marginTop={reasoning ? 1 : 0}>
       {reasoning ? (
         <ReasoningBlock lines={reasoningLines(reasoning, indent)} barColor={theme.info} />
       ) : null}
