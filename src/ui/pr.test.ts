@@ -21,8 +21,28 @@ describe('parsePrView', () => {
     expect(parsePrView('{"number":99,"state":"OPEN","url":7}')).toEqual({ number: 99 });
   });
 
-  it('ignores closed and merged PRs — a landed number is stale info', () => {
-    expect(parsePrView('{"number":99,"state":"MERGED"}')).toBeNull();
+  it('marks a draft, which gh reports as an open PR', () => {
+    expect(parsePrView('{"number":99,"state":"OPEN","isDraft":true}')).toEqual({
+      number: 99,
+      state: 'draft',
+    });
+    expect(parsePrView('{"number":99,"state":"OPEN","isDraft":false}')).toEqual({ number: 99 });
+  });
+
+  it('keeps a merged PR on the badge and marks it', () => {
+    expect(
+      parsePrView('{"number":99,"state":"MERGED","url":"https://github.com/o/r/pull/99"}'),
+    ).toEqual({ number: 99, url: 'https://github.com/o/r/pull/99', state: 'merged' });
+  });
+
+  it('reads merged over a stale draft flag', () => {
+    expect(parsePrView('{"number":99,"state":"MERGED","isDraft":true}')).toEqual({
+      number: 99,
+      state: 'merged',
+    });
+  });
+
+  it('ignores a closed PR', () => {
     expect(parsePrView('{"number":99,"state":"CLOSED"}')).toBeNull();
   });
 

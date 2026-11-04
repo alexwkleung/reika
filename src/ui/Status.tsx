@@ -36,7 +36,7 @@ export type StatusProps = {
   // usage and no stats.
   decodeRate?: number;
   // Which PR the checked-out branch is attached to (ui/pr.ts), with its web URL when `gh`
-  // reported one. Null until resolved, and whenever there is no open PR to show.
+  // reported one. Null until resolved, and whenever there is no open or merged PR to show.
   pr?: PrRef | null;
   autoApprove?: 'safe' | 'bypass';
   // REIKA_UNATTENDED (#526). A standing chip because the mode silently declines: left on by
@@ -254,7 +254,9 @@ export function formatCache(cachedTokens?: number, contextTokens?: number | null
   return cachedTokens > 0 ? `${pct}% cached (${kFormat(cachedTokens)})` : `${pct}% cached`;
 }
 
-// `PR #12` when the branch has an open PR, empty when it doesn't (or we couldn't tell). The
+// `PR #12` when the branch has an open PR, `PR #12 draft` or `PR #12 merged` when that changes
+// what the branch is for, empty when there is none (or we couldn't tell). Merged takes the warning
+// color: it is the one state where the next commit on this branch goes nowhere. The
 // number is the click target, the `PR` label is not, so the chip comes in two segments — and the
 // separating space rides on the *label*, not the number: a segment's underline runs the whole
 // width of the segment it is on, so a leading space inside the number would draw a column of
@@ -275,11 +277,21 @@ export function prChip(
   const label: Segment = { text: 'PR ', color: theme.secondary };
   const shown = `#${number}`;
   const url = pr?.url;
+  // Outside the link, or the underline would run under the word and past the click target.
+  const suffix: Chip = pr?.state
+    ? [
+        {
+          text: ` ${pr.state}`,
+          color: pr.state === 'merged' ? theme.warning : theme.secondary,
+        },
+      ]
+    : [];
   if (url && links) {
     return [
       label,
       { text: `\x1b]8;;${url}\x07${shown}\x1b]8;;\x07`, color: theme.link, underline: true },
+      ...suffix,
     ];
   }
-  return [label, { text: shown, color: url ? theme.link : theme.secondary }];
+  return [label, { text: shown, color: url ? theme.link : theme.secondary }, ...suffix];
 }

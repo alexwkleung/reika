@@ -157,6 +157,25 @@ describe('prChip', () => {
     expect(chip.reduce((n, s) => n + stringWidth(s.text), 0)).toBe(6);
   });
 
+  it('labels a draft and a merged PR, with merged in the warning color', () => {
+    expect(prChip({ number: 99, state: 'draft' }, false)).toEqual([
+      { text: 'PR ', color: theme.secondary },
+      { text: '#99', color: theme.secondary },
+      { text: ' draft', color: theme.secondary },
+    ]);
+    expect(prChip({ number: 99, state: 'merged' }, false)!.at(-1)).toEqual({
+      text: ' merged',
+      color: theme.warning,
+    });
+  });
+
+  it('keeps the state word out of the link', () => {
+    const chip = prChip({ number: 99, url: URL, state: 'merged' }, true)!;
+    expect(chip[1].underline).toBe(true);
+    expect(chip[1].text).not.toContain('merged');
+    expect(chip[2]).toEqual({ text: ' merged', color: theme.warning });
+  });
+
   it('renders nothing when the branch has no PR', () => {
     expect(prChip(null)).toBeNull();
     expect(prChip(undefined)).toBeNull();
