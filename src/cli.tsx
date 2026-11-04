@@ -2,6 +2,7 @@
 import { sweepDebugLogs } from './debug.js';
 import { sweepStaleSpills } from './tools/_spill.js';
 import { USAGE, parseHeadlessArgs } from './headless/headlessargs.js';
+import { loadWithProductionReact } from './ui/reactbuild.js';
 import { VERSION } from './version.js';
 
 // Lowercase like the command: ps/top/Activity Monitor otherwise list every session as `node`, and
@@ -60,12 +61,6 @@ if (headless) {
   });
   process.exit(code);
 } else {
-  const [{ render }, { App }, { createSyncedStdout }] = await Promise.all([
-    import('ink'),
-    import('./ui/App.js'),
-    import('./ui/syncframe.js'),
-  ]);
-  // Frames go out as one synchronized write each (#345) so a swapped-out process can't leave the
-  // terminal painting a half-erased screen between Ink's writes.
-  render(<App />, { exitOnCtrlC: false, stdout: createSyncedStdout(process.stdout) });
+  const { startTui } = await loadWithProductionReact(() => import('./ui/tui.js'));
+  startTui();
 }
