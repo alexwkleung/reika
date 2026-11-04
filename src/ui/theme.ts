@@ -60,6 +60,10 @@ const truecolor = {
   // that marks the Thinking bar. Underlined only on terminals that take OSC 8 hyperlinks
   // (markdown.ts): an underline promises a click, and elsewhere there is none to deliver.
   link: '#aac0f0',
+  // `merged` on the status line's PR chip. GitHub's merged purple, so it reads without a legend.
+  // Not `warning`, which the context gauge on the same line turns at 80% fill, and more saturated
+  // than the agent tag's soft magenta at the other end of that line.
+  prMerged: '#b48cf0',
 };
 
 export type Theme = Record<keyof typeof truecolor, string>;
@@ -88,6 +92,7 @@ const ansi16: Partial<Theme> = {
   modeGrind: 'magenta',
   modeChat: 'cyan',
   modeShell: 'greenBright',
+  prMerged: 'magenta',
   link: 'blueBright',
 };
 

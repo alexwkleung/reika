@@ -255,8 +255,8 @@ export function formatCache(cachedTokens?: number, contextTokens?: number | null
 }
 
 // `PR #12` when the branch has an open PR, `PR #12 draft` or `PR #12 merged` when that changes
-// what the branch is for, empty when there is none (or we couldn't tell). Merged takes the warning
-// color: it is the one state where the next commit on this branch goes nowhere. The
+// what the branch is for, empty when there is none (or we couldn't tell). Merged gets a color of
+// its own: it is the one state where the next commit on this branch goes nowhere. The
 // number is the click target, the `PR` label is not, so the chip comes in two segments — and the
 // separating space rides on the *label*, not the number: a segment's underline runs the whole
 // width of the segment it is on, so a leading space inside the number would draw a column of
@@ -282,7 +282,7 @@ export function prChip(
     ? [
         {
           text: ` ${pr.state}`,
-          color: pr.state === 'merged' ? theme.warning : theme.secondary,
+          color: pr.state === 'merged' ? theme.prMerged : theme.secondary,
         },
       ]
     : [];
