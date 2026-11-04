@@ -5,6 +5,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Changed
+
+- The status bar's PR chip now says when the PR is a draft, and stays up marked `merged` after the
+  PR lands instead of disappearing, so a finished branch no longer looks like one with no PR
+  (#905).
+
 ### Fixed
 
 - A compaction note no longer drops a row when it finishes streaming, which left an extra blank line

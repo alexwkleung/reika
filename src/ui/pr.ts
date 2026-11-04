@@ -9,14 +9,15 @@ import { execFile } from 'node:child_process';
 
 const GIT_TIMEOUT_MS = 2_000;
 const GH_TIMEOUT_MS = 4_000;
-// A PR opened mid-session should appear without a restart; a merged one should stop
-// showing eventually. Neither is urgent, so both TTLs sit well above the poll interval.
+// A PR opened mid-session should appear without a restart; a merge should reach the badge
+// eventually. Neither is urgent, so both TTLs sit well above the poll interval.
 const MISS_TTL_MS = 60_000;
 const HIT_TTL_MS = 300_000;
 
 // The number is always there; the URL is optional, because it is only what the terminal click
 // needs — `gh` reporting an open PR without one still earns the badge, just not the hyperlink.
-export type PrRef = { number: number; url?: string };
+// `state` is absent for an ordinary open PR, so only what changes the branch's meaning is labelled.
+export type PrRef = { number: number; url?: string; state?: 'draft' | 'merged' };
 
 type CacheEntry = { pr: PrRef | null; at: number };
 
@@ -49,26 +50,35 @@ export async function currentBranch(cwd: string): Promise<string | null> {
 async function lookupPr(cwd: string, branch: string): Promise<PrRef | null> {
   const out = await run(
     'gh',
-    ['pr', 'view', branch, '--json', 'number,state,url'],
+    ['pr', 'view', branch, '--json', 'number,state,isDraft,url'],
     cwd,
     GH_TIMEOUT_MS,
   );
   return out ? parsePrView(out) : null;
 }
 
-// `gh` reports the newest PR for the branch whatever its state; a closed or merged number
-// is stale the moment it lands, so only an open one earns the status-bar slot. Draft isn't
-// a state (drafts are OPEN + isDraft), so they show like any other open PR — deliberate:
-// the badge answers "which PR is this branch", not "is it ready".
+// `gh` reports the newest PR for the branch whatever its state. Merged stays on the badge: people
+// stay on a branch after it lands, a commit there goes nowhere, and a badge that just vanishes
+// reads the same as `gh` failing. Closed does not, since it says nothing about what to do next.
+// Draft isn't a state to `gh` (drafts are OPEN + isDraft).
 // The URL rides along only when `gh` gave us a usable one: it is the click target, never the
 // label, so its absence costs the hyperlink and nothing else.
 export function parsePrView(stdout: string): PrRef | null {
   try {
-    const data = JSON.parse(stdout) as { number?: unknown; state?: unknown; url?: unknown };
+    const data = JSON.parse(stdout) as {
+      number?: unknown;
+      state?: unknown;
+      isDraft?: unknown;
+      url?: unknown;
+    };
     if (typeof data.number !== 'number') return null;
-    if (typeof data.state === 'string' && data.state.toUpperCase() !== 'OPEN') return null;
+    const state = typeof data.state === 'string' ? data.state.toUpperCase() : 'OPEN';
+    if (state !== 'OPEN' && state !== 'MERGED') return null;
     const url = typeof data.url === 'string' && data.url ? data.url : undefined;
-    return url ? { number: data.number, url } : { number: data.number };
+    const pr: PrRef = url ? { number: data.number, url } : { number: data.number };
+    if (state === 'MERGED') pr.state = 'merged';
+    else if (data.isDraft === true) pr.state = 'draft';
+    return pr;
   } catch {
     return null;
   }
