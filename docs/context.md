@@ -36,7 +36,7 @@ max_tokens  = window − prompt − 384
 Everything in the shed cycle comes down to one quantity, the window $W$ minus the reserve $G$:
 
 $$
-\underbrace{0.9\,(W - G)}_{\text{shed point}} \;\longrightarrow\; \underbrace{0.63\,(W - G)}_{\text{shed target}}
+\underbrace{0.9(W - G)}_{\text{shed point}} \longrightarrow \underbrace{0.63(W - G)}_{\text{shed target}}
 $$
 
 In tokens, with the default reserve unless noted:
