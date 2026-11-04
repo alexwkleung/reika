@@ -54,7 +54,7 @@ function makeConfig(): Config {
     autoApprove: 'bypass',
     subagentMaxTurns: 5,
     profiles: {},
-    contextWindow: 8192,
+    contextWindow: 12000,
     minGenTokens: 1024,
     reasoningRounds: 1,
     maxSearchesPerTurn: 0,
