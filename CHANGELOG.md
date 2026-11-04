@@ -7,6 +7,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A long session resumed on a smaller context window no longer sends the whole conversation to the
+  model for a compaction note it could not fit, before folding without one (#902).
 - A turn that had already recovered from one failed edit no longer stops on the first attempt at a
   second, unrelated one. When the stop does fire on an edit whose target is in the file but one
   line differs, it names that line instead of saying the code may not exist (#891).
