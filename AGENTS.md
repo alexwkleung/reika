@@ -222,7 +222,7 @@ Ink paints a frame as `eraseLines + output`, and a `<Static>` commit is three wr
 live region, write the committed rows, redraw the live region). The terminal may paint between
 any two of them, and a 7KB frame arrives over the pty in several reads anyway. Invisible when the
 process is on-CPU; under memory pressure (a 27B model on a 16GB machine swapping this process out
-between writes) the erased state gets painted and the UI flickers. `cli.tsx` therefore renders to
+between writes) the erased state gets painted and the UI flickers. `ui/tui.tsx` therefore renders to
 `createSyncedStdout(process.stdout)`: every write in a tick is coalesced into one `stream.write`
 (Ink issues a frame's writes synchronously, so the microtask boundary is the frame edge) and
 wrapped in DEC private mode 2026, which makes a supporting terminal buffer until the closing
@@ -268,6 +268,8 @@ Semantic colors live in `src/ui/theme.ts`. Components reference them via `theme.
 To re-theme, edit `theme.ts` only. New UI must consult these names, not introduce hardcoded colors. A theme slot may hold a named color, so paint one through `themeChalk`, never `chalk.hex`.
 
 **Old terminals.** Two fallbacks, each engaging only where the full set cannot render. On a 16-color terminal (`chalk.level === 1`) `theme.ts` swaps its pastels for named colors: downsampled, nearly every pastel lands on white, so accent, warning and every mode tag became one color. The syntax palette (`highlight.ts`) and the diff tints (`DiffView.tsx`, where both row backgrounds downsampled to black) follow the same rule. On a console whose font lacks the ornaments (`TERM=linux`/`vt*`, or `REIKA_BASIC_GLYPHS=1`), `glyphs.ts` swaps the non-WGL4 glyphs — `⏺`, braille, `❯`, `▎`, `↳`, rounded corners — for WGL4 ones and leaves everything else alone. A new ornament goes in `glyphs.ts` with a basic counterpart, or it draws as a replacement diamond there.
+
+**React loads its production build, and only for the load** (`ui/reactbuild.ts`). The build is picked from `NODE_ENV` at first import, and every child inherits `process.env`, where `production` would make the model's `npm install` skip devDependencies. So `cli.tsx` sets it around the dynamic import of `ui/tui.tsx`, then removes it, and must stay free of JSX: JSX compiles to a static `react/jsx-runtime` import that runs before the entry's body.
 
 ## Layout
 
