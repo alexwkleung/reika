@@ -7,6 +7,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A long session resumed on a smaller context window no longer sends the whole conversation to the
+  model for a compaction note it could not fit, before folding without one (#902).
 - The terminal UI runs on React's production build, so resuming a long session and drawing replies
   take less time and CPU (#901).
 - A turn that had already recovered from one failed edit no longer stops on the first attempt at a

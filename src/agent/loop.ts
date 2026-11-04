@@ -2351,6 +2351,18 @@ export async function runTurn(opts: {
     // REIKA_COMPACTION_REPORT=0 is the ledger-only baseline arm; /compact honors it too, and then
     // folds without a note exactly as an automatic fold would.
     const reportEnabled = compactionReportEnabled();
+    // The note is written from the unfolded history, which a resumed session (folds are not
+    // restored) or a /model switch to a smaller window can leave over the window: the engine
+    // refuses the request and its retries, or one that truncates spends a whole window of prefill
+    // on the backstop's 256 tokens. Last in the gate, so only a fold that is really due logs it.
+    const noteFitsWindow = (contextWindow: number): boolean => {
+      const promptTokens = Math.round(rawEstimate() * compactCalibration);
+      if (promptTokens < contextWindow) return true;
+      debugLog(
+        `[reika:debug] round=${i} compaction-report skipped prompt=${promptTokens} window=${contextWindow}\n`,
+      );
+      return false;
+    };
     const autoReport =
       !manualRound &&
       reportEnabled &&
@@ -2376,7 +2388,8 @@ export async function runTurn(opts: {
             // The manual trigger's only question is "would the fold remove anything" (#481).
             !manualRound,
           )
-        : wouldFold(opts.history, window, compactCalibration, minGen()))
+        : wouldFold(opts.history, window, compactCalibration, minGen())) &&
+      noteFitsWindow(window)
     ) {
       const n = shrink.folds + 1;
       const directive = buildCompactionReportDirective(n);
