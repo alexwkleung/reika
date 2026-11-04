@@ -20,7 +20,7 @@ like a small one in some ways, but it does not reproduce Q2 quantization loss.
 
 **Three words used throughout.** When the request nears the context window, the harness first
 _sheds_ old tool output, collapsing each payload to a one-line summary, down to a _watermark_ (a target
-fill, 70% of the window). If that is not enough it _folds_: the oldest turns are replaced by one recap
+fill, 70% of the point where shedding starts, so about 58% of a 24k window). If that is not enough it _folds_: the oldest turns are replaced by one recap
 message.
 
 ## The harness's own context management cost more than anything the model did
