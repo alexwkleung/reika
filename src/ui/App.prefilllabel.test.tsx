@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import type { Config, ContextBundle, PromptProgress } from '../types.js';
@@ -75,41 +75,60 @@ const runTurn = vi.fn(
 );
 vi.mock('../agent/loop.js', () => ({ runTurn: (...a: unknown[]) => runTurn(...(a as [never])) }));
 
-const { App } = await import('./App.js');
+const { App, TYPECHECK_LINGER_MS } = await import('./App.js');
 
 const plain = (frame: string | undefined) => (frame ?? '').replace(/\x1b\[[0-9;]*m/g, '');
-const wait = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
+const wait = (ms = 25): Promise<void> => new Promise(r => setTimeout(r, ms));
 
 const LONG = { total: 20000, cached: 0, processed: 0, elapsedMs: 0 };
 const SHORT = { total: 20000, cached: 19900, processed: 19900, elapsedMs: 0 };
 
+// A write can beat the input's stdin listener, so keep typing until the text echoes.
 async function busyApp() {
   const app = render(<App />);
-  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes('╭'); i++) await wait(25);
-  app.stdin.write('hello');
-  await wait(120);
+  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes('╭'); i++) await wait();
+  for (let i = 0; i < 200 && !plain(app.lastFrame()).includes('hello'); i++) {
+    app.stdin.write('hello');
+    await wait();
+  }
   app.stdin.write('\r');
-  for (let i = 0; i < 200 && !turn; i++) await wait(25);
+  for (let i = 0; i < 400 && !turn; i++) await wait();
+  if (!turn) throw new Error('the turn never started');
   return app;
 }
 
-describe('prefill label handoff (#914)', () => {
+async function waitFor(app: Awaited<ReturnType<typeof busyApp>>, text: string) {
+  for (let i = 0; i < 400 && !plain(app.lastFrame()).includes(text); i++) await wait();
+  expect(plain(app.lastFrame())).toContain(text);
+}
+
+// Asserted on the timer rather than the frame, so a slow runner passing 650ms cannot decide it.
+function lingerTimer(setTimeoutSpy: MockInstance<typeof setTimeout>) {
+  const at = setTimeoutSpy.mock.calls.findIndex(call => call[1] === TYPECHECK_LINGER_MS);
+  expect(at).toBeGreaterThanOrEqual(0);
+  return setTimeoutSpy.mock.results[at].value as NodeJS.Timeout;
+}
+
+describe('prefill label handoff (#914)', { timeout: 30_000 }, () => {
   beforeEach(() => {
     turn = undefined;
     runTurn.mockClear();
   });
-  afterEach(() => finishTurn());
+  afterEach(() => {
+    finishTurn();
+    vi.restoreAllMocks();
+  });
 
   it("ends a finished check's linger", async () => {
     const app = await busyApp();
+    const setSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
     turn!.onTypecheck!(true);
-    await wait();
     turn!.onTypecheck!(false);
-    await wait();
-    expect(plain(app.lastFrame())).toContain('Typechecking');
+    const timer = lingerTimer(setSpy);
     turn!.onPromptProgress!(LONG);
-    await wait();
-    expect(plain(app.lastFrame())).toContain('Processing context 0%');
+    expect(clearSpy).toHaveBeenCalledWith(timer);
+    await waitFor(app, 'Processing context 0%');
     expect(plain(app.lastFrame())).not.toContain('Typechecking');
     app.unmount();
   });
@@ -118,19 +137,21 @@ describe('prefill label handoff (#914)', () => {
     const app = await busyApp();
     turn!.onTypecheck!(true);
     turn!.onPromptProgress!(LONG);
-    await wait();
-    expect(plain(app.lastFrame())).toContain('Typechecking');
+    await waitFor(app, 'Typechecking');
+    expect(plain(app.lastFrame())).not.toContain('Processing context');
     turn!.onTypecheck!(false);
     app.unmount();
   });
 
   it('keeps the linger for a round too short to name', async () => {
     const app = await busyApp();
+    const setSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
     turn!.onTypecheck!(true);
     turn!.onTypecheck!(false);
+    const timer = lingerTimer(setSpy);
     turn!.onPromptProgress!(SHORT);
-    await wait();
-    expect(plain(app.lastFrame())).toContain('Typechecking');
+    expect(clearSpy).not.toHaveBeenCalledWith(timer);
     app.unmount();
   });
 });

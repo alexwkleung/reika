@@ -159,7 +159,7 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
-const TYPECHECK_LINGER_MS = 650;
+export const TYPECHECK_LINGER_MS = 650;
 
 // Only the startup splash lives in the dedicated header <Static> — Ink honors a
 // single <Static>, so appending to this one after the message log's Static takes
