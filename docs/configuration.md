@@ -105,8 +105,8 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_BASH_IDLE_MS`** — A hang — a server, a watcher, a prompt waiting on input — goes
   silent, so this is the bound that catches it without shortening the ceiling for real work. `0`
   disables
-- **`REIKA_REQUEST_TIMEOUT_MS`** — Unset, reika waits as long as it takes — llama.cpp emits no
-  bytes while it prefills, and a model streamed off SSD can be silent for a very long time and still
+- **`REIKA_REQUEST_TIMEOUT_MS`** — Unset, reika waits as long as it takes — llama.cpp can send
+  nothing while it prefills, and a model streamed off SSD can be silent for a very long time and still
   be working (Node's own default would kill the turn at 300s). Esc cancels a server that really is
   hung. Set a positive value to cap the wait
 
@@ -436,6 +436,9 @@ changes:
 REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_MODEL=qwen3-coder,kimi-k2,glm-4.6   # /model kimi-k2 to switch
 ```
+
+A router has to forward the stream as it arrives. One that reads fixed-size blocks holds it back, so
+text arrives in lumps and the prefill progress on the busy line never shows.
 
 **Different endpoints/keys — named profiles.** When a model lives behind a different base URL or API
 key, define a full profile and switch between them at runtime with `/model <name>`:
