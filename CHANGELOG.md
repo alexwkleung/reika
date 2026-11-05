@@ -18,6 +18,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   (#917).
 - A model that stops with no reply is now asked once to continue, and a `warn` line says so, instead
   of the turn ending silently and looking like an abort (#917).
+- A long session no longer loses your current request in a fold: the recap could keep the previous
+  task under a header calling it the current one (#918).
 
 ## [0.9.0] - 2026-11-04
 
