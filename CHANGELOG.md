@@ -11,6 +11,14 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
   hang (#913, #915).
 
+### Fixed
+
+- `/issue` and `/review` keep a longer issue or PR in context, so a small window no longer drops it
+  at the first shrink. The model is also told on that same request when earlier output was dropped
+  (#917).
+- A model that stops with no reply is now asked once to continue, and a `warn` line says so, instead
+  of the turn ending silently and looking like an abort (#917).
+
 ## [0.9.0] - 2026-11-04
 
 ### Changed

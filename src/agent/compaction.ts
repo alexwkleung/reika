@@ -179,7 +179,7 @@ export function compactHistory(
   // lead a request, its assistant parent may have issued sibling calls whose responses are being
   // folded, and an unmatched tool_call is an API error. Text has none of those failure modes.
   //
-  // No extra bound needed — every candidate is capped at TASK_SPEC_PIN_CHARS, so this is a few KB at
+  // No extra bound needed — every candidate is capped by taskSpecIndex, so this is a few KB at
   // most. Note the elected spec stops being findable by taskSpecIndex afterwards (that looks for a
   // `tool` message), so `spec-pin none` after a compaction is expected, not a regression: the
   // content is in the recap, and the next turn's opening call becomes the new pin.
@@ -418,7 +418,7 @@ function protectedTailStart(history: Message[]): number {
 
 // Approximate the characters a message contributes to a request (at rest: tool payloads
 // are already summarized by aging, so only the summary counts). The one message this under-prices
-// is the pinned task spec (#227), which still carries its payload; bounded by TASK_SPEC_PIN_CHARS,
+// is the pinned task spec (#227), which still carries its payload; bounded by taskSpecIndex,
 // so the keep-budget walk stays close enough.
 function msgChars(m: Message): number {
   switch (m.role) {
@@ -481,7 +481,7 @@ function stripOmissionNote(content: string): string {
 
 // The preserved task definition that leads a recap (#251), and the closing line that bounds it so a
 // later fold can find the whole block and carry it forward instead of electing a second one (#275).
-// One block per recap, always at the front, always under TASK_SPEC_PIN_CHARS.
+// One block per recap, always at the front, always within taskSpecIndex's cap.
 const SPEC_BLOCK_END = '(End of the preserved task definition; the recap of earlier work follows.)';
 
 // The three things the block can hold, most trustworthy first. Only the first two make the strong

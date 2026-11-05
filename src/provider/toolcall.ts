@@ -217,6 +217,11 @@ const SMALL_PAYLOAD_FLOOR_TOTAL_CHARS = 4096;
 // motivated this was 505 bytes), and a first result larger than this is a dump, not a definition,
 // which aging should stay free to collapse.
 export const TASK_SPEC_PIN_CHARS = 4096;
+// A `gh issue|pr view` opening a turn is a task definition whatever its size, and comments are where
+// an issue's decisions land, so it is pinned whole rather than by its head. 8192 clears 480 of 485
+// saved fetches; 4096 cleared 355.
+export const TASK_SPEC_FETCH_PIN_CHARS = 8192;
+const TASK_SPEC_FETCH_SUMMARY = /^Ran: gh (?:issue|pr) view\b/;
 
 // What the fit-to-window cap did to THIS request's fresh tool payloads (#253). Measurement only —
 // nothing reads it but the debug log. The cap is sized from the room left after everything else in
@@ -687,8 +692,8 @@ export function findFreshToolBlockStart(history: Message[]): number {
 // opening call (`/issue`, `/review` both do) the payload holding the task definition is always the
 // FIRST one sacrificed, which inverts the priority (#227). `verbatim` only exempts a fresh payload
 // from the char cap and newest-read protection only covers a `read`, so neither reaches a `bash`
-// result holding the issue text. Scoped to the turn in progress and capped at TASK_SPEC_PIN_CHARS,
-// so the pin costs a bounded few KB and the next turn's own opening result moves it. Deliberately
+// result holding the issue text. Scoped to the turn in progress and capped (TASK_SPEC_PIN_CHARS, or
+// TASK_SPEC_FETCH_PIN_CHARS for a `gh` view), so the pin costs a bounded few KB and the next turn's own opening result moves it. Deliberately
 // not "the first SMALL payload": the opening call is the spec candidate, and a huge one means this
 // turn didn't open with a spec fetch at all. Pure + exported for tests and batch aging.
 // Index of the newest real user message, or -1. "Real" excludes `meta` — a slash-command echo is
@@ -704,14 +709,13 @@ export function lastUserMessageIndex(history: Message[]): number {
   return -1;
 }
 
-export function taskSpecIndex(history: Message[]): number {
+function openingPayloadIndex(history: Message[]): number {
   for (let u = history.length - 1; u >= 0; u--) {
     const m = history[u];
     if (m.role !== 'user' || m.meta || m.harness) continue;
     for (let i = u + 1; i < history.length; i++) {
       const t = history[i];
-      if (t.role !== 'tool' || !t.payload) continue;
-      return t.payload.length <= TASK_SPEC_PIN_CHARS ? i : -1;
+      if (t.role === 'tool' && t.payload) return i;
     }
     // This turn has no tool result yet (round 0), so nothing has replaced the spec — keep the
     // previous turn's pin rather than releasing it the instant the user hits enter. Releasing at
@@ -720,6 +724,26 @@ export function taskSpecIndex(history: Message[]): number {
     // no gain. The handover happens one round later, when this turn's own opening result lands.
   }
   return -1;
+}
+
+function fitsTaskSpecPin(m: Message): boolean {
+  if (m.role !== 'tool' || !m.payload) return false;
+  const cap = TASK_SPEC_FETCH_SUMMARY.test(m.summary)
+    ? TASK_SPEC_FETCH_PIN_CHARS
+    : TASK_SPEC_PIN_CHARS;
+  return m.payload.length <= cap;
+}
+
+export function taskSpecIndex(history: Message[]): number {
+  const i = openingPayloadIndex(history);
+  return i >= 0 && fitsTaskSpecPin(history[i]) ? i : -1;
+}
+
+// The opening payload the pin refused for its size, or -1. Nothing in a payload says it is the
+// task, so a spec fetched some other way cannot be detected; this makes the miss greppable instead.
+export function oversizeOpeningPayloadIndex(history: Message[]): number {
+  const i = openingPayloadIndex(history);
+  return i >= 0 && !fitsTaskSpecPin(history[i]) ? i : -1;
 }
 
 // Per-payload character budget for the fresh tool block, computed to *fit the window*:
@@ -792,7 +816,7 @@ function freshPayloadCharCap(
   // split; whether it goes verbatim or rejoins the split is decided after the budget is known.
   let protectedChars = 0;
   // Payload length of the pinned task spec (0 = none). Allocated verbatim ahead of everything
-  // else — it is already bounded by TASK_SPEC_PIN_CHARS, and losing it is what #227 is about.
+  // else — it is already bounded by taskSpecIndex, and losing it is what #227 is about.
   let specChars = 0;
   for (let i = 0; i < history.length; i++) {
     const m = history[i];

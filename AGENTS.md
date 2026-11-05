@@ -506,7 +506,7 @@ reading why:
   which its summary (`Ran: gh issue view 213 (505 bytes output)`) reads to the model as a result it
   already handled. Observed: "let me re-read the issue", no tool call, then a fabricated issue body.
   The fix pins the current turn's _opening_ tool payload (capped at `TASK_SPEC_PIN_CHARS`, 4096 — same
-  number and trade as `PROTECTED_READ_FLOOR_CHARS`) so it serializes live past the trailing block, is
+  number and trade as `PROTECTED_READ_FLOOR_CHARS` — or `TASK_SPEC_FETCH_PIN_CHARS`, 8192, for a `gh issue|pr view`, pinned whole because comments come last) so it serializes live past the trailing block, is
   allocated verbatim ahead of everything in `freshPayloadCharCap`, and is skipped by
   `batchAgePayloads`. Two non-obvious rules: it's the _opening_ payload, not the first small one (a
   huge first result means this turn didn't open with a spec fetch, and aging should stay free to
@@ -515,7 +515,7 @@ reading why:
   `warm.ts` prebuilt, which `warm.test.ts`'s strict-prefix assertion catches. Prefix-stable mode
   leaves the pin entirely to batch aging: resurrecting bytes that already serialized as a summary is
   the mid-history rewrite that mode exists to prevent. `dedupToolContent` signs the pinned message as
-  a payload so "the signature is what WOULD be serialized" stays true. The `spec-pin` REIKA_DEBUG line
+  a payload so "the signature is what WOULD be serialized" stays true. A refusal for size logs `spec-pin none reason=oversize`, since nothing in a payload says it is the task. The `spec-pin` REIKA_DEBUG line
   reports the index, size, whether the pin is currently `holding` (the spec has fallen outside the
   trailing block, so the pin is the only reason it survives) and whether it is `stale` (it predates
   the current user message — the deliberate carry-over that keeps round 0 append-only, which spends
@@ -534,7 +534,7 @@ reading why:
   pinned task spec, since the pin keeps that one live and a request whose only summary-only payload
   is the spec has dropped nothing — and it rides the
   same transport as every other ledger (system suffix; the trailing note under `REIKA_PREFIX_STABLE`,
-  where the tail is rewritten each round anyway). There are **four** live compositions — {plan,
+  where the tail is rewritten each round anyway). A shed runs after the suffix is composed, so the loop adds the notice to that round's tail: the request that first shows a payload as summary-only must say so. There are **four** live compositions — {plan,
   agent} x {system suffix, trailing note} — and plan-mode-under-prefix-stable builds its own suffix
   inline, so a change here has to touch it too; `loop.droppedpayload.test.ts` (system suffix) and
   `loop.droppedpayload.prefixstable.test.ts` (trailing note, driving runTurn) cover all four between

@@ -132,5 +132,35 @@ describe('dropped-payload notice under REIKA_PREFIX_STABLE (#227)', () => {
       const c = await roundZero(clean, promptMode);
       expect(c.trailingNote ?? '').not.toContain('dropped to make room');
     });
+
+    // The suffix is composed before the shed, so the shed's own request needs the notice added.
+    it(`says so on the request that sheds in ${promptMode} mode`, async () => {
+      const big = (id: string): Message[] => [
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id, name: 'read', args: { path: `${id}.ts` } }],
+        },
+        // `rendered` marks it as already sent, or the fit-to-window cap sizes it to whatever is free.
+        {
+          role: 'tool',
+          callId: id,
+          summary: `Read ${id}.ts`,
+          payload: 'x'.repeat(14000),
+          rendered: 'x'.repeat(14000),
+        },
+      ];
+      const history: Message[] = [
+        { role: 'user', content: 'work on it' },
+        ...big('a'),
+        ...big('b'),
+        ...big('c'),
+        ...big('d'),
+        { role: 'assistant', content: 'read them.' },
+      ];
+      const c = await roundZero(history, promptMode);
+      expect(history.some(m => m.role === 'tool' && m.aged)).toBe(true);
+      expect(c.trailingNote ?? '').toContain('Their output was dropped to make room');
+    });
   }
 });
