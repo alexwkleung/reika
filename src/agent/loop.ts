@@ -42,6 +42,7 @@ import {
   findFreshToolBlockStart,
   hasDroppedPayloads,
   lastUserMessageIndex,
+  oversizeOpeningPayloadIndex,
   taskSpecIndex,
   toolsToChatTools,
 } from '../provider/toolcall.js';
@@ -954,6 +955,9 @@ const LOOP_TERMINAL_AFTER = 3;
 // gives one fix attempt plus a re-check; beyond that, finishing dirty (with a user notice) beats
 // spiralling. See check/typecheck.ts.
 const MAX_TYPECHECK_GATE_ROUNDS = 2;
+const MAX_EMPTY_REPLY_RETRIES = 1;
+const EMPTY_REPLY_NUDGE =
+  '(your previous response was empty — no answer and no tool call. Continue the task: call the next tool, or give your answer.)';
 // Floor on the learned calibration when it drives the COMPACTION decision (not the UI gauge). The
 // calibration = real-tokens / char-4-estimate; a prose-heavy session drives it below 1 (~0.9), which
 // makes the trigger assume content is even sparser than the char/4 baseline. That optimism is what let
@@ -1665,6 +1669,7 @@ export async function runTurn(opts: {
   let typecheckTsconfig: string | undefined;
   // Consecutive done-gate send-backs this turn. Bounds the fix loop at MAX_TYPECHECK_GATE_ROUNDS.
   let typecheckGateRounds = 0;
+  let emptyReplyRetries = 0;
   // Consecutive plan done-gate send-backs this turn. Bounds the plan gate at MAX_PLAN_GATE_ROUNDS.
   let planGateRounds = 0;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
@@ -2324,13 +2329,18 @@ export async function runTurn(opts: {
       // task conflation, so it is greppable rather than something to re-derive from the history.
       const specIdx = taskSpecIndex(opts.history);
       const spec = specIdx >= 0 ? opts.history[specIdx] : undefined;
+      const refused = opts.history[oversizeOpeningPayloadIndex(opts.history)];
       debugLog(
         specIdx >= 0 && spec?.role === 'tool'
           ? `[reika:debug] round=${i} spec-pin idx=${specIdx} chars=${spec.payload?.length ?? 0} ` +
               `holding=${specIdx < findFreshToolBlockStart(opts.history)} ` +
               `stale=${specIdx < lastUserMessageIndex(opts.history)} ` +
               `summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
-          : `[reika:debug] round=${i} spec-pin none\n`,
+          : refused?.role === 'tool'
+            ? `[reika:debug] round=${i} spec-pin none reason=oversize ` +
+              `chars=${refused.payload?.length ?? 0} ` +
+              `summary=${JSON.stringify(refused.summary.slice(0, 60))}\n`
+            : `[reika:debug] round=${i} spec-pin none\n`,
       );
       // Dropped-payload ledger (#227). Read off the COMPOSED request — the notice reaches the model
       // through the system block or the trailing note depending on mode and REIKA_PREFIX_STABLE,
@@ -2721,6 +2731,18 @@ export async function runTurn(opts: {
       // The gauge would otherwise keep the pre-fold fill until the next real turn (#481).
       opts.onContextEstimate?.(Math.round(rawEstimate() * calibration));
       return;
+    }
+    // The suffix was composed before the shed above, so without this the request that first shows
+    // a payload as summary-only is the one request whose note cannot say so.
+    if (agedThisRound && !roundSuffix?.includes(DROPPED_LEDGER_MARKER)) {
+      const dropped = droppedPayloadLedgerFor(opts.history, prefixStable);
+      if (dropped) {
+        roundSuffix = roundSuffix ? `${dropped}\n\n${roundSuffix}` : dropped;
+        debugLog(
+          `[reika:debug] round=${i} dropped-ledger active=true ` +
+            `payloads=${droppedPayloadCount(opts.history, prefixStable)} via=tail after-shed=true\n`,
+        );
+      }
     }
     const sentTools = subagentForceReport && lastSentTools ? lastSentTools : callTools;
     lastSentTools = sentTools;
@@ -3473,6 +3495,30 @@ export async function runTurn(opts: {
     }
 
     if (isFinal) {
+      // A reply with no text and no call ends the turn with nothing on screen to say so, which reads
+      // as an abort. Ask once; a second empty reply gets the notice, since a stop this turn cannot
+      // recover from is still one the user has to see.
+      if (
+        !assistantContent?.trim() &&
+        response.finishReason !== 'length' &&
+        !opts.signal?.aborted
+      ) {
+        const retry = emptyReplyRetries < MAX_EMPTY_REPLY_RETRIES;
+        debugLog(`[reika:debug] round=${i} empty-reply retry=${retry}\n`);
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: retry
+            ? 'The model stopped without replying — asking it to continue.'
+            : 'The model stopped again without replying. Send a prompt to continue.',
+        });
+        if (retry) {
+          emptyReplyRetries++;
+          // Same `harness` reasoning as the typecheck send-back below (#287).
+          opts.history.push({ role: 'user', content: EMPTY_REPLY_NUDGE, harness: true });
+          continue;
+        }
+      }
       // Post-edit typecheck gate. If this turn edited (baseline captured) and a final check shows
       // the edits introduced new type errors, send the model back to fix them instead of letting it
       // finish on broken code — the harness verifies so the weak model doesn't have to. The model's

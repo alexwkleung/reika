@@ -6,8 +6,8 @@
   5  round   msgs= 12  chars= 23958  reprocess=  3530  append-only
   6  round   msgs= 14  chars= 24354  reprocess=   396  append-only
   7  round   msgs= 16  chars= 27853  reprocess=  3499  append-only
-  8  round   msgs= 18  chars= 23470  reprocess= 15968  mid-history@3
-  9  round   msgs= 21  chars= 27917  reprocess=  4447  append-only
+  8  round   msgs= 19  chars= 23949  reprocess= 16447  mid-history@3
+  9  round   msgs= 21  chars= 27917  reprocess=  4447  tail-rewrite
  10  report  msgs= 24  chars= 32394  reprocess=  4956  tail-rewrite
  11  round   msgs= 19  chars= 26350  reprocess= 21470  system-changed
  12  round   msgs= 21  chars= 26759  reprocess=   888  tail-rewrite
@@ -18,6 +18,6 @@
  17  report  msgs= 28  chars= 34372  reprocess=  6747  tail-rewrite
  18  round   msgs= 27  chars= 32612  reprocess= 27732  system-changed
 
-requests=19 sent=458392 reprocessed=138984
+requests=19 sent=458871 reprocessed=139463
 sheds=4 folds=3
-first=1 append-only=8 mid-history=1 tail-rewrite=6 system-changed=3
+first=1 append-only=7 mid-history=1 tail-rewrite=7 system-changed=3

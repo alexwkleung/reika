@@ -15,6 +15,7 @@ const {
   dedupToolContent,
   droppedPayloadCount,
   hasDroppedPayloads,
+  oversizeOpeningPayloadIndex,
   lastUserMessageIndex,
   messagesToChatParams,
   taskSpecIndex,
@@ -189,7 +190,7 @@ describe('messagesToChatParams', () => {
     it('does not pin an opening payload larger than the spec ceiling', () => {
       const history: Message[] = [
         { role: 'user', content: 'go' },
-        ...spec('D'.repeat(5000)),
+        ...spec('D'.repeat(8193)),
         ...later('a', 'A'.repeat(3000)),
         ...later('b', 'B'.repeat(3000)),
       ];
@@ -1096,6 +1097,27 @@ describe('lastUserMessageIndex', () => {
     ];
     expect(taskSpecIndex(own)).toBe(5);
     expect(taskSpecIndex(own) < lastUserMessageIndex(own)).toBe(false); // this turn's own
+  });
+
+  const openingWith = (summary: string, size: number): Message[] => [
+    { role: 'user', content: 'work on issue 642' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'bash', args: {} }] },
+    { role: 'tool', callId: 'a', summary, payload: 'x'.repeat(size) },
+  ];
+
+  it('pins an oversize gh view whole, and only a gh view', () => {
+    const issue = 'Ran: gh issue view 642 --json title,body,comments (4820 bytes output)';
+    expect(taskSpecIndex(openingWith(issue, 4820))).toBe(2);
+    expect(taskSpecIndex(openingWith('Ran: gh pr view 7 (4820 bytes output)', 4820))).toBe(2);
+    expect(taskSpecIndex(openingWith('Read src/ui/DiffView.tsx lines 1-300', 4820))).toBe(-1);
+    expect(taskSpecIndex(openingWith('Ran: gh pr diff 7 (4820 bytes output)', 4820))).toBe(-1);
+    expect(taskSpecIndex(openingWith(issue, 8193))).toBe(-1);
+  });
+
+  it('reports the opening payload the pin refused', () => {
+    expect(oversizeOpeningPayloadIndex(openingWith('Read a.ts', 4820))).toBe(2);
+    expect(oversizeOpeningPayloadIndex(openingWith('Read a.ts', 100))).toBe(-1);
+    expect(oversizeOpeningPayloadIndex([{ role: 'user', content: 'hi' }])).toBe(-1);
   });
 });
 
