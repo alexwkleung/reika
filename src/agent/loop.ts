@@ -6,6 +6,7 @@ import type {
   ContextBundle,
   EditFailure,
   Message,
+  PromptProgress,
   QuestionAnswer,
   QuestionRequest,
   Tool,
@@ -1316,6 +1317,7 @@ export async function runTurn(opts: {
   onMessage: (msg: Message) => void;
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
+  onPromptProgress?: (progress: PromptProgress | undefined) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
   // A subagent is running under one of this turn's tool calls (#342): true when it starts, false
   // when it returns. The parent is blocked inside the call with its own assistant message already
@@ -2476,6 +2478,7 @@ export async function runTurn(opts: {
                 ? prefilledNoteStream(assistantPrefill, opts.onContentDelta)
                 : opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
+            onPromptProgress: opts.onPromptProgress,
             signal: opts.signal,
             calibration,
             maxTokens: computeMaxTokens({
@@ -2802,6 +2805,7 @@ export async function runTurn(opts: {
       config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
+      onPromptProgress: opts.onPromptProgress,
       signal: callAbort.signal,
       calibration,
       // Per-turn backstop: cap generation to the room actually left in the window so a
@@ -4305,6 +4309,7 @@ function makeSpawnSubagent(
         // them nested via onSubagent.
         onContentDelta: parent.onContentDelta,
         onReasoningDelta: parent.onReasoningDelta,
+        onPromptProgress: parent.onPromptProgress,
         onToolProgress: parent.onToolProgress,
         // `onToolStart` is the one callback deliberately NOT forwarded (#509). The parent's live row
         // is a single slot keyed to its own round: forwarding a nested start would overwrite the

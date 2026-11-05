@@ -3,6 +3,14 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Added
+
+- While a local llama.cpp prefills a long prompt, the busy indicator now shows how far along it is
+  and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
+  hang (#PR).
+
 ## [0.9.0] - 2026-11-04
 
 ### Changed

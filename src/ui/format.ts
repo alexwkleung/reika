@@ -1,4 +1,5 @@
 import { MCP_TOOL_PREFIX, type McpServerConfig } from '../mcp/config.js';
+import type { PromptProgress } from '../types.js';
 
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback
 // lines, transcript exports, and /summary all render times identically (issue #74). Fields are
@@ -16,6 +17,30 @@ export function formatElapsed(seconds: number): string {
 // Convenience for call sites holding milliseconds.
 export function formatDurationMs(ms: number): string {
   return formatElapsed(Math.round(ms / 1000));
+}
+
+// Below both, the label would flash past on an ordinary append round.
+const PREFILL_LABEL_MIN_TOKENS = 2048;
+const PREFILL_LABEL_MIN_MS = 2000;
+
+// `Processing context 41% · ~30s left` while a local engine prefills (#912), or undefined when the wait
+// is too short to name. Over the uncached work, because `processed/total` opens at 98% on a round
+// that reuses the cache. The estimate is this request's own rate, and appears once a batch is done.
+export function prefillLabel(progress: PromptProgress | undefined): string | undefined {
+  if (!progress) return undefined;
+  const work = progress.total - progress.cached;
+  const done = Math.min(Math.max(progress.processed - progress.cached, 0), work);
+  if (work <= 0) return undefined;
+  const remainingMs =
+    done > 0 && progress.elapsedMs > 0 ? (work - done) * (progress.elapsedMs / done) : undefined;
+  const projectedMs = remainingMs === undefined ? 0 : progress.elapsedMs + remainingMs;
+  if (work < PREFILL_LABEL_MIN_TOKENS && projectedMs < PREFILL_LABEL_MIN_MS) return undefined;
+  const percent = Math.floor((done / work) * 100);
+  const estimate =
+    remainingMs !== undefined && remainingMs >= PREFILL_LABEL_MIN_MS
+      ? ` · ~${formatDurationMs(remainingMs)} left`
+      : '';
+  return `Processing context ${percent}%${estimate}`;
 }
 
 // Compact token counts: `999`, `1.2k`, `126k`, `1.3M`, `2.5B`. Lives here rather than in the

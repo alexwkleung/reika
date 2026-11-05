@@ -63,6 +63,7 @@ export type SessionEvents = Partial<
     | 'onMessage'
     | 'onContentDelta'
     | 'onReasoningDelta'
+    | 'onPromptProgress'
     | 'onPhase'
     | 'onSubagent'
     | 'onCompactionNote'

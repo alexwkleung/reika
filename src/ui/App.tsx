@@ -95,7 +95,7 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
-import { mcpStartupLine } from './format.js';
+import { mcpStartupLine, prefillLabel } from './format.js';
 import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
@@ -148,6 +148,7 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   Message,
+  PromptProgress,
   QuestionAnswer,
   QuestionRequest,
   Usage,
@@ -236,6 +237,7 @@ export function App() {
   // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
   // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
   const [reasoningSpin, setReasoningSpin] = useState<boolean>(false);
+  const [promptProgress, setPromptProgress] = useState<PromptProgress | undefined>(undefined);
   // Checklist of the plan currently being implemented (#71), snapshotted from the loop's
   // deterministic tracker. Non-null only after an agent turn found a written plan in history;
   // persists between turns so the user can see what's left before continuing. Human-only.
@@ -2841,6 +2843,7 @@ export function App() {
         // re-render.
         onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
         onReasoningStatus: setReasoningSpin,
+        onPromptProgress: setPromptProgress,
         onReasoningReset: () => {
           // Loop-break recovery: end the degenerate looped reasoning's live preview so the
           // recovery notice is visible and the next round streams into a fresh Thinking block
@@ -2915,6 +2918,7 @@ export function App() {
         )
       : undefined;
 
+  const prefilling = prefillLabel(promptProgress);
   const statusWidth = useContentWidth();
   const statusProps: StatusProps = {
     model: config?.profiles[activeProfile]?.model ?? config?.model ?? '',
@@ -3091,17 +3095,18 @@ export function App() {
                   ? 'Typechecking'
                   : recovering
                     ? 'Recovering from a loop'
-                    : reasoningSpin
-                      ? 'Thinking — may be looping (ctrl-c to abort)'
-                      : noteLive
-                        ? 'Writing compaction note'
-                        : subagentLive
-                          ? 'Subagent working'
-                          : undefined
+                    : (prefilling ??
+                      (reasoningSpin
+                        ? 'Thinking — may be looping (ctrl-c to abort)'
+                        : noteLive
+                          ? 'Writing compaction note'
+                          : subagentLive
+                            ? 'Subagent working'
+                            : undefined))
               }
               words={config?.workingWords ? WORKING_WORDS : undefined}
               accent={
-                typechecking || recovering || noteLive
+                typechecking || recovering || prefilling || noteLive
                   ? theme.info
                   : reasoningSpin
                     ? theme.warning
