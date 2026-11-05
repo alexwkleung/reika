@@ -242,8 +242,9 @@ const GIT_GLOBAL_VALUE_FLAGS = new Set([
 
 // Subcommand options that run a program the model wrote. `--template` plants hooks that run at
 // checkout and clone's `--config` is `-c` again, so both belong here although neither is spelled
-// as a command. Long names apply to every subcommand: none has a harmless option abbreviated by
-// these, and `push --exec`/`archive --exec` mean the same as `rebase --exec`.
+// as a command. Long names apply to every subcommand: `push --exec`/`archive --exec` mean the same
+// as `rebase --exec`, and an abbreviation of one of these is refused on any subcommand — a false
+// deny where that subcommand's own `--e`/`--t`/`--u` means something else, never a hole.
 const GIT_PROGRAM_LONG_FLAGS = [
   'upload-pack',
   'receive-pack',
@@ -262,8 +263,14 @@ const GIT_PROGRAM_SHORT_FLAGS: Record<string, { run: string; value: string }> = 
   rebase: { run: 'x', value: 'sXxC' },
   difftool: { run: 'x', value: 'tx' },
 };
-// Whole subcommands (or a subcommand's first operand) whose job is running a command.
-const GIT_PROGRAM_SUBCOMMANDS = new Set(['filter-branch', 'submodule foreach', 'bisect run']);
+// Whole subcommands (or a subcommand's first operand) that name a program to run: `send-email`
+// does so five ways (four `--*-cmd` options, and `--smtp-server=/path`), so it goes by subcommand.
+const GIT_PROGRAM_SUBCOMMANDS = new Set([
+  'filter-branch',
+  'submodule foreach',
+  'bisect run',
+  'send-email',
+]);
 
 function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
   if (GIT_PROGRAM_SUBCOMMANDS.has(sub)) return true;
@@ -274,7 +281,8 @@ function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
     if (a === '--') return false;
     if (a.startsWith('--')) {
       const name = a.slice(2).split('=')[0];
-      if (name.length >= 2 && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
+      // Any prefix, down to one letter (`--u=cmd` ran); `--=x` has an empty name, which is none.
+      if (name && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
     } else if (short && a.startsWith('-')) {
       for (const ch of a.slice(1)) {
         if (short.run.includes(ch)) return true;
