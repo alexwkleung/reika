@@ -17,6 +17,9 @@ const truecolor = {
   secondary: '#a0a0a0',
   muted: '#808080',
   reasoning: '#6495ed', // cornflower blue: thinking-block bar, dimmer than the accent
+  // The busy line during a prefill (#912). A warmer, softer cornflower: the family of the reasoning
+  // blue it hands over to, tinted by Working to about 10° off it, so the two do not read as one.
+  prefill: '#7a90ee',
   warning: '#e5d49a', // soft pastel yellow — luminous but easy on the eyes, matches the other accents
   queued: '#e8b87a', // soft pastel orange — `next ›` label on the queued list, complements the yellow warning
   // The `▎` bar on a nested (subagent) user bubble. `▎` is a legend, not decoration: the same
@@ -72,7 +75,7 @@ export type Theme = Record<keyof typeof truecolor, string>;
 // place of the pastels. Chalk downsamples a hex to the nearest of 16, and nearly every pastel above
 // is nearest to white — accent, warning and every mode tag collapsed into one, so the colors meant
 // nothing. The hues are chosen per slot; 16 colors cannot keep every distinction, so the ones that
-// share a color (queued/subagent, link/reasoning) never meet on screen. `userBg` and the named
+// share a color (queued/subagent, link/reasoning/prefill) never meet on screen. `userBg` and the named
 // slots already downsample fine and are left alone.
 const ansi16: Partial<Theme> = {
   accent: 'magentaBright',
@@ -81,6 +84,7 @@ const ansi16: Partial<Theme> = {
   secondary: 'gray',
   muted: 'gray',
   reasoning: 'blueBright',
+  prefill: 'blueBright',
   warning: 'yellowBright',
   queued: 'yellow',
   subagent: 'yellow',

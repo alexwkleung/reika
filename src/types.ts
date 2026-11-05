@@ -142,6 +142,15 @@ export type Message =
   | { role: 'compaction'; content: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
+// A local engine's prefill progress (#912). `processed` counts from `cached`, not from zero, so the
+// work done is `processed - cached` of `total - cached`.
+export type PromptProgress = {
+  total: number;
+  cached: number;
+  processed: number;
+  elapsedMs: number;
+};
+
 export type Usage = {
   promptTokens: number;
   completionTokens: number;

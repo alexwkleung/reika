@@ -5,6 +5,7 @@ import {
   formatDurationMs,
   formatTokensPerSecond,
   mcpStartupLine,
+  prefillLabel,
   TIMER_AFTER_S,
   toolLabel,
   toolTimer,
@@ -210,5 +211,44 @@ describe('mcpStartupLine', () => {
     expect(mcpStartupLine([s('a'), s('b'), s('c'), s('d'), s('e')])).toBe(
       'Starting MCP: a, b, c +2 more…',
     );
+  });
+});
+
+describe('prefillLabel (#912)', () => {
+  const at = (processed: number, elapsedMs: number, cached = 0, total = 28156) =>
+    prefillLabel({ total, cached, processed, elapsedMs });
+
+  it('says nothing with no prefill running', () => {
+    expect(prefillLabel(undefined)).toBeUndefined();
+  });
+
+  it('names a long prefill before its first batch, with no estimate yet', () => {
+    expect(at(0, 0)).toBe('Processing context 0%');
+  });
+
+  it('estimates from the rate so far', () => {
+    expect(at(2048, 2090)).toBe('Processing context 7% · ~27s left');
+  });
+
+  it('drops the estimate near the end but never rounds up to done', () => {
+    expect(at(28152, 48398)).toBe('Processing context 99%');
+    expect(at(28156, 49577)).toBe('Processing context 100%');
+  });
+
+  it('measures the uncached work, not the prompt', () => {
+    expect(at(40000, 2000, 38000, 44000)).toBe('Processing context 33% · ~4s left');
+  });
+
+  it('stays quiet on an append round', () => {
+    expect(at(28157, 75, 27640, 28161)).toBeUndefined();
+  });
+
+  it('still names a small prefill that is slow', () => {
+    expect(at(27740, 5000, 27640, 28161)).toBe('Processing context 19% · ~21s left');
+  });
+
+  it('survives a fully cached prompt and a processed count behind the cache', () => {
+    expect(at(28156, 0, 28156)).toBeUndefined();
+    expect(at(1000, 500, 2000, 8000)).toBe('Processing context 0%');
   });
 });
