@@ -263,11 +263,8 @@ const GIT_PROGRAM_SHORT_FLAGS: Record<string, { run: string; value: string }> = 
   rebase: { run: 'x', value: 'sXxC' },
   difftool: { run: 'x', value: 'tx' },
 };
-// Whole subcommands (or a subcommand's first operand) whose job is running a command.
-// `send-email` is refused whole rather than by option: it names commands four ways
-// (`--sendmail-cmd`, `--to-cmd`, `--cc-cmd`, `--header-cmd`) and `--smtp-server=<path>` names one
-// too when the path starts with `/`. It is also an outward-facing act in its own right — mail out,
-// not a read of the repo — so the whole subcommand loses the allow.
+// Whole subcommands (or a subcommand's first operand) that name a program to run: `send-email`
+// does so five ways (four `--*-cmd` options, and `--smtp-server=/path`), so it goes by subcommand.
 const GIT_PROGRAM_SUBCOMMANDS = new Set([
   'filter-branch',
   'submodule foreach',
@@ -284,13 +281,7 @@ function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
     if (a === '--') return false;
     if (a.startsWith('--')) {
       const name = a.slice(2).split('=')[0];
-      // Any abbreviation, down to one letter: parse-options takes any unambiguous prefix, and
-      // `--u=cmd` was `--upload-pack` on `ls-remote` and `clone` (git 2.50, measured) — the
-      // two-letter guard left that spelling open, and the command was unflagged, so it ran with no
-      // prompt and with the network. A one-letter spelling of a harmless option (`--e`, where the
-      // subcommand's own `--e` means something else) is a false deny, which is this module's rule: a
-      // false deny, never a hole. The empty name (`--=x`) matches every flag by prefix, so it is
-      // not one.
+      // Any prefix, down to one letter (`--u=cmd` ran); `--=x` has an empty name, which is none.
       if (name && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
     } else if (short && a.startsWith('-')) {
       for (const ch of a.slice(1)) {

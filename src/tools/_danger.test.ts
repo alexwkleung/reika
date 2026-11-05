@@ -52,6 +52,12 @@ describe('detectDangerousPatterns — workflow policy', () => {
     expect(hits).toContain('Git push (publishes commits to remote)');
   });
 
+  it('flags git send-email (mail out, and it cannot run sandboxed)', () => {
+    expect(detectDangerousPatterns('git send-email --to a@example.com p.patch')).toContain(
+      'Git send-email (sends mail, outward-facing)',
+    );
+  });
+
   it('does NOT flag read-only git commands', () => {
     expect(detectDangerousPatterns('git status')).toEqual([]);
     expect(detectDangerousPatterns('git log --oneline')).toEqual([]);

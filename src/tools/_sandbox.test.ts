@@ -571,12 +571,14 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git clone --u=./x.sh a b')).toBe(false);
     expect(networkAllowedFor('git ls-remote --u ./x.sh origin')).toBe(false);
     // The rule is per flag, not per subcommand: `--e` is `--exec`, `--t` is `--template` and `--o`
-    // is `--open-files-in-pager` wherever they are unambiguous. Git rejects these on `log` anyway
-    // ("unrecognized argument"), so the cost of the wider match here is a false deny and nothing
-    // else.
+    // is `--open-files-in-pager` wherever they are unambiguous.
     expect(networkAllowedFor('git log --e=./x.sh')).toBe(false);
     expect(networkAllowedFor('git log --t=/tmp/t')).toBe(false);
     expect(networkAllowedFor('git log --o=./x.sh')).toBe(false);
+    // The accepted cost: on `fetch` and `ls-remote` git reads `--t` as `--tags` and it works, so
+    // this harmless spelling loses the network.
+    expect(networkAllowedFor('git fetch --t origin')).toBe(false);
+    expect(networkAllowedFor('git ls-remote --t origin')).toBe(false);
     // The empty name is not an abbreviation of anything: `--=x` is an unknown option to git.
     expect(networkAllowedFor('git ls-remote --=x origin')).toBe(true);
     // A longer spelling that is not a prefix of one of these is none of their business.
