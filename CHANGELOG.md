@@ -13,6 +13,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A `git` command whose program-running option was spelled as a one-letter abbreviation
+  (`git ls-remote --u=./x.sh`) no longer keeps the sandbox's network allow, and `git send-email`
+  no longer keeps it either (#909).
 - Token totals now count a round cut short by the reasoning limit, a loop abort or ctrl-c, from
   what streamed before the cut. Such a total is an estimate, shown with `~` in the status bar,
   `/tokens` and the exit summary, and recorded in the saved session header (#908).

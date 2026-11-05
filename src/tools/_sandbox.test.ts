@@ -561,6 +561,42 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor("git filter-branch --tree-filter 'curl x' HEAD")).toBe(false);
   });
 
+  // A one-letter abbreviation is still an abbreviation: parse-options takes any unambiguous prefix,
+  // and `--u=cmd` ran as `--upload-pack` on `ls-remote` and `clone` (git 2.50, measured — the marker
+  // script ran), where the two-letter guard left the spelling open. The command is unflagged, so it
+  // ran with no prompt and with the network. A one-letter spelling of a harmless option costs a
+  // false deny, which is this module's rule: a false deny, never a hole.
+  it('refuses a one-letter abbreviation of a program-running git option', () => {
+    expect(networkAllowedFor('git ls-remote --u=./x.sh origin')).toBe(false);
+    expect(networkAllowedFor('git clone --u=./x.sh a b')).toBe(false);
+    expect(networkAllowedFor('git ls-remote --u ./x.sh origin')).toBe(false);
+    // The rule is per flag, not per subcommand: `--e` is `--exec`, `--t` is `--template` and `--o`
+    // is `--open-files-in-pager` wherever they are unambiguous. Git rejects these on `log` anyway
+    // ("unrecognized argument"), so the cost of the wider match here is a false deny and nothing
+    // else.
+    expect(networkAllowedFor('git log --e=./x.sh')).toBe(false);
+    expect(networkAllowedFor('git log --t=/tmp/t')).toBe(false);
+    expect(networkAllowedFor('git log --o=./x.sh')).toBe(false);
+    // The empty name is not an abbreviation of anything: `--=x` is an unknown option to git.
+    expect(networkAllowedFor('git ls-remote --=x origin')).toBe(true);
+    // A longer spelling that is not a prefix of one of these is none of their business.
+    expect(networkAllowedFor('git ls-remote --exit-code origin')).toBe(true);
+  });
+
+  // `send-email` names commands four ways (`--sendmail-cmd`, `--to-cmd`, `--cc-cmd`,
+  // `--header-cmd`) and `--smtp-server=<path>` names one too when the path starts with `/`, so it
+  // loses the allow whole rather than by option — and it is outward-facing (mail out) besides.
+  it('refuses git send-email whole', () => {
+    expect(
+      networkAllowedFor('git send-email --sendmail-cmd=./x.sh --to a@example.com p.patch'),
+    ).toBe(false);
+    expect(networkAllowedFor('git send-email --smtp-server=/usr/sbin/sendmail p.patch')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git send-email p.patch')).toBe(false);
+    expect(networkAllowedFor('git send-email --quiet --to a@example.com p.patch')).toBe(false);
+  });
+
   // The other direction: the same letters mean something else elsewhere, a value letter's value is
   // the rest of its bundle, `--no-config` only removes config, and after `--` everything is operands.
   it('keeps the allow for look-alike git options that run nothing', () => {

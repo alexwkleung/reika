@@ -242,8 +242,9 @@ const GIT_GLOBAL_VALUE_FLAGS = new Set([
 
 // Subcommand options that run a program the model wrote. `--template` plants hooks that run at
 // checkout and clone's `--config` is `-c` again, so both belong here although neither is spelled
-// as a command. Long names apply to every subcommand: none has a harmless option abbreviated by
-// these, and `push --exec`/`archive --exec` mean the same as `rebase --exec`.
+// as a command. Long names apply to every subcommand: `push --exec`/`archive --exec` mean the same
+// as `rebase --exec`, and an abbreviation of one of these is refused on any subcommand — a false
+// deny where that subcommand's own `--e`/`--t`/`--u` means something else, never a hole.
 const GIT_PROGRAM_LONG_FLAGS = [
   'upload-pack',
   'receive-pack',
@@ -263,7 +264,16 @@ const GIT_PROGRAM_SHORT_FLAGS: Record<string, { run: string; value: string }> = 
   difftool: { run: 'x', value: 'tx' },
 };
 // Whole subcommands (or a subcommand's first operand) whose job is running a command.
-const GIT_PROGRAM_SUBCOMMANDS = new Set(['filter-branch', 'submodule foreach', 'bisect run']);
+// `send-email` is refused whole rather than by option: it names commands four ways
+// (`--sendmail-cmd`, `--to-cmd`, `--cc-cmd`, `--header-cmd`) and `--smtp-server=<path>` names one
+// too when the path starts with `/`. It is also an outward-facing act in its own right — mail out,
+// not a read of the repo — so the whole subcommand loses the allow.
+const GIT_PROGRAM_SUBCOMMANDS = new Set([
+  'filter-branch',
+  'submodule foreach',
+  'bisect run',
+  'send-email',
+]);
 
 function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
   if (GIT_PROGRAM_SUBCOMMANDS.has(sub)) return true;
@@ -274,7 +284,14 @@ function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
     if (a === '--') return false;
     if (a.startsWith('--')) {
       const name = a.slice(2).split('=')[0];
-      if (name.length >= 2 && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
+      // Any abbreviation, down to one letter: parse-options takes any unambiguous prefix, and
+      // `--u=cmd` was `--upload-pack` on `ls-remote` and `clone` (git 2.50, measured) — the
+      // two-letter guard left that spelling open, and the command was unflagged, so it ran with no
+      // prompt and with the network. A one-letter spelling of a harmless option (`--e`, where the
+      // subcommand's own `--e` means something else) is a false deny, which is this module's rule: a
+      // false deny, never a hole. The empty name (`--=x`) matches every flag by prefix, so it is
+      // not one.
+      if (name && GIT_PROGRAM_LONG_FLAGS.some(f => f.startsWith(name))) return true;
     } else if (short && a.startsWith('-')) {
       for (const ch of a.slice(1)) {
         if (short.run.includes(ch)) return true;
