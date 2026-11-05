@@ -13,6 +13,7 @@ const STATES: { name: string; label?: string; accent?: string }[] = [
   { name: 'default (agent turn)' },
   { name: 'typechecking', label: 'Typechecking', accent: theme.info },
   { name: 'loop recovery', label: 'Recovering from a loop', accent: theme.info },
+  { name: 'prefill', label: 'Processing context 38% · ~14s left', accent: theme.prefill },
   {
     name: 'spin hint',
     label: 'Thinking — may be looping (ctrl-c to abort)',

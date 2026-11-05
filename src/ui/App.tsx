@@ -3106,13 +3106,17 @@ export function App() {
               }
               words={config?.workingWords ? WORKING_WORDS : undefined}
               accent={
-                typechecking || recovering || prefilling || noteLive
+                typechecking || recovering
                   ? theme.info
-                  : reasoningSpin
-                    ? theme.warning
-                    : subagentLive
-                      ? theme.subagent
-                      : undefined
+                  : prefilling
+                    ? theme.prefill
+                    : noteLive
+                      ? theme.info
+                      : reasoningSpin
+                        ? theme.warning
+                        : subagentLive
+                          ? theme.subagent
+                          : undefined
               }
             />
           ) : (pasting ?? expanding ?? resuming) ? (
