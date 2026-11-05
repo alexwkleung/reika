@@ -2652,6 +2652,12 @@ export function App() {
       }, TYPECHECK_LINGER_MS);
     }
   };
+  // The linger exists to keep a finished check on screen; a prefill worth naming is the newer fact,
+  // and holding it back made its label land late (#914). A check still running keeps its label.
+  const onPromptProgressChange = (progress: PromptProgress | undefined) => {
+    setPromptProgress(progress);
+    if (typecheckHideTimerRef.current && prefillLabel(progress)) resetTypecheck();
+  };
   // Immediate, un-lingered clear for turn boundaries.
   const resetTypecheck = () => {
     if (typecheckHideTimerRef.current) {
@@ -2843,7 +2849,7 @@ export function App() {
         // re-render.
         onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
         onReasoningStatus: setReasoningSpin,
-        onPromptProgress: setPromptProgress,
+        onPromptProgress: onPromptProgressChange,
         onReasoningReset: () => {
           // Loop-break recovery: end the degenerate looped reasoning's live preview so the
           // recovery notice is visible and the next round streams into a fresh Thinking block
