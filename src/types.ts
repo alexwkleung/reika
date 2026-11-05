@@ -149,6 +149,9 @@ export type Usage = {
   // reports it (OpenAI `prompt_tokens_details.cached_tokens`, DeepSeek
   // `prompt_cache_hit_tokens`); undefined means the provider didn't report it.
   cachedTokens?: number;
+  // Our estimate rather than the provider's count, for a round cut short: its stream never reached
+  // the final usage chunk (#906). On a total, at least one round in it was estimated.
+  estimated?: boolean;
 };
 
 // One generated token as the provider reported it, with the alternatives it was sampled against.

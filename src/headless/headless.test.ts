@@ -490,6 +490,13 @@ describe('createHeadlessStatus', () => {
     });
   });
 
+  it('keeps the last real call when an estimated round lands', () => {
+    const t = createHeadlessStatus(() => []);
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    t.events.onUsage?.({ promptTokens: 900, completionTokens: 300, estimated: true });
+    expect(t.status(session).lastUsage).toEqual({ promptTokens: 50, completionTokens: 3 });
+  });
+
   it('stamps a shrink with the turn it landed in and drops the stale last call', () => {
     const msgs: Message[] = [
       { role: 'user', content: 'go' },

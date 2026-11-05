@@ -17,6 +17,7 @@ import type {
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
+import type { ModelResponse } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
 import { observeNoteSlot, reasoningCharsBehindNote } from './noteslotmonitor.js';
 import { isLocalEngine } from '../provider/templatekwargs.js';
@@ -1746,6 +1747,30 @@ export async function runTurn(opts: {
       trailingNote: roundSuffix,
     });
 
+  // A stream cut short never reaches its final usage chunk, but a hosted API has still billed it
+  // (#906), so a cut round is counted from what streamed. A cut before any output counts nothing:
+  // no decode happened. Goes to onUsage only, never onto the response: calibration, the decode rate
+  // and the reserve read `response.usage`, and a learned value must not be fitted to our own guess.
+  const reportUsage = (
+    response: Pick<ModelResponse, 'usage' | 'content' | 'reasoning'>,
+    cut: boolean,
+    promptEstimate: () => number,
+  ): void => {
+    if (response.usage) {
+      opts.onUsage?.(response.usage);
+      return;
+    }
+    const output = (response.reasoning ?? '') + (response.content ?? '');
+    if (!cut || !output) return;
+    opts.onUsage?.({
+      promptTokens: Math.round(promptEstimate() * calibration),
+      completionTokens: Math.round(
+        estimateTokens(output) * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+      ),
+      estimated: true,
+    });
+  };
+
   // Run a typecheck while pulsing the UI indicator around it (and clearing on any exit). The
   // pulse is human-only; the CheckOutcome flows to the gate logic, never to the model.
   const typecheck = async () => {
@@ -2520,8 +2545,9 @@ export async function runTurn(opts: {
             return plain;
           }
         };
+        const notePrompt = () => rawEstimate(opts.history, noteTools);
         const rep = await report(directive);
-        if (rep.usage) opts.onUsage?.(rep.usage);
+        reportUsage(rep, !!opts.signal?.aborted, notePrompt);
         // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
         // is a cut-off fragment — never a note, and not a reason to fold.
         if (opts.signal?.aborted) {
@@ -2541,7 +2567,7 @@ export async function runTurn(opts: {
           );
           opts.onReasoningReset?.();
           retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`, refusedCallTurn(rep));
-          if (retry.usage) opts.onUsage?.(retry.usage);
+          reportUsage(retry, !!opts.signal?.aborted, notePrompt);
           if (opts.signal?.aborted) {
             commitNoteRoundAbort();
             return;
@@ -2866,7 +2892,7 @@ export async function runTurn(opts: {
       debugLog(`[reika:debug] reasoning-spin off round=${i} (block ended while flagged)\n`);
     }
 
-    if (response.usage) opts.onUsage?.(response.usage);
+    reportUsage(response, callAbort.signal.aborted, () => sentEstimate);
 
     // Recalibrate from what the provider actually counted vs. what we estimated for the
     // request we just sent. Clamped to a sane band to ignore one-off outliers.

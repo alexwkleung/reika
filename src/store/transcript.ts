@@ -43,6 +43,8 @@ export type TranscriptUsage = {
   completionTokens: number;
   // Session total of prompt tokens served from the provider's cache.
   cachedTokens?: number;
+  // The totals above include rounds cut short, counted from our own estimate (#906).
+  tokensEstimated?: boolean;
   // Current context size: the last call's prompt tokens, or the pre-send estimate when no call has
   // landed yet. `contextEstimated` says which, because the difference matters when the file is
   // being read as debugging evidence.
@@ -122,6 +124,7 @@ export function buildTranscriptMeta(opts: {
     promptTokens: totals.promptTokens,
     completionTokens: totals.completionTokens,
     ...(totals.cachedTokens != null ? { cachedTokens: totals.cachedTokens } : {}),
+    ...(totals.estimated ? { tokensEstimated: true } : {}),
     contextTokens: last?.promptTokens ?? status.estimatedContext,
     // No call has landed yet, so the context size above is the pre-send estimate.
     ...(last?.promptTokens == null ? { contextEstimated: true } : {}),
@@ -214,8 +217,9 @@ export function formatUsageHeader(usage: TranscriptUsage): string[] {
   const lines = [`# turns:    ${usage.turns}`];
   const cachedTotal =
     usage.cachedTokens != null ? `, ${kFormat(usage.cachedTokens)} from cache` : '';
+  const approx = usage.tokensEstimated ? '~' : '';
   lines.push(
-    `# tokens:   ${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓ (session total${cachedTotal})`,
+    `# tokens:   ${approx}${kFormat(usage.promptTokens)}↑ ${approx}${kFormat(usage.completionTokens)}↓ (session total${cachedTotal})`,
   );
   const ctx = usage.contextTokens;
   if (ctx != null && ctx > 0) {

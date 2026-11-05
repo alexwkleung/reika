@@ -407,6 +407,13 @@ describe('usage in the saved record', () => {
     expect(txt).toContain('# cache:    89% of the last prompt (40k)');
   });
 
+  it('marks estimated totals in both the .txt and the JSONL header', () => {
+    const usage = { ...USAGE, tokensEstimated: true };
+    expect(renderTxt([], { ...META, usage })).toContain('# tokens:   ~1.3M↑ ~34k↓ (session total');
+    const meta = JSON.parse(serializeJsonl([], { ...META, usage }).split('\n')[0]);
+    expect(meta.usage.tokensEstimated).toBe(true);
+  });
+
   it('carries the raw counts in the JSONL meta line', () => {
     const meta = JSON.parse(serializeJsonl([], { ...META, usage: USAGE }).split('\n')[0]);
     expect(meta.usage).toEqual(USAGE);
