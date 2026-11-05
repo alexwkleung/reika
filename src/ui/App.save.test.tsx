@@ -236,6 +236,29 @@ describe('/save records the status-line accounting', () => {
     app.unmount();
   });
 
+  it('marks the totals after a cut round, keeping ctx and cache on the last real call', async () => {
+    runTurn.mockImplementationOnce(async (opts: TurnOpts) => {
+      opts.onMessage({ role: 'user', content: opts.userInput });
+      opts.onMessage({ role: 'assistant', content: 'ok' });
+      opts.onUsage?.(CALL_USAGE);
+      opts.onUsage?.({ promptTokens: 5000, completionTokens: 300, estimated: true });
+    });
+    const app = await mountApp();
+    await submit(app, 'fix the parser');
+    await submit(app, '/tokens');
+    expect(app.lastFrame()).toContain('~6000');
+    await submit(app, '/save');
+
+    expect(savedWith().meta.usage).toMatchObject({
+      promptTokens: 6000,
+      completionTokens: 400,
+      tokensEstimated: true,
+      contextTokens: 1000,
+      lastCachedTokens: 800,
+    });
+    app.unmount();
+  });
+
   it('saves zeroed counts before any turn has run', async () => {
     const app = await mountApp();
     await submit(app, '/plan');

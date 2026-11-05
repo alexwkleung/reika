@@ -52,6 +52,7 @@ export function buildSummary(
           .map(f => scrubPaths(f))
           .join(', ');
 
+  const approx = usage.estimated ? '~' : '';
   return [
     'Session summary',
     '─'.repeat(40),
@@ -59,7 +60,7 @@ export function buildSummary(
     `Turns:           ${userTurns} user · ${assistantTurns} assistant`,
     `Tools:           ${totalTools}${breakdown}`,
     `Subagents:       ${subagentCount}`,
-    `Tokens:          ${usage.promptTokens.toLocaleString()} ↑  ${usage.completionTokens.toLocaleString()} ↓`,
+    `Tokens:          ${approx}${usage.promptTokens.toLocaleString()} ↑  ${approx}${usage.completionTokens.toLocaleString()} ↓`,
     ...(usage.cachedTokens && usage.promptTokens > 0
       ? [
           `Cache hits:      ${usage.cachedTokens.toLocaleString()} (${Math.round(

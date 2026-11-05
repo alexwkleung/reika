@@ -13,6 +13,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Token totals now count a round cut short by the reasoning limit, a loop abort or ctrl-c, from
+  what streamed before the cut. Such a total is an estimate, shown with `~` in the status bar,
+  `/tokens` and the exit summary, and recorded in the saved session header (#PR).
 - A compaction note no longer drops a row when it finishes streaming, which left an extra blank line
   above it (#903).
 - A long session resumed on a smaller context window no longer sends the whole conversation to the

@@ -22,6 +22,13 @@ describe('Status', () => {
     expect(lastFrame()).not.toContain('PR');
   });
 
+  it('marks both totals as approximate once a cut round is in them', () => {
+    const { lastFrame } = render(
+      <Status {...BASE} usage={{ promptTokens: 5000, completionTokens: 900, estimated: true }} />,
+    );
+    expect(lastFrame()).toContain('~5.0k↑ ~900↓');
+  });
+
   it('shows shrink chips after the gauge once something has shrunk', () => {
     const { lastFrame } = render(
       <Status

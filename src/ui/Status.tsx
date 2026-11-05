@@ -105,9 +105,10 @@ export function statusChips({
   const busy = elapsed !== null;
   const timer = busy ? ` · ${formatElapsed(elapsed)}` : '';
   const keys = busy ? 'ctrl-c to abort' : 'ctrl-c to exit';
+  const approx = usage.estimated ? '~' : '';
   const tokens =
     usage.promptTokens > 0 || usage.completionTokens > 0
-      ? `${kFormat(usage.promptTokens)}↑ ${kFormat(usage.completionTokens)}↓`
+      ? `${approx}${kFormat(usage.promptTokens)}↑ ${approx}${kFormat(usage.completionTokens)}↓`
       : '';
 
   // Current context size and how full the window is. The fill % drives the color so a

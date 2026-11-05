@@ -2039,9 +2039,11 @@ export function App() {
       case 'cwd':
         response = bundle?.cwd ?? '(unknown)';
         break;
-      case 'tokens':
-        response = `prompt:     ${totalUsage.promptTokens}\ncompletion: ${totalUsage.completionTokens}`;
+      case 'tokens': {
+        const approx = totalUsage.estimated ? '~' : '';
+        response = `prompt:     ${approx}${totalUsage.promptTokens}\ncompletion: ${approx}${totalUsage.completionTokens}`;
         break;
+      }
       case 'skills': {
         const list = bundle?.skills ?? [];
         if (list.length === 0) {
@@ -2868,7 +2870,8 @@ export function App() {
           setStreaming('');
         },
         onUsage: u => {
-          setLastUsage(u);
+          // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
+          if (!u.estimated) setLastUsage(u);
           setTotalUsage(t => ({
             promptTokens: t.promptTokens + u.promptTokens,
             completionTokens: t.completionTokens + u.completionTokens,
@@ -2877,6 +2880,7 @@ export function App() {
               : t.cachedTokens != null
                 ? { cachedTokens: t.cachedTokens }
                 : {}),
+            ...(u.estimated || t.estimated ? { estimated: true } : {}),
           }));
         },
         onContextEstimate: t => setEstimatedContext(t),

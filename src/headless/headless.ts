@@ -377,7 +377,9 @@ export function createHeadlessStatus(messages: () => Message[]): {
   const shrinkEvents: TranscriptShrinkEvent[] = [];
   return {
     events: {
-      onUsage: u => (lastUsage = u),
+      onUsage: u => {
+        if (!u.estimated) lastUsage = u;
+      },
       onContextEstimate: t => (estimatedContext = t),
       onShrink: event => {
         lastUsage = null;
