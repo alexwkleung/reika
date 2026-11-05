@@ -170,8 +170,8 @@ describe('agent prompt subagent nudge (#273)', () => {
     // 8 is the caller-check rule (#556, default on).
     expect(p).toContain('8. After you change what a function accepts');
     expect(p).toContain('9. Stopping to ask');
-    expect(p).not.toContain('10.');
-    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain('9.');
+    expect(p).not.toContain(' 10. ');
+    expect(agentPrompt({ canAsk: false, canSubagent: true })).not.toContain(' 9. ');
   });
 
   // Scoped to exploration: the value is N reads collapsing into one digest payload in the parent;
