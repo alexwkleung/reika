@@ -20,6 +20,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   of the turn ending silently and looking like an abort (#917).
 - A long session no longer loses your current request in a fold: the recap could keep the previous
   task under a header calling it the current one (#918).
+- Quitting Reika now closes the Chrome it started for web search, instead of leaving it running and
+  holding memory. A `reika -p` run left it behind every time (#921).
 
 ## [0.9.0] - 2026-11-04
 
