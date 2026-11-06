@@ -189,8 +189,14 @@ export function compactHistory(
   // whatever small tool result had arrived since (a 13-line file read, then a grep of AGENTS.md)
   // under a header asserting it is the task. The first fold is also the only one whose ballot still
   // held the real spec, so its answer is the one to keep.
+  //
+  // Only a recap written since the newest user message is this turn's. One from before it holds an
+  // earlier task, and carrying it would present that task as this one under the header above.
   const span = history.slice(recapStart, keepFrom);
-  const preserved = carriedSpecBlock(span) ?? electSpecBlock(history, recapStart, keepFrom);
+  const turnStart = Math.max(recapStart, lastUserMessageIndex(history) + 1);
+  const preserved =
+    carriedSpecBlock(history.slice(turnStart, keepFrom)) ??
+    electSpecBlock(history, recapStart, keepFrom);
 
   const recap = buildRecap(span, avail, calib, note);
   history.splice(recapStart, keepFrom - recapStart, {
