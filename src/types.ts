@@ -63,6 +63,10 @@ export type Message =
       // the block's height and the input jumped up under a one-line notice. 'note' draws it in the
       // note's colors, as it streamed. Never enters model history.
       discarded?: 'stream' | 'note';
+      // Set on the message a turn ends with when the harness ended it instead of the model: the
+      // text is the harness's own report, not an answer. A front end with no reader (headless)
+      // cannot tell the two apart from the content.
+      harnessStop?: 'loop' | 'length' | 'edit' | 'max-turns';
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.

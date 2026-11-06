@@ -221,8 +221,12 @@ pnpm run dev -p "..."                                # from a checkout: pnpm for
   `--json` alone prints as one array at the end. Text streamed from a model with no native tool-call
   template can include its in-band call text, which the TUI hides once the round lands but a pipe cannot
   take back.
-- **Exit status:** 0 on a reply, 1 on an error or a turn that ended without one, 130 when interrupted
-  (ctrl-c aborts the turn cleanly).
+- **Exit status:** 0 on a reply, 1 on an error or a turn that ended without one, 2 when Reika stopped
+  the turn itself (a model stuck in a loop, or the round limit), 130 when interrupted (ctrl-c aborts the
+  turn cleanly). A stopped turn prints nothing to stdout; what happened goes to stderr, and `--json`
+  marks that message with `harnessStop`.
+- **Run summary:** a line on stderr at the end of the run names the model, the tokens, the time and
+  the saved session, the numbers the TUI keeps in its status bar.
 - **Profiles** (`--profile <name>`): the run uses that profile, over a launch `REIKA_MODEL` and over
   the mode's own model in `REIKA_MODE_MODELS`. Names match case-insensitively; a name no profile
   defines prints a notice on stderr listing the defined ones and runs on the profile it would have

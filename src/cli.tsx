@@ -40,10 +40,10 @@ if (headless?.help) {
 }
 
 if (headless) {
-  const { runHeadless } = await import('./headless/headless.js');
+  const { runHeadless, terminalSafeWriter } = await import('./headless/headless.js');
   const code = await runHeadless(headless, {
-    stdout: text => process.stdout.write(text),
-    stderr: text => process.stderr.write(text),
+    stdout: terminalSafeWriter(process.stdout),
+    stderr: terminalSafeWriter(process.stderr),
     readStdin: async () => {
       if (process.stdin.isTTY) {
         process.stderr.write(`reika: -p needs a prompt or piped stdin\n${USAGE}\n`);
