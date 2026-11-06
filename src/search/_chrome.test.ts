@@ -119,34 +119,57 @@ describe('ChromeHost exit close', () => {
 
 describe('buildBrowserCloseScript', () => {
   const run = promisify(execFile);
+  const launchTab = { id: 'launch', type: 'page', url: 'about:blank' };
+  const searchUrl = 'https://search.brave.com/search?q=x';
 
-  async function requestsMadeBy(tabs: { type: string; url: string }[]): Promise<string[]> {
+  // One tab list per look; the last repeats, so a run that keeps looking is visible in the count.
+  async function requestsMadeBy(...looks: { id: string; type: string; url: string }[][]) {
     const requested: string[] = [];
+    let listed = 0;
     const server = createServer((req, res) => {
       requested.push(req.url ?? '');
+      const tabs = looks[Math.min(listed, looks.length - 1)];
+      if (req.url === '/json/list') listed++;
       res.end(JSON.stringify(req.url === '/json/list' ? tabs : {}));
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
-    await run(process.execPath, ['-e', buildBrowserCloseScript(port)]);
+    await run(process.execPath, ['-e', buildBrowserCloseScript(port, 20)]);
     server.close();
     return requested;
   }
 
   it('leaves the browser up while a search or a bot check holds a tab', async () => {
     const requested = await requestsMadeBy([
-      { type: 'page', url: 'about:blank' },
-      { type: 'page', url: 'https://search.brave.com/search?q=x' },
+      launchTab,
+      { id: 'search', type: 'page', url: searchUrl },
     ]);
     expect(requested).toEqual(['/json/list']);
   });
 
-  it('goes on to close a browser holding only the launch tab', async () => {
-    const requested = await requestsMadeBy([{ type: 'page', url: 'about:blank' }]);
-    expect(requested).toEqual(['/json/list', '/json/version']);
+  it('goes on to close a browser holding only the launch tab, after looking twice', async () => {
+    const requested = await requestsMadeBy([launchTab]);
+    expect(requested).toEqual(['/json/list', '/json/list', '/json/version']);
+  });
+
+  it('leaves the browser up when a blank tab turns out to be a search navigating', async () => {
+    const newTab = { id: 'search', type: 'page', url: 'about:blank' };
+    const requested = await requestsMadeBy(
+      [launchTab, newTab],
+      [launchTab, { ...newTab, url: searchUrl }],
+    );
+    expect(requested).toEqual(['/json/list', '/json/list']);
+  });
+
+  it('leaves the browser up when a tab opens between the two looks', async () => {
+    const newTab = { id: 'search', type: 'page', url: 'about:blank' };
+    const requested = await requestsMadeBy([launchTab], [launchTab, newTab]);
+    expect(requested).toEqual(['/json/list', '/json/list']);
   });
 
   it('exits quietly when no browser is listening', async () => {
-    await expect(run(process.execPath, ['-e', buildBrowserCloseScript(1)])).resolves.toBeDefined();
+    await expect(
+      run(process.execPath, ['-e', buildBrowserCloseScript(1, 20)]),
+    ).resolves.toBeDefined();
   });
 });

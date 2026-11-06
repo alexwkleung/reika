@@ -32,6 +32,8 @@ const READY_POLL_MS = 200;
 // minutes keeps a burst of searches on one warm browser while not holding the memory all session.
 // The profile lives on disk, so cookies survive the kill and only the process cost is reclaimed.
 const IDLE_SHUTDOWN_MS = 10 * 60_000;
+// Long enough for a tab another session just opened to leave `about:blank` (#920).
+const BROWSER_CLOSE_SETTLE_MS = 1000;
 
 export type ChromeOptions = {
   port?: number;
@@ -309,15 +311,22 @@ export class ChromeHost implements BrowserHost {
 }
 
 // The idle timer dies with the process that armed it, and an exit hook cannot await the open-tab
-// check, so a detached child does what shutdown() would (#920). No imports: it runs from `node -e`,
-// and a closing browser has nothing more to answer, so any reply or failure ends it.
-export function buildBrowserCloseScript(port: number): string {
+// check, so a detached child does what shutdown() would (#920). It looks twice because another
+// session's new tab is `about:blank` until it navigates, which reads the same as the launch tab.
+// No imports: it runs from `node -e`.
+export function buildBrowserCloseScript(port: number, settleMs = BROWSER_CLOSE_SETTLE_MS): string {
   return [
     `const base = 'http://127.0.0.1:${port}';`,
     'const get = async path => (await fetch(base + path, { signal: AbortSignal.timeout(1500) })).json();',
+    'const blankPageIds = async () => {',
+    "  const pages = (await get('/json/list')).filter(t => t.type === 'page');",
+    "  return pages.every(t => t.url === 'about:blank') ? pages.map(t => t.id).sort().join() : null;",
+    '};',
     '(async () => {',
-    "  const targets = await get('/json/list');",
-    "  if (targets.some(t => t.type === 'page' && t.url !== 'about:blank')) return;",
+    '  const first = await blankPageIds();',
+    '  if (first === null) return;',
+    `  await new Promise(resolve => setTimeout(resolve, ${settleMs}));`,
+    '  if ((await blankPageIds()) !== first) return;',
     "  const { webSocketDebuggerUrl } = await get('/json/version');",
     '  if (!webSocketDebuggerUrl) return;',
     '  const socket = new WebSocket(webSocketDebuggerUrl);',
