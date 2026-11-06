@@ -312,15 +312,15 @@ describe('withdrawal text follows the turn tool list', () => {
     expect(withdrawalRemedy(CHAT_TOOLS)).toBe('Answer from what you already have');
   });
 
-  it('leaves agent mode byte-identical to the pre-list-aware text', () => {
+  it("pins agent mode's refusal and ledger bytes", () => {
     // House rule: a change that only adds a new mode must not move the bytes of the existing one,
     // or every measurement taken against the old text silently stops comparing.
     expect(buildWithdrawalDirective(AGENT_TOOLS)).toBe(
-      '(reika: inspection tools (read/grep/glob/list, and read-only shell commands like grep/cat/tail) ' +
-        'are paused because you have repeated the same reads or searches without making progress. You ' +
-        'already have what you need. Make the edit the task requires with the edit/write tools, state ' +
-        'what is specifically blocking you, or — if the change is already complete — say so and stop. ' +
-        'Reading and searching are unavailable until you make progress.)',
+      '(reika: this is deliberate, not a fault. inspection tools (read/grep/glob/list, and read-only ' +
+        'shell commands like grep/cat/tail) are paused because the work has repeated without making ' +
+        'progress. Sending this call again now gets this same reply, so do not retry it. Make the ' +
+        'edit the task requires with the edit/write tools, state what is specifically blocking you, ' +
+        'or — if the change is already complete — say so and stop.)',
     );
     expect(buildAgentLoopLedger([], true, AGENT_TOOLS)).toContain(
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write\n' +
@@ -342,7 +342,7 @@ describe('withdrawal text follows the turn tool list', () => {
     expect(minimal).toContain('read-only shell commands (grep/cat/tail and similar inspection)');
     expect(minimal).toContain('running the command that applies it');
     // Still says what it is and how to get out of it.
-    expect(minimal).toContain('are paused because you have repeated the same reads or searches');
+    expect(minimal).toContain('are paused because the work has repeated without making progress');
     expect(minimal).toContain('say so and stop');
   });
 });

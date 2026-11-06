@@ -1033,13 +1033,13 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out. Built per turn rather than held as a
 // const because both halves — what is paused, and what to do instead — depend on the tool list.
+// "now" is load-bearing: the hold lifts on its own, so a bare "gets this same reply" would be false.
 export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string {
   return (
-    `(reika: ${withdrawnToolsPhrase(toolNames)} are paused because you have repeated the same ` +
-    'reads or searches without making progress. You already have what you need. ' +
-    `${withdrawalRemedy(toolNames)}, state what is specifically blocking you, or — if the change ` +
-    'is already complete — say so and stop. Reading and searching are unavailable until you make ' +
-    'progress.)'
+    `(reika: this is deliberate, not a fault. ${withdrawnToolsPhrase(toolNames)} are paused ` +
+    'because the work has repeated without making progress. Sending this call again now gets ' +
+    `this same reply, so do not retry it. ${withdrawalRemedy(toolNames)}, state what is ` +
+    'specifically blocking you, or — if the change is already complete — say so and stop.)'
   );
 }
 
