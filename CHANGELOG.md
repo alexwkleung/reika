@@ -15,7 +15,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 ### Fixed
 
 - While inspection is paused to break a loop, a plain `echo` or `pwd` now runs instead of being
-  refused, so a model checking its shell no longer concludes the shell is broken.
+  refused, so a model checking its shell no longer concludes the shell is broken (#924).
 - `/issue` and `/review` keep a longer issue or PR in context, so a small window no longer drops it
   at the first shrink. The model is also told on that same request when earlier output was dropped
   (#917).
