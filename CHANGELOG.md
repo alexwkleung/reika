@@ -16,6 +16,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - While inspection is paused to break a loop, a plain `echo` or `pwd` now runs instead of being
   refused, so a model checking its shell no longer concludes the shell is broken (#924).
+- The message a model gets when a read is refused during a pause no longer makes claims that are not
+  always true, and it says the pause is deliberate.
 - `/issue` and `/review` keep a longer issue or PR in context, so a small window no longer drops it
   at the first shrink. The model is also told on that same request when earlier output was dropped
   (#917).
