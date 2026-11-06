@@ -582,6 +582,29 @@ describe('isInspectionEscape — the withdrawal ladder refuses the call', () => 
     expect(isInspectionEscape(cmd)).toBe(false);
   });
 
+  // A refused probe reads to the model as a broken shell. Plan mode's answer stays the same: these
+  // change nothing, so the exemption is the ladder's alone.
+  it.each(['echo hi', 'echo "test"', "echo 'a * b'", 'pwd', 'cd src && pwd', 'echo a; pwd'])(
+    'lets a command that reads nothing through: %s',
+    cmd => {
+      expect(isInspectionEscape(cmd)).toBe(false);
+      expect(isProvablyReadOnly(cmd)).toBe(true);
+    },
+  );
+
+  // Models separate reads with echo, so the exemption must not reach past a bare probe.
+  it.each([
+    'echo --- ; cat a.ts',
+    'echo --- && cat a.ts',
+    'cat a.ts; echo done',
+    'echo hi | wc -l',
+    'echo *', // a directory listing
+    'echo src/*.ts',
+    'echo a?.ts',
+  ])('still refuses a read beside or behind a probe: %s', cmd => {
+    expect(isInspectionEscape(cmd)).toBe(true);
+  });
+
   it.each([
     ['empty', ''],
     ['whitespace only', '   '],
