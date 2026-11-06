@@ -4,9 +4,12 @@ import { render } from 'ink-testing-library';
 import type { Config, ContextBundle, PromptProgress } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
+import type * as WorkingModule from './Working.js';
+import { theme } from './theme.js';
 
-// The prefill label against the typecheck linger (#914), through the real App: both are label state
-// in App's own chain, and a test of Working alone cannot see which one wins.
+// The prefill label against the typecheck linger (#914) and the recovery label (#916), through the
+// real App: all are label state in App's own chain, and a test of Working alone cannot see which
+// one wins.
 
 const CONFIG: Config = {
   baseURL: 'http://127.0.0.1:1/v1',
@@ -56,11 +59,24 @@ vi.mock('../laststate.js', async () => {
   return { ...actual, loadLastState: () => ({}), saveLastState: () => {} };
 });
 vi.mock('./pr.js', () => ({ resolvePr: async () => null }));
+// The label text is in the frame but a test frame carries no color, so the accent is read off the prop.
+let workingAccent: string | undefined;
+vi.mock('./Working.js', async importActual => {
+  const actual = await importActual<typeof WorkingModule>();
+  return {
+    ...actual,
+    Working: (props: Parameters<typeof actual.Working>[0]) => {
+      workingAccent = props.accent;
+      return actual.Working(props);
+    },
+  };
+});
 
 type Turn = {
   onMessage: (m: unknown) => void;
   userInput: string;
   onTypecheck?: (checking: boolean) => void;
+  onRecovering?: (active: boolean) => void;
   onPromptProgress?: (p: PromptProgress | undefined) => void;
 };
 let turn: Turn | undefined;
@@ -152,6 +168,49 @@ describe('prefill label handoff (#914)', { timeout: 30_000 }, () => {
     const timer = lingerTimer(setSpy);
     turn!.onPromptProgress!(SHORT);
     expect(clearSpy).not.toHaveBeenCalledWith(timer);
+    app.unmount();
+  });
+});
+
+describe('prefill label during a recovery round (#916)', { timeout: 30_000 }, () => {
+  beforeEach(() => {
+    turn = undefined;
+    runTurn.mockClear();
+  });
+  afterEach(() => {
+    finishTurn();
+    vi.restoreAllMocks();
+  });
+
+  it('names the prefill, then hands back to the recovery label until the round ends', async () => {
+    const app = await busyApp();
+    turn!.onRecovering!(true);
+    await waitFor(app, 'Recovering from a loop');
+    expect(workingAccent).toBe(theme.info);
+
+    turn!.onPromptProgress!(LONG);
+    await waitFor(app, 'Processing context 0%');
+    expect(plain(app.lastFrame())).not.toContain('Recovering from a loop');
+    expect(workingAccent).toBe(theme.prefill);
+
+    turn!.onPromptProgress!(undefined);
+    await waitFor(app, 'Recovering from a loop');
+    expect(workingAccent).toBe(theme.info);
+
+    turn!.onRecovering!(false);
+    for (let i = 0; i < 400 && plain(app.lastFrame()).includes('Recovering'); i++) await wait();
+    expect(plain(app.lastFrame())).not.toContain('Recovering from a loop');
+    app.unmount();
+  });
+
+  it('keeps the recovery label for a prefill too short to name', async () => {
+    const app = await busyApp();
+    turn!.onRecovering!(true);
+    turn!.onPromptProgress!(SHORT);
+    await waitFor(app, 'Recovering from a loop');
+    expect(plain(app.lastFrame())).not.toContain('Processing context');
+    expect(workingAccent).toBe(theme.info);
+    turn!.onRecovering!(false);
     app.unmount();
   });
 });

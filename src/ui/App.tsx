@@ -3095,14 +3095,15 @@ export function App() {
           {status === 'busy' && pending === null && question === null ? (
             <Working
               // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
-              // hint — they're things the harness is actively doing, not a maybe.
+              // hint — they're things the harness is actively doing, not a maybe. Prefill outranks
+              // recovery (#916): the scrollback already records the recovery, and the wait is longer.
               label={
                 typechecking
                   ? 'Typechecking'
-                  : recovering
-                    ? 'Recovering from a loop'
-                    : (prefilling ??
-                      (reasoningSpin
+                  : (prefilling ??
+                    (recovering
+                      ? 'Recovering from a loop'
+                      : reasoningSpin
                         ? 'Thinking — may be looping (ctrl-c to abort)'
                         : noteLive
                           ? 'Writing compaction note'
@@ -3112,11 +3113,11 @@ export function App() {
               }
               words={config?.workingWords ? WORKING_WORDS : undefined}
               accent={
-                typechecking || recovering
+                typechecking
                   ? theme.info
                   : prefilling
                     ? theme.prefill
-                    : noteLive
+                    : recovering || noteLive
                       ? theme.info
                       : reasoningSpin
                         ? theme.warning
