@@ -10,7 +10,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - While a local llama.cpp prefills a long prompt, the busy indicator now shows how far along it is
   and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
   hang (#913, #915, #919).
-- `reika -p` ends with a line on stderr naming the model, tokens, time and saved session.
+- `reika -p` ends with a line on stderr naming the model, tokens, time and saved session (#923).
 
 ### Fixed
 
@@ -25,12 +25,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   holding memory. A `reika -p` run left it behind every time (#921).
 - `reika -p` no longer reports a stopped turn as a success. When Reika ends a turn itself (a model
   stuck in a loop, the round limit) the run exits 2 and says why on stderr, instead of printing that
-  report as the reply and exiting 0.
+  report as the reply and exiting 0 (#923).
 - `reika -p` no longer prints text from an earlier round as the answer when the turn ended with no
-  reply. It exits 1 and says so.
-- `reika -p` now warns when the context window leaves too little room to work in, as the TUI does.
+  reply. It exits 1 and says so (#923).
+- `reika -p` now warns when the context window leaves too little room to work in, as the TUI does (#923).
 - Escape sequences in a model's reply no longer reach your terminal from `reika -p` or its `-i`
-  menus. Output to a pipe keeps the model's exact bytes.
+  menus. Output to a pipe keeps the model's exact bytes (#923).
 
 ## [0.9.0] - 2026-11-04
 
