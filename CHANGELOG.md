@@ -9,7 +9,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - While a local llama.cpp prefills a long prompt, the busy indicator now shows how far along it is
   and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
-  hang (#913, #915).
+  hang (#913, #915, #919).
 
 ### Fixed
 
