@@ -23,7 +23,9 @@ import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
 import { matchSkill, shouldAutoInject, shouldConfirmInject } from '../skills/skillmatch.js';
 import { imageReader } from '../ocr/select.js';
 import { autoApproves } from '../approval.js';
-import { toolLabel } from '../ui/format.js';
+import { budgetWarning } from '../context/bundlesize.js';
+import { formatElapsed, toolLabel } from '../ui/format.js';
+import { stripTerminalControls } from '../ui/termtext.js';
 import { debugLog, processSessionStem } from '../debug.js';
 import { callMcpTool, findMcpCommand, parseMcpArgs } from '../mcp/tools.js';
 import {
@@ -51,6 +53,9 @@ import type {
 // expansion, skill routing) and the approval policy. Those are deliberately the same modules App
 // calls, in the same order: a headless run must be the run the TUI would have made, or it is
 // useless as the debugging instrument the issue asks for.
+
+// The harness ended the turn itself (a loop, the round cap): not a crash, and not an answer.
+const EXIT_HARNESS_STOP = 2;
 
 // The TUI's mid-turn auto-save cadence.
 const AUTOSAVE_INTERVAL_MS = 3000;
@@ -151,6 +156,42 @@ export function headlessProfile(
 // as a fetch failure: an abort, a 400 or a tool throw lands here too.
 export function formatTurnFailure(profile: string, baseURL: string, message: string): string {
   return `reika: turn failed (profile "${profile}" at ${baseURL}): ${message}`;
+}
+
+// One line closing a run, since headless has no status bar or exit summary. On stderr, so stdout
+// stays the reply; the session path is where the rest of what the TUI shows can be read back.
+export function formatRunSummary(run: {
+  model: string;
+  totals: Usage;
+  elapsedMs: number;
+  sessionPath?: string | null;
+}): string {
+  const { model, totals, elapsedMs, sessionPath } = run;
+  const n = (t: number): string => t.toLocaleString('en-US');
+  const approx = totals.estimated ? '~' : '';
+  const cached = totals.cachedTokens ? ` (${n(totals.cachedTokens)} cached)` : '';
+  // A server that reports no usage leaves zeros, which would read as a measurement.
+  const counted = totals.promptTokens > 0 || totals.completionTokens > 0;
+  const parts = [
+    model,
+    ...(counted
+      ? [
+          `${approx}${n(totals.promptTokens)} tokens in${cached}, ${approx}${n(totals.completionTokens)} out`,
+        ]
+      : []),
+    formatElapsed(Math.floor(elapsedMs / 1000)),
+    ...(sessionPath ? [`session ${sessionPath}`] : []),
+  ];
+  return parts.join(' · ');
+}
+
+// A reply can carry escape sequences a fetched page smuggled into it, and a terminal obeys them. A
+// pipe gets the model's bytes: stdout is the reply, and a consumer decides what to do with it.
+export function terminalSafeWriter(stream: {
+  isTTY?: boolean;
+  write: (text: string) => unknown;
+}): (text: string) => void {
+  return text => void stream.write(stream.isTTY ? stripTerminalControls(text) : text);
 }
 
 export async function runHeadless(args: HeadlessArgs, io: HeadlessIo): Promise<number> {
@@ -262,6 +303,8 @@ async function runHeadlessTurn(
     }
     if (session.limitsNotice) io.stderr(`reika: ${session.limitsNotice}\n`);
     if (session.windowNotice) io.stderr(`reika: ${session.windowNotice}\n`);
+    const budgetProblem = budgetWarning(bundle, config);
+    if (budgetProblem) io.stderr(`reika: ${budgetProblem}\n`);
     if (session.offline)
       io.stderr('reika: no network — search and fetch_url are off for this run\n');
     if (session.searchNotice) io.stderr(`reika: ${session.searchNotice}\n`);
@@ -310,6 +353,7 @@ async function runHeadlessTurn(
     process.once('SIGINT', onSigint);
 
     let failed: Error | null = null;
+    const turnStartedAt = Date.now();
     try {
       await session.submit(input.modelText, {
         mode,
@@ -339,6 +383,14 @@ async function runHeadlessTurn(
       }
     }
 
+    const summary = formatRunSummary({
+      model: config.model,
+      totals: session.totals,
+      elapsedMs: Date.now() - turnStartedAt,
+      sessionPath: autosave?.savedPath(),
+    });
+    io.stderr(`reika: ${summary}\n`);
+
     if (failed) {
       debugLog(`headless: turn failed: ${failed.message}`);
       io.stderr(`${formatTurnFailure(profile, config.baseURL, failed.message)}\n`);
@@ -353,7 +405,15 @@ async function runHeadlessTurn(
       io.stderr('reika: interrupted\n');
       return 130;
     }
+    const closing = closingAssistantMessage(appended);
+    if (closing?.role === 'assistant' && closing.harnessStop) {
+      // Not printed as the reply: a script reading stdout would take the harness's report for the
+      // model's answer. The exit status is what it can branch on.
+      io.stderr(`reika: stopped (${closing.harnessStop}): ${closing.content}\n`);
+      return EXIT_HARNESS_STOP;
+    }
     const reply = finalReply(appended);
+    if (!reply) io.stderr('reika: the turn ended without a reply\n');
     if (!args.json && !args.stream && reply) io.stdout(`${reply}\n`);
     return reply ? 0 : 1;
   } finally {
@@ -399,7 +459,12 @@ export function createHeadlessStatus(messages: () => Message[]): {
   };
 }
 
-export type HeadlessAutosave = { onMessage: () => void; finish: () => Promise<void> };
+export type HeadlessAutosave = {
+  onMessage: () => void;
+  finish: () => Promise<void>;
+  // Null until a write was attempted, and after one failed: a path nothing landed at is no use.
+  savedPath: () => string | null;
+};
 
 // Auto-save for a headless run (#871): the TUI's file, in the TUI's place, so /resume lists a
 // `reika -p` run beside the interactive ones. Written on the first real prompt, at most once per
@@ -452,6 +517,7 @@ export function createHeadlessAutosave(
       timer.unref?.();
     },
     finish: () => save(false),
+    savedPath: () => (written && !failed ? path : null),
   };
 }
 
@@ -514,14 +580,22 @@ export function createStreamPrinter(
   };
 }
 
-// The last assistant message with content is the answer. A turn that ended on a tool call or an
-// empty message has no reply, which the exit status reports.
-export function finalReply(messages: Message[]): string | null {
+// What the turn itself ended on: a subagent's rounds and a compaction note are harness asides.
+function closingAssistantMessage(messages: Message[]): Message | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === 'assistant' && m.content?.trim()) return m.content.trim();
+    if (m.role === 'assistant' && !m.nested && !m.compactionNote) return m;
   }
   return null;
+}
+
+// The message the turn ended on, and only that one. A turn that ended on a tool call or an empty
+// message has no reply, which the exit status reports: walking further back would return the text
+// a model wrote before an earlier tool call as if it were the answer.
+export function finalReply(messages: Message[]): string | null {
+  const closing = closingAssistantMessage(messages);
+  if (closing?.role !== 'assistant' || closing.toolCalls?.length) return null;
+  return closing.content?.trim() || null;
 }
 
 function firstLine(text: string): string {

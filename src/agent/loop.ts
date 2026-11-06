@@ -2120,6 +2120,7 @@ export async function runTurn(opts: {
             role: 'assistant',
             content:
               buildEditRecoveryStopMessage(lastEditFailure) + (await reportTypecheckAtStop()),
+            harnessStop: 'edit',
             durationMs: Date.now() - turnStart,
             ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
           };
@@ -4133,6 +4134,7 @@ export async function runTurn(opts: {
     content:
       `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)` +
       (await reportTypecheckAtStop()),
+    harnessStop: 'max-turns',
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4220,6 +4222,7 @@ function commitSpiralStop(
         : `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
           `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
           `rephrasing or narrowing it, or use a stronger model.`,
+    harnessStop: reason,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4266,6 +4269,7 @@ function commitAgentLoopStop(
   const m: Message = {
     role: 'assistant',
     content,
+    harnessStop: 'loop',
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };

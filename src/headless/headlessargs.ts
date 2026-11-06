@@ -46,7 +46,7 @@ With -p: a prompt starting with /<skill> runs that skill. Approvals follow REIKA
 (default 'safe'): with no prompt to fall back on, anything 'safe' would have asked about is
 declined, and 'off' declines every edit and command. ask_user is never offered. With -i each of
 those is asked instead, as a numbered menu on the terminal. Exit status: 0 on a reply, 1 on an
-error, 130 when interrupted.`;
+error, 2 when Reika stopped the turn itself (a loop, the round limit), 130 when interrupted.`;
 
 const MODES: ReadonlySet<string> = new Set(['agent', 'plan', 'vibe', 'minimal', 'grind', 'chat']);
 
