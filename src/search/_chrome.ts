@@ -32,6 +32,8 @@ const READY_POLL_MS = 200;
 // minutes keeps a burst of searches on one warm browser while not holding the memory all session.
 // The profile lives on disk, so cookies survive the kill and only the process cost is reclaimed.
 const IDLE_SHUTDOWN_MS = 10 * 60_000;
+// Long enough for a tab another session just opened to leave `about:blank` (#920).
+const BROWSER_CLOSE_SETTLE_MS = 1000;
 
 export type ChromeOptions = {
   port?: number;
@@ -45,6 +47,13 @@ export class ChromeHost implements BrowserHost {
   private readonly profileDir: string;
   private idleTimer?: NodeJS.Timeout;
   private launching?: Promise<void>;
+  // Armed only by launch: a browser reattached on the port may be one the user started (#920).
+  private readonly closeBrowserAfterExit = () => {
+    spawn(process.execPath, ['-e', buildBrowserCloseScript(this.port)], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  };
 
   constructor(opts: ChromeOptions = {}) {
     this.port = opts.port ?? DEFAULT_PORT;
@@ -195,6 +204,8 @@ export class ChromeHost implements BrowserHost {
         // Searches open their own windows, and the startup one would surface beside the first bot
         // check's tab. macOS only: elsewhere closing the last window quits Chrome.
         if (hidden) await this.closeStartupWindow();
+        process.off('exit', this.closeBrowserAfterExit);
+        process.once('exit', this.closeBrowserAfterExit);
         return;
       }
       await sleep(LAUNCH_POLL_MS);
@@ -279,6 +290,7 @@ export class ChromeHost implements BrowserHost {
     } catch {
       /* already gone */
     }
+    process.off('exit', this.closeBrowserAfterExit);
     debugLog('[cdp] browser shut down after idle timeout');
   }
 
@@ -296,6 +308,33 @@ export class ChromeHost implements BrowserHost {
       return false;
     }
   }
+}
+
+// The idle timer dies with the process that armed it, and an exit hook cannot await the open-tab
+// check, so a detached child does what shutdown() would (#920). It looks twice because another
+// session's new tab is `about:blank` until it navigates, which reads the same as the launch tab.
+// No imports: it runs from `node -e`.
+export function buildBrowserCloseScript(port: number, settleMs = BROWSER_CLOSE_SETTLE_MS): string {
+  return [
+    `const base = 'http://127.0.0.1:${port}';`,
+    'const get = async path => (await fetch(base + path, { signal: AbortSignal.timeout(1500) })).json();',
+    'const blankPageIds = async () => {',
+    "  const pages = (await get('/json/list')).filter(t => t.type === 'page');",
+    "  return pages.every(t => t.url === 'about:blank') ? pages.map(t => t.id).sort().join() : null;",
+    '};',
+    '(async () => {',
+    '  const first = await blankPageIds();',
+    '  if (first === null) return;',
+    `  await new Promise(resolve => setTimeout(resolve, ${settleMs}));`,
+    '  if ((await blankPageIds()) !== first) return;',
+    "  const { webSocketDebuggerUrl } = await get('/json/version');",
+    '  if (!webSocketDebuggerUrl) return;',
+    '  const socket = new WebSocket(webSocketDebuggerUrl);',
+    "  socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));",
+    '  socket.onmessage = socket.onerror = socket.onclose = () => process.exit(0);',
+    '  setTimeout(() => process.exit(0), 3000);',
+    '})().catch(() => {});',
+  ].join('\n');
 }
 
 // readyState alone is not enough: it reads `complete` for the document still on screen while the
