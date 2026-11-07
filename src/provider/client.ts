@@ -68,6 +68,9 @@ export async function callModel(opts: {
   config: Config;
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
+  // Every generated string as it arrives, tool-call text included: what the live status counts
+  // (#925). Raw, where onContentDelta may be filtered for display.
+  onOutputDelta?: (text: string) => void;
   // Prefill progress from a local engine (#912), then `undefined` once the wait is over. Requested
   // only when set, so warm and probe calls stay byte-identical.
   onPromptProgress?: (progress: PromptProgress | undefined) => void;
@@ -290,6 +293,7 @@ export async function callModel(opts: {
       if (delta.content) {
         contentParts.push(delta.content);
         opts.onContentDelta?.(delta.content);
+        opts.onOutputDelta?.(delta.content);
       }
       // Field name differs by provider: DeepSeek/Kimi use `reasoning_content`,
       // OpenRouter normalizes to `reasoning`. Accept either.
@@ -297,6 +301,7 @@ export async function callModel(opts: {
       if (reasoningChunk) {
         reasoningParts.push(reasoningChunk);
         opts.onReasoningDelta?.(reasoningChunk);
+        opts.onOutputDelta?.(reasoningChunk);
       }
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -307,8 +312,14 @@ export async function callModel(opts: {
             callsByIndex.set(idx, acc);
           }
           if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          if (tc.function?.name) {
+            acc.name = tc.function.name;
+            opts.onOutputDelta?.(tc.function.name);
+          }
+          if (tc.function?.arguments) {
+            acc.args += tc.function.arguments;
+            opts.onOutputDelta?.(tc.function.arguments);
+          }
         }
       }
     }

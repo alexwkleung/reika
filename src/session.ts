@@ -72,6 +72,7 @@ export type SessionEvents = Partial<
     | 'onReasoningStatus'
     | 'onReasoningReset'
     | 'onUsage'
+    | 'onLiveUsage'
     | 'onContextEstimate'
     | 'onShrink'
     | 'onCalibration'

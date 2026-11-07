@@ -57,6 +57,7 @@ import {
   sampleTokens,
 } from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
+import { LiveRound, type LiveUsage } from './liveusage.js';
 import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
   selfRepeatRatio,
@@ -1355,6 +1356,9 @@ export async function runTurn(opts: {
   // as a notice: the UI drops both previews so the round's real reply starts clean.
   onReasoningReset?: () => void;
   onUsage?: (usage: Usage) => void;
+  // The running estimate for the request in flight (#925), `undefined` once its real count lands.
+  // Display only: nothing learned may read it.
+  onLiveUsage?: (live: LiveUsage | undefined) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
   onContextEstimate?: (tokens: number) => void;
@@ -1763,6 +1767,7 @@ export async function runTurn(opts: {
     cut: boolean,
     promptEstimate: () => number,
   ): void => {
+    opts.onLiveUsage?.(undefined);
     if (response.usage) {
       opts.onUsage?.(response.usage);
       return;
@@ -1777,6 +1782,16 @@ export async function runTurn(opts: {
       estimated: true,
     });
   };
+
+  // Same densities as a cut round above, so the live figure and the one a cut leaves behind agree.
+  const startLiveRound = (promptEstimate: () => number): LiveRound | undefined =>
+    opts.onLiveUsage
+      ? new LiveRound(
+          Math.round(promptEstimate() * calibration),
+          Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+          opts.onLiveUsage,
+        )
+      : undefined;
 
   // Run a typecheck while pulsing the UI indicator around it (and clearing on any exit). The
   // pulse is human-only; the CheckOutcome flows to the gate logic, never to the model.
@@ -2470,8 +2485,9 @@ export async function runTurn(opts: {
           ? compactionNotePrefill(n)
           : undefined;
       try {
-        const send = (suffix: string, appended: Message[], assistantPrefill?: string) =>
-          callModel({
+        const send = (suffix: string, appended: Message[], assistantPrefill?: string) => {
+          const live = startLiveRound(() => rawEstimate(opts.history, noteTools));
+          return callModel({
             system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
             history: appended.length ? [...opts.history, ...appended] : opts.history,
             // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
@@ -2489,6 +2505,7 @@ export async function runTurn(opts: {
                 ? prefilledNoteStream(assistantPrefill, opts.onContentDelta)
                 : opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
+            onOutputDelta: live && (text => live.add(text)),
             onPromptProgress: opts.onPromptProgress,
             signal: opts.signal,
             calibration,
@@ -2542,6 +2559,7 @@ export async function runTurn(opts: {
                 }
               : undefined,
           });
+        };
         // A failed prefilled request is asked again the plain way, and the prefill is latched off for
         // the endpoint only if that one succeeds: a 400 the plain request shares (an over-long
         // prompt) is not the prefill's, and latching on it would cost every later fold its note.
@@ -2821,6 +2839,7 @@ export async function runTurn(opts: {
           }
         }
       : opts.onReasoningDelta;
+    const live = startLiveRound(() => sentEstimate);
     const response = await callModel({
       system,
       history: callHistory,
@@ -2828,6 +2847,7 @@ export async function runTurn(opts: {
       config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
+      onOutputDelta: live && (text => live.add(text)),
       onPromptProgress: opts.onPromptProgress,
       signal: callAbort.signal,
       calibration,
@@ -4344,6 +4364,7 @@ function makeSpawnSubagent(
         requestApproval: parent.requestApproval,
         isUnattended: parent.isUnattended,
         onUsage: parent.onUsage,
+        onLiveUsage: parent.onLiveUsage,
         priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
         genReserve: sameEngine ? parentGenReserve : undefined,
         onDecodeRate: rate => {

@@ -11,6 +11,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
   hang (#913, #915, #919).
 - `reika -p` ends with a line on stderr naming the model, tokens, time and saved session (#923).
+- The status bar's token counts and tok/s now move during a request instead of at its end, marked
+  `~` until the real count arrives (#925).
 
 ### Fixed
 
