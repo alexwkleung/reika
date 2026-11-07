@@ -1077,7 +1077,7 @@ export function shouldWithdrawInspection(opts: {
 // without inspection, then the cycle again, each switch of the tool list a full re-prefill (~22 in
 // one 163-round run). Held until the tree changes instead, capped so a model that has declared
 // itself stuck gets reads back.
-export const WITHDRAW_HOLD_ROUNDS = 5;
+export const WITHDRAW_HOLD_ROUNDS = 4;
 
 // Whether a withdrawal already in force stays on this round although the loop no longer reads as
 // active. `since` is the round it began; `mutated` is whether the tree has changed since then.
