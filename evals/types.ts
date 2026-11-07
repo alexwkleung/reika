@@ -11,6 +11,9 @@ export type Fixture = {
   // revision of the plan the first one wrote — so without this it is unreachable from a fixture. The
   // assert sees the whole conversation, both turns included.
   followUp?: string;
+  // Runs between the first turn and `followUp`, in the eval cwd: a change to the tree the model did
+  // not make and was not told about, like an editor or formatter writing mid-session.
+  beforeFollowUp?: (cwd: string) => Promise<void>;
   timeoutMs?: number;
   // Which tool set the turn gets. 'plan' is planTools() — read/list/grep/glob and the web tools
   // (#290), no bash — the configuration plan mode ships, and the only one where a capped result has
