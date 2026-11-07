@@ -342,6 +342,40 @@ describe('Scrollback nested (subagent) messages', () => {
     expect(after).toMatch(new RegExp(`^ {${1 + INDENT + PROSE_HANG + 4}}\\S`));
   });
 
+  const CODE_MD = [
+    'Here:',
+    '',
+    '```ts',
+    '// a comment long enough that it has to wrap inside the nested box of a narrow pane',
+    '```',
+  ].join('\n');
+
+  // A fence at the nested width: every row sits under the prose marker's hang, colored, where it
+  // used to overflow its budget, wrap back to the box's edge and lose the comment's gray.
+  const expectNestedCodeRows = (frame: string) => {
+    const gray = '\x1b[38;2;127;132;142m';
+    const rows = frame
+      .split('\n')
+      .filter(r => stripAnsi(r).includes('comment') || r.includes(gray));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row).toContain(gray);
+      expect(stripAnsi(row)).toMatch(new RegExp(`^ {${1 + INDENT + PROSE_HANG}}\\S`));
+      expect(stringWidth(row.trimEnd())).toBeLessThanOrEqual(COLS);
+    }
+  };
+
+  it('wraps a nested reply’s code fence inside the nested box, colored on every row', () => {
+    const level = chalk.level;
+    chalk.level = 3;
+    try {
+      const frame = framePlusApp([{ role: 'assistant', content: CODE_MD, nested: true }]);
+      expectNestedCodeRows(frame);
+    } finally {
+      chalk.level = level;
+    }
+  });
+
   // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must
   // sit at the same indent their committed rows will land at, and wrap inside it — the same
   // width discipline as the committed nested rows above.
@@ -374,6 +408,16 @@ describe('Scrollback nested (subagent) messages', () => {
       Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
     }
   };
+
+  it('wraps a streaming nested code fence the way its committed row will', () => {
+    const level = chalk.level;
+    chalk.level = 3;
+    try {
+      expectNestedCodeRows(liveFrame({ streaming: CODE_MD, streamingNested: true }));
+    } finally {
+      chalk.level = level;
+    }
+  });
 
   it('draws a nested live reasoning block at the nested indent, every row behind its bar', () => {
     const frame = liveFrame({

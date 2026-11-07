@@ -6,7 +6,7 @@ import { supportsHyperlink } from 'supports-hyperlinks';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
-import { contentWidth, wrapStyledRows } from './layout.js';
+import { contentWidth, dropWrapWhitespace, wrapStyledRows } from './layout.js';
 
 // marked only parses here: the terminal rendering is ours, a walk over its token tree. Each block
 // renders at the width it actually has — `width` shrinks by a list's tab and marker or a quote's
@@ -38,6 +38,21 @@ function wrapProse(text: string, ctx: Ctx): string {
   return wrapStyledRows(text, proseWidth(ctx), true).join('\n');
 }
 
+// Wrapped here, not left to Ink: a fence that reached Ink overflowed its list or quote column and
+// lost its colors from the second row on, the same two defects wrapProse exists to prevent. By
+// source line because only a break's whitespace is noise; a line's own indent is the code. Chalk
+// closes its styles at a newline, so no style crosses that split.
+function wrapCode(code: string, ctx: Ctx): string {
+  return code
+    .split('\n')
+    .flatMap(line =>
+      wrapStyledRows(line, proseWidth(ctx)).map((row, i) =>
+        i === 0 ? row : dropWrapWhitespace(row),
+      ),
+    )
+    .join('\n');
+}
+
 function renderBlocks(tokens: Token[], ctx: Ctx): string {
   return tokens
     .map(token => renderBlock(token as MarkedToken, ctx))
@@ -57,7 +72,7 @@ function renderBlock(token: MarkedToken, ctx: Ctx): string {
     // Flush with the prose, no fence lines. The info string's first word is the language: a
     // ```ts title="x" fence is TypeScript, not an unknown language.
     case 'code':
-      return highlightCode(token.text, token.lang?.split(/\s/)[0] ?? '');
+      return wrapCode(highlightCode(token.text, token.lang?.split(/\s/)[0] ?? ''), ctx);
     case 'hr':
       return chalk.dim('─'.repeat(Math.min(40, proseWidth(ctx))));
     case 'blockquote':
@@ -326,6 +341,20 @@ export function renderInlineMarkdown(text: string): string {
 // text, no fence lines. Links keep their URL.
 export function renderReasoningMarkdown(text: string, width: number): string {
   return stripAnsi(renderDocument(text, { width, listDepth: 0, plainLinks: true }));
+}
+
+// The fence line a live tail needs put back when it was cut out of `text` inside a code block, or
+// ''. Without the opener the tail's code parses as prose, and its closer opens a block of its own
+// that swallows the prose after it. A closer is the opener's character, at least as long, bare.
+export function openFenceBefore(text: string, end: number): string {
+  let open: { line: string; fence: string } | null = null;
+  for (const [line, fence, info] of text.slice(0, end).matchAll(/^ {0,3}(`{3,}|~{3,})(.*)$/gm)) {
+    if (!open) open = { line, fence };
+    else if (fence[0] === open.fence[0] && fence.length >= open.fence.length && !info.trim()) {
+      open = null;
+    }
+  }
+  return open?.line ?? '';
 }
 
 // A live stream's last line ends mid-span often: `**the loo` renders as literal asterisks until

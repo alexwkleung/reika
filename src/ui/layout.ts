@@ -91,6 +91,13 @@ export function wrapStyledRows(text: string, width: number, trim = false): strin
   });
 }
 
+// trim:false leaves the space wrap-ansi broke on at the head of a continuation row, one column
+// right of the block's edge. A style can open ahead of it. Never for a row that starts a real line,
+// whose leading whitespace is content.
+export function dropWrapWhitespace(row: string): string {
+  return row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
+}
+
 // The styled text whose plain characters are `[start, end)`, opening with the styles active at
 // `start` and closing what is still open at `end`, so the slice stands on its own. Lets a caller
 // style a whole line in one pass and cut it afterwards: a fragment styled alone loses its context,

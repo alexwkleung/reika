@@ -9,6 +9,7 @@ import { highlightCode } from './highlight.js';
 import { sanitizeTerminalText } from './termtext.js';
 import {
   hangingRows,
+  dropWrapWhitespace,
   hangingWrap,
   useContentWidth,
   wrappedRows,
@@ -268,12 +269,6 @@ function CommandPreview({
       {hidden > 0 ? <Text color={theme.muted}>{`… ${hidden} more lines`}</Text> : null}
     </>
   );
-}
-
-// trim:false leaves the space wrap-ansi broke on at the head of a continuation row, one column
-// right of the hang — the same noise hangingWrap drops. Highlighting can open a color ahead of it.
-function dropWrapWhitespace(row: string): string {
-  return row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
 }
 
 // Leading lines that fit in `maxRows` wrapped rows, one reserved for the footer when any are cut.

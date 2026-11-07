@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { highlightCode, resolveLanguage } from './highlight.js';
 import {
   hideDanglingMarkers,
+  openFenceBefore,
   renderInlineMarkdown,
   renderMarkdown,
   renderReasoningMarkdown,
@@ -557,5 +558,76 @@ describe('renderMarkdown inline code that wraps', () => {
     expect(rows.length).toBeGreaterThan(2);
     for (const row of rows.slice(1, -1)) expect(row.startsWith(open)).toBe(true);
     expect(stripAnsi(rows[1]).startsWith(' ')).toBe(false);
+  });
+});
+
+// A fence used to reach Ink unwrapped: wrap-ansi re-opens only the innermost style and no hex color
+// at a break, so a comment went italic-only and a string went plain from its second row on.
+describe('code fence wrapping', () => {
+  const level = chalk.level;
+  afterEach(() => {
+    chalk.level = level;
+  });
+  const gray = '\x1b[38;2;127;132;142m';
+  const green = '\x1b[38;2;159;212;159m';
+  const words = 'one two three four five six seven eight nine ten eleven twelve thirteen';
+
+  it('keeps a comment and a string colored on every row', () => {
+    chalk.level = 3;
+    const out = renderMarkdown(`\`\`\`ts\n// ${words}\nconst s = "${words}";\n\`\`\``, 30);
+    const rows = out.split('\n');
+    const comment = rows.filter(r => r.includes(gray));
+    const string = rows.filter(r => r.includes(green));
+    expect(comment.length).toBeGreaterThan(1);
+    expect(string.length).toBeGreaterThan(1);
+    expect(comment.length + string.length).toBe(rows.length);
+    for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(30);
+  });
+
+  it('keeps a multi-line comment colored past its wrapped rows', () => {
+    chalk.level = 3;
+    const rows = renderMarkdown(`\`\`\`ts\n/* ${words}\n   ${words} */\n\`\`\``, 30).split('\n');
+    for (const row of rows) expect(row).toContain(gray);
+  });
+
+  it('fits a fence to the column of the list that holds it', () => {
+    const md = `- item\n\n  \`\`\`ts\n  const s = "${words}";\n  \`\`\``;
+    const rows = stripAnsi(renderMarkdown(md, 30)).split('\n').slice(2);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row.startsWith('    ')).toBe(true);
+      expect(row.length).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it('keeps a line’s indent and drops only the space a break landed on', () => {
+    const fills = `    ${'a'.repeat(16)}`;
+    const rows = renderMarkdown(`\`\`\`\n${fills} bbbb\n\`\`\``, 20).split('\n');
+    expect(rows).toEqual([fills, 'bbbb']);
+  });
+
+  it('breaks a token with no space in it', () => {
+    const rows = renderMarkdown(`\`\`\`\n${'x'.repeat(50)}\n\`\`\``, 20).split('\n');
+    expect(rows.map(r => r.length)).toEqual([20, 20, 10]);
+  });
+});
+
+describe('openFenceBefore', () => {
+  it('finds the fence still open at the cut', () => {
+    const text = 'a\n```ts title="x"\ncode\ncode';
+    expect(openFenceBefore(text, text.lastIndexOf('code'))).toBe('```ts title="x"');
+  });
+
+  it('finds nothing past a closed fence', () => {
+    const text = '```ts\ncode\n```\nprose';
+    expect(openFenceBefore(text, text.length)).toBe('');
+  });
+
+  it('is not closed by a shorter run, another marker, or a line with an info string', () => {
+    expect(openFenceBefore('````md\n```\n~~~~\n````ts\n', 22)).toBe('````md');
+  });
+
+  it('closes on a longer run of the same marker', () => {
+    expect(openFenceBefore('```\ncode\n`````\n', 15)).toBe('');
   });
 });

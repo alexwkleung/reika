@@ -4,7 +4,12 @@ import { Box, Static, Text } from 'ink';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 import type { Message, PlanChecks } from '../types.js';
-import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
+import {
+  hideDanglingMarkers,
+  openFenceBefore,
+  renderMarkdown,
+  renderReasoningMarkdown,
+} from './markdown.js';
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
@@ -328,13 +333,21 @@ export function tailText(
   return { text: out, truncated };
 }
 
+// `tailText` for text that gets rendered as markdown: a cut inside a code block keeps the block.
+export function markdownTail(text: string, maxLines: number): { text: string; truncated: boolean } {
+  const pre = tailText(text, maxLines);
+  if (!pre.truncated) return pre;
+  const fence = openFenceBefore(text, text.length - pre.text.length);
+  return fence ? { text: `${fence}\n${pre.text}`, truncated: true } : pre;
+}
+
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
 // message re-renders the full text in <Static>. The logical-line pre-trim caps markdown render cost
 // on very long streams; the factor keeps enough lines to fill `bound` display rows even when each
 // wraps. The rows are measured *rendered* (markdown can expand lines, e.g. code fences), which is
 // what Ink counts against the viewport.
 function streamingContentRows(text: string, width: number, bound: number): LiveRows {
-  const pre = tailText(text, bound * 4);
+  const pre = markdownTail(text, bound * 4);
   // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
   const prose = markProse(
     renderMarkdown(hideDanglingMarkers(pre.text), width - CALL_MARKER_MEASURED),
@@ -346,7 +359,7 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
 // The live tail of a compaction note: its rows sit behind the bar, so no prose marker and two
 // columns narrower. Same pre-trim and measuring as streamingContentRows.
 function streamingNoteRows(text: string, width: number, bound: number): LiveRows {
-  const pre = tailText(text, bound * 4);
+  const pre = markdownTail(text, bound * 4);
   return { rows: noteBodyRows(hideDanglingMarkers(pre.text), width), cut: pre.truncated };
 }
 
