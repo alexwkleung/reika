@@ -43,11 +43,53 @@ describe('LiveRound (#925)', () => {
   });
 });
 
+describe('LiveRound with engine timings (#925)', () => {
+  const timings = { predictedN: 200, predictedMs: 10_000, perSecond: 20 };
+  const prompt = { promptN: 300, cacheN: 7000 };
+
+  it("reports the engine's counts and rate as exact", () => {
+    const { live, reports } = round();
+    live.engine(timings, prompt);
+    expect(reports.at(-1)).toEqual({
+      promptTokens: 7300,
+      completionTokens: 200,
+      rate: 20,
+      exact: true,
+    });
+  });
+
+  it('stops estimating once the engine has reported', () => {
+    const { live, reports } = round();
+    live.add('a'.repeat(4000));
+    live.engine(timings, prompt);
+    const count = reports.length;
+    live.add('a'.repeat(4000));
+    expect(reports).toHaveLength(count);
+  });
+
+  it('keeps the prompt estimate, and the mark, without both prompt fields', () => {
+    const { live, reports } = round();
+    live.engine(timings, { promptN: 300 });
+    expect(reports.at(-1)).toEqual({ promptTokens: 5000, completionTokens: 200, rate: 20 });
+  });
+
+  it('holds back a rate the sample bounds reject', () => {
+    const { live, reports } = round();
+    live.engine({ predictedN: 5, predictedMs: 100, perSecond: 50 }, prompt);
+    expect(reports.at(-1)?.rate).toBeUndefined();
+  });
+});
+
 describe('withLiveUsage (#925)', () => {
   const total = { promptTokens: 100, completionTokens: 20, cachedTokens: 5 };
 
   it('returns the total itself when nothing is in flight', () => {
     expect(withLiveUsage(total, undefined)).toBe(total);
+  });
+
+  it('leaves an exact report unmarked', () => {
+    const live = { promptTokens: 50, completionTokens: 7, exact: true };
+    expect(withLiveUsage(total, live).estimated).toBeUndefined();
   });
 
   it('adds the live round and marks the sum as an estimate', () => {

@@ -66,6 +66,7 @@ export type ChatCompletionRequest = {
   stream_options?: { include_usage?: boolean };
   // llama.cpp: stream `prompt_progress` while the prompt is processed (#912).
   return_progress?: boolean;
+  timings_per_token?: boolean;
   max_tokens?: number;
   // Per-token logit offsets (token id → additive bias), applied for one request. Used only by the
   // last-resort rumination recovery to gently down-weight a looping model's repeated tokens before

@@ -128,6 +128,16 @@ describe('live status chips (#925)', { timeout: 30_000 }, () => {
     app.unmount();
   });
 
+  it('shows an exact report without the estimate mark', async () => {
+    const app = await busyApp();
+    turn!.onLiveUsage({ promptTokens: 5000, completionTokens: 0 });
+    await waitFor(app, '~5.0k↑');
+    turn!.onLiveUsage({ promptTokens: 6000, completionTokens: 2000, rate: 42, exact: true });
+    await waitFor(app, '6.0k↑ 2.0k↓');
+    expect(plain(app.lastFrame())).not.toContain('~');
+    app.unmount();
+  });
+
   it('drops the estimate when a request dies without reporting', async () => {
     const app = await busyApp();
     turn!.onLiveUsage({ promptTokens: 5000, completionTokens: 2000 });
