@@ -74,6 +74,7 @@ import {
 import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
+import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { execStream } from '../tools/bash.js';
 import { isOffline } from '../tools/_net.js';
 import { expandMentions } from '../agent/mentions.js';
@@ -291,7 +292,13 @@ export function App() {
   const activeProfile = snapshot?.profile ?? 'default';
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
+  // The session total and the estimate for the request in flight (#925), one state so the real
+  // count replaces the estimate in a single commit: apart, the chip blinks out between them. The
+  // loop reports on every delta, and `live` takes it on the clock tick so the chips move once a
+  // second rather than on every stream flush.
+  const [usage, setUsage] = useState<{ total: Usage; live?: LiveUsage }>({
+    total: { promptTokens: 0, completionTokens: 0 },
+  });
   // Most recent call's usage (the authoritative current context size + cache hit rate),
   // and the pre-send estimate used to fill the gauge before that real count arrives.
   const [lastUsage, setLastUsage] = useState<Usage | null>(null);
@@ -305,6 +312,7 @@ export function App() {
   // Decode throughput (tokens/second) for the status bar's tok/s chip (#204). The session keeps
   // the learned value a turn seeds from; this is what the chip shows.
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
+  const liveUsageRef = useRef<LiveUsage | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (answer: ApprovalAnswer) => void;
@@ -517,7 +525,7 @@ export function App() {
   // model-facing side of each is the session's (switchSide).
   const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
-  usageRef.current = totalUsage;
+  usageRef.current = usage.total;
   // The other two halves of the status line's accounting, mirrored for the same reason as
   // `usageRef`: /save reads them from a handler that may be a render behind (#199).
   const lastUsageRef = useRef<Usage | null>(null);
@@ -759,6 +767,7 @@ export function App() {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
+      setUsage(u => ({ total: u.total, live: liveUsageRef.current }));
     }, 1000);
     return () => clearInterval(id);
   }, [status, pending, question]);
@@ -1217,7 +1226,7 @@ export function App() {
     stashedMessagesRef.current = {};
     sessionRef.current?.reset({ relearn });
     setPlanSteps(null);
-    setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+    setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
     setLastUsage(null);
     setEstimatedContext(null);
     setShrink({ sheds: 0, folds: 0 });
@@ -2042,8 +2051,8 @@ export function App() {
         response = bundle?.cwd ?? '(unknown)';
         break;
       case 'tokens': {
-        const approx = totalUsage.estimated ? '~' : '';
-        response = `prompt:     ${approx}${totalUsage.promptTokens}\ncompletion: ${approx}${totalUsage.completionTokens}`;
+        const approx = usage.total.estimated ? '~' : '';
+        response = `prompt:     ${approx}${usage.total.promptTokens}\ncompletion: ${approx}${usage.total.completionTokens}`;
         break;
       }
       case 'skills': {
@@ -2754,6 +2763,9 @@ export function App() {
         noteLiveRef.current = false;
         setSubagentLive(false);
         setNoteLive(false);
+        // A request that threw reports no usage, so nothing else would clear it.
+        liveUsageRef.current = undefined;
+        setUsage(u => ({ total: u.total }));
         resetTypecheck();
         setReasoningSpin(false);
         setStatus('idle');
@@ -2881,16 +2893,25 @@ export function App() {
         onUsage: u => {
           // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
           if (!u.estimated) setLastUsage(u);
-          setTotalUsage(t => ({
-            promptTokens: t.promptTokens + u.promptTokens,
-            completionTokens: t.completionTokens + u.completionTokens,
-            ...(u.cachedTokens != null
-              ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
-              : t.cachedTokens != null
-                ? { cachedTokens: t.cachedTokens }
-                : {}),
-            ...(u.estimated || t.estimated ? { estimated: true } : {}),
+          setUsage(({ total: t }) => ({
+            total: {
+              promptTokens: t.promptTokens + u.promptTokens,
+              completionTokens: t.completionTokens + u.completionTokens,
+              ...(u.cachedTokens != null
+                ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
+                : t.cachedTokens != null
+                  ? { cachedTokens: t.cachedTokens }
+                  : {}),
+              ...(u.estimated || t.estimated ? { estimated: true } : {}),
+            },
           }));
+        },
+        onLiveUsage: live => {
+          // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
+          // touches the ref: onUsage drops `live` with the real count, or the next tick does.
+          const first = live && !liveUsageRef.current;
+          liveUsageRef.current = live;
+          if (first) setUsage(u => ({ total: u.total, live }));
         },
         onContextEstimate: t => setEstimatedContext(t),
         onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
@@ -2931,14 +2952,14 @@ export function App() {
     turns: messages.filter(m => m.role === 'assistant').length,
     status: status === 'busy' ? phase : status,
     elapsed: status === 'busy' ? elapsed : null,
-    usage: totalUsage,
+    usage: withLiveUsage(usage.total, usage.live),
     contextTokens: lastUsage?.promptTokens ?? estimatedContext,
     contextWindow: statusWindow,
     contextUsable: statusUsable,
     sheds: shrink.sheds,
     folds: shrink.folds,
     cachedTokens: lastUsage?.cachedTokens,
-    decodeRate: decodeRate,
+    decodeRate: usage.live?.rate ?? decodeRate,
     pr: pr,
     autoApprove:
       config?.autoApprove === 'bypass'

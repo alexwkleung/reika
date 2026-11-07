@@ -778,6 +778,7 @@ describe('batchAgePayloads', () => {
             cacheControl: false,
             chatTemplateKwargs: false,
             promptProgress: false,
+            timingsPerToken: false,
             assistantPrefill: false,
             noteOnToolResult: false,
           },
