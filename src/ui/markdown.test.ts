@@ -49,6 +49,26 @@ describe('hideDanglingMarkers', () => {
     expect(hideDanglingMarkers('*')).toBe('');
   });
 
+  it('holds back a last line that would read as a setext underline', () => {
+    expect(hideDanglingMarkers('Established:\n-')).toBe('Established:\n');
+    expect(hideDanglingMarkers('Established:\n- ')).toBe('Established:\n');
+    expect(hideDanglingMarkers('Still open\n==')).toBe('Still open\n');
+    expect(hideDanglingMarkers('Established:\n- a')).toBe('Established:\n- a');
+    expect(hideDanglingMarkers('```\nx\n-')).toBe('```\nx\n-');
+  });
+
+  it('keeps a paragraph line from rendering as a heading while a bullet streams', () => {
+    const level = chalk.level;
+    chalk.level = 3; // under vitest it is 0, which would strip the heading's bold
+    try {
+      const live = (s: string) => renderMarkdown(hideDanglingMarkers(s), 60);
+      expect(live('Established:\n-')).toBe(live('Established:'));
+      expect(live('Established:')).not.toContain('\u001b[1m');
+    } finally {
+      chalk.level = level;
+    }
+  });
+
   it('leaves balanced markers, arithmetic and list markers alone', () => {
     for (const s of ['**a** and *b* and `c`', '2 * 3 = 6', '* item', '  * nested item']) {
       expect(hideDanglingMarkers(s)).toBe(s);

@@ -24,6 +24,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- While a reply or compaction note streams, a line followed by a bullet no longer flashes as a bold
+  heading for a moment before the bullet's text arrives (#934).
 - Code blocks keep their colors when they wrap on a narrow pane and stay inside their column under a
   list, a quote or a subagent's indent. A long code block also stays highlighted while it streams
   (#930).

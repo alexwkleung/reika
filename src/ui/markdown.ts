@@ -370,6 +370,9 @@ export function hideDanglingMarkers(text: string): string {
   if (/^ {0,3}(`|`{2,}[^`]*|~{3,}.*)$/.test(line)) return text.slice(0, start);
   const fences = text.slice(0, start).match(/^ {0,3}(```|~~~)/gm);
   if (fences && fences.length % 2 === 1) return text;
+  // A bullet's first `-` under a paragraph line reads as a setext underline, so the line above
+  // flashed as a heading until the bullet's text arrived. Hidden whole until its newline, like a fence.
+  if (/^ {0,3}(-+|=+)[ \t]*$/.test(line)) return text.slice(0, start);
   const drop: [number, number][] = [];
 
   // A code span closes on a backtick run of its opener's length. Past an unclosed opener is a
