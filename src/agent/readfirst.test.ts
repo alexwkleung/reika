@@ -1,11 +1,12 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ReadFirstGate,
   buildReadFirstDirective,
   isLive,
+  oldStringProvesBytes,
   probeLine,
   probeWouldLand,
 } from './readfirst.js';
@@ -312,6 +313,52 @@ function escapesProjectProbe(): string {
 // The bounce line's would-land field is the gate's false-positive meter, so it must agree with what
 // the edit tool would actually have done — including the whitespace-insensitive fallback, which is
 // why a re-indented old_string counts as landing.
+describe('wouldBounce', () => {
+  it('answers like shouldBounce without spending the bounce', () => {
+    const gate = new ReadFirstGate(CWD);
+    expect(gate.wouldBounce('src/a.ts', [])).toBe(true);
+    expect(gate.wouldBounce('src/a.ts', [])).toBe(true);
+    expect(gate.shouldBounce('src/a.ts', [])).toBe(true);
+    expect(gate.wouldBounce('src/a.ts', [])).toBe(false);
+  });
+
+  // The loop reads the file only past this check, and oldStringProvesBytes runs before approval.
+  it('never asks about a path outside the project', () => {
+    expect(new ReadFirstGate(CWD).wouldBounce('../outside.txt', [])).toBe(false);
+  });
+});
+
+describe('oldStringProvesBytes', () => {
+  const LINE = 'export const provenAnchorLine = 1;';
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'reika-proven-'));
+    await writeFile(join(dir, 'a.ts'), `${LINE}\nreturn null;\n`, 'utf8');
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('accepts a long, exact, unique match', async () => {
+    expect(await oldStringProvesBytes(dir, 'a.ts', LINE, 'x')).toBe(true);
+  });
+
+  it('measures the floor on trimmed text, so indentation cannot pad a short match', async () => {
+    await writeFile(join(dir, 'b.ts'), `${' '.repeat(30)}return null;\n`, 'utf8');
+    expect(await oldStringProvesBytes(dir, 'b.ts', `${' '.repeat(30)}return null;`, 'x')).toBe(
+      false,
+    );
+  });
+
+  it('rejects an edit that changes nothing, a miss and an unreadable file', async () => {
+    expect(await oldStringProvesBytes(dir, 'a.ts', LINE, LINE)).toBe(false);
+    expect(await oldStringProvesBytes(dir, 'a.ts', 'this text is not in the file', 'x')).toBe(
+      false,
+    );
+    expect(await oldStringProvesBytes(dir, 'nope.ts', LINE, 'x')).toBe(false);
+  });
+});
+
 describe('probeWouldLand', () => {
   async function inTmp(body: string, fn: (dir: string) => Promise<void>): Promise<void> {
     const dir = await mkdtemp(join(tmpdir(), 'reika-rf-'));

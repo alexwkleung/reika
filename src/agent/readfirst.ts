@@ -92,6 +92,14 @@ export class ReadFirstGate {
   // True exactly once per ungrounded path per turn — and recording the bounce here (a side effect)
   // is what guarantees the once: every later call for the path, grounded or not, passes.
   shouldBounce(path: string, history: Message[], prefixStable = false): boolean {
+    if (!this.wouldBounce(path, history, prefixStable)) return false;
+    this.bounced.add(this.norm(path));
+    return true;
+  }
+
+  // shouldBounce's question without spending the bounce (#932): an edit that proves its bytes must
+  // leave the path's one bounce for a later edit that does not.
+  wouldBounce(path: string, history: Message[], prefixStable = false): boolean {
     // Never bounce a path outside the project (#216). The bounce is a directive to `read` the file,
     // and `read` applies no boundary of its own — so bouncing here is the harness walking the model
     // around the gate `write`/`edit` just applied to that same path (#175, tools/_paths.ts). This
@@ -103,14 +111,9 @@ export class ReadFirstGate {
     // resolve() would read it as a literal `~` directory inside cwd — in-project, and unbounced for
     // the wrong reason. A test pins that distinction.
     //
-    // Returning before the `bounced` bookkeeping is tidiness, not policy: nothing reads that set
-    // for a path this branch rejects, so recording it would be equally correct.
     if (escapesProject(this.cwd, resolveUserPath(this.cwd, path))) return false;
-    const p = this.norm(path);
-    if (this.bounced.has(p)) return false;
-    if (this.isGrounded(path, history, prefixStable)) return false;
-    this.bounced.add(p);
-    return true;
+    if (this.bounced.has(this.norm(path))) return false;
+    return !this.isGrounded(path, history, prefixStable);
   }
 }
 
@@ -182,6 +185,31 @@ export async function probeWouldLand(
   const kind = classifyEditMatch(text, oldStr, newStr);
   const lands = kind === 'exact' || kind === 'fuzzy';
   return `would-land=${lands ? 'yes' : 'no'} match=${kind}`;
+}
+
+// Below this an exact match proves little: `return null;` can be unique in a small file. Trimmed,
+// because indentation is not evidence. Over 157 saved bounces, 24 kept 100 of the 101 that were
+// re-issued unchanged and landed.
+const MIN_PROVEN_OLD_STRING_CHARS = 24;
+
+// An old_string that matches the file exactly and uniquely is not a guess, however the model got
+// the bytes (grep context, a pipeline, a subagent report), so bouncing it only costs a round (#932).
+// Exact only: a fuzzy match is the model's approximation of the bytes. Unreadable reads as unproven,
+// which keeps today's bounce. The caller must have ruled out a path outside the project, since this
+// reads the file before any approval (see shouldBounce).
+export async function oldStringProvesBytes(
+  cwd: string,
+  path: string,
+  oldStr: string,
+  newStr: string,
+): Promise<boolean> {
+  if (oldStr === newStr || oldStr.trim().length < MIN_PROVEN_OLD_STRING_CHARS) return false;
+  try {
+    const text = await readFile(resolveUserPath(cwd, path), 'utf8');
+    return classifyEditMatch(text, oldStr, newStr) === 'exact';
+  } catch {
+    return false;
+  }
 }
 
 export function buildReadFirstDirective(path: string): string {

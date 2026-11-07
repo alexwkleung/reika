@@ -15,6 +15,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   llama.cpp they are the engine's own numbers; elsewhere they are estimates, marked `~` until the
   real count arrives (#929).
 
+### Changed
+
+- An edit whose `old_string` already matches the file exactly no longer waits for a read first, so a
+  model doesn't spend a round re-reading text it already has. Shorter or inexact edits to a file the
+  model hasn't read are still held back once. `REIKA_READ_FIRST_EXACT=0` restores the old behavior
+  (#933).
+
 ### Fixed
 
 - Code blocks keep their colors when they wrap on a narrow pane and stay inside their column under a

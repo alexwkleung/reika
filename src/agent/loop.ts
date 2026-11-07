@@ -100,7 +100,12 @@ import {
   type PlanMarker,
   type StepMatch,
 } from './plantrack.js';
-import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
+import {
+  ReadFirstGate,
+  buildReadFirstDirective,
+  oldStringProvesBytes,
+  probeWouldLand,
+} from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
   SUBAGENT_REPORT_FRAME,
@@ -508,6 +513,9 @@ const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
 // runs as-is), suspended while inspection tools are withdrawn (the directed read would be refused).
 // The `would-land=` field on the bounce debug line is the measurement. See agent/readfirst.ts.
 const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
+// An exact, unique old_string passes the gate (#932, `=0` is the baseline arm for
+// evals/fixtures/22-read-first-exact). See readfirst.ts oldStringProvesBytes.
+const READ_FIRST_EXACT = process.env.REIKA_READ_FIRST_EXACT !== '0';
 // EXPERIMENT (#867): keep the offered tool list unchanged while inspection is withdrawn, enforcing
 // the pause at dispatch and through the ledger only. The template renders the tools ahead of the
 // system prompt, so dropping them makes the withdrawal round and the lift round each a full
@@ -3715,13 +3723,27 @@ export async function runTurn(opts: {
       // equipped to make. Now that shouldBounce asks the real question (are those bytes in the
       // request the model just answered — see readfirst.ts isLive), the proxy only loses coverage:
       // the long unplanned turn is exactly where reads age out beneath the model.
-      const bouncedBlindEdit =
+      const blindEdit =
         READ_FIRST &&
         !withdrawInspection &&
         call.name === 'edit' &&
         tool !== undefined &&
         typeof call.args.path === 'string' &&
-        readFirst.shouldBounce(call.args.path, opts.history, prefixStable);
+        readFirst.wouldBounce(call.args.path, opts.history, prefixStable);
+      const provenEdit =
+        READ_FIRST_EXACT &&
+        blindEdit &&
+        (await oldStringProvesBytes(
+          opts.bundle.cwd,
+          String(call.args.path),
+          String(call.args.old_string ?? ''),
+          String(call.args.new_string ?? ''),
+        ));
+      if (provenEdit) debugLog(`[reika:debug] round=${i} read-first proven ${call.args.path}\n`);
+      const bouncedBlindEdit =
+        blindEdit &&
+        !provenEdit &&
+        readFirst.shouldBounce(String(call.args.path), opts.history, prefixStable);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
