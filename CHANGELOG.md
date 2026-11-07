@@ -40,6 +40,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- When Reika pauses a looping model's reads, the pause now lasts four rounds instead of five (#927).
 - The status bar's PR chip now says when the PR is a draft, and stays up marked `merged` after the
   PR lands instead of disappearing, so a finished branch no longer looks like one with no PR
   (#905).
