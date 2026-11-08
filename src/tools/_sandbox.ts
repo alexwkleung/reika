@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { expandingHeredocBodies, stripHeredocs } from './_heredoc.js';
 import {
+  WORD_RE,
   dropCarriers,
   hasExecutableSubstitution,
   hasRawSubstitution,
@@ -263,22 +264,92 @@ const GIT_PROGRAM_SHORT_FLAGS: Record<string, { run: string; value: string }> = 
   rebase: { run: 'x', value: 'sXxC' },
   difftool: { run: 'x', value: 'tx' },
 };
-// Whole subcommands (or a subcommand's first operand) that name a program to run: `send-email`
-// does so five ways (four `--*-cmd` options, and `--smtp-server=/path`), so it goes by subcommand.
-const GIT_PROGRAM_SUBCOMMANDS = new Set([
-  'filter-branch',
-  'submodule foreach',
-  'bisect run',
-  'send-email',
+// The subcommands a `git` segment may keep the network with — an ALLOWLIST since #910, the polarity
+// `gh` and `hf` already have, because the blocklist it replaced (`filter-branch`, `submodule
+// foreach`, `bisect run`, `send-email`) left every subcommand nobody had listed open: `git
+// remote-ext`, `git submodule--helper foreach` and `git merge-index ./x.sh -a` each ran a program
+// with the network. A missed subcommand is now a false deny. Only the first group needs the network;
+// the second is here so a read or a branch switch beside a fetch (`git fetch && git log ..@{u}`,
+// `git checkout main && git pull`) does not cost the fetch its allow, and each was checked for an
+// option that names a program on the command line (`merge -s` looks a strategy up on PATH only, so
+// `-s ./x` is refused by git itself). `send-email`, `filter-branch`, `bisect`, `worktree add`, `help`
+// (`-w` starts a browser) and every plumbing command not named are out.
+const GIT_NETWORK_SUBCOMMANDS = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'push', 'remote']);
+const GIT_LOCAL_SUBCOMMANDS = new Set([
+  'add',
+  'apply',
+  'blame',
+  'branch',
+  'cat-file',
+  'check-ignore',
+  'checkout',
+  'cherry',
+  'cherry-pick',
+  'commit',
+  'config',
+  'count-objects',
+  'describe',
+  'diff',
+  'for-each-ref',
+  'grep',
+  'hash-object',
+  'log',
+  'ls-files',
+  'ls-tree',
+  'merge',
+  'merge-base',
+  'merge-tree',
+  'mv',
+  'name-rev',
+  'range-diff',
+  'rebase',
+  'reflog',
+  'reset',
+  'restore',
+  'rev-list',
+  'rev-parse',
+  'revert',
+  'rm',
+  'shortlog',
+  'show',
+  'show-ref',
+  'stash',
+  'status',
+  'stripspace',
+  'switch',
+  'symbolic-ref',
+  'tag',
+  'version',
+  'whatchanged',
 ]);
+// Subcommands allowed only with one of these as their first operand: `submodule foreach` and `lfs`'s
+// own verbs that push or install hooks are the rest of those namespaces.
+const GIT_SUBCOMMAND_OPERANDS: Record<string, Set<string>> = {
+  submodule: new Set(['update', 'init', 'sync', 'status', 'summary', 'deinit', 'absorbgitdirs']),
+  lfs: new Set(['fetch', 'pull', 'ls-files', 'status', 'env', 'version']),
+  worktree: new Set(['list', 'prune', 'remove']),
+};
 
 function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
-  if (GIT_PROGRAM_SUBCOMMANDS.has(sub)) return true;
-  const first = args.find(a => !a.startsWith('-'));
-  if (first && GIT_PROGRAM_SUBCOMMANDS.has(`${sub} ${first}`)) return true;
+  const operands = GIT_SUBCOMMAND_OPERANDS[sub];
+  if (operands) {
+    const first = args.find(a => !a.startsWith('-'));
+    if (!first || !operands.has(first)) return true;
+  } else if (!GIT_NETWORK_SUBCOMMANDS.has(sub) && !GIT_LOCAL_SUBCOMMANDS.has(sub)) {
+    return true;
+  }
   const short = GIT_PROGRAM_SHORT_FLAGS[sub];
-  for (const a of args) {
-    if (a === '--') return false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    // `--` ends the options only when it is not the VALUE of the option before it: in `git
+    // ls-remote -o -- --upload-pack=./x.sh .` it is `-o`'s value and git read the next word as an
+    // option (measured, #910). Which options take a value is per subcommand and not worth a table,
+    // so any bare option before it (one carrying no `=value`) keeps the scan going.
+    if (a === '--') {
+      const prev = args[i - 1];
+      if (prev === undefined || !prev.startsWith('-') || prev.includes('=')) return false;
+      continue;
+    }
     if (a.startsWith('--')) {
       const name = a.slice(2).split('=')[0];
       // Any prefix, down to one letter (`--u=cmd` ran); `--=x` has an empty name, which is none.
@@ -288,6 +359,38 @@ function gitSubcommandRunsProgram(sub: string, args: string[]): boolean {
         if (short.run.includes(ch)) return true;
         if (short.value.includes(ch)) break;
       }
+    }
+  }
+  return false;
+}
+
+// Whether a raw (still-quoted) word holds something the shell expands before git sees it, so the
+// classifier cannot read the option git will get (#910): a parameter (`"$f"` from a `for` loop), a
+// backtick, a glob (`--up*` matches a file of that name) or a brace expansion (`{--u=./x.sh,.}`,
+// `git {send-email,p}`). Single quotes and backslashes make each of these literal. A brace counts only
+// with a `,` or `..` before its `}`, since `HEAD@{1}` and `@{u}` are not expansions.
+function shellExpandsWord(raw: string): boolean {
+  let quote: '"' | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '\\') {
+      i++;
+    } else if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '$' || c === '`') return true;
+    } else if (c === "'") {
+      const end = raw.indexOf("'", i + 1);
+      i = end < 0 ? raw.length : end;
+    } else if (c === '$' && (raw[i + 1] === "'" || raw[i + 1] === '"')) {
+      // `$'…'` and `$"…"` are quoting, not a parameter; the quote itself is read next.
+    } else if (c === '"') {
+      quote = '"';
+    } else if (c === '$' || c === '`' || c === '*' || c === '?' || c === '[') {
+      return true;
+    } else if (c === '{') {
+      const close = raw.indexOf('}', i + 1);
+      const inner = close < 0 ? '' : raw.slice(i + 1, close);
+      if (inner.includes(',') || inner.includes('..')) return true;
     }
   }
   return false;
@@ -408,11 +511,12 @@ const XARGS_VALUE_FLAGS = new Set(['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-J
 // out of the allow.
 const SHELL_STRUCTURE_RE = /^(?:do|done)$|^for\s+\w+\s+in(?:\s|$)/;
 
-function effectiveWords(segment: string): string[] {
+function effectiveWords(segment: string): { ws: string[]; viaXargs: boolean } {
   // `timeout` and `xargs` each name the command they run rather than being it, so both are skipped to
   // reach it — a carrier inside the command xargs runs included.
   let ws = dropCarriers(words(segment.trim().replace(VERB_PREFIX_RE, '')));
-  if (ws[0] === 'xargs') {
+  const viaXargs = ws[0] === 'xargs';
+  if (viaXargs) {
     let i = 1;
     while (i < ws.length && ws[i].startsWith('-')) {
       if (XARGS_VALUE_FLAGS.has(ws[i])) i++;
@@ -420,7 +524,7 @@ function effectiveWords(segment: string): string[] {
     }
     ws = dropCarriers(ws.slice(i));
   }
-  return ws;
+  return { ws, viaXargs };
 }
 
 /**
@@ -461,13 +565,21 @@ export function networkDecision(command: string): { allowed: boolean; blockedBy?
   let net = false;
   let blockedBy: string | undefined;
   for (const seg of segments) {
-    const ws = effectiveWords(seg);
+    const { ws, viaXargs } = effectiveWords(seg);
     const verb = ws[0];
     if (!verb) return { allowed: false };
     const args = ws.slice(1);
     if (NET_VERBS.has(verb)) {
       if (!envPrefixHarmless(seg)) return { allowed: false };
-      if (verb === 'git' && gitArgsRunProgram(args)) return { allowed: false };
+      if (verb === 'git') {
+        // What `xargs` appends comes from stdin and what the shell expands is decided at run time, so
+        // neither is an argument this reader has seen (#910): `echo --upload-pack=./x.sh . | xargs
+        // git ls-remote` ran the program. `gh`/`hf` keep both shapes, which their verb tables bound.
+        if (viaXargs || (seg.match(WORD_RE) ?? []).some(shellExpandsWord)) {
+          return { allowed: false };
+        }
+        if (gitArgsRunProgram(args)) return { allowed: false };
+      }
       net = true;
     } else if (!NET_PIPE_COMMANDS.has(verb)) {
       blockedBy ??= verb;
