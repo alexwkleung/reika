@@ -2607,6 +2607,15 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} compaction-report n=${n} no-note ${describe(rep)}; retrying\n`,
           );
           opts.onReasoningReset?.();
+          // The reset freezes the failed attempt in place, so without a line it reads as a first
+          // note that went wrong rather than one the harness set aside.
+          opts.onMessage({
+            role: 'system',
+            tone: 'info',
+            content: rep.toolCalls?.length
+              ? 'The model made a tool call instead of writing the note — asking again.'
+              : 'That reply carried no note — asking again.',
+          });
           retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`, refusedCallTurn(rep));
           reportUsage(retry, !!opts.signal?.aborted, notePrompt);
           if (opts.signal?.aborted) {

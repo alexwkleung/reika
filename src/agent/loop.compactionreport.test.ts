@@ -72,6 +72,11 @@ vi.mock('../provider/client.js', () => ({
 }));
 
 const { runTurn } = await import('./loop.js');
+
+const retryNotices = (messages: Message[]): string[] =>
+  messages.flatMap(m =>
+    m.role === 'system' && m.content.endsWith('asking again.') ? [m.content] : [],
+  );
 const { callModel } = await import('../provider/client.js');
 
 function makeBundle(): ContextBundle {
@@ -195,6 +200,7 @@ describe('compaction report round (#280)', () => {
       onMessage: m => messages.push(m),
     });
     expect(h.captured).toHaveLength(2);
+    expect(retryNotices(messages)).toEqual([]);
     // Report call: the round's tools kept with calls forbidden (#426 — withholding them re-rendered
     // the system turn and re-prefilled the whole request), numbered directive, the UNFOLDED history
     // (the note is written from the material that is about to be dropped).
@@ -251,6 +257,7 @@ describe('compaction report round (#280)', () => {
       { content: 'RETRY NOTE: established a; open b', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
+    const messages: Message[] = [];
     const history = bigHistory();
     await runTurn({
       userInput: 'keep going',
@@ -259,9 +266,13 @@ describe('compaction report round (#280)', () => {
       config: makeConfig(),
       tools: [noopTool],
       payloads: new PayloadStore(),
-      onMessage: () => {},
+      onMessage: m => messages.push(m),
     });
     expect(h.captured).toHaveLength(3);
+    // The frozen first attempt is labelled as set aside, and says why.
+    expect(retryNotices(messages)).toEqual([
+      'The model made a tool call instead of writing the note — asking again.',
+    ]);
     expect(directiveOf(h.captured[0])).toContain(buildCompactionReportDirective(1));
     expect(directiveOf(h.captured[0])).not.toContain('your reply carried no note');
     expect(h.captured[1].toolChoice).toBe('none');
@@ -339,6 +350,7 @@ describe('compaction report round (#280)', () => {
       { content: '', reasoning: 'second try', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
+    const messages: Message[] = [];
     let history = bigHistory();
     await runTurn({
       userInput: 'keep going',
@@ -347,8 +359,9 @@ describe('compaction report round (#280)', () => {
       config: makeConfig(),
       tools: [noopTool],
       payloads: new PayloadStore(),
-      onMessage: () => {},
+      onMessage: m => messages.push(m),
     });
+    expect(retryNotices(messages)).toEqual(['That reply carried no note — asking again.']);
     let recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain('reasoned note');
     // A reply that made no call has nothing to refuse: the retry re-sends the same history.
