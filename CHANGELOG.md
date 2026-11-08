@@ -24,6 +24,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- When the model answers a compaction note request with a tool call or nothing at all, a line now
+  says it is being asked again, so the set-aside attempt no longer reads as a broken note (#937).
 - While a reply or compaction note streams, a line followed by a bullet no longer flashes as a bold
   heading for a moment before the bullet's text arrives (#934).
 - Code blocks keep their colors when they wrap on a narrow pane and stay inside their column under a
