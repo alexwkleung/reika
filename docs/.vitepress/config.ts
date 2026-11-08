@@ -76,6 +76,8 @@ export default defineConfigWithTheme<TranslationTheme>({
               { text: '模型', link: '/zh/models' },
               { text: '平台', link: '/zh/platforms' },
               { text: '架构', link: '/zh/architecture' },
+              { text: '上下文管理（英文）', link: '/zh/context' },
+              { text: '基于 Reika 构建（英文）', link: '/zh/building-on-reika' },
               { text: '研究结果（英文）', link: '/zh/findings' },
             ],
           },
@@ -135,6 +137,7 @@ export default defineConfigWithTheme<TranslationTheme>({
     ];
   },
   markdown: {
+    math: true,
     anchor: { slugify: githubSlugify },
     config: md => md.use(githubLinks),
   },
@@ -170,6 +173,8 @@ export default defineConfigWithTheme<TranslationTheme>({
           { text: 'Models', link: '/models' },
           { text: 'Platforms', link: '/platforms' },
           { text: 'Architecture', link: '/architecture' },
+          { text: 'Context management', link: '/context' },
+          { text: 'Building on Reika', link: '/building-on-reika' },
           { text: 'Findings', link: '/findings' },
         ],
       },

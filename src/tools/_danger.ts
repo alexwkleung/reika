@@ -25,6 +25,7 @@ const POLICY_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bgit\s+commit\b/, label: 'Git commit (records to version history)' },
   // Bare push; force push is also flagged separately below as a destructive pattern.
   { re: /\bgit\s+push\b/, label: 'Git push (publishes commits to remote)' },
+  { re: /\bgit\s+send-email\b/, label: 'Git send-email (sends mail, outward-facing)' },
   // Outward-facing GitHub/HF actions. Scoped to the publishing subcommands here because they are
   // the ones whose label the user needs to see in these words — the rest of the coverage is the
   // read-verb allowlists (`GH_READ_VERBS`, `HF_READ_VERBS`), which flag every verb that is not a

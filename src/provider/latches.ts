@@ -7,6 +7,8 @@
 //   - toolMessageName: it refuses `name` on tool messages (OpenAI's wire shape);
 //   - promptCacheKey / cacheControl: it 400s on that cache hint despite a host that documents it;
 //   - chatTemplateKwargs: a local engine 400s on `chat_template_kwargs` (templatekwargs.ts);
+//   - promptProgress: a local engine 400s on `return_progress` (#912);
+//   - timingsPerToken: a local engine 400s on `timings_per_token` (#925);
 //   - assistantPrefill: it rejects a request ending in an assistant message (compactionreport.ts);
 //   - noteOnToolResult: its template hides earlier reasoning behind a user-role trailing note, so
 //     the note rides the newest tool result instead (#827) — learned by a probe or the live check
@@ -25,6 +27,8 @@ export type EndpointLatches = {
   promptCacheKey: boolean;
   cacheControl: boolean;
   chatTemplateKwargs: boolean;
+  promptProgress: boolean;
+  timingsPerToken: boolean;
   assistantPrefill: boolean;
   noteOnToolResult: boolean;
 };
@@ -51,6 +55,8 @@ export function latchesFor(endpoint: { baseURL: string; model: string }): Endpoi
       promptCacheKey: false,
       cacheControl: false,
       chatTemplateKwargs: false,
+      promptProgress: false,
+      timingsPerToken: false,
       assistantPrefill: false,
       noteOnToolResult: false,
     };

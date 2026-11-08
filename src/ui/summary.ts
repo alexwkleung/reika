@@ -16,7 +16,7 @@ export function buildSummary(
   const elapsed = Math.floor((Date.now() - startedAt) / 1000);
   const userTurns = messages.filter(m => m.role === 'user' && !m.nested && !m.meta).length;
   const assistantTurns = messages.filter(
-    m => m.role === 'assistant' && !m.nested && !m.compactionNote,
+    m => m.role === 'assistant' && !m.nested && !m.compactionNote && !m.discarded,
   ).length;
 
   const toolCounts: Record<string, number> = {};
@@ -52,6 +52,7 @@ export function buildSummary(
           .map(f => scrubPaths(f))
           .join(', ');
 
+  const approx = usage.estimated ? '~' : '';
   return [
     'Session summary',
     '─'.repeat(40),
@@ -59,7 +60,7 @@ export function buildSummary(
     `Turns:           ${userTurns} user · ${assistantTurns} assistant`,
     `Tools:           ${totalTools}${breakdown}`,
     `Subagents:       ${subagentCount}`,
-    `Tokens:          ${usage.promptTokens.toLocaleString()} ↑  ${usage.completionTokens.toLocaleString()} ↓`,
+    `Tokens:          ${approx}${usage.promptTokens.toLocaleString()} ↑  ${approx}${usage.completionTokens.toLocaleString()} ↓`,
     ...(usage.cachedTokens && usage.promptTokens > 0
       ? [
           `Cache hits:      ${usage.cachedTokens.toLocaleString()} (${Math.round(

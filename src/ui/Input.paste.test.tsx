@@ -8,6 +8,10 @@ import { rememberPaste, type PastedText } from './pastes.js';
 // Longer than the paste coalescing window, so a write lands as its own paste unless the test
 // deliberately writes back-to-back inside one tick.
 const tick = (): Promise<void> => new Promise(r => setTimeout(r, 40));
+// A long write is coalesced as a paste and flushed on a timer, which a loaded CI runner can run late.
+const untilFrameHas = async (lastFrame: () => string | undefined, text: string): Promise<void> => {
+  for (let i = 0; i < 50 && !(lastFrame() ?? '').includes(text); i++) await tick();
+};
 
 function plain(frame: string | undefined): string {
   return (frame ?? '').replace(/\x1b\[[0-9;]*m/g, '');
@@ -182,7 +186,7 @@ describe('typing up to the wrap edge', () => {
     );
     await tick();
     stdin.write('the quick brown fox jumps over the lazy dog and keeps running along the river');
-    await tick();
+    await untilFrameHas(lastFrame, 'the quick');
     for (const ch of ' bank until something') {
       stdin.write(ch);
       await tick();
@@ -208,7 +212,7 @@ describe('typing up to the wrap edge', () => {
     stdin.write(
       'the quick brown fox jumps over the lazy dog and keeps running along the river bank until some',
     );
-    await tick();
+    await untilFrameHas(lastFrame, 'the quick');
     const on = lastFrame() ?? '';
     await new Promise(r => setTimeout(r, 600));
     const off = lastFrame() ?? '';

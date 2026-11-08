@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { useMemo } from 'react';
 import type { SessionEntry } from '../store/sessions.js';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
@@ -25,10 +26,15 @@ export function ResumeSelect({
   const start = windowStart(entries.length, selectedIndex, RESUME_VISIBLE_ROWS);
   const shown = entries.slice(start, start + RESUME_VISIBLE_ROWS);
   const below = entries.length - start - shown.length;
-  const now = new Date();
   // Locale formats vary in width ("9:05 a.m." vs "11:28 p.m."); padding over every entry, not just
-  // the visible ones, keeps the title column still while the window scrolls.
-  const whenWidth = Math.max(0, ...entries.map(e => formatSavedAt(e.savedAt, now).length));
+  // the visible ones, keeps the title column still while the window scrolls. Formatted once per
+  // list: toLocaleString over hundreds of entries on every cursor move was the picker's whole cost.
+  const whens = useMemo(() => {
+    const now = new Date();
+    const formatted = entries.map(e => formatSavedAt(e.savedAt, now));
+    const width = Math.max(0, ...formatted.map(w => w.length));
+    return formatted.map(w => w.padEnd(width));
+  }, [entries]);
   return (
     <Box
       borderStyle={glyphs.border}
@@ -46,11 +52,11 @@ export function ResumeSelect({
         <Text color={theme.muted}>{start > 0 ? `  ↑ ${start} newer` : ' '}</Text>
         {shown.map((e, i) => {
           const selected = start + i === selectedIndex;
-          const when = formatSavedAt(e.savedAt, now).padEnd(whenWidth);
+          const when = whens[start + i];
           const label = e.title ?? '(untitled)';
           // The model is what tells apart two sessions opened with the same prompt; `chat` marks a
           // session holding a chat (#875), which otherwise reads like any other.
-          const tail = `  ${e.messageCount} msgs${e.chatTurns ? ' · chat' : ''}${e.model ? ` · ${e.model}` : ''}`;
+          const tail = `  ${e.messageCount} msgs${e.chat ? ' · chat' : ''}${e.model ? ` · ${e.model}` : ''}`;
           const budget = Math.max(10, maxDisplay - when.length - tail.length - 2);
           // One Text with nested runs: on wrap Ink drops the char at a sibling boundary.
           return (

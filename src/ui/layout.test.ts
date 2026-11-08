@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import wrapAnsi from 'wrap-ansi';
-import { contentWidth, hangingWrap, sliceStyled, wrapStyledRows } from './layout.js';
+import {
+  contentWidth,
+  hangingWrap,
+  NARROW_PUNCTUATION,
+  sliceStyled,
+  wrapLines,
+  wrapStyledRows,
+} from './layout.js';
 
 describe('contentWidth', () => {
   it('pays for the App’s paddingX and any block indent', () => {
@@ -148,5 +155,80 @@ describe('sliceStyled', () => {
 
   it('returns plain text unchanged', () => {
     expect(sliceStyled('plain words', 6, 11)).toBe('words');
+  });
+});
+
+describe('wrapLines', () => {
+  // The shortcut is only allowed to skip wrap-ansi, never to disagree with it: Ink re-wraps by the
+  // same rules, and a row that differs is a row Ink splits again.
+  const pieces = [
+    'a',
+    'bc',
+    'word',
+    'longerword',
+    ' ',
+    '  ',
+    '\t',
+    '\x1b[31m',
+    '\x1b[1m',
+    '\x1b[39m',
+    '\x1b[0m',
+    '\x1b[38;2;10;20;30m',
+    '\x1b[3A',
+    '漢字',
+    'é',
+    'é',
+    '✔',
+    '🙂',
+    '\r',
+    '\x1b]8;;https://x\x07',
+    '~',
+    '`',
+    '|',
+    ...NARROW_PUNCTUATION,
+  ];
+  let seed = 7;
+  const rand = (n: number) => {
+    seed = (seed * 1103515245 + 12345) % 2 ** 31;
+    return seed % n;
+  };
+  const sample = (ascii: boolean) => {
+    const pool = ascii
+      ? pieces.filter(
+          p =>
+            [...p].every(c => /[\x20-\x7e\x1b]/.test(c) || NARROW_PUNCTUATION.includes(c)) &&
+            !p.includes(']8'),
+        )
+      : pieces;
+    const lines = Array.from({ length: 1 + rand(4) }, () =>
+      Array.from({ length: rand(12) }, () => pool[rand(pool.length)]).join(''),
+    );
+    return lines.join('\n');
+  };
+
+  it('matches wrap-ansi on mixed text at every width, trimmed or not', () => {
+    for (let i = 0; i < 4000; i++) {
+      const text = sample(i % 2 === 0);
+      const width = 1 + rand(30);
+      for (const trim of [false, true]) {
+        expect(wrapLines(text, width, trim)).toBe(wrapAnsi(text, width, { trim, hard: true }));
+      }
+    }
+  });
+
+  // What the shortcut assumes of a character it lets through: one code unit, so `length` counts
+  // it; one string-width cell, as wrap-ansi measures it; untouched by the NFC pass wrap-ansi runs.
+  it('lets through only punctuation that is one unit, one cell and NFC-stable', () => {
+    for (const c of NARROW_PUNCTUATION) {
+      expect(c.length).toBe(1);
+      expect(stringWidth(c)).toBe(1);
+      expect(c.normalize()).toBe(c);
+    }
+  });
+
+  it('returns a fitting styled ASCII block as is', () => {
+    const text = '\x1b[1mtitle\x1b[22m\n  indented code\n';
+    expect(wrapLines(text, 20)).toBe(text);
+    expect(wrapLines(text, 20, true)).toBe(wrapAnsi(text, 20, { trim: true, hard: true }));
   });
 });

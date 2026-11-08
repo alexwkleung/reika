@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { loadConfig } from '../src/config.js';
 import { debugLogPath, formatExperimentFlags } from '../src/debug.js';
-import { buildHeadlessInput } from '../src/headless.js';
+import { buildHeadlessInput } from '../src/headless/headless.js';
 import { createSession } from '../src/session.js';
 
 import type { Message } from '../src/types.js';
@@ -37,6 +37,7 @@ import {
 import { agedFixture as f19b, liveFixture as f19 } from './fixtures/19-edit-recall.js';
 import { fixture as f20 } from './fixtures/20-skill-script.js';
 import { fixture as f21 } from './fixtures/21-self-history.js';
+import { fixture as f22 } from './fixtures/22-read-first-exact.js';
 
 const FIXTURES: Fixture[] = [
   f1,
@@ -64,6 +65,7 @@ const FIXTURES: Fixture[] = [
   f19b,
   f20,
   f21,
+  f22,
 ];
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -230,7 +232,10 @@ async function runFixture(
       // The follow-up runs in the same session, so the first turn's plan sits in the history the
       // loop reads — which is what makes that second turn a refinement (#46) rather than a fresh
       // planning pass. Same mode and tools; the timeout covers both turns.
-      if (fix.followUp) await session.submit(fix.followUp, options);
+      if (fix.followUp) {
+        await fix.beforeFollowUp?.(cwd);
+        await session.submit(fix.followUp, options);
+      }
     } finally {
       clearTimeout(timeoutId);
       if (homeDir) {

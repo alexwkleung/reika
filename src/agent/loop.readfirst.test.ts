@@ -208,6 +208,79 @@ describe('read-first gate (integration)', () => {
     expect(messages.some(m => m.role === 'tool' && m.summary.startsWith('edit paused'))).toBe(true);
   });
 
+  // #932: exact bytes are proof the model holds them, however it got them.
+  const LONG_LINE = 'export const provenAnchorLine = 1;';
+  const pausedCount = (messages: Message[]) =>
+    messages.filter(m => m.role === 'tool' && m.summary.startsWith('edit paused')).length;
+
+  it('applies an unread edit whose old_string matches exactly and uniquely', async () => {
+    await writeFile(app, `${LONG_LINE}\n`, 'utf8');
+    h.scripted.push(editResponse('src/app.ts', LONG_LINE, 'export const x = 2;'), finalResponse());
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY]);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(pausedCount(messages)).toBe(0);
+    expect(await readFile(app, 'utf8')).toBe('export const x = 2;\n');
+  });
+
+  it('still bounces an exact match too short to prove anything', async () => {
+    await writeFile(app, 'return null;\n', 'utf8');
+    h.scripted.push(
+      editResponse('src/app.ts', 'return null;', 'return 1;'),
+      readResponse('src/app.ts'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY]);
+
+    expect(pausedCount(messages)).toBe(1);
+    expect(await readFile(app, 'utf8')).toBe('return null;\n');
+  });
+
+  it('still bounces a long old_string that appears twice', async () => {
+    await writeFile(app, `${LONG_LINE}\n${LONG_LINE}\n`, 'utf8');
+    h.scripted.push(
+      editResponse('src/app.ts', LONG_LINE, 'export const x = 2;'),
+      readResponse('src/app.ts'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY]);
+
+    expect(pausedCount(messages)).toBe(1);
+  });
+
+  it('still bounces a long old_string that only matches fuzzily', async () => {
+    await writeFile(app, `    ${LONG_LINE}\n    export const secondLine = 2;\n`, 'utf8');
+    h.scripted.push(
+      editResponse('src/app.ts', `${LONG_LINE}\nexport const secondLine = 2;`, 'gone'),
+      readResponse('src/app.ts'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY]);
+
+    expect(pausedCount(messages)).toBe(1);
+  });
+
+  it('keeps the one bounce for a later blind edit after a proven one', async () => {
+    await writeFile(app, `${LONG_LINE}\n`, 'utf8');
+    const other = join(cwd, 'src', 'big.ts');
+    // Past the edit echo's size cap, so the proven edit grounds nothing and the file stays blind.
+    await writeFile(other, `${LONG_LINE}\n${'// padding line\n'.repeat(40_000)}`, 'utf8');
+    h.scripted.push(
+      editResponse('src/big.ts', LONG_LINE, 'export const x = 2;'),
+      editResponse('src/big.ts', 'not in the file at all, a guess', 'y'),
+      finalResponse(),
+    );
+
+    const { messages } = await run(cwd, [...PLAN_HISTORY]);
+
+    expect(pausedCount(messages)).toBe(1);
+    expect(await readFile(other, 'utf8')).toContain('export const x = 2;');
+  });
+
   it('is fail-open: a re-issued edit runs as-is without the read', async () => {
     h.scripted.push(
       editResponse('src/app.ts', 'export const app = 1;', 'export const renamed = 1;'),

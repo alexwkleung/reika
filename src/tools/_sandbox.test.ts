@@ -473,7 +473,9 @@ describe('networkAllowedFor', () => {
     // A carrier's own words must not pose as the verb's: the `-I` placeholder below is not the git,
     // and the real one's `-c` is global.
     expect(networkAllowedFor('xargs -I git git -c core.sshCommand=./x.sh fetch')).toBe(false);
-    expect(networkAllowedFor('xargs -I git git grep -c TODO')).toBe(true);
+    // Not true either since #910: what xargs appends comes from stdin, so nothing it feeds git keeps
+    // the allow.
+    expect(networkAllowedFor('xargs -I git git grep -c TODO')).toBe(false);
   });
 
   // The second, independent cause of that same call's refusal (#685), and the end-to-end shape: with
@@ -561,6 +563,97 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor("git filter-branch --tree-filter 'curl x' HEAD")).toBe(false);
   });
 
+  // A one-letter abbreviation is still an abbreviation: parse-options takes any unambiguous prefix,
+  // and `--u=cmd` ran as `--upload-pack` on `ls-remote` and `clone` (git 2.50, measured — the marker
+  // script ran), where the two-letter guard left the spelling open. The command is unflagged, so it
+  // ran with no prompt and with the network. A one-letter spelling of a harmless option costs a
+  // false deny, which is this module's rule: a false deny, never a hole.
+  it('refuses a one-letter abbreviation of a program-running git option', () => {
+    expect(networkAllowedFor('git ls-remote --u=./x.sh origin')).toBe(false);
+    expect(networkAllowedFor('git clone --u=./x.sh a b')).toBe(false);
+    expect(networkAllowedFor('git ls-remote --u ./x.sh origin')).toBe(false);
+    // The rule is per flag, not per subcommand: `--e` is `--exec`, `--t` is `--template` and `--o`
+    // is `--open-files-in-pager` wherever they are unambiguous.
+    expect(networkAllowedFor('git log --e=./x.sh')).toBe(false);
+    expect(networkAllowedFor('git log --t=/tmp/t')).toBe(false);
+    expect(networkAllowedFor('git log --o=./x.sh')).toBe(false);
+    // The accepted cost: on `fetch` and `ls-remote` git reads `--t` as `--tags` and it works, so
+    // this harmless spelling loses the network.
+    expect(networkAllowedFor('git fetch --t origin')).toBe(false);
+    expect(networkAllowedFor('git ls-remote --t origin')).toBe(false);
+    // The empty name is not an abbreviation of anything: `--=x` is an unknown option to git.
+    expect(networkAllowedFor('git ls-remote --=x origin')).toBe(true);
+    // A longer spelling that is not a prefix of one of these is none of their business.
+    expect(networkAllowedFor('git ls-remote --exit-code origin')).toBe(true);
+  });
+
+  // `send-email` names commands four ways (`--sendmail-cmd`, `--to-cmd`, `--cc-cmd`,
+  // `--header-cmd`) and `--smtp-server=<path>` names one too when the path starts with `/`, so it
+  // loses the allow whole rather than by option — and it is outward-facing (mail out) besides.
+  it('refuses git send-email whole', () => {
+    expect(
+      networkAllowedFor('git send-email --sendmail-cmd=./x.sh --to a@example.com p.patch'),
+    ).toBe(false);
+    expect(networkAllowedFor('git send-email --smtp-server=/usr/sbin/sendmail p.patch')).toBe(
+      false,
+    );
+    expect(networkAllowedFor('git send-email p.patch')).toBe(false);
+    expect(networkAllowedFor('git send-email --quiet --to a@example.com p.patch')).toBe(false);
+  });
+
+  // #910: each of these ran the program with the network (marker script, git 2.50) or got the
+  // decision past the classifier, unflagged, before subcommands became an allowlist and a git
+  // argument the shell rewrites stopped being read as if it were literal.
+  it('refuses git commands whose options it cannot read or whose subcommand is unlisted', () => {
+    for (const cmd of [
+      'git ls-remote -o -- --upload-pack=./x.sh .',
+      'git clone -b -- --upload-pack=./x.sh . d',
+      'echo --upload-pack=./x.sh . | xargs git ls-remote',
+      'for f in --upload-pack=./x.sh; do git ls-remote "$f" .; done',
+      'git ls-remote {--u=./x.sh,.}',
+      'git ls-remote --up* .',
+      'git ls-remote --upload-pac? .',
+      'git ls-remote --upload-pac[k]=./x.sh .',
+      'git ls-remote `cat opt` .',
+      'git ls-remote $OPT .',
+      'git remote-ext . x',
+      'git submodule--helper foreach ./x.sh',
+      'git merge-index ./x.sh -a',
+      'git {send-email,p}',
+      'echo send-email | xargs -I{} git {} --sendmail-cmd=./x.sh p',
+      'git bisect run ./x.sh',
+      'git submodule',
+      'git lfs install',
+    ]) {
+      expect(networkAllowedFor(cmd), cmd).toBe(false);
+    }
+  });
+
+  // The shapes the #910 checks must leave alone: quoted or escaped metacharacters are literal, a
+  // brace without `,`/`..` is a reflog or upstream selector, and `--` after an operand or an
+  // `=`-joined option still ends the options. The #621 gh poll and loop shapes keep theirs.
+  it('keeps the allow for git words the shell passes through unchanged', () => {
+    for (const cmd of [
+      "git log --grep='fix*' -1",
+      'git log --format="%h %s" -3',
+      'git log --grep fix\\* -1',
+      'git show HEAD@{1}',
+      'git log @{u}..HEAD --oneline',
+      "git ls-remote origin 'refs/tags/v*'",
+      'git fetch origin && git log --oneline origin/main..HEAD',
+      'git checkout main && git pull --ff-only',
+      'git stash && git pull --rebase && git stash pop',
+      'git fetch --depth=1 -- origin main',
+      'git submodule update --init --recursive',
+      'git lfs pull',
+      'sleep 5 && gh pr view 609 --json mergeable',
+      'for n in 610 608; do gh pr view $n --json title; done',
+      'gh pr list --json number | xargs -I{} gh pr view {}',
+    ]) {
+      expect(networkAllowedFor(cmd), cmd).toBe(true);
+    }
+  });
+
   // The other direction: the same letters mean something else elsewhere, a value letter's value is
   // the rest of its bundle, `--no-config` only removes config, and after `--` everything is operands.
   it('keeps the allow for look-alike git options that run nothing', () => {
@@ -571,7 +664,6 @@ describe('networkAllowedFor', () => {
     expect(networkAllowedFor('git clone /repo -- -c')).toBe(true);
     expect(networkAllowedFor('git grep -e x -- -O')).toBe(true);
     expect(networkAllowedFor('git submodule update --init')).toBe(true);
-    expect(networkAllowedFor('git bisect log')).toBe(true);
     expect(networkAllowedFor('git switch -c topic origin/topic')).toBe(true);
   });
 

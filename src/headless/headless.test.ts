@@ -8,13 +8,15 @@ import {
   createHeadlessStatus,
   createStreamPrinter,
   finalReply,
+  formatRunSummary,
+  terminalSafeWriter,
   formatTurnFailure,
   headlessProfile,
 } from './headless.js';
 import { parseHeadlessArgs } from './headlessargs.js';
-import { listSessions, loadSession } from './store/sessions.js';
-import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
-import type { Config, ContextBundle, Message } from './types.js';
+import { listSessions, loadSession } from '../store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from '../store/transcript.js';
+import type { Config, ContextBundle, Message } from '../types.js';
 
 describe('parseHeadlessArgs', () => {
   it('returns null with no headless flag, so the TUI starts', () => {
@@ -121,6 +123,104 @@ describe('finalReply', () => {
   it('is null when no assistant message has content', () => {
     expect(finalReply([{ role: 'user', content: 'q' }])).toBeNull();
     expect(finalReply([{ role: 'assistant', content: '  ' }])).toBeNull();
+  });
+
+  it('never reaches back past an empty final message to an earlier round', () => {
+    const msgs: Message[] = [
+      { role: 'user', content: 'q' },
+      {
+        role: 'assistant',
+        content: 'Let me read the file first.',
+        toolCalls: [{ id: '1', name: 'read', args: {} }],
+      },
+      { role: 'tool', callId: '1', summary: 'Read a.ts' },
+      { role: 'assistant', content: '' },
+    ];
+    expect(finalReply(msgs)).toBeNull();
+  });
+
+  it('is null when the turn ended on a tool call', () => {
+    const msgs: Message[] = [
+      {
+        role: 'assistant',
+        content: 'Reading.',
+        toolCalls: [{ id: '1', name: 'read', args: {} }],
+      },
+      { role: 'tool', callId: '1', summary: 'Read a.ts' },
+    ];
+    expect(finalReply(msgs)).toBeNull();
+  });
+
+  it('does not take a compaction note or a subagent round for the reply', () => {
+    expect(
+      finalReply([
+        { role: 'assistant', content: 'answer' },
+        { role: 'assistant', content: 'Established: x', compactionNote: true },
+        { role: 'assistant', content: 'from the subagent', nested: true },
+      ]),
+    ).toBe('answer');
+  });
+});
+
+describe('formatRunSummary', () => {
+  it('names the model, tokens, time and session', () => {
+    expect(
+      formatRunSummary({
+        model: 'qwen',
+        totals: { promptTokens: 12345, completionTokens: 678, cachedTokens: 9000 },
+        elapsedMs: 42_500,
+        sessionPath: '/h/s.jsonl',
+      }),
+    ).toBe('qwen · 12,345 tokens in (9,000 cached), 678 out · 42s · session /h/s.jsonl');
+  });
+
+  it('marks an estimate and leaves out a session nothing was saved to', () => {
+    expect(
+      formatRunSummary({
+        model: 'qwen',
+        totals: { promptTokens: 10, completionTokens: 2, estimated: true },
+        elapsedMs: 0,
+        sessionPath: null,
+      }),
+    ).toBe('qwen · ~10 tokens in, ~2 out · 0s');
+  });
+});
+
+describe('formatRunSummary with no usage', () => {
+  it('leaves the tokens out rather than reporting zero', () => {
+    expect(
+      formatRunSummary({
+        model: 'qwen',
+        totals: { promptTokens: 0, completionTokens: 0 },
+        elapsedMs: 1000,
+      }),
+    ).toBe('qwen · 1s');
+  });
+});
+
+describe('terminalSafeWriter', () => {
+  const capture = (isTTY: boolean) => {
+    const written: string[] = [];
+    return { written, write: terminalSafeWriter({ isTTY, write: t => written.push(t) }) };
+  };
+
+  it('strips escape sequences for a terminal', () => {
+    const { written, write } = capture(true);
+    write('a\x1b[2Jb\x1b]0;title\x07c\rd');
+    expect(written).toEqual(['abcd']);
+  });
+
+  it('keeps the spacing of streamed chunks', () => {
+    const { written, write } = capture(true);
+    write('hello ');
+    write('\tworld\n');
+    expect(written.join('')).toBe('hello \tworld\n');
+  });
+
+  it('leaves a pipe the exact bytes', () => {
+    const { written, write } = capture(false);
+    write('a\x1b[2Jb');
+    expect(written).toEqual(['a\x1b[2Jb']);
   });
 });
 
@@ -488,6 +588,13 @@ describe('createHeadlessStatus', () => {
       contextWindow: 8000,
       minGenTokens: 1024,
     });
+  });
+
+  it('keeps the last real call when an estimated round lands', () => {
+    const t = createHeadlessStatus(() => []);
+    t.events.onUsage?.({ promptTokens: 50, completionTokens: 3 });
+    t.events.onUsage?.({ promptTokens: 900, completionTokens: 300, estimated: true });
+    expect(t.status(session).lastUsage).toEqual({ promptTokens: 50, completionTokens: 3 });
   });
 
   it('stamps a shrink with the turn it landed in and drops the stale last call', () => {

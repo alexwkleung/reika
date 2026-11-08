@@ -63,6 +63,7 @@ export type SessionEvents = Partial<
     | 'onMessage'
     | 'onContentDelta'
     | 'onReasoningDelta'
+    | 'onPromptProgress'
     | 'onPhase'
     | 'onSubagent'
     | 'onCompactionNote'
@@ -71,6 +72,7 @@ export type SessionEvents = Partial<
     | 'onReasoningStatus'
     | 'onReasoningReset'
     | 'onUsage'
+    | 'onLiveUsage'
     | 'onContextEstimate'
     | 'onShrink'
     | 'onCalibration'
@@ -361,13 +363,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
           for (const n of pending.splice(0)) emit(n);
         },
         onUsage: u => {
-          lastUsage = u;
+          // An estimate says nothing about the last real request, which is what lastUsage is for.
+          if (!u.estimated) lastUsage = u;
           totals = {
             promptTokens: totals.promptTokens + u.promptTokens,
             completionTokens: totals.completionTokens + u.completionTokens,
             ...(u.cachedTokens != null || totals.cachedTokens != null
               ? { cachedTokens: (totals.cachedTokens ?? 0) + (u.cachedTokens ?? 0) }
               : {}),
+            ...(u.estimated || totals.estimated ? { estimated: true } : {}),
           };
           events.onUsage?.(u);
         },

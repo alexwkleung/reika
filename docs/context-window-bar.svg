@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 270" width="760" height="270" role="img" aria-label="Two bars of a 24k context window. With a 2048 token reserve, sheds start at 19.8k and fall back to 13.8k. With a 6144 token reserve, sheds start at 16.1k and fall back to 11.2k.">
+<rect x="0.5" y="0.5" width="759" height="269" rx="10" fill="#17151a" stroke="#2c2830"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+<text x="48" y="36" font-size="13" fill="#cfc6d4">Reserve 2048 (the default start)</text>
+<rect x="48.0" y="70" width="382.6" height="34" fill="#a13d93"/>
+<rect x="430.6" y="70" width="164.0" height="34" fill="#edc4e8"/>
+<rect x="594.6" y="70" width="60.7" height="34" fill="#4a4350"/>
+<rect x="655.3" y="70" width="56.7" height="34" fill="#8a8090"/>
+<line x1="430.6" x2="430.6" y1="64" y2="110" stroke="#17151a" stroke-width="2"/>
+<line x1="594.6" x2="594.6" y1="64" y2="110" stroke="#17151a" stroke-width="2"/>
+<line x1="655.3" x2="655.3" y1="64" y2="110" stroke="#17151a" stroke-width="2"/>
+<text x="430.6" y="60" font-size="11" fill="#8a8090" text-anchor="middle">13.8k</text>
+<text x="594.6" y="60" font-size="11" fill="#8a8090" text-anchor="middle">19.8k</text>
+<text x="655.3" y="60" font-size="11" fill="#8a8090" text-anchor="middle">22.0k</text>
+<text x="712.0" y="60" font-size="11" fill="#8a8090" text-anchor="end">24k</text>
+<text x="48" y="132" font-size="13" fill="#cfc6d4">Reserve 6144</text>
+<rect x="48.0" y="166" width="311.2" height="34" fill="#a13d93"/>
+<rect x="359.2" y="166" width="133.4" height="34" fill="#edc4e8"/>
+<rect x="492.6" y="166" width="49.4" height="34" fill="#4a4350"/>
+<rect x="542.0" y="166" width="170.0" height="34" fill="#8a8090"/>
+<line x1="359.2" x2="359.2" y1="160" y2="206" stroke="#17151a" stroke-width="2"/>
+<line x1="492.6" x2="492.6" y1="160" y2="206" stroke="#17151a" stroke-width="2"/>
+<line x1="542.0" x2="542.0" y1="160" y2="206" stroke="#17151a" stroke-width="2"/>
+<text x="359.2" y="156" font-size="11" fill="#8a8090" text-anchor="middle">11.2k</text>
+<text x="492.6" y="156" font-size="11" fill="#8a8090" text-anchor="middle">16.1k</text>
+<text x="542.0" y="156" font-size="11" fill="#8a8090" text-anchor="middle">17.9k</text>
+<text x="712.0" y="156" font-size="11" fill="#8a8090" text-anchor="end">24k</text>
+<rect x="48" y="232" width="12" height="12" rx="2" fill="#a13d93"/><text x="66" y="243" font-size="11" fill="#cfc6d4">Request after a shed</text>
+<rect x="236" y="232" width="12" height="12" rx="2" fill="#edc4e8"/><text x="254" y="243" font-size="11" fill="#cfc6d4">Grows here, then sheds</text>
+<rect x="448" y="232" width="12" height="12" rx="2" fill="#4a4350"/><text x="466" y="243" font-size="11" fill="#cfc6d4">Safety margin</text>
+<rect x="600" y="232" width="12" height="12" rx="2" fill="#8a8090"/><text x="618" y="243" font-size="11" fill="#cfc6d4">Reply reserve</text>
+</g></svg>

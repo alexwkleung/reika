@@ -3,11 +3,10 @@ import { Lexer, type MarkedToken, type Token, type Tokens } from 'marked';
 import stringWidth from 'string-width';
 import stripAnsi from 'strip-ansi';
 import { supportsHyperlink } from 'supports-hyperlinks';
-import wrapAnsi from 'wrap-ansi';
 import { theme, themeChalk } from './theme.js';
 import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
-import { contentWidth } from './layout.js';
+import { contentWidth, dropWrapWhitespace, wrapStyledRows } from './layout.js';
 
 // marked only parses here: the terminal rendering is ours, a walk over its token tree. Each block
 // renders at the width it actually has — `width` shrinks by a list's tab and marker or a quote's
@@ -32,9 +31,26 @@ function proseWidth(ctx: Ctx): number {
   return Math.max(MIN_PROSE_WIDTH, ctx.width);
 }
 
-// `hard` splits a bare URL longer than the line instead of letting it overflow.
+// `hard` splits a bare URL longer than the line instead of letting it overflow. Styled rows, not
+// bare wrap-ansi: it re-opens a named color at a break but not a hex one, so an inline code span
+// that wrapped lost its color from the second row on.
 function wrapProse(text: string, ctx: Ctx): string {
-  return wrapAnsi(text, proseWidth(ctx), { hard: true });
+  return wrapStyledRows(text, proseWidth(ctx), true).join('\n');
+}
+
+// Wrapped here, not left to Ink: a fence that reached Ink overflowed its list or quote column and
+// lost its colors from the second row on, the same two defects wrapProse exists to prevent. By
+// source line because only a break's whitespace is noise; a line's own indent is the code. Chalk
+// closes its styles at a newline, so no style crosses that split.
+function wrapCode(code: string, ctx: Ctx): string {
+  return code
+    .split('\n')
+    .flatMap(line =>
+      wrapStyledRows(line, proseWidth(ctx)).map((row, i) =>
+        i === 0 ? row : dropWrapWhitespace(row),
+      ),
+    )
+    .join('\n');
 }
 
 function renderBlocks(tokens: Token[], ctx: Ctx): string {
@@ -56,7 +72,7 @@ function renderBlock(token: MarkedToken, ctx: Ctx): string {
     // Flush with the prose, no fence lines. The info string's first word is the language: a
     // ```ts title="x" fence is TypeScript, not an unknown language.
     case 'code':
-      return highlightCode(token.text, token.lang?.split(/\s/)[0] ?? '');
+      return wrapCode(highlightCode(token.text, token.lang?.split(/\s/)[0] ?? ''), ctx);
     case 'hr':
       return chalk.dim('─'.repeat(Math.min(40, proseWidth(ctx))));
     case 'blockquote':
@@ -140,7 +156,7 @@ function renderTable(table: Tokens.Table, ctx: Ctx): string {
     border(left + widths.map(w => '─'.repeat(w)).join(mid) + right);
   const drawRow = (row: string[], paint: (s: string) => string) => {
     const wrapped = widths.map((w, col) =>
-      wrapAnsi(row[col] ?? '', Math.max(1, w - 2), { hard: true }).split('\n'),
+      wrapStyledRows(row[col] ?? '', Math.max(1, w - 2), true),
     );
     const height = Math.max(...wrapped.map(lines => lines.length));
     const lines: string[] = [];
@@ -327,6 +343,20 @@ export function renderReasoningMarkdown(text: string, width: number): string {
   return stripAnsi(renderDocument(text, { width, listDepth: 0, plainLinks: true }));
 }
 
+// The fence line a live tail needs put back when it was cut out of `text` inside a code block, or
+// ''. Without the opener the tail's code parses as prose, and its closer opens a block of its own
+// that swallows the prose after it. A closer is the opener's character, at least as long, bare.
+export function openFenceBefore(text: string, end: number): string {
+  let open: { line: string; fence: string } | null = null;
+  for (const [line, fence, info] of text.slice(0, end).matchAll(/^ {0,3}(`{3,}|~{3,})(.*)$/gm)) {
+    if (!open) open = { line, fence };
+    else if (fence[0] === open.fence[0] && fence.length >= open.fence.length && !info.trim()) {
+      open = null;
+    }
+  }
+  return open?.line ?? '';
+}
+
 // A live stream's last line ends mid-span often: `**the loo` renders as literal asterisks until
 // the closer arrives, then they vanish, which reads as the markup parsing in front of the user.
 // Holding back an unmatched opener on that line lets the text gain its styling in place instead.
@@ -340,6 +370,9 @@ export function hideDanglingMarkers(text: string): string {
   if (/^ {0,3}(`|`{2,}[^`]*|~{3,}.*)$/.test(line)) return text.slice(0, start);
   const fences = text.slice(0, start).match(/^ {0,3}(```|~~~)/gm);
   if (fences && fences.length % 2 === 1) return text;
+  // A bullet's first `-` under a paragraph line reads as a setext underline, so the line above
+  // flashed as a heading until the bullet's text arrived. Hidden whole until its newline, like a fence.
+  if (/^ {0,3}(-+|=+)[ \t]*$/.test(line)) return text.slice(0, start);
   const drop: [number, number][] = [];
 
   // A code span closes on a backtick run of its opener's length. Past an unclosed opener is a

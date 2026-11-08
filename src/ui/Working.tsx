@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
 import chalk from 'chalk';
 import { glyphs } from './glyphs.js';
@@ -210,7 +210,13 @@ export function nextWordIndex(current: number, count: number, rand = Math.random
   return (current + step) % count;
 }
 
-type Clock = { tick: number; word: number; since: number };
+// Stepped rather than derived from the tick: `cycle` follows the label's length, so a modulo moved
+// the tip whenever a prefill label changed width (#914). A shorter label past its end wraps here.
+export function nextSweep(sweep: number, cycle: number): number {
+  return sweep + 1 >= cycle ? 0 : sweep + 1;
+}
+
+type Clock = { tick: number; word: number; since: number; sweep: number };
 
 // `accent` colors the spinner glyph (default = brand magenta). A distinct accent — e.g. cyan while
 // the harness is typechecking — makes a transient state read at a glance rather than as a mere
@@ -230,7 +236,9 @@ export function Working({
     tick: 0,
     word: words && words.length > 0 ? Math.floor(Math.random() * words.length) : 0,
     since: 0,
+    sweep: 0,
   }));
+  const cycleRef = useRef(0);
 
   useEffect(() => {
     const id = setInterval(
@@ -238,14 +246,20 @@ export function Working({
         setClock(c => {
           const tick = c.tick + 1;
           if (pool && tick - c.since >= ticksPerWord(pool[c.word % pool.length])) {
-            return { tick, word: nextWordIndex(c.word, pool.length), since: tick };
+            return { tick, word: nextWordIndex(c.word, pool.length), since: tick, sweep: 0 };
           }
-          return { ...c, tick };
+          const stepped = (tick - c.since) % SHIMMER_STEP === 0;
+          return { ...c, tick, sweep: stepped ? nextSweep(c.sweep, cycleRef.current) : c.sweep };
         }),
       TICK_MS,
     );
     return () => clearInterval(id);
   }, [pool]);
+
+  // A new accent is a new state on the line, so it opens on a fresh sweep rather than mid-glow.
+  useEffect(() => {
+    setClock(c => (c.sweep === 0 ? c : { ...c, sweep: 0 }));
+  }, [accent]);
 
   const text = pool ? pool[clock.word % pool.length] : (label ?? 'Working');
   const chars = `${text}…`.split('');
@@ -253,10 +267,9 @@ export function Working({
   const ramp = shimmerRamp(accent);
   const base = shimmerBase(accent);
   // The shimmer tip sweeps across every char, then sits in a "pause" region past
-  // the end of the label where no char is highlighted, before looping. Measured from the
-  // word's first tick so a new word starts on a fresh sweep.
-  const cycle = chars.length + SHIMMER_PAUSE;
-  const pos = Math.floor((clock.tick - clock.since) / SHIMMER_STEP) % cycle;
+  // the end of the label where no char is highlighted, before looping.
+  cycleRef.current = chars.length + SHIMMER_PAUSE;
+  const pos = clock.sweep;
 
   return (
     <Box marginTop={1}>

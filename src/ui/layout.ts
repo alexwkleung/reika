@@ -35,11 +35,40 @@ export function useContentWidth(indent = 0): number {
   return width;
 }
 
+// wrap-ansi measures every word with string-width (a grapheme segmenter plus an emoji regex),
+// which was ~45% of drawing a resumed 1.3MB session, mostly on rows that already fit. A line of
+// printable ASCII under CSI codes that fits comes back from it byte-for-byte, so it is returned
+// as is; anything else (wide or combining text, tabs, hyperlinks, a trim that would bite) goes
+// to wrap-ansi. Same options as Ink's wrap, so the rows are the ones Ink would draw.
+// The punctuation models write most (`→`, `—`, `✓`, `…`, `•`: a fifth of a measured session's
+// rows held one) passes too: each is one code unit, one string-width cell and NFC-stable, which is
+// all the shortcut assumes — `layout.test.ts` checks every one.
+export const NARROW_PUNCTUATION = '→←↑↓—–…•·×✓≠≤≥‘’“”│─';
+const STYLED_ASCII = new RegExp(`^[\\x20-\\x7e\\x1b${NARROW_PUNCTUATION}]*$`);
+const CSI_SEQUENCE = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+function fitsUnwrapped(line: string, width: number, trim: boolean): boolean {
+  if (!STYLED_ASCII.test(line)) return false;
+  const plain = line.includes('\x1b') ? line.replace(CSI_SEQUENCE, '') : line;
+  if (plain.length > width || plain.includes('\x1b')) return false;
+  return !trim || !(plain.startsWith(' ') || plain.endsWith(' '));
+}
+
+export function wrapLines(text: string, width: number, trim = false): string {
+  const lines = text.split('\n');
+  if (lines.every(line => fitsUnwrapped(line, width, trim))) return text;
+  return lines
+    .map(line =>
+      fitsUnwrapped(line, width, trim) ? line : wrapAnsi(line, width, { trim, hard: true }),
+    )
+    .join('\n');
+}
+
 // Display rows `text` takes at `width` columns — the unit Ink measures a frame in when it decides
 // the frame is as tall as the viewport. Wrapped with the exact options Ink wraps with
 // (build/wrap-text.js), so a row count measured here is the row count that gets drawn.
 export function wrappedRows(text: string, width: number): number {
-  return wrapAnsi(text, Math.max(1, width), { trim: false, hard: true }).split('\n').length;
+  return wrapLines(text, Math.max(1, width)).split('\n').length;
 }
 
 // Wrap styled text into rows that each carry every style active where they start (#852).
@@ -49,9 +78,10 @@ export function wrappedRows(text: string, width: number): number {
 // default foreground; a changed word in a diff is a background then a foreground, and lost its
 // highlight the same way. So the state at each row's end is replayed at the next row's start, and
 // closed at the row's end so a row never leaks a style into whatever Ink draws after it. Same
-// options as Ink's own wrap, so the break points and row count are unchanged.
-export function wrapStyledRows(text: string, width: number): string[] {
-  const rows = wrapAnsi(text, Math.max(1, width), { trim: false, hard: true }).split('\n');
+// options as Ink's own wrap, so the break points and row count are unchanged. `trim` is for a caller
+// that wraps prose itself (markdown), where wrap-ansi's default drops the space a break lands on.
+export function wrapStyledRows(text: string, width: number, trim = false): string[] {
+  const rows = wrapLines(text, Math.max(1, width), trim).split('\n');
   let open = new Map<SgrSlot, string>();
   return rows.map(row => {
     const lead = [...open.values()].join('');
@@ -59,6 +89,13 @@ export function wrapStyledRows(text: string, width: number): string[] {
     const close = [...open.keys()].map(slot => SGR_CLOSE[slot]).join('');
     return lead + row + close;
   });
+}
+
+// trim:false leaves the space wrap-ansi broke on at the head of a continuation row, one column
+// right of the block's edge. A style can open ahead of it. Never for a row that starts a real line,
+// whose leading whitespace is content.
+export function dropWrapWhitespace(row: string): string {
+  return row.replace(/^((?:\x1b\[[0-9;]*m)*) +/, '$1');
 }
 
 // The styled text whose plain characters are `[start, end)`, opening with the styles active at
@@ -172,12 +209,9 @@ export function hangingWrap(text: string, width: number, hang: number, first = h
   const out: string[] = [];
   let atStart = true;
   for (const line of text.split('\n')) {
-    const rows = wrapAnsi(atStart ? lead + line : line, wrapAt, {
-      // Ink's own options (build/wrap-text.js), so the break points match what Ink would have
-      // chosen and this stays a re-formatting of Ink's wrap rather than a second, different one.
-      trim: false,
-      hard: true,
-    }).split('\n');
+    // Ink's own options (build/wrap-text.js), so the break points match what Ink would have
+    // chosen and this stays a re-formatting of Ink's wrap rather than a second, different one.
+    const rows = wrapLines(atStart ? lead + line : line, wrapAt).split('\n');
     rows.forEach((row, i) => {
       // trim:false leaves the whitespace wrap-ansi broke on at the head of the continuation row —
       // the whole run of it, so a line that breaks inside expanded tabs staggers further right on

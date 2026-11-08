@@ -2,14 +2,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import type { Config, ContextBundle } from './types.js';
+import type { Config, ContextBundle } from '../types.js';
 
 // Headless reads an @-mentioned image through the same reader App does (#130): a configured vision
 // model, not system OCR — which on Linux does not exist, so the image was refused outright.
 const visionOcr = vi.fn(() => async () => ({ ok: true as const, text: 'A red error banner.' }));
 const systemOcr = vi.fn(() => async () => ({ ok: false as const, reason: 'unavailable' as const }));
-vi.mock('./ocr/vision.js', () => ({ visionOcr }));
-vi.mock('./ocr/system.js', () => ({ systemOcr }));
+vi.mock('../ocr/vision.js', () => ({ visionOcr }));
+vi.mock('../ocr/system.js', () => ({ systemOcr }));
 
 const { buildHeadlessInput } = await import('./headless.js');
 

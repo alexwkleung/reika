@@ -1,5 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { allocateLiveRows, displayRows, fitTail, lastCall, tailText } from './Scrollback.js';
+import {
+  allocateLiveRows,
+  displayRows,
+  fitTail,
+  lastCall,
+  markdownTail,
+  tailText,
+} from './Scrollback.js';
+
+describe('markdownTail', () => {
+  const code = Array.from({ length: 30 }, (_, i) => `const v${i} = 1;`);
+
+  it('puts back the fence a cut landed inside', () => {
+    const text = ['```ts', ...code].join('\n');
+    expect(markdownTail(text, 2)).toEqual({
+      text: ['```ts', ...code.slice(-2)].join('\n'),
+      truncated: true,
+    });
+  });
+
+  it('keeps the closer a closer, so the prose after it stays prose', () => {
+    const text = ['```ts', ...code, '```', 'Done.'].join('\n');
+    expect(markdownTail(text, 3).text).toBe(['```ts', code.at(-1), '```', 'Done.'].join('\n'));
+  });
+
+  it('leaves a tail past the block, or an uncut text, as tailText has it', () => {
+    const closed = ['```ts', ...code, '```', 'one', 'two'].join('\n');
+    expect(markdownTail(closed, 2)).toEqual(tailText(closed, 2));
+    expect(markdownTail('```ts\nx', 5)).toEqual(tailText('```ts\nx', 5));
+  });
+});
 
 describe('tailText', () => {
   it('returns text unchanged when within the line budget', () => {

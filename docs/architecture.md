@@ -13,9 +13,11 @@ the rest of the repo reaches for fit inside `REIKA_REPO_MAP_BUDGET` first. It is
 rather than a parser, and covers TypeScript/JavaScript (exports), Python, Go, Rust, Java/C#, Kotlin,
 Swift, C/C++/Objective-C, Ruby, PHP, Lua and shell.
 
-**Payload aging.** A tool result carries a `summary` and a `payload`. Only the newest contiguous block
-of results sends its payload; older ones collapse to their summary, which keeps the history bounded
-without losing what the model is acting on right now.
+**Payload aging.** A tool result carries a `summary` and a `payload`. With a known context window,
+payloads stay in the request until it nears the limit, then the oldest are shed together in one event,
+so requests stay append-only and the engine's prefix cache holds between events. With no known window,
+only the newest contiguous block of results sends its payload. [Context
+management](context.md) covers the budgets and what survives.
 
 **One system-prompt builder**, parameterized per mode, so no mode's prompt drifts from another's.
 **One `AbortController`** carries streaming, abort, approval and subagent. Everything speaks

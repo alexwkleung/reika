@@ -342,6 +342,40 @@ describe('Scrollback nested (subagent) messages', () => {
     expect(after).toMatch(new RegExp(`^ {${1 + INDENT + PROSE_HANG + 4}}\\S`));
   });
 
+  const CODE_MD = [
+    'Here:',
+    '',
+    '```ts',
+    '// a comment long enough that it has to wrap inside the nested box of a narrow pane',
+    '```',
+  ].join('\n');
+
+  // A fence at the nested width: every row sits under the prose marker's hang, colored, where it
+  // used to overflow its budget, wrap back to the box's edge and lose the comment's gray.
+  const expectNestedCodeRows = (frame: string) => {
+    const gray = '\x1b[38;2;127;132;142m';
+    const rows = frame
+      .split('\n')
+      .filter(r => stripAnsi(r).includes('comment') || r.includes(gray));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row).toContain(gray);
+      expect(stripAnsi(row)).toMatch(new RegExp(`^ {${1 + INDENT + PROSE_HANG}}\\S`));
+      expect(stringWidth(row.trimEnd())).toBeLessThanOrEqual(COLS);
+    }
+  };
+
+  it('wraps a nested reply’s code fence inside the nested box, colored on every row', () => {
+    const level = chalk.level;
+    chalk.level = 3;
+    try {
+      const frame = framePlusApp([{ role: 'assistant', content: CODE_MD, nested: true }]);
+      expectNestedCodeRows(frame);
+    } finally {
+      chalk.level = level;
+    }
+  });
+
   // #342: a subagent's rounds stream into the parent's (idle) live region. The live blocks must
   // sit at the same indent their committed rows will land at, and wrap inside it — the same
   // width discipline as the committed nested rows above.
@@ -374,6 +408,16 @@ describe('Scrollback nested (subagent) messages', () => {
       Object.defineProperty(process.stdout, 'columns', { value: prev, configurable: true });
     }
   };
+
+  it('wraps a streaming nested code fence the way its committed row will', () => {
+    const level = chalk.level;
+    chalk.level = 3;
+    try {
+      expectNestedCodeRows(liveFrame({ streaming: CODE_MD, streamingNested: true }));
+    } finally {
+      chalk.level = level;
+    }
+  });
 
   it('draws a nested live reasoning block at the nested indent, every row behind its bar', () => {
     const frame = liveFrame({
@@ -519,6 +563,31 @@ describe('Scrollback nested (subagent) messages', () => {
       framePlusApp([{ role: 'assistant', content: NOTE, reasoning, compactionNote: true }]),
     );
     expect(live).toEqual(committed);
+  });
+
+  // Blank rows count here: a note with no Thinking above it took the block's margin and the body's,
+  // so it dropped a row on commit, under the notice that announced it.
+  it('keeps one gap above a compaction note, live and committed', () => {
+    const notice: Message = { role: 'system', tone: 'info', content: 'Writing a compaction note.' };
+    const committed = framePlusApp([
+      notice,
+      { role: 'assistant', content: NOTE, compactionNote: true },
+    ]);
+    const rows = committed.split('\n');
+    const label = rows.findIndex(r => r.includes('Compaction note'));
+    expect(rows[label - 1].trim()).toBe('');
+    expect(rows[label - 2]).toContain('Writing a compaction note.');
+    const live = liveFrame({ streaming: NOTE, streamingNote: true });
+    expect(live.split('\n').findIndex(r => r.includes('Compaction note'))).toBe(1);
+
+    const reasoning = 'deriving it';
+    const thinking = framePlusApp([
+      notice,
+      { role: 'assistant', content: NOTE, reasoning, compactionNote: true },
+    ]).split('\n');
+    const top = thinking.findIndex(r => r.includes('Thinking'));
+    expect(thinking[top - 1].trim()).toBe('');
+    expect(thinking[top - 2]).toContain('Writing a compaction note.');
   });
 
   it('leaves the top-level live region byte-identical when not nested', () => {
@@ -731,6 +800,70 @@ describe('Scrollback pending tool row', () => {
     expect(rows.findIndex(l => l.includes('↳ Running…'))).toBeLessThan(
       rows.findIndex(l => l.includes('Checking formatting')),
     );
+  });
+
+  // An answered approval collapses into the command it cleared (#897): the `$ command` block and the
+  // tail under it are drawn as the chip commits them, so the swap changes only the verb.
+  it('draws an approved command where its chip will commit it', () => {
+    const command = 'npm run format:check';
+    const live = inApp(
+      <Scrollback
+        messages={[]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool="ok"
+        streamingCommand
+        pendingTool="bash"
+        pendingCommand={command}
+      />,
+    );
+    const committed = inApp(
+      <Scrollback
+        messages={[
+          {
+            role: 'tool',
+            callId: 't1',
+            summary: 'Ran: npm run format:check',
+            command: { text: command, outputTail: 'ok', outputTruncated: false },
+          },
+        ]}
+        streaming=""
+        streamingReasoning=""
+        streamingTool=""
+      />,
+    );
+    const block = (frame: string): string[] => {
+      const rows = frame.split('\n').map(r => r.trimEnd());
+      return rows.slice(rows.findIndex(r => r.includes('↳')) + 1);
+    };
+    expect(block(live).join('\n').trimEnd()).toBe(block(committed).join('\n').trimEnd());
+  });
+
+  // A long heredoc must not push the live frame to the viewport: it gives up its rows past the
+  // tail's and ends in `…`, and the chip draws all of it on commit.
+  it('cuts a long approved command to the live budget', () => {
+    const prevRows = process.stdout.rows;
+    Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
+    try {
+      const command = Array.from({ length: 80 }, (_, i) => `echo step-${i}`).join('\n');
+      const frame = inApp(
+        <Scrollback
+          messages={[]}
+          streaming=""
+          streamingReasoning=""
+          streamingTool=""
+          streamingCommand
+          pendingTool="bash"
+          pendingCommand={command}
+        />,
+      );
+      expect(frame).toContain('$ echo step-0');
+      expect(frame).not.toContain('echo step-79');
+      expect(frame).toMatch(/^ {5}…$/m);
+      expect(frame.split('\n').length).toBeLessThan(30 - 8);
+    } finally {
+      Object.defineProperty(process.stdout, 'rows', { value: prevRows, configurable: true });
+    }
   });
 
   // The second call of a round: its result gets a gap when either row carries a block (#492), so

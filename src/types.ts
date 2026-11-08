@@ -1,6 +1,6 @@
 import type { Ignore } from 'ignore';
 import type { McpServerConfig } from './mcp/config.js';
-import type { Skill } from './skills.js';
+import type { Skill } from './skills/skills.js';
 
 export type ToolCall = {
   id: string;
@@ -58,6 +58,15 @@ export type Message =
       // fold, drawn at the left edge as one info-barred block (reasoning, then the note) so it reads
       // as a harness aside — not the answer, and not a subagent (#498). Never enters model history.
       compactionNote?: boolean;
+      // UI-only: a live stream the harness threw away (a reasoning loop cut, a compaction-note
+      // attempt with no note), frozen where it stood instead of erased. Erased, the frame dropped by
+      // the block's height and the input jumped up under a one-line notice. 'note' draws it in the
+      // note's colors, as it streamed. Never enters model history.
+      discarded?: 'stream' | 'note';
+      // Set on the message a turn ends with when the harness ended it instead of the model: the
+      // text is the harness's own report, not an answer. A front end with no reader (headless)
+      // cannot tell the two apart from the content.
+      harnessStop?: 'loop' | 'length' | 'edit' | 'max-turns';
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
@@ -137,6 +146,15 @@ export type Message =
   | { role: 'compaction'; content: string; nested?: boolean }
   | { role: 'shell'; command: string; output: string; nested?: boolean };
 
+// A local engine's prefill progress (#912). `processed` counts from `cached`, not from zero, so the
+// work done is `processed - cached` of `total - cached`.
+export type PromptProgress = {
+  total: number;
+  cached: number;
+  processed: number;
+  elapsedMs: number;
+};
+
 export type Usage = {
   promptTokens: number;
   completionTokens: number;
@@ -144,6 +162,9 @@ export type Usage = {
   // reports it (OpenAI `prompt_tokens_details.cached_tokens`, DeepSeek
   // `prompt_cache_hit_tokens`); undefined means the provider didn't report it.
   cachedTokens?: number;
+  // Our estimate rather than the provider's count, for a round cut short: its stream never reached
+  // the final usage chunk (#906). On a total, at least one round in it was estimated.
+  estimated?: boolean;
 };
 
 // One generated token as the provider reported it, with the alternatives it was sampled against.

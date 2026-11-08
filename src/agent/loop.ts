@@ -1,3 +1,4 @@
+import { isAbsolute, relative } from 'node:path';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -5,6 +6,7 @@ import type {
   ContextBundle,
   EditFailure,
   Message,
+  PromptProgress,
   QuestionAnswer,
   QuestionRequest,
   Tool,
@@ -16,6 +18,7 @@ import type {
 import { buildSystemPrompt, type PromptMode } from './prompt.js';
 import type { NativeImage } from './attachments.js';
 import { callModel } from '../provider/client.js';
+import type { ModelResponse } from '../provider/client.js';
 import { latchesFor } from '../provider/latches.js';
 import { observeNoteSlot, reasoningCharsBehindNote } from './noteslotmonitor.js';
 import { isLocalEngine } from '../provider/templatekwargs.js';
@@ -39,6 +42,7 @@ import {
   findFreshToolBlockStart,
   hasDroppedPayloads,
   lastUserMessageIndex,
+  oversizeOpeningPayloadIndex,
   taskSpecIndex,
   toolsToChatTools,
 } from '../provider/toolcall.js';
@@ -53,6 +57,7 @@ import {
   sampleTokens,
 } from './prefillcost.js';
 import { DecodeRate, decodeSample, formatRate } from './decoderate.js';
+import { LiveRound, type LiveUsage } from './liveusage.js';
 import { GenReserve, resolveGenReserve, withGenReserve } from './genreserve.js';
 import {
   selfRepeatRatio,
@@ -95,7 +100,12 @@ import {
   type PlanMarker,
   type StepMatch,
 } from './plantrack.js';
-import { ReadFirstGate, buildReadFirstDirective, probeWouldLand } from './readfirst.js';
+import {
+  ReadFirstGate,
+  buildReadFirstDirective,
+  oldStringProvesBytes,
+  probeWouldLand,
+} from './readfirst.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
   SUBAGENT_REPORT_FRAME,
@@ -503,6 +513,9 @@ const DROPPED_LEDGER = process.env.REIKA_DROPPED_LEDGER !== '0';
 // runs as-is), suspended while inspection tools are withdrawn (the directed read would be refused).
 // The `would-land=` field on the bounce debug line is the measurement. See agent/readfirst.ts.
 const READ_FIRST = process.env.REIKA_READ_FIRST !== '0';
+// An exact, unique old_string passes the gate (#932, `=0` is the baseline arm for
+// evals/fixtures/22-read-first-exact). See readfirst.ts oldStringProvesBytes.
+const READ_FIRST_EXACT = process.env.REIKA_READ_FIRST_EXACT !== '0';
 // EXPERIMENT (#867): keep the offered tool list unchanged while inspection is withdrawn, enforcing
 // the pause at dispatch and through the ledger only. The template renders the tools ahead of the
 // system prompt, so dropping them makes the withdrawal round and the lift round each a full
@@ -951,6 +964,9 @@ const LOOP_TERMINAL_AFTER = 3;
 // gives one fix attempt plus a re-check; beyond that, finishing dirty (with a user notice) beats
 // spiralling. See check/typecheck.ts.
 const MAX_TYPECHECK_GATE_ROUNDS = 2;
+const MAX_EMPTY_REPLY_RETRIES = 1;
+const EMPTY_REPLY_NUDGE =
+  '(your previous response was empty — no answer and no tool call. Continue the task: call the next tool, or give your answer.)';
 // Floor on the learned calibration when it drives the COMPACTION decision (not the UI gauge). The
 // calibration = real-tokens / char-4-estimate; a prose-heavy session drives it below 1 (~0.9), which
 // makes the trigger assume content is even sparser than the char/4 baseline. That optimism is what let
@@ -1026,13 +1042,13 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
 // Returned in place of a withdrawn inspection call. No content, so it can't re-fuel the loop or
 // inflate context; it just states the rule and the way out. Built per turn rather than held as a
 // const because both halves — what is paused, and what to do instead — depend on the tool list.
+// "now" is load-bearing: the hold lifts on its own, so a bare "gets this same reply" would be false.
 export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string {
   return (
-    `(reika: ${withdrawnToolsPhrase(toolNames)} are paused because you have repeated the same ` +
-    'reads or searches without making progress. You already have what you need. ' +
-    `${withdrawalRemedy(toolNames)}, state what is specifically blocking you, or — if the change ` +
-    'is already complete — say so and stop. Reading and searching are unavailable until you make ' +
-    'progress.)'
+    `(reika: this is deliberate, not a fault. ${withdrawnToolsPhrase(toolNames)} are paused ` +
+    'because the work has repeated without making progress. Sending this call again now gets ' +
+    `this same reply, so do not retry it. ${withdrawalRemedy(toolNames)}, state what is ` +
+    'specifically blocking you, or — if the change is already complete — say so and stop.)'
   );
 }
 
@@ -1070,7 +1086,7 @@ export function shouldWithdrawInspection(opts: {
 // without inspection, then the cycle again, each switch of the tool list a full re-prefill (~22 in
 // one 163-round run). Held until the tree changes instead, capped so a model that has declared
 // itself stuck gets reads back.
-export const WITHDRAW_HOLD_ROUNDS = 5;
+export const WITHDRAW_HOLD_ROUNDS = 4;
 
 // Whether a withdrawal already in force stays on this round although the loop no longer reads as
 // active. `since` is the round it began; `mutated` is whether the tree has changed since then.
@@ -1224,6 +1240,27 @@ export function buildEditRecoveryLedger(failure: EditFailure): string {
   ].join('\n');
 }
 
+// The edit-recovery dead-end's report. A `diverged` failure names the line that differs: the
+// target is there, so "the plan may reference code that doesn't exist" would send the user hunting
+// for a problem the file does not have.
+export function buildEditRecoveryStopMessage(failure: EditFailure | undefined): string {
+  const file = failure ? `\`${failure.path}\`` : 'the file';
+  if (failure?.kind === 'diverged') {
+    return (
+      `My edit to ${file} didn't apply: line ${failure.divergentLine} differs from the text I ` +
+      `expected (expected \`${failure.expected}\`, the file has \`${failure.actual}\`). I've ` +
+      `stopped instead of looping. Ask me to continue and I'll re-read that part of the file and ` +
+      `retry the edit from its current text.`
+    );
+  }
+  return (
+    `I kept trying to edit ${file} but the text I expected isn't in the file, so the change can't ` +
+    `be applied as planned — the plan may reference code that doesn't exist there. I've stopped ` +
+    `instead of looping. Please confirm the change belongs in that file, or point me at the right ` +
+    `location.`
+  );
+}
+
 // Payload attached to an `absent` edit failure when the file's bytes are not in the model's context
 // (see the call site). Rides the tool result rather than the system suffix: unlike the diverged
 // recovery ledger — which must survive several rounds to reach a period-2 loop — this is consumed by
@@ -1293,6 +1330,7 @@ export async function runTurn(opts: {
   onMessage: (msg: Message) => void;
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
+  onPromptProgress?: (progress: PromptProgress | undefined) => void;
   onPhase?: (phase: 'thinking' | 'tool') => void;
   // A subagent is running under one of this turn's tool calls (#342): true when it starts, false
   // when it returns. The parent is blocked inside the call with its own assistant message already
@@ -1326,6 +1364,9 @@ export async function runTurn(opts: {
   // as a notice: the UI drops both previews so the round's real reply starts clean.
   onReasoningReset?: () => void;
   onUsage?: (usage: Usage) => void;
+  // The running estimate for the request in flight (#925), `undefined` once its real count lands.
+  // Display only: nothing learned may read it.
+  onLiveUsage?: (live: LiveUsage | undefined) => void;
   // Pre-send estimate of the next request's prompt tokens. Fires before each model
   // call so the UI can show context fill before the provider's real count arrives.
   onContextEstimate?: (tokens: number) => void;
@@ -1609,6 +1650,8 @@ export async function runTurn(opts: {
   // line off) gets exactly ONE round with the divergence lifted into the system suffix before the
   // dead-end stop — the same "each tier gets one round" discipline as the rumination ladder. Set when
   // that round fires so a still-looping turn falls through to the stop instead of grounding forever.
+  // Per failure, not per turn: a landed edit clears it, so a later failure on other code gets its own
+  // round (a turn-wide guard stopped a second, unrelated failure on its first attempt).
   let editRecoveryGroundingTried = false;
   // One-shot guard for the Tier 2 logit-recovery round (REIKA_LOGIT_RECOVERY): the rumination
   // dead-end gets exactly ONE biased round before the terminal stop. Set when it fires so a
@@ -1638,6 +1681,7 @@ export async function runTurn(opts: {
   let typecheckTsconfig: string | undefined;
   // Consecutive done-gate send-backs this turn. Bounds the fix loop at MAX_TYPECHECK_GATE_ROUNDS.
   let typecheckGateRounds = 0;
+  let emptyReplyRetries = 0;
   // Consecutive plan done-gate send-backs this turn. Bounds the plan gate at MAX_PLAN_GATE_ROUNDS.
   let planGateRounds = 0;
   // Per-turn memory of read-only calls already made, keyed by tool + result summary, so the
@@ -1721,6 +1765,41 @@ export async function runTurn(opts: {
       latches: latchesFor(opts.config),
       trailingNote: roundSuffix,
     });
+
+  // A stream cut short never reaches its final usage chunk, but a hosted API has still billed it
+  // (#906), so a cut round is counted from what streamed. A cut before any output counts nothing:
+  // no decode happened. Goes to onUsage only, never onto the response: calibration, the decode rate
+  // and the reserve read `response.usage`, and a learned value must not be fitted to our own guess.
+  const reportUsage = (
+    response: Pick<ModelResponse, 'usage' | 'content' | 'reasoning'>,
+    cut: boolean,
+    promptEstimate: () => number,
+  ): void => {
+    opts.onLiveUsage?.(undefined);
+    if (response.usage) {
+      opts.onUsage?.(response.usage);
+      return;
+    }
+    const output = (response.reasoning ?? '') + (response.content ?? '');
+    if (!cut || !output) return;
+    opts.onUsage?.({
+      promptTokens: Math.round(promptEstimate() * calibration),
+      completionTokens: Math.round(
+        estimateTokens(output) * Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+      ),
+      estimated: true,
+    });
+  };
+
+  // Same densities as a cut round above, so the live figure and the one a cut leaves behind agree.
+  const startLiveRound = (promptEstimate: () => number): LiveRound | undefined =>
+    opts.onLiveUsage
+      ? new LiveRound(
+          Math.round(promptEstimate() * calibration),
+          Math.max(calibration, COMPACTION_CALIBRATION_FLOOR),
+          opts.onLiveUsage,
+        )
+      : undefined;
 
   // Run a typecheck while pulsing the UI indicator around it (and clearing on any exit). The
   // pulse is human-only; the CheckOutcome flows to the gate logic, never to the model.
@@ -2063,11 +2142,8 @@ export async function runTurn(opts: {
           const stuck: Message = {
             role: 'assistant',
             content:
-              `I kept trying to edit ${file ? `\`${file}\`` : 'the file'} but the text I expected ` +
-              `isn't in the file, so the change can't be applied as planned — the plan may reference ` +
-              `code that doesn't exist there. I've stopped instead of looping. Please confirm the ` +
-              `change belongs in that file, or point me at the right location.` +
-              (await reportTypecheckAtStop()),
+              buildEditRecoveryStopMessage(lastEditFailure) + (await reportTypecheckAtStop()),
+            harnessStop: 'edit',
             durationMs: Date.now() - turnStart,
             ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
           };
@@ -2277,13 +2353,18 @@ export async function runTurn(opts: {
       // task conflation, so it is greppable rather than something to re-derive from the history.
       const specIdx = taskSpecIndex(opts.history);
       const spec = specIdx >= 0 ? opts.history[specIdx] : undefined;
+      const refused = opts.history[oversizeOpeningPayloadIndex(opts.history)];
       debugLog(
         specIdx >= 0 && spec?.role === 'tool'
           ? `[reika:debug] round=${i} spec-pin idx=${specIdx} chars=${spec.payload?.length ?? 0} ` +
               `holding=${specIdx < findFreshToolBlockStart(opts.history)} ` +
               `stale=${specIdx < lastUserMessageIndex(opts.history)} ` +
               `summary=${JSON.stringify(spec.summary.slice(0, 60))}\n`
-          : `[reika:debug] round=${i} spec-pin none\n`,
+          : refused?.role === 'tool'
+            ? `[reika:debug] round=${i} spec-pin none reason=oversize ` +
+              `chars=${refused.payload?.length ?? 0} ` +
+              `summary=${JSON.stringify(refused.summary.slice(0, 60))}\n`
+            : `[reika:debug] round=${i} spec-pin none\n`,
       );
       // Dropped-payload ledger (#227). Read off the COMPOSED request — the notice reaches the model
       // through the system block or the trailing note depending on mode and REIKA_PREFIX_STABLE,
@@ -2331,6 +2412,18 @@ export async function runTurn(opts: {
     // REIKA_COMPACTION_REPORT=0 is the ledger-only baseline arm; /compact honors it too, and then
     // folds without a note exactly as an automatic fold would.
     const reportEnabled = compactionReportEnabled();
+    // The note is written from the unfolded history, which a resumed session (folds are not
+    // restored) or a /model switch to a smaller window can leave over the window: the engine
+    // refuses the request and its retries, or one that truncates spends a whole window of prefill
+    // on the backstop's 256 tokens. Last in the gate, so only a fold that is really due logs it.
+    const noteFitsWindow = (contextWindow: number): boolean => {
+      const promptTokens = Math.round(rawEstimate() * compactCalibration);
+      if (promptTokens < contextWindow) return true;
+      debugLog(
+        `[reika:debug] round=${i} compaction-report skipped prompt=${promptTokens} window=${contextWindow}\n`,
+      );
+      return false;
+    };
     const autoReport =
       !manualRound &&
       reportEnabled &&
@@ -2356,7 +2449,8 @@ export async function runTurn(opts: {
             // The manual trigger's only question is "would the fold remove anything" (#481).
             !manualRound,
           )
-        : wouldFold(opts.history, window, compactCalibration, minGen()))
+        : wouldFold(opts.history, window, compactCalibration, minGen())) &&
+      noteFitsWindow(window)
     ) {
       const n = shrink.folds + 1;
       const directive = buildCompactionReportDirective(n);
@@ -2399,8 +2493,9 @@ export async function runTurn(opts: {
           ? compactionNotePrefill(n)
           : undefined;
       try {
-        const send = (suffix: string, appended: Message[], assistantPrefill?: string) =>
-          callModel({
+        const send = (suffix: string, appended: Message[], assistantPrefill?: string) => {
+          const live = startLiveRound(() => rawEstimate(opts.history, noteTools));
+          return callModel({
             system: prefixStable ? baseSystem : directiveAsTail ? system : system + '\n\n' + suffix,
             history: appended.length ? [...opts.history, ...appended] : opts.history,
             // The same tools the round would send, with calls forbidden by `tool_choice` (#426).
@@ -2418,6 +2513,9 @@ export async function runTurn(opts: {
                 ? prefilledNoteStream(assistantPrefill, opts.onContentDelta)
                 : opts.onContentDelta,
             onReasoningDelta: opts.onReasoningDelta,
+            onOutputDelta: live && (text => live.add(text)),
+            onEngineTimings: live && ((timings, prompt) => live.engine(timings, prompt)),
+            onPromptProgress: opts.onPromptProgress,
             signal: opts.signal,
             calibration,
             maxTokens: computeMaxTokens({
@@ -2470,6 +2568,7 @@ export async function runTurn(opts: {
                 }
               : undefined,
           });
+        };
         // A failed prefilled request is asked again the plain way, and the prefill is latched off for
         // the endpoint only if that one succeeds: a 400 the plain request shares (an over-long
         // prompt) is not the prefill's, and latching on it would cost every later fold its note.
@@ -2487,8 +2586,9 @@ export async function runTurn(opts: {
             return plain;
           }
         };
+        const notePrompt = () => rawEstimate(opts.history, noteTools);
         const rep = await report(directive);
-        if (rep.usage) opts.onUsage?.(rep.usage);
+        reportUsage(rep, !!opts.signal?.aborted, notePrompt);
         // callModel returns what streamed before a ctrl-c rather than throwing, so an aborted note
         // is a cut-off fragment — never a note, and not a reason to fold.
         if (opts.signal?.aborted) {
@@ -2507,8 +2607,17 @@ export async function runTurn(opts: {
             `[reika:debug] round=${i} compaction-report n=${n} no-note ${describe(rep)}; retrying\n`,
           );
           opts.onReasoningReset?.();
+          // The reset freezes the failed attempt in place, so without a line it reads as a first
+          // note that went wrong rather than one the harness set aside.
+          opts.onMessage({
+            role: 'system',
+            tone: 'info',
+            content: rep.toolCalls?.length
+              ? 'The model made a tool call instead of writing the note — asking again.'
+              : 'That reply carried no note — asking again.',
+          });
           retry = await report(`${directive}\n\n${COMPACTION_REPORT_RETRY}`, refusedCallTurn(rep));
-          if (retry.usage) opts.onUsage?.(retry.usage);
+          reportUsage(retry, !!opts.signal?.aborted, notePrompt);
           if (opts.signal?.aborted) {
             commitNoteRoundAbort();
             return;
@@ -2540,10 +2649,11 @@ export async function runTurn(opts: {
         }
         debugLog(`[reika:debug] round=${i} compaction-report failed err=${String(err)}\n`);
       } finally {
-        opts.onCompactionNote?.(false);
         // The live region held the note; if the reply was empty no assistant commit cleared it,
-        // so the UI is told explicitly before the round's real reply streams.
+        // so the UI is told explicitly before the round's real reply streams. Ahead of the note
+        // flag, so the UI still knows the stream it is ending was a note's.
         opts.onReasoningReset?.();
+        opts.onCompactionNote?.(false);
       }
     }
     // Prefix-stable shrink event: payloads stay live (byte-frozen) across rounds, so shed them in
@@ -2659,6 +2769,18 @@ export async function runTurn(opts: {
       opts.onContextEstimate?.(Math.round(rawEstimate() * calibration));
       return;
     }
+    // The suffix was composed before the shed above, so without this the request that first shows
+    // a payload as summary-only is the one request whose note cannot say so.
+    if (agedThisRound && !roundSuffix?.includes(DROPPED_LEDGER_MARKER)) {
+      const dropped = droppedPayloadLedgerFor(opts.history, prefixStable);
+      if (dropped) {
+        roundSuffix = roundSuffix ? `${dropped}\n\n${roundSuffix}` : dropped;
+        debugLog(
+          `[reika:debug] round=${i} dropped-ledger active=true ` +
+            `payloads=${droppedPayloadCount(opts.history, prefixStable)} via=tail after-shed=true\n`,
+        );
+      }
+    }
     const sentTools = subagentForceReport && lastSentTools ? lastSentTools : callTools;
     lastSentTools = sentTools;
     const sentEstimate = rawEstimate(callHistory, sentTools);
@@ -2735,6 +2857,7 @@ export async function runTurn(opts: {
           }
         }
       : opts.onReasoningDelta;
+    const live = startLiveRound(() => sentEstimate);
     const response = await callModel({
       system,
       history: callHistory,
@@ -2742,6 +2865,9 @@ export async function runTurn(opts: {
       config: withGenReserve(opts.config, genReserve),
       onContentDelta: opts.onContentDelta,
       onReasoningDelta,
+      onOutputDelta: live && (text => live.add(text)),
+      onEngineTimings: live && ((timings, prompt) => live.engine(timings, prompt)),
+      onPromptProgress: opts.onPromptProgress,
       signal: callAbort.signal,
       calibration,
       // Per-turn backstop: cap generation to the room actually left in the window so a
@@ -2832,7 +2958,7 @@ export async function runTurn(opts: {
       debugLog(`[reika:debug] reasoning-spin off round=${i} (block ended while flagged)\n`);
     }
 
-    if (response.usage) opts.onUsage?.(response.usage);
+    reportUsage(response, callAbort.signal.aborted, () => sentEstimate);
 
     // Recalibrate from what the provider actually counted vs. what we estimated for the
     // request we just sent. Clamped to a sane band to ignore one-off outliers.
@@ -3409,6 +3535,30 @@ export async function runTurn(opts: {
     }
 
     if (isFinal) {
+      // A reply with no text and no call ends the turn with nothing on screen to say so, which reads
+      // as an abort. Ask once; a second empty reply gets the notice, since a stop this turn cannot
+      // recover from is still one the user has to see.
+      if (
+        !assistantContent?.trim() &&
+        response.finishReason !== 'length' &&
+        !opts.signal?.aborted
+      ) {
+        const retry = emptyReplyRetries < MAX_EMPTY_REPLY_RETRIES;
+        debugLog(`[reika:debug] round=${i} empty-reply retry=${retry}\n`);
+        opts.onMessage({
+          role: 'system',
+          tone: 'warn',
+          content: retry
+            ? 'The model stopped without replying — asking it to continue.'
+            : 'The model stopped again without replying. Send a prompt to continue.',
+        });
+        if (retry) {
+          emptyReplyRetries++;
+          // Same `harness` reasoning as the typecheck send-back below (#287).
+          opts.history.push({ role: 'user', content: EMPTY_REPLY_NUDGE, harness: true });
+          continue;
+        }
+      }
       // Post-edit typecheck gate. If this turn edited (baseline captured) and a final check shows
       // the edits introduced new type errors, send the model back to fix them instead of letting it
       // finish on broken code — the harness verifies so the weak model doesn't have to. The model's
@@ -3582,13 +3732,27 @@ export async function runTurn(opts: {
       // equipped to make. Now that shouldBounce asks the real question (are those bytes in the
       // request the model just answered — see readfirst.ts isLive), the proxy only loses coverage:
       // the long unplanned turn is exactly where reads age out beneath the model.
-      const bouncedBlindEdit =
+      const blindEdit =
         READ_FIRST &&
         !withdrawInspection &&
         call.name === 'edit' &&
         tool !== undefined &&
         typeof call.args.path === 'string' &&
-        readFirst.shouldBounce(call.args.path, opts.history, prefixStable);
+        readFirst.wouldBounce(call.args.path, opts.history, prefixStable);
+      const provenEdit =
+        READ_FIRST_EXACT &&
+        blindEdit &&
+        (await oldStringProvesBytes(
+          opts.bundle.cwd,
+          String(call.args.path),
+          String(call.args.old_string ?? ''),
+          String(call.args.new_string ?? ''),
+        ));
+      if (provenEdit) debugLog(`[reika:debug] round=${i} read-first proven ${call.args.path}\n`);
+      const bouncedBlindEdit =
+        blindEdit &&
+        !provenEdit &&
+        readFirst.shouldBounce(String(call.args.path), opts.history, prefixStable);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -3869,6 +4033,7 @@ export async function runTurn(opts: {
         if (summary.startsWith('Edited ') || summary.startsWith('Wrote ')) {
           lastEditFailed = false;
           lastEditFailure = undefined;
+          editRecoveryGroundingTried = false;
           // Read-first (#72): a successful edit/write grounds its path, but by different routes. An
           // edit grounds only through the post-edit echo it hands back (tools/edit.ts refreshedFile),
           // which is size-capped and absent on a large file — so it keys on the message index and
@@ -4022,6 +4187,7 @@ export async function runTurn(opts: {
     content:
       `(reached max turns of ${opts.config.maxTurns}; ask me to continue or raise the turn limit)` +
       (await reportTypecheckAtStop()),
+    harnessStop: 'max-turns',
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4064,12 +4230,24 @@ function commitAborted(
   opts.onMessage(m);
 }
 
+// The files a stop message names, as inline code and project-relative: an edit's `path` arg is
+// often absolute, and a bare `/Users/…/src/a.ts, …` list read as prose and wrapped mid-path.
+function stopFileList(files: Set<string>, cwd: string, max: number): string {
+  return [...files]
+    .slice(0, max)
+    .map(f => {
+      const rel = isAbsolute(f) ? relative(cwd, f) : f;
+      return `\`${rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : f}\``;
+    })
+    .join(', ');
+}
+
 // Honest terminal stop when reasoning keeps spiraling even through recovery (the force-write looped,
 // or the recovery budget is spent). Better than committing spiral garbage as a "plan" or running to
 // the token wall. Names the files examined so the user has a handle on what was done. Deliberately
 // not marked planFinal — it isn't a plan, so the plan→agent handoff won't treat it as one.
 function commitSpiralStop(
-  opts: { history: Message[]; onMessage: (m: Message) => void },
+  opts: { history: Message[]; onMessage: (m: Message) => void; bundle: { cwd: string } },
   turnStart: number,
   fetchedUrls: Set<string>,
   // Why the turn ran out of recoveries. 'loop' is the genuine spiral; 'length' is a coherent thought
@@ -4086,7 +4264,7 @@ function commitSpiralStop(
     }
   }
   const examined =
-    files.size > 0 ? ` Files I examined: ${[...files].slice(0, 12).join(', ')}.` : '';
+    files.size > 0 ? ` Files I examined: ${stopFileList(files, opts.bundle.cwd, 12)}.` : '';
   const m: Message = {
     role: 'assistant',
     content:
@@ -4097,6 +4275,7 @@ function commitSpiralStop(
         : `I couldn't converge — the reasoning kept looping and was stopped to avoid running ` +
           `indefinitely.${examined} This looks like a request the model is getting stuck on; try ` +
           `rephrasing or narrowing it, or use a stronger model.`,
+    harnessStop: reason,
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4109,7 +4288,7 @@ function commitSpiralStop(
 // already on disk — frame it as "done but stopped re-checking" and name the edited files; otherwise
 // it's a stuck-without-progress stop. Mirrors commitSpiralStop (plan mode).
 function commitAgentLoopStop(
-  opts: { history: Message[]; onMessage: (m: Message) => void },
+  opts: { history: Message[]; onMessage: (m: Message) => void; bundle: { cwd: string } },
   turnStart: number,
   fetchedUrls: Set<string>,
   edited: boolean,
@@ -4132,7 +4311,7 @@ function commitAgentLoopStop(
       }
     }
   }
-  const fileList = files.size > 0 ? ` to ${[...files].slice(0, 8).join(', ')}` : '';
+  const fileList = files.size > 0 ? ` to ${stopFileList(files, opts.bundle.cwd, 8)}` : '';
   const content = edited
     ? `I made changes${fileList} but then kept repeating the same checks without making progress, so ` +
       `I've stopped to avoid looping. The edits are saved — review them and ask me to continue if ` +
@@ -4143,6 +4322,7 @@ function commitAgentLoopStop(
   const m: Message = {
     role: 'assistant',
     content,
+    harnessStop: 'loop',
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
   };
@@ -4217,6 +4397,7 @@ function makeSpawnSubagent(
         requestApproval: parent.requestApproval,
         isUnattended: parent.isUnattended,
         onUsage: parent.onUsage,
+        onLiveUsage: parent.onLiveUsage,
         priorDecodeRate: sameEngine ? parentDecodeRate.get() : undefined,
         genReserve: sameEngine ? parentGenReserve : undefined,
         onDecodeRate: rate => {
@@ -4232,6 +4413,7 @@ function makeSpawnSubagent(
         // them nested via onSubagent.
         onContentDelta: parent.onContentDelta,
         onReasoningDelta: parent.onReasoningDelta,
+        onPromptProgress: parent.onPromptProgress,
         onToolProgress: parent.onToolProgress,
         // `onToolStart` is the one callback deliberately NOT forwarded (#509). The parent's live row
         // is a single slot keyed to its own round: forwarding a nested start would overwrite the

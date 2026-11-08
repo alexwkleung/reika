@@ -7,6 +7,103 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Added
 
+- While a local llama.cpp prefills a long prompt, the busy indicator now shows how far along it is
+  and about how long is left, such as `Processing context 41% · ~30s left`, instead of looking like a
+  hang (#913, #915, #919).
+- `reika -p` ends with a line on stderr naming the model, tokens, time and saved session (#923).
+- The status bar's token counts and tok/s now move during a request instead of at its end. On
+  llama.cpp they are the engine's own numbers; elsewhere they are estimates, marked `~` until the
+  real count arrives (#929).
+
+### Changed
+
+- An edit whose `old_string` already matches the file exactly no longer waits for a read first, so a
+  model doesn't spend a round re-reading text it already has. Shorter or inexact edits to a file the
+  model hasn't read are still held back once. `REIKA_READ_FIRST_EXACT=0` restores the old behavior
+  (#933).
+
+### Fixed
+
+- Sandboxed `git` commands no longer keep network access when the classifier cannot read the options
+  git will get: an unlisted subcommand, arguments from `xargs`, a shell variable, glob or brace
+  expansion, or a `--` used as an option's value. Commands that fetch, pull, clone or push keep it
+  (#910, #939).
+- When the model answers a compaction note request with a tool call or nothing at all, a line now
+  says it is being asked again, so the set-aside attempt no longer reads as a broken note (#937).
+- While a reply or compaction note streams, a line followed by a bullet no longer flashes as a bold
+  heading for a moment before the bullet's text arrives (#934).
+- Code blocks keep their colors when they wrap on a narrow pane and stay inside their column under a
+  list, a quote or a subagent's indent. A long code block also stays highlighted while it streams
+  (#930).
+- While inspection is paused to break a loop, a plain `echo` or `pwd` now runs instead of being
+  refused, so a model checking its shell no longer concludes the shell is broken (#924).
+- The message a model gets when a read is refused during a pause no longer makes claims that are not
+  always true, and it says the pause is deliberate (#926).
+- `/issue` and `/review` keep a longer issue or PR in context, so a small window no longer drops it
+  at the first shrink. The model is also told on that same request when earlier output was dropped
+  (#917).
+- A model that stops with no reply is now asked once to continue, and a `warn` line says so, instead
+  of the turn ending silently and looking like an abort (#917).
+- A long session no longer loses your current request in a fold: the recap could keep the previous
+  task under a header calling it the current one (#918).
+- Quitting Reika now closes the Chrome it started for web search, instead of leaving it running and
+  holding memory. A `reika -p` run left it behind every time (#921).
+- `reika -p` no longer reports a stopped turn as a success. When Reika ends a turn itself (a model
+  stuck in a loop, the round limit) the run exits 2 and says why on stderr, instead of printing that
+  report as the reply and exiting 0 (#923).
+- `reika -p` no longer prints text from an earlier round as the answer when the turn ended with no
+  reply. It exits 1 and says so (#923).
+- `reika -p` now warns when the context window leaves too little room to work in, as the TUI does (#923).
+- Escape sequences in a model's reply no longer reach your terminal from `reika -p` or its `-i`
+  menus. Output to a pipe keeps the model's exact bytes (#923).
+
+## [0.9.0] - 2026-11-04
+
+### Changed
+
+- When Reika pauses a looping model's reads, the pause now lasts four rounds instead of five (#927).
+- The status bar's PR chip now says when the PR is a draft, and stays up marked `merged` after the
+  PR lands instead of disappearing, so a finished branch no longer looks like one with no PR
+  (#905).
+
+### Fixed
+
+- A `git` command whose program-running option was spelled as a one-letter abbreviation
+  (`git ls-remote --u=./x.sh`) no longer keeps the sandbox's network allow. `git send-email` now
+  prompts like `git push`, and keeps no network without that approval (#909).
+- Token totals now count a round cut short by the reasoning limit, a loop abort or ctrl-c, from
+  what streamed before the cut. Such a total is an estimate, shown with `~` in the status bar,
+  `/tokens` and the exit summary, and recorded in the saved session header (#908).
+- A compaction note no longer drops a row when it finishes streaming, which left an extra blank line
+  above it (#903).
+- A long session resumed on a smaller context window no longer sends the whole conversation to the
+  model for a compaction note it could not fit, before folding without one (#902).
+- The terminal UI runs on React's production build, so resuming a long session and drawing replies
+  take less time and CPU (#901).
+- A turn that had already recovered from one failed edit no longer stops on the first attempt at a
+  second, unrelated one. When the stop does fire on an edit whose target is in the file but one
+  line differs, it names that line instead of saying the code may not exist (#891).
+- Inline code in a reply keeps its color when it wraps onto more than one line; it used to fall back
+  to plain text from the second line on. A loop stop names the files it changed as inline code
+  relative to the project, not as full absolute paths (#893).
+- Reika no longer freezes for several seconds when a long session sheds old tool output, which
+  happened most on the first prompt after `/resume`-ing a long session (#895).
+- The input box no longer jumps up when Reika stops a reasoning loop or retries a compaction note.
+  The cut-off thought now stays on screen above the notice instead of vanishing (#896).
+- The input box no longer jumps up when you answer an approval prompt. The prompt collapses into
+  the command you approved and its output streams in under it; a command that prints nothing lets
+  the space slide away instead of leaving it blank (#897).
+- The input box no longer jumps up when you answer a question Reika asked, and the answer line no
+  longer pushes it back down. The model's next thinking fills the space the question took (#898).
+- Moving through the `/resume` list no longer slows down in a project with hundreds of saved
+  sessions (#899).
+- Long replies and resumed sessions draw faster: `/resume` on a 320-message session spends about a
+  fifth less time drawing it (#900).
+
+## [0.8.0] - 2026-10-31
+
+### Added
+
 - `/resume` in chat mode lists only chats, and every `/resume` list tags a session holding a chat
   with `chat`. `/resume all` lists every session in any mode. Sessions saved before this release
   are not tagged and appear only under `/resume all`. Resuming a session that holds only a chat
@@ -53,6 +150,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   it as an agent session and put the chat into agent history — and, since a one-sided session opens
   on its side, switched to agent mode. A file with no marker whose prompts were all sent in chat
   mode is now read as the chat side, so the saves made before this fix open correctly too. (#881)
+- `/resume` in chat mode lists a `/save` made in chat mode, falling back to those saves when the
+  project has no chats, as it does for every session outside chat mode. Saves made before this fix
+  are listed too. (#887)
 
 - On a narrow pane, where the status bar wraps onto several rows, a streaming reply no longer
   clears the terminal's scrollback on every update (iTerm2's "attempted to clear scrollback"

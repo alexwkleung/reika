@@ -105,8 +105,8 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_BASH_IDLE_MS`** — A hang — a server, a watcher, a prompt waiting on input — goes
   silent, so this is the bound that catches it without shortening the ceiling for real work. `0`
   disables
-- **`REIKA_REQUEST_TIMEOUT_MS`** — Unset, reika waits as long as it takes — llama.cpp emits no
-  bytes while it prefills, and a model streamed off SSD can be silent for a very long time and still
+- **`REIKA_REQUEST_TIMEOUT_MS`** — Unset, reika waits as long as it takes — llama.cpp can send
+  nothing while it prefills, and a model streamed off SSD can be silent for a very long time and still
   be working (Node's own default would kill the turn at 300s). Esc cancels a server that really is
   hung. Set a positive value to cap the wait
 
@@ -277,6 +277,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_REASONING_LOOP`      | `1`               | Acts on detected reasoning rumination (the model re-deriving the same analysis across rounds while tool results look new; measured over 8-gram self-repeat + cross-round similarity): plan mode gains a force-write trigger, agent mode drives the ledger→withdrawal ladder and, past it, an honest terminal stop.                                                                                 |
 | `REIKA_WITHDRAW_KEEP_TOOLS` | `1`               | While the loop ladder has paused inspection, keeps `read`/`grep`/`glob`/`list` in the offered tool list and refuses them when called, instead of dropping them. The tool list sits at the start of the prompt, so dropping them re-processes the whole prompt twice per pause.                                                                                                                     |
 | `REIKA_READ_FIRST`          | `1`               | Read-first edit gate: the first `edit` to a file whose contents are no longer in the model's context (never read, or the read has since aged out) is held back once with a directive to read it, so a blind `old_string` never gets the chance to fail and spiral.                                                                                                                                 |
+| `REIKA_READ_FIRST_EXACT`    | `1`               | Lets an `edit` past the read-first gate when its `old_string` is 24 or more characters and matches the file exactly and uniquely, since those bytes are not a guess. `0` bounces it like any other unread edit, the baseline arm for `evals/fixtures/22-read-first-exact`.                                                                                                                         |
 | `REIKA_PLAN_VERIFY`         | `1`               | Grounds a finalized plan against the codebase: paths and backticked identifiers it names are checked (paths by `stat`, symbols by a bounded tree walk) and any not found are appended as a "may be new" advisory the agent turn inherits — heading off the agent hunting on 0-match greps or edits whose `old_string` is in no file.                                                               |
 | `REIKA_PLAN_ALIGN`          | `1`               | Plan-alignment pressure on top of the (always-on) step checklist: the checklist is pinned into the system prompt each round during implementation, and a turn that stops with observable steps unchecked is bounced back once (leftovers are then waived, not re-asked).                                                                                                                           |
 | `REIKA_LOGIT_RECOVERY`      | `1`               | Spends one last-resort biased round before the terminal reasoning-loop stop: a mild one-shot `logit_bias` (−4, capped, tool-name tokens exempt) down-weighting the loop's own recurring tokens. llama.cpp-only (needs the native `/tokenize` endpoint) and inactive under `REIKA_REASONING_LOOP=0`; degrades to the honest stop if it doesn't help.                                                |
@@ -341,7 +342,8 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_READ_FIRST`** — Fail-open — re-issuing the edit applies it as-is — and at most one
   extra round per file per turn. Under `REIKA_DEBUG` each bounce logs `would-land=yes\|no`: whether
   the withheld edit would have applied, i.e. how often the gate cost a round versus caught a blind
-  edit. `0` turns it off
+  edit. An `old_string` of 24 or more characters that matches the file exactly and uniquely isn't
+  held back, and logs `read-first proven` instead. `0` turns it off
 - **`REIKA_PLAN_VERIFY`** — Advisory only, one-directional (under-flags rather than over-flags).
   `0` turns it off
 - **`REIKA_PLAN_ALIGN`** — `0` turns it off (the checklist itself stays)
@@ -436,6 +438,9 @@ changes:
 REIKA_BASE_URL=http://localhost:9931/v1
 REIKA_MODEL=qwen3-coder,kimi-k2,glm-4.6   # /model kimi-k2 to switch
 ```
+
+A router has to forward the stream as it arrives. One that reads fixed-size blocks holds it back, so
+text arrives in lumps and the prefill progress on the busy line never shows.
 
 **Different endpoints/keys — named profiles.** When a model lives behind a different base URL or API
 key, define a full profile and switch between them at runtime with `/model <name>`:

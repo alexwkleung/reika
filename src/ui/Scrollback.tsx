@@ -2,17 +2,21 @@ import type { ReactElement } from 'react';
 import { useMemo, useRef } from 'react';
 import { Box, Static, Text } from 'ink';
 import chalk from 'chalk';
-import wrapAnsi from 'wrap-ansi';
 import stringWidth from 'string-width';
 import type { Message, PlanChecks } from '../types.js';
-import { hideDanglingMarkers, renderMarkdown, renderReasoningMarkdown } from './markdown.js';
+import {
+  hideDanglingMarkers,
+  openFenceBefore,
+  renderMarkdown,
+  renderReasoningMarkdown,
+} from './markdown.js';
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
 import { scrubDisplay, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
-import { contentWidth, hangingWrap } from './layout.js';
+import { contentWidth, hangingWrap, wrapLines } from './layout.js';
 import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
 import { OUTPUT_TAIL_LINES } from '../tools/bash.js';
 
@@ -26,6 +30,7 @@ export function Scrollback({
   streamingCommand = false,
   pendingTool = '',
   pendingToolMs = 0,
+  pendingCommand = '',
   chromeRows = 0,
   showHeldWorked = true,
 }: {
@@ -55,6 +60,9 @@ export function Scrollback({
   // tools `toolTimer` times, once it passes its threshold. The App reads it off the render clock
   // the status bar's one-second tick already drives, so nothing here keeps a timer.
   pendingToolMs?: number;
+  // The command a just-answered approval cleared, drawn under that row as the `$ command` block
+  // its chip commits with, so the dialog's rows collapse into the command instead of blank space.
+  pendingCommand?: string;
   // Extra fixed rows the App renders below the live region beyond the baseline CHROME (e.g. the
   // plan-progress checklist). Must be counted against the viewport budget or the live frame grows
   // past stdout.rows and Ink falls into its full-repaint path — visible as flicker at the bottom.
@@ -103,8 +111,21 @@ export function Scrollback({
   }
   const { log: scrollback, held } = useScrollbackLog(messages);
   const pendingGap = pendingTool ? pendingToolGap(pendingTool, scrollback.at(-1)) : 0;
-  const pool =
+  const commandWidth = contentWidth(COMMAND_MARGIN + indent);
+  const commandLines =
+    pendingTool && pendingCommand
+      ? hangingWrap(scrubOutput(pendingCommand), commandWidth, SHELL_MARKER.length).split('\n')
+      : [];
+  const poolBeforeCommand =
     region - (pendingTool ? 1 + pendingGap : 0) - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  // The output tail keeps its room (the rows the chip will show), and a long command gives up
+  // its rows past that, ending in `…` — the chip draws all of it once it commits.
+  const commandRows =
+    commandLines.length === 0
+      ? 0
+      : Math.min(commandLines.length, Math.max(1, poolBeforeCommand - 1 - OUTPUT_TAIL_LINES));
+  const commandCut = commandRows < commandLines.length;
+  const pool = poolBeforeCommand - (commandRows ? 1 + commandRows : 0);
   // A running command's tail is held to the rows its committed chip shows: grown to the pool, it
   // pushed the input to the bottom and then dropped it by the difference when the chip replaced it.
   const shares = allocateLiveRows(
@@ -130,6 +151,18 @@ export function Scrollback({
                 on one row lose the boundary char between them when the row wraps. */}
             <Text color={theme.muted}>{toolTimer(pendingTool, pendingToolMs)}</Text>
           </Text>
+        </Box>
+      ) : null}
+      {commandRows ? (
+        // The committed chip's `$ command` block, same margin and wrap (MessageView).
+        <Box flexDirection="column" marginTop={1} marginLeft={COMMAND_MARGIN}>
+          <Text>
+            <Text color={theme.success}>{SHELL_MARKER}</Text>
+            <Text>
+              {commandLines.slice(0, commandCut ? commandRows - 1 : commandRows).join('\n')}
+            </Text>
+          </Text>
+          {commandCut ? <Text color={theme.muted}>…</Text> : null}
         </Box>
       ) : null}
       {blocks.map((b, i) =>
@@ -264,7 +297,7 @@ function liveContentWidth(indent = 0): number {
 // exceeds the viewport. Wrapped with the exact wrap-ansi options Ink uses (build/wrap-text.js), so
 // the count matches and Ink's own re-wrap of a row is a no-op (rows are already ≤ width).
 export function displayRows(text: string, width: number): string[] {
-  return wrapAnsi(text, width, { trim: false, hard: true }).split('\n');
+  return wrapLines(text, width).split('\n');
 }
 
 // A live block's rows before they are fitted to its share of the region. `cut` means the cheap
@@ -300,13 +333,21 @@ export function tailText(
   return { text: out, truncated };
 }
 
+// `tailText` for text that gets rendered as markdown: a cut inside a code block keeps the block.
+export function markdownTail(text: string, maxLines: number): { text: string; truncated: boolean } {
+  const pre = tailText(text, maxLines);
+  if (!pre.truncated) return pre;
+  const fence = openFenceBefore(text, text.length - pre.text.length);
+  return fence ? { text: `${fence}\n${pre.text}`, truncated: true } : pre;
+}
+
 // Live assistant text: rendered as a bounded tail (markdown preview); the committed
 // message re-renders the full text in <Static>. The logical-line pre-trim caps markdown render cost
 // on very long streams; the factor keeps enough lines to fill `bound` display rows even when each
 // wraps. The rows are measured *rendered* (markdown can expand lines, e.g. code fences), which is
 // what Ink counts against the viewport.
 function streamingContentRows(text: string, width: number, bound: number): LiveRows {
-  const pre = tailText(text, bound * 4);
+  const pre = markdownTail(text, bound * 4);
   // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
   const prose = markProse(
     renderMarkdown(hideDanglingMarkers(pre.text), width - CALL_MARKER_MEASURED),
@@ -318,7 +359,7 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
 // The live tail of a compaction note: its rows sit behind the bar, so no prose marker and two
 // columns narrower. Same pre-trim and measuring as streamingContentRows.
 function streamingNoteRows(text: string, width: number, bound: number): LiveRows {
-  const pre = tailText(text, bound * 4);
+  const pre = markdownTail(text, bound * 4);
   return { rows: noteBodyRows(hideDanglingMarkers(pre.text), width), cut: pre.truncated };
 }
 
@@ -451,6 +492,60 @@ const liveContentRows = lastCall(streamingContentRows, paintKey);
 const liveNoteRows = lastCall(streamingNoteRows, paintKey);
 const liveToolRows = lastCall(streamingToolRows, paintKey);
 
+// A discarded stream, drawn as its live tail was: the same builders and row split, so the committed
+// rows take the live rows' place one for one and the input stays where it was. At least as tall as
+// what was on screen, since the live region it was split against also paid for any dialog chrome.
+function FrozenStream({
+  reasoning,
+  content,
+  note,
+  indent,
+}: {
+  reasoning: string;
+  content: string;
+  note: boolean;
+  indent: number;
+}) {
+  const region = liveRegionRows();
+  const folded = note ? { reasoning, content } : foldedLiveFields(reasoning, content);
+  const blocks: { kind: 'reasoning' | 'content'; live: LiveRows; fixed: number }[] = [];
+  if (folded.reasoning) {
+    const columns = process.stdout.columns || 80;
+    const live = streamingReasoningRows(folded.reasoning, indent, region, columns);
+    blocks.push({ kind: 'reasoning', live, fixed: 2 });
+  }
+  if (folded.content.trim()) {
+    const width = liveContentWidth(indent);
+    const live = note
+      ? streamingNoteRows(folded.content, width, region)
+      : streamingContentRows(folded.content, width, region);
+    blocks.push({ kind: 'content', live, fixed: note ? 3 : 1 });
+  }
+  const pool = region - blocks.reduce((sum, b) => sum + b.fixed, 0);
+  const shares = allocateLiveRows(
+    blocks.map(b => (b.live.cut ? Infinity : b.live.rows.length)),
+    pool,
+  );
+  return (
+    <Box flexDirection="column">
+      {blocks.map((b, i) =>
+        b.kind === 'reasoning' ? (
+          <Box key={b.kind} marginTop={1}>
+            <ReasoningBlock
+              lines={b.live.rows.slice(-shares[i])}
+              barColor={note ? theme.info : undefined}
+            />
+          </Box>
+        ) : note ? (
+          <NoteBody key={b.kind} tail={fitTail(b.live, shares[i])} joined={i > 0} />
+        ) : (
+          <StreamingTail key={b.kind} tail={fitTail(b.live, shares[i])} />
+        ),
+      )}
+    </Box>
+  );
+}
+
 // `offset` is how far inside the live wrapper the committed row will sit (the command chip's
 // margin), so the tail doesn't jump sideways when it commits (#461).
 function StreamingTail({
@@ -529,7 +624,8 @@ function CompactionNoteBlock({
   indent: number;
 }) {
   return (
-    <Box flexDirection="column" marginTop={1}>
+    // Without Thinking the body is the first row and brings its own margin.
+    <Box flexDirection="column" marginTop={reasoning ? 1 : 0}>
       {reasoning ? (
         <ReasoningBlock lines={reasoningLines(reasoning, indent)} barColor={theme.info} />
       ) : null}
@@ -853,6 +949,16 @@ function renderMessage(
           </Text>
         ) : null}
       </Box>
+    );
+  }
+  if (msg.role === 'assistant' && msg.discarded) {
+    return (
+      <FrozenStream
+        reasoning={msg.reasoning ?? ''}
+        content={msg.content}
+        note={msg.discarded === 'note'}
+        indent={indent}
+      />
     );
   }
   if (msg.role === 'assistant' && msg.compactionNote) {
@@ -1201,7 +1307,7 @@ function UserBubble({
 function wrapText(text: string, width: number): string[] {
   const out: string[] = [];
   for (const raw of text.split('\n')) {
-    const rows = wrapAnsi(raw, width, { trim: false, hard: true }).split('\n');
+    const rows = wrapLines(raw, width).split('\n');
     // The space a break landed on heads the next row; a leading space on a real line is content.
     rows.forEach((row, i) => out.push(i === 0 ? row : row.replace(/^ +/, '')));
   }

@@ -76,6 +76,17 @@ function isControl(ch: string): boolean {
   return c < 0x20 || (c >= 0x7f && c <= 0x9f);
 }
 
+// For text written straight to a terminal with no frame to keep in step, in pieces that may split a
+// line: sanitizeTerminalText replays whole lines, so a chunk's trailing space would be lost. A
+// sequence split across two chunks leaves its printable tail as plain text, which instructs nothing.
+export function stripTerminalControls(text: string): string {
+  let out = '';
+  for (const ch of stripAnsi(text).replace(/\r\n/g, '\n')) {
+    if (ch === '\n' || ch === '\t' || !isControl(ch)) out += ch;
+  }
+  return out;
+}
+
 // The other direction from the tab above: a glyph the terminal draws in ONE column that Ink's
 // measurement spends TWO on. string-width asks the emoji regex, which holds the pictographs that
 // default to TEXT presentation too — `✔`, `⚠`, `♦`, `❤`, the record glyph `⏺` (syncframe.ts) —
@@ -98,10 +109,13 @@ const ASKS_FOR_TEXT = /\uFE0E/;
 const segmenter = new Intl.Segmenter();
 
 export function drawnWidth(text: string): number {
+  const plain = stripAnsi(text);
+  // Printable ASCII is one cell a character on every path below; skip the segmenter for it.
+  if (/^[\x20-\x7e]*$/.test(plain)) return plain.length;
   let width = 0;
   // Grapheme by grapheme, the way string-width counts: a ZWJ sequence is one glyph on screen and
   // a combining mark spends no cell of its own.
-  for (const { segment } of segmenter.segment(stripAnsi(text))) {
+  for (const { segment } of segmenter.segment(plain)) {
     const measured = stringWidth(segment);
     const textPresentation =
       measured === 2 &&

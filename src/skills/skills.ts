@@ -24,9 +24,9 @@ export type Skill = {
 
 const GLOBAL_DEFAULT = join(homedir(), '.config', 'reika', 'skills');
 const PROJECT_RELATIVE = '.reika/skills';
-// The skills that ship in the package (`issue`, `review`), beside `dist/` — one level up from this
-// module whether it runs as src/skills.ts or dist/skills.js.
-export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills');
+// The skills that ship in the package (`issue`, `review`), beside `dist/` — two levels up from this
+// module whether it runs as src/skills/skills.ts or dist/skills/skills.js.
+export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills');
 
 // Other harnesses' skill dirs (#861), so a skill folder works where it already is. Global is the
 // agent-agnostic `~/.agents/skills` only — never `~/.claude/skills`, another app's config dir; a

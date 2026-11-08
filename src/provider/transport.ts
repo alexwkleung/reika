@@ -64,6 +64,9 @@ export type ChatCompletionRequest = {
   tools?: ChatTool[];
   stream: true;
   stream_options?: { include_usage?: boolean };
+  // llama.cpp: stream `prompt_progress` while the prompt is processed (#912).
+  return_progress?: boolean;
+  timings_per_token?: boolean;
   max_tokens?: number;
   // Per-token logit offsets (token id → additive bias), applied for one request. Used only by the
   // last-resort rumination recovery to gently down-weight a looping model's repeated tokens before
@@ -128,6 +131,14 @@ export type ChatCompletionChunk = {
     completion_tokens: number;
     prompt_tokens_details?: { cached_tokens?: number | null } | null;
     prompt_cache_hit_tokens?: number | null;
+  } | null;
+  // llama.cpp's prefill progress under `return_progress`: one chunk per processed batch, with no
+  // generated content. `processed` counts from `cache`, not from zero.
+  prompt_progress?: {
+    total?: number;
+    cache?: number;
+    processed?: number;
+    time_ms?: number;
   } | null;
   // llama.cpp's own stats for the call, at the top level next to `usage` (not inside it) on the
   // final chunk of a streaming response — and, under `timings_per_token`, on every chunk, where

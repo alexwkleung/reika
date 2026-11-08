@@ -587,6 +587,37 @@ describe('batchAgePayloads', () => {
     expect(estimateOf(history)()).toBeLessThanOrEqual(900 * AGE_LOW_FRACTION);
   });
 
+  it('stops at the first mark that reaches the watermark and restores the probed rest (#894)', () => {
+    // threshold 1800, target 1260; estimate 50 + 7 × 300 = 2150, and each mark sheds 299. The spec
+    // is exempt and g is the protected tail, so a..f are the marks: two leave 1552, three 1253.
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...['a', 'b', 'c', 'd', 'e', 'f', 'g'].flatMap(id => round(id, id.repeat(300))),
+    ];
+    const estimate = estimateOf(history);
+    let calls = 0;
+    const aged = batchAgePayloads(history, () => (calls++, estimate()), 2000, 0);
+    const tools = history.filter(m => m.role === 'tool') as Array<Message & { role: 'tool' }>;
+    expect(tools.map(t => t.aged === true)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(aged).toMatchObject({ marked: 3, bulk: 0, crumbs: 3, short: 0 });
+    // The search applied d..f to probe past the stop; undoing them must leave no trace.
+    for (const t of tools.slice(4)) {
+      expect('aged' in t).toBe(false);
+      expect(t.rendered).toBe(`${t.callId}\n\n${t.payload}`);
+    }
+    expect(calls).toBeLessThan(6);
+  });
+
   it('reports short=0 when the event reaches its watermark', () => {
     const history: Message[] = [
       { role: 'user', content: 'go' },
@@ -746,6 +777,8 @@ describe('batchAgePayloads', () => {
             promptCacheKey: false,
             cacheControl: false,
             chatTemplateKwargs: false,
+            promptProgress: false,
+            timingsPerToken: false,
             assistantPrefill: false,
             noteOnToolResult: false,
           },
@@ -1084,6 +1117,42 @@ describe('compactHistory across repeated folds (#275)', () => {
     }
     return recaps;
   }
+
+  it("replaces an earlier turn's preserved task with the current one", () => {
+    const task = (name: string): string => `${name} ${'detail '.repeat(60)}END-OF-${name}`;
+    const history: Message[] = [
+      { role: 'user', content: 'open the session' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: task('TASK-ONE') },
+    ];
+    for (let i = 0; i < 20; i++) history.push(...round(i, 'ONE'));
+    expect(compactHistory(history, W5, 1, 0)).toBeGreaterThan(0);
+
+    history.push({ role: 'user', content: task('TASK-TWO') });
+    for (let i = 20; i < 40; i++) history.push(...round(i, 'TWO'));
+    expect(compactHistory(history, W5, 1, 0)).toBeGreaterThan(0);
+
+    const recap = history.find(m => m.role === 'compaction') as { content: string };
+    expect(recap.content).toContain(STRONG);
+    expect(recap.content).toContain('END-OF-TASK-TWO');
+    expect(recap.content).not.toContain('END-OF-TASK-ONE');
+  });
+
+  it('keeps carrying the block through later folds of the same turn', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'open the session' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'the only task END-OF-TASK' },
+    ];
+    let n = 0;
+    for (let f = 0; f < 3; f++) {
+      for (let i = 0; i < 20; i++) history.push(...round(n++, 'WORK'));
+      expect(compactHistory(history, W5, 1, 0)).toBeGreaterThan(0);
+      const recap = history.find(m => m.role === 'compaction') as { content: string };
+      expect(recap.content).toContain('END-OF-TASK');
+      expect(recap.content).toContain(STRONG);
+    }
+  });
 
   it('keeps the recap flat over five folds instead of stacking each one on the last', () => {
     const recaps = foldRepeatedly(5, { skill: 'review' });

@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Box, Static, Text, useApp, useInput } from 'ink';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import { Box, Static, Text, measureElement, useApp, useInput, type DOMElement } from 'ink';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -67,6 +74,7 @@ import {
 import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
+import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { execStream } from '../tools/bash.js';
 import { isOffline } from '../tools/_net.js';
 import { expandMentions } from '../agent/mentions.js';
@@ -80,7 +88,7 @@ import {
   type NativeImageBytes,
 } from '../agent/attachments.js';
 import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldConfirmInject } from '../skillmatch.js';
+import { matchSkill, shouldConfirmInject } from '../skills/skillmatch.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { sniffImageMime } from '../ocr/vision.js';
@@ -88,7 +96,7 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
-import { mcpStartupLine } from './format.js';
+import { mcpStartupLine, prefillLabel } from './format.js';
 import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
@@ -100,6 +108,7 @@ import {
   newSessionPath,
   projectHistoryDir,
   ROOT_HISTORY_DIR,
+  saveHeader,
   writeSession,
   type SessionEntry,
   type SessionSides,
@@ -140,6 +149,7 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   Message,
+  PromptProgress,
   QuestionAnswer,
   QuestionRequest,
   Usage,
@@ -150,7 +160,7 @@ type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
-const TYPECHECK_LINGER_MS = 650;
+export const TYPECHECK_LINGER_MS = 650;
 
 // Only the startup splash lives in the dedicated header <Static> — Ink honors a
 // single <Static>, so appending to this one after the message log's Static takes
@@ -181,6 +191,18 @@ function promptPlaceholder(): string {
 }
 
 const AUTOSAVE_INTERVAL_MS = 3000;
+
+// A frozen stream's kept tail: well past what a viewport-tall live block can draw.
+const FROZEN_STREAM_CHARS = 16000;
+// An answered approval's rows: held this long for output to fill them, then whatever is still blank
+// shrinks by this fraction a frame (at least a row), so the input slides up rather than snapping.
+// Once the command has printed, the ease waits for it to go quiet this long instead: a command
+// printing a line every half second fills the rows, where easing them out between lines slid the
+// input up and then had each line push it back down.
+const HOLD_GRACE_MS = 300;
+const HOLD_QUIET_MS = 1500;
+const HOLD_FRAME_MS = 32;
+const HOLD_EASE = 0.35;
 
 // A resumed session reaches the scrollback a slice at a time (#854): a commit renders its messages'
 // markdown, highlighting and wrap synchronously, and one commit for the whole session held the
@@ -216,6 +238,7 @@ export function App() {
   // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
   // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
   const [reasoningSpin, setReasoningSpin] = useState<boolean>(false);
+  const [promptProgress, setPromptProgress] = useState<PromptProgress | undefined>(undefined);
   // Checklist of the plan currently being implemented (#71), snapshotted from the loop's
   // deterministic tracker. Non-null only after an agent turn found a written plan in history;
   // persists between turns so the user can see what's left before continuing. Human-only.
@@ -233,10 +256,29 @@ export function App() {
   // is the status bar's one-second tick (below) — a state of its own would repaint the live region
   // a second time every second for a value that changes on no other edge.
   const pendingToolAtRef = useRef<number>(0);
+  // An answered approval or question keeps its rows for a moment: closing a 13-row dialog in one
+  // frame dropped the input 13 rows, and output arriving in the grace window fills that space
+  // instead. Whatever is still blank after it eases out (HOLD_*). An approval's hold is keyed to its
+  // call's start stamp (`forCall`), so the next call never inherits it; a question's lasts past its
+  // call, whose answer commits at once, into the model's next round.
+  const [dialogHold, setDialogHold] = useState<{
+    rows: number;
+    at: number;
+    forCall: boolean;
+    command?: string;
+  } | null>(null);
+  const heldFrameRef = useRef<DOMElement>(null);
+  const heldFrameRowsRef = useRef(0);
+  // The blank the hold is leaving right now, which is what the ease-out shrinks.
+  const holdSpacerRef = useRef<DOMElement>(null);
+  const lastLiveOutputAtRef = useRef(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
   // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
   const [noteLive, setNoteLive] = useState<boolean>(false);
+  // Read by onReasoningReset, which runs inside the loop's callbacks rather than a render.
+  const subagentLiveRef = useRef(false);
+  const noteLiveRef = useRef(false);
   // The session owns the config, the active profile, the bundle and everything a turn threads to
   // the next (#403); App renders from its snapshot and never keeps a copy of its own.
   const [session, setSession] = useState<Session | null>(null);
@@ -250,7 +292,13 @@ export function App() {
   const activeProfile = snapshot?.profile ?? 'default';
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [totalUsage, setTotalUsage] = useState<Usage>({ promptTokens: 0, completionTokens: 0 });
+  // The session total and the estimate for the request in flight (#925), one state so the real
+  // count replaces the estimate in a single commit: apart, the chip blinks out between them. The
+  // loop reports on every delta, and `live` takes it on the clock tick so the chips move once a
+  // second rather than on every stream flush.
+  const [usage, setUsage] = useState<{ total: Usage; live?: LiveUsage }>({
+    total: { promptTokens: 0, completionTokens: 0 },
+  });
   // Most recent call's usage (the authoritative current context size + cache hit rate),
   // and the pre-send estimate used to fill the gauge before that real count arrives.
   const [lastUsage, setLastUsage] = useState<Usage | null>(null);
@@ -264,6 +312,7 @@ export function App() {
   // Decode throughput (tokens/second) for the status bar's tok/s chip (#204). The session keeps
   // the learned value a turn seeds from; this is what the chip shows.
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
+  const liveUsageRef = useRef<LiveUsage | undefined>(undefined);
   const [pending, setPending] = useState<{
     request: ApprovalRequest;
     resolve: (answer: ApprovalAnswer) => void;
@@ -404,6 +453,8 @@ export function App() {
   };
   const statusRef = useRef<UIStatus>('loading');
   statusRef.current = status;
+  const pendingToolRef = useRef('');
+  pendingToolRef.current = pendingTool;
   const pendingRef = useRef<typeof pending>(null);
   pendingRef.current = pending;
   const questionRef = useRef<typeof question>(null);
@@ -474,7 +525,7 @@ export function App() {
   // model-facing side of each is the session's (switchSide).
   const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
-  usageRef.current = totalUsage;
+  usageRef.current = usage.total;
   // The other two halves of the status line's accounting, mirrored for the same reason as
   // `usageRef`: /save reads them from a handler that may be a render behind (#199).
   const lastUsageRef = useRef<Usage | null>(null);
@@ -716,6 +767,7 @@ export function App() {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
+      setUsage(u => ({ total: u.total, live: liveUsageRef.current }));
     }, 1000);
     return () => clearInterval(id);
   }, [status, pending, question]);
@@ -1174,7 +1226,7 @@ export function App() {
     stashedMessagesRef.current = {};
     sessionRef.current?.reset({ relearn });
     setPlanSteps(null);
-    setTotalUsage({ promptTokens: 0, completionTokens: 0 });
+    setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
     setLastUsage(null);
     setEstimatedContext(null);
     setShrink({ sheds: 0, folds: 0 });
@@ -1359,6 +1411,16 @@ export function App() {
     setApprovalTyping(false);
     return new Promise(resolve => {
       const wrappedResolve = (answer: ApprovalAnswer): void => {
+        // Only for the call that is running: a subagent's approval names a nested call, and the
+        // parent's row (`subagent`) would hold these rows for the whole delegated run.
+        if (req.tool === pendingToolRef.current) {
+          setDialogHold({
+            rows: heldFrameRowsRef.current,
+            at: pendingToolAtRef.current,
+            forCall: true,
+            command: answer === true && req.tool === 'bash' ? req.preview : undefined,
+          });
+        }
         setApprovals(a =>
           answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
         );
@@ -1371,7 +1433,15 @@ export function App() {
   const requestQuestion = (req: QuestionRequest): Promise<QuestionAnswer | null> => {
     setQuestionSelected(0);
     setQuestionTyping(null);
-    return new Promise(resolve => setQuestion({ request: req, resolve }));
+    return new Promise(resolve =>
+      setQuestion({
+        request: req,
+        resolve: answer => {
+          setDialogHold({ rows: heldFrameRowsRef.current, at: Date.now(), forCall: false });
+          resolve(answer);
+        },
+      }),
+    );
   };
 
   // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
@@ -1667,29 +1737,30 @@ export function App() {
       const projectDir = projectHistoryDir(bundle.cwd);
       // The session in progress is not something to resume into.
       const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
-      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A file
-      // saved before the header counted chat turns is not listed here; /resume all still has it.
+      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A
+      // project file saved before the header counted chat turns is not listed here; /resume all
+      // still has it.
       const chatsOnly = target === '' && modeRef.current === 'chat';
       let entries: SessionEntry[] = [];
       let heading = 'saved with /save';
       if (target !== 'root') {
         entries = (await listSessions(projectDir)).filter(notCurrent);
-        heading = 'this project';
+        if (chatsOnly) entries = entries.filter(e => e.chat);
+        heading = chatsOnly ? 'chats in this project' : 'this project';
       }
-      if (chatsOnly) {
-        entries = entries.filter(e => e.chatTurns !== undefined);
-        // No root fallback: /save files carry no chat count, so it would list agent sessions here.
-        if (entries.length === 0) {
-          say('No saved chats for this project. /resume all lists every session.');
-          return;
-        }
-        heading = 'chats in this project';
-      }
-      // A project with no sessions yet falls back to the manual saves.
+      // A project with nothing to list falls back to the manual saves — in chat mode, the ones that
+      // hold a chat (#882).
       if (entries.length === 0) {
-        entries = await listSessions(ROOT_HISTORY_DIR);
+        entries = await listSessions(ROOT_HISTORY_DIR, true);
+        if (chatsOnly) entries = entries.filter(e => e.chat);
         if (target === '' && entries.length > 0)
-          heading = 'none for this project — saved with /save';
+          heading = chatsOnly
+            ? 'no chats for this project — saved with /save'
+            : 'none for this project — saved with /save';
+      }
+      if (entries.length === 0 && chatsOnly) {
+        say('No saved chats for this project. /resume all lists every session.');
+        return;
       }
       if (entries.length === 0) {
         say(
@@ -1726,9 +1797,9 @@ export function App() {
       }
       try {
         const { jsonlPath, txtPath } = await saveTranscript(
-          join(homedir(), '.config', 'reika', 'history'),
+          ROOT_HISTORY_DIR,
           msgs,
-          transcriptMeta(msgs, bundle.cwd, midTurn),
+          saveHeader(transcriptMeta(msgs, bundle.cwd, midTurn), msgs),
           { redact: !raw },
         );
         setMessages(prev => [
@@ -1979,9 +2050,11 @@ export function App() {
       case 'cwd':
         response = bundle?.cwd ?? '(unknown)';
         break;
-      case 'tokens':
-        response = `prompt:     ${totalUsage.promptTokens}\ncompletion: ${totalUsage.completionTokens}`;
+      case 'tokens': {
+        const approx = usage.total.estimated ? '~' : '';
+        response = `prompt:     ${approx}${usage.total.promptTokens}\ncompletion: ${approx}${usage.total.completionTokens}`;
         break;
+      }
       case 'skills': {
         const list = bundle?.skills ?? [];
         if (list.length === 0) {
@@ -2588,6 +2661,12 @@ export function App() {
       }, TYPECHECK_LINGER_MS);
     }
   };
+  // The linger exists to keep a finished check on screen; a prefill worth naming is the newer fact,
+  // and holding it back made its label land late (#914). A check still running keeps its label.
+  const onPromptProgressChange = (progress: PromptProgress | undefined) => {
+    setPromptProgress(progress);
+    if (typecheckHideTimerRef.current && prefillLabel(progress)) resetTypecheck();
+  };
   // Immediate, un-lingered clear for turn boundaries.
   const resetTypecheck = () => {
     if (typecheckHideTimerRef.current) {
@@ -2680,8 +2759,13 @@ export function App() {
         setStreamingReasoning('');
         setStreamingTool('');
         setPendingTool('');
+        subagentLiveRef.current = false;
+        noteLiveRef.current = false;
         setSubagentLive(false);
         setNoteLive(false);
+        // A request that threw reports no usage, so nothing else would clear it.
+        liveUsageRef.current = undefined;
+        setUsage(u => ({ total: u.total }));
         resetTypecheck();
         setReasoningSpin(false);
         setStatus('idle');
@@ -2736,14 +2820,17 @@ export function App() {
           setMessages(prev => [...prev, msg]);
         },
         onContentDelta: delta => {
+          lastLiveOutputAtRef.current = Date.now();
           streamingRef.current += delta;
           scheduleFlush();
         },
         onReasoningDelta: delta => {
+          lastLiveOutputAtRef.current = Date.now();
           reasoningRef.current += delta;
           scheduleReasoningFlush();
         },
         onToolProgress: (chunk, tool) => {
+          lastLiveOutputAtRef.current = Date.now();
           toolRef.current += chunk;
           toolNameRef.current = tool;
           scheduleToolFlush();
@@ -2752,6 +2839,7 @@ export function App() {
           // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
           // this is the call's own start — the same instant the row it ages appears (#585).
           pendingToolAtRef.current = Date.now();
+          pendingToolRef.current = name;
           setPendingTool(name);
         },
         onPhase: p => {
@@ -2759,18 +2847,40 @@ export function App() {
           if (p !== 'thinking') setReasoningSpin(false);
           setPhase(p);
         },
-        onSubagent: setSubagentLive,
-        onCompactionNote: setNoteLive,
+        onSubagent: live => {
+          subagentLiveRef.current = live;
+          setSubagentLive(live);
+        },
+        onCompactionNote: live => {
+          noteLiveRef.current = live;
+          setNoteLive(live);
+        },
         onTypecheck: onTypecheckChange,
         onRecovering: setRecovering,
         // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
         // re-render.
         onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
         onReasoningStatus: setReasoningSpin,
+        onPromptProgress: onPromptProgressChange,
         onReasoningReset: () => {
-          // Loop-break recovery: drop the degenerate looped reasoning's live preview so the
+          // Loop-break recovery: end the degenerate looped reasoning's live preview so the
           // recovery notice is visible and the next round streams into a fresh Thinking block
-          // instead of appending onto the looped text (#55).
+          // instead of appending onto the looped text (#55). Frozen into the scrollback where it
+          // stood rather than erased: erased, the frame dropped by the block's height under a
+          // one-line notice and the input jumped up. The tail is all that is kept, since a cut
+          // spiral can run to tens of thousands of chars and the block only ever drew its end.
+          const reasoning = reasoningRef.current.trim();
+          const content = streamingRef.current.trim();
+          if (reasoning || content) {
+            const frozen: Message = {
+              role: 'assistant',
+              content: content.slice(-FROZEN_STREAM_CHARS),
+              ...(reasoning ? { reasoning: reasoning.slice(-FROZEN_STREAM_CHARS) } : {}),
+              discarded: noteLiveRef.current ? 'note' : 'stream',
+              ...(subagentLiveRef.current ? { nested: true } : {}),
+            };
+            setMessages(prev => [...prev, frozen]);
+          }
           reasoningRef.current = '';
           setStreamingReasoning('');
           setReasoningSpin(false);
@@ -2781,16 +2891,27 @@ export function App() {
           setStreaming('');
         },
         onUsage: u => {
-          setLastUsage(u);
-          setTotalUsage(t => ({
-            promptTokens: t.promptTokens + u.promptTokens,
-            completionTokens: t.completionTokens + u.completionTokens,
-            ...(u.cachedTokens != null
-              ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
-              : t.cachedTokens != null
-                ? { cachedTokens: t.cachedTokens }
-                : {}),
+          // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
+          if (!u.estimated) setLastUsage(u);
+          setUsage(({ total: t }) => ({
+            total: {
+              promptTokens: t.promptTokens + u.promptTokens,
+              completionTokens: t.completionTokens + u.completionTokens,
+              ...(u.cachedTokens != null
+                ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
+                : t.cachedTokens != null
+                  ? { cachedTokens: t.cachedTokens }
+                  : {}),
+              ...(u.estimated || t.estimated ? { estimated: true } : {}),
+            },
           }));
+        },
+        onLiveUsage: live => {
+          // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
+          // touches the ref: onUsage drops `live` with the real count, or the next tick does.
+          const first = live && !liveUsageRef.current;
+          liveUsageRef.current = live;
+          if (first) setUsage(u => ({ total: u.total, live }));
         },
         onContextEstimate: t => setEstimatedContext(t),
         onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
@@ -2824,20 +2945,21 @@ export function App() {
         )
       : undefined;
 
+  const prefilling = prefillLabel(promptProgress);
   const statusWidth = useContentWidth();
   const statusProps: StatusProps = {
     model: config?.profiles[activeProfile]?.model ?? config?.model ?? '',
     turns: messages.filter(m => m.role === 'assistant').length,
     status: status === 'busy' ? phase : status,
     elapsed: status === 'busy' ? elapsed : null,
-    usage: totalUsage,
+    usage: withLiveUsage(usage.total, usage.live),
     contextTokens: lastUsage?.promptTokens ?? estimatedContext,
     contextWindow: statusWindow,
     contextUsable: statusUsable,
     sheds: shrink.sheds,
     folds: shrink.folds,
     cachedTokens: lastUsage?.cachedTokens,
-    decodeRate: decodeRate,
+    decodeRate: usage.live?.rate ?? decodeRate,
     pr: pr,
     autoApprove:
       config?.autoApprove === 'bypass'
@@ -2860,6 +2982,54 @@ export function App() {
     statusExtraRows +
     (planSteps && (mode === 'agent' || mode === 'vibe') ? planProgressRows(planSteps) : 0) +
     (queue.length > 0 ? queue.length + 1 : 0);
+
+  const holdActive =
+    dialogHold !== null &&
+    status === 'busy' &&
+    pending === null &&
+    question === null &&
+    (!dialogHold.forCall || (pendingTool !== '' && pendingToolAtRef.current === dialogHold.at));
+  const heldRows = holdActive && dialogHold.rows > 0 ? dialogHold.rows : undefined;
+  const holdAt = holdActive ? dialogHold.at : undefined;
+  // Measured after every frame the dialog is in, so the answer can hold exactly what it drew.
+  useEffect(() => {
+    if ((pending || question) && heldFrameRef.current) {
+      heldFrameRowsRef.current = measureElement(heldFrameRef.current).height;
+    }
+  });
+  useEffect(() => {
+    if (dialogHold && !holdActive && pending === null && question === null) setDialogHold(null);
+  }, [dialogHold, holdActive, pending, question]);
+  // A row committed while the hold is up lands above the held frame and would push the input down
+  // by its height (a question's answer row, the round's next message), so the hold gives those rows
+  // back. Ink lays out only the rows being committed in this render under its static node; a layout
+  // effect's update re-renders inside the same tick, so the two renders paint as one frame.
+  useLayoutEffect(() => {
+    if (heldRows === undefined) return;
+    const root = heldFrameRef.current?.parentNode as { staticNode?: DOMElement } | undefined;
+    const committed = root?.staticNode?.yogaNode?.getComputedHeight() ?? 0;
+    if (committed > 0) setDialogHold(h => h && { ...h, rows: Math.max(0, h.rows - committed) });
+  }, [messages, heldRows]);
+  // A short timer of its own, unlike the rest of the live region: the ease is a few frames long,
+  // and the status bar's one-second tick is far too coarse to animate it.
+  useEffect(() => {
+    if (holdAt === undefined) return;
+    let timer = setTimeout(function step() {
+      const sinceOutput = Date.now() - lastLiveOutputAtRef.current;
+      if (lastLiveOutputAtRef.current >= holdAt && sinceOutput < HOLD_QUIET_MS) {
+        timer = setTimeout(step, HOLD_QUIET_MS - sinceOutput);
+        return;
+      }
+      const blank = holdSpacerRef.current ? measureElement(holdSpacerRef.current).height : 0;
+      setDialogHold(h =>
+        h && h.at === holdAt
+          ? { ...h, rows: blank > 0 ? h.rows - Math.max(1, Math.ceil(blank * HOLD_EASE)) : 0 }
+          : h,
+      );
+      if (blank > 0) timer = setTimeout(step, HOLD_FRAME_MS);
+    }, HOLD_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [holdAt]);
 
   if (status === 'error') {
     return (
@@ -2891,12 +3061,12 @@ export function App() {
       `${status === 'busy' ? phase : status} msgs=${messages.length} live=${live.join(',') || '-'}` +
         ` pending=${pendingTool || '-'} dialog=${dialog} queue=${queue.length}` +
         ` plan=${planSteps ? planSteps.length : 0} suggest=${suggestionState ? 1 : 0}` +
-        `${subagentLive ? ' subagent' : ''}`,
+        `${subagentLive ? ' subagent' : ''}${heldRows ? ` held=${heldRows}` : ''}`,
     );
   }
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box ref={heldFrameRef} flexDirection="column" paddingX={1} minHeight={heldRows}>
       <Static items={headerItems}>
         {(h, i) => (
           <Splash key={i} model={h.model} cwd={h.cwd} version={h.version} subagent={h.subagent} />
@@ -2926,6 +3096,7 @@ export function App() {
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
             pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
+            pendingCommand={holdActive ? dialogHold.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
             // Everything the live frame draws besides the stream and the baseline chrome — the
@@ -2933,6 +3104,9 @@ export function App() {
             // height, where Ink repaints with a scrollback clear on every chunk (#470).
             chromeRows={dialogReservedRows + suggestionRows(suggestionState)}
           />
+          {/* An answered approval's held rows (see dialogHold): the slack sits under the live
+              stream, so the spinner, checklist and input stay put while output fills it. */}
+          {heldRows !== undefined ? <Box ref={holdSpacerRef} flexGrow={1} /> : null}
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
             <PlanProgress steps={planSteps} />
           ) : null}
@@ -2942,29 +3116,35 @@ export function App() {
           {status === 'busy' && pending === null && question === null ? (
             <Working
               // Definite harness actions (typecheck, loop recovery) take priority over the soft spin
-              // hint — they're things the harness is actively doing, not a maybe.
+              // hint — they're things the harness is actively doing, not a maybe. Prefill outranks
+              // recovery (#916): the scrollback already records the recovery, and the wait is longer.
               label={
                 typechecking
                   ? 'Typechecking'
-                  : recovering
-                    ? 'Recovering from a loop'
-                    : reasoningSpin
-                      ? 'Thinking — may be looping (ctrl-c to abort)'
-                      : noteLive
-                        ? 'Writing compaction note'
-                        : subagentLive
-                          ? 'Subagent working'
-                          : undefined
+                  : (prefilling ??
+                    (recovering
+                      ? 'Recovering from a loop'
+                      : reasoningSpin
+                        ? 'Thinking — may be looping (ctrl-c to abort)'
+                        : noteLive
+                          ? 'Writing compaction note'
+                          : subagentLive
+                            ? 'Subagent working'
+                            : undefined))
               }
               words={config?.workingWords ? WORKING_WORDS : undefined}
               accent={
-                typechecking || recovering || noteLive
+                typechecking
                   ? theme.info
-                  : reasoningSpin
-                    ? theme.warning
-                    : subagentLive
-                      ? theme.subagent
-                      : undefined
+                  : prefilling
+                    ? theme.prefill
+                    : recovering || noteLive
+                      ? theme.info
+                      : reasoningSpin
+                        ? theme.warning
+                        : subagentLive
+                          ? theme.subagent
+                          : undefined
               }
             />
           ) : (pasting ?? expanding ?? resuming) ? (

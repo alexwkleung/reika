@@ -94,6 +94,8 @@ vi.mock('../agent/loop.js', () => ({
 
 const { App } = await import('./App.js');
 const { listSessions, projectHistoryDir, writeSession } = await import('../store/sessions.js');
+const { serializeJsonl } = await import('../store/transcript.js');
+const { writeFileSync } = await import('node:fs');
 
 const tick = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 
@@ -457,6 +459,56 @@ describe('session auto-save and /resume', () => {
       () => plain(app.lastFrame()).includes('No saved chats for this project.'),
       'the no-chats notice',
     );
+    app.unmount();
+  });
+
+  it('writes the chat count into a chat-mode /save header (#882)', async () => {
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, 'what is a monad');
+    await waitFor(() => runTurn.mock.calls.length === 1, 'the turn');
+    await submit(app, '/save');
+    await waitFor(() => plain(app.lastFrame()).includes('saved '), 'the receipt');
+    const [entry] = await listSessions(ROOT);
+    expect(entry).toMatchObject({ chatTurns: 1, chat: true });
+    app.unmount();
+  });
+
+  it('lists chat-mode /save files in chat mode when the project has no chats (#882)', async () => {
+    await saveFixture(
+      'a.jsonl',
+      { agent: [{ role: 'user', content: 'fix the parser' }], chat: [] },
+      '2026-09-01T00:00:00.000Z',
+    );
+    const header = (savedAt: string, mode: 'agent' | 'chat', chatTurns?: number) => ({
+      version: 1,
+      savedAt,
+      model: 'test-model',
+      baseURL: CONFIG.baseURL,
+      cwd: BUNDLE.cwd,
+      messageCount: 1,
+      mode,
+      ...(chatTurns ? { chatTurns } : {}),
+    });
+    const save = (name: string, content: string, h: ReturnType<typeof header>) =>
+      writeFileSync(join(ROOT, name), serializeJsonl([{ role: 'user', content }], h));
+    save('counted.jsonl', 'what is a monad', header('2026-09-03T00:00:00.000Z', 'chat', 1));
+    // Saved in chat mode before /save wrote the count.
+    save('legacy.jsonl', 'what is a functor', header('2026-09-02T00:00:00.000Z', 'chat'));
+    save('agent.jsonl', 'an old manual save', header('2026-09-04T00:00:00.000Z', 'agent'));
+
+    const app = await mountApp();
+    await submit(app, '/chat');
+    await submit(app, '/resume');
+    await waitFor(
+      () => plain(app.lastFrame()).includes('no chats for this project — saved with /save · 2'),
+      'the root chats',
+    );
+    const frame = plain(app.lastFrame());
+    expect(frame).toMatch(/what is a monad\s+1 msgs · chat/);
+    expect(frame).toMatch(/what is a functor\s+1 msgs · chat/);
+    expect(frame).not.toContain('an old manual save');
+    expect(frame).not.toContain('fix the parser');
     app.unmount();
   });
 

@@ -1,14 +1,22 @@
 import { jsonrepair } from 'jsonrepair';
-import type { Config, Message, SampledToken, Tool, ToolCall, Usage } from '../types.js';
+import type {
+  Config,
+  Message,
+  PromptProgress,
+  SampledToken,
+  Tool,
+  ToolCall,
+  Usage,
+} from '../types.js';
 import type { NativeImage } from '../agent/attachments.js';
 import { debugLog } from '../debug.js';
 import type { AgedStats, CapStats } from './toolcall.js';
 import { cacheControlFor, promptCacheKeyFor } from './cachehints.js';
-import { chatTemplateKwargsFor } from './templatekwargs.js';
+import { chatTemplateKwargsFor, isLocalEngine } from './templatekwargs.js';
 import { latchesFor, resetEndpointLatches } from './latches.js';
 import { messagesToChatParams, shapeRejection, toolsToChatTools } from './toolcall.js';
 import { streamChatCompletion } from './transport.js';
-import type { ChatCompletionRequest, ChatMessageParam } from './transport.js';
+import type { ChatCompletionChunk, ChatCompletionRequest, ChatMessageParam } from './transport.js';
 
 // The engine's own decode stats (#536), normalized to the three facts a rate needs here:
 // `predictedN` tokens generated, over the `predictedMs` window the server decoded them in, at
@@ -60,6 +68,16 @@ export async function callModel(opts: {
   config: Config;
   onContentDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
+  // Every generated string as it arrives, tool-call text included: what the live status counts
+  // (#925). Raw, where onContentDelta may be filtered for display.
+  onOutputDelta?: (text: string) => void;
+  // The engine's own running totals while it decodes (#925). Requested only when set and only from
+  // a local engine, so warm and probe calls stay byte-identical. An engine that sends none simply
+  // never fires this.
+  onEngineTimings?: (timings: EngineTimings, prompt: EnginePrompt | undefined) => void;
+  // Prefill progress from a local engine (#912), then `undefined` once the wait is over. Requested
+  // only when set, so warm and probe calls stay byte-identical.
+  onPromptProgress?: (progress: PromptProgress | undefined) => void;
   signal?: AbortSignal;
   // Learned char→token calibration, used to size the fit-to-window payload cap.
   calibration?: number;
@@ -149,6 +167,13 @@ export async function callModel(opts: {
   const timing = (): ModelResponse['timing'] =>
     ttftMs == null ? undefined : { ttftMs, totalMs: Date.now() - startedAt };
 
+  let promptProgressLive = false;
+  const endPromptProgress = (): void => {
+    if (!promptProgressLive) return;
+    promptProgressLive = false;
+    opts.onPromptProgress?.(undefined);
+  };
+
   const wantLogprobs = !!opts.logprobs && opts.logprobs > 0 && !latches.logprobs;
   const wantToolChoice = !!opts.toolChoice && opts.tools.length > 0 && !latches.toolChoice;
   // A latched-off tool_choice means the tools go too: the caller asked for a round with no calls,
@@ -161,6 +186,10 @@ export async function callModel(opts: {
   const templateKwargs = latches.chatTemplateKwargs
     ? undefined
     : chatTemplateKwargsFor(opts.config.baseURL);
+  const wantPromptProgress =
+    !!opts.onPromptProgress && isLocalEngine(opts.config.baseURL) && !latches.promptProgress;
+  const wantEngineTimings =
+    !!opts.onEngineTimings && isLocalEngine(opts.config.baseURL) && !latches.timingsPerToken;
   const body: ChatCompletionRequest = {
     model: opts.config.model,
     messages,
@@ -168,6 +197,8 @@ export async function callModel(opts: {
     ...(wantToolChoice ? { tool_choice: opts.toolChoice } : {}),
     stream: true,
     stream_options: { include_usage: true },
+    ...(wantPromptProgress ? { return_progress: true } : {}),
+    ...(wantEngineTimings ? { timings_per_token: true } : {}),
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
     ...(opts.logitBias && Object.keys(opts.logitBias).length > 0
       ? { logit_bias: opts.logitBias }
@@ -193,7 +224,15 @@ export async function callModel(opts: {
     });
 
     for await (const chunk of stream) {
-      received = true;
+      // Not `received`: progress is no generated output, so a stream that dies during prefill
+      // stays retryable by the degrade ladder below.
+      const promptProgress = readPromptProgress(chunk);
+      if (promptProgress) {
+        promptProgressLive = true;
+        opts.onPromptProgress?.(promptProgress);
+      } else {
+        received = true;
+      }
       if (chunk.usage) {
         // Cache-hit accounting is reported under different field names per provider:
         // OpenAI nests it in `prompt_tokens_details.cached_tokens`; DeepSeek exposes
@@ -234,6 +273,10 @@ export async function callModel(opts: {
         };
         if (Object.keys(prompt).length > 0) enginePrompt = prompt;
       }
+      // Zero predicted is still prefill, where the prompt fields are partial.
+      if (et && engineTimings && engineTimings.predictedN > 0) {
+        opts.onEngineTimings?.(engineTimings, enginePrompt);
+      }
       // Logprobs ride the choice, not the delta, and a chunk can carry them with no delta at all
       // — so collect before the delta guard. Normalized to SampledToken here (the wire's null
       // top_logprobs becomes an absent `top`) so nothing downstream handles wire shapes.
@@ -254,11 +297,14 @@ export async function callModel(opts: {
       if (
         ttftMs == null &&
         (delta.content || delta.reasoning_content || delta.reasoning || delta.tool_calls)
-      )
+      ) {
         ttftMs = Date.now() - startedAt;
+        endPromptProgress();
+      }
       if (delta.content) {
         contentParts.push(delta.content);
         opts.onContentDelta?.(delta.content);
+        opts.onOutputDelta?.(delta.content);
       }
       // Field name differs by provider: DeepSeek/Kimi use `reasoning_content`,
       // OpenRouter normalizes to `reasoning`. Accept either.
@@ -266,6 +312,7 @@ export async function callModel(opts: {
       if (reasoningChunk) {
         reasoningParts.push(reasoningChunk);
         opts.onReasoningDelta?.(reasoningChunk);
+        opts.onOutputDelta?.(reasoningChunk);
       }
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -276,8 +323,14 @@ export async function callModel(opts: {
             callsByIndex.set(idx, acc);
           }
           if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          if (tc.function?.name) {
+            acc.name = tc.function.name;
+            opts.onOutputDelta?.(tc.function.name);
+          }
+          if (tc.function?.arguments) {
+            acc.args += tc.function.arguments;
+            opts.onOutputDelta?.(tc.function.arguments);
+          }
         }
       }
     }
@@ -350,6 +403,24 @@ export async function callModel(opts: {
           req = plain;
           continue;
         }
+        if (req.return_progress !== undefined && reason.includes('return_progress')) {
+          latches.promptProgress = true;
+          debugLog(
+            `[reika:debug] return_progress unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { return_progress: _returnProgress, ...plain } = req;
+          req = plain;
+          continue;
+        }
+        if (req.timings_per_token !== undefined && reason.includes('timings_per_token')) {
+          latches.timingsPerToken = true;
+          debugLog(
+            `[reika:debug] timings_per_token unsupported by backend — retrying without (${reason})\n`,
+          );
+          const { timings_per_token: _timingsPerToken, ...plain } = req;
+          req = plain;
+          continue;
+        }
         // Name-keyed like the cache hints: logprobs below latches on any pre-chunk failure, and a
         // server still loading at startup would otherwise cost the session its reasoning.
         if (req.chat_template_kwargs !== undefined && reason.includes('chat_template_kwargs')) {
@@ -401,6 +472,8 @@ export async function callModel(opts: {
       };
     }
     throw e;
+  } finally {
+    endPromptProgress();
   }
 
   const nativeToolCalls: ToolCall[] = [];
@@ -429,6 +502,20 @@ export async function callModel(opts: {
     ...(enginePrompt ? { enginePrompt } : {}),
     ...(sampled.length > 0 ? { sampled } : {}),
   };
+}
+
+// All four or none: a partial object is nothing a percent or an estimate can be built from.
+function readPromptProgress(chunk: ChatCompletionChunk): PromptProgress | undefined {
+  const p = chunk.prompt_progress;
+  if (
+    typeof p?.total !== 'number' ||
+    typeof p.cache !== 'number' ||
+    typeof p.processed !== 'number' ||
+    typeof p.time_ms !== 'number'
+  ) {
+    return undefined;
+  }
+  return { total: p.total, cached: p.cache, processed: p.processed, elapsedMs: p.time_ms };
 }
 
 // Resolve the final (content, reasoning, toolCalls) from a streamed response. Pure and exported so

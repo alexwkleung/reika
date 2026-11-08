@@ -132,9 +132,9 @@ describe('withdrawal holds until progress (#808)', () => {
   });
 
   it('lifts on the round after a command changes the tree', async () => {
-    const offered = await readOffered([...loop, 'npm test', 'apply', 'npm test']);
+    const offered = await readOffered([...loop, 'apply', 'npm test']);
     const first = offered.indexOf(false);
-    const applyCall = loop.length + 1;
+    const applyCall = loop.length;
     // The lift must come before the cap would end the hold, or it proves nothing about `apply`.
     expect(applyCall + 1).toBeLessThan(first + WITHDRAW_HOLD_ROUNDS);
     expect(offered.slice(first, applyCall + 1).every(o => !o)).toBe(true);

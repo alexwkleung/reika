@@ -72,6 +72,11 @@ vi.mock('../provider/client.js', () => ({
 }));
 
 const { runTurn } = await import('./loop.js');
+
+const retryNotices = (messages: Message[]): string[] =>
+  messages.flatMap(m =>
+    m.role === 'system' && m.content.endsWith('asking again.') ? [m.content] : [],
+  );
 const { callModel } = await import('../provider/client.js');
 
 function makeBundle(): ContextBundle {
@@ -98,7 +103,7 @@ function makeConfig(): Config {
     autoApprove: 'bypass',
     subagentMaxTurns: 5,
     profiles: {},
-    contextWindow: 8192,
+    contextWindow: 14000,
     minGenTokens: 1024,
     reasoningRounds: 1,
     maxSearchesPerTurn: 0,
@@ -195,6 +200,7 @@ describe('compaction report round (#280)', () => {
       onMessage: m => messages.push(m),
     });
     expect(h.captured).toHaveLength(2);
+    expect(retryNotices(messages)).toEqual([]);
     // Report call: the round's tools kept with calls forbidden (#426 — withholding them re-rendered
     // the system turn and re-prefilled the whole request), numbered directive, the UNFOLDED history
     // (the note is written from the material that is about to be dropped).
@@ -251,6 +257,7 @@ describe('compaction report round (#280)', () => {
       { content: 'RETRY NOTE: established a; open b', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
+    const messages: Message[] = [];
     const history = bigHistory();
     await runTurn({
       userInput: 'keep going',
@@ -259,9 +266,13 @@ describe('compaction report round (#280)', () => {
       config: makeConfig(),
       tools: [noopTool],
       payloads: new PayloadStore(),
-      onMessage: () => {},
+      onMessage: m => messages.push(m),
     });
     expect(h.captured).toHaveLength(3);
+    // The frozen first attempt is labelled as set aside, and says why.
+    expect(retryNotices(messages)).toEqual([
+      'The model made a tool call instead of writing the note — asking again.',
+    ]);
     expect(directiveOf(h.captured[0])).toContain(buildCompactionReportDirective(1));
     expect(directiveOf(h.captured[0])).not.toContain('your reply carried no note');
     expect(h.captured[1].toolChoice).toBe('none');
@@ -339,6 +350,7 @@ describe('compaction report round (#280)', () => {
       { content: '', reasoning: 'second try', toolCalls: undefined },
       { content: 'final', toolCalls: undefined },
     );
+    const messages: Message[] = [];
     let history = bigHistory();
     await runTurn({
       userInput: 'keep going',
@@ -347,8 +359,9 @@ describe('compaction report round (#280)', () => {
       config: makeConfig(),
       tools: [noopTool],
       payloads: new PayloadStore(),
-      onMessage: () => {},
+      onMessage: m => messages.push(m),
     });
+    expect(retryNotices(messages)).toEqual(['That reply carried no note — asking again.']);
     let recap = history.find(m => m.role === 'compaction') as Message & { role: 'compaction' };
     expect(recap.content).toContain('reasoned note');
     // A reply that made no call has nothing to refuse: the retry re-sends the same history.
@@ -381,6 +394,27 @@ describe('compaction report round (#280)', () => {
   // everything; a note written there has no recap to live in. Here: one huge pinned user message —
   // the estimate is over the threshold, but the fold cannot remove the pinned message, so nothing
   // would fold and no report round must be spent.
+  it('skips the note when the unfolded request cannot fit the window, and still folds', async () => {
+    process.env.REIKA_COMPACTION_REPORT = '1';
+    h.scripted.push({ content: 'final', toolCalls: undefined });
+    const history = bigHistory();
+    const before = history.length;
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: { ...makeConfig(), contextWindow: 8192 },
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+    });
+    expect(h.captured).toHaveLength(1);
+    expect(directiveOf(h.captured[0])).not.toContain('compaction note');
+    expect(h.captured[0].toolChoice).toBeUndefined();
+    expect(history.length).toBeLessThan(before);
+    expect(history.some(m => m.role === 'compaction')).toBe(true);
+  });
+
   it('does not spend a report round when the fold would remove nothing', async () => {
     process.env.REIKA_COMPACTION_REPORT = '1';
     h.scripted.push({ content: 'final', toolCalls: undefined });

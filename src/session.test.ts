@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Config, ContextBundle, Message, RawConfig, ResolvedConfig, Tool } from './types.js';
+import type {
+  Config,
+  ContextBundle,
+  Message,
+  RawConfig,
+  ResolvedConfig,
+  Tool,
+  Usage,
+} from './types.js';
 import type { ModelLimitsProbe } from './provider/modellimits.js';
 
 const CONFIG: Config = {
@@ -77,7 +85,7 @@ type TurnOpts = {
   onPrefillRate?: (r: number) => void;
   onDecodeRate?: (r: number | undefined) => void;
   onShrink?: (e: unknown, c: { sheds: number; folds: number }) => void;
-  onUsage?: (u: { promptTokens: number; completionTokens: number }) => void;
+  onUsage?: (u: Usage) => void;
 };
 
 const calls: TurnOpts[] = [];
@@ -85,6 +93,8 @@ const calls: TurnOpts[] = [];
 let planWrites = true;
 // Set to make the next turn throw, as a failed chat call does.
 let throwNext: Error | null = null;
+// Set to make the next turn's last round a cut one (#906).
+let cutRound: Usage | null = null;
 
 // Mirrors the real loop's contract: it pushes each committed message onto `opts.history` AND emits
 // it, and reports the learned numbers through the callbacks.
@@ -122,6 +132,8 @@ const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onDecodeRate?.(10 * n);
   opts.onShrink?.({}, { sheds: n, folds: 0 });
   opts.onUsage?.({ promptTokens: 100, completionTokens: 10 });
+  if (cutRound) opts.onUsage?.(cutRound);
+  cutRound = null;
 });
 vi.mock('./agent/loop.js', async importActual => ({
   ...(await importActual<object>()),
@@ -160,6 +172,15 @@ describe('createSession', () => {
     expect(s.shrink).toEqual({ sheds: 2, folds: 0 });
     expect(s.totals).toEqual({ promptTokens: 200, completionTokens: 20 });
     expect(s.history.map(text)).toEqual(['first', 'done', 'second', 'done']);
+  });
+
+  it('adds a cut round to the totals, marked, and leaves the last real call alone', async () => {
+    const s = await createSession({ cwd: '/repo', config: CONFIG });
+    cutRound = { promptTokens: 900, completionTokens: 300, estimated: true };
+    await s.submit('first', { mode: 'agent' });
+    expect(s.lastUsage).toEqual({ promptTokens: 100, completionTokens: 10 });
+    await s.submit('second', { mode: 'agent' });
+    expect(s.totals).toEqual({ promptTokens: 1100, completionTokens: 320, estimated: true });
   });
 
   it('forwards the wrapped callbacks to the consumer after recording them', async () => {

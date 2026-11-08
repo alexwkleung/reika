@@ -530,8 +530,25 @@ export function isProvablyReadOnly(command: string): boolean {
 // these are what a model pages remote output through (`gh pr diff | sed -n '1,300p'`).
 export const INSPECTION_COMMANDS = new Set([...READ_ONLY_COMMANDS, ...INSPECTION_ALSO]);
 
+// Commands that read nothing. Refused during a withdrawal, a model's `echo hi` confirmed its reading
+// that the shell had broken. Exempt only as the WHOLE command, never by leaving INSPECTION_COMMANDS:
+// `echo ---; cat a.ts` is how a model separates reads, and the sandbox's network allow reads that set.
+const INSPECTION_PROBES = new Set(['echo', 'pwd']);
+// An unquoted glob makes `echo *` a directory listing.
+const UNQUOTED_GLOB_RE = /[*?[]/;
+
+function isBareProbe(command: string): boolean {
+  const trimmed = command.trim();
+  const { raw, masked } = blankHarmlessRedirects(trimmed, maskQuoted(trimmed));
+  if (UNQUOTED_GLOB_RE.test(masked)) return false;
+  const segments = splitSegments(raw, masked)
+    .map(s => s.trim())
+    .filter(s => s && !/^cd\s/.test(s));
+  return segments.length > 0 && segments.every(s => INSPECTION_PROBES.has(words(s)[0]));
+}
+
 // The LADDER's question: is this the model inspecting rather than working? A superset of the above —
 // same write/substitution/separator rules, wider set of command names.
 export function isInspectionEscape(command: string): boolean {
-  return classify(command, INSPECTION_COMMANDS);
+  return classify(command, INSPECTION_COMMANDS) && !isBareProbe(command);
 }

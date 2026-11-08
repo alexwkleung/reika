@@ -111,6 +111,16 @@ describe('buildSummary', () => {
     expect(out).toContain('6,789');
   });
 
+  it('marks the token counts when a cut round is in them', () => {
+    const out = buildSummary(
+      [],
+      { promptTokens: 12345, completionTokens: 6789, estimated: true },
+      startedAt,
+      baseApprovals,
+    );
+    expect(out).toContain('~12,345 ↑  ~6,789 ↓');
+  });
+
   it('shows approval counts', () => {
     const out = buildSummary([], baseUsage, startedAt, { approved: 3, declined: 1 });
     expect(out).toContain('3 approved, 1 declined');
