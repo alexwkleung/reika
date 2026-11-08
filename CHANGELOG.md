@@ -24,6 +24,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Sandboxed `git` commands no longer keep network access when the classifier cannot read the options
+  git will get: an unlisted subcommand, arguments from `xargs`, a shell variable, glob or brace
+  expansion, or a `--` used as an option's value. Commands that fetch, pull, clone or push keep it
+  (#910, #939).
 - When the model answers a compaction note request with a tool call or nothing at all, a line now
   says it is being asked again, so the set-aside attempt no longer reads as a broken note (#937).
 - While a reply or compaction note streams, a line followed by a bullet no longer flashes as a bold
