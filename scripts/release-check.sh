@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke-test the package a user would install: pack, install it with npm into a
-# throwaway prefix, run the binary, import every shipped module. `--help` exits
+# throwaway prefix, run the binary, import every shipped module, run one turn. `--help` exits
 # before most modules load, so only the import pass catches a dependency missing
 # from the package. Prints the tarball's sha256, which the Homebrew formula pins:
 # publish this exact file (`npm publish <tgz>`) and the registry serves these bytes.
@@ -84,6 +84,9 @@ if (failed.length) {
 process.exit(0);
 EOF
 ) || fail "a shipped module does not import"
+
+step "one headless turn against a mock server"
+node "$repo/scripts/release-smoke.mjs" "$bin" "$work/cwd" "$home" || fail "the installed binary did not complete a turn"
 
 step "ok"
 sha="$(shasum -a 256 "$tgz" | cut -d' ' -f1)"

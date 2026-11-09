@@ -39,7 +39,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
-      # Packs, installs into a throwaway prefix, runs the binary and imports every module.
+      # Builds the bundle, packs it, installs into a throwaway prefix, imports every module and runs
+      # one headless turn against a mock server.
       - run: pnpm run release:check
       - if: ${{ matrix.docs }}
         run: pnpm run docs:build

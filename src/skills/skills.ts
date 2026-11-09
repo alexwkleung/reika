@@ -3,7 +3,7 @@
 import { access, constants, readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { PACKAGE_ROOT } from '../version.js';
 
 export type Skill = {
   name: string;
@@ -24,9 +24,9 @@ export type Skill = {
 
 const GLOBAL_DEFAULT = join(homedir(), '.config', 'reika', 'skills');
 const PROJECT_RELATIVE = '.reika/skills';
-// The skills that ship in the package (`issue`, `review`), beside `dist/` — two levels up from this
-// module whether it runs as src/skills/skills.ts or dist/skills/skills.js.
-export const BUNDLED_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills');
+// The skills that ship in the package (`issue`, `review`), beside `dist/`. Off the package root and
+// not this module's own path: bundled, the module is no longer two levels down.
+export const BUNDLED_DIR = join(PACKAGE_ROOT, 'skills');
 
 // Other harnesses' skill dirs (#861), so a skill folder works where it already is. Global is the
 // agent-agnostic `~/.agents/skills` only — never `~/.claude/skills`, another app's config dir; a
