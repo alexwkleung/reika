@@ -3,7 +3,7 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
-## [Unreleased]
+## [0.10.0] - 2026-11-08
 
 ### Added
 
