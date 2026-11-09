@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ReadTrace } from './readtrace.js';
+import type { Message } from '../types.js';
+import { priorCopyState, ReadTrace } from './readtrace.js';
 
 const H1 = 'hash-aaa';
 const H2 = 'hash-bbb';
@@ -268,5 +269,38 @@ describe('ReadTrace re-grounding after a shell read (#812)', () => {
     t.record('a.ts', 1, 'h1', 0, undefined, 'bash');
     t.record('a.ts', 1, 'h1', 3, undefined, 'bash');
     expect(t.record('a.ts', 1, 'h1', 4)).toEqual({ cls: 'regrounded', repeats: 2 });
+  });
+});
+
+describe('priorCopyState (prevAged= on a re-read)', () => {
+  const tool = (aged?: boolean): Message => ({
+    role: 'tool',
+    callId: 't1',
+    summary: 'Read a.ts',
+    payload: 'x',
+    ...(aged ? { aged } : {}),
+  });
+
+  it('is yes when a shed collapsed the previous copy', () => {
+    const m = tool(true);
+    expect(priorCopyState(m, [m], true)).toBe('yes');
+  });
+
+  it('is yes when a fold spliced the previous copy out of history', () => {
+    expect(priorCopyState(tool(), [], true)).toBe('yes');
+  });
+
+  it('is no when the previous copy is still live', () => {
+    const m = tool();
+    expect(priorCopyState(m, [m], true)).toBe('no');
+  });
+
+  it('is unknown without prefix-stable, where nothing carries the mark', () => {
+    const m = tool();
+    expect(priorCopyState(m, [m], false)).toBe('?');
+  });
+
+  it('is unknown with no previous copy on record', () => {
+    expect(priorCopyState(undefined, [], true)).toBe('?');
   });
 });

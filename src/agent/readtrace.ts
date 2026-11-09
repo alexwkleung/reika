@@ -1,3 +1,5 @@
+import type { Message } from '../types.js';
+
 // Instrumentation + loop detection for the question "how often, and why, does a model re-read
 // content it already has?" It classifies each read against the model's prior reads this turn so a
 // run yields a distribution — unique vs redundant, and for redundant, whether the prior copy was
@@ -268,4 +270,18 @@ export class ReadTrace {
       `regrounded=${c.regrounded}`
     );
   }
+}
+
+// Whether the previous copy of a re-read region was actually gone when the model asked again: aged
+// to a summary by a shed, or spliced out by a fold. `dup-aged` only says the copy is two or more
+// rounds old, which under prefix-stable usually means it is still live. Without prefix-stable no
+// message carries the mark, so the answer is unknown rather than `no`. Debug-only; nothing reads it.
+export function priorCopyState(
+  prior: Message | undefined,
+  history: readonly Message[],
+  prefixStable: boolean,
+): 'yes' | 'no' | '?' {
+  if (!prior || !prefixStable) return '?';
+  if (prior.role === 'tool' && prior.aged) return 'yes';
+  return history.includes(prior) ? 'no' : 'yes';
 }
