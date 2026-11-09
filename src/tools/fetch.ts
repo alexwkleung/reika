@@ -109,7 +109,16 @@ export const UNTRUSTED_PAGE_HEADER =
 // anyway.
 let extractor: Promise<[typeof DefuddleModule, typeof LinkedomModule]> | undefined;
 function loadExtractor() {
-  return (extractor ??= Promise.all([import('defuddle/node'), import('linkedom')]));
+  return (extractor ??= Promise.all([
+    import('defuddle/node').then(namedExports),
+    import('linkedom'),
+  ]));
+}
+
+// defuddle/node is CommonJS. Node's loader lifts its named exports onto the namespace; the bundler
+// (scripts/build.mjs) hands a lazily imported CommonJS module over as `default` alone.
+function namedExports(mod: typeof DefuddleModule): typeof DefuddleModule {
+  return 'Defuddle' in mod ? mod : (mod as { default: typeof DefuddleModule }).default;
 }
 
 // linkedom, not JSDOM: defuddle depends on it already, and the two extract byte-identical markdown

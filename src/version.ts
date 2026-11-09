@@ -2,9 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Read version from package.json at module load. Works in both src/ (tsx) and dist/.
+// One level up from this module, in src/ (tsx) and in dist/, where the bundle is flat.
+export const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const packageRoot = PACKAGE_ROOT;
+
+// Read version from package.json at module load.
 let version = '0.0.0';
-const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 try {
   const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
     version?: string;
