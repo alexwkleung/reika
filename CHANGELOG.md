@@ -9,7 +9,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - The package now ships as a bundle with its dependencies built in, so an install downloads about
   6 MB instead of about 61 MB and the TUI starts faster. Their license texts are in
-  `dist/THIRD_PARTY_LICENSES.txt`.
+  `dist/THIRD_PARTY_LICENSES.txt` (#942).
 
 ## [0.10.0] - 2026-11-08
 
