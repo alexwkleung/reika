@@ -46,7 +46,7 @@ import {
   taskSpecIndex,
   toolsToChatTools,
 } from '../provider/toolcall.js';
-import { ReadTrace, type LoopingRead } from './readtrace.js';
+import { priorCopyState, ReadTrace, type LoopingRead } from './readtrace.js';
 import { traceBashRead, traceReadPath } from './bashread.js';
 import { PrefixTrace } from './prefixtrace.js';
 import {
@@ -1697,6 +1697,13 @@ export async function runTurn(opts: {
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
   // Model-invisible — only the debug log reads it. See agent/readtrace.ts.
   const readTrace = new ReadTrace();
+  // The tool message that last carried each traced region, so a re-read's log line can say whether
+  // that copy had actually been shed or folded away (`prevAged=`). Keyed like ReadTrace's regions.
+  const lastReadMessage = new Map<string, Message>();
+  const prevAgedField = (cls: string, key: string): string =>
+    cls === 'dup-live' || cls === 'dup-aged'
+      ? ` prevAged=${priorCopyState(lastReadMessage.get(key), opts.history, prefixStable)}`
+      : '';
   // Read-first gate state (#72): per-turn path grounding — reads and successful edits/writes ground
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
   // Recorded unconditionally (cheap); only READ_FIRST (default on) lets it withhold anything.
@@ -3774,6 +3781,7 @@ export async function runTurn(opts: {
       // exists, since handed-back grounding keys on its history index. See readfirst.ts.
       let groundsPath: string | undefined;
       let groundsAuthored = false;
+      let traceKey: string | undefined;
       // Check-off receipt for a plan step this call completed; emitted after the tool chip below.
       let planCheckoff: string | undefined;
       // Capture the pre-edit baseline once, immediately before the turn's first mutating tool
@@ -3968,9 +3976,12 @@ export async function runTurn(opts: {
         // offset-past-end read). Grounding is applied after the tool message is pushed, since it
         // keys on that message's index — the bytes ground edits only while they are still being sent.
         groundsPath = String(call.args.path ?? '');
+        const tracePath = traceReadPath(opts.bundle.cwd, String(call.args.path ?? ''));
+        const traceOffset = Number(call.args.offset ?? 1);
+        traceKey = `${tracePath}\0${traceOffset}`;
         const { cls, repeats } = readTrace.record(
-          traceReadPath(opts.bundle.cwd, String(call.args.path ?? '')),
-          Number(call.args.offset ?? 1),
+          tracePath,
+          traceOffset,
           contentHash,
           i,
           // Resolved exactly as the tool resolves it, so a default-window read followed by an
@@ -3978,13 +3989,15 @@ export async function runTurn(opts: {
           Math.max(1, Number(call.args.limit ?? READ_DEFAULT_LIMIT)),
         );
         debugLog(
-          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} ${summary}\n`,
+          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats}` +
+            `${prevAgedField(cls, traceKey)} ${summary}\n`,
         );
       } else if (shellRead) {
         // A one-file read through the shell deepens the same per-file count as `read` (#801), and
         // grounds the read-first gate like one (#825): its payload carries the file's bytes, and
         // ignoring it bounced 12 of 14 edits on lfm2.5 T2 runs, 10 of 11 that would have landed.
         groundsPath = shellRead.path;
+        traceKey = `${shellRead.path}\0${shellRead.offset}`;
         const { cls, repeats } = readTrace.record(
           shellRead.path,
           shellRead.offset,
@@ -3994,7 +4007,8 @@ export async function runTurn(opts: {
           'bash',
         );
         debugLog(
-          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats} via=bash ${shellRead.path}\n`,
+          `[reika:debug] read-trace round=${i} class=${cls} repeats=${repeats}` +
+            `${prevAgedField(cls, traceKey)} via=bash ${shellRead.path}\n`,
         );
       } else if (debugEnabled() && !refused && call.name !== 'read') {
         // Non-read tool calls have no read-trace line, so a reasoning loop circling on grep/glob/list
@@ -4143,6 +4157,7 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
+      if (traceKey) lastReadMessage.set(traceKey, toolMsg);
       // Read-first (#72): ground the path against the message just pushed, so the gate can later ask
       // whether those exact bytes are still in the request rather than whether they ever were.
       if (groundsPath) {
