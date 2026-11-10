@@ -100,6 +100,8 @@ vi.mock('../agent/loop.js', () => ({ runTurn: (...a: unknown[]) => runTurn(...(a
 
 // Ink stops erasing the live frame when CI is set (is-in-ci, read once at import), so every rise
 // would read 0. Cleared before Ink loads, as App.dialogframe.test.tsx does.
+// The hold's ease is what the bottom floor replaces, so these run on the baseline arm.
+process.env.REIKA_INPUT_FLOOR = '0';
 const ciEnv = process.env.CI;
 process.env.CI = 'false';
 const { render: inkRender } = await import('ink');

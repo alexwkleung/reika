@@ -6,7 +6,17 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { Box, Static, Text, measureElement, useApp, useInput, type DOMElement } from 'ink';
+import {
+  Box,
+  Static,
+  Text,
+  measureElement,
+  useApp,
+  useInput,
+  useStdout,
+  type DOMElement,
+} from 'ink';
+import { inputFloorEnabled, installBottomFloor } from './bottomfloor.js';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
@@ -271,6 +281,19 @@ export function App() {
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
   const holdSpacerRef = useRef<DOMElement>(null);
+  // The bottom floor (bottomfloor.ts) keeps the frame's last row on the terminal's. Released on
+  // exit, so the final frame does not leave its slack in the shell's scrollback.
+  const { stdout: inkStdout } = useStdout();
+  const inputFloor = inputFloorEnabled(inkStdout);
+  const floorReleasedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!inputFloor) return;
+    return installBottomFloor(
+      () => heldFrameRef.current,
+      inkStdout,
+      () => floorReleasedRef.current,
+    );
+  }, [inputFloor, inkStdout]);
   const lastLiveOutputAtRef = useRef(0);
   // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
   const [subagentLive, setSubagentLive] = useState<boolean>(false);
@@ -362,6 +385,7 @@ export function App() {
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
+  floorReleasedRef.current = exitRequested;
   const [exitArmed, setExitArmed] = useState(false);
   // null = untouched, so the effective mode falls through to the config default (safe when
   // REIKA_AUTO_APPROVE is unset) — see effectiveAutoApprove.
@@ -3106,7 +3130,7 @@ export function App() {
           />
           {/* An answered approval's held rows (see dialogHold): the slack sits under the live
               stream, so the spinner, checklist and input stay put while output fills it. */}
-          {heldRows !== undefined ? <Box ref={holdSpacerRef} flexGrow={1} /> : null}
+          {heldRows !== undefined || inputFloor ? <Box ref={holdSpacerRef} flexGrow={1} /> : null}
           {planSteps && (mode === 'agent' || mode === 'vibe') ? (
             <PlanProgress steps={planSteps} />
           ) : null}
