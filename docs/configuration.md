@@ -373,10 +373,11 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 ## Terminal
 
-| Key                  | Default | What                                                                                                                                                                             |
-| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_SYNC_OUTPUT`  | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                            |
-| `REIKA_BASIC_GLYPHS` | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille). |
+| Key                  | Default | What                                                                                                                                                                                                           |
+| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REIKA_SYNC_OUTPUT`  | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                                                          |
+| `REIKA_INPUT_FLOOR`  | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
+| `REIKA_BASIC_GLYPHS` | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame as erase-then-redraw, three separate writes when a
   message commits to scrollback, and a process swapped out under memory pressure (a large local
