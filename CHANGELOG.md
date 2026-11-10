@@ -10,6 +10,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The package now ships as a bundle with its dependencies built in, so an install downloads about
   6 MB instead of about 61 MB and the TUI starts faster. Their license texts are in
   `dist/THIRD_PARTY_LICENSES.txt` (#942).
+- The input box and status bar now stay on the terminal's bottom rows instead of moving with the
+  length of what is streaming above them. A new session opens with the input at the bottom and
+  blank space above it until output fills in. `REIKA_INPUT_FLOOR=0` restores the old layout (#943).
 
 ## [0.10.0] - 2026-11-08
 
