@@ -1,6 +1,5 @@
-import { Fragment } from 'react';
+import { Fragment, useRef } from 'react';
 import { Box, Text } from 'ink';
-import stringWidth from 'string-width';
 import { supportsHyperlink } from 'supports-hyperlinks';
 import type { Usage } from '../types.js';
 import type { PrRef } from './pr.js';
@@ -13,6 +12,16 @@ import {
   kFormat,
 } from './format.js';
 import { useContentWidth } from './layout.js';
+import {
+  type Chip,
+  SEP,
+  type Segment,
+  packChips,
+  packStatus,
+  type StatusPack,
+} from './statuspack.js';
+
+export type { Chip } from './statuspack.js';
 
 export type StatusProps = {
   model: string;
@@ -44,20 +53,32 @@ export type StatusProps = {
   unattended?: boolean;
   modeTag?: string;
   exitArmed?: boolean;
+  // The packing to draw, from `useStatusLayout`. App measures the same packing to budget the live
+  // region, and the two have to agree exactly — a bar that drew its own lines while the frame was
+  // budgeted for another's would either overflow by a row or waste one. Absent when a bar is
+  // rendered on its own (a test), which then packs fresh at the live width with nothing to hold
+  // (#948).
+  layout?: Chip[][];
 };
 
-// Rows the status bar takes at `width` — App budgets the live region with it, since a narrow
-// pane wraps the bar onto several rows and an unbudgeted frame reaches the viewport height.
-// A chip wider than the pane gets a line of its own that Ink hard-wraps, so it counts its rows.
-export function statusRows(props: StatusProps, width: number): number {
-  return packChips(statusChips(props), width).reduce((n, line) => {
-    const w = line.reduce((sum, chip) => sum + chipWidth(chip), 0) + SEP.length * (line.length - 1);
-    return n + Math.max(1, Math.ceil(w / Math.max(1, width)));
-  }, 0);
+// The bar's packing for this frame, held where the last one put it (#948). The packing is state,
+// not a pure re-fit, because the bar's own text changes every second and a re-fit drops the row it
+// has — see `packStatus` for what is held and for how long.
+//
+// App owns it and hands the lines down, rather than `Status` keeping its own: the row count is part
+// of the live region's budget, so the frame has to be measured against the same packing it draws.
+// Kept in a ref, so the packing is recomputed as part of the render that reads it and the row count
+// can never be a frame behind the rows it describes.
+export function useStatusLayout(props: StatusProps, width: number): StatusPack {
+  const prev = useRef<StatusPack | null>(null);
+  const pack = packStatus(statusChips(props), width, prev.current);
+  prev.current = pack;
+  return pack;
 }
 
 export function Status(props: StatusProps) {
   const width = useContentWidth();
+  const lines = props.layout ?? packChips(statusChips(props), width);
   // One <Text> per packed line, chips as nested runs rather than siblings: a row Box of sibling
   // <Text>s hands each its own column when the row overflows, and every chip wraps in place into
   // a stack of two-to-four-character shards (#295). Packing here is what decides where the line
@@ -65,7 +86,7 @@ export function Status(props: StatusProps) {
   // wider than the terminal, which it hard-wraps as a last resort.
   return (
     <Box flexDirection="column">
-      {packChips(statusChips(props), width).map((line, i) => (
+      {lines.map((line, i) => (
         <Text key={i}>
           {line.map((chip, j) => (
             <Fragment key={j}>
@@ -165,44 +186,8 @@ export function statusChips({
   return chips;
 }
 
-// `underline` is the one attribute a segment carries beyond its hue — the link underline, which
-// promises a click and so is set only where the terminal can deliver one (see prChip).
-type Segment = { text: string; color: string; underline?: boolean };
-// A chip is the unit the status wraps at — never split across lines.
-export type Chip = Segment[];
-
-const SEP = ' · ';
-
 function muted(text: string): Chip {
   return [{ text, color: theme.muted }];
-}
-
-function chipWidth(chip: Chip): number {
-  return chip.reduce((n, seg) => n + stringWidth(seg.text), 0);
-}
-
-// Greedy first-fit: chips go on the current line while they fit (separator included), and the
-// first one that doesn't starts the next. Chips never split, and the separator never leads or
-// trails a line — a continuation row starts on its chip, like a wrapped list. A chip wider than
-// the whole width still gets a line of its own; the overflow is Ink's to wrap.
-export function packChips(chips: Chip[], width: number): Chip[][] {
-  const lines: Chip[][] = [];
-  let line: Chip[] = [];
-  let used = 0;
-  for (const chip of chips) {
-    const w = chipWidth(chip);
-    const need = line.length === 0 ? w : used + SEP.length + w;
-    if (line.length > 0 && need > width) {
-      lines.push(line);
-      line = [chip];
-      used = w;
-    } else {
-      line.push(chip);
-      used = need;
-    }
-  }
-  if (line.length > 0) lines.push(line);
-  return lines;
 }
 
 // Soft pastel per mode tag; falls back to muted for anything unexpected.

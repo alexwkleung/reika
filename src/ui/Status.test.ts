@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
-import { formatContext, formatCache, prChip, packChips, statusRows, type Chip } from './Status.js';
+import {
+  formatContext,
+  formatCache,
+  prChip,
+  statusChips,
+  type Chip,
+  type StatusProps,
+} from './Status.js';
+import { packChips, packStatus, type StatusPack } from './statuspack.js';
 import { theme } from './theme.js';
 import { contextFill, formatShrink, kFormat } from './format.js';
 
@@ -205,58 +213,34 @@ describe('formatCache', () => {
   });
 });
 
-describe('packChips', () => {
-  const chip = (text: string): Chip => [{ text, color: 'x' }];
-  const texts = (lines: Chip[][]) => lines.map(l => l.map(c => c.map(s => s.text).join('')));
-
-  it('packs chips first-fit, paying for the separator between them', () => {
-    // 'aaaa · bbbb' is 11 columns; a third 4-wide chip needs 18.
-    expect(texts(packChips([chip('aaaa'), chip('bbbb'), chip('cccc')], 12))).toEqual([
-      ['aaaa', 'bbbb'],
-      ['cccc'],
-    ]);
-    expect(texts(packChips([chip('aaaa'), chip('bbbb'), chip('cccc')], 18))).toEqual([
-      ['aaaa', 'bbbb', 'cccc'],
-    ]);
-  });
-
-  it('never splits a chip — one wider than the line gets a line of its own', () => {
-    expect(texts(packChips([chip('ab'), chip('a much longer chip'), chip('cd')], 10))).toEqual([
-      ['ab'],
-      ['a much longer chip'],
-      ['cd'],
-    ]);
-  });
-
-  it('measures a multi-segment chip as one unit, in columns', () => {
-    // 'agent' + ' (hint)' is 12 wide, the token chip 11: together with the separator, 26.
-    const multi: Chip = [
-      { text: 'agent', color: 'a' },
-      { text: ' (hint)', color: 'b' },
-    ];
-    expect(texts(packChips([multi, chip('123k↑ 4.6k↓')], 26))).toEqual([
-      ['agent (hint)', '123k↑ 4.6k↓'],
-    ]);
-    expect(texts(packChips([multi, chip('123k↑ 4.6k↓')], 25))).toEqual([
-      ['agent (hint)'],
-      ['123k↑ 4.6k↓'],
-    ]);
-  });
-});
-
+// The rows the bar takes: App reserves them out of the live region's budget, since a narrow pane
+// wraps the bar onto several and unbudgeted they push the frame to the viewport height. The count
+// is held from frame to frame (#948), so it is measured the way App measures it.
 describe('statusRows', () => {
   const props = {
-    model: 'test-model',
+    model: 'qwen3-coder-30b-a3b-instruct',
     turns: 3,
     status: 'thinking',
     elapsed: 12,
-    usage: { promptTokens: 0, completionTokens: 0 },
+    usage: { promptTokens: 123_456, completionTokens: 4567 },
+    contextTokens: 11_249,
+    contextWindow: 24_000,
+    contextUsable: 16_070,
+    sheds: 1,
+    folds: 0,
+    cachedTokens: 9000,
+    decodeRate: 21.4,
+    pr: { number: 99 },
     autoApprove: 'safe' as const,
     modeTag: 'agent',
   };
+  const statusRows = (p: StatusProps, width: number, prev?: StatusPack | null): number =>
+    packStatus(statusChips(p), width, prev).rows;
+  const flips = (counts: number[]): number =>
+    counts.filter((n, i) => i > 0 && n !== counts[i - 1]).length;
 
   it('is one row on a wide pane and grows as the pane narrows', () => {
-    expect(statusRows(props, 200)).toBe(1);
+    expect(statusRows({ ...props, model: 'test-model' }, 200)).toBe(1);
     expect(statusRows(props, 60)).toBeGreaterThan(1);
     expect(statusRows(props, 30)).toBeGreaterThan(statusRows(props, 60));
   });
@@ -266,5 +250,40 @@ describe('statusRows', () => {
     expect(statusRows({ ...props, autoApprove: undefined }, 10)).toBeGreaterThanOrEqual(
       3 + packChips([[{ text: 'x', color: '' }]], 10).length,
     );
+  });
+
+  it('keeps the row a round had when the timer resets, given the frame before (#948)', () => {
+    // A pane where the timer's five characters are what buys the bar's last line.
+    const long = { ...props, status: 'streaming', elapsed: 69 };
+    const reset = { ...long, elapsed: 0 };
+    const width = Array.from({ length: 70 }, (_, i) => i + 32).find(
+      w => packChips(statusChips(long), w).length > packChips(statusChips(reset), w).length,
+    );
+    expect(width).toBeDefined();
+    const before = packStatus(statusChips(long), width!);
+    // A fresh fit drops that line at the reset; the held one keeps it.
+    expect(packChips(statusChips(reset), width!)).toHaveLength(before.lines.length - 1);
+    expect(packStatus(statusChips(reset), width!, before).lines).toHaveLength(before.lines.length);
+  });
+
+  it('holds its rows through a round whose phase flips on every tool call (#948)', () => {
+    // `streaming` and `tool` are five columns apart, and the phase flips between them at every call,
+    // so a bar fitted fresh gains and loses its last row with each one — a row that comes and goes,
+    // taking the live region and the input box with it.
+    const round = Array.from({ length: 60 }, (_, t) => ({
+      ...props,
+      elapsed: t,
+      status: t % 14 < 2 ? 'thinking' : t % 14 < 10 ? 'streaming' : 'tool',
+    }));
+    const width = 53;
+    const fresh = flips(round.map(p => packChips(statusChips(p), width).length));
+    let pack: StatusPack | null = null;
+    const held: number[] = [];
+    for (const p of round) {
+      pack = packStatus(statusChips(p), width, pack);
+      held.push(pack.lines.length);
+    }
+    expect(fresh).toBeGreaterThan(4);
+    expect(flips(held)).toBeLessThanOrEqual(1);
   });
 });
