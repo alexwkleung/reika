@@ -14,6 +14,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   length of what is streaming above them. A new session opens with the input at the bottom and
   blank space above it until output fills in. `REIKA_INPUT_FLOOR=0` restores the old layout (#943).
 
+### Fixed
+
+- During a compaction note on a local engine, the `Processing context` label could reach 100% and
+  stay there for the whole note. It now gives way to `Writing compaction note` as soon as the note
+  starts (#946).
+
 ## [0.10.0] - 2026-11-08
 
 ### Added
