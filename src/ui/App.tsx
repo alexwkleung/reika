@@ -24,6 +24,7 @@ import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
+import { usePendingRow } from './pendingrow.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
@@ -277,6 +278,18 @@ export function App() {
     forCall: boolean;
     command?: string;
   } | null>(null);
+  // What the scrollback actually draws for it: the same name, once the call has outlived
+  // `PENDING_ROW_DELAY_MS` (ui/pendingrow.ts, #951). A call that returns inside the delay paints no
+  // row at all — the row is for a call that stalls, and one that is replaced two frames after it
+  // appears reads as a flicker rather than as a wait. Cleared the instant the result commits.
+  //
+  // An approval the user just answered forces it (#897): the frame the answer lands in is the one
+  // that collapses the dialog into that row and into the `$ command` block it cleared, so it has to
+  // carry the row whether the call has outlived the delay or not.
+  const pendingRow = usePendingRow(
+    pendingTool,
+    dialogHold?.forCall === true && dialogHold.at === pendingToolAtRef.current,
+  );
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
@@ -3118,12 +3131,12 @@ export function App() {
             // (after the loop announced it), so an "Editing…" row behind the prompt would name work
             // that has not been permitted yet. Same condition the spinner uses.
             pendingTool={
-              status === 'busy' && pending === null && question === null ? pendingTool : ''
+              status === 'busy' && pending === null && question === null ? pendingRow : ''
             }
             // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
-            pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
+            pendingToolMs={pendingRow ? Date.now() - pendingToolAtRef.current : 0}
             pendingCommand={holdActive ? dialogHold.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}
