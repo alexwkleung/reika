@@ -11,7 +11,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   over — is now stopped once it is clearly looping, past about 16,000 characters, instead of
   running to the token limit and only then being retried. It retries with a notice saying the
   output was repeating. Text that merely repeats its shape, such as a long table, generated
-  fixtures or switch-heavy code, is left alone. `REIKA_CONTENT_SPIN=0` turns it off (#944).
+  fixtures or switch-heavy code, is left alone. `REIKA_CONTENT_SPIN=0` turns it off (#949).
 
 ### Changed
 
