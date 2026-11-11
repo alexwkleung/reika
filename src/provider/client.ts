@@ -229,6 +229,8 @@ export async function callModel(opts: {
       const promptProgress = readPromptProgress(chunk);
       if (promptProgress) {
         promptProgressLive = true;
+        // Prefill is still running, so content seen before this was no first token (#945).
+        ttftMs = undefined;
         opts.onPromptProgress?.(promptProgress);
       } else {
         received = true;
@@ -292,13 +294,14 @@ export async function callModel(opts: {
       }
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
-      // First chunk carrying generated tokens ends prefill. Role-only openers and usage-only
-      // chunks carry no work, so they must not stop the clock early.
+      // A chunk carrying generated tokens ends prefill. Role-only openers and usage-only chunks
+      // carry no work, so they must not stop the clock early. Nor does a progress chunk's own
+      // content: llama.cpp echoes an assistant prefill there, and progress resumes after it (#945).
       if (
-        ttftMs == null &&
+        !promptProgress &&
         (delta.content || delta.reasoning_content || delta.reasoning || delta.tool_calls)
       ) {
-        ttftMs = Date.now() - startedAt;
+        ttftMs ??= Date.now() - startedAt;
         endPromptProgress();
       }
       if (delta.content) {

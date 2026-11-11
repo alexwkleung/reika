@@ -86,6 +86,48 @@ describe('prefill progress (#912)', () => {
     expect(seen).toHaveLength(2);
   });
 
+  // #945: llama.cpp echoes an assistant prefill as content, and an echo that lands before prefill
+  // is over used up the first-token clear, so the label held at 100% until the call returned.
+  // Where the label was cleared, counted in listener calls at the first real token.
+  const clearedAtFirstToken = async (chunks: ChatCompletionChunk[]) => {
+    h.scripted.push(chunks);
+    const seen: (PromptProgress | undefined)[] = [];
+    let atToken: (number | undefined)[] = [];
+    const response = await callModel({
+      system: 's',
+      history: [],
+      tools: [],
+      config: config(),
+      onPromptProgress: p => seen.push(p),
+      onContentDelta: d => {
+        if (d === '- a') atToken = seen.map(p => p?.processed);
+      },
+    });
+    return { atToken, response };
+  };
+
+  it('clears on a token that follows progress sent after an early content chunk', async () => {
+    const { atToken, response } = await clearedAtFirstToken([
+      text('Compaction note 1\n'),
+      progress(2048),
+      progress(28156),
+      text('- a'),
+    ]);
+    expect(atToken).toEqual([2048, 28156, undefined]);
+    expect(response.content).toBe('Compaction note 1\n- a');
+  });
+
+  it('keeps the label through a progress chunk that carries the echoed content', async () => {
+    const echo: ChatCompletionChunk = {
+      choices: [{ delta: { content: 'Compaction note 1\n' } }],
+      prompt_progress: { total: 28156, cache: 0, processed: 2048, time_ms: 1000 },
+    };
+    const { atToken, response } = await clearedAtFirstToken([echo, progress(28156), text('- a')]);
+    expect(atToken).toEqual([2048, 28156, undefined]);
+    expect(response.content).toBe('Compaction note 1\n- a');
+    expect(response.timing).toBeDefined();
+  });
+
   it('leaves the request unchanged without a listener', async () => {
     h.scripted.push([text('hi')]);
     await call(undefined);
