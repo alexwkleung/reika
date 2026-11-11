@@ -66,6 +66,7 @@ import {
   liveSpinSignal,
   verbatimAbortThreshold,
 } from './reasoningtrace.js';
+import { contentSpinSignal, CONTENT_SPIN_DEBOUNCE, CONTENT_SPIN_MIN_CHARS } from './contentspin.js';
 import { ContinuationGate, continuationGate, continuationTail } from './continuation.js';
 import { biasableShingles, buildRuminationLogitBias } from './logitrecovery.js';
 import { EntropyTrace, formatEntropyReading } from './entropytrace.js';
@@ -413,6 +414,21 @@ const MAX_VERBATIM_RECOVERIES = 2;
 const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT !== '0';
+// Content-channel spin cut (#944). The cut above reads the reasoning stream only, so a reply that
+// degenerates in its VISIBLE output runs to the max_tokens wall and only then takes the length
+// retry — on slow local decode that is the whole window spent on text nobody can use. The bar is
+// much stricter than reasoning's (agent/contentspin.ts: near-verbatim only, past CONTENT_SPIN_MIN_CHARS,
+// no length ceiling), because content is the deliverable — a false cut throws away an answer, where
+// a false cut on a thought only costs a round. Default on: replaying 626 saved transcripts through
+// the gate, 5 replies reach the judged length — the two content loops fire (0.88 and 0.83 over the
+// trailing window) and the other three score 0.027, 0.001, 0.001. `REIKA_CONTENT_SPIN=0` is the
+// baseline arm; the `content-spin` debug line records ratio/window/fence either way, which is what
+// any threshold change has to be re-graded against (evals/contentspin-replay.ts).
+const CONTENT_SPIN = process.env.REIKA_CONTENT_SPIN !== '0';
+// One cut-retry per turn, then fall through to the round's normal recovery. A model that loops in
+// its output twice is stuck, and its next repeat simply runs to the token wall, where the length
+// path already handles it.
+const MAX_CONTENT_SPIN_RECOVERIES = 1;
 // EXPERIMENT (#284): generation cut off mid-thought carries the model's own work forward instead of
 // discarding it and nudging a restart. The retry this replaces destroyed a measured 30,270-char
 // block that was cut ONE CLAUSE after solving its problem (selfRepeatRatio 0.014 — below the p90 of
@@ -1547,6 +1563,10 @@ export async function runTurn(opts: {
   // Consecutive length-stops recovered from. Reset on any clean (non-truncated) round so
   // the budget is per-spiral, not per-turn.
   let lengthRetries = 0;
+  // Content-channel spin cuts recovered from this turn (#944). Deliberately its own budget rather
+  // than sharing lengthRetries: a repeat cut and a token-wall cut are different faults, and spending
+  // the length budget on the former would silence the retry for the latter in the same turn.
+  let contentSpinRecoveries = 0;
   // Truncation continuation (#284). `continuation` bounds *unproductive* continuing (a consecutive
   // count that resets on progress, plus a novelty check); the pending accumulators below hold a
   // truncated round's work so the split thought is recorded in the reasoning trace as ONE entry
@@ -2864,13 +2884,48 @@ export async function runTurn(opts: {
           }
         }
       : opts.onReasoningDelta;
+    // Content-channel spin cut (#944). Same debounce shape as the reasoning cut above, a much wider
+    // window and a much stricter bar — see agent/contentspin.ts for why the two channels cannot
+    // share a threshold. Wrapped when a recovery budget remains this turn OR under REIKA_DEBUG,
+    // where the ratio is logged at every check so the thresholds can be re-graded from real runs;
+    // with neither, the delta callback is passed straight through and this costs nothing.
+    let roundContent = '';
+    let contentCheckedAt = 0;
+    let contentSpinCut = false;
+    const canCutContentSpin = CONTENT_SPIN && contentSpinRecoveries < MAX_CONTENT_SPIN_RECOVERIES;
+    const onContentDelta =
+      canCutContentSpin || debugEnabled()
+        ? (delta: string): void => {
+            opts.onContentDelta?.(delta);
+            roundContent += delta;
+            if (contentSpinCut) return;
+            if (roundContent.length - contentCheckedAt < CONTENT_SPIN_DEBOUNCE) return;
+            contentCheckedAt = roundContent.length;
+            const reading = contentSpinSignal(roundContent);
+            // Under the minimum nothing is judged, so there is nothing to grade either: the reading
+            // is a zero by construction, and logging it would bury the checks that mean something.
+            if (roundContent.length < CONTENT_SPIN_MIN_CHARS) return;
+            const cut = canCutContentSpin && reading.spinning;
+            if (debugEnabled()) {
+              debugLog(
+                `[reika:debug] content-spin round=${i} ratio=${reading.ratio.toFixed(2)} ` +
+                  `window=${reading.window} chars=${reading.chars} ` +
+                  `fence=${reading.fence ? 'yes' : 'no'} gate=${cut ? 'cut' : 'measure'}\n`,
+              );
+            }
+            if (cut) {
+              contentSpinCut = true;
+              callAbort.abort();
+            }
+          }
+        : opts.onContentDelta;
     const live = startLiveRound(() => sentEstimate);
     const response = await callModel({
       system,
       history: callHistory,
       tools: sentTools,
       config: withGenReserve(opts.config, genReserve),
-      onContentDelta: opts.onContentDelta,
+      onContentDelta,
       onReasoningDelta,
       onOutputDelta: live && (text => live.add(text)),
       onEngineTimings: live && ((timings, prompt) => live.engine(timings, prompt)),
@@ -3254,6 +3309,34 @@ export async function runTurn(opts: {
         ladderStop === 'count' || forceWriteCutOnLength ? 'length' : 'loop',
       );
       return;
+    }
+
+    // Content-channel spin cut (#944): the visible output was repeating itself near-verbatim, well
+    // past any length a healthy reply reaches. Discard the round and retry — re-feeding a repeat its
+    // own text is what makes it worse, so unlike the token-wall retry below the partial is NOT put in
+    // history. The notice names repetition rather than the token limit on purpose: this cut fires
+    // tens of thousands of chars under the wall, and reading it as an ordinary truncation would hide
+    // what actually happened (the reasoning cut makes the same distinction, #285).
+    if (contentSpinCut) {
+      contentSpinRecoveries++;
+      // Frozen into scrollback rather than erased: the user watched this stream, and the tail is
+      // what evidence there is of the loop. Same hook the degenerate-reasoning recovery uses.
+      opts.onReasoningReset?.();
+      opts.onMessage({
+        role: 'system',
+        tone: 'warn',
+        content: 'Output was repeating itself — stopped it and retrying.',
+      });
+      opts.history.push({
+        role: 'user',
+        content:
+          '(your previous response was repeating the same text over and over and was stopped. ' +
+          'answer the question or call a tool directly, without repeating yourself)',
+        // Not a turn boundary (#287), for the same reason the truncation nudge isn't: this fires on
+        // rounds where the task spec matters most, and re-electing the pin costs the model a re-fetch.
+        harness: true,
+      });
+      continue;
     }
 
     // In plan force-write mode the request carried no tools, but some local models still emit

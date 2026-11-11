@@ -5,6 +5,14 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Added
+
+- A reply that repeats itself in its visible output — the same paragraph or code block over and
+  over — is now stopped once it is clearly looping, past about 16,000 characters, instead of
+  running to the token limit and only then being retried. It retries with a notice saying the
+  output was repeating. Text that merely repeats its shape, such as a long table, generated
+  fixtures or switch-heavy code, is left alone. `REIKA_CONTENT_SPIN=0` turns it off (#944).
+
 ### Changed
 
 - The package now ships as a bundle with its dependencies built in, so an install downloads about
