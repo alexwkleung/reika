@@ -26,7 +26,7 @@ import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
-import { Status, statusRows, type StatusProps } from './Status.js';
+import { Status, useStatusLayout, type StatusProps } from './Status.js';
 import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { clearIdentity, enableAnon, isAnon } from './identity.js';
@@ -2995,10 +2995,14 @@ export function App() {
     modeTag: mode,
     exitArmed: exitArmed && status === 'idle' && pending === null && inputValue === '',
   };
+  // The bar's packing is held where the last frame put it (#948): the volatile chips change width
+  // every second, and a fresh re-fit re-flows the lines behind them on every tick. One packing
+  // decides both what is drawn and what the frame is budgeted for — see `useStatusLayout`.
+  const statusLayout = useStatusLayout(statusProps, statusWidth);
   // Status rows past the one the baseline chrome assumes: a narrow pane (three iTerm2 panes) wraps
   // the bar onto several, and unbudgeted they push the live frame to viewport height, where Ink
   // repaints with a scrollback clear on every chunk.
-  const statusExtraRows = Math.max(0, statusRows(statusProps, statusWidth) - 1);
+  const statusExtraRows = Math.max(0, statusLayout.rows - 1);
 
   // Live rows above a dialog (plan checklist, queued messages, a wrapped status bar) it has to
   // leave viewport room for.
@@ -3266,7 +3270,7 @@ export function App() {
           {suggestionState ? (
             <Suggestions state={suggestionState} selectedIndex={suggestionSelected} />
           ) : null}
-          <Status {...statusProps} />
+          <Status {...statusProps} layout={statusLayout.lines} />
         </>
       )}
     </Box>
