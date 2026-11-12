@@ -262,6 +262,8 @@ export function App() {
   // under the call is drawn from. Set when the loop dispatches a call, cleared when that call's
   // result commits — so it spans exactly the gap the committed call row would otherwise leave.
   const [pendingTool, setPendingTool] = useState<string>('');
+  // Bumped per call start: a same-name call leaves `pendingTool` unchanged and would re-render nothing.
+  const [pendingCall, setPendingCall] = useState(0);
   // When that call started (#585), for the elapsed chip on its live row. A ref, not state: the
   // timestamp itself is never rendered, only `Date.now() - it`, and the render clock that ages it
   // is the status bar's one-second tick (below) — a state of its own would repaint the live region
@@ -278,17 +280,13 @@ export function App() {
     forCall: boolean;
     command?: string;
   } | null>(null);
-  // What the scrollback actually draws for it: the same name, once the call has outlived
-  // `PENDING_ROW_DELAY_MS` (ui/pendingrow.ts, #951). A call that returns inside the delay paints no
-  // row at all — the row is for a call that stalls, and one that is replaced two frames after it
-  // appears reads as a flicker rather than as a wait. Cleared the instant the result commits.
-  //
-  // An approval the user just answered forces it (#897): the frame the answer lands in is the one
-  // that collapses the dialog into that row and into the `$ command` block it cleared, so it has to
-  // carry the row whether the call has outlived the delay or not.
+  // Forced past the delay by an answered approval (its frame collapses the dialog into the row, #897)
+  // and by streamed output, which would otherwise draw first and drop 1–2 rows when the row arrives.
   const pendingRow = usePendingRow(
     pendingTool,
-    dialogHold?.forCall === true && dialogHold.at === pendingToolAtRef.current,
+    pendingCall,
+    streamingTool !== '' ||
+      (dialogHold?.forCall === true && dialogHold.at === pendingToolAtRef.current),
   );
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
@@ -2878,6 +2876,7 @@ export function App() {
           pendingToolAtRef.current = Date.now();
           pendingToolRef.current = name;
           setPendingTool(name);
+          setPendingCall(n => n + 1);
         },
         onPhase: p => {
           // Leaving the thinking phase ends the reasoning block — clear any spin hint.

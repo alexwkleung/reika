@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { Text } from 'ink';
-import { PENDING_ROW_DELAY_MS, pendingRowTool, usePendingRow } from './pendingrow.js';
+import { PENDING_ROW_DELAY_MS, usePendingRow } from './pendingrow.js';
 
 // The live in-flight row's paint delay (#951). A call that returns inside the delay must paint
 // nothing at all — that intermediate frame is the flicker — and a call that outlives it must draw
@@ -11,22 +11,12 @@ import { PENDING_ROW_DELAY_MS, pendingRowTool, usePendingRow } from './pendingro
 const plain = (s: string | undefined) => (s ?? '').replace(/\x1b\[[0-9;]*m/g, '');
 
 // The hook as App uses it: fed the call in flight, drawing the row it hands back.
-function Row({ tool, force = false }: { tool: string; force?: boolean }) {
-  const shown = usePendingRow(tool, force);
+function Row({ tool, call = 1, force = false }: { tool: string; call?: number; force?: boolean }) {
+  const shown = usePendingRow(tool, call, force);
   return <Text>{shown ? `↳ ${shown}` : '-'}</Text>;
 }
 
 const frameOf = (app: { lastFrame: () => string | undefined }) => plain(app.lastFrame()).trim();
-
-describe('pendingRowTool', () => {
-  it('never paints a snapshot that belongs to a call already replaced', () => {
-    // Two calls can land in one commit, so the flag has to name its own call.
-    expect(pendingRowTool({ tool: 'read', due: true }, 'read')).toBe('read');
-    expect(pendingRowTool({ tool: 'read', due: true }, 'edit')).toBe('');
-    expect(pendingRowTool({ tool: 'read', due: false }, 'read')).toBe('');
-    expect(pendingRowTool({ tool: '', due: false }, '')).toBe('');
-  });
-});
 
 describe('usePendingRow', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -63,25 +53,23 @@ describe('usePendingRow', () => {
   });
 
   it('gives the next call its own delay, even for the same tool', async () => {
-    // A loop reading file after file announces `read` again in the same tick its result lands; the
-    // second call must not inherit the first's due flag and flash a row for its own few
-    // milliseconds.
-    const app = render(<Row tool="read" />);
+    // A loop reading file after file announces `read` again in the same commit its result lands, so
+    // the name never changes; the second call must not inherit the first's due flag.
+    const app = render(<Row tool="read" call={1} />);
     await vi.advanceTimersByTimeAsync(PENDING_ROW_DELAY_MS);
     expect(frameOf(app)).toBe('↳ read');
-    app.rerender(<Row tool="edit" />);
+    app.rerender(<Row tool="read" call={2} />);
     await vi.advanceTimersByTimeAsync(0);
     expect(frameOf(app)).toBe('-');
     await vi.advanceTimersByTimeAsync(PENDING_ROW_DELAY_MS);
-    expect(frameOf(app)).toBe('↳ edit');
+    expect(frameOf(app)).toBe('↳ read');
 
-    app.rerender(<Row tool="edit" />); // same name announced again, back to back
+    app.rerender(<Row tool="edit" call={3} />);
     await vi.advanceTimersByTimeAsync(0);
-    expect(frameOf(app)).toBe('↳ edit');
-    app.rerender(<Row tool="" />);
-    await vi.advanceTimersByTimeAsync(0);
-    app.rerender(<Row tool="edit" />);
-    await vi.advanceTimersByTimeAsync(0);
+    expect(frameOf(app)).toBe('-');
+    app.rerender(<Row tool="" call={3} />);
+    app.rerender(<Row tool="edit" call={4} />);
+    await vi.advanceTimersByTimeAsync(PENDING_ROW_DELAY_MS - 1);
     expect(frameOf(app)).toBe('-');
     app.unmount();
   });
