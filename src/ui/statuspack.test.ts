@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Chip, chipWidth, packChips, packStatus } from './statuspack.js';
+import { type Chip, chipWidth, packChips, packStatus, ROW_DWELL_MS } from './statuspack.js';
 
 const chip = (text: string): Chip => [{ text, color: 'x' }];
 const texts = (lines: Chip[][]): string[][] =>
@@ -92,10 +92,15 @@ describe('packStatus', () => {
     expect(texts(packStatus(grown, WIDTH, long).lines)).toEqual(texts(packChips(grown, WIDTH)));
   });
 
-  it('has nothing to hold once the bar has a different set of chips', () => {
-    const before = packStatus(bar('1m 09s'), WIDTH);
+  it('holds no breaks across a different set of chips, only the row count', () => {
+    const before = packStatus(bar('1m 09s'), WIDTH, null, 0);
     const fewer = bar('1m 09s').slice(0, -1);
-    expect(texts(packStatus(fewer, WIDTH, before).lines)).toEqual(texts(packChips(fewer, WIDTH)));
+    const after = packStatus(fewer, WIDTH, before, 1000);
+    expect(packChips(fewer, WIDTH).length).toBe(before.rows - 1);
+    expect(after.rows).toBe(before.rows);
+    // Past the dwell there is nothing left of the old bar at all.
+    const late = packStatus(fewer, WIDTH, before, ROW_DWELL_MS);
+    expect(texts(late.lines)).toEqual(texts(packChips(fewer, WIDTH)));
   });
 
   it('never holds more than one row past a fresh fit', () => {
@@ -104,6 +109,7 @@ describe('packStatus', () => {
     const stale = {
       lines: chips.map(c => [c]),
       rows: chips.length,
+      neededAt: 0,
     };
     const pack = packStatus(chips, WIDTH, stale);
     expect(pack.lines).toHaveLength(packChips(chips, WIDTH).length);
@@ -142,6 +148,89 @@ describe('packStatus', () => {
     expect(fresh).toBe(3);
     expect(held.every((n, i) => i === 0 || n >= held[i - 1]!)).toBe(true);
     expect(flips(held)).toBe(1);
+  });
+});
+
+describe('packStatus chip hops', () => {
+  const bar = (first: string): Chip[] => [
+    chip(first),
+    chip('bbbb'),
+    chip('cccc'),
+    chip('dddddddd'),
+  ];
+
+  it('leaves a chip on its line when the line above makes room but no row is saved', () => {
+    const before = packStatus(bar('aaaa'), 16, null, 0);
+    expect(texts(before.lines)).toEqual([
+      ['aaaa', 'bbbb'],
+      ['cccc', 'dddddddd'],
+    ]);
+    // A fresh fit pulls `cccc` up, and pushes it back down when the first chip grows again.
+    expect(texts(packChips(bar('aa'), 16))).toEqual([['aa', 'bbbb', 'cccc'], ['dddddddd']]);
+    const after = packStatus(bar('aa'), 16, before, 1000);
+    expect(texts(after.lines)).toEqual([
+      ['aa', 'bbbb'],
+      ['cccc', 'dddddddd'],
+    ]);
+  });
+
+  it('moves only the overflow when a line is outgrown, if that costs no row', () => {
+    const before = packStatus(bar('aa'), 16, null, 0);
+    const after = packStatus(bar('aaaa'), 16, before, 1000);
+    expect(after.rows).toBe(2);
+    expect(texts(after.lines)).toEqual([
+      ['aaaa', 'bbbb'],
+      ['cccc', 'dddddddd'],
+    ]);
+  });
+});
+
+describe('packStatus row dwell', () => {
+  // Three 4-wide chips fill a 12-column pane's two rows; the optional one is what buys the second.
+  const withChip = [chip('aaaa'), chip('bbbb'), chip('cccc')];
+  const without = [chip('aaaa'), chip('bbbb')];
+
+  it('keeps the row of a chip that went away, where the old breaks cannot be drawn', () => {
+    const before = packStatus(withChip, 12, null, 0);
+    expect(before.rows).toBe(2);
+    const after = packStatus(without, 12, before, 1000);
+    expect(packChips(without, 12)).toHaveLength(1);
+    expect(texts(after.lines)).toEqual([['aaaa'], ['bbbb']]);
+    expect(after.rows).toBe(2);
+  });
+
+  it('never moves for a chip that toggles faster than the dwell', () => {
+    let pack = packStatus(withChip, 12, null, 0);
+    const rows: number[] = [];
+    for (let t = 1; t <= 60; t++) {
+      pack = packStatus(t % 6 < 3 ? without : withChip, 12, pack, t * 1000);
+      rows.push(pack.rows);
+    }
+    expect(new Set(rows)).toEqual(new Set([2]));
+  });
+
+  it('gives the row up once it has gone unneeded for the dwell', () => {
+    let pack = packStatus(withChip, 12, null, 0);
+    pack = packStatus(without, 12, pack, ROW_DWELL_MS - 1);
+    expect(pack.rows).toBe(2);
+    pack = packStatus(without, 12, pack, ROW_DWELL_MS);
+    expect(pack.rows).toBe(1);
+  });
+
+  it('holds one row at most: a bar two rows short is fitted fresh', () => {
+    const tall = packStatus(
+      [chip('aaaa'), chip('bbbb'), chip('cccc'), chip('dddd'), chip('eeee')],
+      12,
+      null,
+      0,
+    );
+    expect(tall.rows).toBe(3);
+    expect(packStatus(without, 12, tall, 1000).rows).toBe(1);
+  });
+
+  it('fits fresh when there is no second chip to break at', () => {
+    const before = packStatus(withChip, 12, null, 0);
+    expect(packStatus([chip('aaaa')], 12, before, 1000).rows).toBe(1);
   });
 });
 
