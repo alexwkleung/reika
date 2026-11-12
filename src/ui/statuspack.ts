@@ -45,6 +45,10 @@ export type StatusPack = {
   // with.
   lines: Chip[][];
   rows: number;
+  // When a fresh fit last needed this many rows, and whether the last row is only here on the
+  // dwell in `packStatus`, which counts from it.
+  neededAt: number;
+  dwelling?: boolean;
 };
 
 // Display rows `lines` take at `width`: one per line, except a chip the pane can't hold whole,
@@ -57,32 +61,53 @@ function countRows(lines: Chip[][], width: number): number {
   }, 0);
 }
 
-function pack(lines: Chip[][], width: number): StatusPack {
-  return { lines, rows: countRows(lines, width) };
+// How long the bar keeps a row nothing needs any more, when the frame before cannot be re-drawn.
+// Longer than any chip's come-and-go (a cache chip absent for one round, a shed clearing the gauge),
+// so a row that would be back within seconds never leaves.
+export const ROW_DWELL_MS = 10_000;
+
+// `lines` with one more break: the last line holding two chips gives up its last one. The tail of
+// the bar is the cheapest place to break — everything before it stays where the fit put it.
+function spreadByOneLine(lines: Chip[][]): Chip[][] | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.length < 2) continue;
+    return [...lines.slice(0, i), line.slice(0, -1), line.slice(-1), ...lines.slice(i + 1)];
+  }
+  return null;
 }
 
-// The bar's lines as the previous frame drew them, re-measured against the chips of this one — the
-// same BREAKS, which is all that survives: the chips' text changes every tick and only their order
-// is fixed. Null when those breaks can no longer be drawn: a line the bar has outgrown, or a chip
-// list that changed shape under them (a mode switch, the PR chip appearing, a shed adding its
-// count), where a break from the old bar means nothing.
+// This frame's chips packed with the previous frame's BREAKS kept, which is all that survives: the
+// chips' text changes every tick and only their order is fixed. A line the bar has outgrown pushes
+// its overflow onto the next one and keeps every other break, so one chip moves instead of the
+// whole bar re-flowing. Null when the chip list changed shape under the breaks (a mode switch, the
+// PR chip appearing, a shed adding its count), where a break from the old bar means nothing.
 function heldBreaks(chips: Chip[], width: number, prev: StatusPack): Chip[][] | null {
-  const lines: Chip[][] = [];
+  const count = prev.lines.reduce((n, line) => n + line.length, 0);
+  if (count !== chips.length) return null;
+  const starts = new Set<number>();
   let at = 0;
   for (const line of prev.lines) {
-    const next: Chip[] = [];
-    let used = 0;
-    for (let n = 0; n < line.length; n++, at++) {
-      const chip = chips[at];
-      if (!chip) return null;
-      const w = chipWidth(chip);
-      used = next.length === 0 ? w : used + SEP.length + w;
-      if (used > width) return null;
-      next.push(chip);
-    }
-    if (next.length > 0) lines.push(next);
+    starts.add(at);
+    at += line.length;
   }
-  return at === chips.length ? lines : null;
+  const lines: Chip[][] = [];
+  let line: Chip[] = [];
+  let used = 0;
+  chips.forEach((chip, i) => {
+    const w = chipWidth(chip);
+    const need = line.length === 0 ? w : used + SEP.length + w;
+    if (line.length > 0 && (starts.has(i) || need > width)) {
+      lines.push(line);
+      line = [chip];
+      used = w;
+    } else {
+      line.push(chip);
+      used = need;
+    }
+  });
+  if (line.length > 0) lines.push(line);
+  return lines;
 }
 
 // The status bar's packing (#948).
@@ -108,12 +133,43 @@ function heldBreaks(chips: Chip[], width: number, prev: StatusPack): Chip[][] | 
 //   ends the moment the bar outgrows one of those lines — which growing chips do within a few ticks
 //   — and the next frame is fitted fresh.
 // - A resize that makes the bar fit into fewer rows gives the held shape up by the same rule.
-export function packStatus(chips: Chip[], width: number, prev?: StatusPack | null): StatusPack {
+//
+// Breaks cannot be held across a chip that comes or goes (the cache chip on a round that reports no
+// count, the gauge after a shed) or a line the bar outgrew, and there the fresh fit used to drop
+// the row at once — a row gained and lost a second apart. So a row is also held by COUNT: when the
+// fresh fit is one row short of the frame before, it is spread back onto that many rows until the
+// row has gone unneeded for `ROW_DWELL_MS`. The clock restarts whenever a fresh fit needs the row,
+// so a chip toggling faster than the dwell never moves the bar; one that is gone for good costs the
+// row for ten seconds.
+export function packStatus(
+  chips: Chip[],
+  width: number,
+  prev?: StatusPack | null,
+  now: number = Date.now(),
+): StatusPack {
   const fresh = packChips(chips, width);
-  if (!prev) return pack(fresh, width);
+  const freshRows = countRows(fresh, width);
+  if (!prev) return { lines: fresh, rows: freshRows, neededAt: now };
   const held = heldBreaks(chips, width, prev);
-  if (!held || held.length <= fresh.length || held.length > fresh.length + 1) {
-    return pack(fresh, width);
+  const heldRows = held ? countRows(held, width) : 0;
+  // The old breaks cost nothing here, and a fresh fit would move chips between lines for no row
+  // saved: a chip that hops up when its neighbour shrinks hops back when it grows.
+  if (held && heldRows === freshRows) return { lines: held, rows: heldRows, neededAt: now };
+  if (freshRows >= prev.rows) return { lines: fresh, rows: freshRows, neededAt: now };
+  const dwell = freshRows === prev.rows - 1 && now - prev.neededAt < ROW_DWELL_MS;
+  // A shape the bar fitted itself is held for as long as it can be drawn; one that is only a
+  // spread is held for what is left of its dwell.
+  if (held && heldRows === freshRows + 1 && heldRows <= prev.rows && (!prev.dwelling || dwell)) {
+    return { lines: held, rows: heldRows, neededAt: prev.neededAt, dwelling: prev.dwelling };
   }
-  return pack(held, width);
+  const spread = dwell ? spreadByOneLine(fresh) : null;
+  if (spread) {
+    return {
+      lines: spread,
+      rows: countRows(spread, width),
+      neededAt: prev.neededAt,
+      dwelling: true,
+    };
+  }
+  return { lines: fresh, rows: freshRows, neededAt: now };
 }
