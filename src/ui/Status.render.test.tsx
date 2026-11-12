@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { Status } from './Status.js';
+import type { Chip } from './statuspack.js';
 
 const BASE = {
   model: 'Qwen2.5-Coder',
@@ -153,6 +154,25 @@ describe('Status wrap', () => {
       lines(render(<Status {...BASE} pr={{ number: 99 }} />).lastFrame()),
     );
     expect(rows).toEqual(['Qwen2.5-Coder · turn 2 · idle · PR #99 · ctrl-c to exit']);
+  });
+
+  it('draws the packing it is handed, so the frame is budgeted for the rows it takes', () => {
+    // App measures this packing to reserve the live region's rows (#948), and the two have to be
+    // the same packing: a bar that re-fitted itself here would draw rows the frame was never
+    // budgeted for.
+    const layout: Chip[][] = [
+      [[{ text: 'first', color: 'red' }]],
+      [[{ text: 'second', color: 'red' }], [{ text: 'x', color: 'red' }]],
+      [[{ text: 'third', color: 'red' }]],
+    ];
+    const handed = withColumns(100, () =>
+      lines(render(<Status {...BASE} layout={layout} />).lastFrame()),
+    );
+    expect(handed).toEqual(['first', 'second · x', 'third']);
+    // Left to itself the same bar packs fresh at the live width, which is what a bar rendered on
+    // its own (a test, a standalone render) does.
+    const own = withColumns(100, () => lines(render(<Status {...BASE} />).lastFrame()));
+    expect(own).toEqual(['Qwen2.5-Coder · turn 2 · idle · ctrl-c to exit']);
   });
 
   it('re-packs when the terminal is resized, without anything else re-rendering', async () => {
