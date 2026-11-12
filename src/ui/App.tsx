@@ -88,18 +88,18 @@ import { createPrefixWarmer } from '../agent/warm.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { execStream } from '../tools/bash.js';
 import { isOffline } from '../tools/_net.js';
-import { expandMentions } from '../agent/mentions.js';
 import {
-  attachImageBlocks,
   NATIVE_IMAGE_NOTE,
-  readNativeAttachments,
   nextImageMarker,
   type ImageAttachment,
   type NativeImage,
-  type NativeImageBytes,
 } from '../agent/attachments.js';
-import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldConfirmInject } from '../skills/skillmatch.js';
+import {
+  buildSubmitInput,
+  skillToConfirm,
+  submitStageLabel,
+  urlsToConfirm,
+} from '../agent/submitinput.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { sniffImageMime } from '../ocr/vision.js';
@@ -2349,15 +2349,16 @@ export function App() {
       queuedSkillRouteRef.current = undefined;
       return decided;
     }
-    if (config?.skillAuto === 'off' || !config || !bundle) return undefined;
-    // Every model mode but chat asks (#565): chat has no bash, and a shipped skill's first step is
-    // one. Plan mode asks too — its prompt already keeps an applied body from turning into edits.
-    if (prompt.startsWith('/') || modeRef.current === 'shell' || modeRef.current === 'chat') {
-      return undefined;
-    }
-    const match = matchSkill(prompt, bundle.skills);
-    const window = config.profiles[activeProfile]?.contextWindow ?? config.contextWindow;
-    if (!match || !shouldConfirmInject(match, window)) return undefined;
+    if (!config || !bundle) return undefined;
+    // Every model mode but chat asks (#565). Plan mode asks too — its prompt already keeps an
+    // applied body from turning into edits.
+    const match = skillToConfirm(prompt, {
+      skills: bundle.skills,
+      skillAuto: config.skillAuto,
+      mode: modeRef.current,
+      contextWindow: config.profiles[activeProfile]?.contextWindow ?? config.contextWindow,
+    });
+    if (!match) return undefined;
     const accept = await askConfirm(skillConfirmSpec(match));
     return accept === 'abort' ? 'abort' : accept ? match.skill.name : null;
   };
@@ -2374,11 +2375,9 @@ export function App() {
       queuedUrlFetchRef.current = undefined;
       return decided;
     }
-    if (!config || config.pasteFetch === 'off') return undefined;
-    if (prompt.startsWith('/') || modeRef.current === 'shell') return undefined;
-    const plan = planPastedUrls(prompt);
-    if (plan.urls.length === 0 || plan.request) return undefined;
-    return askConfirm(pastedUrlConfirmSpec(plan.urls));
+    if (!config) return undefined;
+    const urls = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode: modeRef.current });
+    return urls ? askConfirm(pastedUrlConfirmSpec(urls)) : undefined;
   };
 
   // Which mode /implement hands the plan to (#561). Asked only from plan mode, where the old answer
@@ -2399,46 +2398,6 @@ export function App() {
     setSuggestionState(null);
     const choice = await askChoice(implementModeConfirmSpec());
     return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
-  };
-
-  // Route a plain-English prompt to a skill without asking the model. `prompt` is the user's own
-  // words (never the expanded text — a fetched page or an @mention'd file mentioning "verify" is
-  // not a request to run /verify); `modelText` is what actually gets sent, returned unchanged
-  // unless the skill is applied. `route` is the confirm dialog's answer when it fired.
-  const routeSkill = (
-    prompt: string,
-    modelText: string,
-    route: string | null | undefined,
-  ): string => {
-    const match = matchSkill(prompt, bundle?.skills ?? []);
-    if (!match) return modelText;
-    if (route === match.skill.name) {
-      pendingNoticesRef.current.push({
-        role: 'system',
-        // Says what actually happened, not just that something matched: the body is in the
-        // prompt the model receives, and nothing between here and the request removes it (#398).
-        content: `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
-        tone: 'info',
-      });
-      pendingSkillRef.current = match.skill.name;
-      return `${match.skill.body}\n\n${modelText}`;
-    }
-    // The dialog replaces the hint when it fires: the user has just seen the skill and declined
-    // it, and a line saying "start with /x to apply it" right after that is the nag.
-    if (route === null) {
-      suggestedSkillsRef.current.add(match.skill.name);
-      return modelText;
-    }
-    if (suggestedSkillsRef.current.has(match.skill.name)) return modelText;
-    suggestedSkillsRef.current.add(match.skill.name);
-    // A hint, not a handoff: the prompt goes through as typed. Said outright — "run it with /x"
-    // read as an instruction to go do that instead (#398).
-    pendingNoticesRef.current.push({
-      role: 'system',
-      content: `Skill hint: /${match.skill.name} — ${match.skill.description}. Prompt sent unchanged; start with /${match.skill.name} to apply it.`,
-      tone: 'info',
-    });
-    return modelText;
   };
 
   // Drain the queue once the agent is idle again. Replays messages in order
@@ -2588,69 +2547,26 @@ export function App() {
     // attachments still referenced in the text, then handed to runTurn for the turn's lifetime.
     let nativeImages: NativeImage[] | undefined;
     try {
-      const active = resolveProfile(config, activeProfileRef.current);
-      const reader = imageReader(active);
-      // A vision model can take a minute on a screenshot, where OCR takes half a second; without a
-      // label the Enter looks like it did nothing.
-      const vision = config.visionModel;
-      const ocr: typeof reader = vision
-        ? bytes => {
-            setExpanding(`Describing image with ${vision}`);
-            return reader(bytes);
-          }
-        : reader;
-      const expansion = await expandMentions(trimmed, bundle.cwd, { ocr });
-      display = expansion.display;
-      pendingNoticesRef.current.push(
-        ...expansion.notices.map(content => ({
-          role: 'system' as const,
-          content,
-          tone: 'warn' as const,
-        })),
-      );
-      // Scans `trimmed`, never the expanded text: a URL inside an @mention'd file is file
-      // content, not a link the user handed over.
-      const urls = await expandPastedUrls(trimmed, {
-        mode: config.pasteFetch,
-        incidental: fetchUrls,
-        onStart: count => setExpanding(`Fetching ${count} pasted link${count > 1 ? 's' : ''}`),
-      });
-      pendingNoticesRef.current.push(
-        ...urls.notices.map(n => ({ role: 'system' as const, content: n.text, tone: n.tone })),
-      );
       // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
       // in the bubble, but recalling that text from history later must not silently re-attach an
       // image the user has moved on from.
-      let liveImages = imageAttachmentsRef.current;
-      if (!pasteIsNative(active) && liveImages.some(a => a.native)) {
-        const read = await readNativeAttachments(liveImages, ocr);
-        liveImages = read.attachments;
-        for (const marker of read.failed) {
-          pendingNoticesRef.current.push({
-            role: 'system',
-            content: `Couldn't read ${marker} for ${active.model}, which can't see images — it was pasted under a profile that could.`,
-            tone: 'warn',
-          });
-        }
-      }
-      modelText = attachImageBlocks(expansion.augmented, liveImages);
-      // The same liveness rule attachImageBlocks just applied, so an attachment whose marker the
-      // user deleted sends neither its text nor its bytes. Read from `modelText` because that is
-      // the exact text the model gets.
-      nativeImages = liveImages
-        .filter((a): a is ImageAttachment & { native: NativeImageBytes } =>
-          Boolean(a.native && modelText.includes(a.marker)),
-        )
-        .map((a): NativeImage => ({ marker: a.marker, ...a.native }));
-      if (nativeImages.length === 0) nativeImages = undefined;
+      const built = await buildSubmitInput(trimmed, {
+        cwd: bundle.cwd,
+        skills: bundle.skills,
+        config: resolveProfile(config, activeProfileRef.current),
+        skillRoute: route,
+        skillHints: suggestedSkillsRef.current,
+        fetchUrls,
+        images: imageAttachmentsRef.current,
+        pastes: pastedTextsRef.current,
+        onStage: stage => setExpanding(submitStageLabel(stage)),
+      });
       imageAttachmentsRef.current = [];
-      if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
-      modelText = routeSkill(trimmed, modelText, route);
-      // Last, so everything above reads the user's own words: a marker is the paste's stand-in
-      // for @mention, URL and skill matching alike — text the user pasted is content, not a
-      // request to fetch a link inside it. The marker survives in `display`, keeping the user
-      // bubble (and the input history entry) short while the model gets the full text.
-      modelText = expandPastes(modelText, pastedTextsRef.current);
+      pendingNoticesRef.current.push(
+        ...built.notices.map(n => ({ role: 'system' as const, ...n })),
+      );
+      if (built.skill) pendingSkillRef.current = built.skill;
+      ({ modelText, display, nativeImages } = built);
       // Chat's history is its own, and its tools could not act on a run anyway: held for the
       // agent side.
       if (heldShellRunsRef.current.length > 0 && modeRef.current !== 'chat') {
