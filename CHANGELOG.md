@@ -20,6 +20,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   timer and the live token counts change the bar's width every second, and re-fitting it from
   scratch let a row come and go with them, moving the input box and the streaming reply above it. It
   now keeps the row it has until the bar has genuinely outgrown it (#948).
+- The status bar also keeps a row for ten seconds after the chip that needed it goes away, and no
+  longer moves a chip up a line and back when the line above briefly has room (#953).
 - During a compaction note on a local engine, the `Processing context` label could reach 100% and
   stay there for the whole note. It now gives way to `Writing compaction note` as soon as the note
   starts (#946).
