@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { COMMANDS } from './commands.js';
+import { PENDING_ROW_DELAY_MS } from './pendingrow.js';
 import type { Config, ContextBundle, Message } from '../types.js';
 import type * as ConfigModule from '../config.js';
 import type * as LastStateModule from '../laststate.js';
@@ -241,9 +242,9 @@ describe('App layout', () => {
   });
 
   // The in-flight tool row (#509). The loop announces each call it is about to run; the row has to
-  // be on screen for the whole dispatch — that is the point, a stalled call otherwise leaves the
-  // committed call row above it looking like the app stopped — and gone the moment the result it
-  // was standing in for commits.
+  // be on screen for the whole of a call that stalls — that is the point, a stalled call otherwise
+  // leaves the committed call row above it looking like the app stopped — and gone the moment the
+  // result it was standing in for commits.
   it('draws the running call’s row, in the result’s place, until the result lands', async () => {
     const app = await mountApp();
     await submit(app, 'hi');
@@ -256,7 +257,8 @@ describe('App layout', () => {
     expect(opts?.onToolStart).toBeTypeOf('function');
 
     opts!.onToolStart!('edit');
-    await tick();
+    // Past the paint delay (#951): a call that outlives it draws its row exactly as it always did.
+    await tick(PENDING_ROW_DELAY_MS + 50);
     const rows = lines(app);
     const row = findLine(rows, /↳ Editing…/);
     expect(row).toBeGreaterThanOrEqual(0);
@@ -266,6 +268,30 @@ describe('App layout', () => {
     opts!.onMessage({ role: 'tool', callId: 'e1', summary: 'Edited src/a.ts (+1 -1)' });
     await tick();
     expect(findLine(lines(app), /Editing…/)).toBe(-1);
+    app.unmount();
+  });
+
+  // #951. A call that returns inside the paint delay must never draw its row. The row is a lie for
+  // that long — it appears and is replaced two or three flushes later, which reads as a flicker
+  // rather than as a wait — so it is held back until the call has actually outlived the delay.
+  it('never draws the row for a call that returns inside the delay', async () => {
+    const app = await mountApp();
+    await submit(app, 'hi');
+    const opts = (runTurn.mock.calls[0] as unknown as unknown[] | undefined)?.[0] as
+      | { onToolStart?: (tool: string) => void; onMessage: (m: Message) => void }
+      | undefined;
+
+    // A whole `read`-class call: announced, run, committed, all inside the delay. The frame at 40ms
+    // is the one the old code drew the row in.
+    opts!.onToolStart!('read');
+    await tick(40);
+    expect(findLine(lines(app), /↳ Reading…/)).toBe(-1);
+    opts!.onMessage({ role: 'tool', callId: 'r1', summary: 'Read src/a.ts lines 1-2 of 2' });
+    await tick(PENDING_ROW_DELAY_MS + 100);
+    const rows = lines(app);
+    expect(findLine(rows, /Reading…/)).toBe(-1);
+    // The result itself is there, so the call did happen — only its wait row was skipped.
+    expect(findLine(rows, /a\.ts lines 1-2 of 2/)).toBeGreaterThanOrEqual(0);
     app.unmount();
   });
 
@@ -282,7 +308,8 @@ describe('App layout', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
     try {
       opts!.onToolStart!('bash');
-      await tick();
+      // Past the paint delay (#951), so the row this test ages is actually on screen.
+      await tick(PENDING_ROW_DELAY_MS + 50);
       const runningRow = (): string => lines(app).find(l => l.includes('↳ Running…')) ?? '';
       expect(runningRow()).not.toBe('');
       // Nothing yet: under the threshold the row has to read exactly as #509 drew it.

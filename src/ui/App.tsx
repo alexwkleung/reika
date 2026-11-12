@@ -24,6 +24,7 @@ import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
+import { usePendingRow } from './pendingrow.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
@@ -261,6 +262,8 @@ export function App() {
   // under the call is drawn from. Set when the loop dispatches a call, cleared when that call's
   // result commits — so it spans exactly the gap the committed call row would otherwise leave.
   const [pendingTool, setPendingTool] = useState<string>('');
+  // Bumped per call start: a same-name call leaves `pendingTool` unchanged and would re-render nothing.
+  const [pendingCall, setPendingCall] = useState(0);
   // When that call started (#585), for the elapsed chip on its live row. A ref, not state: the
   // timestamp itself is never rendered, only `Date.now() - it`, and the render clock that ages it
   // is the status bar's one-second tick (below) — a state of its own would repaint the live region
@@ -277,6 +280,14 @@ export function App() {
     forCall: boolean;
     command?: string;
   } | null>(null);
+  // Forced past the delay by an answered approval (its frame collapses the dialog into the row, #897)
+  // and by streamed output, which would otherwise draw first and drop 1–2 rows when the row arrives.
+  const pendingRow = usePendingRow(
+    pendingTool,
+    pendingCall,
+    streamingTool !== '' ||
+      (dialogHold?.forCall === true && dialogHold.at === pendingToolAtRef.current),
+  );
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
@@ -2865,6 +2876,7 @@ export function App() {
           pendingToolAtRef.current = Date.now();
           pendingToolRef.current = name;
           setPendingTool(name);
+          setPendingCall(n => n + 1);
         },
         onPhase: p => {
           // Leaving the thinking phase ends the reasoning block — clear any spin hint.
@@ -3118,12 +3130,12 @@ export function App() {
             // (after the loop announced it), so an "Editing…" row behind the prompt would name work
             // that has not been permitted yet. Same condition the spinner uses.
             pendingTool={
-              status === 'busy' && pending === null && question === null ? pendingTool : ''
+              status === 'busy' && pending === null && question === null ? pendingRow : ''
             }
             // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
-            pendingToolMs={pendingTool ? Date.now() - pendingToolAtRef.current : 0}
+            pendingToolMs={pendingRow ? Date.now() - pendingToolAtRef.current : 0}
             pendingCommand={holdActive ? dialogHold.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}

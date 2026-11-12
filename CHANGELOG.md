@@ -16,6 +16,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A tool call that finishes almost immediately no longer flickers. Its `↳ Running…` row appeared
+  and was replaced by the result within two or three frames, which read as a screen repaint rather
+  than as a wait; the row is now drawn only once the call has been running for 150ms, so a fast
+  `read`, `edit` or `grep` paints only its result. Slow calls show the row exactly as before
+  (#951, #952).
 - The status bar no longer flickers on a narrow pane, where it wraps onto several rows. A round's
   timer and the live token counts change the bar's width every second, and re-fitting it from
   scratch let a row come and go with them, moving the input box and the streaming reply above it. It
