@@ -1,17 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  isImplementCommand,
   COMMANDS,
   MODE_CYCLE,
-  buildImplementPrompt,
-  buildSearchPrompt,
   isSaveCommand,
   nextMode,
   planWritten,
-  searchModeRefusal,
-  searchUnavailableNotice,
   turnMode,
 } from './commands.js';
+import { isImplementCommand } from '../agent/turncommands.js';
 import type { Message } from '../types.js';
 
 describe('nextMode — Shift+Tab cycling', () => {
@@ -128,35 +124,6 @@ describe('planWritten', () => {
   });
 });
 
-describe('buildImplementPrompt', () => {
-  it('points the model at the plan already in history', () => {
-    const prompt = buildImplementPrompt('');
-    // "the plan above" is load-bearing: the plan sits verbatim in history (handoff distillation),
-    // so the prompt only references it rather than restating intent.
-    expect(prompt).toContain('plan above');
-    expect(prompt).toContain('step by step');
-  });
-
-  it('omits the guidance section when there are no args', () => {
-    expect(buildImplementPrompt('')).not.toContain('Additional guidance');
-  });
-
-  it('treats whitespace-only args as no args', () => {
-    expect(buildImplementPrompt('   ')).toBe(buildImplementPrompt(''));
-  });
-
-  it('appends trailing args as explicit additional guidance', () => {
-    const prompt = buildImplementPrompt('focus on the error paths first');
-    expect(prompt).toContain('Additional guidance: focus on the error paths first');
-    // The base instruction is preserved ahead of the guidance.
-    expect(prompt.indexOf('plan above')).toBeLessThan(prompt.indexOf('Additional guidance'));
-  });
-
-  it('trims surrounding whitespace from the guidance', () => {
-    expect(buildImplementPrompt('  do X  ')).toContain('Additional guidance: do X');
-  });
-});
-
 describe('isSaveCommand', () => {
   it('matches /save with or without --raw, ignoring case and padding', () => {
     expect(isSaveCommand('/save')).toBe(true);
@@ -172,45 +139,10 @@ describe('isSaveCommand', () => {
   });
 });
 
-// /search (#829). The command is the user taking the decision away from the model, so what it sends
-// has to be binding enough that a small model uses `search` rather than answering from memory — but
-// only where the session actually has the tool, which is what the two refusals are for.
 describe('COMMANDS — /search', () => {
   it('is registered so it autocompletes and shows in suggestions', () => {
     const search = COMMANDS.find(c => c.name === 'search');
     expect(search).toBeDefined();
     expect(search?.desc).toMatch(/search provider/i);
-  });
-
-  it('sends instructions, not a bare query: the first action is the search call', () => {
-    const prompt = buildSearchPrompt('react useState');
-    expect(prompt).toContain('react useState');
-    expect(prompt).toMatch(/first action is a `search` tool call/);
-    // The two disciplines worth pinning: don't answer from memory, and don't invent a result set.
-    expect(prompt).toMatch(/not from memory/);
-    expect(prompt).toMatch(/instead of answering from memory/);
-    // The query leads, so the mode's own prefix cannot bury what was asked.
-    expect(prompt.startsWith('Search the web for: react useState')).toBe(true);
-  });
-
-  it('trims the query and keeps it on its own line', () => {
-    expect(buildSearchPrompt('  spaced query  ')).toContain('Search the web for: spaced query\n');
-  });
-
-  it('refuses in the two modes whose tool lists carry no web tools', () => {
-    // Shell has no model turn at all; minimal is bash-only (tools/index.ts minimalTools).
-    expect(searchModeRefusal('shell')).toMatch(/shell mode/);
-    expect(searchModeRefusal('minimal')).toMatch(/minimal mode/);
-    // Every mode that does carry the pair passes, including vibe, whose submit is an agent turn.
-    for (const mode of ['agent', 'plan', 'vibe', 'chat', 'grind'] as const) {
-      expect(searchModeRefusal(mode)).toBeUndefined();
-    }
-  });
-
-  it('names a different fix for offline than for an unconfigured provider', () => {
-    // The two causes are not interchangeable: one is "no route out", the other is a switch to set.
-    expect(searchUnavailableNotice(true)).toMatch(/no route out/);
-    expect(searchUnavailableNotice(false)).toMatch(/REIKA_SEARXNG_URL/);
-    expect(searchUnavailableNotice(false)).toMatch(/REIKA_CDP_SEARCH/);
   });
 });

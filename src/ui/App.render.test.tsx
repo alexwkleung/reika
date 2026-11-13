@@ -463,7 +463,7 @@ describe('the /help list', () => {
 // `/search` (#829) is listed in the menu like any other command, but what it does depends on where it
 // is typed: a mode whose tool list carries no web tools has nothing to hand the query to. Those
 // refusals are deterministic and are the part that would otherwise fail silently, so they are driven
-// through the real App; the prompt itself is a string, pinned in commands.test.ts.
+// through the real App; the prompt itself is a string, pinned in turncommands.test.ts.
 describe('/search', () => {
   // The message log commits through <Static>, so the row may not be in the last frame yet; every
   // write Ink made is in stdout.frames.
@@ -534,6 +534,53 @@ describe('/search', () => {
       app.unmount();
     } finally {
       delete CONFIG.searxngUrl;
+    }
+  });
+});
+
+// The two other commands that end in a turn, through the real App: what each one resolves to is
+// pinned in turncommands.test.ts, and this is that App carries it out — the lines it prints and
+// what the loop is handed.
+describe('turn commands', () => {
+  const turnOptions = (): Record<string, unknown> =>
+    (runTurn.mock.calls as unknown as Array<[Record<string, unknown>]>)[0][0];
+
+  it('/compact echoes the command, announces itself and runs a manual compaction', async () => {
+    runTurn.mockClear();
+    const app = await mountApp();
+    await submit(app, '/compact');
+    for (let i = 0; i < 200 && runTurn.mock.calls.length === 0; i++) await tick(25);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(turnOptions().manualCompact).toBe(true);
+    const printed = plain(app.stdout.frames.join(''));
+    expect(printed).toContain('/compact');
+    expect(printed).toContain('Compacting context…');
+    app.unmount();
+  });
+
+  it('a skill typed as a command sends its body with the text after it', async () => {
+    runTurn.mockClear();
+    BUNDLE.skills = [
+      {
+        name: 'greet',
+        description: 'say hello',
+        body: 'Greet the user by name.',
+        source: 'project',
+        path: '/repo/.reika/skills/greet.md',
+        triggers: [],
+      },
+    ];
+    try {
+      const app = await mountApp();
+      await submit(app, '/greet Mona');
+      for (let i = 0; i < 200 && runTurn.mock.calls.length === 0; i++) await tick(25);
+      expect(runTurn).toHaveBeenCalledTimes(1);
+      expect(turnOptions().userInput).toBe('Greet the user by name.\n\nMona');
+      expect(turnOptions().userDisplay).toBe('/greet Mona');
+      expect(turnOptions().userSkill).toBe('greet');
+      app.unmount();
+    } finally {
+      BUNDLE.skills = [];
     }
   });
 });

@@ -19,6 +19,7 @@ import {
 } from '../store/sessions.js';
 import { createSession, type SessionEvents } from '../session.js';
 import { buildSubmitInput, skillToConfirm, urlsToConfirm } from '../agent/submitinput.js';
+import { resolveSkillCommand } from '../agent/turncommands.js';
 import { matchSkill, shouldAutoInject } from '../skills/skillmatch.js';
 import { autoApproves } from '../approval.js';
 import { budgetWarning } from '../context/bundlesize.js';
@@ -80,17 +81,10 @@ export async function buildHeadlessInput(
   const notices: string[] = [];
   if (prompt.startsWith('/')) {
     const [name, ...rest] = prompt.slice(1).split(/\s+/);
-    const skill = bundle.skills.find(s => s.name === name);
-    if (!skill) throw new Error(`unknown skill /${name}`);
-    const extra = rest.join(' ').trim();
-    notices.push(
-      `Skill /${skill.name} applied — its body was sent as this prompt${extra ? ', with your text after it' : ''}.`,
-    );
-    return {
-      modelText: extra ? `${skill.body}\n\n${extra}` : skill.body,
-      skill: skill.name,
-      notices,
-    };
+    const command = resolveSkillCommand(name, rest.join(' '), { skills: bundle.skills, mode });
+    if (!command) throw new Error(`unknown skill /${name}`);
+    notices.push(...command.after.map(n => n.content));
+    return { modelText: command.modelText, skill: command.skill, notices };
   }
   // Asked as the TUI asks, skill first, and before any expansion so no fetch precedes a question.
   const toApply = skillToConfirm(prompt, {

@@ -1,5 +1,5 @@
 import type { ImageAttachment } from './attachments.js';
-import type { ImplementMode } from '../ui/commands.js';
+import type { ImplementMode } from './turncommands.js';
 
 // What the user answered before a prompt was sent, each taken at keypress while they were present.
 // An absent field means that question never came up.
