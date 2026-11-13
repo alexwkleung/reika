@@ -283,6 +283,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 | `REIKA_LOGIT_RECOVERY`      | `1`               | Spends one last-resort biased round before the terminal reasoning-loop stop: a mild one-shot `logit_bias` (−4, capped, tool-name tokens exempt) down-weighting the loop's own recurring tokens. llama.cpp-only (needs the native `/tokenize` endpoint) and inactive under `REIKA_REASONING_LOOP=0`; degrades to the honest stop if it doesn't help.                                                |
 | `REIKA_CONVERGE_RETRY`      | `1`               | Inserts one steered retry before the honest give-up stop (plan and agent): a strong, failure-naming directive ("you looped and kept re-questioning yourself; commit to one analysis and do it") instead of a cold stop.                                                                                                                                                                            |
 | `REIKA_VERBATIM_ABORT`      | `1`               | Cuts a single runaway reasoning block mid-stream — on a length-aware self-repeat ratio, or an absolute length ceiling for low-repetition semantic spirals — instead of letting it run to the `max_tokens` wall; a length cut whose repetition ratio is low is carried forward like a token-wall cut (`REIKA_CONTINUE`), and a degenerate one recovers by mode (plan → force-write, agent → nudge). |
+| `REIKA_CONTENT_SPIN`        | `1`               | Cuts a reply that repeats itself near-verbatim in its visible output — ratio ≥0.8 past 16,000 chars — rather than letting it run to the `max_tokens` wall. Stricter than the reasoning cut: content is the deliverable, and a long table or switch-heavy code repeats its shape legitimately. The round is discarded and retried with a notice naming the repetition; `0` is the baseline arm.     |
 | `REIKA_SELF_AWARE`          | `1`               | One line in the agent and plan prompts saying the model runs inside reika, with the path to the shipped `docs/`, the skills directories and the saved sessions — scoped to questions about reika itself, so it doesn't pull the model into those paths otherwise.                                                                                                                                  |
 | `REIKA_CALLER_CHECK`        | `1`               | One agent-prompt rule: after changing what a function accepts, returns or throws, find and read every caller and fix any the change breaks.                                                                                                                                                                                                                                                        |
 | `REIKA_SPILL`               | `1`               | Saves an over-cap `grep`/`glob`/`bash` result to a session-scoped temp file and appends the path to the inline page, so the bytes the cap drops stay reachable — the model pages the file with `read`/`grep` instead of re-running the search or the command.                                                                                                                                      |
@@ -352,6 +353,14 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
   the budget is spent. `0` turns it off
 - **`REIKA_VERBATIM_ABORT`** — The only pre-cap backstop for a never-ending single block. `0`
   turns it off
+- **`REIKA_CONTENT_SPIN`** — The output half of the same cut: the reasoning detectors read the
+  `reasoning` stream only, so a reply that loops in `content` ran to the token limit and only then
+  got the length retry. No length ceiling on content — long, distinct output is not evidence of a
+  loop, and `max_tokens` already bounds it. One recovery per turn, then the repeat runs to the wall.
+  The `content-spin` debug line records `ratio`, `window`, `chars` and `fence` (whether the cut
+  landed inside a code fence) at every check, which is what a threshold change has to be re-graded
+  against: `evals/contentspin-replay.ts` replays the saved sessions through the gate. `0` is the
+  baseline arm
 - **`REIKA_SELF_AWARE`** — Never names the `.env` (API keys) or the binary. `0` removes the line
 - **`REIKA_CALLER_CHECK`** — Grind mode's step 6 on its own: on the chunk fixtures
   deepseek-v4.1-flash went from 4/10 to 10/10 with it, a local 27B started searching for callers
