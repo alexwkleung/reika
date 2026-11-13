@@ -148,6 +148,7 @@ import {
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
+import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
 import {
   canDrain,
   queuedMessage,
@@ -1616,16 +1617,18 @@ export function App() {
       requestExit();
       return;
     }
-    if (name === 'stats') {
-      const content = hasActivity(messagesRef.current)
-        ? buildSummary(
-            messagesRef.current,
-            usageRef.current,
-            sessionStartedAtRef.current,
-            approvalsRef.current,
-          )
-        : 'No activity yet.';
-      setMessages(prev => [...prev, echo, { role: 'system', content }]);
+    // The commands that only print (agent/replycommands.ts).
+    const reply = resolveReplyCommand(name, {
+      cwd: bundle?.cwd,
+      skills: bundle?.skills ?? [],
+      messages: messagesRef.current,
+      usage: usageRef.current,
+      startedAt: sessionStartedAtRef.current,
+      approvals: approvalsRef.current,
+      mcpList: () => sessionRef.current?.mcp.list(),
+    });
+    if (reply !== null) {
+      setMessages(prev => [...prev, echo, { role: 'system', content: reply }]);
       return;
     }
     if (
@@ -1799,40 +1802,6 @@ export function App() {
 
     let response: string;
     switch (name) {
-      case 'help':
-        response = [
-          'Commands:',
-          '  /help              show this list',
-          '  /new, /clear       reset conversation, tokens, mode',
-          '  /cd <path>         change cwd (re-indexes repo map)',
-          '  /shell             enter shell mode (raw bash, no model)',
-          '  /chat              enter chat mode (no filesystem/shell tools; isolated)',
-          '  /plan              enter plan mode (read-only exploration; ends with a written plan)',
-          '  /vibe              enter vibe mode (every prompt plans first, then implements)',
-          '  /minimal           enter minimal mode (shell only, no upfront project context)',
-          '  /grind             enter grind mode (verify-everything procedure; slower, checks its work)',
-          '  /agent             return to agent mode',
-          '  /implement         execute the plan above (from plan mode: pick the mode to run it in)',
-          '  /compact           compact older context now (compaction note, then a fold)',
-          '  /model [name]      pick a model/profile (interactive without a name; a name not in your config switches ad-hoc)',
-          '  /anon              show/toggle anonymized display (on|off; bare command opens the picker)',
-          '  /approvals         show/toggle session auto-approve (on|off; bare command opens the picker)',
-          '  /unattended        show/toggle unattended: decline instead of prompting (on|off; bare command opens the picker)',
-          '  /cwd               show working directory',
-          '  /tokens            show token usage this session',
-          '  /stats             show full session summary',
-          '  /save              save the full conversation to history, even mid-turn (--raw skips redaction)',
-          '  /resume [all|root] resume a saved session of this project (chat mode: chats only; all: every session; root: the /save files)',
-          '  /skills            list available skills (loaded from your skill directories)',
-          '  /mcp               list MCP servers and their tools (REIKA_MCP_SERVERS)',
-          '  /<server>:<tool>   call an MCP tool directly (JSON args, or the bare string for a one-arg tool)',
-          '  /search <query>    search the web: the model runs one search and answers from the results',
-          '  /exit, /quit       exit reika (prints summary)',
-          '  @<path>            in agent mode, inline a file as context',
-          '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-          '  shift+tab          cycle mode (agent → plan → minimal → vibe → grind → chat → shell)',
-        ].join('\n');
-        break;
       case 'model': {
         if (!config) {
           response = 'config not loaded';
@@ -2024,33 +1993,6 @@ export function App() {
         ].join('\n');
         break;
       }
-      case 'cwd':
-        response = bundle?.cwd ?? '(unknown)';
-        break;
-      case 'tokens': {
-        const approx = usage.total.estimated ? '~' : '';
-        response = `prompt:     ${approx}${usage.total.promptTokens}\ncompletion: ${approx}${usage.total.completionTokens}`;
-        break;
-      }
-      case 'skills': {
-        const list = bundle?.skills ?? [];
-        if (list.length === 0) {
-          response =
-            'No skills loaded. Drop *.md files or SKILL.md folders in ~/.config/reika/skills/, <cwd>/.reika/skills/, ~/.agents/skills/ or <cwd>/.agents/skills/.';
-        } else {
-          response = [
-            'Available skills (invoke as /<name>):',
-            ...list.map(
-              s =>
-                `  /${s.name.padEnd(16)} ${s.description} ${s.from ? `(${s.from})` : s.source === 'project' ? '(project)' : ''}`,
-            ),
-          ].join('\n');
-        }
-        break;
-      }
-      case 'mcp':
-        response = sessionRef.current?.mcp.list() ?? 'MCP is not available in this session.';
-        break;
       default: {
         // An MCP tool (#265) before a skill: the two share one dispatch point, and a command name
         // carries a colon, which no built-in or skill does — the shapes cannot collide.
@@ -2071,7 +2013,7 @@ export function App() {
           await runTurnCommand(skillCommand, raw, echo);
           return;
         }
-        response = `Unknown command: /${name}. Try /help.`;
+        response = unknownCommandText(name);
       }
     }
     setMessages(prev => [...prev, echo, { role: 'system', content: response }]);
