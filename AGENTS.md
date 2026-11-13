@@ -44,7 +44,7 @@ Most of these are also just good hygiene for humans. What's different is the cos
 
 | Path             | Purpose                                                                                                                                        |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/agent/`     | Turn loop, prompt builder, mention parser, plan tracking (`plantrack.ts`), history compaction (`compaction.ts`)                                |
+| `src/agent/`     | Turn loop, prompt builder, mention parser, submit pipeline (`submitinput.ts`), plan tracking (`plantrack.ts`), compaction (`compaction.ts`)    |
 | `src/provider/`  | OpenAI-compatible client, tool-call serialization, token estimate/calibration (`tokens.ts`), per-endpoint degrade latches                      |
 | `src/tools/`     | One tool per file; register in `src/tools/index.ts`                                                                                            |
 | `src/context/`   | Bootstrap, repo map (per-language regex table), file index (fdir-based), gitignore                                                             |
@@ -1132,7 +1132,7 @@ Filename validation: `[a-z0-9][a-z0-9_-]*` only. Frontmatter (optional) is parse
 
 ### Plain-English routing (`skills/skillmatch.ts`)
 
-A `triggers:` frontmatter list routes an ordinary prompt to a skill **without the model choosing**. `matchSkill` scores each skill's trigger phrases (plus its name, an implicit trigger) against the user's raw input as whole-word matches, weights by phrase word count, and returns the single best — null on a tie, since routing by array order would be arbitrary. `App.tsx`'s `routeSkill` runs it at submit and either emits a one-line suggestion (default, once per skill per session) or, on a strong match (`REIKA_SKILL_AUTO`, default `ask`), asks — a confirm dialog before submit — and prepends the body to the prompt with a receipt naming the matched phrases if the user says so.
+A `triggers:` frontmatter list routes an ordinary prompt to a skill **without the model choosing**. `matchSkill` scores each skill's trigger phrases (plus its name, an implicit trigger) against the user's raw input as whole-word matches, weights by phrase word count, and returns the single best — null on a tie, since routing by array order would be arbitrary. `buildSubmitInput` (`agent/submitinput.ts`, the submit pipeline the TUI and headless share, #584) runs it at submit and either emits a one-line suggestion (default, once per skill per session) or, on a strong match (`REIKA_SKILL_AUTO`, default `ask`), asks — a confirm dialog before submit — and prepends the body to the prompt with a receipt naming the matched phrases if the user says so.
 
 Three constraints shaped this, and they're the reason it is **not** a model-callable tool:
 

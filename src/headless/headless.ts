@@ -18,10 +18,8 @@ import {
   type SessionSides,
 } from '../store/sessions.js';
 import { createSession, type SessionEvents } from '../session.js';
-import { expandMentions } from '../agent/mentions.js';
-import { expandPastedUrls, planPastedUrls } from '../agent/pastedurls.js';
-import { matchSkill, shouldAutoInject, shouldConfirmInject } from '../skills/skillmatch.js';
-import { imageReader } from '../ocr/select.js';
+import { buildSubmitInput, skillToConfirm, urlsToConfirm } from '../agent/submitinput.js';
+import { matchSkill, shouldAutoInject } from '../skills/skillmatch.js';
 import { autoApproves } from '../approval.js';
 import { budgetWarning } from '../context/bundlesize.js';
 import { formatElapsed, toolLabel } from '../ui/format.js';
@@ -94,42 +92,38 @@ export async function buildHeadlessInput(
       notices,
     };
   }
+  // Asked as the TUI asks, skill first, and before any expansion so no fetch precedes a question.
+  const toApply = skillToConfirm(prompt, {
+    skills: bundle.skills,
+    skillAuto: config.skillAuto,
+    mode,
+    contextWindow: config.contextWindow,
+  });
+  const asked =
+    confirm && toApply ? (await confirm(skillConfirmSpec(toApply))) === true : undefined;
+  const toFetch = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode });
+  // Undefined without --interactive: nobody to ask, so a link the prompt is not about is left
+  // alone under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.
+  const fetchUrls =
+    confirm && toFetch ? (await confirm(pastedUrlConfirmSpec(toFetch))) === true : undefined;
+  // With nobody to ask only 'apply' injects, and never in plan mode, where a skill body competes
+  // with the plan prompt. An interactive run never injects unasked, as the TUI never does.
   const match = matchSkill(prompt, bundle.skills);
-  // App.decideSkillRoute's gate: every mode but chat, and no word cap — a human is answering.
-  const applySkill =
-    confirm && match && config.skillAuto !== 'off' && mode !== 'chat'
-      ? shouldConfirmInject(match, config.contextWindow) &&
-        (await confirm(skillConfirmSpec(match))) === true
-      : undefined;
-  const urlPlan = planPastedUrls(prompt);
-  const incidental =
-    confirm && config.pasteFetch !== 'off' && urlPlan.urls.length > 0 && !urlPlan.request
-      ? (await confirm(pastedUrlConfirmSpec(urlPlan.urls))) === true
-      : undefined;
-  const expansion = await expandMentions(prompt, bundle.cwd, { ocr: imageReader(config) });
-  notices.push(...expansion.notices);
-  // No `incidental` without --interactive: there is nobody to ask, so a link the prompt is not
-  // about is left alone under 'ask' and fetched under 'apply' — the REIKA_SKILL_AUTO split.
-  const urls = await expandPastedUrls(prompt, { mode: config.pasteFetch, incidental });
-  notices.push(...urls.notices.map(n => n.text));
-  let modelText = expansion.augmented;
-  if (urls.blocks.length > 0) modelText = `${urls.blocks.join('\n\n')}\n\n${modelText}`;
-  // Same exclusion as App.routeSkill: a skill body landing in plan mode competes with the plan
-  // prompt. Headless has no one to suggest it to, so a non-injecting match is silent — and no one
-  // to ask, so only 'apply' injects; the interactive default 'ask' sends the prompt as typed.
   const auto =
-    applySkill ??
-    (match &&
-      config.skillAuto === 'apply' &&
-      (mode === 'agent' || mode === 'vibe') &&
-      shouldAutoInject(match, config.contextWindow));
-  if (match && auto) {
-    notices.push(
-      `Skill /${match.skill.name} applied — its body was prepended to this prompt (matched: ${match.matched.join(', ')}).`,
-    );
-    return { modelText: `${match.skill.body}\n\n${modelText}`, skill: match.skill.name, notices };
-  }
-  return { modelText, notices };
+    confirm === undefined &&
+    match !== null &&
+    config.skillAuto === 'apply' &&
+    (mode === 'agent' || mode === 'vibe') &&
+    shouldAutoInject(match, config.contextWindow);
+  const built = await buildSubmitInput(prompt, {
+    cwd: bundle.cwd,
+    skills: bundle.skills,
+    config,
+    skillRoute: match && (asked ?? auto) ? match.skill.name : undefined,
+    fetchUrls,
+  });
+  notices.push(...built.notices.map(n => n.content));
+  return { modelText: built.modelText, skill: built.skill, notices };
 }
 
 // `--profile` is the user naming the profile outright, so it outranks a launch REIKA_MODEL and the
