@@ -12,6 +12,15 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   switching branches or building elsewhere silently changed the installed `reika`. Run
   `pnpm run reinstall:global` to pick up new changes (#956).
 
+### Fixed
+
+- With two or more prompts queued behind a running turn, the second could be dropped without a
+  trace when the first replayed. Each queued prompt now waits until the one before it has been
+  submitted (#960).
+- A queued prompt with a pasted image no longer shows its `[Image N]` marker twice when it runs,
+  and an image whose marker was deleted before Enter is no longer sent with the queued prompt
+  (#960).
+
 ## [0.11.0] - 2026-11-12
 
 ### Changed

@@ -467,6 +467,10 @@ export function App() {
   // the turn ends. queueRef mirrors queue for sync access inside effects.
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const queueRef = useRef<QueuedMessage[]>([]);
+  // A queued prompt is being replayed. The status stays idle until its input is built, and the
+  // drain must not take the next entry in that window: it would be refused as a double submit
+  // and lost (#958).
+  const [replaying, setReplaying] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -2402,27 +2406,25 @@ export function App() {
 
   // Drain the queue once the agent is idle again. Replays messages in order
   // through the normal onSubmit path: image attachments go back onto
-  // imageAttachmentsRef and the markers are re-appended to the text so the
-  // regular image pipeline (hasImageMarker → attachImageBlocks) applies.
-  // onSubmit re-seals itself while busy, so a still-busy replay just lands
-  // back on the queue.
+  // imageAttachmentsRef, where the markers still in the text select them
+  // (hasImageMarker → attachImageBlocks). onSubmit re-seals itself while
+  // busy, so a still-busy replay just lands back on the queue.
   // Held while a confirm is up too: a replay under an open dialog could open a second one over
   // it, and the first prompt's answer would never arrive.
   useEffect(() => {
-    if (status !== 'idle' || pending !== null || confirm !== null) return;
+    if (status !== 'idle' || pending !== null || confirm !== null || replaying) return;
     if (queueRef.current.length === 0) return;
     const [next, ...rest] = queueRef.current;
     queueRef.current = rest;
     setQueue(rest);
-    const images = next.images ?? [];
-    imageAttachmentsRef.current = images;
+    imageAttachmentsRef.current = next.images ?? [];
     queuedSkillRouteRef.current = next.skill;
     queuedUrlFetchRef.current = next.fetchUrls;
     queuedImplementModeRef.current = next.implementMode;
-    const markers = images.map(img => img.marker).join(' ');
-    void onSubmit(next.content + (markers ? ` ${markers}` : ''));
+    setReplaying(true);
+    void onSubmit(next.content).finally(() => setReplaying(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pending, confirm, queue]);
+  }, [status, pending, confirm, replaying, queue]);
 
   const onSubmit = async (input: string) => {
     // Left in the box rather than queued: the resume replaces the conversation the prompt was
@@ -2486,8 +2488,9 @@ export function App() {
     // input shows the backlog live and clears as the queue drains.
     if (!config || !bundle || status !== 'idle') {
       const trimmed = input.trim();
-      const images = imageAttachmentsRef.current;
-      if (!trimmed && images.length === 0) return;
+      // An image whose marker was deleted is not sent, queued or not (#959).
+      const images = imageAttachmentsRef.current.filter(img => trimmed.includes(img.marker));
+      if (!trimmed) return;
       // Asked now, while the user is at the keyboard, and carried on the entry: the drain may
       // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
       const route = await decideSkillRoute(trimmed);
