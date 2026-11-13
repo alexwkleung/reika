@@ -146,7 +146,14 @@ import {
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
-import { queueReceipt, type QueuedMessage } from './queue.js';
+import {
+  canDrain,
+  queuedMessage,
+  queueReceipt,
+  takeNext,
+  type QueuedMessage,
+  type SubmitAnswers,
+} from '../agent/busyqueue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
 import {
   buildShellRunsBlock,
@@ -429,14 +436,6 @@ export function App() {
   // than picked by position (#275); no downstream code can tell, since the turn's content is just
   // the skill body.
   const pendingSkillRef = useRef<string | undefined>(undefined);
-  // A queued prompt's skill-confirm answer, put back here by the queue drain just before the
-  // replay (the way images go back onto imageAttachmentsRef) so the replay routes on the decision
-  // taken at keypress instead of asking again at drain, when nobody may be at the desk (#425).
-  const queuedSkillRouteRef = useRef<string | null | undefined>(undefined);
-  // Same for the pasted-link confirm's answer (#448): fetch or not, decided at keypress.
-  const queuedUrlFetchRef = useRef<boolean | undefined>(undefined);
-  // Same for /implement's mode picker (#561).
-  const queuedImplementModeRef = useRef<ImplementMode | undefined>(undefined);
   // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
   // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
   // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
@@ -2347,12 +2346,6 @@ export function App() {
   // for ctrl-c, or undefined when nothing needed asking. Runs BEFORE the busy queue and the
   // expansions so a queued prompt carries its answer and no fetch precedes the question.
   const decideSkillRoute = async (prompt: string): Promise<string | null | 'abort' | undefined> => {
-    // A queued prompt replaying: the answer was taken when it was typed.
-    if (queuedSkillRouteRef.current !== undefined) {
-      const decided = queuedSkillRouteRef.current;
-      queuedSkillRouteRef.current = undefined;
-      return decided;
-    }
     if (!config || !bundle) return undefined;
     // Every model mode but chat asks (#565). Plan mode asks too — its prompt already keeps an
     // applied body from turning into edits.
@@ -2374,11 +2367,6 @@ export function App() {
   // undefined when nothing needed asking. Same placement as the skill confirm: before the busy
   // queue, so the entry carries the answer, and before the expansions, so no fetch precedes it.
   const decidePastedUrls = async (prompt: string): Promise<boolean | 'abort' | undefined> => {
-    if (queuedUrlFetchRef.current !== undefined) {
-      const decided = queuedUrlFetchRef.current;
-      queuedUrlFetchRef.current = undefined;
-      return decided;
-    }
     if (!config) return undefined;
     const urls = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode: modeRef.current });
     return urls ? askConfirm(pastedUrlConfirmSpec(urls)) : undefined;
@@ -2391,11 +2379,6 @@ export function App() {
   const decideImplementMode = async (
     prompt: string,
   ): Promise<ImplementMode | 'abort' | undefined> => {
-    if (queuedImplementModeRef.current !== undefined) {
-      const decided = queuedImplementModeRef.current;
-      queuedImplementModeRef.current = undefined;
-      return decided;
-    }
     if (modeRef.current !== 'plan' || !isImplementCommand(prompt)) return undefined;
     // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
     // up, it draws a second `/implement` under the dialog.
@@ -2404,29 +2387,50 @@ export function App() {
     return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
   };
 
-  // Drain the queue once the agent is idle again. Replays messages in order
-  // through the normal onSubmit path: image attachments go back onto
-  // imageAttachmentsRef, where the markers still in the text select them
-  // (hasImageMarker → attachImageBlocks). onSubmit re-seals itself while
+  // Every question a prompt can raise before it is sent, asked at keypress in one order whether
+  // the prompt runs now or is queued. A replayed prompt hands back the answers it was queued
+  // with, and only a question that never came up then is asked now.
+  const askSubmitAnswers = async (
+    prompt: string,
+    carried: SubmitAnswers = {},
+  ): Promise<SubmitAnswers | 'abort'> => {
+    const skill = carried.skill !== undefined ? carried.skill : await decideSkillRoute(prompt);
+    if (skill === 'abort') return 'abort';
+    const fetchUrls =
+      carried.fetchUrls !== undefined ? carried.fetchUrls : await decidePastedUrls(prompt);
+    if (fetchUrls === 'abort') return 'abort';
+    const implementMode = carried.implementMode ?? (await decideImplementMode(prompt));
+    if (implementMode === 'abort') return 'abort';
+    return {
+      ...(skill !== undefined ? { skill } : {}),
+      ...(fetchUrls !== undefined ? { fetchUrls } : {}),
+      ...(implementMode !== undefined ? { implementMode } : {}),
+    };
+  };
+
+  // Drain the queue once the agent is idle again. Replays messages in order through the normal
+  // onSubmit path: image attachments go back onto imageAttachmentsRef, where the markers still in
+  // the text select them (hasImageMarker → attachImageBlocks). onSubmit re-seals itself while
   // busy, so a still-busy replay just lands back on the queue.
-  // Held while a confirm is up too: a replay under an open dialog could open a second one over
-  // it, and the first prompt's answer would never arrive.
   useEffect(() => {
-    if (status !== 'idle' || pending !== null || confirm !== null || replaying) return;
-    if (queueRef.current.length === 0) return;
-    const [next, ...rest] = queueRef.current;
-    queueRef.current = rest;
-    setQueue(rest);
-    imageAttachmentsRef.current = next.images ?? [];
-    queuedSkillRouteRef.current = next.skill;
-    queuedUrlFetchRef.current = next.fetchUrls;
-    queuedImplementModeRef.current = next.implementMode;
+    const drainable = canDrain({
+      idle: status === 'idle',
+      dialogOpen: pending !== null || confirm !== null,
+      resuming: resumingRef.current,
+      replaying,
+    });
+    if (!drainable) return;
+    const taken = takeNext(queueRef.current);
+    if (!taken) return;
+    queueRef.current = taken.rest;
+    setQueue(taken.rest);
+    imageAttachmentsRef.current = taken.next.images ?? [];
     setReplaying(true);
-    void onSubmit(next.content).finally(() => setReplaying(false));
+    void onSubmit(taken.next.content, taken.next.answers).finally(() => setReplaying(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, pending, confirm, replaying, queue]);
 
-  const onSubmit = async (input: string) => {
+  const onSubmit = async (input: string, carried?: SubmitAnswers) => {
     // Left in the box rather than queued: the resume replaces the conversation the prompt was
     // typed against, and the user sees it land before deciding to send.
     if (resumingRef.current) return;
@@ -2488,24 +2492,12 @@ export function App() {
     // input shows the backlog live and clears as the queue drains.
     if (!config || !bundle || status !== 'idle') {
       const trimmed = input.trim();
-      // An image whose marker was deleted is not sent, queued or not (#959).
-      const images = imageAttachmentsRef.current.filter(img => trimmed.includes(img.marker));
-      if (!trimmed) return;
       // Asked now, while the user is at the keyboard, and carried on the entry: the drain may
       // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
-      const route = await decideSkillRoute(trimmed);
-      if (route === 'abort') return;
-      const fetchUrls = await decidePastedUrls(trimmed);
-      if (fetchUrls === 'abort') return;
-      const implementMode = await decideImplementMode(trimmed);
-      if (implementMode === 'abort') return;
-      const msg: QueuedMessage = {
-        content: trimmed,
-        images: images.length > 0 ? images : undefined,
-        ...(route !== undefined ? { skill: route } : {}),
-        ...(fetchUrls !== undefined ? { fetchUrls } : {}),
-        ...(implementMode !== undefined ? { implementMode } : {}),
-      };
+      const answers = await askSubmitAnswers(trimmed, carried);
+      if (answers === 'abort') return;
+      const msg = queuedMessage(trimmed, imageAttachmentsRef.current, answers);
+      if (!msg) return;
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
       setQueue(queueRef.current);
@@ -2523,12 +2515,9 @@ export function App() {
     const trimmed = input.trim();
     // Before the box clears: the confirm dialog sits over the input, and the prompt it is asking
     // about should still be visible underneath. A ctrl-c leaves it there to edit.
-    const route = await decideSkillRoute(trimmed);
-    if (route === 'abort') return;
-    const fetchUrls = await decidePastedUrls(trimmed);
-    if (fetchUrls === 'abort') return;
-    const implementMode = await decideImplementMode(trimmed);
-    if (implementMode === 'abort') return;
+    const answers = await askSubmitAnswers(trimmed, carried);
+    if (answers === 'abort') return;
+    const { skill: route, fetchUrls, implementMode } = answers;
     setInputValue('');
     setSuggestionState(null);
     if (!trimmed) return;

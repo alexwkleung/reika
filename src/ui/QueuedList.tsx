@@ -1,8 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
-import type { QueuedMessage } from './queue.js';
-import { queuedPreview } from './queue.js';
+import { queuedPreview, type QueuedMessage } from '../agent/busyqueue.js';
 
 /** Ephemeral list of messages waiting for the current turn to finish.
  *  Sits directly above the input where the eye already is; disappears the
