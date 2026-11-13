@@ -10,7 +10,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - `pnpm run install:global` now installs a copy of the checkout instead of a link to it. A linked
   install showed the version of whatever branch was checked out and ran whatever was last built, so
   switching branches or building elsewhere silently changed the installed `reika`. Run
-  `pnpm run reinstall:global` to pick up new changes.
+  `pnpm run reinstall:global` to pick up new changes (#956).
 
 ## [0.11.0] - 2026-11-12
 
