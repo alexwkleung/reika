@@ -62,7 +62,7 @@
     "eval": "tsx evals/runner.ts",
     "docs:dev": "pnpm --dir docs run dev",
     "docs:build": "pnpm --dir docs run build",
-    "install:global": "pnpm run build && pnpm add -g . && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but pnpm's global bin dir is not on your PATH (run: pnpm setup)\"; fi",
+    "install:global": "d=$(mktemp -d) && tgz=$(pnpm pack --pack-destination \"$d\" | tail -1) && pnpm add -g \"$tgz\" && rm -rf \"$d\" && if command -v reika >/dev/null; then echo \"reika $(reika --version) installed at $(command -v reika)\"; else echo \"reika installed, but pnpm's global bin dir is not on your PATH (run: pnpm setup)\"; fi",
     "uninstall:global": "pnpm remove -g @alexwkleung/reika || pnpm remove -g reika",
     "reinstall:global": "pnpm run uninstall:global && pnpm run install:global",
     "prepack": "pnpm run build",
