@@ -3661,7 +3661,7 @@ export async function runTurn(opts: {
       // would point at a step already taken. Requires a parsed step — the same 0-steps-is-not-a-plan
       // line planWritten draws (#126): a force-written spiral stop is a dead end, not a handoff.
       // The three modes are spelled out because the mode switch is the second route, and /agent is
-      // not the only one it can take — keep them in step with IMPLEMENT_MODES (ui/commands.ts).
+      // not the only one it can take — keep them in step with IMPLEMENT_MODES (agent/turncommands.ts).
       // `emphasis: 'lead'` tints "Plan ready" in the marker's own color, so the line reads as the
       // turn's call to action rather than as one more muted notice.
       if (

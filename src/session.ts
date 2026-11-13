@@ -27,7 +27,6 @@ import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
 import { kFormat } from './ui/format.js';
 import {
-  buildImplementPrompt,
   isMinimalPrompt,
   isGrindPrompt,
   planWritten,
@@ -35,6 +34,7 @@ import {
   turnRefines,
   turnTools,
 } from './ui/commands.js';
+import { buildImplementPrompt } from './agent/turncommands.js';
 import type {
   Config,
   ContextBundle,

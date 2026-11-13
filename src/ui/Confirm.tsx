@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink';
 import { type ConfirmSpec } from './dialogspecs.js';
-import { IMPLEMENT_MODES, type ImplementMode } from './commands.js';
+import { IMPLEMENT_MODES, type ImplementMode } from '../agent/turncommands.js';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 

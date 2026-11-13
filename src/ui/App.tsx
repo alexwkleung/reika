@@ -126,23 +126,25 @@ import {
 } from '../store/sessions.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
 import {
-  buildImplementPrompt,
-  buildSearchPrompt,
-  IMPLEMENT_MODES,
-  isImplementCommand,
   isMinimalPrompt,
   isGrindPrompt,
   isSaveCommand,
   nextMode,
-  searchModeRefusal,
-  searchUnavailableNotice,
   turnMode,
   turnPromptMode,
   turnRefines,
   turnTools,
-  type ImplementMode,
   type Mode,
 } from './commands.js';
+import {
+  IMPLEMENT_MODES,
+  isImplementCommand,
+  parseCommand,
+  resolveSkillCommand,
+  resolveTurnCommand,
+  type ImplementMode,
+  type TurnCommand,
+} from '../agent/turncommands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
@@ -1551,11 +1553,33 @@ export function App() {
     }
   };
 
+  // Carries out what a turn command resolved to (agent/turncommands.ts): its lines, the mode
+  // switch and the submit. The typed command is the turn's bubble, unless the turn emits no user
+  // message and the command is echoed by hand.
+  const runTurnCommand = async (cmd: TurnCommand, raw: string, echo: Message): Promise<void> => {
+    if (cmd.kind === 'refuse') {
+      setMessages(prev => [...prev, echo, { role: 'system', content: cmd.content }]);
+      return;
+    }
+    if (cmd.switchTo) setMode(cmd.switchTo);
+    const before = cmd.before.map(n => ({ role: 'system' as const, ...n }));
+    if (cmd.echo || before.length > 0) {
+      setMessages(prev => [...prev, ...(cmd.echo ? [echo] : []), ...before]);
+    }
+    if (cmd.skill) pendingSkillRef.current = cmd.skill;
+    pendingNoticesRef.current.push(...cmd.after.map(n => ({ role: 'system' as const, ...n })));
+    // The override forces this turn's tools + promptMode regardless of a not-yet-flushed mode.
+    await submitToModel(
+      cmd.modelText,
+      cmd.echo ? undefined : raw,
+      cmd.mode,
+      undefined,
+      cmd.manualCompact,
+    );
+  };
+
   const handleCommand = async (raw: string, implementMode?: ImplementMode): Promise<void> => {
-    const rest = raw.slice(1);
-    const space = rest.indexOf(' ');
-    const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
-    const args = space === -1 ? '' : rest.slice(space + 1);
+    const { name, args } = parseCommand(raw);
     // `meta` keeps this command echo in the scrollback but out of the model-facing history.
     const echo: Message = { role: 'user', content: raw, meta: true };
 
@@ -1630,105 +1654,20 @@ export function App() {
       switchMode(name, banner, echo);
       return;
     }
-    if (name === 'implement') {
-      // Shortcut for the plan→agent handoff: flip to agent mode and submit "execute the plan
-      // above" so the user doesn't have to /agent then hand-write the prompt. The plan sits in
-      // `messages` from prior renders, so it's in the history slice submitToModel sends; the loop
-      // folds the exploration into a digest automatically (REIKA_PLAN_HANDOFF, default on).
-      if (mode === 'shell' || mode === 'chat') {
-        setMessages(prev => [
-          ...prev,
-          echo,
-          {
-            role: 'system',
-            content: `/implement isn't available in ${mode} mode — use it from plan mode (or agent mode) to execute a plan.`,
-          },
-        ]);
-        return;
-      }
-      // From plan mode the picker chose the target (#561). Otherwise 'agent' for every mode but
-      // minimal and grind, which stay themselves — handing either the full tool list and agent
-      // prompt for one turn would undo the only thing the mode does, and silently.
-      const target: ImplementMode =
-        mode === 'plan'
-          ? (implementMode ?? 'agent')
-          : mode === 'minimal' || mode === 'grind'
-            ? mode
-            : 'agent';
-      if (mode === 'plan') {
-        setMode(target);
-        const label = target.charAt(0).toUpperCase() + target.slice(1);
-        setMessages(prev => [
-          ...prev,
-          { role: 'system', content: `${label} mode — implementing the plan above.` },
-        ]);
-      }
-      // The user bubble renders as `/implement` (displayOverride) while the model receives the
-      // built prompt; the override forces this turn's tools + promptMode regardless of the
-      // not-yet-flushed mode state.
-      await submitToModel(buildImplementPrompt(args), raw, target);
-      return;
-    }
-    if (name === 'compact') {
-      // Manual compaction (issue #481). The loop runs its own event on this trigger — note round,
-      // fold, session-wide fold numbering — with no user turn, so nothing new enters the history
-      // the recap summarizes. Not available on the chat side (an isolated minibuffer is compacted
-      // by /new, not by context pressure) or shell (no model history at all); vibe routes to an
-      // agent turn the way /implement does, since its plan phase would otherwise claim the turn.
-      if (!config || !bundle) return;
-      if (mode === 'chat' || mode === 'shell') {
-        setMessages(prev => [
-          ...prev,
-          echo,
-          { role: 'system', content: `/compact isn't available in ${mode} mode.` },
-        ]);
-        return;
-      }
-      // The typed command itself must land in scrollback by hand: the manual compaction runs no
-      // user turn, so unlike /implement there is no loop-emitted user message to render it.
-      setMessages(prev => [
-        ...prev,
-        echo,
-        { role: 'system', tone: 'info', emphasis: 'line', content: 'Compacting context…' },
-      ]);
-      await submitToModel(
-        'compact', // text: never reaches the loop — manualCompact drops the user message
-        undefined,
-        mode === 'vibe' ? 'agent' : undefined,
-        undefined,
-        true, // manualCompact
-      );
-      return;
-    }
-    if (name === 'search') {
-      // `/search <query>` (#829): the direct road to the search tool. A mode's own prompt says to
-      // use `search` only when the answer needs current information, which leaves the decision to
-      // the model; this makes it the user's. Availability is read off the session's own tool lists
-      // rather than re-derived from config, so it agrees with the offline case too — that one is
-      // decided once at startup (`opts.offline` in tools/index.ts) and never revisited.
-      const query = args.trim();
-      const say = (content: string): void =>
-        setMessages(prev => [...prev, echo, { role: 'system', content }]);
-      if (!query) {
-        say('Usage: /search <query> — the model runs one web search and answers from the results.');
-        return;
-      }
-      const refusal = searchModeRefusal(mode);
-      if (refusal) {
-        say(refusal);
-        return;
-      }
-      // Vibe plans before it acts, and a search is a question, not a task: it runs as an agent turn,
-      // the same one-turn override /implement and /compact take out of vibe.
-      const target: Mode = mode === 'vibe' ? 'agent' : mode;
-      const lists = sessionRef.current?.lists;
-      if (!lists || !turnTools(target, lists).some(t => t.name === 'search')) {
-        say(searchUnavailableNotice(isOffline()));
-        return;
-      }
-      // No echo of its own, like a skill: runTurn emits the user message, rendered from `raw`, so
-      // the bubble reads `/search react 19` while the model receives the instructions.
-      await submitToModel(buildSearchPrompt(query), raw, target === mode ? undefined : target);
+    // /implement, /compact and /search end in a model turn. Search availability is read off the
+    // session's own tool lists rather than re-derived from config, so it agrees with the offline
+    // case too — that one is decided once at startup and never revisited.
+    const turnCommand = resolveTurnCommand(name, args, {
+      mode,
+      implementMode,
+      searchAvailable: target => {
+        const lists = sessionRef.current?.lists;
+        return !!lists && turnTools(target, lists).some(t => t.name === 'search');
+      },
+      offline: isOffline,
+    });
+    if (turnCommand) {
+      await runTurnCommand(turnCommand, raw, echo);
       return;
     }
     if (name === 'cd') {
@@ -2120,26 +2059,16 @@ export function App() {
           await runMcpCommand(raw, mcpCommand, args);
           return;
         }
-        const skill = bundle?.skills.find(s => s.name === name);
-        if (skill) {
-          // `raw` stays the display, so the bubble shows the marker while the model gets the text.
-          const extra = expandPastes(args.trim(), pastedTextsRef.current);
-          const prompt = extra ? `${skill.body}\n\n${extra}` : skill.body;
-          pendingSkillRef.current = skill.name;
-          // Same receipt shape as auto-routing: the bubble echoes what was typed, and only
-          // this line says the body is what the model got (#398).
-          pendingNoticesRef.current.push({
-            role: 'system',
-            content: `Skill /${skill.name} applied — its body was sent as this prompt${extra ? ', with your text after it' : ''}.`,
-            tone: 'info',
-          });
-          // No `echo` here: unlike the UI-only commands above, a skill runs a real turn, and
-          // runTurn emits its own user message rendered via `raw` (displayOverride) — the user
-          // bubble reads `/issue 14` while the model receives the skill body. Pre-appending
-          // would double it. Same pattern as /implement.
-          // Skills follow the active mode's prompt handling, so in vibe mode they
-          // plan-then-implement like any other prompt.
-          await submitToModel(prompt, raw, modeRef.current === 'vibe' ? 'vibe' : undefined);
+        // No echo for a skill: unlike the UI-only commands above it runs a real turn, and runTurn
+        // emits its own user message rendered from `raw` — the bubble reads `/issue 14` while the
+        // model receives the skill body. Pre-appending would double it.
+        const skillCommand = resolveSkillCommand(name, args, {
+          skills: bundle?.skills ?? [],
+          mode: modeRef.current,
+          pastes: pastedTextsRef.current,
+        });
+        if (skillCommand) {
+          await runTurnCommand(skillCommand, raw, echo);
           return;
         }
         response = `Unknown command: /${name}. Try /help.`;
