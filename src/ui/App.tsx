@@ -125,17 +125,18 @@ import {
   type SessionSides,
 } from '../store/sessions.js';
 import { buildModelTargets, type ModelTarget } from './models.js';
+import { isSaveCommand } from './commands.js';
 import {
   isMinimalPrompt,
   isGrindPrompt,
-  isSaveCommand,
+  modeSide,
   nextMode,
+  resolveModeCommand,
   turnMode,
   turnPromptMode,
   turnRefines,
   turnTools,
-  type Mode,
-} from './commands.js';
+} from '../agent/modes.js';
 import {
   IMPLEMENT_MODES,
   isImplementCommand,
@@ -170,6 +171,7 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   Message,
+  Mode,
   PromptProgress,
   QuestionAnswer,
   QuestionRequest,
@@ -1489,37 +1491,19 @@ export function App() {
   // lands after any restored history (the command echo + banner for /chat et al., nothing
   // for cycling — the status-bar mode tag is that path's feedback).
   const transitionMode = (next: Mode, trailing: Message[]): void => {
-    const currentIsChat = modeRef.current === 'chat';
-    const nextIsChat = next === 'chat';
-    if (currentIsChat !== nextIsChat) {
+    const from = modeSide(modeRef.current);
+    const to = modeSide(next);
+    if (from !== to) {
       // Crossing the chat boundary — save current array, restore the other side's stash
       const stash = stashedMessagesRef.current;
-      if (currentIsChat) stash.chat = messagesRef.current;
-      else stash.agent = messagesRef.current;
-      const restored = (nextIsChat ? stash.chat : stash.agent) ?? [];
-      setMessages([...restored, ...trailing]);
+      stash[from] = messagesRef.current;
+      setMessages([...(stash[to] ?? []), ...trailing]);
       // The trailing banner/echo are UI-only (system + meta), so the model history restores bare.
-      sessionRef.current?.switchSide(nextIsChat ? 'chat' : 'agent');
+      sessionRef.current?.switchSide(to);
     } else if (trailing.length > 0) {
       setMessages(prev => [...prev, ...trailing]);
     }
     setMode(next);
-  };
-
-  const switchMode = (next: Mode, banner: string, echo: Message): void => {
-    if (next === mode) {
-      setMessages(prev => [...prev, echo, { role: 'system', content: `Already in ${next} mode.` }]);
-      return;
-    }
-    if (statusRef.current === 'busy') {
-      setMessages(prev => [
-        ...prev,
-        echo,
-        { role: 'system', content: 'Cannot switch modes while busy. Wait or ctrl-c to abort.' },
-      ]);
-      return;
-    }
-    transitionMode(next, [echo, { role: 'system', content: banner }]);
   };
 
   // A slash-invoked MCP tool (#265): `/filesystem:read_file {"path":"src/index.ts"}`. No approval
@@ -1631,30 +1615,17 @@ export function App() {
       setMessages(prev => [...prev, echo, { role: 'system', content: reply }]);
       return;
     }
-    if (
-      name === 'shell' ||
-      name === 'agent' ||
-      name === 'chat' ||
-      name === 'plan' ||
-      name === 'vibe' ||
-      name === 'minimal' ||
-      name === 'grind'
-    ) {
-      const banner =
-        name === 'shell'
-          ? 'Shell mode. Commands run directly in cwd. /agent to return.'
-          : name === 'chat'
-            ? 'Chat mode. Filesystem and shell tools disabled. Conversation isolated from agent. /agent to return.'
-            : name === 'plan'
-              ? 'Plan mode — read-only exploration; will end with a written plan. Send another message to refine that plan, or /implement (agent, minimal or grind) to execute it.'
-              : name === 'vibe'
-                ? 'Vibe mode — each prompt is planned first (read-only), then the plan is implemented automatically. Approvals apply as usual. /agent to return.'
-                : name === 'minimal'
-                  ? 'Minimal mode — shell only, and no repo map, project summary, or AGENTS.md in the prompt. The model works from what commands show it. /agent to return.'
-                  : name === 'grind'
-                    ? 'Grind mode — the model works through a fixed procedure: pin down the task, explore, choose, change, prove it by running checks, review the diff, report what was verified. Tools: bash, read, edit. /agent to return.'
-                    : 'Agent mode.';
-      switchMode(name, banner, echo);
+    // /agent, /plan and the other mode commands (agent/modes.ts).
+    const modeCommand = resolveModeCommand(name, {
+      mode,
+      busy: statusRef.current === 'busy',
+    });
+    if (modeCommand) {
+      if (modeCommand.kind === 'refuse') {
+        setMessages(prev => [...prev, echo, { role: 'system', content: modeCommand.content }]);
+      } else {
+        transitionMode(modeCommand.to, [echo, { role: 'system', content: modeCommand.banner }]);
+      }
       return;
     }
     // /implement, /compact and /search end in a model turn. Search availability is read off the

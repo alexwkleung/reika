@@ -5,7 +5,7 @@ import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { isLargePaste } from './pastes.js';
 import { isFocusKeypress, useTerminalFocus } from './focus.js';
-import type { Mode } from './commands.js';
+import type { Mode } from '../types.js';
 
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';

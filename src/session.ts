@@ -26,14 +26,14 @@ import type { NativeImage } from './agent/attachments.js';
 import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
 import { kFormat } from './ui/format.js';
+import { planWritten } from './ui/commands.js';
 import {
   isMinimalPrompt,
   isGrindPrompt,
-  planWritten,
   turnPromptMode,
   turnRefines,
   turnTools,
-} from './ui/commands.js';
+} from './agent/modes.js';
 import { buildImplementPrompt } from './agent/turncommands.js';
 import type {
   Config,
