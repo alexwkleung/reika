@@ -519,7 +519,9 @@ const sandboxWorks = sandboxExecAvailable();
 // The composition half of #163: which commands run sandboxed is decided by the danger scan and the
 // presence of an approval gate, so the cells are pinned on the pure decision — deterministic on every
 // platform — and one darwin-only run pins that the decision reaches a real process.
-describe('bashTool — sandbox composition', () => {
+// These spawn real `sandbox-exec` and `git` processes, several per test: about a second each run
+// alone, four to five times that when every file runs in parallel, which is the 5s default (#964).
+describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
   const approve = async (): Promise<boolean> => true;
 
   it('sandboxes a clean command, auto-approved (safe) or with no gate at all (bypass)', () => {
