@@ -325,6 +325,25 @@ describe('App layout', () => {
     }
   });
 
+  // The controller's rule (#584): output under another tool's name replaces the block, where App's
+  // own copy used to append it to the one already streaming.
+  it('starts a fresh tool block when another tool’s output arrives', async () => {
+    const app = await mountApp();
+    await submit(app, 'hi');
+    const opts = (runTurn.mock.calls[0] as unknown as unknown[] | undefined)?.[0] as
+      | { onToolProgress?: (chunk: string, tool: string) => void }
+      | undefined;
+    opts!.onToolProgress!('first-block-output\n', 'bash');
+    await tick(120);
+    expect(plain(app.lastFrame())).toContain('first-block-output');
+    opts!.onToolProgress!('second-block-output\n', 'grep');
+    await tick(120);
+    const frame = plain(app.lastFrame());
+    expect(frame).toContain('second-block-output');
+    expect(frame).not.toContain('first-block-output');
+    app.unmount();
+  });
+
   // The #112 regression. The completion list drops its bottom border and the input drops its
   // top one so the two read as one frame; anything rendered between them lands *inside* it.
   it('keeps the Working indicator outside the completion/input frame', async () => {

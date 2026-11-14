@@ -1746,9 +1746,41 @@ describe('controller live turn state', () => {
       await answered;
       seen.push(controller.live.pending, `${changes.length}`);
     });
-    const pending = { name: 'bash', since: 1234 };
+    const pending = { name: 'bash', since: 1234, call: 1 };
     expect(seen).toEqual([null, '1', pending, '2', null, '3', pending, '4']);
     expect(changes.slice(0, 4)).toEqual(Array(4).fill({ type: 'live' }));
+  });
+
+  it('numbers every call it sees start, so two same-name calls differ', async () => {
+    const { controller, turn } = live();
+    const calls: (number | undefined)[] = [];
+    await turn(opts => {
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+      opts.events!.onMessage!({ role: 'tool', callId: 'c1', summary: 'Read a.ts' });
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+    });
+    await turn(opts => {
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+    });
+    expect(calls).toEqual([1, 2, 3]);
+  });
+
+  it('keeps the running call readable while a dialog hides it from live', async () => {
+    const { controller, turn } = live();
+    const seen: unknown[] = [];
+    await turn(async opts => {
+      opts.events!.onToolStart!('bash');
+      const approved = opts.requestApproval!({ tool: 'bash', subject: 'Run', preview: 'ls' });
+      seen.push(controller.live.pending, controller.runningCall);
+      controller.answerApproval(true);
+      await approved;
+      opts.events!.onMessage!({ role: 'tool', callId: 'c1', summary: 'Ran: ls' });
+      seen.push(controller.runningCall);
+    });
+    expect(seen).toEqual([null, { name: 'bash', since: 1234, call: 1 }, null]);
   });
 
   it('says nothing when a dialog opens with no call pending', async () => {
@@ -2486,7 +2518,6 @@ describe('controller.runCommand', () => {
     exit: vi.fn(),
     pickModel: vi.fn(),
     pickSession: vi.fn(),
-    onNewConversation: vi.fn(),
     ...overrides,
   });
   const issueSkill: Skill = {
@@ -2509,7 +2540,6 @@ describe('controller.runCommand', () => {
         content: expect.stringMatching(/^New session/),
       });
       expect(controller.mode).toBe('agent');
-      expect(front.onNewConversation).toHaveBeenCalledTimes(1);
     }
   });
 
@@ -2812,7 +2842,6 @@ describe('controller.submit', () => {
       exit: vi.fn(),
       pickModel: vi.fn(),
       pickSession: vi.fn(),
-      onNewConversation: vi.fn(),
       shell: { onProgress: vi.fn() },
       onStage: vi.fn(),
       onImagesTaken: vi.fn(() => calls.push('images')),
