@@ -4,6 +4,7 @@ import { autoApproves, effectiveAutoApprove } from './approval.js';
 import { inheritProfile, modeSwitchProfile } from './config.js';
 import { persistableMode, type LastState } from './laststate.js';
 import type { Session } from './session.js';
+import { countRealTurns, modelHistoryFromScrollback, type SessionSides } from './store/sessions.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
@@ -85,7 +86,6 @@ export type Controller = {
   setSessionUnattended(on: boolean | null): void;
   // What an unattended session declined since this was last called.
   takeUnattendedDeclines(): ApprovalRequest[];
-  resetApprovals(): void;
   // Null is the question dropped unanswered.
   openQuestion(request: QuestionRequest): Promise<QuestionAnswer | null>;
   answerQuestion(answer: QuestionAnswer | null): void;
@@ -111,16 +111,19 @@ export type Controller = {
   pickModel(typed: string, echo?: Message): void;
   // What the model picker and `/model` completion list.
   modelTargets(): ModelTarget[];
-  // A new conversation starts over: the pick is forgotten and the per-mode models apply again,
-  // over the default profile.
-  unpinModel(): void;
-  // Puts the session on the current mode's model. A mode change does this itself.
-  applyModeModel(): void;
+  // When this conversation began: launch, or the last `newConversation`.
+  readonly startedAt: number;
+  // `/new`: drops both sides and everything the session learned about the engine, and starts over
+  // in agent mode on the default profile with the counters, the auto-approve toggle and the model
+  // pick cleared. The scrollback is seeded with the echo and a receipt, since an empty screen
+  // reads as a fresh launch.
+  newConversation(echo: Message): void;
+  // Puts a saved session in this one's place and hands back the rows to show: the side that is
+  // now on screen, then a receipt. The caller shows them, in slices if it wants, starting with a
+  // `replace`. A session with only one side opens on that side (#875).
+  loadConversation(sides: SessionSides, from: { title?: string; path: string }): Message[];
   // Both sides' scrollbacks, whichever one is on screen.
   sides(): Record<Side, Message[]>;
-  // Sets the scrollback kept off screen, dropping whatever was there.
-  stash(side: Side, messages: Message[]): void;
-  clearStash(): void;
 };
 
 export function createController(opts: {
@@ -153,6 +156,7 @@ export function createController(opts: {
   let ownProfile = 'default';
   // The user said which model this session runs, which outranks the per-mode map (#616).
   let modelPinned = false;
+  let startedAt = Date.now();
   const listeners = new Set<() => void>();
 
   const set = (next: Partial<ControllerSnapshot>): void => {
@@ -201,6 +205,11 @@ export function createController(opts: {
     const target = modeSwitchProfile(cfg, snapshot.mode, ownProfile);
     if (!target || target === session.profile || !cfg.profiles[target]) return;
     switchModel(target, undefined, false);
+  };
+  const setMode = (mode: Mode): void => {
+    if (mode === snapshot.mode) return;
+    set({ mode });
+    modeChanged();
   };
   // Every route to a new mode ends here, so the saved state and the mode's model cannot miss one.
   // Chat and shell are not modes a session can open in, so they leave the last work mode saved.
@@ -308,7 +317,6 @@ export function createController(opts: {
       unattendedDeclines = [];
       return taken;
     },
-    resetApprovals: () => set({ approvals: { approved: 0, declined: 0 } }),
     openQuestion: request =>
       new Promise(resolve => {
         resolveQuestion = resolve;
@@ -335,11 +343,7 @@ export function createController(opts: {
     },
     append,
     replace: messages => set({ messages }),
-    setMode: mode => {
-      if (mode === snapshot.mode) return;
-      set({ mode });
-      modeChanged();
-    },
+    setMode,
     transition: (mode, trailing = []) => {
       const changed = mode !== snapshot.mode;
       const from = modeSide(snapshot.mode);
@@ -383,11 +387,66 @@ export function createController(opts: {
       const cfg = config();
       return session && cfg ? buildModelTargets(cfg, session.profile) : [];
     },
-    unpinModel: () => {
+    get startedAt() {
+      return startedAt;
+    },
+    newConversation: echo => {
+      stashed = {};
+      startedAt = Date.now();
+      set({
+        messages: [
+          echo,
+          { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+        ],
+        approvals: { approved: 0, declined: 0 },
+        sessionAutoApprove: null,
+      });
+      // Also drops back to the default profile, which may be another model on other hardware.
+      session?.reset({ relearn: true });
+      session?.switchSide('agent');
+      // A picked model belonged to the conversation that just went away. Unpinned before the mode
+      // moves: the mode's model is applied over `ownProfile`, which must already be the default.
       modelPinned = false;
       ownProfile = 'default';
+      setMode('agent');
+      applyModeModel();
     },
-    applyModeModel,
+    loadConversation: (sides, from) => {
+      stashed = {};
+      session?.reset({ relearn: false });
+      // Emptied first so a line the mode change prints below can be told from the old scrollback.
+      set({ messages: [] });
+      const agentTurns = countRealTurns(sides.agent);
+      const chatTurns = countRealTurns(sides.chat);
+      // Leaving chat goes to agent, not the saved session's last mode, which could be plan or
+      // shell. Nothing is on screen to put away, so only the session's side and the mode move.
+      const switchedTo: Mode | null =
+        snapshot.mode !== 'chat' && agentTurns === 0 && chatTurns > 0
+          ? 'chat'
+          : snapshot.mode === 'chat' && chatTurns === 0 && agentTurns > 0
+            ? 'agent'
+            : null;
+      if (switchedTo) {
+        session?.switchSide(modeSide(switchedTo));
+        setMode(switchedTo);
+      }
+      const onScreen = modeSide(snapshot.mode);
+      const offScreen: Side = onScreen === 'chat' ? 'agent' : 'chat';
+      const active = sides[onScreen];
+      const other = sides[offScreen];
+      stashed = { [offScreen]: other };
+      session?.loadHistory(modelHistoryFromScrollback(active), modelHistoryFromScrollback(other));
+      const otherNote = other.length > 0 ? ` (+ ${other.length} on the ${offScreen} side)` : '';
+      return [
+        ...active,
+        {
+          role: 'system',
+          content: `Resumed "${from.title ?? 'untitled'}" — ${active.length} ${onScreen} messages${otherNote}${switchedTo ? `, switched to ${switchedTo} mode,` : ''} from ${from.path}`,
+        },
+        // What the mode change printed: the model it brought, which belongs under the receipt.
+        ...snapshot.messages,
+      ];
+    },
     sides: () => {
       const onScreen = modeSide(snapshot.mode);
       const other: Side = onScreen === 'chat' ? 'agent' : 'chat';
@@ -395,12 +454,6 @@ export function createController(opts: {
         Side,
         Message[]
       >;
-    },
-    stash: (side, messages) => {
-      stashed = { [side]: messages };
-    },
-    clearStash: () => {
-      stashed = {};
     },
   };
 }

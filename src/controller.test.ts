@@ -29,6 +29,11 @@ function fakeSession(config: Policy) {
     profile: 'default',
     getSnapshot: () => ({ config: cfg }),
     switchSide: vi.fn(),
+    loadHistory: vi.fn(),
+    // Like the real one: a relearning reset drops back to the default profile.
+    reset: vi.fn((opts: { relearn?: boolean } = {}) => {
+      if (opts.relearn) session.profile = 'default';
+    }),
     addProfile: vi.fn((name: string, profile: Profile) => {
       cfg.profiles[name] = profile;
     }),
@@ -187,24 +192,6 @@ describe('controller sides and stash', () => {
     expect(controller.mode).toBe('chat');
     expect(controller.messages).toHaveLength(1);
     expect(switchSide).not.toHaveBeenCalled();
-  });
-
-  it('takes a scrollback for the side that is off screen', () => {
-    const { controller } = controllerIn('agent');
-    const saved = [user('saved chat')];
-    controller.stash('chat', saved);
-    expect(controller.sides().chat).toBe(saved);
-    controller.transition('chat');
-    expect(controller.messages).toEqual(saved);
-  });
-
-  it('forgets the off-screen side when the stash is cleared', () => {
-    const { controller } = controllerIn('agent');
-    controller.append(user('agent task'));
-    controller.transition('chat');
-    controller.clearStash();
-    controller.transition('agent');
-    expect(controller.messages).toEqual([]);
   });
 });
 
@@ -468,15 +455,6 @@ describe('controller approval gate', () => {
     launchedOff.setSessionUnattended(true);
     expect(launchedOff.unattended).toBe(true);
   });
-
-  it('zeroes the counters on a reset and leaves the toggles alone', () => {
-    const { controller } = controllerIn('agent');
-    void controller.requestApproval(ordinary);
-    controller.answerApproval(true, { always: true });
-    controller.resetApprovals();
-    expect(controller.getSnapshot().approvals).toEqual({ approved: 0, declined: 0 });
-    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
-  });
 });
 
 describe('controller modes and the saved state', () => {
@@ -594,18 +572,6 @@ describe('controller model switching', () => {
     controller.pickModel('go');
     controller.transition('plan');
     expect(session?.profile).toBe('go');
-
-    controller.unpinModel();
-    controller.applyModeModel();
-    expect(session?.profile).toBe('kimi');
-  });
-
-  it('comes back to the default profile after an unpin, not to the one it opened on', () => {
-    const { controller, session } = controllerIn('plan', { profiles }, 'go');
-    controller.unpinModel();
-    session!.profile = 'kimi';
-    controller.applyModeModel();
-    expect(session?.profile).toBe('default');
   });
 
   it('lists the picker targets with the active one marked', () => {
@@ -613,5 +579,173 @@ describe('controller model switching', () => {
     controller.pickModel('kimi');
     const active = controller.modelTargets().filter(t => t.active);
     expect(active.map(t => t.name)).toEqual(['kimi']);
+  });
+});
+
+describe('controller.newConversation', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('deepseek'),
+  };
+  const echo: Message = { role: 'user', content: '/new', meta: true };
+  const receipt = note('New session — conversation, tokens, and mode reset.');
+
+  it('seeds the scrollback with the echo and a receipt, and drops both sides', () => {
+    const { controller } = controllerIn('agent');
+    controller.append(user('agent task'));
+    controller.transition('chat');
+    controller.append(user('chat question'));
+
+    controller.newConversation(echo);
+    expect(controller.messages).toEqual([echo, receipt]);
+    expect(controller.mode).toBe('agent');
+    expect(controller.sides()).toEqual({ agent: [echo, receipt], chat: [] });
+  });
+
+  it('resets the session with what it learned, and puts it on the agent side', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.newConversation(echo);
+    expect(session?.reset).toHaveBeenCalledWith({ relearn: true });
+    expect(session?.switchSide).toHaveBeenLastCalledWith('agent');
+  });
+
+  it('clears the counters and the auto-approve toggle, and leaves unattended as it was', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval({ tool: 'edit', subject: 'a.ts', preview: '+ x' });
+    controller.answerApproval(true, { always: true });
+    controller.setSessionUnattended(true);
+
+    controller.newConversation(echo);
+    expect(controller.getSnapshot()).toMatchObject({
+      approvals: { approved: 0, declined: 0 },
+      sessionAutoApprove: null,
+      sessionUnattended: true,
+    });
+  });
+
+  it('moves the start time forward', async () => {
+    const { controller } = controllerIn('agent');
+    const before = controller.startedAt;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    controller.newConversation(echo);
+    expect(controller.startedAt).toBeGreaterThan(before);
+  });
+
+  it('forgets a picked model, so the mode map applies again', () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    controller.pickModel('go');
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('default');
+
+    controller.transition('plan');
+    expect(session?.profile).toBe('kimi');
+  });
+
+  it('comes back to the default profile, not the one the session opened on', () => {
+    const { controller, session } = controllerIn('plan', { profiles }, 'go');
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('default');
+    expect(session?.setProfile).not.toHaveBeenCalled();
+    // One line only: no switch to the opening profile and back.
+    expect(controller.messages).toEqual([echo, receipt]);
+  });
+
+  it("lands on agent mode's own model when it has one, under the receipt", () => {
+    const { controller, session } = controllerIn('plan', {
+      profiles,
+      modeProfiles: { agent: 'kimi' },
+    });
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('kimi');
+    expect(controller.messages).toEqual([
+      echo,
+      receipt,
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+  });
+});
+
+describe('controller.loadConversation', () => {
+  const saved = {
+    agent: [user('fix the parser'), { role: 'assistant', content: 'fixed' } as Message],
+    chat: [user('what is a monad')],
+  };
+  const from = { title: 'fix the parser', path: '/history/a.jsonl' };
+
+  it('hands back the side on screen and a receipt, and keeps the other side off screen', () => {
+    const { controller, session } = controllerIn('agent');
+    controller.append(user('old conversation'));
+    const rows = controller.loadConversation(saved, from);
+    expect(rows).toEqual([
+      ...saved.agent,
+      note(
+        'Resumed "fix the parser" — 2 agent messages (+ 1 on the chat side) from /history/a.jsonl',
+      ),
+    ]);
+    expect(controller.mode).toBe('agent');
+    expect(controller.messages).toEqual([]);
+    expect(session?.reset).toHaveBeenCalledWith({ relearn: false });
+
+    controller.replace(rows);
+    expect(controller.sides().chat).toBe(saved.chat);
+    controller.transition('chat');
+    expect(controller.messages).toEqual(saved.chat);
+  });
+
+  it('gives the session both model histories, the side on screen first', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.loadConversation(saved, from);
+    const [active, other] = session!.loadHistory.mock.calls[0];
+    expect(active).toEqual([user('what is a monad')]);
+    expect(other).toHaveLength(2);
+  });
+
+  it('opens a chat-only session on the chat side', () => {
+    const { controller, session } = controllerIn('plan');
+    const rows = controller.loadConversation({ agent: [], chat: saved.chat }, from);
+    expect(controller.mode).toBe('chat');
+    expect(session?.switchSide).toHaveBeenLastCalledWith('chat');
+    expect(rows.at(-1)).toEqual(
+      note(
+        'Resumed "fix the parser" — 1 chat messages, switched to chat mode, from /history/a.jsonl',
+      ),
+    );
+  });
+
+  it('opens an agent-only session in agent mode when resumed from chat', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.loadConversation({ agent: saved.agent, chat: [] }, from);
+    expect(controller.mode).toBe('agent');
+    expect(session?.switchSide).toHaveBeenLastCalledWith('agent');
+  });
+
+  it('stays in the current mode for a session with both sides', () => {
+    const { controller, session } = controllerIn('plan');
+    controller.loadConversation(saved, from);
+    expect(controller.mode).toBe('plan');
+    expect(session?.switchSide).not.toHaveBeenCalled();
+  });
+
+  it('calls an untitled session untitled', () => {
+    const { controller } = controllerIn('agent');
+    const rows = controller.loadConversation(saved, { path: '/history/b.jsonl' });
+    expect(rows.at(-1)).toMatchObject({ content: expect.stringContaining('Resumed "untitled"') });
+  });
+
+  it('puts the model a mode change brought under the receipt, not in the old scrollback', () => {
+    const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+    const { controller } = controllerIn('chat', { profiles, modeProfiles: { agent: 'kimi' } });
+    controller.append(user('old chat'));
+    const rows = controller.loadConversation({ agent: saved.agent, chat: [] }, from);
+    expect(rows.slice(-2)).toEqual([
+      note(
+        'Resumed "fix the parser" — 2 agent messages, switched to agent mode, from /history/a.jsonl',
+      ),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
   });
 });

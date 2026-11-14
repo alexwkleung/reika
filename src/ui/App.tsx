@@ -98,7 +98,6 @@ import {
   forAutosave,
   listSessions,
   loadSession,
-  modelHistoryFromScrollback,
   newSessionPath,
   projectHistoryDir,
   ROOT_HISTORY_DIR,
@@ -391,7 +390,6 @@ export function App() {
     projectDir: string;
   } | null>(null);
   const [resumeSelected, setResumeSelected] = useState(0);
-  const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
   const [exitRequested, setExitRequested] = useState(false);
   floorReleasedRef.current = exitRequested;
   const [exitArmed, setExitArmed] = useState(false);
@@ -515,8 +513,6 @@ export function App() {
   lastUsageRef.current = lastUsage;
   const estimatedContextRef = useRef<number | null>(null);
   estimatedContextRef.current = estimatedContext;
-  const sessionStartedAtRef = useRef(sessionStartedAt);
-  sessionStartedAtRef.current = sessionStartedAt;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -1100,11 +1096,10 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, status]);
 
-  // What /new and /resume both drop: the conversation and everything measured about it. The next
-  // save starts a new file (/resume re-points it after this when it continues one).
-  const resetConversation = (relearn = false): void => {
-    controller.clearStash();
-    sessionRef.current?.reset({ relearn });
+  // What /new and /resume both drop beside the conversation itself, which is the controller's:
+  // everything measured about it. The next save starts a new file (/resume re-points it after this
+  // when it continues one).
+  const resetMeasurements = (): void => {
     setPlanSteps(null);
     setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
     setLastUsage(null);
@@ -1141,7 +1136,7 @@ export function App() {
     }
     // Save whatever this session had before it is replaced.
     await autosaveNow();
-    resetConversation();
+    resetMeasurements();
     // A project session carries on in its own file; a manual save from the root is left as it was
     // and the continuation gets a project file of its own on its next save.
     if (dirname(entry.path) === projectDir) {
@@ -1149,41 +1144,7 @@ export function App() {
       logSessionFile(entry.path);
     }
     autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
-    // A session with only one side opens on that side (#875): resumed from the other, it would
-    // land on an empty screen, its messages one /chat or /agent away. A session with both stays
-    // put. Leaving chat goes to agent rather than the session's last mode, which could be plan or
-    // shell. The conversation was just reset, so there is no screen to stash — only the session's
-    // side and the mode move.
-    const agentTurns = countRealTurns(sides.agent);
-    const chatTurns = countRealTurns(sides.chat);
-    const switchedTo: Mode | null =
-      controller.mode !== 'chat' && agentTurns === 0 && chatTurns > 0
-        ? 'chat'
-        : controller.mode === 'chat' && chatTurns === 0 && agentTurns > 0
-          ? 'agent'
-          : null;
-    if (switchedTo) {
-      sessionRef.current?.switchSide(switchedTo === 'chat' ? 'chat' : 'agent');
-      controller.setMode(switchedTo);
-    }
-    const inChat = controller.mode === 'chat';
-    const active = inChat ? sides.chat : sides.agent;
-    const other = inChat ? sides.agent : sides.chat;
-    controller.stash(inChat ? 'agent' : 'chat', other);
-    sessionRef.current?.loadHistory(
-      modelHistoryFromScrollback(active),
-      modelHistoryFromScrollback(other),
-    );
-    const where = inChat ? 'chat' : 'agent';
-    const otherNote =
-      other.length > 0 ? ` (+ ${other.length} on the ${inChat ? 'agent' : 'chat'} side)` : '';
-    const resumed: Message[] = [
-      ...active,
-      {
-        role: 'system',
-        content: `Resumed "${entry.title ?? 'untitled'}" — ${active.length} ${where} messages${otherNote}${switchedTo ? `, switched to ${switchedTo} mode,` : ''} from ${entry.path}`,
-      },
-    ];
+    const resumed = controller.loadConversation(sides, entry);
     let size = RESUME_FIRST_SLICE;
     for (let at = 0; at < resumed.length;) {
       const slice = resumed.slice(at, at + size);
@@ -1206,7 +1167,7 @@ export function App() {
       const summary = buildSummary(
         controller.messages,
         usageRef.current,
-        sessionStartedAtRef.current,
+        controller.startedAt,
         controller.getSnapshot().approvals,
       );
       controller.append({ role: 'system', content: summary, skipAutosave: true });
@@ -1375,31 +1336,11 @@ export function App() {
     const echo: Message = { role: 'user', content: raw, meta: true };
 
     if (name === 'clear' || name === 'new') {
-      // Seed the wiped scrollback with a persistent receipt (echo + notice) rather
-      // than leaving it empty — a bare screen after /new is indistinguishable from a
-      // fresh launch, so the user can't tell the reset actually happened. Both sides
-      // of the chat/agent stash go too: a stashed conversation resurfacing on the
-      // next mode switch would make the "new session" a lie.
-      controller.replace([
-        echo,
-        { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
-      ]);
-      // Also forgets what was learned about the engine and drops back to the default profile, which
-      // may be a different model on different hardware (#204): the tok/s chip goes with the token
-      // counts it sits next to.
-      resetConversation(true);
+      controller.newConversation(echo);
+      resetMeasurements();
       heldShellRunsRef.current = [];
-      sessionRef.current?.switchSide('agent');
+      // The tok/s chip goes with the token counts it sits next to (#204).
       setDecodeRate(undefined);
-      controller.resetApprovals();
-      setSessionStartedAt(Date.now());
-      controller.setSessionAutoApprove(null);
-      // A new session un-pins the model (#616): a /model choice belonged to the conversation that
-      // just went away, and the map applies again from here. `own` is what resetConversation just
-      // put the session on, so agent mode's own model — if it has one — can land on top of it.
-      controller.unpinModel();
-      controller.setMode('agent');
-      controller.applyModeModel();
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1412,7 +1353,7 @@ export function App() {
       skills: bundle?.skills ?? [],
       messages: controller.messages,
       usage: usageRef.current,
-      startedAt: sessionStartedAtRef.current,
+      startedAt: controller.startedAt,
       approvals: controller.getSnapshot().approvals,
       mcpList: () => sessionRef.current?.mcp.list(),
     });
