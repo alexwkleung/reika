@@ -150,14 +150,7 @@ import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { createController } from '../controller.js';
 import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
-import {
-  canDrain,
-  queuedMessage,
-  queueReceipt,
-  takeNext,
-  type QueuedMessage,
-  type SubmitAnswers,
-} from '../agent/busyqueue.js';
+import { queuedMessage, type SubmitAnswers } from '../agent/busyqueue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
 import {
   buildShellRunsBlock,
@@ -179,7 +172,6 @@ import type {
 } from '../types.js';
 
 type Phase = 'thinking' | 'tool';
-type UIStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
 // still reads. Long enough to perceive, short enough not to imply the check is still running.
@@ -243,7 +235,6 @@ function nextResumeSliceSize(size: number, tookMs: number): number {
 
 export function App() {
   const { exit } = useApp();
-  const [status, setStatus] = useState<UIStatus>('loading');
   // What the pre-session frame says while bootstrap runs, or undefined for the usual launch where
   // there is nothing worth saying yet (#265). Only ever read in the `loading` frame: once the
   // session lands, the splash and the scrollback describe the session itself.
@@ -385,15 +376,19 @@ export function App() {
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
-  // The scrollback, the other side's stash and the mode live in the controller (src/controller.ts);
-  // this component renders them and changes them only through it.
+  // The scrollback, the other side's stash, the mode, the status and the queue of prompts typed
+  // while busy live in the controller (src/controller.ts); this component renders them and changes
+  // them only through it.
   const [controller] = useState(() =>
     createController({
       mode: startMode(loadLastState()),
       switchSide: side => sessionRef.current?.switchSide(side),
     }),
   );
-  const { messages, mode } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const { messages, mode, status, queue, replaying } = useSyncExternalStore(
+    controller.subscribe,
+    controller.getSnapshot,
+  );
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
@@ -473,15 +468,6 @@ export function App() {
   // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
   // its render's value, so a fast double-press would read a stale `false`.
   const submitBusyRef = useRef(false);
-  // Messages typed while the agent is busy (or the session is still booting)
-  // wait here and are replayed through the normal onSubmit path in order once
-  // the turn ends. queueRef mirrors queue for sync access inside effects.
-  const [queue, setQueue] = useState<QueuedMessage[]>([]);
-  const queueRef = useRef<QueuedMessage[]>([]);
-  // A queued prompt is being replayed. The status stays idle until its input is built, and the
-  // drain must not take the next entry in that window: it would be refused as a double submit
-  // and lost (#958).
-  const [replaying, setReplaying] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
@@ -501,8 +487,6 @@ export function App() {
     }
     setExitArmed(false);
   };
-  const statusRef = useRef<UIStatus>('loading');
-  statusRef.current = status;
   const pendingToolRef = useRef('');
   pendingToolRef.current = pendingTool;
   const pendingRef = useRef<typeof pending>(null);
@@ -731,10 +715,10 @@ export function App() {
             skipAutosave: true,
           });
         }
-        setStatus('idle');
+        controller.setStatus('idle');
       } catch (e) {
         setError((e as Error).message);
-        setStatus('error');
+        controller.setStatus('error');
       }
     })();
     // Boot runs once: the controller is created once and read live.
@@ -914,7 +898,7 @@ export function App() {
         setConfirm(null);
         return;
       }
-      if (statusRef.current === 'busy' && abortRef.current) {
+      if (controller.status === 'busy' && abortRef.current) {
         abortRef.current.abort();
         return;
       }
@@ -1106,7 +1090,7 @@ export function App() {
     // in-flight turn's tools and prompt, the same reason /plan et al. refuse while busy; a
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
-      if (statusRef.current === 'idle' && !resumingRef.current) {
+      if (controller.status === 'idle' && !resumingRef.current) {
         transitionMode(nextMode(controller.mode), []);
       }
       return;
@@ -1203,7 +1187,7 @@ export function App() {
       logSessionFile(sessionPathRef.current);
     }
     const path = sessionPathRef.current;
-    const meta = transcriptMeta(sides.agent, bundle.cwd, statusRef.current === 'busy');
+    const meta = transcriptMeta(sides.agent, bundle.cwd, controller.status === 'busy');
     autosaveChainRef.current = autosaveChainRef.current
       .then(() => writeSession(path, sides, meta))
       .catch((e: unknown) => {
@@ -1366,7 +1350,7 @@ export function App() {
       return;
     }
     const s = sessionRef.current;
-    if (edge && s && statusRef.current === 'idle' && controller.mode !== 'shell') {
+    if (edge && s && controller.status === 'idle' && controller.mode !== 'shell') {
       const m = controller.mode;
       warmerRef.current.onEdge({
         // The model history, so the warm reproduces the prefix round 0 will actually send —
@@ -1478,7 +1462,7 @@ export function App() {
       controller.append({ role: 'system', content: parsed.error, tone: 'warn' });
       return;
     }
-    setStatus('busy');
+    controller.setStatus('busy');
     const aborter = new AbortController();
     abortRef.current = aborter;
     try {
@@ -1494,7 +1478,7 @@ export function App() {
       controller.append({ role: 'shell', command: raw, output });
     } finally {
       abortRef.current = null;
-      setStatus('idle');
+      controller.setStatus('idle');
     }
   };
 
@@ -1578,7 +1562,7 @@ export function App() {
     // /agent, /plan and the other mode commands (agent/modes.ts).
     const modeCommand = resolveModeCommand(name, {
       mode,
-      busy: statusRef.current === 'busy',
+      busy: controller.status === 'busy',
     });
     if (modeCommand) {
       if (modeCommand.kind === 'refuse') {
@@ -1613,7 +1597,7 @@ export function App() {
       if (!bundle || !config) return;
       const expanded = expandHome(target);
       const newCwd = isAbsolute(expanded) ? expanded : resolve(bundle.cwd, expanded);
-      setStatus('busy');
+      controller.setStatus('busy');
       controller.append(echo, { role: 'system', content: `Re-indexing ${newCwd}…` });
       try {
         const newBundle = await bootstrap(newCwd, sessionRef.current?.bundle.repoMapBudget);
@@ -1622,7 +1606,7 @@ export function App() {
       } catch (e) {
         controller.append({ role: 'system', content: `cd failed: ${(e as Error).message}` });
       } finally {
-        setStatus('idle');
+        controller.setStatus('idle');
       }
       return;
     }
@@ -1630,7 +1614,7 @@ export function App() {
     if (name === 'resume') {
       if (!config || !bundle) return;
       const say = (content: string): void => controller.append(echo, { role: 'system', content });
-      if (statusRef.current === 'busy') {
+      if (controller.status === 'busy') {
         say('Cannot resume while busy. Wait or ctrl-c to abort.');
         return;
       }
@@ -1696,7 +1680,7 @@ export function App() {
       // save now holds everything up to the last completed round. The round still streaming is
       // not a message yet and is not in it — the receipt says so, so a reader of the transcript
       // isn't left wondering why it ends without a reply.
-      const midTurn = statusRef.current === 'busy';
+      const midTurn = controller.status === 'busy';
       const msgs = controller.messages;
       if (msgs.length === 0) {
         controller.append(echo, { role: 'system', content: 'Nothing to save yet.' });
@@ -1944,7 +1928,7 @@ export function App() {
     // model sees the run through the held copy, attached to the next prompt.
     const echo: Message = { role: 'user', content: command, meta: true };
     controller.append(echo);
-    setStatus('busy');
+    controller.setStatus('busy');
     toolRef.current = '';
     setStreamingTool('');
     // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the UI
@@ -1983,7 +1967,7 @@ export function App() {
       toolRef.current = '';
       setStreamingTool('');
       abortRef.current = null;
-      setStatus('idle');
+      controller.setStatus('idle');
     }
   };
 
@@ -2200,20 +2184,13 @@ export function App() {
   // the text select them (hasImageMarker → attachImageBlocks). onSubmit re-seals itself while
   // busy, so a still-busy replay just lands back on the queue.
   useEffect(() => {
-    const drainable = canDrain({
-      idle: status === 'idle',
+    const next = controller.takeQueued({
       dialogOpen: pending !== null || confirm !== null,
       resuming: resumingRef.current,
-      replaying,
     });
-    if (!drainable) return;
-    const taken = takeNext(queueRef.current);
-    if (!taken) return;
-    queueRef.current = taken.rest;
-    setQueue(taken.rest);
-    imageAttachmentsRef.current = taken.next.images ?? [];
-    setReplaying(true);
-    void onSubmit(taken.next.content, taken.next.answers).finally(() => setReplaying(false));
+    if (!next) return;
+    imageAttachmentsRef.current = next.images ?? [];
+    void onSubmit(next.content, next.answers).finally(() => controller.replayDone());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, pending, confirm, replaying, queue]);
 
@@ -2286,9 +2263,7 @@ export function App() {
       const msg = queuedMessage(trimmed, imageAttachmentsRef.current, answers);
       if (!msg) return;
       imageAttachmentsRef.current = [];
-      queueRef.current = [...queueRef.current, msg];
-      setQueue(queueRef.current);
-      controller.append({ role: 'system', content: queueReceipt(msg), tone: 'info' });
+      controller.enqueue(msg);
       // Clear the box just like the normal submit path does below — the
       // queued list above the input is now the source of truth for it.
       setInputValue('');
@@ -2441,7 +2416,7 @@ export function App() {
       isUnattended: () => unattendedRef.current,
       // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
       onTurnStart: () => {
-        setStatus('busy');
+        controller.setStatus('busy');
         setPhase('thinking');
         resetTypecheck();
         setReasoningSpin(false);
@@ -2498,7 +2473,7 @@ export function App() {
         setUsage(u => ({ total: u.total }));
         resetTypecheck();
         setReasoningSpin(false);
-        setStatus('idle');
+        controller.setStatus('idle');
         abortRef.current = null;
       },
       events: {

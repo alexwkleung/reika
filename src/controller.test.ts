@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createController } from './controller.js';
+import type { QueuedMessage } from './agent/busyqueue.js';
 import type { Message, Mode } from './types.js';
 
 const user = (content: string): Message => ({ role: 'user', content });
@@ -13,7 +14,13 @@ function controllerIn(mode: Mode) {
 describe('createController', () => {
   it('starts with an empty scrollback in the given mode', () => {
     const { controller } = controllerIn('plan');
-    expect(controller.getSnapshot()).toEqual({ messages: [], mode: 'plan' });
+    expect(controller.getSnapshot()).toEqual({
+      messages: [],
+      mode: 'plan',
+      status: 'loading',
+      queue: [],
+      replaying: false,
+    });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
   });
@@ -153,5 +160,72 @@ describe('controller sides and stash', () => {
     controller.clearStash();
     controller.transition('agent');
     expect(controller.messages).toEqual([]);
+  });
+});
+
+describe('controller status and queue', () => {
+  const queued = (content: string): QueuedMessage => ({ content, answers: {} });
+  const open = { dialogOpen: false, resuming: false };
+
+  it('reports the status and notifies only when it changes', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    controller.setStatus('idle');
+    controller.setStatus('idle');
+    expect(controller.status).toBe('idle');
+    expect(controller.getSnapshot().status).toBe('idle');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a prompt and prints its receipt in one change', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    const first = queued('fix the tests');
+    controller.enqueue(first);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().queue).toEqual([first]);
+    expect(controller.messages).toEqual([
+      { role: 'system', content: '[Queued] fix the tests', tone: 'info' },
+    ]);
+  });
+
+  it('hands nothing back while a turn runs, the session boots, a dialog is up or a resume loads', () => {
+    const { controller } = controllerIn('agent');
+    controller.enqueue(queued('later'));
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.setStatus('busy');
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.setStatus('idle');
+    expect(controller.takeQueued({ ...open, dialogOpen: true })).toBeNull();
+    expect(controller.takeQueued({ ...open, resuming: true })).toBeNull();
+    expect(controller.getSnapshot().queue).toHaveLength(1);
+  });
+
+  it('hands back the oldest prompt, then nothing more until that replay is done (#958)', () => {
+    const { controller } = controllerIn('agent');
+    const [a, b] = [queued('a'), queued('b')];
+    controller.enqueue(a);
+    controller.enqueue(b);
+    controller.setStatus('idle');
+
+    expect(controller.takeQueued(open)).toBe(a);
+    expect(controller.getSnapshot()).toMatchObject({ queue: [b], replaying: true });
+    expect(controller.takeQueued(open)).toBeNull();
+
+    controller.replayDone();
+    expect(controller.getSnapshot().replaying).toBe(false);
+    expect(controller.takeQueued(open)).toBe(b);
+    expect(controller.getSnapshot().queue).toEqual([]);
+  });
+
+  it('has nothing to hand back from an empty queue, and does not start a replay', () => {
+    const { controller } = controllerIn('agent');
+    controller.setStatus('idle');
+    const before = controller.getSnapshot();
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.replayDone();
+    expect(controller.getSnapshot()).toBe(before);
   });
 });
