@@ -1,10 +1,18 @@
 import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
 import { modeSide } from './agent/modes.js';
-import type { Message, Mode } from './types.js';
+import type { ConfirmSpec } from './ui/dialogspecs.js';
+import type {
+  ApprovalAnswer,
+  ApprovalRequest,
+  Message,
+  Mode,
+  QuestionAnswer,
+  QuestionRequest,
+} from './types.js';
 
 // The conversation a front end shows, held outside any UI framework (#584): the scrollback of the
 // side on screen, the other side's scrollback while it is off screen, the mode, whether a turn is
-// running, and the prompts waiting for it to end. A front end
+// running, the prompts waiting for it to end, and whatever is waiting on the user. A front end
 // renders from `getSnapshot`/`subscribe` and changes them only through these methods, as it does
 // with the session — a copy kept in UI state goes stale between a change and the next render.
 //
@@ -24,6 +32,11 @@ export type ControllerSnapshot = {
   queue: QueuedMessage[];
   // A queued prompt has been handed back and its submit has not settled yet.
   replaying: boolean;
+  // What is waiting on the user, one of each at most: a tool asking to act, the model asking a
+  // question (`ask_user`), and the harness asking before a prompt is sent.
+  approval: ApprovalRequest | null;
+  question: QuestionRequest | null;
+  confirm: ConfirmSpec | null;
 };
 
 export type Controller = {
@@ -38,8 +51,21 @@ export type Controller = {
   enqueue(message: QueuedMessage): void;
   // The next queued prompt to replay, or null while the queue has to wait. The caller submits it
   // and calls `replayDone` once that submit settles; nothing else is handed out until then.
-  takeQueued(blockers: { dialogOpen: boolean; resuming: boolean }): QueuedMessage | null;
+  takeQueued(blockers: { resuming: boolean }): QueuedMessage | null;
   replayDone(): void;
+  readonly approval: ApprovalRequest | null;
+  readonly question: QuestionRequest | null;
+  readonly confirm: ConfirmSpec | null;
+  // Each `open` puts the request on screen and resolves when its `answer` is called. An answer
+  // with nothing open is ignored.
+  openApproval(request: ApprovalRequest): Promise<ApprovalAnswer>;
+  answerApproval(answer: ApprovalAnswer): void;
+  // Null is the question dropped unanswered.
+  openQuestion(request: QuestionRequest): Promise<QuestionAnswer | null>;
+  answerQuestion(answer: QuestionAnswer | null): void;
+  // The chosen row, or 'abort' for the dialog dismissed with nothing chosen.
+  openConfirm(spec: ConfirmSpec): Promise<number | 'abort'>;
+  answerConfirm(choice: number | 'abort'): void;
   append(...messages: Message[]): void;
   // Puts a new scrollback on screen in place of the current one.
   replace(messages: Message[]): void;
@@ -66,7 +92,13 @@ export function createController(opts: {
     status: 'loading',
     queue: [],
     replaying: false,
+    approval: null,
+    question: null,
+    confirm: null,
   };
+  let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
+  let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
+  let resolveConfirm: ((choice: number | 'abort') => void) | null = null;
   let stashed: Partial<Record<Side, Message[]>> = {};
   const listeners = new Set<() => void>();
 
@@ -102,9 +134,12 @@ export function createController(opts: {
         ],
       }),
     takeQueued: blockers => {
+      // A replay under an approval or a confirm could open a second dialog over it. A question
+      // only exists while a turn runs, which already holds the queue.
       const drainable = canDrain({
         idle: snapshot.status === 'idle',
         replaying: snapshot.replaying,
+        dialogOpen: snapshot.approval !== null || snapshot.confirm !== null,
         ...blockers,
       });
       const taken = drainable ? takeNext(snapshot.queue) : null;
@@ -114,6 +149,51 @@ export function createController(opts: {
     },
     replayDone: () => {
       if (snapshot.replaying) set({ replaying: false });
+    },
+    get approval() {
+      return snapshot.approval;
+    },
+    get question() {
+      return snapshot.question;
+    },
+    get confirm() {
+      return snapshot.confirm;
+    },
+    openApproval: request =>
+      new Promise(resolve => {
+        resolveApproval = resolve;
+        set({ approval: request });
+      }),
+    answerApproval: answer => {
+      const resolve = resolveApproval;
+      if (!resolve) return;
+      resolveApproval = null;
+      set({ approval: null });
+      resolve(answer);
+    },
+    openQuestion: request =>
+      new Promise(resolve => {
+        resolveQuestion = resolve;
+        set({ question: request });
+      }),
+    answerQuestion: answer => {
+      const resolve = resolveQuestion;
+      if (!resolve) return;
+      resolveQuestion = null;
+      set({ question: null });
+      resolve(answer);
+    },
+    openConfirm: spec =>
+      new Promise(resolve => {
+        resolveConfirm = resolve;
+        set({ confirm: spec });
+      }),
+    answerConfirm: choice => {
+      const resolve = resolveConfirm;
+      if (!resolve) return;
+      resolveConfirm = null;
+      set({ confirm: null });
+      resolve(choice);
     },
     append: (...messages) => {
       if (messages.length > 0) set({ messages: [...snapshot.messages, ...messages] });
