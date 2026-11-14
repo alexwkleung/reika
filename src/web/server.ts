@@ -12,6 +12,8 @@ export const MAX_STREAM_BUFFER_BYTES = 8 * 1024 * 1024;
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export const DEFAULT_HEARTBEAT_MS = 15_000;
 export const TOKEN_BYTES = 32;
+export const LINK_CODE_TTL_MS = 10 * 60_000;
+const BAD_CODE_ERROR = 'invalid or expired link code';
 // Bounds on the request side only, so a slow-loris cannot hold sockets; an SSE response is not
 // governed by either once its GET has arrived.
 export const HEADERS_TIMEOUT_MS = 10_000;
@@ -28,12 +30,14 @@ export type WebServerOptions = {
   token?: string;
   assets?: (pathname: string) => Promise<WebAsset | null>;
   heartbeatMs?: number;
+  now?: () => number;
 };
 
 export type WebServer = {
   port: number;
   token: string;
   url: string;
+  newLink(): string;
   close(): Promise<void>;
 };
 
@@ -169,6 +173,11 @@ export async function startWebServer(
 ): Promise<WebServer> {
   const token = opts.token ?? randomBytes(TOKEN_BYTES).toString('base64url');
   const tokenHash = sha256(token);
+  // A digest of nothing anyone holds, compared against when no code is live, so a dead code costs
+  // the same comparison as a live one.
+  const noCodeHash = sha256(randomBytes(TOKEN_BYTES).toString('base64url'));
+  let liveCode: { hash: Buffer; mintedAt: number } | null = null;
+  const now = opts.now ?? Date.now;
   const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const streams = new Set<{ res: ServerResponse; stop: () => void }>();
   let port = 0;
@@ -198,11 +207,27 @@ export async function startWebServer(
     return true;
   }
 
+  // In the fragment, so the code never reaches a request line or a Referer, and a speculative
+  // fetch of the pasted URL cannot spend it.
+  function newLink(): string {
+    const code = randomBytes(TOKEN_BYTES).toString('base64url');
+    liveCode = { hash: sha256(code), mintedAt: now() };
+    return `http://127.0.0.1:${port}/#code=${code}`;
+  }
+
+  function consumeLinkCode(candidate: unknown): boolean {
+    const live =
+      liveCode !== null && now() - liveCode.mintedAt < LINK_CODE_TTL_MS ? liveCode : null;
+    if (live === null) liveCode = null;
+    const code = typeof candidate === 'string' ? candidate : undefined;
+    const matched = tokenMatches(code ?? '', live?.hash ?? noCodeHash) && live !== null && !!code;
+    if (matched) liveCode = null;
+    return matched;
+  }
+
   function openStream(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): void {
-    if (
-      !tokenMatches(bearerToken(req), tokenHash) &&
-      !tokenMatches(query.get('token') ?? undefined, tokenHash)
-    ) {
+    // A token in a URL is the leak the link code exists to end, so its presence refuses outright.
+    if (query.has('token') || !tokenMatches(bearerToken(req), tokenHash)) {
       sendText(req, res, 401, 'unauthorized');
       return;
     }
@@ -262,6 +287,45 @@ export async function startWebServer(
       sendText(req, res, 401, 'unauthorized');
       return;
     }
+    const value = await readJsonBody(req, res);
+    if (value === undefined) return;
+    const message = parseClientMessage(value);
+    if ('error' in message) {
+      sendJson(req, res, 400, { error: message.error });
+      return;
+    }
+    const result = bridge.handle(message);
+    if (result.ok) sendJson(req, res, 200, { ok: true });
+    else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
+  }
+
+  // The one route that hands out the token, so the one that never takes a credential in its URL
+  // and answers every failed code alike.
+  async function exchangeLinkCode(
+    req: IncomingMessage,
+    res: ServerResponse,
+    query: URLSearchParams,
+  ): Promise<void> {
+    if (query.has('code') || query.has('token')) {
+      sendJson(req, res, 401, { error: BAD_CODE_ERROR });
+      return;
+    }
+    // The page's own fetch POST always sends Origin (checked exact above), so a caller without
+    // one is not the page.
+    if (headerCount(req, 'origin') !== 1) {
+      sendText(req, res, 403, 'forbidden');
+      return;
+    }
+    const value = await readJsonBody(req, res);
+    if (value === undefined) return;
+    const code =
+      typeof value === 'object' && value !== null ? (value as { code?: unknown }).code : undefined;
+    if (consumeLinkCode(code)) sendJson(req, res, 200, { token });
+    else sendJson(req, res, 401, { error: BAD_CODE_ERROR });
+  }
+
+  // Answers the refusal itself and returns undefined, or returns the parsed body.
+  async function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
     // A form on another site cannot send application/json without a preflight, which is refused.
     const contentType = req.headers['content-type'];
     const mediaType =
@@ -280,21 +344,12 @@ export async function startWebServer(
       sendText(req, res, 413, 'payload too large');
       return;
     }
-    let value: unknown;
     try {
-      value = JSON.parse(body.toString('utf8'));
+      return JSON.parse(body.toString('utf8'));
     } catch {
       sendJson(req, res, 400, { error: 'invalid JSON' });
-      return;
+      return undefined;
     }
-    const message = parseClientMessage(value);
-    if ('error' in message) {
-      sendJson(req, res, 400, { error: message.error });
-      return;
-    }
-    const result = bridge.handle(message);
-    if (result.ok) sendJson(req, res, 200, { ok: true });
-    else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
   }
 
   async function serveAsset(req: IncomingMessage, res: ServerResponse, rawPath: string) {
@@ -331,6 +386,7 @@ export async function startWebServer(
     const query = new URLSearchParams(queryAt === -1 ? '' : target.slice(queryAt + 1));
     if (req.method === 'POST') {
       if (rawPath === '/message') await acceptMessage(req, res, query);
+      else if (rawPath === '/session') await exchangeLinkCode(req, res, query);
       else sendText(req, res, 404, 'not found');
       return;
     }
@@ -365,7 +421,8 @@ export async function startWebServer(
   return {
     port,
     token,
-    url: `http://127.0.0.1:${port}/?token=${token}`,
+    url: newLink(),
+    newLink,
     close: () =>
       new Promise<void>(resolve => {
         for (const stream of [...streams]) {
