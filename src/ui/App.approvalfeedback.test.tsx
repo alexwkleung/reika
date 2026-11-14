@@ -165,3 +165,35 @@ describe('approval: decline with a reason', () => {
     app.unmount();
   });
 });
+
+// The third row. It answers this request and turns the session's auto-approve on, so the next
+// ordinary request never opens a dialog; the status bar is where the user sees that it took.
+describe('approval: Always (this session)', () => {
+  beforeEach(() => {
+    runTurn.mockClear();
+    answers.length = 0;
+  });
+
+  it('approves this request and stops asking about the next ordinary one', async () => {
+    const app = await mountApp();
+    expect(plain(app.lastFrame())).not.toContain('auto approve');
+    await openApproval(app);
+    for (let i = 0; i < 2; i++) await press(app, DOWN);
+    await until(app, '› Always (this session)', 'the Always row selected');
+    await press(app, '\r');
+    for (let i = 0; i < 100 && answers.length === 0; i++) await tick(20);
+    expect(answers).toEqual([true]);
+    await until(app, 'auto approve', 'the status bar indicator');
+    expect(plain(app.lastFrame())).not.toContain('Decline, and say what to do instead');
+
+    for (let i = 0; i < 200 && !plain(app.lastFrame()).includes('again'); i++) {
+      app.stdin.write('again');
+      await tick(20);
+    }
+    await press(app, '\r');
+    for (let i = 0; i < 100 && answers.length < 2; i++) await tick(20);
+    expect(answers).toEqual([true, true]);
+    expect(plain(app.lastFrame())).not.toContain('Decline, and say what to do instead');
+    app.unmount();
+  });
+});

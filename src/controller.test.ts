@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createController } from './controller.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
-import type { Message, Mode } from './types.js';
+import type { Config, Message, Mode } from './types.js';
 
 const user = (content: string): Message => ({ role: 'user', content });
 const note = (content: string): Message => ({ role: 'system', content });
 
-function controllerIn(mode: Mode) {
+type Policy = Pick<Config, 'autoApprove' | 'autoApproveExplicit' | 'unattended'>;
+
+// `off` unless a test says otherwise, so every approval request opens its dialog.
+function controllerIn(mode: Mode, policy: Policy | null = { autoApprove: 'off' }) {
   const switchSide = vi.fn();
-  return { controller: createController({ mode, switchSide }), switchSide };
+  return { controller: createController({ mode, switchSide, config: () => policy }), switchSide };
 }
 
 describe('createController', () => {
@@ -23,6 +26,9 @@ describe('createController', () => {
       approval: null,
       question: null,
       confirm: null,
+      approvals: { approved: 0, declined: 0 },
+      sessionAutoApprove: null,
+      sessionUnattended: null,
     });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
@@ -210,7 +216,7 @@ describe('controller status and queue', () => {
     controller.enqueue(queued('later'));
     controller.setStatus('idle');
 
-    void controller.openApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
+    void controller.requestApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
     expect(controller.takeQueued(open)).toBeNull();
     controller.answerApproval(true);
 
@@ -265,7 +271,7 @@ describe('controller dialogs', () => {
 
   it('shows an approval until it is answered, and resolves with the answer', async () => {
     const { controller } = controllerIn('agent');
-    const answer = controller.openApproval(request);
+    const answer = controller.requestApproval(request);
     expect(controller.approval).toBe(request);
     expect(controller.getSnapshot().approval).toBe(request);
     controller.answerApproval({ feedback: 'not that file' });
@@ -302,7 +308,7 @@ describe('controller dialogs', () => {
   it('closes the dialog before the answer reaches whoever asked', async () => {
     const { controller } = controllerIn('agent');
     let openWhenResolved: unknown = 'unset';
-    const asked = controller.openApproval(request).then(() => {
+    const asked = controller.requestApproval(request).then(() => {
       openWhenResolved = controller.approval;
     });
     controller.answerApproval(true);
@@ -322,11 +328,117 @@ describe('controller dialogs', () => {
 
   it('keeps the three kinds apart: answering one leaves the others open', () => {
     const { controller } = controllerIn('agent');
-    void controller.openApproval(request);
+    void controller.requestApproval(request);
     void controller.openQuestion(question);
     void controller.openConfirm(spec);
     controller.answerQuestion(null);
     expect(controller.approval).toBe(request);
     expect(controller.confirm).toBe(spec);
+  });
+});
+
+describe('controller approval gate', () => {
+  const ordinary = { tool: 'edit', subject: 'src/a.ts', preview: '+ line' };
+  const flagged = {
+    tool: 'bash',
+    subject: 'rm -rf build',
+    preview: 'rm -rf build',
+    warnings: ['Deletes files'],
+  };
+
+  it('asks about everything when auto-approve is off', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    expect(controller.autoApprove).toBe('off');
+    const answer = controller.requestApproval(ordinary);
+    expect(controller.approval).toBe(ordinary);
+    controller.answerApproval(true);
+    await expect(answer).resolves.toBe(true);
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 0 });
+  });
+
+  it('runs an ordinary action unasked under safe, and still asks about a flagged one', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe' });
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 0 });
+
+    void controller.requestApproval(flagged);
+    expect(controller.approval).toBe(flagged);
+  });
+
+  it('counts a decline, with or without a reason', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval(ordinary);
+    controller.answerApproval(false);
+    void controller.requestApproval(ordinary);
+    controller.answerApproval({ feedback: 'wrong file' });
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 0, declined: 2 });
+  });
+
+  it('"Always (this session)" approves this one and stops asking about ordinary ones', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    const first = controller.requestApproval(ordinary);
+    controller.answerApproval(true, { always: true });
+    await expect(first).resolves.toBe(true);
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.autoApprove).toBe('safe');
+
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 2, declined: 0 });
+
+    void controller.requestApproval(flagged);
+    expect(controller.approval).toBe(flagged);
+  });
+
+  it('lets the session toggle turn a default safe off, but not an env-forced one', () => {
+    const byDefault = controllerIn('agent', { autoApprove: 'safe' }).controller;
+    byDefault.setSessionAutoApprove(false);
+    expect(byDefault.autoApprove).toBe('off');
+
+    const forced = controllerIn('agent', {
+      autoApprove: 'safe',
+      autoApproveExplicit: true,
+    }).controller;
+    forced.setSessionAutoApprove(false);
+    expect(forced.autoApprove).toBe('safe');
+  });
+
+  it('asks about everything before the session has a config', () => {
+    const { controller } = controllerIn('agent', null);
+    expect(controller.autoApprove).toBe('off');
+    expect(controller.unattended).toBe(false);
+  });
+
+  it('declines what would have asked when unattended, and keeps the list for the roll-up', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe', unattended: true });
+    expect(controller.unattended).toBe(true);
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    await expect(controller.requestApproval(flagged)).resolves.toBe(false);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 1 });
+    expect(controller.takeUnattendedDeclines()).toEqual([flagged]);
+    expect(controller.takeUnattendedDeclines()).toEqual([]);
+  });
+
+  it('lets /unattended override the launch state in either direction', () => {
+    const launchedOn = controllerIn('agent', { autoApprove: 'off', unattended: true }).controller;
+    launchedOn.setSessionUnattended(false);
+    expect(launchedOn.unattended).toBe(false);
+    void launchedOn.requestApproval(ordinary);
+    expect(launchedOn.approval).toBe(ordinary);
+
+    const launchedOff = controllerIn('agent', { autoApprove: 'off' }).controller;
+    launchedOff.setSessionUnattended(true);
+    expect(launchedOff.unattended).toBe(true);
+  });
+
+  it('zeroes the counters on a reset and leaves the toggles alone', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval(ordinary);
+    controller.answerApproval(true, { always: true });
+    controller.resetApprovals();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 0, declined: 0 });
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
   });
 });

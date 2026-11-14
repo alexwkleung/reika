@@ -65,12 +65,7 @@ import {
   startMode,
   startProfiles,
 } from '../laststate.js';
-import {
-  autoApproveForced,
-  autoApproves,
-  effectiveAutoApprove,
-  formatUnattendedDeclines,
-} from '../approval.js';
+import { autoApproveForced, effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugEnabled, debugLog, processSessionStem } from '../debug.js';
@@ -146,7 +141,7 @@ import {
   type TurnCommand,
 } from '../agent/turncommands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
-import { buildSummary, hasActivity, type Approvals } from './summary.js';
+import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { createController } from '../controller.js';
 import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
@@ -371,6 +366,7 @@ export function App() {
     createController({
       mode: startMode(loadLastState()),
       switchSide: side => sessionRef.current?.switchSide(side),
+      config: () => sessionRef.current?.getSnapshot().config ?? null,
     }),
   );
   // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
@@ -384,7 +380,12 @@ export function App() {
     approval: pending,
     question,
     confirm,
+    sessionAutoApprove,
+    sessionUnattended,
   } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  // `/unattended on|off` (#526) over REIKA_UNATTENDED's launch state. Safe to switch mid-session
+  // where `bypass` is not: either direction only ever adds a decline or restores the prompt.
+  const unattended = sessionUnattended ?? config?.unattended === true;
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
@@ -404,18 +405,9 @@ export function App() {
   } | null>(null);
   const [resumeSelected, setResumeSelected] = useState(0);
   const [sessionStartedAt, setSessionStartedAt] = useState(() => Date.now());
-  const [approvals, setApprovals] = useState<Approvals>({ approved: 0, declined: 0 });
   const [exitRequested, setExitRequested] = useState(false);
   floorReleasedRef.current = exitRequested;
   const [exitArmed, setExitArmed] = useState(false);
-  // null = untouched, so the effective mode falls through to the config default (safe when
-  // REIKA_AUTO_APPROVE is unset) — see effectiveAutoApprove.
-  const [sessionAutoApprove, setSessionAutoApprove] = useState<boolean | null>(null);
-  // `/unattended on|off` (#526). null = untouched, so REIKA_UNATTENDED's launch state holds. Safe
-  // to switch mid-session where `bypass` is not: either direction only ever adds a decline or
-  // restores the ordinary prompt.
-  const [sessionUnattended, setSessionUnattended] = useState<boolean | null>(null);
-  const unattended = sessionUnattended ?? config?.unattended === true;
   // Open PR for the checked-out branch, shown in the status bar. Null until resolved,
   // and whenever the branch has no PR (or `gh` can't tell us).
   const [pr, setPr] = useState<PrRef | null>(null);
@@ -495,13 +487,8 @@ export function App() {
   approvalTypingRef.current = approvalTyping;
   const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
   confirmSelectedRef.current = confirmSelected;
-  const sessionAutoApproveRef = useRef<boolean | null>(null);
-  sessionAutoApproveRef.current = sessionAutoApprove;
   // What this turn declined under REIKA_UNATTENDED, rolled up into one notice when it ends (#526).
-  const unattendedDeclinesRef = useRef<ApprovalRequest[]>([]);
   // Read at each approval and tool call, so a toggle mid-turn applies to the next action.
-  const unattendedRef = useRef(false);
-  unattendedRef.current = unattended;
   const activeProfileRef = useRef('default');
   activeProfileRef.current = activeProfile;
   // The model a mode switch comes back to when the new mode has none of its own (#616): the
@@ -551,8 +538,6 @@ export function App() {
   estimatedContextRef.current = estimatedContext;
   const sessionStartedAtRef = useRef(sessionStartedAt);
   sessionStartedAtRef.current = sessionStartedAt;
-  const approvalsRef = useRef<Approvals>({ approved: 0, declined: 0 });
-  approvalsRef.current = approvals;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -941,10 +926,7 @@ export function App() {
         }
         if (sel === 0) answerApproval(true);
         else if (sel === 1) answerApproval(false);
-        else {
-          setSessionAutoApprove(true);
-          answerApproval(true);
-        }
+        else answerApproval(true, true);
         return;
       }
       if (input === 'y' || input === 'Y') {
@@ -1308,7 +1290,7 @@ export function App() {
         controller.messages,
         usageRef.current,
         sessionStartedAtRef.current,
-        approvalsRef.current,
+        controller.getSnapshot().approvals,
       );
       controller.append({ role: 'system', content: summary, skipAutosave: true });
     }
@@ -1368,31 +1350,17 @@ export function App() {
     setSuggestionSelected(0);
   };
 
+  // The gate itself is the controller's (auto-approve, unattended, the dialog); this only puts
+  // the dialog's cursor back on its first row for the next one.
   const requestApproval = (req: ApprovalRequest): Promise<ApprovalAnswer> => {
-    // 'safe' (env or default) and the session toggle are the same policy (approval.ts, shared
-    // with the headless runner): ordinary actions auto-run, a flagged dangerous command still
-    // falls through to the prompt. 'bypass' never reaches here — requestApproval is undefined in
-    // that mode (see runTurn wiring below).
-    const policy = effectiveAutoApprove(config, sessionAutoApproveRef.current);
-    if (autoApproves(policy, req)) {
-      setApprovals(a => ({ ...a, approved: a.approved + 1 }));
-      return Promise.resolve(true);
-    }
-    // Unattended (#526): a dialog nobody answers stalls the turn until morning. Declined the way
-    // headless declines; the tool's own summary is the receipt, and says why.
-    if (unattendedRef.current) {
-      unattendedDeclinesRef.current.push(req);
-      setApprovals(a => ({ ...a, declined: a.declined + 1 }));
-      return Promise.resolve(false);
-    }
     setApprovalSelected(0);
     setApprovalTyping(false);
-    return controller.openApproval(req);
+    return controller.requestApproval(req);
   };
 
   // Answers the open approval. The frame hold and the dialog's close land in one tick, so no
   // frame is drawn between them (#897).
-  const answerApproval = (answer: ApprovalAnswer): void => {
+  const answerApproval = (answer: ApprovalAnswer, always = false): void => {
     const req = controller.approval;
     if (!req) return;
     // Only for the call that is running: a subagent's approval names a nested call, and the
@@ -1405,10 +1373,7 @@ export function App() {
         command: answer === true && req.tool === 'bash' ? req.preview : undefined,
       });
     }
-    setApprovals(a =>
-      answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
-    );
-    controller.answerApproval(answer);
+    controller.answerApproval(answer, { always });
   };
 
   const requestQuestion = (req: QuestionRequest): Promise<QuestionAnswer | null> => {
@@ -1509,9 +1474,9 @@ export function App() {
       heldShellRunsRef.current = [];
       sessionRef.current?.switchSide('agent');
       setDecodeRate(undefined);
-      setApprovals({ approved: 0, declined: 0 });
+      controller.resetApprovals();
       setSessionStartedAt(Date.now());
-      setSessionAutoApprove(null);
+      controller.setSessionAutoApprove(null);
       // A new session un-pins the model (#616): a /model choice belonged to the conversation that
       // just went away, and the map applies again from here. `own` is what resetConversation just
       // put the session on, so agent mode's own model — if it has one — can land on top of it.
@@ -1532,7 +1497,7 @@ export function App() {
       messages: controller.messages,
       usage: usageRef.current,
       startedAt: sessionStartedAtRef.current,
-      approvals: approvalsRef.current,
+      approvals: controller.getSnapshot().approvals,
       mcpList: () => sessionRef.current?.mcp.list(),
     });
     if (reply !== null) {
@@ -1743,7 +1708,7 @@ export function App() {
             response = `auto-approve is forced to '${config?.autoApprove}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
             break;
           }
-          setSessionAutoApprove(target === 'on');
+          controller.setSessionAutoApprove(target === 'on');
           response = `Session auto-approve: ${target}`;
           break;
         }
@@ -1767,7 +1732,7 @@ export function App() {
             return;
           }
           const wantOn = choice === TOGGLE_ON;
-          setSessionAutoApprove(wantOn);
+          controller.setSessionAutoApprove(wantOn);
           response = `Session auto-approve: ${wantOn ? 'on' : 'off'}`;
           break;
         }
@@ -1817,7 +1782,7 @@ export function App() {
         } else {
           next = arg === 'on';
         }
-        setSessionUnattended(next);
+        controller.setSessionUnattended(next);
         // ask_user is fixed at launch (the tool list is the cached prefix), so an attended-start
         // session keeps it; while unattended, its questions resolve as "no user available".
         response = next
@@ -2389,7 +2354,7 @@ export function App() {
       manualCompact,
       requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
       requestQuestion,
-      isUnattended: () => unattendedRef.current,
+      isUnattended: () => controller.unattended,
       // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
       onTurnStart: () => {
         controller.setStatus('busy');
@@ -2416,8 +2381,7 @@ export function App() {
       },
       onTurnEnd: () => {
         // After the final reply, so a glance at the end of a night's scrollback shows what is left.
-        const declined = formatUnattendedDeclines(unattendedDeclinesRef.current);
-        unattendedDeclinesRef.current = [];
+        const declined = formatUnattendedDeclines(controller.takeUnattendedDeclines());
         if (declined) {
           controller.append({ role: 'system', content: declined, tone: 'warn' });
         }
