@@ -53,12 +53,6 @@ import { loadLastState, saveLastState, startMode } from '../laststate.js';
 import { effectiveAutoApprove } from '../approval.js';
 import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
-import {
-  buildTranscriptMeta,
-  type TranscriptShrinkEvent,
-  type TranscriptMeta,
-} from '../store/transcript.js';
-import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
@@ -263,26 +257,13 @@ export function App() {
   const bundle = snapshot?.bundle ?? null;
   const activeProfile = snapshot?.profile ?? 'default';
   const [elapsed, setElapsed] = useState(0);
-  // The session total and the estimate for the request in flight (#925), one state so the real
-  // count replaces the estimate in a single commit: apart, the chip blinks out between them. The
-  // loop reports on every delta, and `live` takes it on the clock tick so the chips move once a
+  // The estimate for the request in flight (#925), with the session total it was taken against.
+  // The real count reaches this component through the controller and the estimate through React
+  // state, which Ink commits separately, so an estimate is drawn only beside its own total: the
+  // commit that brings the real count drops it, and the chip neither blinks out nor double-counts.
+  // The loop reports on every delta, and this takes it on the clock tick so the chips move once a
   // second rather than on every stream flush.
-  const [usage, setUsage] = useState<{ total: Usage; live?: LiveUsage }>({
-    total: { promptTokens: 0, completionTokens: 0 },
-  });
-  // Most recent call's usage (the authoritative current context size + cache hit rate),
-  // and the pre-send estimate used to fill the gauge before that real count arrives.
-  const [lastUsage, setLastUsage] = useState<Usage | null>(null);
-  const [estimatedContext, setEstimatedContext] = useState<number | null>(null);
-  // Session-cumulative shrink counts (status chips) and the events behind them (transcript only —
-  // a shed lands every few rounds on a small window, so as scrollback lines they would be noise,
-  // while a saved file wants the timeline). Refs because the loop reads/writes them from a turn
-  // in flight and /save reads them from a handler that may be a render behind (#199).
-  const [shrink, setShrink] = useState<ShrinkCounts>({ sheds: 0, folds: 0 });
-  const shrinkEventsRef = useRef<TranscriptShrinkEvent[]>([]);
-  // Decode throughput (tokens/second) for the status bar's tok/s chip (#204). The session keeps
-  // the learned value a turn seeds from; this is what the chip shows.
-  const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
+  const [live, setLive] = useState<{ usage: LiveUsage; base: Usage } | null>(null);
   const liveUsageRef = useRef<LiveUsage | undefined>(undefined);
   const [approvalSelected, setApprovalSelected] = useState(0);
   // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
@@ -302,16 +283,10 @@ export function App() {
   // The scrollback, the other side's stash, the mode, the status, the queue of prompts typed while
   // busy and the open dialogs live in the controller (src/controller.ts); this component renders
   // them and changes them only through it.
-  const transcriptMetaRef = useRef<
-    (msgs: Message[], cwd: string, midTurn: boolean) => TranscriptMeta
-  >(() => {
-    throw new Error('transcript meta read before the first render finished');
-  });
   const [controller] = useState(() =>
     createController({
       mode: startMode(loadLastState()),
       remember: saveLastState,
-      transcriptMeta: (...args) => transcriptMetaRef.current(...args),
     }),
   );
   // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
@@ -328,7 +303,13 @@ export function App() {
     sessionAutoApprove,
     sessionUnattended,
     error,
+    usage,
+    lastUsage,
+    estimatedContext,
+    shrink,
+    decodeRate,
   } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
+  const liveUsage = live && live.base === usage ? live.usage : undefined;
   // `/unattended on|off` (#526) over REIKA_UNATTENDED's launch state. Safe to switch mid-session
   // where `bypass` is not: either direction only ever adds a decline or restores the prompt.
   const unattended = sessionUnattended ?? config?.unattended === true;
@@ -429,14 +410,6 @@ export function App() {
   resumeSelectRef.current = resumeSelect;
   const resumeSelectedRef = useRef(0);
   resumeSelectedRef.current = resumeSelected;
-  const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
-  usageRef.current = usage.total;
-  // The other two halves of the status line's accounting, mirrored for the same reason as
-  // `usageRef`: /save reads them from a handler that may be a render behind (#199).
-  const lastUsageRef = useRef<Usage | null>(null);
-  lastUsageRef.current = lastUsage;
-  const estimatedContextRef = useRef<number | null>(null);
-  estimatedContextRef.current = estimatedContext;
   const streamingRef = useRef<string>('');
   const reasoningRef = useRef<string>('');
   const toolRef = useRef<string>('');
@@ -540,10 +513,11 @@ export function App() {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
-      setUsage(u => ({ total: u.total, live: liveUsageRef.current }));
+      const estimate = liveUsageRef.current;
+      setLive(estimate ? { usage: estimate, base: controller.getSnapshot().usage } : null);
     }, 1000);
     return () => clearInterval(id);
-  }, [status, pending, question]);
+  }, [status, pending, question, controller]);
 
   // Branch↔PR badge. The poll only shells out to git (cheap, local); the `gh` lookup behind
   // it is cached per branch, so a branch switch made in another terminal shows up within a
@@ -563,12 +537,6 @@ export function App() {
       clearInterval(id);
     };
   }, []);
-
-  // The tok/s chip describes the model that produced it (#204), so it goes with any switch: one
-  // the user picked or one a mode change brought.
-  useEffect(() => {
-    setDecodeRate(undefined);
-  }, [activeProfile]);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
@@ -776,10 +744,7 @@ export function App() {
       } else if (key.return) {
         const sel = ms[modelSelectedRef.current];
         setModelSelect(null);
-        if (sel) {
-          controller.pickModel(sel.name);
-          setDecodeRate(undefined);
-        }
+        if (sel) controller.pickModel(sel.name);
       } else if (key.escape) {
         setModelSelect(null);
       }
@@ -832,46 +797,6 @@ export function App() {
     }
   });
 
-  // The header both /save and the auto-save write. `msgs` is what the file's body holds.
-  const transcriptMeta = (msgs: Message[], cwd: string, midTurn: boolean): TranscriptMeta => {
-    // Use the active profile's model/base so the saved meta reflects what was actually running,
-    // not the default.
-    const profile = config!.profiles[activeProfileRef.current] ?? config!.profiles.default;
-    return buildTranscriptMeta({
-      msgs,
-      model: profile.model,
-      baseURL: profile.baseURL,
-      cwd,
-      mode: controller.mode,
-      midTurn,
-      status: {
-        totals: usageRef.current,
-        lastUsage: lastUsageRef.current,
-        estimatedContext: estimatedContextRef.current,
-        shrink: sessionRef.current?.shrink ?? { sheds: 0, folds: 0 },
-        shrinkEvents: shrinkEventsRef.current,
-        contextWindow: profile.contextWindow ?? config!.contextWindow,
-        // The session's reserve is the learned one (#551), the number the next round compacts at.
-        minGenTokens: sessionRef.current?.config.minGenTokens ?? profile.minGenTokens,
-      },
-    });
-  };
-
-  // The auto-save's header comes from this render's values, which the controller, created once,
-  // reaches through the ref.
-  transcriptMetaRef.current = transcriptMeta;
-
-  // What /new and /resume both drop beside the conversation itself, which is the controller's:
-  // everything measured about it.
-  const resetMeasurements = (): void => {
-    setPlanSteps(null);
-    setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
-    setLastUsage(null);
-    setEstimatedContext(null);
-    setShrink({ sheds: 0, folds: 0 });
-    shrinkEventsRef.current = [];
-  };
-
   const resumeSession = async (entry: SessionEntry): Promise<void> => {
     resumingRef.current = true;
     try {
@@ -894,7 +819,7 @@ export function App() {
     }
     // Save whatever this session had before it is replaced.
     await controller.saveNow();
-    resetMeasurements();
+    setPlanSteps(null);
     const resumed = controller.loadConversation(sides, entry);
     let size = RESUME_FIRST_SLICE;
     for (let at = 0; at < resumed.length;) {
@@ -917,7 +842,7 @@ export function App() {
     if (hasActivity(controller.messages)) {
       const summary = buildSummary(
         controller.messages,
-        usageRef.current,
+        controller.getSnapshot().usage,
         controller.startedAt,
         controller.getSnapshot().approvals,
       );
@@ -1058,9 +983,7 @@ export function App() {
 
     if (name === 'clear' || name === 'new') {
       controller.newConversation(echo);
-      resetMeasurements();
-      // The tok/s chip goes with the token counts it sits next to (#204).
-      setDecodeRate(undefined);
+      setPlanSteps(null);
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1072,7 +995,7 @@ export function App() {
       cwd: bundle?.cwd,
       skills: bundle?.skills ?? [],
       messages: controller.messages,
-      usage: usageRef.current,
+      usage: controller.getSnapshot().usage,
       startedAt: controller.startedAt,
       approvals: controller.getSnapshot().approvals,
       mcpList: () => sessionRef.current?.mcp.list(),
@@ -1165,7 +1088,6 @@ export function App() {
         }
         if (args.trim()) {
           controller.pickModel(args, echo);
-          setDecodeRate(undefined);
           return;
         }
         // Bare /model opens the interactive picker, cursor parked on the
@@ -1649,7 +1571,7 @@ export function App() {
       setNoteLive(false);
       // A request that threw reports no usage, so nothing else would clear it.
       liveUsageRef.current = undefined;
-      setUsage(u => ({ total: u.total }));
+      setLive(null);
       resetTypecheck();
       setReasoningSpin(false);
     },
@@ -1740,41 +1662,15 @@ export function App() {
         streamingRef.current = '';
         setStreaming('');
       },
-      onUsage: u => {
-        // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
-        if (!u.estimated) setLastUsage(u);
-        setUsage(({ total: t }) => ({
-          total: {
-            promptTokens: t.promptTokens + u.promptTokens,
-            completionTokens: t.completionTokens + u.completionTokens,
-            ...(u.cachedTokens != null
-              ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
-              : t.cachedTokens != null
-                ? { cachedTokens: t.cachedTokens }
-                : {}),
-            ...(u.estimated || t.estimated ? { estimated: true } : {}),
-          },
-        }));
-      },
-      onLiveUsage: live => {
+      // The controller has the real count; the estimate it replaces is drawn no more.
+      onUsage: () => setLive(null),
+      onLiveUsage: estimate => {
         // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
-        // touches the ref: onUsage drops `live` with the real count, or the next tick does.
-        const first = live && !liveUsageRef.current;
-        liveUsageRef.current = live;
-        if (first) setUsage(u => ({ total: u.total, live }));
+        // touches the ref: onUsage drops the estimate with the real count, or the next tick does.
+        const first = estimate && !liveUsageRef.current;
+        liveUsageRef.current = estimate;
+        if (first) setLive({ usage: estimate, base: controller.getSnapshot().usage });
       },
-      onContextEstimate: t => setEstimatedContext(t),
-      onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
-        setShrink(counts);
-        // The last reported prompt size predates the shed/fold, and the gauge prefers it over
-        // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
-        setLastUsage(null);
-        // Stamp the turn the way the status line counts turns (assistant messages so far), so
-        // the saved event lines up with the `turn N` a reader sees in the header.
-        const turn = controller.messages.filter(m => m.role === 'assistant').length + 1;
-        shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
-      },
-      onDecodeRate: setDecodeRate,
     },
   };
 
@@ -1801,14 +1697,14 @@ export function App() {
     turns: messages.filter(m => m.role === 'assistant').length,
     status: status === 'busy' ? phase : status,
     elapsed: status === 'busy' ? elapsed : null,
-    usage: withLiveUsage(usage.total, usage.live),
+    usage: withLiveUsage(usage, liveUsage),
     contextTokens: lastUsage?.promptTokens ?? estimatedContext,
     contextWindow: statusWindow,
     contextUsable: statusUsable,
     sheds: shrink.sheds,
     folds: shrink.folds,
     cachedTokens: lastUsage?.cachedTokens,
-    decodeRate: usage.live?.rate ?? decodeRate,
+    decodeRate: liveUsage?.rate ?? decodeRate,
     pr: pr,
     autoApprove:
       config?.autoApprove === 'bypass'

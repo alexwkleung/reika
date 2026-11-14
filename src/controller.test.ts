@@ -11,6 +11,7 @@ import {
   writeSession,
 } from './store/sessions.js';
 import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
+import type * as Transcript from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
 import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
@@ -32,6 +33,19 @@ vi.mock('./tools/bash.js', async importOriginal => {
       const failure = shellFailure.next;
       shellFailure.next = null;
       return failure ? Promise.reject(failure) : real.execStream(...args);
+    },
+  };
+});
+
+// Every save builds its header once, which is how a test counts the save decisions a tick made.
+const builtMeta = vi.hoisted(() => ({ calls: [] as { midTurn: boolean; msgs: unknown[] }[] }));
+vi.mock('./store/transcript.js', async importOriginal => {
+  const real = await importOriginal<typeof Transcript>();
+  return {
+    ...real,
+    buildTranscriptMeta: (o: Parameters<typeof real.buildTranscriptMeta>[0]) => {
+      builtMeta.calls.push({ midTurn: o.midTurn, msgs: o.msgs });
+      return real.buildTranscriptMeta(o);
     },
   };
 });
@@ -89,6 +103,7 @@ function fakeSession(config: Policy) {
       ignore?: Ignore;
     },
     config: cfg,
+    shrink: { sheds: 0, folds: 0 },
     getSnapshot: () => ({ config: cfg }),
     set turn(next: typeof turn) {
       turn = next;
@@ -115,8 +130,6 @@ function fakeSession(config: Policy) {
   return session;
 }
 
-// `off` unless a test says otherwise, so every approval request opens its dialog. A null policy
-// is a controller whose session has not booted.
 const metaFor = (agentSide: Message[], cwd: string, midTurn: boolean): TranscriptMeta => ({
   version: TRANSCRIPT_VERSION,
   savedAt: new Date().toISOString(),
@@ -128,6 +141,12 @@ const metaFor = (agentSide: Message[], cwd: string, midTurn: boolean): Transcrip
   ...(midTurn ? { midTurn: true as const } : {}),
 });
 
+// The header line of a saved file.
+const headerOf = async (path: string): Promise<TranscriptMeta> =>
+  JSON.parse((await readFile(path, 'utf8')).split('\n')[0]) as TranscriptMeta;
+
+// `off` unless a test says otherwise, so every approval request opens its dialog. A null policy
+// is a controller whose session has not booted.
 function controllerIn(
   mode: Mode,
   policy: Policy | null = {},
@@ -135,8 +154,7 @@ function controllerIn(
   historyRoot?: string,
 ) {
   const remember = vi.fn<(state: LastState) => void>();
-  const transcriptMeta = vi.fn(metaFor);
-  const controller = createController({ mode, remember, transcriptMeta, historyRoot });
+  const controller = createController({ mode, remember, historyRoot });
   const session = policy ? fakeSession(policy) : null;
   if (session) controller.attachSession(session as unknown as Session, own);
   return {
@@ -144,7 +162,6 @@ function controllerIn(
     session,
     switchSide: session?.switchSide ?? vi.fn(),
     remember,
-    transcriptMeta,
   };
 }
 
@@ -164,6 +181,11 @@ describe('createController', () => {
       sessionAutoApprove: null,
       sessionUnattended: null,
       error: null,
+      usage: { promptTokens: 0, completionTokens: 0 },
+      lastUsage: null,
+      estimatedContext: null,
+      shrink: { sheds: 0, folds: 0 },
+      decodeRate: undefined,
     });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
@@ -848,6 +870,7 @@ describe('controller auto-save', () => {
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'reika-controller-save-'));
+    builtMeta.calls = [];
   });
   afterEach(async () => {
     vi.useRealTimers();
@@ -881,14 +904,73 @@ describe('controller auto-save', () => {
   });
 
   it("saves from the first real prompt, into the project's directory", async () => {
-    const { controller, transcriptMeta } = saving();
+    const { controller } = saving();
     controller.setStatus('idle');
     controller.append(user('fix the parser'));
     await settled(controller);
 
     expect(dirname(controller.sessionPath!)).toBe(projectDir());
     expect((await loadSession(controller.sessionPath!)).agent).toEqual([user('fix the parser')]);
-    expect(transcriptMeta).toHaveBeenLastCalledWith([user('fix the parser')], '/repo/app', false);
+    const header = await headerOf(controller.sessionPath!);
+    expect(header).toMatchObject({
+      model: 'local',
+      baseURL: 'http://127.0.0.1:1/v1',
+      cwd: '/repo/app',
+      mode: 'agent',
+      usage: { promptTokens: 0, completionTokens: 0 },
+    });
+    expect(header.midTurn).toBeUndefined();
+  });
+
+  it("writes the active profile and the turn's measurements into the header", async () => {
+    const { controller, session } = controllerIn(
+      'agent',
+      {
+        autosave: true,
+        contextWindow: 32000,
+        minGenTokens: 2048,
+        profiles: { default: profileOf('local'), kimi: profileOf('kimi-k3') },
+      },
+      'default',
+      root,
+    );
+    controller.setStatus('idle');
+    controller.pickModel('kimi');
+    session!.shrink = { sheds: 1, folds: 0 };
+    session!.turn = async (text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!(user(text));
+      opts.events!.onUsage!({ promptTokens: 900, completionTokens: 40, cachedTokens: 600 });
+      opts.events!.onShrink!(
+        { kind: 'age', round: 3, marked: 2, bulk: 2, crumbs: 0, kept: 1, short: 0 },
+        { sheds: 1, folds: 0 },
+      );
+      opts.events!.onContextEstimate!(700);
+      opts.events!.onMessage!(reply);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('fix the parser', {}, {});
+    await settled(controller);
+
+    const header = await headerOf(controller.sessionPath!);
+    expect(header).toMatchObject({ model: 'kimi-k3', cwd: '/repo/app' });
+    expect(header.usage).toEqual({
+      turns: 1,
+      promptTokens: 900,
+      completionTokens: 40,
+      cachedTokens: 600,
+      // The shed cleared the last real count, so the gauge is the estimate after it.
+      contextTokens: 700,
+      contextEstimated: true,
+      contextWindow: 32000,
+      contextUsable: expect.any(Number),
+      sheds: 1,
+      folds: 0,
+      shrinkEvents: [
+        { turn: 1, kind: 'age', round: 3, marked: 2, bulk: 2, crumbs: 0, kept: 1, short: 0 },
+      ],
+    });
   });
 
   it('rewrites one file as the conversation grows, with both sides in it', async () => {
@@ -910,40 +992,40 @@ describe('controller auto-save', () => {
   });
 
   it('makes one save decision for a tick with several changes', async () => {
-    const { controller, transcriptMeta } = saving();
+    const { controller } = saving();
     controller.setStatus('idle');
     controller.append(user('a'));
     controller.append(reply);
     controller.append(note('receipt'));
     await Promise.resolve();
-    expect(transcriptMeta).toHaveBeenCalledTimes(1);
+    expect(builtMeta.calls).toHaveLength(1);
     await controller.saveNow();
   });
 
   it('saves at once on the first prompt of a turn, then at most once per interval while it runs', async () => {
     vi.useFakeTimers();
-    const { controller, transcriptMeta } = saving();
+    const { controller } = saving();
     controller.setStatus('busy');
     controller.append(user('long task'));
     await Promise.resolve();
-    expect(transcriptMeta).toHaveBeenCalledTimes(1);
-    expect(transcriptMeta).toHaveBeenLastCalledWith([user('long task')], '/repo/app', true);
+    expect(builtMeta.calls).toEqual([{ midTurn: true, msgs: [user('long task')] }]);
 
     controller.append(reply);
     await Promise.resolve();
     controller.append(reply);
     await Promise.resolve();
-    expect(transcriptMeta).toHaveBeenCalledTimes(1);
+    expect(builtMeta.calls).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(3000);
-    expect(transcriptMeta).toHaveBeenCalledTimes(2);
+    expect(builtMeta.calls).toHaveLength(2);
+    expect(builtMeta.calls.at(-1)?.midTurn).toBe(true);
 
     controller.setStatus('idle');
     await Promise.resolve();
-    expect(transcriptMeta).toHaveBeenCalledTimes(3);
-    expect(transcriptMeta).toHaveBeenLastCalledWith(expect.any(Array), '/repo/app', false);
+    expect(builtMeta.calls).toHaveLength(3);
     vi.useRealTimers();
     await controller.saveNow();
+    expect((await headerOf(controller.sessionPath!)).midTurn).toBeUndefined();
   });
 
   it('starts a new file after a new conversation', async () => {
@@ -964,14 +1046,14 @@ describe('controller auto-save', () => {
   });
 
   it('continues a resumed project session in its own file, and only once it grows', async () => {
-    const { controller, transcriptMeta } = saving();
+    const { controller } = saving();
     controller.setStatus('idle');
     const path = join(projectDir(), 'earlier.jsonl');
     const sides = { agent: [user('fix the parser'), reply], chat: [] };
     controller.replace(controller.loadConversation(sides, { path }));
     await settled(controller);
     expect(controller.sessionPath).toBe(path);
-    expect(transcriptMeta).not.toHaveBeenCalled();
+    expect(builtMeta.calls).toEqual([]);
 
     controller.append(user('and the lexer'));
     await settled(controller);
@@ -1146,7 +1228,7 @@ describe('controller commands on disk', () => {
     });
 
     it('writes the scrollback on screen to the history root and names both files', async () => {
-      const { controller, transcriptMeta } = inRoot();
+      const { controller } = inRoot();
       controller.setStatus('idle');
       controller.append(user('fix the parser'), reply);
       await controller.saveTranscript(false, echo('/save'));
@@ -1156,22 +1238,28 @@ describe('controller commands on disk', () => {
       expect(dirname(jsonlPath)).toBe(root);
       expect((await loadSession(jsonlPath)).agent).toEqual([user('fix the parser'), reply]);
       expect(await readFile(txtPath, 'utf8')).toContain('fix the parser');
-      expect(transcriptMeta).toHaveBeenLastCalledWith(
-        [user('fix the parser'), reply],
-        '/repo/app',
-        false,
-      );
+      const header = await headerOf(jsonlPath);
+      expect(header).toMatchObject({
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        cwd: '/repo/app',
+        messageCount: 2,
+        usage: { turns: 1, promptTokens: 0, completionTokens: 0 },
+      });
+      expect(header.midTurn).toBeUndefined();
     });
 
     it('marks a raw save and a mid-turn one in the receipt', async () => {
-      const { controller, transcriptMeta } = inRoot();
+      const { controller } = inRoot();
       controller.append(user('fix the parser'));
       controller.setStatus('busy');
       await controller.saveTranscript(true, echo('/save --raw'));
-      expect(lines(controller.messages).at(-1)).toMatch(
+      const receipt = lines(controller.messages).at(-1)!;
+      expect(receipt).toMatch(
         /^saved 1 messages \(raw, unredacted\) — mid-turn, up to the last completed round; the turn continues → /,
       );
-      expect(transcriptMeta).toHaveBeenLastCalledWith([user('fix the parser')], '/repo/app', true);
+      const jsonlPath = /→ (.+)\n/.exec(receipt)![1];
+      expect(await headerOf(jsonlPath)).toMatchObject({ midTurn: true, cwd: '/repo/app' });
     });
 
     it('reports a save that could not be written', async () => {
@@ -1439,6 +1527,163 @@ describe('controller.runTurn', () => {
   });
 });
 
+describe('controller measurements', () => {
+  const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+  type Events = NonNullable<SubmitOptions['events']>;
+  // A turn that hands its events to `drive` between its brackets.
+  const turnWith =
+    (drive: (events: Events) => void) =>
+    async (_text: string, opts: SubmitOptions): Promise<Message[]> => {
+      opts.onTurnStart?.();
+      drive(opts.events!);
+      opts.onTurnEnd?.();
+      return [];
+    };
+  const fold = { kind: 'fold', round: 4, removed: 6, recapChars: 900 } as const;
+
+  it('adds each round to the total, and keeps the last real count apart from an estimate', async () => {
+    const { controller, session } = controllerIn('agent');
+    const heard = vi.fn();
+    const counts: ReturnType<typeof controller.getSnapshot>[] = [];
+    session!.turn = turnWith(e => {
+      e.onUsage!({ promptTokens: 1000, completionTokens: 50, cachedTokens: 800 });
+      counts.push(controller.getSnapshot());
+      e.onUsage!({ promptTokens: 1200, completionTokens: 30 });
+      counts.push(controller.getSnapshot());
+      e.onUsage!({ promptTokens: 1300, completionTokens: 20, estimated: true });
+    });
+    await controller.runTurn('x', {}, { events: { onUsage: heard } });
+
+    expect(counts[0]).toMatchObject({
+      usage: { promptTokens: 1000, completionTokens: 50, cachedTokens: 800 },
+      lastUsage: { promptTokens: 1000, completionTokens: 50, cachedTokens: 800 },
+    });
+    // A round that reports no cache count leaves the total's as it was.
+    expect(counts[1].usage).toEqual({
+      promptTokens: 2200,
+      completionTokens: 80,
+      cachedTokens: 800,
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      usage: { promptTokens: 3500, completionTokens: 100, cachedTokens: 800, estimated: true },
+      lastUsage: { promptTokens: 1200, completionTokens: 30 },
+    });
+    expect(heard).toHaveBeenCalledTimes(3);
+    expect(heard).toHaveBeenLastCalledWith({
+      promptTokens: 1300,
+      completionTokens: 20,
+      estimated: true,
+    });
+  });
+
+  it('carries the total over to the next turn, and adds no cache count nobody reported', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = turnWith(e => e.onUsage!({ promptTokens: 10, completionTokens: 1 }));
+    await controller.runTurn('x', {}, {});
+    await controller.runTurn('y', {}, {});
+    expect(controller.getSnapshot().usage).toEqual({ promptTokens: 20, completionTokens: 2 });
+  });
+
+  it('records the pre-send estimate and the decode rate, and passes both on', async () => {
+    const { controller, session } = controllerIn('agent');
+    const onContextEstimate = vi.fn();
+    const onDecodeRate = vi.fn();
+    session!.turn = turnWith(e => {
+      e.onContextEstimate!(4200);
+      e.onDecodeRate!(21.5);
+    });
+    await controller.runTurn('x', {}, { events: { onContextEstimate, onDecodeRate } });
+    expect(controller.getSnapshot()).toMatchObject({ estimatedContext: 4200, decodeRate: 21.5 });
+    expect(onContextEstimate).toHaveBeenCalledWith(4200);
+    expect(onDecodeRate).toHaveBeenCalledWith(21.5);
+  });
+
+  it('counts a shrink, drops the stale real count, and stamps the event with its turn', async () => {
+    const { controller, session } = controllerIn('agent');
+    const onShrink = vi.fn();
+    session!.turn = turnWith(e => {
+      e.onUsage!({ promptTokens: 9000, completionTokens: 10 });
+      e.onMessage!({ role: 'assistant', content: 'first' });
+      e.onMessage!({ role: 'assistant', content: 'second' });
+      e.onShrink!(fold, { sheds: 0, folds: 1 });
+    });
+    await controller.runTurn('x', {}, { events: { onShrink } });
+    expect(controller.getSnapshot()).toMatchObject({
+      shrink: { sheds: 0, folds: 1 },
+      lastUsage: null,
+      usage: { promptTokens: 9000, completionTokens: 10 },
+    });
+    expect(onShrink).toHaveBeenCalledWith(fold, { sheds: 0, folds: 1 });
+  });
+
+  // A turn that leaves every measurement set.
+  const measured = turnWith(e => {
+    e.onUsage!({ promptTokens: 500, completionTokens: 5 });
+    e.onContextEstimate!(600);
+    e.onDecodeRate!(30);
+    e.onShrink!(fold, { sheds: 0, folds: 1 });
+    e.onUsage!({ promptTokens: 100, completionTokens: 5 });
+  });
+  const blank = {
+    usage: { promptTokens: 0, completionTokens: 0 },
+    lastUsage: null,
+    estimatedContext: null,
+    shrink: { sheds: 0, folds: 0 },
+  };
+
+  it('starts a new conversation with nothing measured', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    expect(controller.getSnapshot()).toMatchObject({ ...blank, decodeRate: undefined });
+  });
+
+  it('drops the counts on a resume and keeps the decode rate of the model still on', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.loadConversation({ agent: [user('earlier')], chat: [] }, { path: '/h/a.jsonl' });
+    expect(controller.getSnapshot()).toMatchObject({ ...blank, decodeRate: 30 });
+  });
+
+  it('drops the decode rate when a resume brings another model with its mode', async () => {
+    const { controller, session } = controllerIn('chat', {
+      profiles,
+      modeProfiles: { agent: 'kimi' },
+    });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.loadConversation({ agent: [user('earlier')], chat: [] }, { path: '/h/a.jsonl' });
+    expect(session!.profile).toBe('kimi');
+    expect(controller.getSnapshot().decodeRate).toBeUndefined();
+  });
+
+  it('drops the decode rate on a picked model, even the one already on, and keeps the counts', async () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.pickModel('default');
+    expect(controller.getSnapshot()).toMatchObject({
+      decodeRate: undefined,
+      usage: { promptTokens: 600, completionTokens: 10 },
+    });
+  });
+
+  it('drops the decode rate when a mode brings its own model, and not when the model stays', async () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.transition('grind');
+    expect(controller.getSnapshot().decodeRate).toBe(30);
+    controller.transition('plan');
+    expect(controller.getSnapshot().decodeRate).toBeUndefined();
+  });
+});
+
 describe('controller.submitPrompt', () => {
   const answers = {};
   const input = (
@@ -1695,7 +1940,6 @@ describe('controller.boot', () => {
     const controller = createController({
       mode,
       remember: vi.fn(),
-      transcriptMeta: vi.fn(metaFor),
       createSession: create as unknown as typeof createSession,
     });
     return { controller, create, calls, made: () => made };
