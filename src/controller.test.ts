@@ -1,17 +1,53 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createController } from './controller.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
-import type { Config, Message, Mode } from './types.js';
+import type { LastState } from './laststate.js';
+import type { Session } from './session.js';
+import type { Config, Message, Mode, Profile } from './types.js';
 
 const user = (content: string): Message => ({ role: 'user', content });
 const note = (content: string): Message => ({ role: 'system', content });
 
-type Policy = Pick<Config, 'autoApprove' | 'autoApproveExplicit' | 'unattended'>;
+type Policy = Partial<Config>;
 
-// `off` unless a test says otherwise, so every approval request opens its dialog.
-function controllerIn(mode: Mode, policy: Policy | null = { autoApprove: 'off' }) {
-  const switchSide = vi.fn();
-  return { controller: createController({ mode, switchSide, config: () => policy }), switchSide };
+const profileOf = (model: string): Profile => ({
+  model,
+  baseURL: 'http://127.0.0.1:1/v1',
+  apiKey: 'test',
+});
+
+// The parts of a session the controller reads: its config and active profile, and the three
+// calls it makes. `setProfile` reports one probe notice, as the real one does for a new window.
+function fakeSession(config: Policy) {
+  const cfg = {
+    autoApprove: 'off',
+    models: ['local'],
+    profiles: { default: profileOf('local') },
+    ...config,
+  } as Config;
+  const session = {
+    profile: 'default',
+    getSnapshot: () => ({ config: cfg }),
+    switchSide: vi.fn(),
+    addProfile: vi.fn((name: string, profile: Profile) => {
+      cfg.profiles[name] = profile;
+    }),
+    setProfile: vi.fn(async (name: string): Promise<Message[]> => {
+      session.profile = name;
+      return [{ role: 'system', content: `window probed for ${name}` }];
+    }),
+  };
+  return session;
+}
+
+// `off` unless a test says otherwise, so every approval request opens its dialog. A null policy
+// is a controller whose session has not booted.
+function controllerIn(mode: Mode, policy: Policy | null = {}, own = 'default') {
+  const remember = vi.fn<(state: LastState) => void>();
+  const controller = createController({ mode, remember });
+  const session = policy ? fakeSession(policy) : null;
+  if (session) controller.attachSession(session as unknown as Session, own);
+  return { controller, session, switchSide: session?.switchSide ?? vi.fn(), remember };
 }
 
 describe('createController', () => {
@@ -440,5 +476,142 @@ describe('controller approval gate', () => {
     controller.resetApprovals();
     expect(controller.getSnapshot().approvals).toEqual({ approved: 0, declined: 0 });
     expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+  });
+});
+
+describe('controller modes and the saved state', () => {
+  it('remembers a work mode the user switched to, by either route', () => {
+    const { controller, remember } = controllerIn('agent');
+    controller.transition('plan');
+    controller.setMode('grind');
+    expect(remember.mock.calls).toEqual([[{ mode: 'plan' }], [{ mode: 'grind' }]]);
+  });
+
+  it('leaves the last work mode saved across chat and shell, which no session opens in', () => {
+    const { controller, remember } = controllerIn('plan');
+    controller.transition('chat');
+    controller.transition('shell');
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing for the mode it starts in, or for a switch to the mode it is in', () => {
+    const { controller, remember } = controllerIn('plan');
+    controller.setMode('plan');
+    controller.transition('plan');
+    expect(remember).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller model switching', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('deepseek'),
+  };
+
+  it('has no targets and ignores a pick before the session has booted', () => {
+    const { controller, remember } = controllerIn('agent', null);
+    expect(controller.session).toBeNull();
+    expect(controller.modelTargets()).toEqual([]);
+    controller.pickModel('kimi');
+    expect(controller.messages).toEqual([]);
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('switches to a picked profile, says so under the echo, and remembers it', async () => {
+    const { controller, session, remember } = controllerIn('agent', { profiles });
+    const echo: Message = { role: 'user', content: '/model kimi', meta: true };
+    controller.pickModel(' Kimi ', echo);
+    expect(session?.setProfile).toHaveBeenCalledWith('kimi');
+    expect(controller.messages).toEqual([
+      echo,
+      { role: 'system', content: "Switched to profile 'kimi' (kimi-k3)" },
+    ]);
+    expect(remember).toHaveBeenCalledWith({ profile: 'kimi' });
+    await Promise.resolve();
+    expect(controller.messages.at(-1)).toEqual({
+      role: 'system',
+      content: 'window probed for kimi',
+    });
+  });
+
+  it("maps one of the config's models to the profile that serves it", () => {
+    const { controller, session } = controllerIn('agent', { profiles, models: ['local'] });
+    controller.pickModel('LOCAL');
+    expect(session?.setProfile).toHaveBeenCalledWith('default');
+    expect(controller.messages).toEqual([
+      { role: 'system', content: "Switched to profile 'default' (local)" },
+    ]);
+  });
+
+  it("tries a name the config lacks on the active profile's server, as typed", () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    controller.pickModel('Qwen3-Next');
+    expect(session?.addProfile).toHaveBeenCalledWith('qwen3-next', {
+      ...profileOf('Qwen3-Next'),
+      contextWindow: undefined,
+      adhoc: true,
+    });
+    expect(session?.setProfile).toHaveBeenCalledWith('qwen3-next');
+    expect(controller.messages[0]).toEqual({
+      role: 'system',
+      content:
+        "Switched to model 'Qwen3-Next' — not in your config; using it anyway on http://127.0.0.1:1/v1",
+    });
+  });
+
+  it("brings a mode's own model with the mode, and comes back to the session's on the way out", () => {
+    const { controller, session, remember } = controllerIn(
+      'agent',
+      { profiles, modeProfiles: { plan: 'kimi' } },
+      'go',
+    );
+    controller.transition('plan', [note('Plan mode')]);
+    expect(session?.profile).toBe('kimi');
+    expect(controller.messages).toEqual([
+      note('Plan mode'),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+
+    controller.transition('agent');
+    expect(session?.profile).toBe('go');
+    // A mode's model is re-derived every launch, so only the mode is remembered.
+    expect(remember.mock.calls).toEqual([[{ mode: 'plan' }], [{ mode: 'agent' }]]);
+  });
+
+  it('leaves the model alone in shell, and where the mode already runs on it', () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    controller.transition('shell');
+    controller.transition('grind');
+    expect(session?.setProfile).not.toHaveBeenCalled();
+  });
+
+  it('keeps a picked model through mode switches until it is unpinned', () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    controller.pickModel('go');
+    controller.transition('plan');
+    expect(session?.profile).toBe('go');
+
+    controller.unpinModel();
+    controller.applyModeModel();
+    expect(session?.profile).toBe('kimi');
+  });
+
+  it('comes back to the default profile after an unpin, not to the one it opened on', () => {
+    const { controller, session } = controllerIn('plan', { profiles }, 'go');
+    controller.unpinModel();
+    session!.profile = 'kimi';
+    controller.applyModeModel();
+    expect(session?.profile).toBe('default');
+  });
+
+  it('lists the picker targets with the active one marked', () => {
+    const { controller } = controllerIn('agent', { profiles });
+    controller.pickModel('kimi');
+    const active = controller.modelTargets().filter(t => t.active);
+    expect(active.map(t => t.name)).toEqual(['kimi']);
   });
 });

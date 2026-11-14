@@ -51,20 +51,8 @@ import {
   toggleConfirmSpec,
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
-import {
-  inheritProfile,
-  loadConfig,
-  modeSwitchProfile,
-  resolveDefaultMode,
-  resolveProfile,
-} from '../config.js';
-import {
-  loadLastState,
-  persistableMode,
-  saveLastState,
-  startMode,
-  startProfiles,
-} from '../laststate.js';
+import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import { loadLastState, saveLastState, startMode, startProfiles } from '../laststate.js';
 import { autoApproveForced, effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
@@ -119,7 +107,7 @@ import {
   type SessionEntry,
   type SessionSides,
 } from '../store/sessions.js';
-import { buildModelTargets, type ModelTarget } from './models.js';
+import { type ModelTarget } from './models.js';
 import { isSaveCommand } from './commands.js';
 import {
   isMinimalPrompt,
@@ -365,8 +353,7 @@ export function App() {
   const [controller] = useState(() =>
     createController({
       mode: startMode(loadLastState()),
-      switchSide: side => sessionRef.current?.switchSide(side),
-      config: () => sessionRef.current?.getSnapshot().config ?? null,
+      remember: saveLastState,
     }),
   );
   // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
@@ -491,14 +478,6 @@ export function App() {
   // Read at each approval and tool call, so a toggle mid-turn applies to the next action.
   const activeProfileRef = useRef('default');
   activeProfileRef.current = activeProfile;
-  // The model a mode switch comes back to when the new mode has none of its own (#616): the
-  // profile the session opened on, or 'default' after /new. A ref, not state: it is read at a mode
-  // switch, never rendered.
-  const ownProfileRef = useRef('default');
-  // Set by /model (command or picker): the user said which model THIS session runs, which outranks
-  // the per-mode map for the rest of it (#616) — a mode switch must not undo a deliberate choice.
-  // Cleared by /new, where the session starts over.
-  const modelPinnedRef = useRef(false);
   const inputValueRef = useRef('');
   inputValueRef.current = inputValue;
   // What the box held when the ask_user answer field opened, so backing out discards only the answer.
@@ -581,7 +560,6 @@ export function App() {
         // on; `own` is kept for the mode switches below.
         const started = startProfiles(cfg, controller.mode, loadLastState());
         const profile = started.profile;
-        ownProfileRef.current = started.own;
         // Said before the await, because the wait is the point: a configured MCP server is the one
         // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
         // only one whose names are already known. No servers → nothing is painted at all (#265).
@@ -596,6 +574,7 @@ export function App() {
         });
         const b = s.bundle;
         sessionRef.current = s;
+        controller.attachSession(s, started.own);
         setSession(s);
         const offline = s.offline;
         const searchNotice = s.searchNotice;
@@ -710,25 +689,6 @@ export function App() {
     [],
   );
 
-  // Every route to a new mode (slash command, Shift+Tab, /implement, /clear) lands here, so the
-  // saved state can't miss one — and so the new mode's own model (#616) is applied on every one of
-  // them without a call at each site. The mount run is skipped: the start mode is already on disk,
-  // or is a launch pin (`REIKA_DEFAULT_MODE=plan reika`) that must not outlive the session it
-  // pinned, and the start mode's model was resolved before the session was created.
-  const modeMountedRef = useRef(false);
-  useEffect(() => {
-    if (!modeMountedRef.current) {
-      modeMountedRef.current = true;
-      return;
-    }
-    const persisted = persistableMode(mode);
-    if (persisted) saveLastState({ mode: persisted });
-    applyModeModel(mode);
-    // applyModeModel reads the session and the per-mode policy through refs and the live session
-    // snapshot, so only the mode itself is a dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
-
   useEffect(() => {
     if (!exitRequested) return;
     // Defer one tick so the just-pushed summary message renders before we unmount.
@@ -778,57 +738,11 @@ export function App() {
     };
   }, []);
 
-  // Switch the active profile and record it in scrollback — shared by
-  // `/model <name>` and the interactive picker's enter. The optional echo is
-  // the command line that triggered it (the picker already echoed on open).
-  // Reads the session, not the `config` closure: an ad-hoc profile registered in the same tick is
-  // already there.
-  // `persist` is false for the switch a mode change makes on its own (#616): that model comes from
-  // REIKA_MODE_MODELS and is re-derived every launch, so it is not a choice to remember — and
-  // saving it would strand the next session on a mode's model after the map changed or went away.
-  const applyModelSwitch = (target: string, echo?: Message, persist = true): void => {
-    const s = sessionRef.current;
-    const cfg = s?.getSnapshot().config;
-    if (!s || !cfg) return;
-    const next = cfg.profiles[target];
-    if (!next) return;
-    const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
-    // Not awaited: the switch is instant, and a turn submitted before the probe (#417) answers runs
-    // without a window, as it would have anyway.
-    void s.setProfile(target).then(notices => {
-      if (notices.length > 0) controller.append(...notices);
-    });
-    // Saved here rather than on every profile change: /clear's reset to default and a launch
-    // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
-    // A hand-picked model is the choice that pins the session to it (#616): from here on, mode
-    // switches leave the model alone.
-    if (persist) {
-      modelPinnedRef.current = true;
-      saveLastState({ profile: target });
-    }
-    // The tok/s chip describes the model that produced it (#204).
+  // The tok/s chip describes the model that produced it (#204), so it goes with any switch: one
+  // the user picked or one a mode change brought.
+  useEffect(() => {
     setDecodeRate(undefined);
-    controller.append(...(echo ? [echo] : []), {
-      role: 'system' as const,
-      content: next.adhoc
-        ? `Switched to model '${next.model}' — not in your config; using it anyway on ${next.baseURL}`
-        : `Switched to ${kind} '${target}' (${next.model})`,
-    });
-  };
-
-  // The model a mode runs on (#616). REIKA_MODE_MODELS gives each mode its own; a mode without one
-  // comes back to the session's own profile, so plan → agent is a round trip rather than a one-way
-  // switch onto the plan model. A hand-picked /model outranks the map for the rest of the session,
-  // and shell has no model to choose — both cases are the undefined/no-op path. The switch itself
-  // lands in scrollback as the ordinary `Switched to …` line, so the model change is never silent.
-  const applyModeModel = (next: Mode): void => {
-    const s = sessionRef.current;
-    const cfg = s?.getSnapshot().config;
-    if (!s || !cfg || modelPinnedRef.current) return;
-    const target = modeSwitchProfile(cfg, next, ownProfileRef.current);
-    if (!target || target === s.profile || !cfg.profiles[target]) return;
-    applyModelSwitch(target, undefined, false);
-  };
+  }, [activeProfile]);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
@@ -1039,7 +953,10 @@ export function App() {
       } else if (key.return) {
         const sel = ms[modelSelectedRef.current];
         setModelSelect(null);
-        if (sel) applyModelSwitch(sel.name);
+        if (sel) {
+          controller.pickModel(sel.name);
+          setDecodeRate(undefined);
+        }
       } else if (key.escape) {
         setModelSelect(null);
       }
@@ -1344,7 +1261,7 @@ export function App() {
           description: `MCP ${c.server}${c.description ? ` · ${c.description}` : ''}`,
         })),
       ],
-      config ? buildModelTargets(config, activeProfileRef.current) : [],
+      controller.modelTargets(),
     );
     setSuggestionState(next);
     setSuggestionSelected(0);
@@ -1480,10 +1397,9 @@ export function App() {
       // A new session un-pins the model (#616): a /model choice belonged to the conversation that
       // just went away, and the map applies again from here. `own` is what resetConversation just
       // put the session on, so agent mode's own model — if it has one — can land on top of it.
-      modelPinnedRef.current = false;
-      ownProfileRef.current = 'default';
+      controller.unpinModel();
       controller.setMode('agent');
-      applyModeModel('agent');
+      controller.applyModeModel();
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1655,35 +1571,15 @@ export function App() {
           response = 'config not loaded';
           break;
         }
-        const target = args.trim().toLowerCase();
-        if (target) {
-          if (!config.profiles[target]) {
-            // A config model can lack its own profile only in the single-model case
-            // (loadProfiles registers auto-profiles from two models up); its switch
-            // target is 'default', same as buildModelTargets maps it.
-            if (config.models.some(m => m.toLowerCase() === target)) {
-              applyModelSwitch('default', echo);
-              return;
-            }
-            // A name not in the config still switches (#96): testing a model that's
-            // up on the current server shouldn't require touching .env. Register it
-            // as an ad-hoc profile inheriting the active profile's connection
-            // settings — being a real profile means the picker, completion, and
-            // resolveProfile all see it; the adhoc flag keeps the UI honest that
-            // it's off-config. Casing as typed: the key lowercases like every
-            // profile key, but the server gets the model string verbatim.
-            const inherit = config.profiles[activeProfileRef.current] ?? config.profiles.default;
-            sessionRef.current?.addProfile(target, inheritProfile(inherit, args.trim()));
-            applyModelSwitch(target, echo);
-            return;
-          }
-          applyModelSwitch(target, echo);
+        if (args.trim()) {
+          controller.pickModel(args, echo);
+          setDecodeRate(undefined);
           return;
         }
         // Bare /model opens the interactive picker, cursor parked on the
         // active entry. The echo lands now so the command shows in scrollback
         // even if the picker is dismissed.
-        const targets = buildModelTargets(config, activeProfile);
+        const targets = controller.modelTargets();
         controller.append(echo);
         // Deferred past the current keypress dispatch: Ink hands the same
         // Enter to every useInput handler, and the submit re-renders in
