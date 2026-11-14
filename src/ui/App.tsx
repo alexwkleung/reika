@@ -129,7 +129,6 @@ import { isSaveCommand } from './commands.js';
 import {
   isMinimalPrompt,
   isGrindPrompt,
-  modeSide,
   nextMode,
   resolveModeCommand,
   turnMode,
@@ -149,6 +148,7 @@ import {
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity, type Approvals } from './summary.js';
 import { QueuedList } from './QueuedList.js';
+import { createController } from '../controller.js';
 import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
 import {
   canDrain,
@@ -243,7 +243,6 @@ function nextResumeSliceSize(size: number, tookMs: number): number {
 
 export function App() {
   const { exit } = useApp();
-  const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<UIStatus>('loading');
   // What the pre-session frame says while bootstrap runs, or undefined for the usual launch where
   // there is nothing worth saying yet (#265). Only ever read in the `loading` frame: once the
@@ -386,7 +385,15 @@ export function App() {
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
-  const [mode, setMode] = useState<Mode>(() => startMode(loadLastState()));
+  // The scrollback, the other side's stash and the mode live in the controller (src/controller.ts);
+  // this component renders them and changes them only through it.
+  const [controller] = useState(() =>
+    createController({
+      mode: startMode(loadLastState()),
+      switchSide: side => sessionRef.current?.switchSide(side),
+    }),
+  );
+  const { messages, mode } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
@@ -521,8 +528,6 @@ export function App() {
   // Read at each approval and tool call, so a toggle mid-turn applies to the next action.
   const unattendedRef = useRef(false);
   unattendedRef.current = unattended;
-  const modeRef = useRef<Mode>('agent');
-  modeRef.current = mode;
   const activeProfileRef = useRef('default');
   activeProfileRef.current = activeProfile;
   // The model a mode switch comes back to when the new mode has none of its own (#616): the
@@ -562,11 +567,6 @@ export function App() {
   // grows past it, so opening a session and leaving neither copies a /save file into the project
   // nor re-stamps a project session as the newest.
   const autosaveHoldRef = useRef<number | null>(null);
-  const messagesRef = useRef<Message[]>([]);
-  messagesRef.current = messages;
-  // Scrollback stash for the inactive side of the chat/agent boundary; shell shares with agent. The
-  // model-facing side of each is the session's (switchSide).
-  const stashedMessagesRef = useRef<{ agent?: Message[]; chat?: Message[] }>({});
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = usage.total;
   // The other two halves of the status line's accounting, mirrored for the same reason as
@@ -620,7 +620,7 @@ export function App() {
         // REIKA_MODEL pinned the profile, with the start mode's own model (#616) on top. Resolved
         // before the probe and the splash so both describe the model the session actually opens
         // on; `own` is kept for the mode switches below.
-        const started = startProfiles(cfg, modeRef.current, loadLastState());
+        const started = startProfiles(cfg, controller.mode, loadLastState());
         const profile = started.profile;
         ownProfileRef.current = started.own;
         // Said before the await, because the wait is the point: a configured MCP server is the one
@@ -659,18 +659,15 @@ export function App() {
         // user has to see — a plan-mode start answers a task with a plan, not edits — so it gets a
         // persistent line, not just the status-bar tag.
         const resumed = [
-          ...(modeRef.current !== resolveDefaultMode() ? [`${modeRef.current} mode`] : []),
+          ...(controller.mode !== resolveDefaultMode() ? [`${controller.mode} mode`] : []),
           ...(profile !== 'default' ? [`profile '${profile}' (${runtime.model})`] : []),
         ];
         if (resumed.length > 0) {
-          setMessages(prev => [
-            ...prev,
-            {
-              role: 'system',
-              content: `Resumed ${resumed.join(' and ')} from the last session.`,
-              skipAutosave: true,
-            },
-          ]);
+          controller.append({
+            role: 'system',
+            content: `Resumed ${resumed.join(' and ')} from the last session.`,
+            skipAutosave: true,
+          });
         }
         // The window/reserve arithmetic decides how much room reads and history get, and a
         // configuration that leaves too little degrades silently — reads truncated every round,
@@ -679,58 +676,47 @@ export function App() {
         debugLog(formatBudget(b, runtime));
         const limitsNotice = s.limitsNotice;
         if (limitsNotice) {
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content: limitsNotice, skipAutosave: true },
-          ]);
+          controller.append({ role: 'system', content: limitsNotice, skipAutosave: true });
         }
         const windowNotice = s.windowNotice;
         if (windowNotice) {
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content: windowNotice, tone: 'warn', skipAutosave: true },
-          ]);
+          controller.append({
+            role: 'system',
+            content: windowNotice,
+            tone: 'warn',
+            skipAutosave: true,
+          });
         }
         const warn = budgetWarning(b, runtime);
         if (warn) {
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content: warn, tone: 'warn', skipAutosave: true },
-          ]);
+          controller.append({ role: 'system', content: warn, tone: 'warn', skipAutosave: true });
         }
         if (offline) {
-          setMessages(prev => [
-            ...prev,
-            {
-              role: 'system',
-              content:
-                'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
-              tone: 'warn',
-              skipAutosave: true,
-            },
-          ]);
+          controller.append({
+            role: 'system',
+            content:
+              'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
+            tone: 'warn',
+            skipAutosave: true,
+          });
         }
         if (searchNotice) {
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content: searchNotice, tone: 'info', skipAutosave: true },
-          ]);
+          controller.append({
+            role: 'system',
+            content: searchNotice,
+            tone: 'info',
+            skipAutosave: true,
+          });
         }
         // A REIKA_MODE_MODELS entry that named nothing the config has (#616). The mode keeps the
         // session's model, which from the user's side is indistinguishable from the feature not
         // working — so the typo says so instead of going unmentioned.
         for (const problem of cfg.modeModelErrors ?? []) {
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content: problem, tone: 'warn', skipAutosave: true },
-          ]);
+          controller.append({ role: 'system', content: problem, tone: 'warn', skipAutosave: true });
         }
         if (cfg.projectEnvNotice) {
           const content = cfg.projectEnvNotice;
-          setMessages(prev => [
-            ...prev,
-            { role: 'system', content, tone: 'warn', skipAutosave: true },
-          ]);
+          controller.append({ role: 'system', content, tone: 'warn', skipAutosave: true });
         }
         // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
         // only line that is good news — the shape `connectNotices` emits — so everything else that
@@ -738,15 +724,12 @@ export function App() {
         // noticing. Keying on the failure wording instead would miss `REIKA_MCP_SERVERS: …`, which
         // is the case where no server started at all.
         for (const notice of s.mcpNotices) {
-          setMessages(prev => [
-            ...prev,
-            {
-              role: 'system',
-              content: notice,
-              tone: notice.startsWith('MCP: ') ? 'info' : 'warn',
-              skipAutosave: true,
-            },
-          ]);
+          controller.append({
+            role: 'system',
+            content: notice,
+            tone: notice.startsWith('MCP: ') ? 'info' : 'warn',
+            skipAutosave: true,
+          });
         }
         setStatus('idle');
       } catch (e) {
@@ -754,6 +737,8 @@ export function App() {
         setStatus('error');
       }
     })();
+    // Boot runs once: the controller is created once and read live.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(
@@ -852,7 +837,7 @@ export function App() {
     // Not awaited: the switch is instant, and a turn submitted before the probe (#417) answers runs
     // without a window, as it would have anyway.
     void s.setProfile(target).then(notices => {
-      if (notices.length > 0) setMessages(prev => [...prev, ...notices]);
+      if (notices.length > 0) controller.append(...notices);
     });
     // Saved here rather than on every profile change: /clear's reset to default and a launch
     // REIKA_MODEL pin are not choices, and saving them silently replaced the profile to resume on.
@@ -864,16 +849,12 @@ export function App() {
     }
     // The tok/s chip describes the model that produced it (#204).
     setDecodeRate(undefined);
-    setMessages(prev => [
-      ...prev,
-      ...(echo ? [echo] : []),
-      {
-        role: 'system' as const,
-        content: next.adhoc
-          ? `Switched to model '${next.model}' — not in your config; using it anyway on ${next.baseURL}`
-          : `Switched to ${kind} '${target}' (${next.model})`,
-      },
-    ]);
+    controller.append(...(echo ? [echo] : []), {
+      role: 'system' as const,
+      content: next.adhoc
+        ? `Switched to model '${next.model}' — not in your config; using it anyway on ${next.baseURL}`
+        : `Switched to ${kind} '${target}' (${next.model})`,
+    });
   };
 
   // The model a mode runs on (#616). REIKA_MODE_MODELS gives each mode its own; a mode without one
@@ -1126,7 +1107,7 @@ export function App() {
     // keystroke shouldn't spam that refusal into scrollback, so it just no-ops.
     if (key.tab && key.shift) {
       if (statusRef.current === 'idle' && !resumingRef.current) {
-        transitionMode(nextMode(modeRef.current), []);
+        transitionMode(nextMode(controller.mode), []);
       }
       return;
     }
@@ -1176,7 +1157,7 @@ export function App() {
       model: profile.model,
       baseURL: profile.baseURL,
       cwd,
-      mode: modeRef.current,
+      mode: controller.mode,
       midTurn,
       status: {
         totals: usageRef.current,
@@ -1193,10 +1174,7 @@ export function App() {
 
   // Both sides of the chat boundary, wherever each currently lives.
   const sessionSides = (): SessionSides => {
-    const stash = stashedMessagesRef.current;
-    return modeRef.current === 'chat'
-      ? { agent: stash.agent ?? [], chat: messagesRef.current }
-      : { agent: messagesRef.current, chat: stash.chat ?? [] };
+    return controller.sides();
   };
 
   // The basename only: enough to find the transcript under history/, no home path in the log.
@@ -1232,14 +1210,11 @@ export function App() {
         // Said once: a full disk fails every save the same way, and the session itself is fine.
         if (autosaveFailedRef.current) return;
         autosaveFailedRef.current = true;
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'system',
-            tone: 'warn',
-            content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
-          },
-        ]);
+        controller.append({
+          role: 'system',
+          tone: 'warn',
+          content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
+        });
       });
     return autosaveChainRef.current;
   };
@@ -1266,7 +1241,7 @@ export function App() {
   // What /new and /resume both drop: the conversation and everything measured about it. The next
   // save starts a new file (/resume re-points it after this when it continues one).
   const resetConversation = (relearn = false): void => {
-    stashedMessagesRef.current = {};
+    controller.clearStash();
     sessionRef.current?.reset({ relearn });
     setPlanSteps(null);
     setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
@@ -1299,10 +1274,7 @@ export function App() {
       sides = await loadSession(entry.path);
     } catch (e) {
       setResuming(null);
-      setMessages(prev => [
-        ...prev,
-        { role: 'error', content: `resume failed: ${(e as Error).message}` },
-      ]);
+      controller.append({ role: 'error', content: `resume failed: ${(e as Error).message}` });
       return;
     }
     // Save whatever this session had before it is replaced.
@@ -1323,20 +1295,19 @@ export function App() {
     const agentTurns = countRealTurns(sides.agent);
     const chatTurns = countRealTurns(sides.chat);
     const switchedTo: Mode | null =
-      modeRef.current !== 'chat' && agentTurns === 0 && chatTurns > 0
+      controller.mode !== 'chat' && agentTurns === 0 && chatTurns > 0
         ? 'chat'
-        : modeRef.current === 'chat' && chatTurns === 0 && agentTurns > 0
+        : controller.mode === 'chat' && chatTurns === 0 && agentTurns > 0
           ? 'agent'
           : null;
     if (switchedTo) {
       sessionRef.current?.switchSide(switchedTo === 'chat' ? 'chat' : 'agent');
-      modeRef.current = switchedTo;
-      setMode(switchedTo);
+      controller.setMode(switchedTo);
     }
-    const inChat = modeRef.current === 'chat';
+    const inChat = controller.mode === 'chat';
     const active = inChat ? sides.chat : sides.agent;
     const other = inChat ? sides.agent : sides.chat;
-    stashedMessagesRef.current = inChat ? { agent: other } : { chat: other };
+    controller.stash(inChat ? 'agent' : 'chat', other);
     sessionRef.current?.loadHistory(
       modelHistoryFromScrollback(active),
       modelHistoryFromScrollback(other),
@@ -1356,7 +1327,8 @@ export function App() {
       const slice = resumed.slice(at, at + size);
       const started = performance.now();
       // The first slice replaces the old conversation; the rest extend it.
-      setMessages(at === 0 ? slice : prev => [...prev, ...slice]);
+      if (at === 0) controller.replace(slice);
+      else controller.append(...slice);
       at += slice.length;
       if (at >= resumed.length) break;
       // A timer, not a microtask: the spinner ticks on an interval, which only a yield to the timer
@@ -1368,14 +1340,14 @@ export function App() {
   };
 
   const requestExit = (): void => {
-    if (hasActivity(messagesRef.current)) {
+    if (hasActivity(controller.messages)) {
       const summary = buildSummary(
-        messagesRef.current,
+        controller.messages,
         usageRef.current,
         sessionStartedAtRef.current,
         approvalsRef.current,
       );
-      setMessages(prev => [...prev, { role: 'system', content: summary, skipAutosave: true }]);
+      controller.append({ role: 'system', content: summary, skipAutosave: true });
     }
     setExitRequested(true);
   };
@@ -1394,8 +1366,8 @@ export function App() {
       return;
     }
     const s = sessionRef.current;
-    if (edge && s && statusRef.current === 'idle' && modeRef.current !== 'shell') {
-      const m = modeRef.current;
+    if (edge && s && statusRef.current === 'idle' && controller.mode !== 'shell') {
+      const m = controller.mode;
       warmerRef.current.onEdge({
         // The model history, so the warm reproduces the prefix round 0 will actually send —
         // including any span already folded by a previous turn's compaction.
@@ -1491,19 +1463,7 @@ export function App() {
   // lands after any restored history (the command echo + banner for /chat et al., nothing
   // for cycling — the status-bar mode tag is that path's feedback).
   const transitionMode = (next: Mode, trailing: Message[]): void => {
-    const from = modeSide(modeRef.current);
-    const to = modeSide(next);
-    if (from !== to) {
-      // Crossing the chat boundary — save current array, restore the other side's stash
-      const stash = stashedMessagesRef.current;
-      stash[from] = messagesRef.current;
-      setMessages([...(stash[to] ?? []), ...trailing]);
-      // The trailing banner/echo are UI-only (system + meta), so the model history restores bare.
-      sessionRef.current?.switchSide(to);
-    } else if (trailing.length > 0) {
-      setMessages(prev => [...prev, ...trailing]);
-    }
-    setMode(next);
+    controller.transition(next, trailing);
   };
 
   // A slash-invoked MCP tool (#265): `/filesystem:read_file {"path":"src/index.ts"}`. No approval
@@ -1515,12 +1475,12 @@ export function App() {
     if (!session) return;
     const parsed = parseMcpArgs(command, args);
     if ('error' in parsed) {
-      setMessages(prev => [...prev, { role: 'system', content: parsed.error, tone: 'warn' }]);
+      controller.append({ role: 'system', content: parsed.error, tone: 'warn' });
       return;
     }
     setStatus('busy');
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const aborter = new AbortController();
+    abortRef.current = aborter;
     try {
       const result = await invokeMcpTool(
         session.mcp.call,
@@ -1528,10 +1488,10 @@ export function App() {
         command.server,
         command.tool,
         parsed.args,
-        { signal: controller.signal },
+        { signal: aborter.signal },
       );
       const output = [result.summary, result.payload].filter(Boolean).join('\n');
-      setMessages(prev => [...prev, { role: 'shell', command: raw, output }]);
+      controller.append({ role: 'shell', command: raw, output });
     } finally {
       abortRef.current = null;
       setStatus('idle');
@@ -1543,13 +1503,13 @@ export function App() {
   // message and the command is echoed by hand.
   const runTurnCommand = async (cmd: TurnCommand, raw: string, echo: Message): Promise<void> => {
     if (cmd.kind === 'refuse') {
-      setMessages(prev => [...prev, echo, { role: 'system', content: cmd.content }]);
+      controller.append(echo, { role: 'system', content: cmd.content });
       return;
     }
-    if (cmd.switchTo) setMode(cmd.switchTo);
+    if (cmd.switchTo) controller.setMode(cmd.switchTo);
     const before = cmd.before.map(n => ({ role: 'system' as const, ...n }));
     if (cmd.echo || before.length > 0) {
-      setMessages(prev => [...prev, ...(cmd.echo ? [echo] : []), ...before]);
+      controller.append(...(cmd.echo ? [echo] : []), ...before);
     }
     if (cmd.skill) pendingSkillRef.current = cmd.skill;
     pendingNoticesRef.current.push(...cmd.after.map(n => ({ role: 'system' as const, ...n })));
@@ -1574,7 +1534,7 @@ export function App() {
       // fresh launch, so the user can't tell the reset actually happened. Both sides
       // of the chat/agent stash go too: a stashed conversation resurfacing on the
       // next mode switch would make the "new session" a lie.
-      setMessages([
+      controller.replace([
         echo,
         { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
       ]);
@@ -1593,7 +1553,7 @@ export function App() {
       // put the session on, so agent mode's own model — if it has one — can land on top of it.
       modelPinnedRef.current = false;
       ownProfileRef.current = 'default';
-      setMode('agent');
+      controller.setMode('agent');
       applyModeModel('agent');
       return;
     }
@@ -1605,14 +1565,14 @@ export function App() {
     const reply = resolveReplyCommand(name, {
       cwd: bundle?.cwd,
       skills: bundle?.skills ?? [],
-      messages: messagesRef.current,
+      messages: controller.messages,
       usage: usageRef.current,
       startedAt: sessionStartedAtRef.current,
       approvals: approvalsRef.current,
       mcpList: () => sessionRef.current?.mcp.list(),
     });
     if (reply !== null) {
-      setMessages(prev => [...prev, echo, { role: 'system', content: reply }]);
+      controller.append(echo, { role: 'system', content: reply });
       return;
     }
     // /agent, /plan and the other mode commands (agent/modes.ts).
@@ -1622,7 +1582,7 @@ export function App() {
     });
     if (modeCommand) {
       if (modeCommand.kind === 'refuse') {
-        setMessages(prev => [...prev, echo, { role: 'system', content: modeCommand.content }]);
+        controller.append(echo, { role: 'system', content: modeCommand.content });
       } else {
         transitionMode(modeCommand.to, [echo, { role: 'system', content: modeCommand.banner }]);
       }
@@ -1647,23 +1607,20 @@ export function App() {
     if (name === 'cd') {
       const target = args.trim();
       if (!target) {
-        setMessages(prev => [...prev, echo, { role: 'system', content: 'Usage: /cd <path>' }]);
+        controller.append(echo, { role: 'system', content: 'Usage: /cd <path>' });
         return;
       }
       if (!bundle || !config) return;
       const expanded = expandHome(target);
       const newCwd = isAbsolute(expanded) ? expanded : resolve(bundle.cwd, expanded);
       setStatus('busy');
-      setMessages(prev => [...prev, echo, { role: 'system', content: `Re-indexing ${newCwd}…` }]);
+      controller.append(echo, { role: 'system', content: `Re-indexing ${newCwd}…` });
       try {
         const newBundle = await bootstrap(newCwd, sessionRef.current?.bundle.repoMapBudget);
         sessionRef.current?.updateBundle(() => newBundle);
-        setMessages(prev => [...prev, { role: 'system', content: `cwd is now ${newCwd}` }]);
+        controller.append({ role: 'system', content: `cwd is now ${newCwd}` });
       } catch (e) {
-        setMessages(prev => [
-          ...prev,
-          { role: 'system', content: `cd failed: ${(e as Error).message}` },
-        ]);
+        controller.append({ role: 'system', content: `cd failed: ${(e as Error).message}` });
       } finally {
         setStatus('idle');
       }
@@ -1672,8 +1629,7 @@ export function App() {
 
     if (name === 'resume') {
       if (!config || !bundle) return;
-      const say = (content: string): void =>
-        setMessages(prev => [...prev, echo, { role: 'system', content }]);
+      const say = (content: string): void => controller.append(echo, { role: 'system', content });
       if (statusRef.current === 'busy') {
         say('Cannot resume while busy. Wait or ctrl-c to abort.');
         return;
@@ -1691,7 +1647,7 @@ export function App() {
       // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A
       // project file saved before the header counted chat turns is not listed here; /resume all
       // still has it.
-      const chatsOnly = target === '' && modeRef.current === 'chat';
+      const chatsOnly = target === '' && controller.mode === 'chat';
       let entries: SessionEntry[] = [];
       let heading = 'saved with /save';
       if (target !== 'root') {
@@ -1723,7 +1679,7 @@ export function App() {
         );
         return;
       }
-      setMessages(prev => [...prev, echo]);
+      controller.append(echo);
       // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
       // every useInput handler, and an open picker would take it as a selection.
       queueMicrotask(() => {
@@ -1741,9 +1697,9 @@ export function App() {
       // not a message yet and is not in it — the receipt says so, so a reader of the transcript
       // isn't left wondering why it ends without a reply.
       const midTurn = statusRef.current === 'busy';
-      const msgs = messagesRef.current;
+      const msgs = controller.messages;
       if (msgs.length === 0) {
-        setMessages(prev => [...prev, echo, { role: 'system', content: 'Nothing to save yet.' }]);
+        controller.append(echo, { role: 'system', content: 'Nothing to save yet.' });
         return;
       }
       try {
@@ -1753,20 +1709,12 @@ export function App() {
           saveHeader(transcriptMeta(msgs, bundle.cwd, midTurn), msgs),
           { redact: !raw },
         );
-        setMessages(prev => [
-          ...prev,
-          echo,
-          {
-            role: 'system',
-            content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''}${midTurn ? ' — mid-turn, up to the last completed round; the turn continues' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
-          },
-        ]);
+        controller.append(echo, {
+          role: 'system',
+          content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''}${midTurn ? ' — mid-turn, up to the last completed round; the turn continues' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
+        });
       } catch (e) {
-        setMessages(prev => [
-          ...prev,
-          echo,
-          { role: 'error', content: `save failed: ${(e as Error).message}` },
-        ]);
+        controller.append(echo, { role: 'error', content: `save failed: ${(e as Error).message}` });
       }
       return;
     }
@@ -1807,7 +1755,7 @@ export function App() {
         // active entry. The echo lands now so the command shows in scrollback
         // even if the picker is dismissed.
         const targets = buildModelTargets(config, activeProfile);
-        setMessages(prev => [...prev, echo]);
+        controller.append(echo);
         // Deferred past the current keypress dispatch: Ink hands the same
         // Enter to every useInput handler, and the submit re-renders in
         // between — opening synchronously would let the picker's own handler
@@ -1851,7 +1799,7 @@ export function App() {
             effectiveMode === 'safe',
           );
           if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            setMessages(prev => [...prev, echo]);
+            controller.append(echo);
             return;
           }
           const wantOn = choice === TOGGLE_ON;
@@ -1898,7 +1846,7 @@ export function App() {
             current,
           );
           if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            setMessages(prev => [...prev, echo]);
+            controller.append(echo);
             return;
           }
           next = choice === TOGGLE_ON;
@@ -1940,7 +1888,7 @@ export function App() {
             current,
           );
           if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            setMessages(prev => [...prev, echo]);
+            controller.append(echo);
             return;
           }
           want = choice === TOGGLE_ON;
@@ -1977,7 +1925,7 @@ export function App() {
         // model receives the skill body. Pre-appending would double it.
         const skillCommand = resolveSkillCommand(name, args, {
           skills: bundle?.skills ?? [],
-          mode: modeRef.current,
+          mode: controller.mode,
           pastes: pastedTextsRef.current,
         });
         if (skillCommand) {
@@ -1987,7 +1935,7 @@ export function App() {
         response = unknownCommandText(name);
       }
     }
-    setMessages(prev => [...prev, echo, { role: 'system', content: response }]);
+    controller.append(echo, { role: 'system', content: response });
   };
 
   const runShell = async (command: string): Promise<void> => {
@@ -1995,20 +1943,20 @@ export function App() {
     // Shell mode is "raw bash, no model" — the echo and the `shell` message below are UI-only. The
     // model sees the run through the held copy, attached to the next prompt.
     const echo: Message = { role: 'user', content: command, meta: true };
-    setMessages(prev => [...prev, echo]);
+    controller.append(echo);
     setStatus('busy');
     toolRef.current = '';
     setStreamingTool('');
     // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the UI
     // is blocked on it just the same.
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const aborter = new AbortController();
+    abortRef.current = aborter;
     try {
       const result = await execStream(command, {
         cwd: bundle.cwd,
         bashTimeoutMs: config?.bashTimeoutMs,
         bashIdleMs: config?.bashIdleMs,
-        signal: controller.signal,
+        signal: aborter.signal,
         onProgress: chunk => {
           toolRef.current += chunk;
           toolNameRef.current = '';
@@ -2020,13 +1968,13 @@ export function App() {
         command,
         output: result.payload ?? '',
       };
-      setMessages(prev => [...prev, shellMsg]);
+      controller.append(shellMsg);
       heldShellRunsRef.current = holdShellRun(
         heldShellRunsRef.current,
         await captureShellRun(command, result.exitCode ?? null, result.payload ?? ''),
       );
     } catch (e) {
-      setMessages(prev => [...prev, { role: 'error', content: (e as Error).message }]);
+      controller.append({ role: 'error', content: (e as Error).message });
     } finally {
       if (toolFlushTimerRef.current !== null) {
         clearTimeout(toolFlushTimerRef.current);
@@ -2044,7 +1992,7 @@ export function App() {
   // from "attached, and here's how much text came out".
   const onPasteImage = async (): Promise<void> => {
     const notice = (content: string, tone: 'info' | 'warn'): void => {
-      setMessages(prev => [...prev, { role: 'system', content, tone }]);
+      controller.append({ role: 'system', content, tone });
     };
     if (!clipboardImageSupported()) {
       notice('Image paste reads the system clipboard — macOS and Windows only.', 'warn');
@@ -2052,7 +2000,7 @@ export function App() {
     }
     // Shell mode submits the buffer to bash, which would try to run `[Image 1]` as a command —
     // there's no model turn for the block to ride along with.
-    if (modeRef.current === 'shell') {
+    if (controller.mode === 'shell') {
       notice("Can't attach an image in shell mode.", 'warn');
       return;
     }
@@ -2150,10 +2098,7 @@ export function App() {
   // line rather than letting a rejection escape as an unhandled promise and kill the TUI.
   const onPasteImageSafely = (): void => {
     void onPasteImage().catch((e: unknown) => {
-      setMessages(prev => [
-        ...prev,
-        { role: 'error', content: `Image paste failed: ${(e as Error).message}` },
-      ]);
+      controller.append({ role: 'error', content: `Image paste failed: ${(e as Error).message}` });
     });
   };
 
@@ -2194,7 +2139,7 @@ export function App() {
     const match = skillToConfirm(prompt, {
       skills: bundle.skills,
       skillAuto: config.skillAuto,
-      mode: modeRef.current,
+      mode: controller.mode,
       contextWindow: config.profiles[activeProfile]?.contextWindow ?? config.contextWindow,
     });
     if (!match) return undefined;
@@ -2210,7 +2155,7 @@ export function App() {
   // queue, so the entry carries the answer, and before the expansions, so no fetch precedes it.
   const decidePastedUrls = async (prompt: string): Promise<boolean | 'abort' | undefined> => {
     if (!config) return undefined;
-    const urls = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode: modeRef.current });
+    const urls = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode: controller.mode });
     return urls ? askConfirm(pastedUrlConfirmSpec(urls)) : undefined;
   };
 
@@ -2221,7 +2166,7 @@ export function App() {
   const decideImplementMode = async (
     prompt: string,
   ): Promise<ImplementMode | 'abort' | undefined> => {
-    if (modeRef.current !== 'plan' || !isImplementCommand(prompt)) return undefined;
+    if (controller.mode !== 'plan' || !isImplementCommand(prompt)) return undefined;
     // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
     // up, it draws a second `/implement` under the dialog.
     setSuggestionState(null);
@@ -2343,7 +2288,7 @@ export function App() {
       imageAttachmentsRef.current = [];
       queueRef.current = [...queueRef.current, msg];
       setQueue(queueRef.current);
-      setMessages(prev => [...prev, { role: 'system', content: queueReceipt(msg), tone: 'info' }]);
+      controller.append({ role: 'system', content: queueReceipt(msg), tone: 'info' });
       // Clear the box just like the normal submit path does below — the
       // queued list above the input is now the source of truth for it.
       setInputValue('');
@@ -2369,7 +2314,7 @@ export function App() {
       await handleCommand(trimmed, implementMode);
       return;
     }
-    if (modeRef.current === 'shell') {
+    if (controller.mode === 'shell') {
       await runShell(expandPastes(trimmed, pastedTextsRef.current));
       return;
     }
@@ -2403,7 +2348,7 @@ export function App() {
       ({ modelText, display, nativeImages } = built);
       // Chat's history is its own, and its tools could not act on a run anyway: held for the
       // agent side.
-      if (heldShellRunsRef.current.length > 0 && modeRef.current !== 'chat') {
+      if (heldShellRunsRef.current.length > 0 && controller.mode !== 'chat') {
         const budget = shellRunBudget(sessionRef.current?.config.contextWindow);
         modelText = `${buildShellRunsBlock(heldShellRunsRef.current, budget)}\n\n${modelText}`;
         heldShellRunsRef.current = [];
@@ -2412,7 +2357,7 @@ export function App() {
       setExpanding(null);
       submitBusyRef.current = false;
     }
-    if (modeRef.current === 'vibe') {
+    if (controller.mode === 'vibe') {
       await submitToModel(
         modelText,
         display !== modelText ? display : undefined,
@@ -2486,7 +2431,7 @@ export function App() {
     return s.submit(modelText, {
       mode: activeMode,
       // What this turn is recorded as on its prompt, which is not always what it runs as.
-      recordAs: turnMode(modeRef.current, activeMode),
+      recordAs: turnMode(controller.mode, activeMode),
       display: displayOverride,
       skill,
       nativeImages,
@@ -2511,19 +2456,19 @@ export function App() {
         // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
         // stale checklist lingering after the conversation moves on.
         setPlanSteps(null);
-        const controller = new AbortController();
-        abortRef.current = controller;
-        return controller.signal;
+        const aborter = new AbortController();
+        abortRef.current = aborter;
+        return aborter.signal;
       },
       onTurnError: e => {
-        setMessages(prev => [...prev, { role: 'error', content: e.message }]);
+        controller.append({ role: 'error', content: e.message });
       },
       onTurnEnd: () => {
         // After the final reply, so a glance at the end of a night's scrollback shows what is left.
         const declined = formatUnattendedDeclines(unattendedDeclinesRef.current);
         unattendedDeclinesRef.current = [];
         if (declined) {
-          setMessages(prev => [...prev, { role: 'system', content: declined, tone: 'warn' }]);
+          controller.append({ role: 'system', content: declined, tone: 'warn' });
         }
         if (flushTimerRef.current !== null) {
           clearTimeout(flushTimerRef.current);
@@ -2599,10 +2544,10 @@ export function App() {
           if (msg.role === 'user' && pendingNoticesRef.current.length > 0) {
             const notices = pendingNoticesRef.current;
             pendingNoticesRef.current = [];
-            setMessages(prev => [...prev, msg, ...notices]);
+            controller.append(msg, ...notices);
             return;
           }
-          setMessages(prev => [...prev, msg]);
+          controller.append(msg);
         },
         onContentDelta: delta => {
           lastLiveOutputAtRef.current = Date.now();
@@ -2665,7 +2610,7 @@ export function App() {
               discarded: noteLiveRef.current ? 'note' : 'stream',
               ...(subagentLiveRef.current ? { nested: true } : {}),
             };
-            setMessages(prev => [...prev, frozen]);
+            controller.append(frozen);
           }
           reasoningRef.current = '';
           setStreamingReasoning('');
@@ -2707,7 +2652,7 @@ export function App() {
           setLastUsage(null);
           // Stamp the turn the way the status line counts turns (assistant messages so far), so
           // the saved event lines up with the `turn N` a reader sees in the header.
-          const turn = messagesRef.current.filter(m => m.role === 'assistant').length + 1;
+          const turn = controller.messages.filter(m => m.role === 'assistant').length + 1;
           shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
         },
         onDecodeRate: setDecodeRate,
