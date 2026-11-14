@@ -1,13 +1,16 @@
 import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
 import { modeSide } from './agent/modes.js';
 import { autoApproves, effectiveAutoApprove } from './approval.js';
+import { inheritProfile, modeSwitchProfile } from './config.js';
+import { persistableMode, type LastState } from './laststate.js';
+import type { Session } from './session.js';
+import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
   AutoApproveMode,
-  Config,
   Message,
   Mode,
   QuestionAnswer,
@@ -92,11 +95,27 @@ export type Controller = {
   append(...messages: Message[]): void;
   // Puts a new scrollback on screen in place of the current one.
   replace(messages: Message[]): void;
-  // Changes the mode and nothing else: the scrollback and the session's side stay as they are.
+  // Changes the mode without touching the scrollback or the session's side. Like every mode
+  // change it is remembered for the next launch and brings the mode's own model with it.
   setMode(mode: Mode): void;
   // A mode switch the user made. Crossing the chat boundary puts the current scrollback away and
   // brings the other side's back; `trailing` lands after it either way.
   transition(mode: Mode, trailing?: Message[]): void;
+  // The session, once it has booted. `own` is the profile it opened on, which a mode with no
+  // model of its own comes back to.
+  readonly session: Session | null;
+  attachSession(session: Session, own: string): void;
+  // `/model <name>` and the picker's choice: a profile, one of the config's models, or any other
+  // name, which is tried on the active profile's server. It pins the session to that model and
+  // is what the next launch resumes on.
+  pickModel(typed: string, echo?: Message): void;
+  // What the model picker and `/model` completion list.
+  modelTargets(): ModelTarget[];
+  // A new conversation starts over: the pick is forgotten and the per-mode models apply again,
+  // over the default profile.
+  unpinModel(): void;
+  // Puts the session on the current mode's model. A mode change does this itself.
+  applyModeModel(): void;
   // Both sides' scrollbacks, whichever one is on screen.
   sides(): Record<Side, Message[]>;
   // Sets the scrollback kept off screen, dropping whatever was there.
@@ -106,10 +125,9 @@ export type Controller = {
 
 export function createController(opts: {
   mode: Mode;
-  // Moves the session's model history to the other side when a transition crosses the boundary.
-  switchSide: (side: Side) => void;
-  // The session's config, or null before it has booted. Read at each use, never kept.
-  config: () => Pick<Config, 'autoApprove' | 'autoApproveExplicit' | 'unattended'> | null;
+  // Saves what the next launch opens on (#365): a mode the user switched to, a model they picked.
+  // Every front end hands in the same one, so a session started in one resumes in another.
+  remember: (state: LastState) => void;
 }): Controller {
   let snapshot: ControllerSnapshot = {
     messages: [],
@@ -129,6 +147,12 @@ export function createController(opts: {
   let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
   let resolveConfirm: ((choice: number | 'abort') => void) | null = null;
   let stashed: Partial<Record<Side, Message[]>> = {};
+  let session: Session | null = null;
+  // The model a mode switch comes back to when the new mode has none of its own (#616): the
+  // profile the session opened on, or 'default' once the model is unpinned.
+  let ownProfile = 'default';
+  // The user said which model this session runs, which outranks the per-mode map (#616).
+  let modelPinned = false;
   const listeners = new Set<() => void>();
 
   const set = (next: Partial<ControllerSnapshot>): void => {
@@ -139,10 +163,52 @@ export function createController(opts: {
     approved: snapshot.approvals.approved + (approved ? 1 : 0),
     declined: snapshot.approvals.declined + (approved ? 0 : 1),
   });
+  const config = () => session?.getSnapshot().config ?? null;
   const autoApprove = (): AutoApproveMode =>
-    effectiveAutoApprove(opts.config(), snapshot.sessionAutoApprove);
-  const unattended = (): boolean =>
-    snapshot.sessionUnattended ?? opts.config()?.unattended === true;
+    effectiveAutoApprove(config(), snapshot.sessionAutoApprove);
+  const unattended = (): boolean => snapshot.sessionUnattended ?? config()?.unattended === true;
+  const append = (...messages: Message[]): void => {
+    if (messages.length > 0) set({ messages: [...snapshot.messages, ...messages] });
+  };
+
+  // `picked` is the user's own choice, which pins the session to it and is remembered. A switch
+  // a mode makes is neither: its model is re-derived from REIKA_MODE_MODELS at every launch, and
+  // saving it would strand the next session there after the map changed.
+  const switchModel = (target: string, echo: Message | undefined, picked: boolean): void => {
+    const cfg = config();
+    const next = cfg?.profiles[target];
+    if (!session || !cfg || !next) return;
+    const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
+    // Not awaited: the switch is instant, and a turn submitted before the window probe (#417)
+    // answers runs without a window, as it would have anyway.
+    void session.setProfile(target).then(notices => append(...notices));
+    if (picked) {
+      modelPinned = true;
+      opts.remember({ profile: target });
+    }
+    append(...(echo ? [echo] : []), {
+      role: 'system',
+      content: next.adhoc
+        ? `Switched to model '${next.model}' — not in your config; using it anyway on ${next.baseURL}`
+        : `Switched to ${kind} '${target}' (${next.model})`,
+    });
+  };
+  // A mode without a model of its own comes back to the session's, so plan → agent is a round
+  // trip. Nothing moves for a pinned model or for shell, which reaches no model.
+  const applyModeModel = (): void => {
+    const cfg = config();
+    if (!session || !cfg || modelPinned) return;
+    const target = modeSwitchProfile(cfg, snapshot.mode, ownProfile);
+    if (!target || target === session.profile || !cfg.profiles[target]) return;
+    switchModel(target, undefined, false);
+  };
+  // Every route to a new mode ends here, so the saved state and the mode's model cannot miss one.
+  // Chat and shell are not modes a session can open in, so they leave the last work mode saved.
+  const modeChanged = (): void => {
+    const persisted = persistableMode(snapshot.mode);
+    if (persisted) opts.remember({ mode: persisted });
+    applyModeModel();
+  };
 
   return {
     getSnapshot: () => snapshot,
@@ -267,14 +333,15 @@ export function createController(opts: {
       set({ confirm: null });
       resolve(choice);
     },
-    append: (...messages) => {
-      if (messages.length > 0) set({ messages: [...snapshot.messages, ...messages] });
-    },
+    append,
     replace: messages => set({ messages }),
     setMode: mode => {
-      if (mode !== snapshot.mode) set({ mode });
+      if (mode === snapshot.mode) return;
+      set({ mode });
+      modeChanged();
     },
     transition: (mode, trailing = []) => {
+      const changed = mode !== snapshot.mode;
       const from = modeSide(snapshot.mode);
       const to = modeSide(mode);
       if (from === to) {
@@ -282,13 +349,45 @@ export function createController(opts: {
           mode,
           ...(trailing.length > 0 ? { messages: [...snapshot.messages, ...trailing] } : {}),
         });
-        return;
+      } else {
+        stashed[from] = snapshot.messages;
+        // The trailing banner and echo are UI-only, so the model history comes back bare.
+        session?.switchSide(to);
+        set({ messages: [...(stashed[to] ?? []), ...trailing], mode });
       }
-      stashed[from] = snapshot.messages;
-      // The trailing banner and echo are UI-only, so the model history comes back bare.
-      opts.switchSide(to);
-      set({ messages: [...(stashed[to] ?? []), ...trailing], mode });
+      if (changed) modeChanged();
     },
+    get session() {
+      return session;
+    },
+    attachSession: (attached, own) => {
+      session = attached;
+      ownProfile = own;
+    },
+    pickModel: (typed, echo) => {
+      const cfg = config();
+      if (!session || !cfg) return;
+      const key = typed.trim().toLowerCase();
+      if (cfg.profiles[key]) return switchModel(key, echo, true);
+      // A config model can lack a profile of its own only in the single-model case, where its
+      // switch target is 'default', as `buildModelTargets` maps it.
+      if (cfg.models.some(m => m.toLowerCase() === key)) return switchModel('default', echo, true);
+      // A name not in the config still switches (#96): trying a model that is up on the current
+      // server should not need a .env edit. It becomes an ad-hoc profile on the active profile's
+      // connection, keyed lowercase like every profile, with the model string as typed.
+      const inherit = cfg.profiles[session.profile] ?? cfg.profiles.default;
+      session.addProfile(key, inheritProfile(inherit, typed.trim()));
+      switchModel(key, echo, true);
+    },
+    modelTargets: () => {
+      const cfg = config();
+      return session && cfg ? buildModelTargets(cfg, session.profile) : [];
+    },
+    unpinModel: () => {
+      modelPinned = false;
+      ownProfile = 'default';
+    },
+    applyModeModel,
     sides: () => {
       const onScreen = modeSide(snapshot.mode);
       const other: Side = onScreen === 'chat' ? 'agent' : 'chat';
