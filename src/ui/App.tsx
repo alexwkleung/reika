@@ -39,14 +39,7 @@ import {
   pastedUrlConfirmSpec,
   skillConfirmSpec,
 } from './dialogspecs.js';
-import {
-  Confirm,
-  TOGGLE_CANCEL,
-  TOGGLE_OFF,
-  TOGGLE_ON,
-  implementModeConfirmSpec,
-  toggleConfirmSpec,
-} from './Confirm.js';
+import { Confirm, implementModeConfirmSpec } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { loadLastState, saveLastState, startMode } from '../laststate.js';
@@ -56,7 +49,6 @@ import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
-import { isOffline } from '../tools/_net.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { skillToConfirm, submitStageLabel, urlsToConfirm } from '../agent/submitinput.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
@@ -76,25 +68,15 @@ import {
   isMinimalPrompt,
   isGrindPrompt,
   nextMode,
-  resolveModeCommand,
   turnPromptMode,
   turnRefines,
   turnTools,
 } from '../agent/modes.js';
-import {
-  IMPLEMENT_MODES,
-  isImplementCommand,
-  parseCommand,
-  resolveSkillCommand,
-  resolveTurnCommand,
-  type ImplementMode,
-  type TurnCommand,
-} from '../agent/turncommands.js';
+import { IMPLEMENT_MODES, isImplementCommand, type ImplementMode } from '../agent/turncommands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
-import { createController, type TurnFrontEnd } from '../controller.js';
-import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
+import { createController, type CommandFrontEnd, type TurnFrontEnd } from '../controller.js';
 import { queuedMessage, type SubmitAnswers } from '../agent/busyqueue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
 import type {
@@ -942,199 +924,46 @@ export function App() {
     controller.answerQuestion(answer);
   };
 
-  // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
-  // lands after any restored history (the command echo + banner for /chat et al., nothing
-  // for cycling — the status-bar mode tag is that path's feedback).
+  // The mode change Shift+Tab cycling makes. `trailing` lands after any restored history; cycling
+  // passes nothing, since the status-bar mode tag is that path's feedback (a mode command's echo
+  // and banner are the controller's, in `runCommand`).
   const transitionMode = (next: Mode, trailing: Message[]): void => {
     controller.transition(next, trailing);
   };
 
-  // Carries out what a turn command resolved to (agent/turncommands.ts): its lines, the mode
-  // switch and the submit. The typed command is the turn's bubble, unless the turn emits no user
-  // message and the command is echoed by hand.
-  const runTurnCommand = async (cmd: TurnCommand, raw: string, echo: Message): Promise<void> => {
-    if (cmd.kind === 'refuse') {
-      controller.append(echo, { role: 'system', content: cmd.content });
-      return;
-    }
-    if (cmd.switchTo) controller.setMode(cmd.switchTo);
-    const before = cmd.before.map(n => ({ role: 'system' as const, ...n }));
-    if (cmd.echo || before.length > 0) {
-      controller.append(...(cmd.echo ? [echo] : []), ...before);
-    }
-    // The override forces this turn's tools + promptMode regardless of a not-yet-flushed mode.
-    await controller.runTurn(
-      cmd.modelText,
-      {
-        display: cmd.echo ? undefined : raw,
-        mode: cmd.mode,
-        manualCompact: cmd.manualCompact,
-        skill: cmd.skill,
-        notices: cmd.after.map(n => ({ role: 'system' as const, ...n })),
-      },
-      turnFrontEnd,
-    );
-  };
-
-  const handleCommand = async (raw: string, implementMode?: ImplementMode): Promise<void> => {
-    const { name, args } = parseCommand(raw);
-    // `meta` keeps this command echo in the scrollback but out of the model-facing history.
-    const echo: Message = { role: 'user', content: raw, meta: true };
-
-    if (name === 'clear' || name === 'new') {
-      controller.newConversation(echo);
-      setPlanSteps(null);
-      return;
-    }
-    if (name === 'exit' || name === 'quit') {
-      requestExit();
-      return;
-    }
-    // The commands that only print (agent/replycommands.ts).
-    const reply = resolveReplyCommand(name, {
-      cwd: bundle?.cwd,
-      skills: bundle?.skills ?? [],
-      messages: controller.messages,
-      usage: controller.getSnapshot().usage,
-      startedAt: controller.startedAt,
-      approvals: controller.getSnapshot().approvals,
-      mcpList: () => sessionRef.current?.mcp.list(),
-    });
-    if (reply !== null) {
-      controller.append(echo, { role: 'system', content: reply });
-      return;
-    }
-    // /agent, /plan and the other mode commands (agent/modes.ts).
-    const modeCommand = resolveModeCommand(name, {
-      mode,
-      busy: controller.status === 'busy',
-    });
-    if (modeCommand) {
-      if (modeCommand.kind === 'refuse') {
-        controller.append(echo, { role: 'system', content: modeCommand.content });
-      } else {
-        transitionMode(modeCommand.to, [echo, { role: 'system', content: modeCommand.banner }]);
-      }
-      return;
-    }
-    // /implement, /compact and /search end in a model turn. Search availability is read off the
-    // session's own tool lists rather than re-derived from config, so it agrees with the offline
-    // case too — that one is decided once at startup and never revisited.
-    const turnCommand = resolveTurnCommand(name, args, {
-      mode,
-      implementMode,
-      searchAvailable: target => {
-        const lists = sessionRef.current?.lists;
-        return !!lists && turnTools(target, lists).some(t => t.name === 'search');
-      },
-      offline: isOffline,
-    });
-    if (turnCommand) {
-      await runTurnCommand(turnCommand, raw, echo);
-      return;
-    }
-    if (name === 'cd') {
-      await controller.changeDirectory(args, echo);
-      return;
-    }
-    if (name === 'resume') {
-      const list = await controller.resumeList(args);
-      if ('reply' in list) {
-        controller.append(echo, { role: 'system', content: list.reply });
-        return;
-      }
-      controller.append(echo);
+  // What a slash command hands back to this front end: the turn's hooks, the dialog's cursor, and
+  // the pickers, which only it can draw.
+  const commandFrontEnd = (implementMode?: ImplementMode): CommandFrontEnd => ({
+    turn: turnFrontEnd,
+    pastes: pastedTextsRef.current,
+    implementMode,
+    ask: askChoice,
+    exit: requestExit,
+    onNewConversation: () => setPlanSteps(null),
+    pickModel: targets => {
+      // Deferred past the current keypress dispatch: Ink hands the same Enter to every useInput
+      // handler, and the submit re-renders in between — opening synchronously would let the
+      // picker's own handler see that Enter and instantly select the first entry. The cursor is
+      // parked on the active entry.
+      queueMicrotask(() => {
+        setModelSelect(targets);
+        setModelSelected(
+          Math.max(
+            0,
+            targets.findIndex(t => t.active),
+          ),
+        );
+      });
+    },
+    pickSession: list => {
       // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
       // every useInput handler, and an open picker would take it as a selection.
       queueMicrotask(() => {
         setResumeSelect(list);
         setResumeSelected(0);
       });
-      return;
-    }
-    if (name === 'save') {
-      await controller.saveTranscript(args.trim().toLowerCase() === '--raw', echo);
-      return;
-    }
-    // /approvals, /unattended and /anon (agent/togglecommands.ts). The bare command asks (#625);
-    // cancelling changes nothing and leaves the echo as the only record, like a dismissed picker.
-    const toggle = controller.toggleCommand(name, args);
-    if (toggle) {
-      if (toggle.kind === 'reply') {
-        controller.append(echo, { role: 'system', content: toggle.content });
-        return;
-      }
-      let on: boolean;
-      if (toggle.kind === 'ask') {
-        const choice = await askToggle(toggle.title, toggle.subtitle, toggle.currentlyOn);
-        if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-          controller.append(echo);
-          return;
-        }
-        on = choice === TOGGLE_ON;
-      } else {
-        on = toggle.on;
-      }
-      await controller.setToggle(toggle.toggle, on, echo);
-      return;
-    }
-
-    let response: string;
-    switch (name) {
-      case 'model': {
-        if (!config) {
-          response = 'config not loaded';
-          break;
-        }
-        if (args.trim()) {
-          controller.pickModel(args, echo);
-          return;
-        }
-        // Bare /model opens the interactive picker, cursor parked on the
-        // active entry. The echo lands now so the command shows in scrollback
-        // even if the picker is dismissed.
-        const targets = controller.modelTargets();
-        controller.append(echo);
-        // Deferred past the current keypress dispatch: Ink hands the same
-        // Enter to every useInput handler, and the submit re-renders in
-        // between — opening synchronously would let the picker's own handler
-        // see that Enter and instantly select the first entry.
-        queueMicrotask(() => {
-          setModelSelect(targets);
-          setModelSelected(
-            Math.max(
-              0,
-              targets.findIndex(t => t.active),
-            ),
-          );
-        });
-        return;
-      }
-      default: {
-        // An MCP tool (#265) before a skill: the two share one dispatch point, and a command name
-        // carries a colon, which no built-in or skill does — the shapes cannot collide.
-        const mcpCommand = sessionRef.current?.mcp.commands.find(c => c.name === name);
-        if (mcpCommand) {
-          await controller.runMcpCommand(raw, mcpCommand, args);
-          return;
-        }
-        // No echo for a skill: unlike the UI-only commands above it runs a real turn, and runTurn
-        // emits its own user message rendered from `raw` — the bubble reads `/issue 14` while the
-        // model receives the skill body. Pre-appending would double it.
-        const skillCommand = resolveSkillCommand(name, args, {
-          skills: bundle?.skills ?? [],
-          mode: controller.mode,
-          pastes: pastedTextsRef.current,
-        });
-        if (skillCommand) {
-          await runTurnCommand(skillCommand, raw, echo);
-          return;
-        }
-        response = unknownCommandText(name);
-      }
-    }
-    controller.append(echo, { role: 'system', content: response });
-  };
+    },
+  });
 
   // The run is the controller's; its output streams through the tool block here.
   const runShell = (command: string): Promise<void> =>
@@ -1288,14 +1117,6 @@ export function App() {
     const choice = await askChoice(spec);
     return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
   };
-  // The toggle dialogs for /approvals, /unattended, /anon (#625): the user who typed the bare
-  // command picks on/off/cancel. `currentlyOn` preselects the row matching the state.
-  const askToggle = (
-    title: string,
-    subtitle: string,
-    currentlyOn: boolean,
-  ): Promise<number | 'abort'> =>
-    askChoice(toggleConfirmSpec({ title, subtitle }), currentlyOn ? TOGGLE_ON : TOGGLE_OFF);
 
   // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
   // a strong match opens the confirm dialog rather than injecting — the user is the classifier,
@@ -1430,7 +1251,7 @@ export function App() {
       setSuggestionState(null);
       const trimmed = input.trim();
       setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
-      await handleCommand(trimmed);
+      await controller.runCommand(trimmed, commandFrontEnd());
       return;
     }
     // While a turn is running (or the session is still booting), don't drop the
@@ -1469,7 +1290,7 @@ export function App() {
     // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
     setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
     if (trimmed.startsWith('/')) {
-      await handleCommand(trimmed, implementMode);
+      await controller.runCommand(trimmed, commandFrontEnd(implementMode));
       return;
     }
     if (controller.mode === 'shell') {

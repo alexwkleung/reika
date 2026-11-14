@@ -8,7 +8,8 @@ import {
 } from './agent/busyqueue.js';
 import { buildLaunchNotices } from './agent/launchnotices.js';
 import type { ShrinkCounts } from './agent/loop.js';
-import { modeSide, turnMode } from './agent/modes.js';
+import { modeSide, resolveModeCommand, turnMode, turnTools } from './agent/modes.js';
+import { resolveReplyCommand, unknownCommandText } from './agent/replycommands.js';
 import {
   buildShellRunsBlock,
   captureShellRun,
@@ -23,6 +24,13 @@ import {
   type ToggleCommand,
   type ToggleName,
 } from './agent/togglecommands.js';
+import {
+  parseCommand,
+  resolveSkillCommand,
+  resolveTurnCommand,
+  type ImplementMode,
+  type TurnCommand,
+} from './agent/turncommands.js';
 import {
   autoApproveForced,
   autoApproves,
@@ -59,10 +67,17 @@ import {
   type TranscriptShrinkEvent,
 } from './store/transcript.js';
 import { execStream } from './tools/bash.js';
+import { isOffline } from './tools/_net.js';
 import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import type { PastedText } from './ui/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
-import type { ConfirmSpec } from './ui/dialogspecs.js';
+import {
+  TOGGLE_CANCEL,
+  TOGGLE_OFF,
+  TOGGLE_ON,
+  toggleConfirmSpec,
+  type ConfirmSpec,
+} from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
 import type {
   ApprovalAnswer,
@@ -191,6 +206,26 @@ export type ShellFrontEnd = {
   onEnd?(): void;
 };
 
+// What a front end hands `runCommand`: the hooks for the commands that end in a turn, a dialog or
+// a picker of its own.
+export type CommandFrontEnd = {
+  // For a command that ends in a model turn.
+  turn: TurnFrontEnd;
+  // The paste store, which a skill command's arguments may point into.
+  pastes: PastedText[];
+  // /implement's answer to "which mode", asked before the command was sent (#561).
+  implementMode?: ImplementMode;
+  // Opens a dialog the front end's way, with its cursor on `initial`. The controller's own
+  // `openConfirm` when absent.
+  ask?(spec: ConfirmSpec, initial?: number): Promise<number | 'abort'>;
+  exit(): void;
+  // Bare /model and /resume: the front end shows its own picker over what the controller lists.
+  pickModel(targets: ModelTarget[]): void;
+  pickSession(list: { entries: SessionEntry[]; heading: string }): void;
+  // /new also drops whatever live state the front end holds.
+  onNewConversation?(): void;
+};
+
 export type Controller = {
   getSnapshot(): ControllerSnapshot;
   subscribe(listener: () => void): () => void;
@@ -300,6 +335,11 @@ export type Controller = {
   runMcpCommand(raw: string, command: McpCommand, args: string): Promise<void>;
   // Stops the turn, shell command or MCP call that is running. False when nothing was.
   abort(): boolean;
+  // A typed `/command`, decided in a fixed order: /new, /exit, the commands that only print, the
+  // mode commands, the ones that end in a turn, /cd, /resume, /save, the toggles, /model, an MCP
+  // tool, then a skill. Each is echoed in the scrollback, except where its turn's own bubble is
+  // the echo.
+  runCommand(raw: string, front: CommandFrontEnd): Promise<void>;
 };
 
 export function createController(opts: {
@@ -561,6 +601,11 @@ export function createController(opts: {
       resolveQuestion = resolve;
       set({ question: request });
     });
+  const openConfirm = (spec: ConfirmSpec): Promise<number | 'abort'> =>
+    new Promise(resolve => {
+      resolveConfirm = resolve;
+      set({ confirm: spec });
+    });
   const setStatus = (status: ControllerStatus): void => {
     if (status !== snapshot.status) set({ status });
   };
@@ -734,7 +779,179 @@ export function createController(opts: {
     });
   };
 
-  return {
+  // Carries out what a turn command resolved to (agent/turncommands.ts): its lines, the mode
+  // switch and the submit. The typed command is the turn's bubble, unless the turn emits no user
+  // message and the command is echoed by hand.
+  const runTurnCommand = async (
+    cmd: TurnCommand,
+    raw: string,
+    echo: Message,
+    front: TurnFrontEnd,
+  ): Promise<void> => {
+    if (cmd.kind === 'refuse') {
+      append(echo, { role: 'system', content: cmd.content });
+      return;
+    }
+    if (cmd.switchTo) setMode(cmd.switchTo);
+    const before = cmd.before.map(n => ({ role: 'system' as const, ...n }));
+    if (cmd.echo || before.length > 0) {
+      append(...(cmd.echo ? [echo] : []), ...before);
+    }
+    // The override forces this turn's tools + promptMode regardless of a not-yet-flushed mode.
+    await runTurn(
+      cmd.modelText,
+      {
+        display: cmd.echo ? undefined : raw,
+        mode: cmd.mode,
+        manualCompact: cmd.manualCompact,
+        skill: cmd.skill,
+        notices: cmd.after.map(n => ({ role: 'system' as const, ...n })),
+      },
+      front,
+    );
+  };
+
+  const runCommand = async (raw: string, front: CommandFrontEnd): Promise<void> => {
+    const { name, args } = parseCommand(raw);
+    // `meta` keeps this command echo in the scrollback but out of the model-facing history.
+    const echo: Message = { role: 'user', content: raw, meta: true };
+
+    if (name === 'clear' || name === 'new') {
+      controller.newConversation(echo);
+      front.onNewConversation?.();
+      return;
+    }
+    if (name === 'exit' || name === 'quit') {
+      front.exit();
+      return;
+    }
+    // The commands that only print (agent/replycommands.ts).
+    const reply = resolveReplyCommand(name, {
+      cwd: session?.bundle.cwd,
+      skills: session?.bundle.skills ?? [],
+      messages: snapshot.messages,
+      usage: snapshot.usage,
+      startedAt,
+      approvals: snapshot.approvals,
+      mcpList: () => session?.mcp.list(),
+    });
+    if (reply !== null) {
+      append(echo, { role: 'system', content: reply });
+      return;
+    }
+    // /agent, /plan and the other mode commands (agent/modes.ts).
+    const modeCommand = resolveModeCommand(name, {
+      mode: snapshot.mode,
+      busy: snapshot.status === 'busy',
+    });
+    if (modeCommand) {
+      if (modeCommand.kind === 'refuse') {
+        append(echo, { role: 'system', content: modeCommand.content });
+      } else {
+        controller.transition(modeCommand.to, [
+          echo,
+          { role: 'system', content: modeCommand.banner },
+        ]);
+      }
+      return;
+    }
+    // /implement, /compact and /search end in a model turn. Search availability is read off the
+    // session's own tool lists rather than re-derived from config, so it agrees with the offline
+    // case too — that one is decided once at startup and never revisited.
+    const turnCommand = resolveTurnCommand(name, args, {
+      mode: snapshot.mode,
+      implementMode: front.implementMode,
+      searchAvailable: target => {
+        const lists = session?.lists;
+        return !!lists && turnTools(target, lists).some(t => t.name === 'search');
+      },
+      offline: isOffline,
+    });
+    if (turnCommand) {
+      await runTurnCommand(turnCommand, raw, echo, front.turn);
+      return;
+    }
+    if (name === 'cd') {
+      await controller.changeDirectory(args, echo);
+      return;
+    }
+    if (name === 'resume') {
+      const list = await controller.resumeList(args);
+      if ('reply' in list) {
+        append(echo, { role: 'system', content: list.reply });
+        return;
+      }
+      append(echo);
+      front.pickSession(list);
+      return;
+    }
+    if (name === 'save') {
+      await controller.saveTranscript(args.trim().toLowerCase() === '--raw', echo);
+      return;
+    }
+    // /approvals, /unattended and /anon (agent/togglecommands.ts). The bare command asks (#625);
+    // cancelling changes nothing and leaves the echo as the only record, like a dismissed picker.
+    const toggle = controller.toggleCommand(name, args);
+    if (toggle) {
+      if (toggle.kind === 'reply') {
+        append(echo, { role: 'system', content: toggle.content });
+        return;
+      }
+      let on: boolean;
+      if (toggle.kind === 'ask') {
+        const spec = toggleConfirmSpec({ title: toggle.title, subtitle: toggle.subtitle });
+        const initial = toggle.currentlyOn ? TOGGLE_ON : TOGGLE_OFF;
+        const choice = await (front.ask ? front.ask(spec, initial) : openConfirm(spec));
+        if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+          append(echo);
+          return;
+        }
+        on = choice === TOGGLE_ON;
+      } else {
+        on = toggle.on;
+      }
+      await controller.setToggle(toggle.toggle, on, echo);
+      return;
+    }
+    if (name === 'model') {
+      if (!config()) {
+        append(echo, { role: 'system', content: 'config not loaded' });
+        return;
+      }
+      if (args.trim()) {
+        controller.pickModel(args, echo);
+        return;
+      }
+      // Bare /model is the picker. The echo lands now so the command shows in the scrollback even
+      // if the picker is dismissed.
+      const targets = controller.modelTargets();
+      append(echo);
+      front.pickModel(targets);
+      return;
+    }
+    // An MCP tool (#265) before a skill: the two share one dispatch point, and a command name
+    // carries a colon, which no built-in or skill does — the shapes cannot collide.
+    const mcpCommand = session?.mcp.commands.find(c => c.name === name);
+    if (mcpCommand) {
+      await controller.runMcpCommand(raw, mcpCommand, args);
+      return;
+    }
+    // No echo for a skill: unlike the UI-only commands above it runs a real turn, and runTurn
+    // emits its own user message rendered from `raw` — the bubble reads `/issue 14` while the
+    // model receives the skill body. Pre-appending would double it.
+    const skillCommand = resolveSkillCommand(name, args, {
+      skills: session?.bundle.skills ?? [],
+      mode: snapshot.mode,
+      pastes: front.pastes,
+    });
+    if (skillCommand) {
+      await runTurnCommand(skillCommand, raw, echo, front.turn);
+      return;
+    }
+    append(echo, { role: 'system', content: unknownCommandText(name) });
+  };
+
+  const controller: Controller = {
     getSnapshot: () => snapshot,
     subscribe: listener => {
       listeners.add(listener);
@@ -844,11 +1061,7 @@ export function createController(opts: {
       set({ question: null });
       resolve(answer);
     },
-    openConfirm: spec =>
-      new Promise(resolve => {
-        resolveConfirm = resolve;
-        set({ confirm: spec });
-      }),
+    openConfirm,
     answerConfirm: choice => {
       const resolve = resolveConfirm;
       if (!resolve) return;
@@ -1191,5 +1404,7 @@ export function createController(opts: {
       aborter.abort();
       return true;
     },
+    runCommand,
   };
+  return controller;
 }
