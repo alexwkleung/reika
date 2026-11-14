@@ -230,9 +230,10 @@ export type LiveTurn = {
   reasoning: string;
   // A shell-mode run streams here under the empty name.
   tool: { name: string; output: string } | null;
-  // The call that is running and when it started. Null while an approval or question is open
-  // (#509): the approval happens inside the call, so a running row under it names unpermitted work.
-  pending: { name: string; since: number } | null;
+  // The call that is running, when it started and its number. Null while an approval or question
+  // is open (#509): the approval happens inside the call, so a running row under it names
+  // unpermitted work.
+  pending: RunningCall | null;
   plan: EventArg<'onPlanProgress'> | null;
   usage: NonNullable<EventArg<'onLiveUsage'>> | null;
   subagent: EventArg<'onSubagent'>;
@@ -243,6 +244,10 @@ export type LiveTurn = {
   // The reasoning block may be looping (the live hint, not a verdict).
   looping: EventArg<'onReasoningStatus'>;
 };
+
+// `call` counts every call the controller has seen start, so two same-name calls differ and a
+// front end can key a per-call delay on it (#951).
+export type RunningCall = { name: string; since: number; call: number };
 
 // A delta for streamed text, `live` for anything else; the new value is read off `live`.
 export type LiveChange =
@@ -283,8 +288,6 @@ export type CommandFrontEnd = {
   // Bare /model and /resume: the front end shows its own picker over what the controller lists.
   pickModel(targets: ModelTarget[]): void;
   pickSession(list: { entries: SessionEntry[]; heading: string }): void;
-  // /new also drops whatever live state the front end holds.
-  onNewConversation?(): void;
 };
 
 // What a front end hands `submit` for a typed line: the command hooks, the shell's, and the input
@@ -314,6 +317,8 @@ export type Controller = {
   readonly live: LiveTurn;
   // A listener that throws is dropped, so a broken front end cannot take the turn down.
   subscribeLive(listener: (change: LiveChange) => void): () => void;
+  // The running call even while a dialog hides it from `live`: the dialog is about that call.
+  readonly runningCall: RunningCall | null;
   // The same values as the snapshot, for a caller that is not rendering.
   readonly messages: Message[];
   readonly mode: Mode;
@@ -444,7 +449,8 @@ export function createController(opts: {
   // Stamps when a pending call started.
   now?: () => number;
 }): Controller {
-  const now = opts.now ?? Date.now;
+  // Looked up per call, so a clock swapped in after creation is the one read.
+  const now = opts.now ?? (() => Date.now());
   let snapshot: ControllerSnapshot = {
     messages: [],
     mode: opts.mode,
@@ -506,6 +512,7 @@ export function createController(opts: {
   let submitting = false;
 
   let live: LiveTurn = emptyLive();
+  let callsStarted = 0;
   const liveListeners = new Set<(change: LiveChange) => void>();
   const notifyLive = (change: LiveChange): void => {
     for (const listener of [...liveListeners]) {
@@ -844,7 +851,8 @@ export function createController(opts: {
           front.events?.onToolProgress?.(chunk, tool);
         },
         onToolStart: name => {
-          setLive({ pending: { name, since: now() } });
+          callsStarted += 1;
+          setLive({ pending: { name, since: now(), call: callsStarted } });
           front.events?.onToolStart?.(name);
         },
         onPhase: phase => {
@@ -1021,7 +1029,6 @@ export function createController(opts: {
 
     if (name === 'clear' || name === 'new') {
       controller.newConversation(echo);
-      front.onNewConversation?.();
       return;
     }
     if (name === 'exit' || name === 'quit') {
@@ -1304,6 +1311,9 @@ export function createController(opts: {
       return () => {
         liveListeners.delete(listener);
       };
+    },
+    get runningCall() {
+      return live.pending;
     },
     get messages() {
       return snapshot.messages;

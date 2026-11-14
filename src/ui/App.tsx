@@ -24,7 +24,6 @@ import { Input } from './Input.js';
 import { Working, WORKING_WORDS } from './Working.js';
 import { usePendingRow } from './pendingrow.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
-import type { PlanStep } from '../agent/plantrack.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
 import type { Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
@@ -46,7 +45,7 @@ import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
-import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
+import { withLiveUsage } from '../agent/liveusage.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { submitStageLabel } from '../agent/submitinput.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
@@ -73,6 +72,7 @@ import { acceptSuggestion, computeSuggestions, type SuggestionState } from './su
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { createController, type InputFrontEnd, type TurnFrontEnd } from '../controller.js';
+import { useLiveView } from './liveview.js';
 import { type SubmitAnswers } from '../agent/busyqueue.js';
 import { rememberPaste, type PastedText } from './pastes.js';
 import type {
@@ -81,17 +81,11 @@ import type {
   Config,
   Message,
   Mode,
-  PromptProgress,
   QuestionAnswer,
   QuestionRequest,
-  Usage,
 } from '../types.js';
 
-type Phase = 'thinking' | 'tool';
-
-// How long the "Typechecking" indicator lingers after a check settles, so a sub-second warm check
-// still reads. Long enough to perceive, short enough not to imply the check is still running.
-export const TYPECHECK_LINGER_MS = 650;
+export { TYPECHECK_LINGER_MS } from './liveview.js';
 
 // Only the startup splash lives in the dedicated header <Static> — Ink honors a
 // single <Static>, so appending to this one after the message log's Static takes
@@ -145,38 +139,38 @@ export function App() {
   // there is nothing worth saying yet (#265). Only ever read in the `loading` frame: once the
   // session lands, the splash and the scrollback describe the session itself.
   const [loadingNote, setLoadingNote] = useState<string | undefined>(undefined);
-  const [phase, setPhase] = useState<Phase>('thinking');
-  // True while the harness is running a post-edit typecheck; relabels the busy indicator so the
-  // verification is visible in the dispatch gap. Human-only — never part of model context.
-  const [typechecking, setTypechecking] = useState<boolean>(false);
-  // True during a one-round loop-recovery intervention (edit re-grounding or the logit-bias nudge), so
-  // the busy indicator shows it's actively recovering. Human-only — the durable record is the system
-  // receipt in scrollback.
-  const [recovering, setRecovering] = useState<boolean>(false);
-  // True while the current reasoning block looks like it may be spinning (long AND repetitive).
-  // Relabels the busy indicator so the user can decide to abort (ctrl-c) or wait it out. A soft
-  // hint, not an automated cutoff — human-only, never part of model context. See loop.ts.
-  const [reasoningSpin, setReasoningSpin] = useState<boolean>(false);
-  const [promptProgress, setPromptProgress] = useState<PromptProgress | undefined>(undefined);
-  // Checklist of the plan currently being implemented (#71), snapshotted from the loop's
-  // deterministic tracker. Non-null only after an agent turn found a written plan in history;
-  // persists between turns so the user can see what's left before continuing. Human-only.
-  const [planSteps, setPlanSteps] = useState<PlanStep[] | null>(null);
-  const [streaming, setStreaming] = useState<string>('');
-  const [streamingReasoning, setStreamingReasoning] = useState<string>('');
-  const [streamingTool, setStreamingTool] = useState<string>('');
-  const [streamingToolName, setStreamingToolName] = useState<string>('');
-  // The model tool call running right now (#509), by name: what the scrollback's live "…ing" row
-  // under the call is drawn from. Set when the loop dispatches a call, cleared when that call's
-  // result commits — so it spans exactly the gap the committed call row would otherwise leave.
-  const [pendingTool, setPendingTool] = useState<string>('');
-  // Bumped per call start: a same-name call leaves `pendingTool` unchanged and would re-render nothing.
-  const [pendingCall, setPendingCall] = useState(0);
-  // When that call started (#585), for the elapsed chip on its live row. A ref, not state: the
-  // timestamp itself is never rendered, only `Date.now() - it`, and the render clock that ages it
-  // is the status bar's one-second tick (below) — a state of its own would repaint the live region
-  // a second time every second for a value that changes on no other edge.
-  const pendingToolAtRef = useRef<number>(0);
+  // The scrollback, the other side's stash, the mode, the status, the queue of prompts typed while
+  // busy, the open dialogs and the running turn's live state live in the controller
+  // (src/controller.ts); this component renders them and changes them only through it. The launch
+  // mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
+  // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback.
+  const [controller] = useState(() =>
+    createController({
+      mode: startMode(loadLastState()),
+      remember: saveLastState,
+    }),
+  );
+  // The running turn as drawn (liveview.ts): the controller's live state on this front end's
+  // timing — the stream flush, the typecheck linger and the estimate's once-a-second cadence.
+  const liveView = useLiveView(controller);
+  const {
+    phase,
+    content: streaming,
+    reasoning: streamingReasoning,
+    tool: streamingToolBlock,
+    pending: runningCall,
+    plan: planSteps,
+    subagent: subagentLive,
+    note: noteLive,
+    typechecking,
+    recovering,
+    looping: reasoningSpin,
+    promptProgress,
+  } = liveView.view;
+  const streamingTool = streamingToolBlock?.output ?? '';
+  const streamingToolName = streamingToolBlock?.name ?? '';
+  // The call running right now (#509), by name: what the scrollback's live "…ing" row is drawn from.
+  const pendingTool = runningCall?.name ?? '';
   // An answered approval or question keeps its rows for a moment: closing a 13-row dialog in one
   // frame dropped the input 13 rows, and output arriving in the grace window fills that space
   // instead. Whatever is still blank after it eases out (HOLD_*). An approval's hold is keyed to its
@@ -192,9 +186,8 @@ export function App() {
   // and by streamed output, which would otherwise draw first and drop 1–2 rows when the row arrives.
   const pendingRow = usePendingRow(
     pendingTool,
-    pendingCall,
-    streamingTool !== '' ||
-      (dialogHold?.forCall === true && dialogHold.at === pendingToolAtRef.current),
+    runningCall?.call ?? 0,
+    streamingTool !== '' || (dialogHold?.forCall === true && dialogHold.at === runningCall?.since),
   );
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
@@ -213,14 +206,7 @@ export function App() {
       () => floorReleasedRef.current,
     );
   }, [inputFloor, inkStdout]);
-  const lastLiveOutputAtRef = useRef(0);
-  // A subagent owns the live region right now (#342): its streamed blocks draw at the nested indent.
-  const [subagentLive, setSubagentLive] = useState<boolean>(false);
-  // The model is writing a compaction note (#280): nested like a subagent, labelled as itself.
-  const [noteLive, setNoteLive] = useState<boolean>(false);
-  // Read by onReasoningReset, which runs inside the loop's callbacks rather than a render.
-  const subagentLiveRef = useRef(false);
-  const noteLiveRef = useRef(false);
+  const { tick: tickLiveUsage, lastOutputAtRef: lastLiveOutputAtRef } = liveView;
   // The session owns the config, the active profile, the bundle and everything a turn threads to
   // the next (#403); App renders from its snapshot and never keeps a copy of its own.
   const [session, setSession] = useState<Session | null>(null);
@@ -233,14 +219,6 @@ export function App() {
   const bundle = snapshot?.bundle ?? null;
   const activeProfile = snapshot?.profile ?? 'default';
   const [elapsed, setElapsed] = useState(0);
-  // The estimate for the request in flight (#925), with the session total it was taken against.
-  // The real count reaches this component through the controller and the estimate through React
-  // state, which Ink commits separately, so an estimate is drawn only beside its own total: the
-  // commit that brings the real count drops it, and the chip neither blinks out nor double-counts.
-  // The loop reports on every delta, and this takes it on the clock tick so the chips move once a
-  // second rather than on every stream flush.
-  const [live, setLive] = useState<{ usage: LiveUsage; base: Usage } | null>(null);
-  const liveUsageRef = useRef<LiveUsage | undefined>(undefined);
   const [approvalSelected, setApprovalSelected] = useState(0);
   // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
   const [approvalTyping, setApprovalTyping] = useState(false);
@@ -253,18 +231,6 @@ export function App() {
   // /implement's mode): one modal slot like Approval, whatever is being asked about. Resolves the
   // chosen row, or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
   const [confirmSelected, setConfirmSelected] = useState<number>(CONFIRM_DECLINE);
-  // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
-  // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
-  // /vibe and /agent still toggle it at any time regardless.
-  // The scrollback, the other side's stash, the mode, the status, the queue of prompts typed while
-  // busy and the open dialogs live in the controller (src/controller.ts); this component renders
-  // them and changes them only through it.
-  const [controller] = useState(() =>
-    createController({
-      mode: startMode(loadLastState()),
-      remember: saveLastState,
-    }),
-  );
   // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
   // before a prompt is sent.
   const {
@@ -285,7 +251,11 @@ export function App() {
     shrink,
     decodeRate,
   } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
-  const liveUsage = live && live.base === usage ? live.usage : undefined;
+  // The estimate is drawn only beside the total it was taken against (#925): the real count reaches
+  // this component through the snapshot, which Ink commits separately, so the commit that brings it
+  // drops the estimate and the chip neither blinks out nor double-counts.
+  const shownUsage = liveView.usage;
+  const liveUsage = shownUsage && shownUsage.base === usage ? shownUsage.usage : undefined;
   // `/unattended on|off` (#526) over REIKA_UNATTENDED's launch state. Safe to switch mid-session
   // where `bypass` is not: either direction only ever adds a decline or restores the prompt.
   const unattended = sessionUnattended ?? config?.unattended === true;
@@ -343,10 +313,6 @@ export function App() {
   const exitArmedRef = useRef(false);
   exitArmedRef.current = exitArmed;
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // A warm incremental typecheck can return in well under a second; without a floor the indicator
-  // flashes too briefly to register. Hold the "Typechecking" state a beat after the check settles so
-  // it's actually perceptible. See onTypecheckChange / resetTypecheck.
-  const typecheckHideTimerRef = useRef<NodeJS.Timeout | null>(null);
   const disarmExit = (): void => {
     if (exitTimerRef.current) {
       clearTimeout(exitTimerRef.current);
@@ -354,8 +320,6 @@ export function App() {
     }
     setExitArmed(false);
   };
-  const pendingToolRef = useRef('');
-  pendingToolRef.current = pendingTool;
   const questionSelectedRef = useRef(0);
   questionSelectedRef.current = questionSelected;
   const questionTypingRef = useRef<QuestionTyping | null>(null);
@@ -386,39 +350,6 @@ export function App() {
   resumeSelectRef.current = resumeSelect;
   const resumeSelectedRef = useRef(0);
   resumeSelectedRef.current = resumeSelected;
-  const streamingRef = useRef<string>('');
-  const reasoningRef = useRef<string>('');
-  const toolRef = useRef<string>('');
-  const toolNameRef = useRef<string>('');
-  const flushTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const reasoningFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const toolFlushTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  const scheduleFlush = (): void => {
-    if (flushTimerRef.current !== null) return;
-    flushTimerRef.current = setTimeout(() => {
-      flushTimerRef.current = null;
-      setStreaming(streamingRef.current);
-    }, 50);
-  };
-
-  const scheduleReasoningFlush = (): void => {
-    if (reasoningFlushTimerRef.current !== null) return;
-    reasoningFlushTimerRef.current = setTimeout(() => {
-      reasoningFlushTimerRef.current = null;
-      setStreamingReasoning(reasoningRef.current);
-    }, 50);
-  };
-
-  const scheduleToolFlush = (): void => {
-    if (toolFlushTimerRef.current !== null) return;
-    toolFlushTimerRef.current = setTimeout(() => {
-      toolFlushTimerRef.current = null;
-      setStreamingTool(toolRef.current);
-      setStreamingToolName(toolNameRef.current);
-    }, 50);
-  };
-
   useEffect(() => {
     // The config as loaded, which names the subagent model the splash shows.
     let loaded: Config | null = null;
@@ -489,11 +420,10 @@ export function App() {
       if (startedAtRef.current != null) {
         setElapsed(Math.floor((Date.now() - startedAtRef.current) / 1000));
       }
-      const estimate = liveUsageRef.current;
-      setLive(estimate ? { usage: estimate, base: controller.getSnapshot().usage } : null);
+      tickLiveUsage();
     }, 1000);
     return () => clearInterval(id);
-  }, [status, pending, question, controller]);
+  }, [status, pending, question, tickLiveUsage]);
 
   // Branch↔PR badge. The poll only shells out to git (cheap, local); the `gh` lookup behind
   // it is cached per branch, so a branch switch made in another terminal shows up within a
@@ -795,7 +725,6 @@ export function App() {
     }
     // Save whatever this session had before it is replaced.
     await controller.saveNow();
-    setPlanSteps(null);
     const resumed = controller.loadConversation(sides, entry);
     let size = RESUME_FIRST_SLICE;
     for (let at = 0; at < resumed.length;) {
@@ -895,10 +824,11 @@ export function App() {
     if (!req) return;
     // Only for the call that is running: a subagent's approval names a nested call, and the
     // parent's row (`subagent`) would hold these rows for the whole delegated run.
-    if (req.tool === pendingToolRef.current) {
+    const running = controller.runningCall;
+    if (running && req.tool === running.name) {
       setDialogHold({
         rows: heldFrameRowsRef.current,
-        at: pendingToolAtRef.current,
+        at: running.since,
         forCall: true,
         command: answer === true && req.tool === 'bash' ? req.preview : undefined,
       });
@@ -938,7 +868,6 @@ export function App() {
     },
     ask: askChoice,
     exit: requestExit,
-    onNewConversation: () => setPlanSteps(null),
     pickModel: targets => {
       // Deferred past the current keypress dispatch: Ink hands the same Enter to every useInput
       // handler, and the submit re-renders in between — opening synchronously would let the
@@ -962,26 +891,8 @@ export function App() {
         setResumeSelected(0);
       });
     },
-    // The run is the controller's; its output streams through the tool block here.
-    shell: {
-      onStart: () => {
-        toolRef.current = '';
-        setStreamingTool('');
-      },
-      onProgress: chunk => {
-        toolRef.current += chunk;
-        toolNameRef.current = '';
-        scheduleToolFlush();
-      },
-      onEnd: () => {
-        if (toolFlushTimerRef.current !== null) {
-          clearTimeout(toolFlushTimerRef.current);
-          toolFlushTimerRef.current = null;
-        }
-        toolRef.current = '';
-        setStreamingTool('');
-      },
-    },
+    // The run is the controller's, and its output streams through the live tool block.
+    shell: {},
     onStage: stage => setExpanding(stage ? submitStageLabel(stage) : null),
     // Clipboard attachments are consumed by the line that takes them: recalling that text from
     // history later must not silently re-attach an image the user has moved on from.
@@ -1187,173 +1098,11 @@ export function App() {
     await controller.submit(input, inputFrontEnd(), carried);
   };
 
-  // Latch the typecheck indicator: show immediately when a check starts, but defer hiding by
-  // TYPECHECK_LINGER_MS so a fast check stays on screen long enough to see. A new check cancels a
-  // pending hide so back-to-back checks read as continuous.
-  const onTypecheckChange = (checking: boolean) => {
-    if (typecheckHideTimerRef.current) {
-      clearTimeout(typecheckHideTimerRef.current);
-      typecheckHideTimerRef.current = null;
-    }
-    if (checking) {
-      setTypechecking(true);
-    } else {
-      typecheckHideTimerRef.current = setTimeout(() => {
-        setTypechecking(false);
-        typecheckHideTimerRef.current = null;
-      }, TYPECHECK_LINGER_MS);
-    }
-  };
-  // The linger exists to keep a finished check on screen; a prefill worth naming is the newer fact,
-  // and holding it back made its label land late (#914). A check still running keeps its label.
-  const onPromptProgressChange = (progress: PromptProgress | undefined) => {
-    setPromptProgress(progress);
-    if (typecheckHideTimerRef.current && prefillLabel(progress)) resetTypecheck();
-  };
-  // Immediate, un-lingered clear for turn boundaries.
-  const resetTypecheck = () => {
-    if (typecheckHideTimerRef.current) {
-      clearTimeout(typecheckHideTimerRef.current);
-      typecheckHideTimerRef.current = null;
-    }
-    setTypechecking(false);
-  };
-
-  // What a turn the controller runs reports to this front end: the live stream, the dialogs'
-  // cursor resets, and the per-turn indicators.
+  // What a turn the controller runs reports to this front end: the dialogs' cursor resets. The live
+  // stream and the per-turn indicators are read off the controller (liveview.ts).
   const turnFrontEnd: TurnFrontEnd = {
     requestApproval,
     requestQuestion,
-    // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
-    onTurnStart: () => {
-      setPhase('thinking');
-      resetTypecheck();
-      setReasoningSpin(false);
-      streamingRef.current = '';
-      reasoningRef.current = '';
-      toolRef.current = '';
-      setStreaming('');
-      setStreamingReasoning('');
-      setStreamingTool('');
-      setPendingTool('');
-      // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written
-      // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
-      // stale checklist lingering after the conversation moves on.
-      setPlanSteps(null);
-    },
-    onTurnEnd: () => {
-      if (flushTimerRef.current !== null) {
-        clearTimeout(flushTimerRef.current);
-        flushTimerRef.current = null;
-      }
-      if (reasoningFlushTimerRef.current !== null) {
-        clearTimeout(reasoningFlushTimerRef.current);
-        reasoningFlushTimerRef.current = null;
-      }
-      if (toolFlushTimerRef.current !== null) {
-        clearTimeout(toolFlushTimerRef.current);
-        toolFlushTimerRef.current = null;
-      }
-      streamingRef.current = '';
-      reasoningRef.current = '';
-      toolRef.current = '';
-      setStreaming('');
-      setStreamingReasoning('');
-      setStreamingTool('');
-      setPendingTool('');
-      subagentLiveRef.current = false;
-      noteLiveRef.current = false;
-      setSubagentLive(false);
-      setNoteLive(false);
-      // A request that threw reports no usage, so nothing else would clear it.
-      liveUsageRef.current = undefined;
-      setLive(null);
-      resetTypecheck();
-      setReasoningSpin(false);
-    },
-    onMessage: msg => {
-      if (msg.role === 'assistant') {
-        streamingRef.current = '';
-        reasoningRef.current = '';
-        setStreaming('');
-        setStreamingReasoning('');
-      }
-      if (msg.role === 'tool') {
-        toolRef.current = '';
-        setStreamingTool('');
-        // The result this row was standing in for has landed (#509).
-        setPendingTool('');
-      }
-    },
-    events: {
-      onContentDelta: delta => {
-        lastLiveOutputAtRef.current = Date.now();
-        streamingRef.current += delta;
-        scheduleFlush();
-      },
-      onReasoningDelta: delta => {
-        lastLiveOutputAtRef.current = Date.now();
-        reasoningRef.current += delta;
-        scheduleReasoningFlush();
-      },
-      onToolProgress: (chunk, tool) => {
-        lastLiveOutputAtRef.current = Date.now();
-        toolRef.current += chunk;
-        toolNameRef.current = tool;
-        scheduleToolFlush();
-      },
-      onToolStart: name => {
-        // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
-        // this is the call's own start — the same instant the row it ages appears (#585).
-        pendingToolAtRef.current = Date.now();
-        pendingToolRef.current = name;
-        setPendingTool(name);
-        setPendingCall(n => n + 1);
-      },
-      onPhase: p => {
-        // Leaving the thinking phase ends the reasoning block — clear any spin hint.
-        if (p !== 'thinking') setReasoningSpin(false);
-        setPhase(p);
-      },
-      onSubagent: live => {
-        subagentLiveRef.current = live;
-        setSubagentLive(live);
-      },
-      onCompactionNote: live => {
-        noteLiveRef.current = live;
-        setNoteLive(live);
-      },
-      onTypecheck: onTypecheckChange,
-      onRecovering: setRecovering,
-      // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
-      // re-render.
-      onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
-      onReasoningStatus: setReasoningSpin,
-      onPromptProgress: onPromptProgressChange,
-      onReasoningReset: () => {
-        // Loop-break recovery: end the degenerate looped reasoning's live preview so the
-        // recovery notice is visible and the next round streams into a fresh Thinking block
-        // instead of appending onto the looped text (#55). The controller has already frozen it into
-        // the scrollback where it stood (frozenstream.ts).
-        reasoningRef.current = '';
-        setStreamingReasoning('');
-        setReasoningSpin(false);
-        // The compaction report round (#280) streams its note as content and commits it as a
-        // system notice, which does not clear the content preview the way an assistant commit
-        // does — without this the round's real reply would stream onto the note's tail.
-        streamingRef.current = '';
-        setStreaming('');
-      },
-      // The controller has the real count; the estimate it replaces is drawn no more.
-      onUsage: () => setLive(null),
-      onLiveUsage: estimate => {
-        // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
-        // touches the ref: onUsage drops the estimate with the real count, or the next tick does.
-        const first = estimate && !liveUsageRef.current;
-        liveUsageRef.current = estimate;
-        if (first) setLive({ usage: estimate, base: controller.getSnapshot().usage });
-      },
-    },
   };
 
   // The status line's context gauge: raw window for the ratio, shed ceiling for the percent. Same
@@ -1372,12 +1121,13 @@ export function App() {
         )
       : undefined;
 
-  const prefilling = prefillLabel(promptProgress);
+  const prefilling = prefillLabel(promptProgress ?? undefined);
   const statusWidth = useContentWidth();
   const statusProps: StatusProps = {
     model: config?.profiles[activeProfile]?.model ?? config?.model ?? '',
     turns: messages.filter(m => m.role === 'assistant').length,
-    status: status === 'busy' ? phase : status,
+    // Null outside a model turn: a shell run or a /cd is busy with no phase of its own.
+    status: status === 'busy' ? (phase ?? 'thinking') : status,
     elapsed: status === 'busy' ? elapsed : null,
     usage: withLiveUsage(usage, liveUsage),
     contextTokens: lastUsage?.promptTokens ?? estimatedContext,
@@ -1419,7 +1169,7 @@ export function App() {
     status === 'busy' &&
     pending === null &&
     question === null &&
-    (!dialogHold.forCall || (pendingTool !== '' && pendingToolAtRef.current === dialogHold.at));
+    (!dialogHold.forCall || runningCall?.since === dialogHold.at);
   const heldRows = holdActive && dialogHold.rows > 0 ? dialogHold.rows : undefined;
   const holdAt = holdActive ? dialogHold.at : undefined;
   // Measured after every frame the dialog is in, so the answer can hold exactly what it drew.
@@ -1460,7 +1210,7 @@ export function App() {
       if (blank > 0) timer = setTimeout(step, HOLD_FRAME_MS);
     }, HOLD_GRACE_MS);
     return () => clearTimeout(timer);
-  }, [holdAt]);
+  }, [holdAt, lastLiveOutputAtRef]);
 
   if (status === 'error') {
     return (
@@ -1526,7 +1276,7 @@ export function App() {
             // Its age (#585), read here rather than ticked in the Scrollback: the status bar's
             // one-second `elapsed` interval re-renders this component for the whole of a call, so
             // the row's timer advances off that instead of an interval of its own.
-            pendingToolMs={pendingRow ? Date.now() - pendingToolAtRef.current : 0}
+            pendingToolMs={pendingRow && runningCall ? Date.now() - runningCall.since : 0}
             pendingCommand={holdActive ? dialogHold.command : undefined}
             streamingNote={noteLive}
             showHeldWorked={status !== 'busy'}

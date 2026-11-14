@@ -492,7 +492,7 @@ describe('live', () => {
     expect(lastLive(events).pending).toBeNull();
     expect(lastLive(bridge.connect()).pending).toBeNull();
     bridge.handle({ type: 'answer', id: 'd1', kind: 'approval', answer: true });
-    expect(lastLive(events).pending).toEqual({ name: 'bash', since: 1000 });
+    expect(lastLive(events).pending).toEqual({ name: 'bash', since: 1000, call: 1 });
     await expect(answered.promise).resolves.toBe(true);
   });
 
