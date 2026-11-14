@@ -349,46 +349,42 @@ export function App() {
   // the learned value a turn seeds from; this is what the chip shows.
   const [decodeRate, setDecodeRate] = useState<number | undefined>(undefined);
   const liveUsageRef = useRef<LiveUsage | undefined>(undefined);
-  const [pending, setPending] = useState<{
-    request: ApprovalRequest;
-    resolve: (answer: ApprovalAnswer) => void;
-  } | null>(null);
   const [approvalSelected, setApprovalSelected] = useState(0);
   // Typing the reason for a decline: like `questionTyping`, the input box underneath is the field.
   const [approvalTyping, setApprovalTyping] = useState(false);
   // An `ask_user` question waiting on the user (#198). Modal like Approval, with one difference: the
   // input box stays LIVE underneath once `questionTyping` is set, because the free-text row hands the
   // answer to Input rather than to a field rebuilt in the dialog.
-  const [question, setQuestion] = useState<{
-    request: QuestionRequest;
-    resolve: (answer: QuestionAnswer | null) => void;
-  } | null>(null);
   const [questionSelected, setQuestionSelected] = useState(0);
   const [questionTyping, setQuestionTyping] = useState<QuestionTyping | null>(null);
   // The harness asking before submit (#425 skill confirm, #448 pasted-link confirm, #561
   // /implement's mode): one modal slot like Approval, whatever is being asked about. Resolves the
   // chosen row, or 'abort' (ctrl-c: nothing is sent and the prompt stays in the box).
-  const [confirm, setConfirm] = useState<{
-    spec: ConfirmSpec;
-    resolve: (choice: number | 'abort') => void;
-  } | null>(null);
   const [confirmSelected, setConfirmSelected] = useState<number>(CONFIRM_DECLINE);
   // The launch mode is the last session's (#365) unless REIKA_DEFAULT_MODE was given at launch
   // (REIKA_PLAN_EXPERIMENT=1 is the legacy alias for plan); a .env value is only the fallback. /plan,
   // /vibe and /agent still toggle it at any time regardless.
-  // The scrollback, the other side's stash, the mode, the status and the queue of prompts typed
-  // while busy live in the controller (src/controller.ts); this component renders them and changes
-  // them only through it.
+  // The scrollback, the other side's stash, the mode, the status, the queue of prompts typed while
+  // busy and the open dialogs live in the controller (src/controller.ts); this component renders
+  // them and changes them only through it.
   const [controller] = useState(() =>
     createController({
       mode: startMode(loadLastState()),
       switchSide: side => sessionRef.current?.switchSide(side),
     }),
   );
-  const { messages, mode, status, queue, replaying } = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-  );
+  // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
+  // before a prompt is sent.
+  const {
+    messages,
+    mode,
+    status,
+    queue,
+    replaying,
+    approval: pending,
+    question,
+    confirm,
+  } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const [headerItems, setHeaderItems] = useState<HeaderItem[]>([]);
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
@@ -489,10 +485,6 @@ export function App() {
   };
   const pendingToolRef = useRef('');
   pendingToolRef.current = pendingTool;
-  const pendingRef = useRef<typeof pending>(null);
-  pendingRef.current = pending;
-  const questionRef = useRef<typeof question>(null);
-  questionRef.current = question;
   const questionSelectedRef = useRef(0);
   questionSelectedRef.current = questionSelected;
   const questionTypingRef = useRef<QuestionTyping | null>(null);
@@ -501,8 +493,6 @@ export function App() {
   approvalSelectedRef.current = approvalSelected;
   const approvalTypingRef = useRef(false);
   approvalTypingRef.current = approvalTyping;
-  const confirmRef = useRef<typeof confirm>(null);
-  confirmRef.current = confirm;
   const confirmSelectedRef = useRef<number>(CONFIRM_DECLINE);
   confirmSelectedRef.current = confirmSelected;
   const sessionAutoApproveRef = useRef<boolean | null>(null);
@@ -857,7 +847,8 @@ export function App() {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
-      const hadPending = pendingRef.current !== null;
+      const hadPending = controller.approval !== null;
+      const hadQuestion = controller.question !== null;
       // Typing a decline's reason: back out to the options, as the question's field does (#651).
       // Nothing is decided yet, so neither the approval nor the turn may end here.
       if (hadPending && approvalTypingRef.current) {
@@ -868,11 +859,8 @@ export function App() {
       }
       // Interrupt anything in flight: decline a pending approval, drop an unanswered question,
       // abort a turn.
-      if (hadPending) {
-        pendingRef.current!.resolve(false);
-        setPending(null);
-      }
-      if (questionRef.current) {
+      if (hadPending) answerApproval(false);
+      if (hadQuestion) {
         // Typing an answer or a note (#651): ctrl-c backs out of the field to the option list
         // instead of dropping the question. The field is live and owns the keyboard, so this is the
         // only route back to the list, and ask_user is one-shot — dropping it here throws away the
@@ -887,15 +875,13 @@ export function App() {
           setQuestionTyping(null);
           return;
         }
-        questionRef.current.resolve(null);
-        setQuestion(null);
+        answerQuestion(null);
         setQuestionTyping(null);
       }
       // An open confirm closes first, like the /model picker, and the turn (if one is running)
       // keeps going: the dialog is about the prompt being submitted, not the turn.
-      if (!hadPending && !questionRef.current && confirmRef.current) {
-        confirmRef.current.resolve('abort');
-        setConfirm(null);
+      if (!hadPending && !hadQuestion && controller.confirm) {
+        controller.answerConfirm('abort');
         return;
       }
       if (controller.status === 'busy' && abortRef.current) {
@@ -933,7 +919,7 @@ export function App() {
       }, 1500);
       return;
     }
-    if (pendingRef.current) {
+    if (controller.approval) {
       // Input owns the keyboard while the reason is typed; a key consumed here is a lost character.
       if (approvalTypingRef.current) return;
       if (key.upArrow) {
@@ -953,32 +939,28 @@ export function App() {
           queueMicrotask(() => setApprovalTyping(true));
           return;
         }
-        const resolve = pendingRef.current.resolve;
-        setPending(null);
-        if (sel === 0) resolve(true);
-        else if (sel === 1) resolve(false);
+        if (sel === 0) answerApproval(true);
+        else if (sel === 1) answerApproval(false);
         else {
           setSessionAutoApprove(true);
-          resolve(true);
+          answerApproval(true);
         }
         return;
       }
       if (input === 'y' || input === 'Y') {
-        pendingRef.current.resolve(true);
-        setPending(null);
+        answerApproval(true);
       } else if (input === 'n' || input === 'N') {
-        pendingRef.current.resolve(false);
-        setPending(null);
+        answerApproval(false);
       }
       return;
     }
-    const q = questionRef.current;
+    const q = controller.question;
     if (q) {
       // Typing the answer: Input owns the keyboard. Nothing here may consume the keystroke, or the
       // answer loses characters to the dialog that asked for it.
       if (questionTypingRef.current) return;
       // Rows are the options plus the always-last "type your own" row.
-      const last = q.request.options.length;
+      const last = q.options.length;
       if (key.upArrow) {
         setQuestionSelected(i => Math.max(0, i - 1));
         return;
@@ -1010,10 +992,9 @@ export function App() {
           queueMicrotask(() => setQuestionTyping({}));
           return;
         }
-        const chosen = q.request.options[sel];
-        setQuestion(null);
+        const chosen = q.options[sel];
         setQuestionTyping(null);
-        q.resolve({ text: chosen.label, index: sel });
+        answerQuestion({ text: chosen.label, index: sel });
         return;
       }
       // No escape-to-skip, deliberately, and none in the typing branch above either. An arrow key
@@ -1025,11 +1006,11 @@ export function App() {
       // Modal while the list is up: the input is disabled, so no other key has anywhere to go.
       return;
     }
-    const cf = confirmRef.current;
+    const cf = controller.confirm;
     if (cf) {
       // Digits and y/n only move the cursor, as in the question dialog: Enter is the one key that
       // answers, and y lands on the accepting row — the one Approval-trained fingers expect first.
-      const last = cf.spec.options.length - 1;
+      const last = cf.options.length - 1;
       const digit = Number(input);
       if (key.upArrow) {
         setConfirmSelected(i => Math.max(0, i - 1));
@@ -1037,19 +1018,17 @@ export function App() {
         setConfirmSelected(i => Math.min(last, i + 1));
       } else if (/^[1-9]$/.test(input) && digit - 1 <= last) {
         setConfirmSelected(digit - 1);
-      } else if (cf.spec.accept && (input === 'n' || input === 'N')) {
+      } else if (cf.accept && (input === 'n' || input === 'N')) {
         setConfirmSelected(CONFIRM_DECLINE);
-      } else if (cf.spec.accept && (input === 'y' || input === 'Y')) {
+      } else if (cf.accept && (input === 'y' || input === 'Y')) {
         setConfirmSelected(CONFIRM_ACCEPT);
       } else if (key.return) {
-        setConfirm(null);
-        cf.resolve(confirmSelectedRef.current);
+        controller.answerConfirm(confirmSelectedRef.current);
       } else if (key.escape) {
         // Unlike Approval and Question, escape is safe here: a split arrow sequence arriving as a
         // bare escape only cancels — nothing is sent and the prompt stays in the box — the same
         // cost the /model picker's escape carries. Approval's escape would decline for the user.
-        setConfirm(null);
-        cf.resolve('abort');
+        controller.answerConfirm('abort');
       }
       // Modal: the input is disabled, so nothing else has anywhere to go.
       return;
@@ -1408,39 +1387,40 @@ export function App() {
     }
     setApprovalSelected(0);
     setApprovalTyping(false);
-    return new Promise(resolve => {
-      const wrappedResolve = (answer: ApprovalAnswer): void => {
-        // Only for the call that is running: a subagent's approval names a nested call, and the
-        // parent's row (`subagent`) would hold these rows for the whole delegated run.
-        if (req.tool === pendingToolRef.current) {
-          setDialogHold({
-            rows: heldFrameRowsRef.current,
-            at: pendingToolAtRef.current,
-            forCall: true,
-            command: answer === true && req.tool === 'bash' ? req.preview : undefined,
-          });
-        }
-        setApprovals(a =>
-          answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
-        );
-        resolve(answer);
-      };
-      setPending({ request: req, resolve: wrappedResolve });
-    });
+    return controller.openApproval(req);
+  };
+
+  // Answers the open approval. The frame hold and the dialog's close land in one tick, so no
+  // frame is drawn between them (#897).
+  const answerApproval = (answer: ApprovalAnswer): void => {
+    const req = controller.approval;
+    if (!req) return;
+    // Only for the call that is running: a subagent's approval names a nested call, and the
+    // parent's row (`subagent`) would hold these rows for the whole delegated run.
+    if (req.tool === pendingToolRef.current) {
+      setDialogHold({
+        rows: heldFrameRowsRef.current,
+        at: pendingToolAtRef.current,
+        forCall: true,
+        command: answer === true && req.tool === 'bash' ? req.preview : undefined,
+      });
+    }
+    setApprovals(a =>
+      answer === true ? { ...a, approved: a.approved + 1 } : { ...a, declined: a.declined + 1 },
+    );
+    controller.answerApproval(answer);
   };
 
   const requestQuestion = (req: QuestionRequest): Promise<QuestionAnswer | null> => {
     setQuestionSelected(0);
     setQuestionTyping(null);
-    return new Promise(resolve =>
-      setQuestion({
-        request: req,
-        resolve: answer => {
-          setDialogHold({ rows: heldFrameRowsRef.current, at: Date.now(), forCall: false });
-          resolve(answer);
-        },
-      }),
-    );
+    return controller.openQuestion(req);
+  };
+
+  const answerQuestion = (answer: QuestionAnswer | null): void => {
+    if (!controller.question) return;
+    setDialogHold({ rows: heldFrameRowsRef.current, at: Date.now(), forCall: false });
+    controller.answerQuestion(answer);
   };
 
   // The mode change itself, shared by the slash commands and Shift+Tab cycling. `trailing`
@@ -2094,7 +2074,7 @@ export function App() {
   const askChoice = (spec: ConfirmSpec, initial = 0): Promise<number | 'abort'> => {
     setConfirmSelected(Math.max(0, Math.min(initial, spec.options.length - 1)));
     return new Promise(resolve => {
-      queueMicrotask(() => setConfirm({ spec, resolve }));
+      queueMicrotask(() => void controller.openConfirm(spec).then(resolve));
     });
   };
   const askConfirm = async (spec: ConfirmSpec): Promise<boolean | 'abort'> => {
@@ -2185,7 +2165,6 @@ export function App() {
   // busy, so a still-busy replay just lands back on the queue.
   useEffect(() => {
     const next = controller.takeQueued({
-      dialogOpen: pending !== null || confirm !== null,
       resuming: resumingRef.current,
     });
     if (!next) return;
@@ -2203,18 +2182,16 @@ export function App() {
     // be queued as the user's next prompt.
     // A decline's reason, likewise not a message for the model's next turn. An empty one is not a
     // reason; the field stays open, and ctrl-c is the way back to a plain Decline.
-    const ap = pendingRef.current;
-    if (ap && approvalTypingRef.current) {
+    if (controller.approval && approvalTypingRef.current) {
       const text = input.trim();
       if (!text) return;
       setInputValue(preAnswerDraftRef.current);
       setSuggestionState(null);
-      setPending(null);
       setApprovalTyping(false);
-      ap.resolve({ feedback: text });
+      answerApproval({ feedback: text });
       return;
     }
-    const q = questionRef.current;
+    const q = controller.question;
     const typing = questionTypingRef.current;
     if (q && typing) {
       const text = input.trim();
@@ -2223,13 +2200,12 @@ export function App() {
       if (typing.forIndex === undefined && !text) return;
       setInputValue('');
       setSuggestionState(null);
-      setQuestion(null);
       setQuestionTyping(null);
       if (typing.forIndex === undefined) {
-        q.resolve({ text });
+        answerQuestion({ text });
       } else {
-        q.resolve({
-          text: q.request.options[typing.forIndex].label,
+        answerQuestion({
+          text: q.options[typing.forIndex].label,
           index: typing.forIndex,
           ...(text ? { notes: text } : {}),
         });
@@ -2867,14 +2843,14 @@ export function App() {
           <QueuedList queue={queue} />
           {pending ? (
             <Approval
-              request={pending.request}
+              request={pending}
               selectedIndex={approvalSelected}
               typing={approvalTyping}
               reservedRows={dialogReservedRows}
             />
           ) : question ? (
             <Question
-              request={question.request}
+              request={question}
               selectedIndex={questionSelected}
               typing={questionTyping}
               reservedRows={dialogReservedRows}
@@ -2899,7 +2875,7 @@ export function App() {
               heading={resumeSelect.heading}
             />
           ) : confirm ? (
-            <Confirm spec={confirm.spec} selectedIndex={confirmSelected} />
+            <Confirm spec={confirm} selectedIndex={confirmSelected} />
           ) : null}
           <Input
             // The question dialog is modal only while its list is up; once the user is typing an
@@ -2922,7 +2898,7 @@ export function App() {
             reservedRows={
               question
                 ? questionDialogHeight(
-                    question.request,
+                    question,
                     questionTyping,
                     dialogReservedRows,
                     questionSelected,

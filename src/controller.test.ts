@@ -20,6 +20,9 @@ describe('createController', () => {
       status: 'loading',
       queue: [],
       replaying: false,
+      approval: null,
+      question: null,
+      confirm: null,
     });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
@@ -165,7 +168,7 @@ describe('controller sides and stash', () => {
 
 describe('controller status and queue', () => {
   const queued = (content: string): QueuedMessage => ({ content, answers: {} });
-  const open = { dialogOpen: false, resuming: false };
+  const open = { resuming: false };
 
   it('reports the status and notifies only when it changes', () => {
     const { controller } = controllerIn('agent');
@@ -198,9 +201,29 @@ describe('controller status and queue', () => {
     controller.setStatus('busy');
     expect(controller.takeQueued(open)).toBeNull();
     controller.setStatus('idle');
-    expect(controller.takeQueued({ ...open, dialogOpen: true })).toBeNull();
-    expect(controller.takeQueued({ ...open, resuming: true })).toBeNull();
+    expect(controller.takeQueued({ resuming: true })).toBeNull();
     expect(controller.getSnapshot().queue).toHaveLength(1);
+  });
+
+  it('holds the queue under an approval or a confirm, and releases it once answered', () => {
+    const { controller } = controllerIn('agent');
+    controller.enqueue(queued('later'));
+    controller.setStatus('idle');
+
+    void controller.openApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.answerApproval(true);
+
+    void controller.openConfirm({
+      title: 'Skill',
+      subtitle: '/issue',
+      details: [],
+      options: ['Send as typed', 'Apply'],
+    });
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.answerConfirm('abort');
+
+    expect(controller.takeQueued(open)).toMatchObject({ content: 'later' });
   });
 
   it('hands back the oldest prompt, then nothing more until that replay is done (#958)', () => {
@@ -227,5 +250,83 @@ describe('controller status and queue', () => {
     expect(controller.takeQueued(open)).toBeNull();
     controller.replayDone();
     expect(controller.getSnapshot()).toBe(before);
+  });
+});
+
+describe('controller dialogs', () => {
+  const request = { tool: 'bash', subject: 'npm test', preview: 'npm test' };
+  const question = { question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }] };
+  const spec = {
+    title: 'Skill',
+    subtitle: '/issue',
+    details: [],
+    options: ['Send as typed', 'Apply /issue'],
+  };
+
+  it('shows an approval until it is answered, and resolves with the answer', async () => {
+    const { controller } = controllerIn('agent');
+    const answer = controller.openApproval(request);
+    expect(controller.approval).toBe(request);
+    expect(controller.getSnapshot().approval).toBe(request);
+    controller.answerApproval({ feedback: 'not that file' });
+    expect(controller.approval).toBeNull();
+    await expect(answer).resolves.toEqual({ feedback: 'not that file' });
+  });
+
+  it('resolves a question with its answer, or with null when it is dropped', async () => {
+    const { controller } = controllerIn('agent');
+    const first = controller.openQuestion(question);
+    expect(controller.question).toBe(question);
+    controller.answerQuestion({ text: 'B', index: 1 });
+    await expect(first).resolves.toEqual({ text: 'B', index: 1 });
+
+    const second = controller.openQuestion(question);
+    controller.answerQuestion(null);
+    expect(controller.question).toBeNull();
+    await expect(second).resolves.toBeNull();
+  });
+
+  it('resolves a confirm with the chosen row, or abort', async () => {
+    const { controller } = controllerIn('agent');
+    const first = controller.openConfirm(spec);
+    expect(controller.confirm).toBe(spec);
+    controller.answerConfirm(1);
+    await expect(first).resolves.toBe(1);
+
+    const second = controller.openConfirm(spec);
+    controller.answerConfirm('abort');
+    await expect(second).resolves.toBe('abort');
+    expect(controller.confirm).toBeNull();
+  });
+
+  it('closes the dialog before the answer reaches whoever asked', async () => {
+    const { controller } = controllerIn('agent');
+    let openWhenResolved: unknown = 'unset';
+    const asked = controller.openApproval(request).then(() => {
+      openWhenResolved = controller.approval;
+    });
+    controller.answerApproval(true);
+    await asked;
+    expect(openWhenResolved).toBeNull();
+  });
+
+  it('ignores an answer when nothing is open', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    controller.answerApproval(true);
+    controller.answerQuestion(null);
+    controller.answerConfirm(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('keeps the three kinds apart: answering one leaves the others open', () => {
+    const { controller } = controllerIn('agent');
+    void controller.openApproval(request);
+    void controller.openQuestion(question);
+    void controller.openConfirm(spec);
+    controller.answerQuestion(null);
+    expect(controller.approval).toBe(request);
+    expect(controller.confirm).toBe(spec);
   });
 });
