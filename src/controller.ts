@@ -1,10 +1,21 @@
 import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
 import { modeSide } from './agent/modes.js';
 import { autoApproves, effectiveAutoApprove } from './approval.js';
+import { basename, dirname } from 'node:path';
 import { inheritProfile, modeSwitchProfile } from './config.js';
+import { debugLog, processSessionStem } from './debug.js';
 import { persistableMode, type LastState } from './laststate.js';
 import type { Session } from './session.js';
-import { countRealTurns, modelHistoryFromScrollback, type SessionSides } from './store/sessions.js';
+import {
+  countRealTurns,
+  forAutosave,
+  modelHistoryFromScrollback,
+  newSessionPath,
+  projectHistoryDir,
+  writeSession,
+  type SessionSides,
+} from './store/sessions.js';
+import type { TranscriptMeta } from './store/transcript.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
@@ -31,6 +42,8 @@ import type {
 type Side = 'agent' | 'chat';
 
 // `loading` until the session has booted, `error` when it could not.
+const AUTOSAVE_INTERVAL_MS = 3000;
+
 export type ControllerStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 export type ControllerSnapshot = {
@@ -124,6 +137,13 @@ export type Controller = {
   loadConversation(sides: SessionSides, from: { title?: string; path: string }): Message[];
   // Both sides' scrollbacks, whichever one is on screen.
   sides(): Record<Side, Message[]>;
+  // The file this conversation auto-saves to (#1), or null before its first save and after a
+  // `newConversation`. Fixed once set, so a conversation is one entry in the resume list.
+  readonly sessionPath: string | null;
+  // Writes the conversation now and resolves when that write, and any before it, has landed.
+  // The controller also saves on its own: when a real prompt first appears, whenever a turn or a
+  // command ends, and at most every few seconds while a turn runs.
+  saveNow(): Promise<void>;
 };
 
 export function createController(opts: {
@@ -131,6 +151,11 @@ export function createController(opts: {
   // Saves what the next launch opens on (#365): a mode the user switched to, a model they picked.
   // Every front end hands in the same one, so a session started in one resumes in another.
   remember: (state: LastState) => void;
+  // The header a save is written under. Supplied because it carries the token counts and shrink
+  // events a front end still measures.
+  transcriptMeta: (agentSide: Message[], cwd: string, midTurn: boolean) => TranscriptMeta;
+  // Where sessions are kept; the default is the user's history directory.
+  historyRoot?: string;
 }): Controller {
   let snapshot: ControllerSnapshot = {
     messages: [],
@@ -157,11 +182,94 @@ export function createController(opts: {
   // The user said which model this session runs, which outranks the per-mode map (#616).
   let modelPinned = false;
   let startedAt = Date.now();
+  let sessionPath: string | null = null;
+  // The process's first transcript shares the debug log's name (#761); a later one gets its own.
+  let stemClaimed = false;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveQueued = false;
+  // Writes run one after another: two in flight could rename out of order and leave the older
+  // snapshot on disk.
+  let saveChain: Promise<void> = Promise.resolve();
+  let saveFailed = false;
+  // The real-turn count a resume loaded. Nothing is written until the conversation grows past it,
+  // so opening a session and leaving neither copies a /save file into the project nor re-stamps
+  // a project session as the newest.
+  let saveHold: number | null = null;
   const listeners = new Set<() => void>();
 
   const set = (next: Partial<ControllerSnapshot>): void => {
     snapshot = { ...snapshot, ...next };
     for (const listener of listeners) listener();
+    // Only these two changes mean there is news to save.
+    if ('messages' in next || 'status' in next) saveSoon();
+  };
+  const bothSides = (): Record<Side, Message[]> => {
+    const onScreen = modeSide(snapshot.mode);
+    const other: Side = onScreen === 'chat' ? 'agent' : 'chat';
+    return { [onScreen]: snapshot.messages, [other]: stashed[other] ?? [] } as Record<
+      Side,
+      Message[]
+    >;
+  };
+  const projectDir = (): string | null =>
+    session ? projectHistoryDir(session.bundle.cwd, opts.historyRoot) : null;
+  // The basename only: enough to find the transcript under history/, no home path in the log.
+  const logSessionFile = (path: string): void =>
+    debugLog(`[reika:debug] session file=${basename(path)}`);
+  const stopSaveTimer = (): void => {
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    saveTimer = null;
+  };
+  const saveNow = (): Promise<void> => {
+    stopSaveTimer();
+    const dir = projectDir();
+    if (!session || !dir || !session.getSnapshot().config.autosave) return saveChain;
+    const all = bothSides();
+    const saved = { agent: forAutosave(all.agent), chat: forAutosave(all.chat) };
+    const turns = countRealTurns(saved.agent) + countRealTurns(saved.chat);
+    // Nothing typed yet: the launch notices alone are not a session worth listing.
+    if (turns === 0 || turns <= (saveHold ?? 0)) return saveChain;
+    saveHold = null;
+    if (sessionPath === null) {
+      const stem = stemClaimed ? undefined : processSessionStem();
+      stemClaimed = true;
+      sessionPath = newSessionPath(dir, new Date(), stem);
+      logSessionFile(sessionPath);
+    }
+    const path = sessionPath;
+    const meta = opts.transcriptMeta(saved.agent, session.bundle.cwd, snapshot.status === 'busy');
+    saveChain = saveChain
+      .then(() => writeSession(path, saved, meta))
+      .catch((e: unknown) => {
+        // Said once: a full disk fails every save the same way, and the session itself is fine.
+        if (saveFailed) return;
+        saveFailed = true;
+        append({
+          role: 'system',
+          tone: 'warn',
+          content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
+        });
+      });
+    return saveChain;
+  };
+  // At once on the first real prompt (a session exists from the moment it is typed) and whenever
+  // nothing is running; while a turn runs, at most once per interval, so a crash loses seconds of
+  // a long turn without a write per round. One decision per tick, however many changes it held.
+  const saveSoon = (): void => {
+    if (saveQueued) return;
+    saveQueued = true;
+    queueMicrotask(() => {
+      saveQueued = false;
+      if (!session?.getSnapshot().config.autosave) return;
+      if (snapshot.status !== 'busy' || sessionPath === null) {
+        void saveNow();
+        return;
+      }
+      saveTimer ??= setTimeout(() => {
+        saveTimer = null;
+        void saveNow();
+      }, AUTOSAVE_INTERVAL_MS);
+    });
   };
   const counted = (approved: boolean): Approvals => ({
     approved: snapshot.approvals.approved + (approved ? 1 : 0),
@@ -393,6 +501,10 @@ export function createController(opts: {
     newConversation: echo => {
       stashed = {};
       startedAt = Date.now();
+      // A new conversation gets a new file.
+      stopSaveTimer();
+      sessionPath = null;
+      saveHold = null;
       set({
         messages: [
           echo,
@@ -414,6 +526,12 @@ export function createController(opts: {
     loadConversation: (sides, from) => {
       stashed = {};
       session?.reset({ relearn: false });
+      // A project session carries on in its own file. A manual save from the root is left as it
+      // was, and the continuation gets a project file of its own at its next save.
+      stopSaveTimer();
+      sessionPath = dirname(from.path) === projectDir() ? from.path : null;
+      if (sessionPath) logSessionFile(sessionPath);
+      saveHold = countRealTurns(sides.agent) + countRealTurns(sides.chat);
       // Emptied first so a line the mode change prints below can be told from the old scrollback.
       set({ messages: [] });
       const agentTurns = countRealTurns(sides.agent);
@@ -447,13 +565,10 @@ export function createController(opts: {
         ...snapshot.messages,
       ];
     },
-    sides: () => {
-      const onScreen = modeSide(snapshot.mode);
-      const other: Side = onScreen === 'chat' ? 'agent' : 'chat';
-      return { [onScreen]: snapshot.messages, [other]: stashed[other] ?? [] } as Record<
-        Side,
-        Message[]
-      >;
+    sides: bothSides,
+    get sessionPath() {
+      return sessionPath;
     },
+    saveNow,
   };
 }

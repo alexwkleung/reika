@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { createController } from './controller.js';
+import { listSessions, loadSession, projectHistoryDir } from './store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
 import type { LastState } from './laststate.js';
 import type { Session } from './session.js';
@@ -27,6 +32,7 @@ function fakeSession(config: Policy) {
   } as Config;
   const session = {
     profile: 'default',
+    bundle: { cwd: '/repo/app' },
     getSnapshot: () => ({ config: cfg }),
     switchSide: vi.fn(),
     loadHistory: vi.fn(),
@@ -47,12 +53,35 @@ function fakeSession(config: Policy) {
 
 // `off` unless a test says otherwise, so every approval request opens its dialog. A null policy
 // is a controller whose session has not booted.
-function controllerIn(mode: Mode, policy: Policy | null = {}, own = 'default') {
+const metaFor = (agentSide: Message[], cwd: string, midTurn: boolean): TranscriptMeta => ({
+  version: TRANSCRIPT_VERSION,
+  savedAt: new Date().toISOString(),
+  model: 'local',
+  baseURL: 'http://127.0.0.1:1/v1',
+  cwd,
+  messageCount: agentSide.length,
+  mode: 'agent',
+  ...(midTurn ? { midTurn: true as const } : {}),
+});
+
+function controllerIn(
+  mode: Mode,
+  policy: Policy | null = {},
+  own = 'default',
+  historyRoot?: string,
+) {
   const remember = vi.fn<(state: LastState) => void>();
-  const controller = createController({ mode, remember });
+  const transcriptMeta = vi.fn(metaFor);
+  const controller = createController({ mode, remember, transcriptMeta, historyRoot });
   const session = policy ? fakeSession(policy) : null;
   if (session) controller.attachSession(session as unknown as Session, own);
-  return { controller, session, switchSide: session?.switchSide ?? vi.fn(), remember };
+  return {
+    controller,
+    session,
+    switchSide: session?.switchSide ?? vi.fn(),
+    remember,
+    transcriptMeta,
+  };
 }
 
 describe('createController', () => {
@@ -747,5 +776,178 @@ describe('controller.loadConversation', () => {
       ),
       note("Switched to profile 'kimi' (kimi-k3)"),
     ]);
+  });
+});
+
+describe('controller auto-save', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'reika-controller-save-'));
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const saving = (mode: Mode = 'agent') => controllerIn(mode, { autosave: true }, 'default', root);
+  const projectDir = (): string => projectHistoryDir('/repo/app', root);
+  const reply: Message = { role: 'assistant', content: 'done' };
+  // A change schedules its save in a microtask; this lets that run and the write land.
+  const settled = async (controller: { saveNow(): Promise<void> }): Promise<void> => {
+    await Promise.resolve();
+    await controller.saveNow();
+  };
+
+  it('writes nothing when the config does not ask for it', async () => {
+    const { controller } = controllerIn('agent', {}, 'default', root);
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'));
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+    expect(await listSessions(projectDir())).toEqual([]);
+  });
+
+  it('writes nothing for launch notices alone', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(note('No network — search is off'));
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+  });
+
+  it("saves from the first real prompt, into the project's directory", async () => {
+    const { controller, transcriptMeta } = saving();
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'));
+    await settled(controller);
+
+    expect(dirname(controller.sessionPath!)).toBe(projectDir());
+    expect((await loadSession(controller.sessionPath!)).agent).toEqual([user('fix the parser')]);
+    expect(transcriptMeta).toHaveBeenLastCalledWith([user('fix the parser')], '/repo/app', false);
+  });
+
+  it('rewrites one file as the conversation grows, with both sides in it', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'), reply);
+    await settled(controller);
+    const path = controller.sessionPath;
+
+    controller.transition('chat');
+    controller.append(user('what is a monad'));
+    await settled(controller);
+    expect(controller.sessionPath).toBe(path);
+    expect(await listSessions(projectDir())).toHaveLength(1);
+    expect(await loadSession(path!)).toEqual({
+      agent: [user('fix the parser'), reply],
+      chat: [user('what is a monad')],
+    });
+  });
+
+  it('makes one save decision for a tick with several changes', async () => {
+    const { controller, transcriptMeta } = saving();
+    controller.setStatus('idle');
+    controller.append(user('a'));
+    controller.append(reply);
+    controller.append(note('receipt'));
+    await Promise.resolve();
+    expect(transcriptMeta).toHaveBeenCalledTimes(1);
+    await controller.saveNow();
+  });
+
+  it('saves at once on the first prompt of a turn, then at most once per interval while it runs', async () => {
+    vi.useFakeTimers();
+    const { controller, transcriptMeta } = saving();
+    controller.setStatus('busy');
+    controller.append(user('long task'));
+    await Promise.resolve();
+    expect(transcriptMeta).toHaveBeenCalledTimes(1);
+    expect(transcriptMeta).toHaveBeenLastCalledWith([user('long task')], '/repo/app', true);
+
+    controller.append(reply);
+    await Promise.resolve();
+    controller.append(reply);
+    await Promise.resolve();
+    expect(transcriptMeta).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(transcriptMeta).toHaveBeenCalledTimes(2);
+
+    controller.setStatus('idle');
+    await Promise.resolve();
+    expect(transcriptMeta).toHaveBeenCalledTimes(3);
+    expect(transcriptMeta).toHaveBeenLastCalledWith(expect.any(Array), '/repo/app', false);
+    vi.useRealTimers();
+    await controller.saveNow();
+  });
+
+  it('starts a new file after a new conversation', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('first'));
+    await settled(controller);
+    const first = controller.sessionPath;
+
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+
+    controller.append(user('second'));
+    await settled(controller);
+    expect(controller.sessionPath).not.toBe(first);
+    expect(await listSessions(projectDir())).toHaveLength(2);
+  });
+
+  it('continues a resumed project session in its own file, and only once it grows', async () => {
+    const { controller, transcriptMeta } = saving();
+    controller.setStatus('idle');
+    const path = join(projectDir(), 'earlier.jsonl');
+    const sides = { agent: [user('fix the parser'), reply], chat: [] };
+    controller.replace(controller.loadConversation(sides, { path }));
+    await settled(controller);
+    expect(controller.sessionPath).toBe(path);
+    expect(transcriptMeta).not.toHaveBeenCalled();
+
+    controller.append(user('and the lexer'));
+    await settled(controller);
+    // The two saved messages, the "Resumed" receipt, and the new prompt.
+    const agent = (await loadSession(path)).agent;
+    expect(agent).toHaveLength(4);
+    expect(agent.at(-1)).toEqual(user('and the lexer'));
+    expect(await listSessions(projectDir())).toHaveLength(1);
+  });
+
+  it('leaves a resumed root save untouched and continues in a project file', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    const rootSave = join(root, 'manual.jsonl');
+    await writeFile(rootSave, 'left as it was');
+    const sides = { agent: [user('fix the parser'), reply], chat: [] };
+    controller.replace(controller.loadConversation(sides, { path: rootSave }));
+    expect(controller.sessionPath).toBeNull();
+
+    controller.append(user('and the lexer'));
+    await settled(controller);
+    expect(dirname(controller.sessionPath!)).toBe(projectDir());
+    expect(await readFile(rootSave, 'utf8')).toBe('left as it was');
+  });
+
+  it('says so once when a save fails, and keeps the session going', async () => {
+    // A file where the history root should be: every write under it fails.
+    const blocked = join(root, 'not-a-dir');
+    await writeFile(blocked, '');
+    const { controller } = controllerIn('agent', { autosave: true }, 'default', blocked);
+    controller.setStatus('idle');
+    controller.append(user('first'));
+    await settled(controller);
+    controller.append(user('second'));
+    await settled(controller);
+    await settled(controller);
+
+    const warnings = controller.messages.filter(m => m.role === 'system' && m.tone === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      content: expect.stringMatching(/^auto-save failed: .* — \/resume won't have this session/),
+    });
   });
 });
