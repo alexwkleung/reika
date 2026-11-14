@@ -903,9 +903,9 @@ export function createController(opts: {
             note: live.note,
             nested: live.subagent,
           });
-          live = { ...live, content: '', reasoning: '', looping: false };
+          // Cleared before the frozen copy lands, or one frame draws the text twice (#985).
+          setLive({ content: '', reasoning: '', looping: false });
           if (frozen) append(frozen);
-          notifyLive({ type: 'live' });
           front.events?.onReasoningReset?.();
         },
         onUsage: u => {
@@ -1721,6 +1721,8 @@ export function createController(opts: {
             front.onProgress?.(chunk);
           },
         });
+        // The streamed block goes before its committed copy lands (#985).
+        setLive({ tool: null });
         append({ role: 'shell', command, output: result.payload ?? '' });
         heldShellRuns = holdShellRun(
           heldShellRuns,
@@ -1729,7 +1731,7 @@ export function createController(opts: {
       } catch (e) {
         append({ role: 'error', content: (e as Error).message });
       } finally {
-        setLive({ tool: null });
+        if (live.tool) setLive({ tool: null });
         front.onEnd?.();
         aborter = null;
         setStatus('idle');
