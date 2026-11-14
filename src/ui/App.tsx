@@ -17,7 +17,7 @@ import {
   type DOMElement,
 } from 'ink';
 import { inputFloorEnabled, installBottomFloor } from './bottomfloor.js';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
@@ -56,7 +56,7 @@ import { loadLastState, saveLastState, startMode, startProfiles } from '../lasts
 import { autoApproveForced, effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
 import { bootstrap } from '../context/bootstrap.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugEnabled, debugLog, processSessionStem } from '../debug.js';
+import { debugEnabled, debugLog } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { addFileToIndex } from '../context/files.js';
 import {
@@ -94,15 +94,11 @@ import { mcpStartupLine, prefillLabel } from './format.js';
 import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import {
-  countRealTurns,
-  forAutosave,
   listSessions,
   loadSession,
-  newSessionPath,
   projectHistoryDir,
   ROOT_HISTORY_DIR,
   saveHeader,
-  writeSession,
   type SessionEntry,
   type SessionSides,
 } from '../store/sessions.js';
@@ -186,8 +182,6 @@ function promptPlaceholder(): string {
   const withHint = `${base}, ctrl-v for images`;
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
 }
-
-const AUTOSAVE_INTERVAL_MS = 3000;
 
 // A frozen stream's kept tail: well past what a viewport-tall live block can draw.
 const FROZEN_STREAM_CHARS = 16000;
@@ -349,10 +343,16 @@ export function App() {
   // The scrollback, the other side's stash, the mode, the status, the queue of prompts typed while
   // busy and the open dialogs live in the controller (src/controller.ts); this component renders
   // them and changes them only through it.
+  const transcriptMetaRef = useRef<
+    (msgs: Message[], cwd: string, midTurn: boolean) => TranscriptMeta
+  >(() => {
+    throw new Error('transcript meta read before the first render finished');
+  });
   const [controller] = useState(() =>
     createController({
       mode: startMode(loadLastState()),
       remember: saveLastState,
+      transcriptMeta: (...args) => transcriptMetaRef.current(...args),
     }),
   );
   // `pending` is the open approval, `question` an open ask_user, `confirm` the harness asking
@@ -387,7 +387,6 @@ export function App() {
   const [resumeSelect, setResumeSelect] = useState<{
     entries: SessionEntry[];
     heading: string;
-    projectDir: string;
   } | null>(null);
   const [resumeSelected, setResumeSelected] = useState(0);
   const [exitRequested, setExitRequested] = useState(false);
@@ -492,19 +491,6 @@ export function App() {
   resumeSelectRef.current = resumeSelect;
   const resumeSelectedRef = useRef(0);
   resumeSelectedRef.current = resumeSelected;
-  // The file this session auto-saves to (#1), fixed at its first save so every later save rewrites
-  // one file. null until then, and again after /new, so a new conversation gets a new file.
-  const sessionPathRef = useRef<string | null>(null);
-  const sessionStemClaimedRef = useRef(false);
-  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Writes run one after another: two in flight could rename out of order and leave the older
-  // snapshot on disk.
-  const autosaveChainRef = useRef<Promise<void>>(Promise.resolve());
-  const autosaveFailedRef = useRef(false);
-  // Set by /resume to the real-turn count it loaded: nothing is written until the conversation
-  // grows past it, so opening a session and leaving neither copies a /save file into the project
-  // nor re-stamps a project session as the newest.
-  const autosaveHoldRef = useRef<number | null>(null);
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0 });
   usageRef.current = usage.total;
   // The other two halves of the status line's accounting, mirrored for the same reason as
@@ -934,7 +920,7 @@ export function App() {
       } else if (key.return) {
         const sel = rs.entries[resumeSelectedRef.current];
         setResumeSelect(null);
-        if (sel) void resumeSession(sel, rs.projectDir);
+        if (sel) void resumeSession(sel);
       } else if (key.escape) {
         setResumeSelect(null);
       }
@@ -1030,75 +1016,12 @@ export function App() {
     });
   };
 
-  // Both sides of the chat boundary, wherever each currently lives.
-  const sessionSides = (): SessionSides => {
-    return controller.sides();
-  };
-
-  // The basename only: enough to find the transcript under history/, no home path in the log.
-  const logSessionFile = (path: string): void => {
-    debugLog(`[reika:debug] session file=${basename(path)}`);
-  };
-
-  const autosaveNow = (): Promise<void> => {
-    if (autosaveTimerRef.current !== null) {
-      clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-    }
-    if (!config?.autosave || !bundle) return autosaveChainRef.current;
-    const all = sessionSides();
-    const sides = { agent: forAutosave(all.agent), chat: forAutosave(all.chat) };
-    const turns = countRealTurns(sides.agent) + countRealTurns(sides.chat);
-    // Nothing typed yet — the splash notices alone are not a session worth listing.
-    if (turns === 0 || turns <= (autosaveHoldRef.current ?? 0)) return autosaveChainRef.current;
-    autosaveHoldRef.current = null;
-    if (sessionPathRef.current === null) {
-      // The process's first transcript shares the debug log's name (#761); a later /new gets its
-      // own, and the log line below is what pairs it.
-      const stem = sessionStemClaimedRef.current ? undefined : processSessionStem();
-      sessionStemClaimedRef.current = true;
-      sessionPathRef.current = newSessionPath(projectHistoryDir(bundle.cwd), new Date(), stem);
-      logSessionFile(sessionPathRef.current);
-    }
-    const path = sessionPathRef.current;
-    const meta = transcriptMeta(sides.agent, bundle.cwd, controller.status === 'busy');
-    autosaveChainRef.current = autosaveChainRef.current
-      .then(() => writeSession(path, sides, meta))
-      .catch((e: unknown) => {
-        // Said once: a full disk fails every save the same way, and the session itself is fine.
-        if (autosaveFailedRef.current) return;
-        autosaveFailedRef.current = true;
-        controller.append({
-          role: 'system',
-          tone: 'warn',
-          content: `auto-save failed: ${(e as Error).message} — /resume won't have this session; /save still works.`,
-        });
-      });
-    return autosaveChainRef.current;
-  };
-
-  // When the auto-save runs: at once on the first real prompt (a session exists from the moment it
-  // is typed) and whenever the app goes idle (a turn ended, a command ran), and mid-turn at most
-  // once per AUTOSAVE_INTERVAL_MS, so a crash loses seconds of a long turn without a write per
-  // streamed round.
-  useEffect(() => {
-    if (!config?.autosave) return;
-    if (status !== 'busy' || sessionPathRef.current === null) {
-      void autosaveNow();
-      return;
-    }
-    if (autosaveTimerRef.current !== null) return;
-    autosaveTimerRef.current = setTimeout(() => {
-      autosaveTimerRef.current = null;
-      void autosaveNow();
-    }, AUTOSAVE_INTERVAL_MS);
-    // autosaveNow reads everything through refs; only these two changes mean there is news to save.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, status]);
+  // The auto-save's header comes from this render's values, which the controller, created once,
+  // reaches through the ref.
+  transcriptMetaRef.current = transcriptMeta;
 
   // What /new and /resume both drop beside the conversation itself, which is the controller's:
-  // everything measured about it. The next save starts a new file (/resume re-points it after this
-  // when it continues one).
+  // everything measured about it.
   const resetMeasurements = (): void => {
     setPlanSteps(null);
     setUsage({ total: { promptTokens: 0, completionTokens: 0 } });
@@ -1106,24 +1029,18 @@ export function App() {
     setEstimatedContext(null);
     setShrink({ sheds: 0, folds: 0 });
     shrinkEventsRef.current = [];
-    if (autosaveTimerRef.current !== null) {
-      clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-    }
-    sessionPathRef.current = null;
-    autosaveHoldRef.current = null;
   };
 
-  const resumeSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+  const resumeSession = async (entry: SessionEntry): Promise<void> => {
     resumingRef.current = true;
     try {
-      await loadResumedSession(entry, projectDir);
+      await loadResumedSession(entry);
     } finally {
       resumingRef.current = false;
     }
   };
 
-  const loadResumedSession = async (entry: SessionEntry, projectDir: string): Promise<void> => {
+  const loadResumedSession = async (entry: SessionEntry): Promise<void> => {
     // Set before the first await, so the frame lands while the file is still being read.
     setResuming(`Resuming "${entry.title ?? 'untitled'}"`);
     let sides: SessionSides;
@@ -1135,15 +1052,8 @@ export function App() {
       return;
     }
     // Save whatever this session had before it is replaced.
-    await autosaveNow();
+    await controller.saveNow();
     resetMeasurements();
-    // A project session carries on in its own file; a manual save from the root is left as it was
-    // and the continuation gets a project file of its own on its next save.
-    if (dirname(entry.path) === projectDir) {
-      sessionPathRef.current = entry.path;
-      logSessionFile(entry.path);
-    }
-    autosaveHoldRef.current = countRealTurns(sides.agent) + countRealTurns(sides.chat);
     const resumed = controller.loadConversation(sides, entry);
     let size = RESUME_FIRST_SLICE;
     for (let at = 0; at < resumed.length;) {
@@ -1429,7 +1339,7 @@ export function App() {
       }
       const projectDir = projectHistoryDir(bundle.cwd);
       // The session in progress is not something to resume into.
-      const notCurrent = (e: SessionEntry): boolean => e.path !== sessionPathRef.current;
+      const notCurrent = (e: SessionEntry): boolean => e.path !== controller.sessionPath;
       // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A
       // project file saved before the header counted chat turns is not listed here; /resume all
       // still has it.
@@ -1469,7 +1379,7 @@ export function App() {
       // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
       // every useInput handler, and an open picker would take it as a selection.
       queueMicrotask(() => {
-        setResumeSelect({ entries, heading, projectDir });
+        setResumeSelect({ entries, heading });
         setResumeSelected(0);
       });
       return;
