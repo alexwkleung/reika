@@ -14,10 +14,11 @@ import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
 import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
+import { setAtLaunch } from './config.js';
 import type { LastState } from './laststate.js';
 import ignore, { type Ignore } from 'ignore';
 import type { McpCallFn, McpCommand } from './mcp/tools.js';
-import type { Session, SubmitOptions } from './session.js';
+import type { createSession, Session, SessionOptions, SubmitOptions } from './session.js';
 import type { Skill } from './skills/skills.js';
 import type { Config, Message, Mode, Profile } from './types.js';
 
@@ -162,6 +163,7 @@ describe('createController', () => {
       approvals: { approved: 0, declined: 0 },
       sessionAutoApprove: null,
       sessionUnattended: null,
+      error: null,
     });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
@@ -1658,5 +1660,169 @@ describe('controller.runMcpCommand', () => {
     await running;
     expect(controller.status).toBe('idle');
     expect((controller.messages[0] as { output: string }).output).toContain('aborted');
+  });
+});
+
+describe('controller.boot', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('go-1'),
+  };
+  type Facts = {
+    offline?: boolean;
+    limitsNotice?: string;
+    windowNotice?: string;
+    searchNotice?: string;
+    mcpNotices?: string[];
+  };
+
+  // A controller whose `createSession` hands back a fake session opened on the profile it was
+  // asked for, with the given launch facts.
+  function booting(mode: Mode, facts: Facts = {}) {
+    const calls: string[] = [];
+    let made: ReturnType<typeof fakeSession> | null = null;
+    const create = vi.fn(async (o: SessionOptions) => {
+      calls.push('createSession');
+      made = Object.assign(fakeSession(o.config ?? {}), {
+        offline: false,
+        mcpNotices: [] as string[],
+        ...facts,
+      });
+      made.profile = o.profile ?? 'default';
+      return made as unknown as Session;
+    });
+    const controller = createController({
+      mode,
+      remember: vi.fn(),
+      transcriptMeta: vi.fn(metaFor),
+      createSession: create as unknown as typeof createSession,
+    });
+    return { controller, create, calls, made: () => made };
+  }
+  const configOf = (policy: Policy): Config =>
+    ({ autoApprove: 'off', models: ['local'], profiles, ...policy }) as Config;
+
+  it('opens the session, prints the launch notices and ends idle', async () => {
+    const { controller, create, calls, made } = booting('agent', {
+      windowNotice: 'no window',
+      mcpNotices: ['MCP: 1 server, 2 tools'],
+    });
+    const onConfig = vi.fn(() => calls.push('onConfig'));
+    const onSession = vi.fn(() => {
+      calls.push('onSession');
+      // Nothing is on screen yet, so a header painted here lands above the notices.
+      expect(controller.messages).toEqual([]);
+    });
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+      onConfig,
+      onSession,
+    });
+    expect(calls).toEqual(['onConfig', 'createSession', 'onSession']);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/repo/app', profile: 'default', canAsk: true }),
+    );
+    expect(s).toBe(made());
+    expect(controller.session).toBe(s);
+    expect(onSession).toHaveBeenCalledWith(s, { profile: 'default', own: 'default' });
+    expect(controller.messages).toEqual([
+      { role: 'system', content: 'no window', tone: 'warn', skipAutosave: true },
+      { role: 'system', content: 'MCP: 1 server, 2 tools', tone: 'info', skipAutosave: true },
+    ]);
+    expect(controller.status).toBe('idle');
+    expect(controller.getSnapshot().error).toBeNull();
+
+    controller.pickModel('kimi');
+    expect(made()?.setProfile).toHaveBeenCalledWith('kimi');
+  });
+
+  it('prints nothing when the launch has nothing to say', async () => {
+    const { controller } = booting('agent');
+    await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+    });
+    expect(controller.messages).toEqual([]);
+    expect(controller.status).toBe('idle');
+  });
+
+  // A REIKA_MODEL exported in the shell running the suite pins the start profile to the default.
+  it.skipIf(setAtLaunch('REIKA_MODEL'))(
+    "opens on the start mode's own model and comes back to the session's",
+    async () => {
+      const { controller, create, made } = booting('plan');
+      const onSession = vi.fn();
+      await controller.boot({
+        cwd: '/repo/app',
+        loadConfig: () => configOf({ model: 'kimi-k3', modeProfiles: { plan: 'kimi' } }),
+        lastState: { profile: 'go' },
+        defaultMode: 'agent',
+        onSession,
+      });
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ profile: 'kimi' }));
+      expect(onSession).toHaveBeenCalledWith(made(), { profile: 'kimi', own: 'go' });
+      expect(controller.messages.map(m => (m as { content: string }).content)).toEqual([
+        "Resumed plan mode and profile 'kimi' (kimi-k3) from the last session.",
+      ]);
+
+      controller.transition('agent');
+      expect(made()?.profile).toBe('go');
+    },
+  );
+
+  it('does not offer ask_user to an unattended session', async () => {
+    const { controller, create } = booting('agent');
+    await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({ unattended: true }),
+      lastState: {},
+      defaultMode: 'agent',
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ canAsk: false }));
+  });
+
+  it('ends in error when the config cannot be loaded', async () => {
+    const { controller, create } = booting('agent');
+    const onConfig = vi.fn();
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => {
+        throw new Error('REIKA_MODEL is not set');
+      },
+      lastState: {},
+      defaultMode: 'agent',
+      onConfig,
+    });
+    expect(s).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+    expect(onConfig).not.toHaveBeenCalled();
+    expect(controller.status).toBe('error');
+    expect(controller.getSnapshot().error).toBe('REIKA_MODEL is not set');
+    expect(controller.messages).toEqual([]);
+    expect(controller.session).toBeNull();
+  });
+
+  it('ends in error when the session cannot be created', async () => {
+    const { controller, create } = booting('agent', { windowNotice: 'no window' });
+    create.mockRejectedValueOnce(new Error('bootstrap failed'));
+    const onSession = vi.fn();
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+      onSession,
+    });
+    expect(s).toBeNull();
+    expect(onSession).not.toHaveBeenCalled();
+    expect(controller.status).toBe('error');
+    expect(controller.getSnapshot().error).toBe('bootstrap failed');
+    expect(controller.messages).toEqual([]);
   });
 });

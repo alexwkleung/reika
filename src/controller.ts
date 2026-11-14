@@ -6,6 +6,7 @@ import {
   type QueuedMessage,
   type SubmitAnswers,
 } from './agent/busyqueue.js';
+import { buildLaunchNotices } from './agent/launchnotices.js';
 import { modeSide, turnMode } from './agent/modes.js';
 import {
   buildShellRunsBlock,
@@ -31,11 +32,12 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { inheritProfile, modeSwitchProfile, resolveProfile } from './config.js';
 import { bootstrap } from './context/bootstrap.js';
+import { budgetWarning, formatBudget } from './context/bundlesize.js';
 import { addFileToIndex } from './context/files.js';
 import { debugLog, processSessionStem } from './debug.js';
-import { persistableMode, type LastState } from './laststate.js';
+import { persistableMode, startProfiles, type LastState } from './laststate.js';
 import { invokeMcpTool, parseMcpArgs, type McpCommand } from './mcp/tools.js';
-import type { Session, SessionEvents } from './session.js';
+import { createSession as createRealSession, type Session, type SessionEvents } from './session.js';
 import {
   countRealTurns,
   forAutosave,
@@ -60,6 +62,7 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   AutoApproveMode,
+  Config,
   Message,
   Mode,
   QuestionAnswer,
@@ -111,6 +114,8 @@ export type ControllerSnapshot = {
   // until the user sets one, which leaves the config's value in force.
   sessionAutoApprove: boolean | null;
   sessionUnattended: boolean | null;
+  // Why the session could not boot, while the status is `error`.
+  error: string | null;
 };
 
 // One prompt's turn. `mode` is the one turn's override of the controller's mode (/implement flips
@@ -149,6 +154,19 @@ export type SubmitPromptInput = {
   pastes: PastedText[];
   onStage(stage: SubmitStage | null): void;
   onBuilt?(): void;
+};
+
+// What a front end hands `boot`. The loaders are passed in so a test never reads the developer's
+// own config or saved state. `onConfig` runs before the session is awaited, and `onSession` before
+// any launch notice lands, so a front end can paint its header in the same tick as the notices.
+export type BootInput = {
+  cwd: string;
+  loadConfig: () => Config;
+  lastState: LastState;
+  // The mode the env alone would start in; opening in another one is announced.
+  defaultMode: Mode;
+  onConfig?(config: Config): void;
+  onSession?(session: Session, started: { profile: string; own: string }): void;
 };
 
 // A shell-mode run's output as it streams, bracketed by its busy spell.
@@ -211,6 +229,11 @@ export type Controller = {
   // The session, once it has booted. `own` is the profile it opened on, which a mode with no
   // model of its own comes back to.
   readonly session: Session | null;
+  // Loads the config, opens the session on the profile the last session and the start mode's own
+  // model (#616) give, and prints the launch notices. Idle and the session on success; on any
+  // failure, `error` with its message in the snapshot and null.
+  boot(input: BootInput): Promise<Session | null>;
+  // Hands over a session built elsewhere; `boot` ends here.
   attachSession(session: Session, own: string): void;
   // `/model <name>` and the picker's choice: a profile, one of the config's models, or any other
   // name, which is tried on the active profile's server. It pins the session to that model and
@@ -274,6 +297,7 @@ export function createController(opts: {
   transcriptMeta: (agentSide: Message[], cwd: string, midTurn: boolean) => TranscriptMeta;
   // Where sessions are kept; the default is the user's history directory.
   historyRoot?: string;
+  createSession?: typeof createRealSession;
 }): Controller {
   let snapshot: ControllerSnapshot = {
     messages: [],
@@ -287,6 +311,7 @@ export function createController(opts: {
     approvals: { approved: 0, declined: 0 },
     sessionAutoApprove: null,
     sessionUnattended: null,
+    error: null,
   };
   let unattendedDeclines: ApprovalRequest[] = [];
   let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
@@ -481,6 +506,57 @@ export function createController(opts: {
     });
   const setStatus = (status: ControllerStatus): void => {
     if (status !== snapshot.status) set({ status });
+  };
+
+  const attachSession = (attached: Session, own: string): void => {
+    session = attached;
+    ownProfile = own;
+  };
+  const createSession = opts.createSession ?? createRealSession;
+  const boot = async (input: BootInput): Promise<Session | null> => {
+    try {
+      const cfg = input.loadConfig();
+      // Resolved before the session is created so the window probe and the splash describe the
+      // model it actually opens on.
+      const started = startProfiles(cfg, snapshot.mode, input.lastState);
+      input.onConfig?.(cfg);
+      // Unattended (#526): ask_user would open a dialog nobody answers, so it is not offered.
+      const s = await createSession({
+        cwd: input.cwd,
+        config: cfg,
+        profile: started.profile,
+        canAsk: !cfg.unattended,
+      });
+      attachSession(s, started.own);
+      input.onSession?.(s, started);
+      // Startup only: a later /model switch reports its own window in /stats.
+      const runtime = s.config;
+      // The window/reserve arithmetic goes to the log always; the scrollback hears of it only
+      // under the floor (#262).
+      debugLog(formatBudget(s.bundle, runtime));
+      append(
+        ...buildLaunchNotices({
+          facts: {
+            model: runtime.model,
+            limitsNotice: s.limitsNotice,
+            windowNotice: s.windowNotice,
+            budgetWarning: budgetWarning(s.bundle, runtime),
+            offline: s.offline,
+            searchNotice: s.searchNotice,
+            mcpNotices: s.mcpNotices,
+          },
+          config: cfg,
+          mode: snapshot.mode,
+          defaultMode: input.defaultMode,
+          profile: started.profile,
+        }),
+      );
+      setStatus('idle');
+      return s;
+    } catch (e) {
+      set({ status: 'error', error: (e as Error).message });
+      return null;
+    }
   };
 
   const runTurn = async (
@@ -710,10 +786,8 @@ export function createController(opts: {
     get session() {
       return session;
     },
-    attachSession: (attached, own) => {
-      session = attached;
-      ownProfile = own;
-    },
+    boot,
+    attachSession,
     pickModel: (typed, echo) => {
       const cfg = config();
       if (!session || !cfg) return;

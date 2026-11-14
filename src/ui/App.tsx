@@ -26,7 +26,7 @@ import { usePendingRow } from './pendingrow.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import type { PlanStep } from '../agent/plantrack.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
-import { createSession, type Session } from '../session.js';
+import type { Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
@@ -49,10 +49,9 @@ import {
 } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
-import { loadLastState, saveLastState, startMode, startProfiles } from '../laststate.js';
+import { loadLastState, saveLastState, startMode } from '../laststate.js';
 import { effectiveAutoApprove } from '../approval.js';
-import { budgetWarning, formatBudget } from '../context/bundlesize.js';
-import { debugEnabled, debugLog } from '../debug.js';
+import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import {
   buildTranscriptMeta,
@@ -107,6 +106,7 @@ import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
+  Config,
   Message,
   Mode,
   PromptProgress,
@@ -262,7 +262,6 @@ export function App() {
   const config = snapshot?.config ?? null;
   const bundle = snapshot?.bundle ?? null;
   const activeProfile = snapshot?.profile ?? 'default';
-  const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   // The session total and the estimate for the request in flight (#925), one state so the real
   // count replaces the estimate in a single commit: apart, the chip blinks out between them. The
@@ -328,6 +327,7 @@ export function App() {
     confirm,
     sessionAutoApprove,
     sessionUnattended,
+    error,
   } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   // `/unattended on|off` (#526) over REIKA_UNATTENDED's launch state. Safe to switch mid-session
   // where `bypass` is not: either direction only ever adds a decline or restores the prompt.
@@ -471,130 +471,36 @@ export function App() {
   };
 
   useEffect(() => {
-    (async () => {
-      try {
-        const cfg = loadConfig();
-        // Where this session opens: the last session's mode and profile (#365), unless a launch
-        // REIKA_MODEL pinned the profile, with the start mode's own model (#616) on top. Resolved
-        // before the probe and the splash so both describe the model the session actually opens
-        // on; `own` is kept for the mode switches below.
-        const started = startProfiles(cfg, controller.mode, loadLastState());
-        const profile = started.profile;
-        // Said before the await, because the wait is the point: a configured MCP server is the one
-        // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
-        // only one whose names are already known. No servers → nothing is painted at all (#265).
+    // The config as loaded, which names the subagent model the splash shows.
+    let loaded: Config | null = null;
+    void controller.boot({
+      cwd: process.cwd(),
+      loadConfig,
+      lastState: loadLastState(),
+      defaultMode: resolveDefaultMode(),
+      // Said before the await, because the wait is the point: a configured MCP server is the one
+      // leg of bootstrap that can hold this frame for seconds (a subprocess handshake), and the
+      // only one whose names are already known. No servers → nothing is painted at all (#265).
+      onConfig: cfg => {
+        loaded = cfg;
         setLoadingNote(mcpStartupLine(cfg.mcpServers ?? []));
-        // Bootstrap, the window probe (#417) and identity detection run concurrently inside.
-        // Unattended (#526): ask_user would open a dialog nobody answers, so it is not offered.
-        const s = await createSession({
-          cwd: process.cwd(),
-          config: cfg,
-          profile,
-          canAsk: !cfg.unattended,
-        });
-        const b = s.bundle;
+      },
+      onSession: s => {
         sessionRef.current = s;
-        controller.attachSession(s, started.own);
         setSession(s);
-        const offline = s.offline;
-        const searchNotice = s.searchNotice;
-        // Startup only: a later /model switch reports its own window in /stats.
-        const runtime = s.config;
+        const subagentModel = loaded?.subagentModel;
         setHeaderItems(prev => [
           ...prev,
           {
             kind: 'splash',
-            model: runtime.model,
-            cwd: b.cwd,
+            model: s.config.model,
+            cwd: s.bundle.cwd,
             version: VERSION,
-            subagent:
-              cfg.subagentModel && cfg.subagentModel !== runtime.model
-                ? cfg.subagentModel
-                : undefined,
+            subagent: subagentModel && subagentModel !== s.config.model ? subagentModel : undefined,
           },
         ]);
-        // Opening somewhere other than where the env alone would put the session is a fact the
-        // user has to see — a plan-mode start answers a task with a plan, not edits — so it gets a
-        // persistent line, not just the status-bar tag.
-        const resumed = [
-          ...(controller.mode !== resolveDefaultMode() ? [`${controller.mode} mode`] : []),
-          ...(profile !== 'default' ? [`profile '${profile}' (${runtime.model})`] : []),
-        ];
-        if (resumed.length > 0) {
-          controller.append({
-            role: 'system',
-            content: `Resumed ${resumed.join(' and ')} from the last session.`,
-            skipAutosave: true,
-          });
-        }
-        // The window/reserve arithmetic decides how much room reads and history get, and a
-        // configuration that leaves too little degrades silently — reads truncated every round,
-        // the model re-reading the same file (#262). Report the numbers to the log always, and
-        // say so in the scrollback when they fall under the floor.
-        debugLog(formatBudget(b, runtime));
-        const limitsNotice = s.limitsNotice;
-        if (limitsNotice) {
-          controller.append({ role: 'system', content: limitsNotice, skipAutosave: true });
-        }
-        const windowNotice = s.windowNotice;
-        if (windowNotice) {
-          controller.append({
-            role: 'system',
-            content: windowNotice,
-            tone: 'warn',
-            skipAutosave: true,
-          });
-        }
-        const warn = budgetWarning(b, runtime);
-        if (warn) {
-          controller.append({ role: 'system', content: warn, tone: 'warn', skipAutosave: true });
-        }
-        if (offline) {
-          controller.append({
-            role: 'system',
-            content:
-              'No network — search and fetch_url tools are off for this session. Restart Reika once you are back online to get them back.',
-            tone: 'warn',
-            skipAutosave: true,
-          });
-        }
-        if (searchNotice) {
-          controller.append({
-            role: 'system',
-            content: searchNotice,
-            tone: 'info',
-            skipAutosave: true,
-          });
-        }
-        // A REIKA_MODE_MODELS entry that named nothing the config has (#616). The mode keeps the
-        // session's model, which from the user's side is indistinguishable from the feature not
-        // working — so the typo says so instead of going unmentioned.
-        for (const problem of cfg.modeModelErrors ?? []) {
-          controller.append({ role: 'system', content: problem, tone: 'warn', skipAutosave: true });
-        }
-        if (cfg.projectEnvNotice) {
-          const content = cfg.projectEnvNotice;
-          controller.append({ role: 'system', content, tone: 'warn', skipAutosave: true });
-        }
-        // MCP: what connected, what failed, and any config error (#265). The healthy summary is the
-        // only line that is good news — the shape `connectNotices` emits — so everything else that
-        // reaches here (a server that did not start, a document that did not parse) is worth
-        // noticing. Keying on the failure wording instead would miss `REIKA_MCP_SERVERS: …`, which
-        // is the case where no server started at all.
-        for (const notice of s.mcpNotices) {
-          controller.append({
-            role: 'system',
-            content: notice,
-            tone: notice.startsWith('MCP: ') ? 'info' : 'warn',
-            skipAutosave: true,
-          });
-        }
-        controller.setStatus('idle');
-      } catch (e) {
-        setError((e as Error).message);
-        controller.setStatus('error');
-      }
-    })();
+      },
+    });
     // Boot runs once: the controller is created once and read live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
