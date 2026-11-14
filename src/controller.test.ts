@@ -1,14 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createController } from './controller.js';
-import { listSessions, loadSession, projectHistoryDir } from './store/sessions.js';
+import {
+  listSessions,
+  loadSession,
+  newSessionPath,
+  projectHistoryDir,
+  writeSession,
+} from './store/sessions.js';
 import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
+import type * as Identity from './ui/identity.js';
 import type { LastState } from './laststate.js';
 import type { Session } from './session.js';
 import type { Config, Message, Mode, Profile } from './types.js';
+
+// Detection runs git in the session's cwd; the controller only has to pass on what it found.
+vi.mock('./ui/identity.js', async importOriginal => {
+  const real = await importOriginal<typeof Identity>();
+  return {
+    ...real,
+    enableAnon: async () => {
+      const found = { names: ['Mona Lisa'], emails: ['octocat@example.com'], slugs: [] };
+      real.setIdentity(found as unknown as Parameters<typeof real.setIdentity>[0]);
+      return found;
+    },
+  };
+});
 
 const user = (content: string): Message => ({ role: 'user', content });
 const note = (content: string): Message => ({ role: 'system', content });
@@ -32,8 +52,11 @@ function fakeSession(config: Policy) {
   } as Config;
   const session = {
     profile: 'default',
-    bundle: { cwd: '/repo/app' },
+    bundle: { cwd: '/repo/app' } as { cwd: string; repoMapBudget?: number },
     getSnapshot: () => ({ config: cfg }),
+    updateBundle: vi.fn((update: (b: { cwd: string }) => { cwd: string }) => {
+      session.bundle = update(session.bundle);
+    }),
     switchSide: vi.fn(),
     loadHistory: vi.fn(),
     // Like the real one: a relearning reset drops back to the default profile.
@@ -445,14 +468,14 @@ describe('controller approval gate', () => {
 
   it('lets the session toggle turn a default safe off, but not an env-forced one', () => {
     const byDefault = controllerIn('agent', { autoApprove: 'safe' }).controller;
-    byDefault.setSessionAutoApprove(false);
+    byDefault.setToggle('approvals', false);
     expect(byDefault.autoApprove).toBe('off');
 
     const forced = controllerIn('agent', {
       autoApprove: 'safe',
       autoApproveExplicit: true,
     }).controller;
-    forced.setSessionAutoApprove(false);
+    forced.setToggle('approvals', false);
     expect(forced.autoApprove).toBe('safe');
   });
 
@@ -475,13 +498,13 @@ describe('controller approval gate', () => {
 
   it('lets /unattended override the launch state in either direction', () => {
     const launchedOn = controllerIn('agent', { autoApprove: 'off', unattended: true }).controller;
-    launchedOn.setSessionUnattended(false);
+    launchedOn.setToggle('unattended', false);
     expect(launchedOn.unattended).toBe(false);
     void launchedOn.requestApproval(ordinary);
     expect(launchedOn.approval).toBe(ordinary);
 
     const launchedOff = controllerIn('agent', { autoApprove: 'off' }).controller;
-    launchedOff.setSessionUnattended(true);
+    launchedOff.setToggle('unattended', true);
     expect(launchedOff.unattended).toBe(true);
   });
 });
@@ -643,7 +666,7 @@ describe('controller.newConversation', () => {
     const { controller } = controllerIn('agent');
     void controller.requestApproval({ tool: 'edit', subject: 'a.ts', preview: '+ x' });
     controller.answerApproval(true, { always: true });
-    controller.setSessionUnattended(true);
+    controller.setToggle('unattended', true);
 
     controller.newConversation(echo);
     expect(controller.getSnapshot()).toMatchObject({
@@ -948,6 +971,263 @@ describe('controller auto-save', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({
       content: expect.stringMatching(/^auto-save failed: .* — \/resume won't have this session/),
+    });
+  });
+});
+
+describe('controller toggles', () => {
+  const echo: Message = { role: 'user', content: '/approvals on', meta: true };
+
+  it('resolves a typed toggle against the live state, and nothing else', () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe' });
+    expect(controller.toggleCommand('approvals', 'off')).toEqual({
+      kind: 'set',
+      toggle: 'approvals',
+      on: false,
+    });
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({
+      kind: 'ask',
+      currentlyOn: true,
+    });
+    expect(controller.toggleCommand('unattended', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.toggleCommand('model', '')).toBeNull();
+
+    void controller.setToggle('approvals', false);
+    void controller.setToggle('unattended', true);
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.toggleCommand('unattended', '')).toMatchObject({ currentlyOn: true });
+  });
+
+  it('answers an env-forced /approvals with a line instead of a switch', () => {
+    const { controller } = controllerIn('agent', {
+      autoApprove: 'bypass',
+      autoApproveExplicit: true,
+    });
+    expect(controller.toggleCommand('approvals', 'off')).toMatchObject({
+      kind: 'reply',
+      content: expect.stringContaining("forced to 'bypass'"),
+    });
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({
+      kind: 'reply',
+      content: expect.stringContaining('auto-approve: bypass'),
+    });
+  });
+
+  it('prints the receipt under the echo when a switch is flipped', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.setToggle('approvals', true, echo);
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo, note('Session auto-approve: on')]);
+
+    await controller.setToggle('unattended', true);
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^unattended: on/),
+    });
+  });
+
+  it('turns anonymize on with what it found, and off again', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.setToggle('anon', true);
+    expect(controller.toggleCommand('anon', '')).toMatchObject({ currentlyOn: true });
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringContaining('substituting 1 name(s) → <user>, 1 email(s) → <email>'),
+    });
+
+    await controller.setToggle('anon', false);
+    expect(controller.toggleCommand('anon', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^anonymize: off/),
+    });
+  });
+});
+
+describe('controller commands on disk', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-cmd-')));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  const reply: Message = { role: 'assistant', content: 'done' };
+  const inRoot = (mode: Mode = 'agent', policy: Policy = {}) =>
+    controllerIn(mode, policy, 'default', root);
+  const lines = (messages: Message[]): string[] =>
+    messages.filter(m => m.role === 'system').map(m => m.content);
+
+  describe('changeDirectory', () => {
+    it('asks for a path when given none', async () => {
+      const { controller, session } = inRoot();
+      await controller.changeDirectory('  ', echo('/cd'));
+      expect(controller.messages).toEqual([echo('/cd'), note('Usage: /cd <path>')]);
+      expect(session!.updateBundle).not.toHaveBeenCalled();
+    });
+
+    it('re-indexes a path relative to the current project and moves the session there', async () => {
+      await mkdir(join(root, 'app', 'pkg'), { recursive: true });
+      await writeFile(join(root, 'app', 'pkg', 'index.ts'), 'export const a = 1;\n');
+      const { controller, session } = inRoot();
+      session!.bundle = { cwd: join(root, 'app') };
+      controller.setStatus('idle');
+
+      const moving = controller.changeDirectory('pkg', echo('/cd pkg'));
+      expect(controller.status).toBe('busy');
+      await moving;
+
+      const target = join(root, 'app', 'pkg');
+      expect(session!.bundle.cwd).toBe(target);
+      expect(controller.status).toBe('idle');
+      expect(controller.messages).toEqual([
+        echo('/cd pkg'),
+        note(`Re-indexing ${target}…`),
+        note(`cwd is now ${target}`),
+      ]);
+    });
+
+    it('says why and stays put when the path cannot be indexed', async () => {
+      const { controller, session } = inRoot();
+      controller.setStatus('idle');
+      await controller.changeDirectory(join(root, 'missing'), echo('/cd missing'));
+      expect(session!.bundle.cwd).toBe('/repo/app');
+      expect(controller.status).toBe('idle');
+      expect(lines(controller.messages).at(-1)).toMatch(/^cd failed: /);
+    });
+  });
+
+  describe('saveTranscript', () => {
+    it('says there is nothing to save on an empty scrollback', async () => {
+      const { controller } = inRoot();
+      await controller.saveTranscript(false, echo('/save'));
+      expect(controller.messages).toEqual([echo('/save'), note('Nothing to save yet.')]);
+    });
+
+    it('writes the scrollback on screen to the history root and names both files', async () => {
+      const { controller, transcriptMeta } = inRoot();
+      controller.setStatus('idle');
+      controller.append(user('fix the parser'), reply);
+      await controller.saveTranscript(false, echo('/save'));
+
+      const receipt = lines(controller.messages).at(-1)!;
+      const [, jsonlPath, txtPath] = /^saved 2 messages → (.+)\n\(\+ (.+)\)$/.exec(receipt)!;
+      expect(dirname(jsonlPath)).toBe(root);
+      expect((await loadSession(jsonlPath)).agent).toEqual([user('fix the parser'), reply]);
+      expect(await readFile(txtPath, 'utf8')).toContain('fix the parser');
+      expect(transcriptMeta).toHaveBeenLastCalledWith(
+        [user('fix the parser'), reply],
+        '/repo/app',
+        false,
+      );
+    });
+
+    it('marks a raw save and a mid-turn one in the receipt', async () => {
+      const { controller, transcriptMeta } = inRoot();
+      controller.append(user('fix the parser'));
+      controller.setStatus('busy');
+      await controller.saveTranscript(true, echo('/save --raw'));
+      expect(lines(controller.messages).at(-1)).toMatch(
+        /^saved 1 messages \(raw, unredacted\) — mid-turn, up to the last completed round; the turn continues → /,
+      );
+      expect(transcriptMeta).toHaveBeenLastCalledWith([user('fix the parser')], '/repo/app', true);
+    });
+
+    it('reports a save that could not be written', async () => {
+      const blocked = join(root, 'not-a-dir');
+      await writeFile(blocked, '');
+      const { controller } = controllerIn('agent', {}, 'default', blocked);
+      controller.append(user('fix the parser'));
+      await controller.saveTranscript(false, echo('/save'));
+      expect(controller.messages.at(-1)).toMatchObject({
+        role: 'error',
+        content: expect.stringMatching(/^save failed: /),
+      });
+    });
+  });
+
+  describe('resumeList', () => {
+    const settled = async (controller: { saveNow(): Promise<void> }): Promise<void> => {
+      await Promise.resolve();
+      await controller.saveNow();
+    };
+    // One finished conversation in the project's directory. Written directly: a second
+    // controller in this process would claim the same first file name (#761).
+    const savedSession = async (side: 'agent' | 'chat', prompt: string): Promise<string> => {
+      const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), side);
+      const turns = [user(prompt), reply];
+      const sides = side === 'chat' ? { agent: [], chat: turns } : { agent: turns, chat: [] };
+      await writeSession(path, sides, metaFor(sides.agent, '/repo/app', false));
+      return path;
+    };
+
+    it('refuses while a turn runs, and on an argument it does not know', async () => {
+      const { controller } = inRoot();
+      controller.setStatus('busy');
+      expect(await controller.resumeList('')).toEqual({
+        reply: 'Cannot resume while busy. Wait or ctrl-c to abort.',
+      });
+      controller.setStatus('idle');
+      expect(await controller.resumeList('everything')).toMatchObject({
+        reply: expect.stringMatching(/^Usage: \/resume /),
+      });
+    });
+
+    it("lists the project's sessions without the one in progress", async () => {
+      const earlier = await savedSession('agent', 'fix the parser');
+      const { controller } = inRoot('agent', { autosave: true });
+      controller.setStatus('idle');
+      controller.append(user('and the lexer'), reply);
+      await settled(controller);
+
+      const list = await controller.resumeList('');
+      expect(list).toMatchObject({ heading: 'this project' });
+      expect('entries' in list && list.entries.map(e => e.path)).toEqual([earlier]);
+    });
+
+    it('lists only chats in chat mode, and everything for /resume all', async () => {
+      await savedSession('agent', 'fix the parser');
+      const chat = await savedSession('chat', 'what is a monad');
+      const { controller } = inRoot('chat');
+      controller.setStatus('idle');
+
+      const chats = await controller.resumeList('');
+      expect(chats).toMatchObject({ heading: 'chats in this project' });
+      expect('entries' in chats && chats.entries.map(e => e.path)).toEqual([chat]);
+      const all = await controller.resumeList('all');
+      expect('entries' in all && all.entries).toHaveLength(2);
+    });
+
+    it('falls back to the manual saves when the project has none, and says so', async () => {
+      const { controller } = inRoot();
+      controller.setStatus('idle');
+      controller.append(user('fix the parser'), reply);
+      await controller.saveTranscript(false, echo('/save'));
+
+      const fallback = await controller.resumeList('');
+      expect(fallback).toMatchObject({ heading: 'none for this project — saved with /save' });
+      expect('entries' in fallback && fallback.entries).toHaveLength(1);
+      expect(await controller.resumeList('root')).toMatchObject({ heading: 'saved with /save' });
+    });
+
+    it('says what is missing when there is nothing to list', async () => {
+      const off = inRoot().controller;
+      off.setStatus('idle');
+      expect(await off.resumeList('')).toEqual({
+        reply: 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
+      });
+      expect(await off.resumeList('root')).toEqual({ reply: `No saved sessions in ${root}.` });
+
+      const on = inRoot('agent', { autosave: true }).controller;
+      on.setStatus('idle');
+      expect(await on.resumeList('')).toEqual({
+        reply: 'No saved sessions for this project yet.',
+      });
+
+      const chat = inRoot('chat', { autosave: true }).controller;
+      chat.setStatus('idle');
+      expect(await chat.resumeList('')).toEqual({
+        reply: 'No saved chats for this project. /resume all lists every session.',
+      });
     });
   });
 });

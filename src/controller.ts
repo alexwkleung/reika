@@ -1,21 +1,34 @@
 import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
 import { modeSide } from './agent/modes.js';
-import { autoApproves, effectiveAutoApprove } from './approval.js';
-import { basename, dirname } from 'node:path';
+import {
+  resolveToggleCommand,
+  toggleReceipt,
+  type ToggleCommand,
+  type ToggleName,
+} from './agent/togglecommands.js';
+import { autoApproveForced, autoApproves, effectiveAutoApprove } from './approval.js';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { inheritProfile, modeSwitchProfile } from './config.js';
+import { bootstrap } from './context/bootstrap.js';
 import { debugLog, processSessionStem } from './debug.js';
 import { persistableMode, type LastState } from './laststate.js';
 import type { Session } from './session.js';
 import {
   countRealTurns,
   forAutosave,
+  listSessions,
   modelHistoryFromScrollback,
   newSessionPath,
   projectHistoryDir,
+  ROOT_HISTORY_DIR,
+  saveHeader,
   writeSession,
+  type SessionEntry,
   type SessionSides,
 } from './store/sessions.js';
-import type { TranscriptMeta } from './store/transcript.js';
+import { saveTranscript as writeTranscript, type TranscriptMeta } from './store/transcript.js';
+import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
@@ -45,6 +58,15 @@ type Side = 'agent' | 'chat';
 const AUTOSAVE_INTERVAL_MS = 3000;
 
 export type ControllerStatus = 'loading' | 'idle' | 'busy' | 'error';
+
+// What `/resume` comes to: sessions to pick from under a heading, or a line saying why not.
+export type ResumeList = { entries: SessionEntry[]; heading: string } | { reply: string };
+
+function expandHome(p: string): string {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
+  return p;
+}
 
 export type ControllerSnapshot = {
   messages: Message[];
@@ -95,8 +117,11 @@ export type Controller = {
   // else the config's default.
   readonly autoApprove: AutoApproveMode;
   readonly unattended: boolean;
-  setSessionAutoApprove(on: boolean | null): void;
-  setSessionUnattended(on: boolean | null): void;
+  // `/approvals`, `/unattended` or `/anon` as typed (agent/togglecommands.ts): a line to print, a
+  // pick to ask the user for, or a switch to flip. Null for any other command.
+  toggleCommand(name: string, args: string): ToggleCommand | null;
+  // Flips one of the three switches and prints its receipt under `echo`.
+  setToggle(toggle: ToggleName, on: boolean, echo?: Message): Promise<void>;
   // What an unattended session declined since this was last called.
   takeUnattendedDeclines(): ApprovalRequest[];
   // Null is the question dropped unanswered.
@@ -144,6 +169,15 @@ export type Controller = {
   // The controller also saves on its own: when a real prompt first appears, whenever a turn or a
   // command ends, and at most every few seconds while a turn runs.
   saveNow(): Promise<void>;
+  // `/cd <path>`: re-indexes the project at `target` (relative to the current one, `~` expanded)
+  // and moves the session there. Busy while it runs; a failure leaves the session where it was.
+  changeDirectory(target: string, echo: Message): Promise<void>;
+  // `/save`: writes the scrollback on screen to the history root as a transcript, redacted unless
+  // `raw`. Works mid-turn (#226), where it holds everything up to the last finished round.
+  saveTranscript(raw: boolean, echo: Message): Promise<void>;
+  // `/resume [all|root]`: the sessions to offer, the one in progress left out. Chat mode lists
+  // chats (#875), and a project with nothing to list falls back to the manual saves.
+  resumeList(args: string): Promise<ResumeList>;
 };
 
 export function createController(opts: {
@@ -195,6 +229,7 @@ export function createController(opts: {
   // so opening a session and leaving neither copies a /save file into the project nor re-stamps
   // a project session as the newest.
   let saveHold: number | null = null;
+  const historyRoot = opts.historyRoot ?? ROOT_HISTORY_DIR;
   const listeners = new Set<() => void>();
 
   const set = (next: Partial<ControllerSnapshot>): void => {
@@ -414,11 +449,34 @@ export function createController(opts: {
     get unattended() {
       return unattended();
     },
-    setSessionAutoApprove: on => {
-      if (on !== snapshot.sessionAutoApprove) set({ sessionAutoApprove: on });
+    toggleCommand: (name, args) => {
+      const cfg = config();
+      return resolveToggleCommand(name, args, {
+        autoApprove: autoApprove(),
+        autoApproveForced: cfg ? autoApproveForced(cfg) : false,
+        configAutoApprove: cfg?.autoApprove,
+        unattended: unattended(),
+        anon: isAnon(),
+      });
     },
-    setSessionUnattended: on => {
-      if (on !== snapshot.sessionUnattended) set({ sessionUnattended: on });
+    setToggle: async (toggle, on, echo) => {
+      let identity: { names: number; emails: number } | undefined;
+      if (toggle === 'approvals') {
+        if (on !== snapshot.sessionAutoApprove) set({ sessionAutoApprove: on });
+      } else if (toggle === 'unattended') {
+        if (on !== snapshot.sessionUnattended) set({ sessionUnattended: on });
+      } else if (on) {
+        // Not gated on REIKA_ANON: the env var is the starting state, and this is for the user
+        // about to record who did not set it.
+        const found = await enableAnon(session?.bundle.cwd ?? process.cwd());
+        identity = { names: found.names.length, emails: found.emails.length };
+      } else {
+        clearIdentity();
+      }
+      append(...(echo ? [echo] : []), {
+        role: 'system',
+        content: toggleReceipt(toggle, on, identity),
+      });
     },
     takeUnattendedDeclines: () => {
       const taken = unattendedDeclines;
@@ -570,5 +628,99 @@ export function createController(opts: {
       return sessionPath;
     },
     saveNow,
+    changeDirectory: async (target, echo) => {
+      const path = target.trim();
+      if (!path) {
+        append(echo, { role: 'system', content: 'Usage: /cd <path>' });
+        return;
+      }
+      if (!session) return;
+      const expanded = expandHome(path);
+      const cwd = isAbsolute(expanded) ? expanded : resolve(session.bundle.cwd, expanded);
+      set({
+        status: 'busy',
+        messages: [...snapshot.messages, echo, { role: 'system', content: `Re-indexing ${cwd}…` }],
+      });
+      try {
+        const bundle = await bootstrap(cwd, session.bundle.repoMapBudget);
+        session.updateBundle(() => bundle);
+        append({ role: 'system', content: `cwd is now ${cwd}` });
+      } catch (e) {
+        append({ role: 'system', content: `cd failed: ${(e as Error).message}` });
+      } finally {
+        set({ status: 'idle' });
+      }
+    },
+    saveTranscript: async (raw, echo) => {
+      if (!session) return;
+      // The round still streaming is not a message yet, so the receipt says where a mid-turn save
+      // stops, or the transcript reads as one that ends without a reply.
+      const midTurn = snapshot.status === 'busy';
+      const msgs = snapshot.messages;
+      if (msgs.length === 0) {
+        append(echo, { role: 'system', content: 'Nothing to save yet.' });
+        return;
+      }
+      try {
+        const { jsonlPath, txtPath } = await writeTranscript(
+          historyRoot,
+          msgs,
+          saveHeader(opts.transcriptMeta(msgs, session.bundle.cwd, midTurn), msgs),
+          { redact: !raw },
+        );
+        append(echo, {
+          role: 'system',
+          content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''}${midTurn ? ' — mid-turn, up to the last completed round; the turn continues' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
+        });
+      } catch (e) {
+        append(echo, { role: 'error', content: `save failed: ${(e as Error).message}` });
+      }
+    },
+    resumeList: async args => {
+      const dir = projectDir();
+      if (!session || !dir) return { reply: 'config not loaded' };
+      if (snapshot.status === 'busy') {
+        return { reply: 'Cannot resume while busy. Wait or ctrl-c to abort.' };
+      }
+      const target = args.trim().toLowerCase();
+      if (target !== '' && target !== 'all' && target !== 'root') {
+        return {
+          reply:
+            'Usage: /resume (this project; chats only in chat mode), /resume all, or /resume root (manual /save files).',
+        };
+      }
+      // A project file saved before the header counted chat turns is not listed as a chat;
+      // /resume all still has it.
+      const chatsOnly = target === '' && snapshot.mode === 'chat';
+      let entries: SessionEntry[] = [];
+      let heading = 'saved with /save';
+      if (target !== 'root') {
+        // The session in progress is not something to resume into.
+        entries = (await listSessions(dir)).filter(e => e.path !== sessionPath);
+        if (chatsOnly) entries = entries.filter(e => e.chat);
+        heading = chatsOnly ? 'chats in this project' : 'this project';
+      }
+      // In chat mode the fallback is the manual saves that hold a chat (#882).
+      if (entries.length === 0) {
+        entries = await listSessions(historyRoot, true);
+        if (chatsOnly) entries = entries.filter(e => e.chat);
+        if (target === '' && entries.length > 0)
+          heading = chatsOnly
+            ? 'no chats for this project — saved with /save'
+            : 'none for this project — saved with /save';
+      }
+      if (entries.length > 0) return { entries, heading };
+      if (chatsOnly) {
+        return { reply: 'No saved chats for this project. /resume all lists every session.' };
+      }
+      return {
+        reply:
+          target === 'root'
+            ? `No saved sessions in ${historyRoot}.`
+            : session.getSnapshot().config.autosave
+              ? 'No saved sessions for this project yet.'
+              : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
+      };
+    },
   };
 }
