@@ -74,11 +74,16 @@ afterEach(async () => {
 });
 
 function setup(mode: Mode = 'agent', opts: Parameters<typeof createWebBridge>[1] = {}) {
-  const controller = createController({ mode, remember: vi.fn(), historyRoot: root });
+  const controller = createController({
+    mode,
+    remember: vi.fn(),
+    historyRoot: root,
+    now: () => 1000,
+  });
   const session = fakeSession();
   controller.attachSession(session as unknown as Session, 'default');
   controller.setStatus('idle');
-  const bridge = createWebBridge(controller, { now: () => 1000, ...opts });
+  const bridge = createWebBridge(controller, opts);
   const events: ServerEvent[] = [];
   bridge.subscribe(e => events.push(e));
   return { controller, session, bridge, events };

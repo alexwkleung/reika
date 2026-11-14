@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createController, type CommandFrontEnd, type InputFrontEnd } from './controller.js';
+import {
+  createController,
+  emptyLive,
+  type CommandFrontEnd,
+  type InputFrontEnd,
+  type LiveChange,
+  type LiveTurn,
+} from './controller.js';
 import {
   listSessions,
   loadSession,
@@ -1555,6 +1562,374 @@ describe('controller.runTurn', () => {
     await controller.runTurn('x', {}, {});
     expect(session!.updateBundle).toHaveBeenCalledTimes(1);
     expect(session!.bundle.fileIndex).toEqual(['src/made.ts', 'src/new.ts']);
+  });
+});
+
+describe('controller live turn state', () => {
+  const steps = () => [
+    { n: 1, text: 'edit a.ts', paths: ['a.ts'], commands: [], snippets: [], done: false },
+  ];
+  // A controller with its own clock, recording every live change.
+  const live = (policy: Policy = {}) => {
+    const remember = vi.fn<(state: LastState) => void>();
+    const controller = createController({ mode: 'agent', remember, now: () => 1234 });
+    const session = fakeSession(policy);
+    controller.attachSession(session as unknown as Session, 'default');
+    controller.setStatus('idle');
+    const changes: LiveChange[] = [];
+    controller.subscribeLive(c => changes.push(c));
+    // Drives one turn by hand; `during` runs inside it, before it ends.
+    const turn = async (during: (opts: SubmitOptions) => Promise<void> | void, end = true) => {
+      session.turn = async (_text, opts) => {
+        opts.onTurnStart?.();
+        await during(opts);
+        if (end) opts.onTurnEnd?.();
+        return [];
+      };
+      await controller.runTurn('x', {}, {});
+    };
+    return { controller, session, changes, turn };
+  };
+
+  it('starts empty', () => {
+    expect(emptyLive()).toEqual({
+      phase: null,
+      content: '',
+      reasoning: '',
+      tool: null,
+      pending: null,
+      plan: null,
+      usage: null,
+      subagent: false,
+      note: false,
+      typechecking: false,
+      recovering: false,
+      promptProgress: null,
+      looping: false,
+    });
+    expect(emptyLive()).not.toBe(emptyLive());
+    expect(live().controller.live).toEqual(emptyLive());
+  });
+
+  it('accumulates the three streamed channels as deltas, and every other event as live', async () => {
+    const { controller, changes, turn } = live();
+    let mid = emptyLive();
+    await turn(opts => {
+      const ev = opts.events!;
+      changes.length = 0;
+      ev.onReasoningDelta!('let me ');
+      ev.onReasoningDelta!('see');
+      ev.onContentDelta!('Hi');
+      ev.onToolProgress!('out', 'bash');
+      ev.onToolProgress!('put', 'bash');
+      ev.onSubagent!(true);
+      ev.onCompactionNote!(true);
+      ev.onTypecheck!(true);
+      ev.onRecovering!(true);
+      ev.onPromptProgress!({ processed: 10, total: 100 } as never);
+      mid = controller.live;
+    });
+    expect(changes).toEqual([
+      { type: 'delta', channel: 'reasoning', text: 'let me ' },
+      { type: 'delta', channel: 'reasoning', text: 'see' },
+      { type: 'delta', channel: 'content', text: 'Hi' },
+      { type: 'live' },
+      { type: 'delta', channel: 'tool', text: 'put' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      // The turn's end.
+      { type: 'live' },
+    ]);
+    expect(mid).toMatchObject({
+      phase: 'thinking',
+      reasoning: 'let me see',
+      content: 'Hi',
+      tool: { name: 'bash', output: 'output' },
+      subagent: true,
+      note: true,
+      typechecking: true,
+      recovering: true,
+      promptProgress: { processed: 10, total: 100 },
+    });
+  });
+
+  it('starts a fresh tool block for a chunk from another tool', async () => {
+    const { controller, changes, turn } = live();
+    let mid = emptyLive();
+    await turn(opts => {
+      opts.events!.onToolProgress!('a', 'bash');
+      changes.length = 0;
+      opts.events!.onToolProgress!('b', 'grep');
+      mid = controller.live;
+    });
+    expect(changes[0]).toEqual({ type: 'live' });
+    expect(mid.tool).toEqual({ name: 'grep', output: 'b' });
+  });
+
+  it('clears the stream at an assistant message, and the tool block and pending call at a tool one', async () => {
+    const { controller, turn } = live();
+    const seen: Partial<LiveTurn>[] = [];
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onReasoningDelta!('r');
+      ev.onContentDelta!('c');
+      ev.onToolStart!('bash');
+      ev.onToolProgress!('out', 'bash');
+      ev.onMessage!({ role: 'assistant', content: 'c' });
+      seen.push({ ...controller.live });
+      ev.onReasoningDelta!('again');
+      ev.onMessage!({ role: 'tool', callId: 'c1', summary: 'Ran: ls' });
+      seen.push({ ...controller.live });
+    });
+    expect(seen[0]).toMatchObject({
+      content: '',
+      reasoning: '',
+      tool: { name: 'bash', output: 'out' },
+      pending: { name: 'bash', since: 1234 },
+    });
+    expect(seen[1]).toMatchObject({ reasoning: 'again', tool: null, pending: null });
+  });
+
+  it('resets at turn start with phase thinking, and at turn end keeps only the plan', async () => {
+    const { controller, turn } = live();
+    const loopSteps = steps();
+    let atStart = emptyLive();
+    await turn(opts => {
+      opts.events!.onPlanProgress!(loopSteps as never);
+      opts.events!.onContentDelta!('half');
+      opts.events!.onPhase!('tool');
+    });
+    expect(controller.live).toEqual({ ...emptyLive(), plan: [expect.objectContaining({ n: 1 })] });
+    await turn(() => {
+      atStart = controller.live;
+    });
+    expect(atStart).toEqual({ ...emptyLive(), phase: 'thinking' });
+  });
+
+  it('copies the plan steps, since the loop mutates its array in place', async () => {
+    const { controller, turn } = live();
+    const loopSteps = steps();
+    await turn(opts => opts.events!.onPlanProgress!(loopSteps as never));
+    loopSteps[0].done = true;
+    expect(controller.live.plan).toEqual([expect.objectContaining({ done: false })]);
+  });
+
+  it('drops the in-flight estimate when the real count lands', async () => {
+    const { controller, turn } = live();
+    const seen: (LiveTurn['usage'] | undefined)[] = [];
+    await turn(opts => {
+      opts.events!.onLiveUsage!({ promptTokens: 9 } as never);
+      seen.push(controller.live.usage);
+      opts.events!.onUsage!({ promptTokens: 10, completionTokens: 2 });
+      seen.push(controller.live.usage);
+    });
+    expect(seen).toEqual([{ promptTokens: 9 }, null]);
+  });
+
+  it('hides the pending call while an approval or a question is open, with a live change at each edge', async () => {
+    const { controller, changes, turn } = live();
+    const seen: (LiveTurn['pending'] | string)[] = [];
+    await turn(async opts => {
+      opts.events!.onToolStart!('bash');
+      changes.length = 0;
+      const approved = opts.requestApproval!({ tool: 'bash', subject: 'Run', preview: 'ls' });
+      seen.push(controller.live.pending, `${changes.length}`);
+      controller.answerApproval(true);
+      await approved;
+      seen.push(controller.live.pending, `${changes.length}`);
+      const answered = opts.requestQuestion!({ question: 'Which?', options: [] });
+      seen.push(controller.live.pending, `${changes.length}`);
+      controller.answerQuestion(null);
+      await answered;
+      seen.push(controller.live.pending, `${changes.length}`);
+    });
+    const pending = { name: 'bash', since: 1234 };
+    expect(seen).toEqual([null, '1', pending, '2', null, '3', pending, '4']);
+    expect(changes.slice(0, 4)).toEqual(Array(4).fill({ type: 'live' }));
+  });
+
+  it('says nothing when a dialog opens with no call pending', async () => {
+    const { controller, changes } = live();
+    void controller.requestApproval({ tool: 'bash', subject: 'Run', preview: 'ls' });
+    controller.answerApproval(false);
+    expect(changes).toEqual([]);
+  });
+
+  it('follows the looping hint, and drops it when the phase leaves thinking or the stream resets', async () => {
+    const { controller, turn } = live();
+    const seen: boolean[] = [];
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onReasoningStatus!(true);
+      seen.push(controller.live.looping);
+      ev.onPhase!('thinking');
+      seen.push(controller.live.looping);
+      ev.onPhase!('tool');
+      seen.push(controller.live.looping);
+      ev.onReasoningStatus!(true);
+      ev.onReasoningReset!();
+      seen.push(controller.live.looping);
+      ev.onReasoningStatus!(true);
+    });
+    expect(seen).toEqual([true, true, false, false]);
+    expect(controller.live.looping).toBe(false);
+  });
+
+  it('freezes what had streamed into the scrollback once, then clears the stream', async () => {
+    const { controller, changes, turn } = live();
+    const order: string[] = [];
+    controller.subscribe(() => order.push(`messages:${controller.messages.length}`));
+    let after = emptyLive();
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onSubagent!(true);
+      ev.onReasoningDelta!('round and round');
+      ev.onContentDelta!('so far');
+      changes.length = 0;
+      order.length = 0;
+      controller.subscribeLive(() => order.push('live'));
+      ev.onReasoningReset!();
+      after = controller.live;
+    });
+    expect(controller.messages.filter(m => m.role === 'assistant')).toEqual([
+      {
+        role: 'assistant',
+        content: 'so far',
+        reasoning: 'round and round',
+        discarded: 'stream',
+        nested: true,
+      },
+    ]);
+    expect(after).toMatchObject({ content: '', reasoning: '', subagent: true });
+    expect(order.slice(0, 2)).toEqual(['messages:1', 'live']);
+  });
+
+  it('marks a frozen compaction note as one, and freezes nothing when nothing streamed', async () => {
+    const { controller, turn } = live();
+    await turn(opts => {
+      opts.events!.onReasoningReset!();
+      opts.events!.onCompactionNote!(true);
+      opts.events!.onContentDelta!('the note');
+      opts.events!.onReasoningReset!();
+    });
+    expect(controller.messages).toEqual([
+      { role: 'assistant', content: 'the note', discarded: 'note' },
+    ]);
+  });
+
+  it("freezes once with a front end that brings its own reset, which runs after the controller's", async () => {
+    const { controller, session } = live();
+    const seenByFront: number[] = [];
+    session.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onReasoningDelta!('spinning');
+      opts.events!.onReasoningReset!();
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      {
+        events: { onReasoningReset: () => seenByFront.push(controller.messages.length) },
+      },
+    );
+    expect(
+      controller.messages.filter(m => m.role === 'assistant' && m.discarded === 'stream'),
+    ).toHaveLength(1);
+    expect(seenByFront).toEqual([1]);
+  });
+
+  it("still calls the front end's own handlers, after its rules are applied", async () => {
+    const { controller, session } = live();
+    const seen: string[] = [];
+    const at = (label: string) => () => {
+      seen.push(`${label}:${controller.live.content || '-'}:${controller.live.phase ?? '-'}`);
+    };
+    session.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onContentDelta!('Hi');
+      opts.events!.onPhase!('tool');
+      opts.events!.onMessage!({ role: 'assistant', content: 'Hi' });
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      {
+        onTurnStart: at('start'),
+        onMessage: at('message'),
+        onTurnEnd: at('end'),
+        events: { onContentDelta: at('delta'), onPhase: at('phase') },
+      },
+    );
+    expect(seen).toEqual([
+      'start:-:thinking',
+      'delta:Hi:thinking',
+      'phase:Hi:tool',
+      'message:-:tool',
+      'end:-:-',
+    ]);
+  });
+
+  it('streams a shell run under the empty tool name and clears it at the end', async () => {
+    const { controller, session, changes } = live();
+    session.bundle.cwd = tmpdir();
+    const during: (LiveTurn['tool'] | null)[] = [];
+    const chunks: string[] = [];
+    await controller.runShell('echo hi', {
+      onStart: () => during.push(controller.live.tool),
+      onProgress: chunk => {
+        chunks.push(chunk);
+        during.push(controller.live.tool);
+      },
+    });
+    expect(chunks.join('')).toContain('hi');
+    expect(during[0]).toBeNull();
+    expect(during[1]).toEqual({ name: '', output: expect.stringContaining('hi') });
+    expect(controller.live.tool).toBeNull();
+    expect(changes.at(-1)).toEqual({ type: 'live' });
+  });
+
+  it('resets for a new conversation and for a resume, plan included', async () => {
+    const { controller, turn } = live();
+    await turn(opts => opts.events!.onPlanProgress!(steps() as never));
+    expect(controller.live.plan).not.toBeNull();
+    controller.newConversation(user('/new'));
+    expect(controller.live).toEqual(emptyLive());
+
+    await turn(opts => opts.events!.onPlanProgress!(steps() as never));
+    controller.loadConversation({ agent: [user('old')], chat: [] }, { path: '/saved/a.jsonl' });
+    expect(controller.live).toEqual(emptyLive());
+  });
+
+  it('drops a live listener that throws, and keeps the turn and the other listeners going', async () => {
+    const { controller, changes, turn } = live();
+    let calls = 0;
+    controller.subscribeLive(() => {
+      calls++;
+      throw new Error('socket closed');
+    });
+    await turn(opts => {
+      opts.events!.onContentDelta!('a');
+      opts.events!.onContentDelta!('b');
+    });
+    expect(calls).toBe(1);
+    expect(changes.filter(c => c.type === 'delta')).toHaveLength(2);
+    expect(controller.status).toBe('idle');
+  });
+
+  it('stops telling a listener that unsubscribed', async () => {
+    const { controller, turn } = live();
+    const seen: LiveChange[] = [];
+    const off = controller.subscribeLive(c => seen.push(c));
+    off();
+    await turn(opts => opts.events!.onContentDelta!('a'));
+    expect(seen).toEqual([]);
   });
 });
 

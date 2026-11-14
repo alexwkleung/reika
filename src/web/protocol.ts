@@ -1,6 +1,5 @@
 import type { ShrinkCounts } from '../agent/loop.js';
-import type { Controller, ControllerStatus } from '../controller.js';
-import type { SessionEvents } from '../session.js';
+import type { Controller, ControllerStatus, LiveTurn } from '../controller.js';
 import type { SessionEntry } from '../store/sessions.js';
 import type {
   ApprovalAnswer,
@@ -176,41 +175,9 @@ export function sessionDialog(list: { heading: string; entries: SessionEntry[] }
   return { kind: 'session', heading: list.heading, entries: list.entries.map(e => ({ ...e })) };
 }
 
-type EventArg<K extends keyof SessionEvents> = Parameters<NonNullable<SessionEvents[K]>>[0];
-
 // The in-flight turn, sent whole on each change rather than patched: a tab that missed one
-// update is right again at the next.
-export type WireLive = {
-  phase: EventArg<'onPhase'> | null;
-  content: string;
-  reasoning: string;
-  tool: { name: string; output: string } | null;
-  pending: { name: string; since: number } | null;
-  plan: EventArg<'onPlanProgress'> | null;
-  usage: NonNullable<EventArg<'onLiveUsage'>> | null;
-  subagent: EventArg<'onSubagent'>;
-  note: EventArg<'onCompactionNote'>;
-  typechecking: EventArg<'onTypecheck'>;
-  recovering: EventArg<'onRecovering'>;
-  promptProgress: NonNullable<EventArg<'onPromptProgress'>> | null;
-};
-
-export function emptyLive(): WireLive {
-  return {
-    phase: null,
-    content: '',
-    reasoning: '',
-    tool: null,
-    pending: null,
-    plan: null,
-    usage: null,
-    subagent: false,
-    note: false,
-    typechecking: false,
-    recovering: false,
-    promptProgress: null,
-  };
-}
+// update is right again at the next. The controller holds it and applies its rules.
+export type WireLive = LiveTurn;
 
 // Committed events are numbered and replayed to a tab that reconnects; live ones are not.
 export type CommittedEvent =

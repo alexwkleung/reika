@@ -46,7 +46,6 @@ import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
-import { frozenStreamMessage } from '../agent/frozenstream.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { submitStageLabel } from '../agent/submitinput.js';
@@ -1334,14 +1333,8 @@ export function App() {
       onReasoningReset: () => {
         // Loop-break recovery: end the degenerate looped reasoning's live preview so the
         // recovery notice is visible and the next round streams into a fresh Thinking block
-        // instead of appending onto the looped text (#55), frozen where it stood (frozenstream.ts).
-        const frozen = frozenStreamMessage({
-          content: streamingRef.current,
-          reasoning: reasoningRef.current,
-          note: noteLiveRef.current,
-          nested: subagentLiveRef.current,
-        });
-        if (frozen) controller.append(frozen);
+        // instead of appending onto the looped text (#55). The controller has already frozen it into
+        // the scrollback where it stood (frozenstream.ts).
         reasoningRef.current = '';
         setStreamingReasoning('');
         setReasoningSpin(false);

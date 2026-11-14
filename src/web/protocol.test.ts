@@ -7,7 +7,6 @@ import {
   approvalDialog,
   confirmDialog,
   DROPPED_MESSAGE_KEYS,
-  emptyLive,
   helloEvent,
   messageEvent,
   modelDialog,
@@ -349,26 +348,6 @@ describe('dialog builders', () => {
       heading: 'this project',
       entries: [entry],
     });
-  });
-});
-
-describe('emptyLive', () => {
-  it('is a turn with nothing in flight', () => {
-    expect(emptyLive()).toEqual({
-      phase: null,
-      content: '',
-      reasoning: '',
-      tool: null,
-      pending: null,
-      plan: null,
-      usage: null,
-      subagent: false,
-      note: false,
-      typechecking: false,
-      recovering: false,
-      promptProgress: null,
-    });
-    expect(emptyLive()).not.toBe(emptyLive());
   });
 });
 

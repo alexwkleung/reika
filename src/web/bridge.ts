@@ -1,5 +1,4 @@
-import { frozenStreamMessage } from '../agent/frozenstream.js';
-import type { Controller, InputFrontEnd, ShellFrontEnd, TurnFrontEnd } from '../controller.js';
+import type { Controller, InputFrontEnd } from '../controller.js';
 import type { ImageAttachment } from '../agent/attachments.js';
 import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
 import type { ApprovalRequest, Message, QuestionRequest } from '../types.js';
@@ -9,7 +8,6 @@ import {
   approvalDialog,
   confirmDialog,
   dialogEvent,
-  emptyLive,
   helloEvent,
   messageEvent,
   modelDialog,
@@ -24,7 +22,6 @@ import {
   type CommittedEvent,
   type ServerEvent,
   type WireDialog,
-  type WireLive,
   type WireState,
 } from './protocol.js';
 
@@ -71,9 +68,8 @@ function startsWithByIdentity(next: Message[], prev: Message[]): boolean {
 
 export function createWebBridge(
   controller: Controller,
-  opts: { now?: () => number; onExit?: () => void; maxLogEvents?: number } = {},
+  opts: { onExit?: () => void; maxLogEvents?: number } = {},
 ): WebBridge {
-  const now = opts.now ?? Date.now;
   const maxLogEvents = opts.maxLogEvents ?? MAX_LOG_EVENTS;
   const listeners = new Set<(event: ServerEvent) => void>();
   let closed = false;
@@ -95,7 +91,6 @@ export function createWebBridge(
   // The row `ask` was handed for the spec it is about to open.
   let askedInitial: { spec: ConfirmSpec; initial: number } | null = null;
 
-  let live: WireLive = emptyLive();
   // A resume is reading its file: a submit now would land in the conversation it is replacing.
   let resuming = false;
 
@@ -118,19 +113,7 @@ export function createWebBridge(
     emit(event);
   };
 
-  const dialogBlocksPending = (): boolean =>
-    fromController.approval !== null || fromController.question !== null;
-  // #509: the approval happens inside the call, after it was announced, so a pending row under an
-  // unanswered prompt would name work that has not been permitted.
-  const liveView = (): WireLive => ({
-    ...live,
-    pending: dialogBlocksPending() ? null : live.pending,
-  });
-  const emitLive = (): void => emit({ type: 'live', live: liveView() });
-  const setLive = (next: Partial<WireLive>): void => {
-    live = { ...live, ...next };
-    emitLive();
-  };
+  const emitLive = (): void => emit({ type: 'live', live: controller.live });
 
   const openDialog = (entry: OpenDialog): void => {
     dialogs.set(entry.id, entry);
@@ -170,7 +153,6 @@ export function createWebBridge(
 
   const syncDialogs = (): void => {
     const snap = controller.getSnapshot();
-    const blockedBefore = dialogBlocksPending();
     for (const kind of ['approval', 'question', 'confirm'] as const) {
       const current = snap[kind];
       const tracked = fromController[kind];
@@ -185,7 +167,6 @@ export function createWebBridge(
         openDialog(entry);
       }
     }
-    if (live.pending && blockedBefore !== dialogBlocksPending()) emitLive();
   };
 
   let session = controller.session;
@@ -201,6 +182,8 @@ export function createWebBridge(
   // change is taken by one more pass after this one, so events never interleave.
   let syncing = false;
   let dirty = false;
+  // A live change made inside a pass is sent after it, behind the dialog events it follows.
+  let liveHeld = false;
   const sync = (): void => {
     if (closed) return;
     if (syncing) {
@@ -232,6 +215,10 @@ export function createWebBridge(
     } finally {
       syncing = false;
     }
+    if (liveHeld) {
+      liveHeld = false;
+      emitLive();
+    }
     scheduleDrain();
   };
 
@@ -261,76 +248,6 @@ export function createWebBridge(
       controller.append({ role: 'error', content: (e as Error).message });
     });
 
-  const toolProgress = (chunk: string, name: string): void => {
-    if (live.tool && live.tool.name === name) {
-      live = { ...live, tool: { name, output: live.tool.output + chunk } };
-      emit({ type: 'delta', channel: 'tool', text: chunk });
-      return;
-    }
-    setLive({ tool: { name, output: chunk } });
-  };
-
-  const turnFrontEnd: TurnFrontEnd = {
-    onTurnStart: () => {
-      // The plan checklist is cleared too; the turn's seed restores it when a plan is in history.
-      setLive({ ...emptyLive(), phase: 'thinking' });
-    },
-    onTurnEnd: () => {
-      // The checklist outlives its turn, so the user sees what is left before continuing.
-      setLive({ ...emptyLive(), plan: live.plan });
-    },
-    onMessage: msg => {
-      if (msg.role === 'assistant') setLive({ content: '', reasoning: '' });
-      // The result the pending row stood in for has landed.
-      else if (msg.role === 'tool') setLive({ tool: null, pending: null });
-    },
-    events: {
-      onContentDelta: delta => {
-        live = { ...live, content: live.content + delta };
-        emit({ type: 'delta', channel: 'content', text: delta });
-      },
-      onReasoningDelta: delta => {
-        live = { ...live, reasoning: live.reasoning + delta };
-        emit({ type: 'delta', channel: 'reasoning', text: delta });
-      },
-      onToolProgress: toolProgress,
-      onToolStart: name => setLive({ pending: { name, since: now() } }),
-      onPhase: phase => setLive({ phase }),
-      onSubagent: subagent => setLive({ subagent }),
-      onCompactionNote: note => setLive({ note }),
-      onTypecheck: typechecking => setLive({ typechecking }),
-      onRecovering: recovering => setLive({ recovering }),
-      // Copied: the loop mutates its tracker array in place.
-      onPlanProgress: steps => setLive({ plan: steps.map(step => ({ ...step })) }),
-      onPromptProgress: progress => setLive({ promptProgress: progress ?? null }),
-      onLiveUsage: usage => setLive({ usage: usage ?? null }),
-      // The controller has the real count; the estimate it replaces is shown no more.
-      onUsage: () => {
-        if (live.usage !== null) setLive({ usage: null });
-      },
-      onReasoningReset: () => {
-        const frozen = frozenStreamMessage({
-          content: live.content,
-          reasoning: live.reasoning,
-          note: live.note,
-          nested: live.subagent,
-        });
-        // The compaction note round streams as content and commits as a notice, which clears no
-        // content preview, so the next reply would stream onto the note's tail.
-        live = { ...live, content: '', reasoning: '' };
-        if (frozen) controller.append(frozen);
-        emitLive();
-      },
-    },
-  };
-
-  // Shell output streams through the tool block under an empty tool name, as in the TUI.
-  const shellFrontEnd: ShellFrontEnd = {
-    onStart: () => setLive({ tool: null }),
-    onProgress: chunk => toolProgress(chunk, ''),
-    onEnd: () => setLive({ tool: null }),
-  };
-
   const supersedePicker = (kind: 'model' | 'session'): void => {
     for (const entry of [...dialogs.values()]) if (entry.kind === kind) closeDialog(entry);
   };
@@ -341,7 +258,7 @@ export function createWebBridge(
   };
 
   const inputFrontEnd = (images: ImageAttachment[] = []): InputFrontEnd => ({
-    turn: turnFrontEnd,
+    turn: {},
     pastes: [],
     images,
     ask,
@@ -360,8 +277,7 @@ export function createWebBridge(
         answered: false,
       });
     },
-    onNewConversation: () => setLive(emptyLive()),
-    shell: shellFrontEnd,
+    shell: {},
     onStage: () => {},
     onTaken: () => {},
   });
@@ -376,7 +292,6 @@ export function createWebBridge(
     }
     // Save whatever this session had before it is replaced.
     await controller.saveNow();
-    setLive(emptyLive());
     controller.replace(controller.loadConversation(sides, entry));
   };
 
@@ -438,6 +353,11 @@ export function createWebBridge(
   };
 
   const unsubscribeController = controller.subscribe(sync);
+  const unsubscribeLive = controller.subscribeLive(change => {
+    if (change.type === 'delta') emit(change);
+    else if (syncing) liveHeld = true;
+    else emitLive();
+  });
   // Dialogs already open when the bridge is made are listed by the next snapshot, not replayed.
   for (const kind of ['approval', 'question', 'confirm'] as const) {
     const current = controller.getSnapshot()[kind];
@@ -454,7 +374,7 @@ export function createWebBridge(
     resetEvent(lastSeq, messages),
     stateEvent(lastSeq, state),
     ...[...dialogs.values()].map(d => dialogEvent(lastSeq, d.id, d.dialog)),
-    { type: 'live', live: liveView() },
+    { type: 'live', live: controller.live },
   ];
 
   return {
@@ -465,7 +385,7 @@ export function createWebBridge(
         afterSeq >= droppedThrough &&
         afterSeq <= lastSeq;
       if (!covered) return snapshotEvents();
-      return [...log.filter(e => e.seq > afterSeq), { type: 'live', live: liveView() }];
+      return [...log.filter(e => e.seq > afterSeq), { type: 'live', live: controller.live }];
     },
     subscribe: listener => {
       listeners.add(listener);
@@ -499,6 +419,7 @@ export function createWebBridge(
       supersedePicker('session');
       closed = true;
       unsubscribeController();
+      unsubscribeLive();
       unsubscribeSession?.();
       unsubscribeSession = null;
       listeners.clear();

@@ -7,6 +7,7 @@ import {
   type QueuedMessage,
   type SubmitAnswers,
 } from './agent/busyqueue.js';
+import { frozenStreamMessage } from './agent/frozenstream.js';
 import { buildLaunchNotices } from './agent/launchnotices.js';
 import type { ShrinkCounts } from './agent/loop.js';
 import { modeSide, resolveModeCommand, turnMode, turnTools } from './agent/modes.js';
@@ -215,9 +216,56 @@ export type BootInput = {
 // A shell-mode run's output as it streams, bracketed by its busy spell.
 export type ShellFrontEnd = {
   onStart?(): void;
-  onProgress(chunk: string): void;
+  onProgress?(chunk: string): void;
   onEnd?(): void;
 };
+
+type EventArg<K extends keyof SessionEvents> = Parameters<NonNullable<SessionEvents[K]>>[0];
+
+// The turn in flight, as a front end draws it: the streamed text, the tool block, the call that is
+// running and the per-turn indicators.
+export type LiveTurn = {
+  phase: EventArg<'onPhase'> | null;
+  content: string;
+  reasoning: string;
+  // A shell-mode run streams here under the empty name.
+  tool: { name: string; output: string } | null;
+  // The call that is running and when it started. Null while an approval or question is open
+  // (#509): the approval happens inside the call, so a running row under it names unpermitted work.
+  pending: { name: string; since: number } | null;
+  plan: EventArg<'onPlanProgress'> | null;
+  usage: NonNullable<EventArg<'onLiveUsage'>> | null;
+  subagent: EventArg<'onSubagent'>;
+  note: EventArg<'onCompactionNote'>;
+  typechecking: EventArg<'onTypecheck'>;
+  recovering: EventArg<'onRecovering'>;
+  promptProgress: NonNullable<EventArg<'onPromptProgress'>> | null;
+  // The reasoning block may be looping (the live hint, not a verdict).
+  looping: EventArg<'onReasoningStatus'>;
+};
+
+// A delta for streamed text, `live` for anything else; the new value is read off `live`.
+export type LiveChange =
+  | { type: 'delta'; channel: 'content' | 'reasoning' | 'tool'; text: string }
+  | { type: 'live' };
+
+export function emptyLive(): LiveTurn {
+  return {
+    phase: null,
+    content: '',
+    reasoning: '',
+    tool: null,
+    pending: null,
+    plan: null,
+    usage: null,
+    subagent: false,
+    note: false,
+    typechecking: false,
+    recovering: false,
+    promptProgress: null,
+    looping: false,
+  };
+}
 
 // What a front end hands `runCommand`: the hooks for the commands that end in a turn, a dialog or
 // a picker of its own.
@@ -261,6 +309,11 @@ export type InputFrontEnd = Omit<CommandFrontEnd, 'implementMode'> & {
 export type Controller = {
   getSnapshot(): ControllerSnapshot;
   subscribe(listener: () => void): () => void;
+  // The running turn as it stands. Not part of the snapshot: streamed text changes many times a
+  // second, and a snapshot change re-renders every subscriber.
+  readonly live: LiveTurn;
+  // A listener that throws is dropped, so a broken front end cannot take the turn down.
+  subscribeLive(listener: (change: LiveChange) => void): () => void;
   // The same values as the snapshot, for a caller that is not rendering.
   readonly messages: Message[];
   readonly mode: Mode;
@@ -388,7 +441,10 @@ export function createController(opts: {
   // Where sessions are kept; the default is the user's history directory.
   historyRoot?: string;
   createSession?: typeof createRealSession;
+  // Stamps when a pending call started.
+  now?: () => number;
 }): Controller {
+  const now = opts.now ?? Date.now;
   let snapshot: ControllerSnapshot = {
     messages: [],
     mode: opts.mode,
@@ -449,9 +505,38 @@ export function createController(opts: {
   // link, so a second Enter would otherwise start a second turn.
   let submitting = false;
 
+  let live: LiveTurn = emptyLive();
+  const liveListeners = new Set<(change: LiveChange) => void>();
+  const notifyLive = (change: LiveChange): void => {
+    for (const listener of [...liveListeners]) {
+      try {
+        listener(change);
+      } catch {
+        liveListeners.delete(listener);
+      }
+    }
+  };
+  const setLive = (next: Partial<LiveTurn>): void => {
+    live = { ...live, ...next };
+    notifyLive({ type: 'live' });
+  };
+  const pendingHidden = (): boolean => snapshot.approval !== null || snapshot.question !== null;
+  // A chunk for another tool than the one streaming starts a block of its own.
+  const liveToolProgress = (chunk: string, name: string): void => {
+    if (live.tool && live.tool.name === name) {
+      live = { ...live, tool: { name, output: live.tool.output + chunk } };
+      notifyLive({ type: 'delta', channel: 'tool', text: chunk });
+      return;
+    }
+    setLive({ tool: { name, output: chunk } });
+  };
+
   const set = (next: Partial<ControllerSnapshot>): void => {
+    const hiddenBefore = pendingHidden();
     snapshot = { ...snapshot, ...next };
     for (const listener of listeners) listener();
+    // After the snapshot listeners, so a front end has the dialog before the row it hides.
+    if (live.pending && hiddenBefore !== pendingHidden()) notifyLive({ type: 'live' });
     // Only these two changes mean there is news to save.
     if ('messages' in next || 'status' in next) saveSoon();
   };
@@ -723,6 +808,8 @@ export function createController(opts: {
       isUnattended: unattended,
       onTurnStart: () => {
         setStatus('busy');
+        // The plan checklist is cleared too; the turn's seed restores it when a plan is in history.
+        setLive({ ...emptyLive(), phase: 'thinking' });
         front.onTurnStart?.();
         aborter = new AbortController();
         return aborter.signal;
@@ -734,12 +821,85 @@ export function createController(opts: {
         // After the final reply, so a glance at the end of a night's scrollback shows what is left.
         const declined = formatUnattendedDeclines(unattendedDeclines.splice(0));
         if (declined) append({ role: 'system', content: declined, tone: 'warn' });
+        // The checklist outlives its turn, so the user sees what is left before continuing.
+        setLive({ ...emptyLive(), plan: live.plan });
         front.onTurnEnd?.();
         setStatus('idle');
         aborter = null;
       },
       events: {
         ...front.events,
+        onContentDelta: delta => {
+          live = { ...live, content: live.content + delta };
+          notifyLive({ type: 'delta', channel: 'content', text: delta });
+          front.events?.onContentDelta?.(delta);
+        },
+        onReasoningDelta: delta => {
+          live = { ...live, reasoning: live.reasoning + delta };
+          notifyLive({ type: 'delta', channel: 'reasoning', text: delta });
+          front.events?.onReasoningDelta?.(delta);
+        },
+        onToolProgress: (chunk, tool) => {
+          liveToolProgress(chunk, tool);
+          front.events?.onToolProgress?.(chunk, tool);
+        },
+        onToolStart: name => {
+          setLive({ pending: { name, since: now() } });
+          front.events?.onToolStart?.(name);
+        },
+        onPhase: phase => {
+          // Leaving the thinking phase ends the reasoning block the hint was about.
+          setLive({ phase, ...(phase !== 'thinking' ? { looping: false } : {}) });
+          front.events?.onPhase?.(phase);
+        },
+        onSubagent: subagent => {
+          setLive({ subagent });
+          front.events?.onSubagent?.(subagent);
+        },
+        onCompactionNote: note => {
+          setLive({ note });
+          front.events?.onCompactionNote?.(note);
+        },
+        onTypecheck: typechecking => {
+          setLive({ typechecking });
+          front.events?.onTypecheck?.(typechecking);
+        },
+        onRecovering: recovering => {
+          setLive({ recovering });
+          front.events?.onRecovering?.(recovering);
+        },
+        onPlanProgress: steps => {
+          // Copied: the loop mutates its tracker array in place.
+          setLive({ plan: steps.map(step => ({ ...step })) });
+          front.events?.onPlanProgress?.(steps);
+        },
+        onPromptProgress: progress => {
+          setLive({ promptProgress: progress ?? null });
+          front.events?.onPromptProgress?.(progress);
+        },
+        onLiveUsage: usage => {
+          setLive({ usage: usage ?? null });
+          front.events?.onLiveUsage?.(usage);
+        },
+        onReasoningStatus: looping => {
+          setLive({ looping });
+          front.events?.onReasoningStatus?.(looping);
+        },
+        onReasoningReset: () => {
+          // A loop-break recovery (#55): what had streamed is frozen into the scrollback where it
+          // stood, so the next round streams into a fresh block. The compaction note round streams
+          // as content and commits as a notice, which clears no content, so content goes too.
+          const frozen = frozenStreamMessage({
+            content: live.content,
+            reasoning: live.reasoning,
+            note: live.note,
+            nested: live.subagent,
+          });
+          live = { ...live, content: '', reasoning: '', looping: false };
+          if (frozen) append(frozen);
+          notifyLive({ type: 'live' });
+          front.events?.onReasoningReset?.();
+        },
         onUsage: u => {
           const t = snapshot.usage;
           set({
@@ -756,6 +916,8 @@ export function createController(opts: {
               ...(u.estimated || t.estimated ? { estimated: true } : {}),
             },
           });
+          // The real count is in; the estimate it replaces is shown no more.
+          if (live.usage !== null) setLive({ usage: null });
           front.events?.onUsage?.(u);
         },
         onContextEstimate: tokens => {
@@ -777,6 +939,9 @@ export function createController(opts: {
           front.events?.onDecodeRate?.(rate);
         },
         onMessage: msg => {
+          if (msg.role === 'assistant') setLive({ content: '', reasoning: '' });
+          // The result the pending row stood in for has landed.
+          else if (msg.role === 'tool') setLive({ tool: null, pending: null });
           front.onMessage?.(msg);
           if (msg.role === 'tool') {
             // Keeps `@` autocomplete current with files the model writes this turn, so a
@@ -1131,6 +1296,15 @@ export function createController(opts: {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    get live() {
+      return live.pending && pendingHidden() ? { ...live, pending: null } : live;
+    },
+    subscribeLive: listener => {
+      liveListeners.add(listener);
+      return () => {
+        liveListeners.delete(listener);
+      };
+    },
     get messages() {
       return snapshot.messages;
     },
@@ -1318,8 +1492,10 @@ export function createController(opts: {
       ownProfile = 'default';
       setMode('agent');
       applyModeModel();
+      setLive(emptyLive());
     },
     loadConversation: (sides, from) => {
+      setLive(emptyLive());
       stashed = {};
       session?.reset({ relearn: false });
       // A project session carries on in its own file. A manual save from the root is left as it
@@ -1517,6 +1693,7 @@ export function createController(opts: {
       // sees the run through the held copy, attached to the next prompt.
       append({ role: 'user', content: command, meta: true });
       setStatus('busy');
+      setLive({ tool: null });
       front.onStart?.();
       // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the
       // front end is blocked on it just the same.
@@ -1528,7 +1705,11 @@ export function createController(opts: {
           bashTimeoutMs: config()?.bashTimeoutMs,
           bashIdleMs: config()?.bashIdleMs,
           signal: running.signal,
-          onProgress: front.onProgress,
+          // Shell output streams through the tool block under the empty name.
+          onProgress: chunk => {
+            liveToolProgress(chunk, '');
+            front.onProgress?.(chunk);
+          },
         });
         append({ role: 'shell', command, output: result.payload ?? '' });
         heldShellRuns = holdShellRun(
@@ -1538,6 +1719,7 @@ export function createController(opts: {
       } catch (e) {
         append({ role: 'error', content: (e as Error).message });
       } finally {
+        setLive({ tool: null });
         front.onEnd?.();
         aborter = null;
         setStatus('idle');
