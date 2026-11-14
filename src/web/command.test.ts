@@ -139,13 +139,24 @@ afterEach(async () => {
   await Promise.all(handles.splice(0).map(h => h.shutdown()));
 });
 
+// What the page does with a link: trade its single-use code for the token.
+async function tradeLink(link: string): Promise<string> {
+  const url = new URL(link);
+  const res = await fetch(`${url.origin}/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: url.origin },
+    body: JSON.stringify({ code: new URLSearchParams(url.hash.slice(1)).get('code') }),
+  });
+  if (!res.ok) throw new Error(`link refused: ${res.status}`);
+  return ((await res.json()) as { token: string }).token;
+}
+
 async function start(overrides: Partial<WebIo> = {}) {
   const t = ioWith(overrides);
   const run = await runWeb({ port: 0, help: false }, t.io);
   if (typeof run === 'number') throw new Error(`runWeb failed: ${t.err.join('')}`);
   handles.push(run);
-  const token = new URL(run.url).searchParams.get('token')!;
-  return { ...t, run, token };
+  return { ...t, run, token: await tradeLink(run.url) };
 }
 
 type Reply = { status: number; headers: Record<string, unknown>; body: string };
@@ -205,8 +216,8 @@ function readEvents(
       {
         host: '127.0.0.1',
         port,
-        path: `/events?token=${token}`,
-        headers: { Host: `127.0.0.1:${port}` },
+        path: '/events',
+        headers: { Host: `127.0.0.1:${port}`, Authorization: `Bearer ${token}` },
       },
       res => {
         const events: ServerEvent[] = [];
@@ -261,18 +272,28 @@ function portRefuses(port: number): Promise<boolean> {
 }
 
 describe('runWeb', () => {
-  it('prints the URL with its token and says it serves only this machine', async () => {
+  it('prints a single-use link, never the token, and says only this machine can connect', async () => {
     const { run, out, token } = await start();
     const text = out.join('');
     expect(text).toContain(run.url);
-    expect(run.url).toBe(`http://127.0.0.1:${run.port}/?token=${token}`);
-    expect(text).toMatch(/only this machine/);
+    expect(run.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${run.port}/#code=[\\w-]+$`));
+    expect(text).not.toContain(token);
+    expect(text).toMatch(/Only this machine/);
     expect(text).toMatch(/ctrl-c to stop/);
   });
 
+  it('hands out a fresh link on request, and the printed one works only once', async () => {
+    const { run } = await start();
+    // `start` already traded the printed link.
+    await expect(tradeLink(run.url)).rejects.toThrow('401');
+    const next = run.newLink();
+    expect(next).not.toBe(run.url);
+    expect(await tradeLink(next)).toBeTruthy();
+  });
+
   it('serves the proof client', async () => {
-    const { run, token } = await start();
-    const index = await get(run.port, `/?token=${token}`);
+    const { run } = await start();
+    const index = await get(run.port, '/');
     expect(index.status).toBe(200);
     expect(index.headers['content-type']).toBe('text/html; charset=utf-8');
     expect(index.body).toContain('<title>proof</title>');

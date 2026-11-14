@@ -58,6 +58,14 @@ if (web) {
     signalled = true;
     void run.shutdown(code);
   };
+  // Enter prints a fresh link: the first one works once, and a second tab needs its own.
+  if (process.stdin.isTTY) {
+    process.stdin.on('data', () => {
+      process.stdout.write(`\n  ${run.newLink()}\n\n`);
+    });
+    // Not a reason to stay alive once the server has shut down.
+    process.stdin.unref();
+  }
   process.on('SIGINT', onSignal(130));
   process.on('SIGTERM', onSignal(143));
   process.exit(await run.done);
