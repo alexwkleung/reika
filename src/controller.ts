@@ -1,19 +1,41 @@
-import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
-import { modeSide } from './agent/modes.js';
+import type { ImageAttachment, NativeImage } from './agent/attachments.js';
+import {
+  canDrain,
+  queueReceipt,
+  takeNext,
+  type QueuedMessage,
+  type SubmitAnswers,
+} from './agent/busyqueue.js';
+import { modeSide, turnMode } from './agent/modes.js';
+import {
+  buildShellRunsBlock,
+  captureShellRun,
+  holdShellRun,
+  shellRunBudget,
+  type ShellRun,
+} from './agent/shellruns.js';
+import { buildSubmitInput, type SubmitStage } from './agent/submitinput.js';
 import {
   resolveToggleCommand,
   toggleReceipt,
   type ToggleCommand,
   type ToggleName,
 } from './agent/togglecommands.js';
-import { autoApproveForced, autoApproves, effectiveAutoApprove } from './approval.js';
+import {
+  autoApproveForced,
+  autoApproves,
+  effectiveAutoApprove,
+  formatUnattendedDeclines,
+} from './approval.js';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
-import { inheritProfile, modeSwitchProfile } from './config.js';
+import { inheritProfile, modeSwitchProfile, resolveProfile } from './config.js';
 import { bootstrap } from './context/bootstrap.js';
+import { addFileToIndex } from './context/files.js';
 import { debugLog, processSessionStem } from './debug.js';
 import { persistableMode, type LastState } from './laststate.js';
-import type { Session } from './session.js';
+import { invokeMcpTool, parseMcpArgs, type McpCommand } from './mcp/tools.js';
+import type { Session, SessionEvents } from './session.js';
 import {
   countRealTurns,
   forAutosave,
@@ -28,7 +50,9 @@ import {
   type SessionSides,
 } from './store/sessions.js';
 import { saveTranscript as writeTranscript, type TranscriptMeta } from './store/transcript.js';
+import { execStream } from './tools/bash.js';
 import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
+import type { PastedText } from './ui/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
@@ -87,6 +111,51 @@ export type ControllerSnapshot = {
   // until the user sets one, which leaves the config's value in force.
   sessionAutoApprove: boolean | null;
   sessionUnattended: boolean | null;
+};
+
+// One prompt's turn. `mode` is the one turn's override of the controller's mode (/implement flips
+// the mode and submits in one tick); `notices` land right after the turn's user bubble, the
+// placement the URL grounder follows: a receipt reads as a follow-on to the action, never as an
+// announcement in front of it.
+export type TurnOptions = {
+  display?: string;
+  mode?: Mode;
+  nativeImages?: NativeImage[];
+  manualCompact?: boolean;
+  // Stamped on the turn's user message: compaction needs to know its opening tool call was a
+  // skill's mandate rather than picked by position (#275), and the content is just the body.
+  skill?: string;
+  notices?: Message[];
+};
+
+// What a front end hears while a turn runs. The live stream is its own state; `onMessage` sees
+// each message before it lands in the scrollback. The request wrappers stand in for the
+// controller's own dialogs, for a front end that resets a dialog's cursor first.
+export type TurnFrontEnd = {
+  events?: Omit<SessionEvents, 'onMessage'>;
+  onMessage?(msg: Message): void;
+  // After the status goes busy, and before it goes idle.
+  onTurnStart?(): void;
+  onTurnEnd?(): void;
+  requestApproval?: (request: ApprovalRequest) => Promise<ApprovalAnswer>;
+  requestQuestion?: (request: QuestionRequest) => Promise<QuestionAnswer | null>;
+};
+
+// A typed prompt's input-box state. `onStage` names what the submit is waiting on, and gets null
+// when it stops; `onBuilt` is the images taken by the prompt, which a failed build leaves alone.
+export type SubmitPromptInput = {
+  answers: SubmitAnswers;
+  images: ImageAttachment[];
+  pastes: PastedText[];
+  onStage(stage: SubmitStage | null): void;
+  onBuilt?(): void;
+};
+
+// A shell-mode run's output as it streams, bracketed by its busy spell.
+export type ShellFrontEnd = {
+  onStart?(): void;
+  onProgress(chunk: string): void;
+  onEnd?(): void;
 };
 
 export type Controller = {
@@ -178,6 +247,21 @@ export type Controller = {
   // `/resume [all|root]`: the sessions to offer, the one in progress left out. Chat mode lists
   // chats (#875), and a project with nothing to list falls back to the manual saves.
   resumeList(args: string): Promise<ResumeList>;
+  // Runs one prompt through the session as the controller's mode (or `opts.mode`) and hands back
+  // what it emitted, or nothing before the session has booted. Busy for each loop turn it runs
+  // (vibe runs two), each with its own abort; under `bypass` there is no approval gate at all.
+  runTurn(text: string, opts: TurnOptions, front: TurnFrontEnd): Promise<Message[]>;
+  // A typed prompt, after its questions are answered: expanded (mentions, images, pasted links, a
+  // routed skill), with the shell runs since the last prompt in front of it, then run. A second
+  // prompt while the first is still expanding is dropped.
+  submitPrompt(text: string, input: SubmitPromptInput, front: TurnFrontEnd): Promise<void>;
+  // A shell-mode command: raw bash, no model. Echoed and shown, and held for the next prompt,
+  // which is how the model sees it.
+  runShell(command: string, front: ShellFrontEnd): Promise<void>;
+  // A slash-invoked MCP tool (#265), shown as a shell message and never in the model history.
+  runMcpCommand(raw: string, command: McpCommand, args: string): Promise<void>;
+  // Stops the turn, shell command or MCP call that is running. False when nothing was.
+  abort(): boolean;
 };
 
 export function createController(opts: {
@@ -231,6 +315,16 @@ export function createController(opts: {
   let saveHold: number | null = null;
   const historyRoot = opts.historyRoot ?? ROOT_HISTORY_DIR;
   const listeners = new Set<() => void>();
+  // Whatever is running: a turn, a shell command or an MCP call.
+  let aborter: AbortController | null = null;
+  // Shell-mode runs since the last prompt, prepended to the next one (agent/shellruns.ts).
+  let heldShellRuns: ShellRun[] = [];
+  // A hint the user declined once is noise the second time, and the user who wanted it typed the
+  // slash command instead.
+  const hintedSkills = new Set<string>();
+  // The status is still idle while a prompt expands, which can wait on the network for a pasted
+  // link, so a second Enter would otherwise start a second turn.
+  let submitting = false;
 
   const set = (next: Partial<ControllerSnapshot>): void => {
     snapshot = { ...snapshot, ...next };
@@ -362,6 +456,115 @@ export function createController(opts: {
     applyModeModel();
   };
 
+  const requestApproval = (request: ApprovalRequest): Promise<ApprovalAnswer> => {
+    // `bypass` never reaches here: a turn in that mode runs with no gate at all.
+    if (autoApproves(autoApprove(), request)) {
+      set({ approvals: counted(true) });
+      return Promise.resolve(true);
+    }
+    // A dialog nobody answers stalls the turn until morning, so it is declined the way headless
+    // declines; the tool's own summary says why.
+    if (unattended()) {
+      unattendedDeclines.push(request);
+      set({ approvals: counted(false) });
+      return Promise.resolve(false);
+    }
+    return new Promise(resolve => {
+      resolveApproval = resolve;
+      set({ approval: request });
+    });
+  };
+  const openQuestion = (request: QuestionRequest): Promise<QuestionAnswer | null> =>
+    new Promise(resolve => {
+      resolveQuestion = resolve;
+      set({ question: request });
+    });
+  const setStatus = (status: ControllerStatus): void => {
+    if (status !== snapshot.status) set({ status });
+  };
+
+  const runTurn = async (
+    text: string,
+    turn: TurnOptions,
+    front: TurnFrontEnd,
+  ): Promise<Message[]> => {
+    const s = session;
+    const cfg = config();
+    if (!s || !cfg) return [];
+    let notices = turn.notices ?? [];
+    const activeMode = turn.mode ?? snapshot.mode;
+    return s.submit(text, {
+      mode: activeMode,
+      // What this turn is recorded as on its prompt, which is not always what it runs as.
+      recordAs: turnMode(snapshot.mode, activeMode),
+      display: turn.display,
+      skill: turn.skill,
+      nativeImages: turn.nativeImages,
+      manualCompact: turn.manualCompact,
+      requestApproval:
+        cfg.autoApprove === 'bypass' ? undefined : (front.requestApproval ?? requestApproval),
+      requestQuestion: front.requestQuestion ?? openQuestion,
+      isUnattended: unattended,
+      onTurnStart: () => {
+        setStatus('busy');
+        front.onTurnStart?.();
+        aborter = new AbortController();
+        return aborter.signal;
+      },
+      onTurnError: e => {
+        append({ role: 'error', content: e.message });
+      },
+      onTurnEnd: () => {
+        // After the final reply, so a glance at the end of a night's scrollback shows what is left.
+        const declined = formatUnattendedDeclines(unattendedDeclines.splice(0));
+        if (declined) append({ role: 'system', content: declined, tone: 'warn' });
+        front.onTurnEnd?.();
+        setStatus('idle');
+        aborter = null;
+      },
+      events: {
+        ...front.events,
+        onMessage: msg => {
+          front.onMessage?.(msg);
+          if (msg.role === 'tool') {
+            // Keeps `@` autocomplete current with files the model writes this turn, so a
+            // just-created file is attachable without a restart or /cd. The diff path is relative
+            // (write/edit emit `relative(cwd, …)`), matching fileIndex. addFileToIndex no-ops on
+            // existing/filtered paths.
+            //
+            // That relativeness is load-bearing, not incidental: `ignore` throws a RangeError on an
+            // absolute path, so an out-of-project write would take the turn down here. write/edit
+            // keep a separate `display` string for the user- and model-facing text and never put
+            // it on `diff.path`. A bash command's changes qualify the same way, minus deletions and
+            // anything that reached outside cwd (`../` is exactly what `ignore` throws on).
+            const written = [
+              ...(msg.diff?.path ? [msg.diff.path] : []),
+              ...(msg.changes?.files ?? [])
+                .filter(f => f.kind !== 'deleted' && !f.path.startsWith('..'))
+                .map(f => f.path),
+            ];
+            if (written.length > 0) {
+              s.updateBundle(prev => {
+                const next = written.reduce(
+                  (idx, p) => addFileToIndex(idx, p, prev.ignore),
+                  prev.fileIndex,
+                );
+                return next === prev.fileIndex ? prev : { ...prev, fileIndex: next };
+              });
+            }
+          }
+          if (msg.role === 'user' && notices.length > 0) {
+            const flushed = notices;
+            notices = [];
+            append(msg, ...flushed);
+            return;
+          }
+          append(msg);
+        },
+      },
+    });
+  };
+
   return {
     getSnapshot: () => snapshot,
     subscribe: listener => {
@@ -377,9 +580,7 @@ export function createController(opts: {
     get status() {
       return snapshot.status;
     },
-    setStatus: status => {
-      if (status !== snapshot.status) set({ status });
-    },
+    setStatus,
     enqueue: message =>
       set({
         queue: [...snapshot.queue, message],
@@ -414,24 +615,7 @@ export function createController(opts: {
     get confirm() {
       return snapshot.confirm;
     },
-    requestApproval: request => {
-      // `bypass` never reaches here: a front end in that mode runs a turn with no gate at all.
-      if (autoApproves(autoApprove(), request)) {
-        set({ approvals: counted(true) });
-        return Promise.resolve(true);
-      }
-      // A dialog nobody answers stalls the turn until morning, so it is declined the way headless
-      // declines; the tool's own summary says why.
-      if (unattended()) {
-        unattendedDeclines.push(request);
-        set({ approvals: counted(false) });
-        return Promise.resolve(false);
-      }
-      return new Promise(resolve => {
-        resolveApproval = resolve;
-        set({ approval: request });
-      });
-    },
+    requestApproval,
     answerApproval: (answer, { always = false } = {}) => {
       const resolve = resolveApproval;
       if (!resolve) return;
@@ -483,11 +667,7 @@ export function createController(opts: {
       unattendedDeclines = [];
       return taken;
     },
-    openQuestion: request =>
-      new Promise(resolve => {
-        resolveQuestion = resolve;
-        set({ question: request });
-      }),
+    openQuestion,
     answerQuestion: answer => {
       const resolve = resolveQuestion;
       if (!resolve) return;
@@ -558,6 +738,7 @@ export function createController(opts: {
     },
     newConversation: echo => {
       stashed = {};
+      heldShellRuns = [];
       startedAt = Date.now();
       // A new conversation gets a new file.
       stopSaveTimer();
@@ -721,6 +902,123 @@ export function createController(opts: {
               ? 'No saved sessions for this project yet.'
               : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
       };
+    },
+    runTurn,
+    submitPrompt: async (text, input, front) => {
+      const s = session;
+      const cfg = config();
+      if (!s || !cfg || submitting) return;
+      submitting = true;
+      let modelText: string;
+      let built: Awaited<ReturnType<typeof buildSubmitInput>>;
+      try {
+        built = await buildSubmitInput(text, {
+          cwd: s.bundle.cwd,
+          skills: s.bundle.skills,
+          config: resolveProfile(cfg, s.profile),
+          skillRoute: input.answers.skill,
+          skillHints: hintedSkills,
+          fetchUrls: input.answers.fetchUrls,
+          images: input.images,
+          pastes: input.pastes,
+          onStage: input.onStage,
+        });
+        // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
+        // in the bubble, but recalling that text from history later must not silently re-attach an
+        // image the user has moved on from.
+        input.onBuilt?.();
+        modelText = built.modelText;
+        // Chat's history is its own, and its tools could not act on a run anyway: held for the
+        // agent side.
+        if (heldShellRuns.length > 0 && snapshot.mode !== 'chat') {
+          const budget = shellRunBudget(s.config.contextWindow);
+          modelText = `${buildShellRunsBlock(heldShellRuns, budget)}\n\n${modelText}`;
+          heldShellRuns = [];
+        }
+      } finally {
+        input.onStage(null);
+        submitting = false;
+      }
+      await runTurn(
+        modelText,
+        {
+          // Vibe runs the plan→implement chain (#45) inside the session.
+          ...(snapshot.mode === 'vibe' ? { mode: 'vibe' as const } : {}),
+          display: built.display !== modelText ? built.display : undefined,
+          nativeImages: built.nativeImages,
+          skill: built.skill,
+          notices: built.notices.map(n => ({ role: 'system' as const, ...n })),
+        },
+        front,
+      );
+    },
+    runShell: async (command, front) => {
+      const s = session;
+      if (!s) return;
+      // Shell mode is "raw bash, no model": the echo and the `shell` message are UI-only. The model
+      // sees the run through the held copy, attached to the next prompt.
+      append({ role: 'user', content: command, meta: true });
+      setStatus('busy');
+      front.onStart?.();
+      // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the
+      // front end is blocked on it just the same.
+      const running = new AbortController();
+      aborter = running;
+      try {
+        const result = await execStream(command, {
+          cwd: s.bundle.cwd,
+          bashTimeoutMs: config()?.bashTimeoutMs,
+          bashIdleMs: config()?.bashIdleMs,
+          signal: running.signal,
+          onProgress: front.onProgress,
+        });
+        append({ role: 'shell', command, output: result.payload ?? '' });
+        heldShellRuns = holdShellRun(
+          heldShellRuns,
+          await captureShellRun(command, result.exitCode ?? null, result.payload ?? ''),
+        );
+      } catch (e) {
+        append({ role: 'error', content: (e as Error).message });
+      } finally {
+        front.onEnd?.();
+        aborter = null;
+        setStatus('idle');
+      }
+    },
+    // `/filesystem:read_file {"path":"src/index.ts"}`. No approval prompt: the user typed it, the
+    // rule shell mode runs under. The result is a command and its output, and the user reading the
+    // tool, not the model calling it.
+    runMcpCommand: async (raw, command, args) => {
+      const s = session;
+      if (!s) return;
+      const parsed = parseMcpArgs(command, args);
+      if ('error' in parsed) {
+        append({ role: 'system', content: parsed.error, tone: 'warn' });
+        return;
+      }
+      setStatus('busy');
+      const running = new AbortController();
+      aborter = running;
+      try {
+        const result = await invokeMcpTool(
+          s.mcp.call,
+          `${command.server}:${command.tool}`,
+          command.server,
+          command.tool,
+          parsed.args,
+          { signal: running.signal },
+        );
+        const output = [result.summary, result.payload].filter(Boolean).join('\n');
+        append({ role: 'shell', command: raw, output });
+      } finally {
+        aborter = null;
+        setStatus('idle');
+      }
+    },
+    abort: () => {
+      if (snapshot.status !== 'busy' || !aborter) return false;
+      aborter.abort();
+      return true;
     },
   };
 }

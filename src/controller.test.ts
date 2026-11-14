@@ -12,10 +12,28 @@ import {
 } from './store/sessions.js';
 import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
+import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
 import type { LastState } from './laststate.js';
-import type { Session } from './session.js';
+import ignore, { type Ignore } from 'ignore';
+import type { McpCallFn, McpCommand } from './mcp/tools.js';
+import type { Session, SubmitOptions } from './session.js';
+import type { Skill } from './skills/skills.js';
 import type { Config, Message, Mode, Profile } from './types.js';
+
+// A spawn that throws, which a real command cannot be made to do on demand.
+const shellFailure = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock('./tools/bash.js', async importOriginal => {
+  const real = await importOriginal<typeof Bash>();
+  return {
+    ...real,
+    execStream: (...args: Parameters<typeof real.execStream>) => {
+      const failure = shellFailure.next;
+      shellFailure.next = null;
+      return failure ? Promise.reject(failure) : real.execStream(...args);
+    },
+  };
+});
 
 // Detection runs git in the session's cwd; the controller only has to pass on what it found.
 vi.mock('./ui/identity.js', async importOriginal => {
@@ -41,8 +59,9 @@ const profileOf = (model: string): Profile => ({
   apiKey: 'test',
 });
 
-// The parts of a session the controller reads: its config and active profile, and the three
-// calls it makes. `setProfile` reports one probe notice, as the real one does for a new window.
+// The parts of a session the controller reads: its config and active profile, the turn it runs,
+// the MCP call, and the calls that change it. `setProfile` reports one probe notice, as the real
+// one does for a new window.
 function fakeSession(config: Policy) {
   const cfg = {
     autoApprove: 'off',
@@ -50,10 +69,31 @@ function fakeSession(config: Policy) {
     profiles: { default: profileOf('local') },
     ...config,
   } as Config;
+  // A turn as the real session runs one: bracketed, with the user's bubble first. A test swaps it
+  // to drive the turn by hand.
+  let turn = async (text: string, opts: SubmitOptions): Promise<Message[]> => {
+    opts.onTurnStart?.();
+    const bubble: Message = { role: 'user', content: opts.display ?? text };
+    opts.events?.onMessage?.(bubble);
+    opts.onTurnEnd?.();
+    return [bubble];
+  };
   const session = {
     profile: 'default',
-    bundle: { cwd: '/repo/app' } as { cwd: string; repoMapBudget?: number },
+    bundle: { cwd: '/repo/app', skills: [], fileIndex: [], ignore: ignore() } as {
+      cwd: string;
+      repoMapBudget?: number;
+      skills?: Skill[];
+      fileIndex?: string[];
+      ignore?: Ignore;
+    },
+    config: cfg,
     getSnapshot: () => ({ config: cfg }),
+    set turn(next: typeof turn) {
+      turn = next;
+    },
+    submit: vi.fn((text: string, opts: SubmitOptions) => turn(text, opts)),
+    mcp: { call: vi.fn<McpCallFn>() },
     updateBundle: vi.fn((update: (b: { cwd: string }) => { cwd: string }) => {
       session.bundle = update(session.bundle);
     }),
@@ -1229,5 +1269,394 @@ describe('controller commands on disk', () => {
         reply: 'No saved chats for this project. /resume all lists every session.',
       });
     });
+  });
+});
+
+describe('controller.runTurn', () => {
+  const lastSubmit = (session: ReturnType<typeof fakeSession>) => session.submit.mock.calls.at(-1)!;
+
+  it('runs nothing before the session has booted', async () => {
+    const { controller } = controllerIn('agent', null);
+    expect(await controller.runTurn('hi', {}, {})).toEqual([]);
+  });
+
+  it("hands the session the turn's options, recorded as the controller's mode", async () => {
+    const { controller, session } = controllerIn('vibe');
+    const nativeImages = [{ marker: '[Image 1]', mime: 'image/png', bytes: new Uint8Array([1]) }];
+    await controller.runTurn(
+      'implement the plan',
+      { mode: 'agent', display: '/implement', skill: 'issue', nativeImages, manualCompact: true },
+      {},
+    );
+    const [text, opts] = lastSubmit(session!);
+    expect(text).toBe('implement the plan');
+    expect(opts).toMatchObject({
+      mode: 'agent',
+      recordAs: 'vibe',
+      display: '/implement',
+      skill: 'issue',
+      nativeImages,
+      manualCompact: true,
+    });
+
+    await controller.runTurn('fix it', {}, {});
+    expect(lastSubmit(session!)[1]).toMatchObject({ mode: 'vibe', recordAs: 'vibe' });
+  });
+
+  it("runs with no gate under bypass, the front end's wrapper when given, and its own otherwise", async () => {
+    const bypass = controllerIn('agent', { autoApprove: 'bypass' });
+    await bypass.controller.runTurn('x', {}, {});
+    expect(lastSubmit(bypass.session!)[1].requestApproval).toBeUndefined();
+
+    const { controller, session } = controllerIn('agent', { autoApprove: 'off' });
+    const requestApproval = vi.fn(async () => true as const);
+    const requestQuestion = vi.fn(async () => null);
+    await controller.runTurn('x', {}, { requestApproval, requestQuestion });
+    expect(lastSubmit(session!)[1]).toMatchObject({ requestApproval, requestQuestion });
+
+    await controller.runTurn('x', {}, {});
+    const own = lastSubmit(session!)[1];
+    const request = { tool: 'edit', subject: 'a.ts', preview: '+ x' };
+    void own.requestApproval!(request);
+    expect(controller.approval).toBe(request);
+    void own.requestQuestion!({ question: 'Which?', options: [{ label: 'A' }] });
+    expect(controller.question).toMatchObject({ question: 'Which?' });
+  });
+
+  it('reads unattended live, so a toggle mid-turn applies to the next action', async () => {
+    const { controller, session } = controllerIn('agent');
+    await controller.runTurn('x', {}, {});
+    const { isUnattended } = lastSubmit(session!)[1];
+    expect(isUnattended!()).toBe(false);
+    await controller.setToggle('unattended', true);
+    expect(isUnattended!()).toBe(true);
+  });
+
+  it('is busy for the turn, with the hooks inside the busy spell', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    const seen: string[] = [];
+    const statusAt = (label: string) => () => seen.push(`${label}:${controller.status}`);
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      seen.push(`running:${controller.status}`);
+      opts.onTurnEnd?.();
+      seen.push(`ended:${controller.status}`);
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      { onTurnStart: statusAt('start'), onTurnEnd: statusAt('end') },
+    );
+    expect(seen).toEqual(['start:busy', 'running:busy', 'end:busy', 'ended:idle']);
+  });
+
+  it('aborts the running turn through the signal it handed the session, and nothing when idle', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    expect(controller.abort()).toBe(false);
+    let signal: AbortSignal | void = undefined;
+    session!.turn = async (_text, opts) => {
+      signal = opts.onTurnStart?.();
+      expect(controller.abort()).toBe(true);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect((signal as AbortSignal | undefined)?.aborted).toBe(true);
+    expect(controller.abort()).toBe(false);
+  });
+
+  it('puts the notices right after the first user message, once', async () => {
+    const { controller, session } = controllerIn('agent');
+    const receipt = note('Skill /issue applied');
+    const seen: Message[] = [];
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!(user('/issue 14'));
+      opts.events!.onMessage!({ role: 'assistant', content: 'on it' });
+      opts.events!.onMessage!(user('and more'));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('body', { notices: [receipt] }, { onMessage: m => seen.push(m) });
+    expect(controller.messages).toEqual([
+      user('/issue 14'),
+      receipt,
+      { role: 'assistant', content: 'on it' },
+      user('and more'),
+    ]);
+    // The front end hears the turn's own messages, not the receipts.
+    expect(seen).toHaveLength(3);
+  });
+
+  it('prints a failed turn, and rolls up what an unattended session declined at the end', async () => {
+    const { controller, session } = controllerIn('agent', { autoApprove: 'off', unattended: true });
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      await controller.requestApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
+      opts.onTurnError?.(new Error('connection refused'));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect(controller.messages[0]).toEqual({ role: 'error', content: 'connection refused' });
+    expect(controller.messages[1]).toMatchObject({
+      role: 'system',
+      tone: 'warn',
+      content: expect.stringContaining('npm test'),
+    });
+    expect(controller.takeUnattendedDeclines()).toEqual([]);
+  });
+
+  it('adds the files a tool wrote to the file index, and nothing from outside the project', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!({
+        role: 'tool',
+        callId: 'call-1',
+        summary: 'Wrote src/new.ts',
+        diff: { text: '+ x', path: 'src/new.ts', added: 1, removed: 0 },
+        changes: {
+          files: [
+            { path: 'src/made.ts', kind: 'added', added: 1, removed: 0 },
+            { path: 'src/gone.ts', kind: 'deleted', added: 0, removed: 1 },
+            { path: '../elsewhere.ts', kind: 'added', added: 1, removed: 0 },
+          ],
+          more: 0,
+        },
+      } as unknown as Message);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect(session!.updateBundle).toHaveBeenCalledTimes(1);
+    expect(session!.bundle.fileIndex).toEqual(['src/made.ts', 'src/new.ts']);
+  });
+});
+
+describe('controller.submitPrompt', () => {
+  const answers = {};
+  const input = (
+    overrides: Partial<Parameters<ReturnType<typeof createController>['submitPrompt']>[1]> = {},
+  ) => ({
+    answers,
+    images: [],
+    pastes: [],
+    onStage: vi.fn(),
+    ...overrides,
+  });
+
+  it('sends a plain prompt as typed, and clears the stage at the end', async () => {
+    const { controller, session } = controllerIn('agent');
+    const typed = input({ onBuilt: vi.fn() });
+    await controller.submitPrompt('fix the parser', typed, {});
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('fix the parser');
+    expect(opts).toMatchObject({ mode: 'agent', display: undefined, skill: undefined });
+    expect(typed.onBuilt).toHaveBeenCalledTimes(1);
+    expect(typed.onStage).toHaveBeenLastCalledWith(null);
+    expect(controller.messages).toEqual([user('fix the parser')]);
+  });
+
+  it('applies a routed skill and prints its receipt under the bubble', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [
+      {
+        name: 'issue',
+        description: 'Work on an issue',
+        body: 'Run gh issue view.',
+        source: 'bundled',
+        path: '/repo/app/skills/issue.md',
+        triggers: ['work on issue'],
+      },
+    ];
+    await controller.submitPrompt('work on issue 14', input({ answers: { skill: 'issue' } }), {});
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('Run gh issue view.\n\nwork on issue 14');
+    expect(opts).toMatchObject({ skill: 'issue', display: 'work on issue 14' });
+    expect(controller.messages[1]).toMatchObject({
+      role: 'system',
+      content: expect.stringMatching(/^Skill \/issue applied/),
+    });
+  });
+
+  it('runs vibe mode as the vibe chain', async () => {
+    const { controller, session } = controllerIn('vibe');
+    await controller.submitPrompt('add a flag', input(), {});
+    expect(session!.submit.mock.calls[0][1]).toMatchObject({ mode: 'vibe' });
+  });
+
+  it('drops a second prompt while the first is still expanding', async () => {
+    const { controller, session } = controllerIn('agent');
+    const first = controller.submitPrompt('one', input(), {});
+    await controller.submitPrompt('two', input(), {});
+    await first;
+    expect(session!.submit.mock.calls.map(c => c[0])).toEqual(['one']);
+  });
+});
+
+describe('controller shell runs', () => {
+  let cwd: string;
+  beforeEach(async () => {
+    cwd = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-shell-')));
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const inCwd = (mode: Mode = 'shell') => {
+    const made = controllerIn(mode);
+    made.session!.bundle.cwd = cwd;
+    made.controller.setStatus('idle');
+    return made;
+  };
+  const shellFront = () => {
+    const seen: string[] = [];
+    return {
+      seen,
+      front: {
+        onStart: vi.fn(),
+        onProgress: (chunk: string) => seen.push(chunk),
+        onEnd: vi.fn(),
+      },
+    };
+  };
+
+  it('echoes the command, streams its output, shows it and goes idle', async () => {
+    const { controller } = inCwd();
+    const { seen, front } = shellFront();
+    const statuses: string[] = [];
+    controller.subscribe(() => statuses.push(controller.status));
+    await controller.runShell('echo hi', front);
+    expect(controller.messages[0]).toEqual({ role: 'user', content: 'echo hi', meta: true });
+    expect(controller.messages[1]).toMatchObject({ role: 'shell', command: 'echo hi' });
+    expect((controller.messages[1] as { output: string }).output).toContain('hi');
+    expect(seen.join('')).toContain('hi');
+    expect(front.onStart).toHaveBeenCalledTimes(1);
+    expect(front.onEnd).toHaveBeenCalledTimes(1);
+    expect(statuses).toContain('busy');
+    expect(controller.status).toBe('idle');
+  });
+
+  it('holds the run for the next prompt, once', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.setMode('agent');
+    await controller.submitPrompt(
+      'what did that print?',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    await controller.submitPrompt(
+      'and now?',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    const [first, second] = session!.submit.mock.calls.map(c => c[0]);
+    expect(first).toContain('echo hi');
+    expect(first).toMatch(/what did that print\?$/);
+    expect(second).toBe('and now?');
+  });
+
+  it('keeps the run for the agent side while in chat', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.setMode('chat');
+    await controller.submitPrompt(
+      'a question',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    controller.setMode('agent');
+    await controller.submitPrompt(
+      'a task',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    const [chat, agent] = session!.submit.mock.calls.map(c => c[0]);
+    expect(chat).toBe('a question');
+    expect(agent).toContain('echo hi');
+  });
+
+  it('drops the held runs with a new conversation', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    await controller.submitPrompt(
+      'a task',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    expect(session!.submit.mock.calls[0][0]).toBe('a task');
+  });
+
+  it('prints an error when the command cannot run, and still goes idle', async () => {
+    const { controller } = inCwd();
+    shellFailure.next = new Error('spawn /bin/sh ENOENT');
+    const { front } = shellFront();
+    await controller.runShell('echo hi', front);
+    expect(controller.messages.at(-1)).toEqual({ role: 'error', content: 'spawn /bin/sh ENOENT' });
+    expect(controller.messages.at(-1)).toMatchObject({ role: 'error' });
+    expect(front.onEnd).toHaveBeenCalledTimes(1);
+    expect(controller.status).toBe('idle');
+  });
+});
+
+describe('controller.runMcpCommand', () => {
+  const command: McpCommand = {
+    name: 'files:read_file',
+    server: 'files',
+    tool: 'read_file',
+    description: 'Read a file',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  };
+
+  it('prints why the arguments are wrong and calls nothing', async () => {
+    const { controller, session } = controllerIn('agent');
+    await controller.runMcpCommand('/files:read_file {oops', command, '{oops');
+    expect(controller.messages).toEqual([
+      expect.objectContaining({ role: 'system', tone: 'warn' }),
+    ]);
+    expect(session!.mcp.call).not.toHaveBeenCalled();
+  });
+
+  it('shows the result as a shell message', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    session!.mcp.call.mockResolvedValue({
+      content: [{ type: 'text', text: 'hello from the file' }],
+    });
+    const raw = '/files:read_file {"path":"src/a.ts"}';
+    await controller.runMcpCommand(raw, command, '{"path":"src/a.ts"}');
+    expect(session!.mcp.call).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'src/a.ts' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(controller.messages[0]).toMatchObject({ role: 'shell', command: raw });
+    expect((controller.messages[0] as { output: string }).output).toContain('hello from the file');
+    expect(controller.status).toBe('idle');
+  });
+
+  it('can be aborted while the call runs', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    session!.mcp.call.mockImplementation(
+      (_server, _tool, _args, opts) =>
+        new Promise((_resolve, reject) =>
+          opts?.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+        ),
+    );
+    const running = controller.runMcpCommand('/files:read_file a.ts', command, '{"path":"a.ts"}');
+    await Promise.resolve();
+    expect(controller.status).toBe('busy');
+    expect(controller.abort()).toBe(true);
+    await running;
+    expect(controller.status).toBe('idle');
+    expect((controller.messages[0] as { output: string }).output).toContain('aborted');
   });
 });

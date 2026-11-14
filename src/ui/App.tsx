@@ -50,11 +50,10 @@ import {
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { loadLastState, saveLastState, startMode, startProfiles } from '../laststate.js';
-import { effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
+import { effectiveAutoApprove } from '../approval.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
-import { addFileToIndex } from '../context/files.js';
 import {
   buildTranscriptMeta,
   type TranscriptShrinkEvent,
@@ -64,20 +63,9 @@ import { type ShrinkCounts, type ShrinkEvent } from '../agent/loop.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
-import { execStream } from '../tools/bash.js';
 import { isOffline } from '../tools/_net.js';
-import {
-  NATIVE_IMAGE_NOTE,
-  nextImageMarker,
-  type ImageAttachment,
-  type NativeImage,
-} from '../agent/attachments.js';
-import {
-  buildSubmitInput,
-  skillToConfirm,
-  submitStageLabel,
-  urlsToConfirm,
-} from '../agent/submitinput.js';
+import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
+import { skillToConfirm, submitStageLabel, urlsToConfirm } from '../agent/submitinput.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { sniffImageMime } from '../ocr/vision.js';
@@ -96,7 +84,6 @@ import {
   isGrindPrompt,
   nextMode,
   resolveModeCommand,
-  turnMode,
   turnPromptMode,
   turnRefines,
   turnTools,
@@ -113,18 +100,10 @@ import {
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
-import { createController } from '../controller.js';
+import { createController, type TurnFrontEnd } from '../controller.js';
 import { resolveReplyCommand, unknownCommandText } from '../agent/replycommands.js';
 import { queuedMessage, type SubmitAnswers } from '../agent/busyqueue.js';
 import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
-import {
-  buildShellRunsBlock,
-  captureShellRun,
-  holdShellRun,
-  shellRunBudget,
-  type ShellRun,
-} from '../agent/shellruns.js';
-import { invokeMcpTool, parseMcpArgs, type McpCommand } from '../mcp/tools.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -380,28 +359,11 @@ export function App() {
   // input buffer. Ref-held: the buffer's marker is the visible state, this is just its payload,
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
-  // Shell-mode runs since the last prompt, prepended to the next one (agent/shellruns.ts).
-  const heldShellRunsRef = useRef<ShellRun[]>([]);
   // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N +412 lines]` marker
   // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
   // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
   // history or leave sitting in a queued message, and it has to still expand when they do.
   const pastedTextsRef = useRef<PastedText[]>([]);
-  // Skills already suggested this session. A hint the user declined once is noise the second
-  // time — and the user who wanted it typed the slash command instead.
-  const suggestedSkillsRef = useRef<Set<string>>(new Set());
-  // The skill the next submit is opening, set where that is known — the `/name` command path and
-  // routing's auto-inject branch — and consumed by submitToModel, which stamps it on the turn's user
-  // message. Compaction needs it to know the turn's opening tool call was mandated by a skill rather
-  // than picked by position (#275); no downstream code can tell, since the turn's content is just
-  // the skill body.
-  const pendingSkillRef = useRef<string | undefined>(undefined);
-  // Receipts for what submit-time expansion did to the prompt (unattachable image, fetched or
-  // dead pasted URL, routed skill). Held rather than pushed so they land *after* the user bubble
-  // — the same placement rule the URL grounder follows: a receipt reads as a follow-on to the
-  // action, never as an announcement in front of it. Flushed by submitToModel's user echo, which
-  // runTurn always emits first, so nothing can strand here.
-  const pendingNoticesRef = useRef<Message[]>([]);
   // Stage label while a ctrl-v paste is in flight; null when idle. Ephemeral by design — the
   // durable record of what got attached is the system notice the paste ends with.
   const [pasting, setPasting] = useState<string | null>(null);
@@ -417,12 +379,7 @@ export function App() {
   // Held for the whole resume, slices included: a submit or a mode switch between two slices would
   // land its rows in the middle of the resumed scrollback, or swap it for the other side's.
   const resumingRef = useRef(false);
-  // `status` is still 'idle' during expansion (submitToModel flips it), so without this a second
-  // Enter during a slow fetch starts a duplicate turn. Ref, not state: the handler closes over
-  // its render's value, so a fast double-press would read a stale `false`.
-  const submitBusyRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
   // submit. Ref-held — the warmer is invisible plumbing and must never trigger a render.
   const warmerRef = useRef(createPrefixWarmer());
@@ -746,10 +703,7 @@ export function App() {
         controller.answerConfirm('abort');
         return;
       }
-      if (controller.status === 'busy' && abortRef.current) {
-        abortRef.current.abort();
-        return;
-      }
+      if (controller.abort()) return;
       if (hadPending) return;
       // An open /model or /resume picker closes first, like esc.
       if (modelSelectRef.current) {
@@ -1088,8 +1042,8 @@ export function App() {
         history: s.history,
         bundle: s.bundle,
         config: s.config,
-        // Same mapping as submitToModel below, through the same helpers so the two cannot drift —
-        // a warm that builds a different prefix than the submit is a guaranteed cache miss.
+        // Same mapping as the controller's runTurn, through the same helpers so the two cannot
+        // drift — a warm that builds a different prefix than the submit is a guaranteed cache miss.
         // Vibe's first internal turn is a plan turn, so it warms the plan prefix — but without the
         // refinement line, since that plan turn is a new task (turnRefines, #46).
         tools: turnTools(m, s.lists),
@@ -1164,38 +1118,6 @@ export function App() {
     controller.transition(next, trailing);
   };
 
-  // A slash-invoked MCP tool (#265): `/filesystem:read_file {"path":"src/index.ts"}`. No approval
-  // prompt — the user typed it, the same rule shell mode runs under. The result lands as a shell
-  // message, which is exactly what it is (a command and its output) and, like shell mode's, never
-  // enters the model history: this is the user reading the tool, not the model calling it.
-  const runMcpCommand = async (raw: string, command: McpCommand, args: string): Promise<void> => {
-    const session = sessionRef.current;
-    if (!session) return;
-    const parsed = parseMcpArgs(command, args);
-    if ('error' in parsed) {
-      controller.append({ role: 'system', content: parsed.error, tone: 'warn' });
-      return;
-    }
-    controller.setStatus('busy');
-    const aborter = new AbortController();
-    abortRef.current = aborter;
-    try {
-      const result = await invokeMcpTool(
-        session.mcp.call,
-        `${command.server}:${command.tool}`,
-        command.server,
-        command.tool,
-        parsed.args,
-        { signal: aborter.signal },
-      );
-      const output = [result.summary, result.payload].filter(Boolean).join('\n');
-      controller.append({ role: 'shell', command: raw, output });
-    } finally {
-      abortRef.current = null;
-      controller.setStatus('idle');
-    }
-  };
-
   // Carries out what a turn command resolved to (agent/turncommands.ts): its lines, the mode
   // switch and the submit. The typed command is the turn's bubble, unless the turn emits no user
   // message and the command is echoed by hand.
@@ -1209,15 +1131,17 @@ export function App() {
     if (cmd.echo || before.length > 0) {
       controller.append(...(cmd.echo ? [echo] : []), ...before);
     }
-    if (cmd.skill) pendingSkillRef.current = cmd.skill;
-    pendingNoticesRef.current.push(...cmd.after.map(n => ({ role: 'system' as const, ...n })));
     // The override forces this turn's tools + promptMode regardless of a not-yet-flushed mode.
-    await submitToModel(
+    await controller.runTurn(
       cmd.modelText,
-      cmd.echo ? undefined : raw,
-      cmd.mode,
-      undefined,
-      cmd.manualCompact,
+      {
+        display: cmd.echo ? undefined : raw,
+        mode: cmd.mode,
+        manualCompact: cmd.manualCompact,
+        skill: cmd.skill,
+        notices: cmd.after.map(n => ({ role: 'system' as const, ...n })),
+      },
+      turnFrontEnd,
     );
   };
 
@@ -1229,7 +1153,6 @@ export function App() {
     if (name === 'clear' || name === 'new') {
       controller.newConversation(echo);
       resetMeasurements();
-      heldShellRunsRef.current = [];
       // The tok/s chip goes with the token counts it sits next to (#204).
       setDecodeRate(undefined);
       return;
@@ -1364,7 +1287,7 @@ export function App() {
         // carries a colon, which no built-in or skill does — the shapes cannot collide.
         const mcpCommand = sessionRef.current?.mcp.commands.find(c => c.name === name);
         if (mcpCommand) {
-          await runMcpCommand(raw, mcpCommand, args);
+          await controller.runMcpCommand(raw, mcpCommand, args);
           return;
         }
         // No echo for a skill: unlike the UI-only commands above it runs a real turn, and runTurn
@@ -1385,54 +1308,27 @@ export function App() {
     controller.append(echo, { role: 'system', content: response });
   };
 
-  const runShell = async (command: string): Promise<void> => {
-    if (!bundle) return;
-    // Shell mode is "raw bash, no model" — the echo and the `shell` message below are UI-only. The
-    // model sees the run through the held copy, attached to the next prompt.
-    const echo: Message = { role: 'user', content: command, meta: true };
-    controller.append(echo);
-    controller.setStatus('busy');
-    toolRef.current = '';
-    setStreamingTool('');
-    // Same bounds and the same ctrl-c as a model-run command: the shell is the user's, but the UI
-    // is blocked on it just the same.
-    const aborter = new AbortController();
-    abortRef.current = aborter;
-    try {
-      const result = await execStream(command, {
-        cwd: bundle.cwd,
-        bashTimeoutMs: config?.bashTimeoutMs,
-        bashIdleMs: config?.bashIdleMs,
-        signal: aborter.signal,
-        onProgress: chunk => {
-          toolRef.current += chunk;
-          toolNameRef.current = '';
-          scheduleToolFlush();
-        },
-      });
-      const shellMsg: Message = {
-        role: 'shell',
-        command,
-        output: result.payload ?? '',
-      };
-      controller.append(shellMsg);
-      heldShellRunsRef.current = holdShellRun(
-        heldShellRunsRef.current,
-        await captureShellRun(command, result.exitCode ?? null, result.payload ?? ''),
-      );
-    } catch (e) {
-      controller.append({ role: 'error', content: (e as Error).message });
-    } finally {
-      if (toolFlushTimerRef.current !== null) {
-        clearTimeout(toolFlushTimerRef.current);
-        toolFlushTimerRef.current = null;
-      }
-      toolRef.current = '';
-      setStreamingTool('');
-      abortRef.current = null;
-      controller.setStatus('idle');
-    }
-  };
+  // The run is the controller's; its output streams through the tool block here.
+  const runShell = (command: string): Promise<void> =>
+    controller.runShell(command, {
+      onStart: () => {
+        toolRef.current = '';
+        setStreamingTool('');
+      },
+      onProgress: chunk => {
+        toolRef.current += chunk;
+        toolNameRef.current = '';
+        scheduleToolFlush();
+      },
+      onEnd: () => {
+        if (toolFlushTimerRef.current !== null) {
+          clearTimeout(toolFlushTimerRef.current);
+          toolFlushTimerRef.current = null;
+        }
+        toolRef.current = '';
+        setStreamingTool('');
+      },
+    });
 
   // Ctrl+V. Outcomes are all persistent scrollback lines rather than spinner states: the user
   // pressed a key expecting an attachment, and "nothing happened" has to be distinguishable
@@ -1752,59 +1648,18 @@ export function App() {
       await runShell(expandPastes(trimmed, pastedTextsRef.current));
       return;
     }
-    if (submitBusyRef.current) return;
-    submitBusyRef.current = true;
-    let modelText: string;
-    let display: string;
-    // Native-vision bytes for this turn (empty on a describe/OCR profile): filled in below from the
-    // attachments still referenced in the text, then handed to runTurn for the turn's lifetime.
-    let nativeImages: NativeImage[] | undefined;
-    try {
-      // Clipboard attachments are consumed by the turn that sends them: the marker stays visible
-      // in the bubble, but recalling that text from history later must not silently re-attach an
-      // image the user has moved on from.
-      const built = await buildSubmitInput(trimmed, {
-        cwd: bundle.cwd,
-        skills: bundle.skills,
-        config: resolveProfile(config, activeProfileRef.current),
-        skillRoute: route,
-        skillHints: suggestedSkillsRef.current,
-        fetchUrls,
+    await controller.submitPrompt(
+      trimmed,
+      {
+        answers: { skill: route, fetchUrls },
         images: imageAttachmentsRef.current,
         pastes: pastedTextsRef.current,
-        onStage: stage => setExpanding(submitStageLabel(stage)),
-      });
-      imageAttachmentsRef.current = [];
-      pendingNoticesRef.current.push(
-        ...built.notices.map(n => ({ role: 'system' as const, ...n })),
-      );
-      if (built.skill) pendingSkillRef.current = built.skill;
-      ({ modelText, display, nativeImages } = built);
-      // Chat's history is its own, and its tools could not act on a run anyway: held for the
-      // agent side.
-      if (heldShellRunsRef.current.length > 0 && controller.mode !== 'chat') {
-        const budget = shellRunBudget(sessionRef.current?.config.contextWindow);
-        modelText = `${buildShellRunsBlock(heldShellRunsRef.current, budget)}\n\n${modelText}`;
-        heldShellRunsRef.current = [];
-      }
-    } finally {
-      setExpanding(null);
-      submitBusyRef.current = false;
-    }
-    if (controller.mode === 'vibe') {
-      await submitToModel(
-        modelText,
-        display !== modelText ? display : undefined,
-        'vibe',
-        nativeImages,
-      );
-      return;
-    }
-    await submitToModel(
-      modelText,
-      display !== modelText ? display : undefined,
-      undefined,
-      nativeImages,
+        onStage: stage => setExpanding(stage ? submitStageLabel(stage) : null),
+        onBuilt: () => {
+          imageAttachmentsRef.current = [];
+        },
+      },
+      turnFrontEnd,
     );
   };
 
@@ -1840,257 +1695,181 @@ export function App() {
     setTypechecking(false);
   };
 
-  const submitToModel = async (
-    modelText: string,
-    displayOverride?: string,
-    // For this submit only: overrides which mode's tools + prompt are used, bypassing the `mode`
-    // closure. Needed by /implement, which flips to agent mode and submits in the same tick — the
-    // setMode('agent') above hasn't flushed yet, so the closure would still read 'plan'. 'vibe'
-    // runs the plan→implement chain (#45) inside the session.
-    modeOverride?: Mode,
-    // Pasted images the model should be shown directly (native-vision profile). The caller owns the
-    // lifetime and has already dropped its attachment ref, so these are this turn's images and no
-    // other turn's — an image reaches the model once.
-    nativeImages?: NativeImage[],
-    // `/compact` (issue #481): the turn is a manual compaction, not a prompt — the loop runs the
-    // note round + fold with no user message in either.
-    manualCompact?: boolean,
-  ): Promise<Message[]> => {
-    // Consumed here whether or not the turn runs, so a skill can never leak onto a later prompt.
-    const skill = pendingSkillRef.current;
-    pendingSkillRef.current = undefined;
-    const s = sessionRef.current;
-    if (!s || !config) return [];
-    const activeMode = modeOverride ?? mode;
-    return s.submit(modelText, {
-      mode: activeMode,
-      // What this turn is recorded as on its prompt, which is not always what it runs as.
-      recordAs: turnMode(controller.mode, activeMode),
-      display: displayOverride,
-      skill,
-      nativeImages,
-      manualCompact,
-      requestApproval: config.autoApprove === 'bypass' ? undefined : requestApproval,
-      requestQuestion,
-      isUnattended: () => controller.unattended,
-      // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
-      onTurnStart: () => {
-        controller.setStatus('busy');
-        setPhase('thinking');
-        resetTypecheck();
-        setReasoningSpin(false);
+  // What a turn the controller runs reports to this front end: the live stream, the dialogs'
+  // cursor resets, and the per-turn indicators.
+  const turnFrontEnd: TurnFrontEnd = {
+    requestApproval,
+    requestQuestion,
+    // Once per loop turn — vibe runs two, and each gets its own busy spell and abort controller.
+    onTurnStart: () => {
+      setPhase('thinking');
+      resetTypecheck();
+      setReasoningSpin(false);
+      streamingRef.current = '';
+      reasoningRef.current = '';
+      toolRef.current = '';
+      setStreaming('');
+      setStreamingReasoning('');
+      setStreamingTool('');
+      setPendingTool('');
+      // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written
+      // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
+      // stale checklist lingering after the conversation moves on.
+      setPlanSteps(null);
+    },
+    onTurnEnd: () => {
+      if (flushTimerRef.current !== null) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      if (reasoningFlushTimerRef.current !== null) {
+        clearTimeout(reasoningFlushTimerRef.current);
+        reasoningFlushTimerRef.current = null;
+      }
+      if (toolFlushTimerRef.current !== null) {
+        clearTimeout(toolFlushTimerRef.current);
+        toolFlushTimerRef.current = null;
+      }
+      streamingRef.current = '';
+      reasoningRef.current = '';
+      toolRef.current = '';
+      setStreaming('');
+      setStreamingReasoning('');
+      setStreamingTool('');
+      setPendingTool('');
+      subagentLiveRef.current = false;
+      noteLiveRef.current = false;
+      setSubagentLive(false);
+      setNoteLive(false);
+      // A request that threw reports no usage, so nothing else would clear it.
+      liveUsageRef.current = undefined;
+      setUsage(u => ({ total: u.total }));
+      resetTypecheck();
+      setReasoningSpin(false);
+    },
+    onMessage: msg => {
+      if (msg.role === 'assistant') {
         streamingRef.current = '';
         reasoningRef.current = '';
-        toolRef.current = '';
         setStreaming('');
         setStreamingReasoning('');
+      }
+      if (msg.role === 'tool') {
+        toolRef.current = '';
         setStreamingTool('');
+        // The result this row was standing in for has landed (#509).
         setPendingTool('');
-        // Cleared up front; the turn's seed (onPlanProgress fires early in runTurn when a written
-        // plan is in history) restores it. A turn with no tracked plan leaves the panel gone — no
-        // stale checklist lingering after the conversation moves on.
-        setPlanSteps(null);
-        const aborter = new AbortController();
-        abortRef.current = aborter;
-        return aborter.signal;
+      }
+    },
+    events: {
+      onContentDelta: delta => {
+        lastLiveOutputAtRef.current = Date.now();
+        streamingRef.current += delta;
+        scheduleFlush();
       },
-      onTurnError: e => {
-        controller.append({ role: 'error', content: e.message });
+      onReasoningDelta: delta => {
+        lastLiveOutputAtRef.current = Date.now();
+        reasoningRef.current += delta;
+        scheduleReasoningFlush();
       },
-      onTurnEnd: () => {
-        // After the final reply, so a glance at the end of a night's scrollback shows what is left.
-        const declined = formatUnattendedDeclines(controller.takeUnattendedDeclines());
-        if (declined) {
-          controller.append({ role: 'system', content: declined, tone: 'warn' });
+      onToolProgress: (chunk, tool) => {
+        lastLiveOutputAtRef.current = Date.now();
+        toolRef.current += chunk;
+        toolNameRef.current = tool;
+        scheduleToolFlush();
+      },
+      onToolStart: name => {
+        // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
+        // this is the call's own start — the same instant the row it ages appears (#585).
+        pendingToolAtRef.current = Date.now();
+        pendingToolRef.current = name;
+        setPendingTool(name);
+        setPendingCall(n => n + 1);
+      },
+      onPhase: p => {
+        // Leaving the thinking phase ends the reasoning block — clear any spin hint.
+        if (p !== 'thinking') setReasoningSpin(false);
+        setPhase(p);
+      },
+      onSubagent: live => {
+        subagentLiveRef.current = live;
+        setSubagentLive(live);
+      },
+      onCompactionNote: live => {
+        noteLiveRef.current = live;
+        setNoteLive(live);
+      },
+      onTypecheck: onTypecheckChange,
+      onRecovering: setRecovering,
+      // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
+      // re-render.
+      onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
+      onReasoningStatus: setReasoningSpin,
+      onPromptProgress: onPromptProgressChange,
+      onReasoningReset: () => {
+        // Loop-break recovery: end the degenerate looped reasoning's live preview so the
+        // recovery notice is visible and the next round streams into a fresh Thinking block
+        // instead of appending onto the looped text (#55). Frozen into the scrollback where it
+        // stood rather than erased: erased, the frame dropped by the block's height under a
+        // one-line notice and the input jumped up. The tail is all that is kept, since a cut
+        // spiral can run to tens of thousands of chars and the block only ever drew its end.
+        const reasoning = reasoningRef.current.trim();
+        const content = streamingRef.current.trim();
+        if (reasoning || content) {
+          const frozen: Message = {
+            role: 'assistant',
+            content: content.slice(-FROZEN_STREAM_CHARS),
+            ...(reasoning ? { reasoning: reasoning.slice(-FROZEN_STREAM_CHARS) } : {}),
+            discarded: noteLiveRef.current ? 'note' : 'stream',
+            ...(subagentLiveRef.current ? { nested: true } : {}),
+          };
+          controller.append(frozen);
         }
-        if (flushTimerRef.current !== null) {
-          clearTimeout(flushTimerRef.current);
-          flushTimerRef.current = null;
-        }
-        if (reasoningFlushTimerRef.current !== null) {
-          clearTimeout(reasoningFlushTimerRef.current);
-          reasoningFlushTimerRef.current = null;
-        }
-        if (toolFlushTimerRef.current !== null) {
-          clearTimeout(toolFlushTimerRef.current);
-          toolFlushTimerRef.current = null;
-        }
-        streamingRef.current = '';
         reasoningRef.current = '';
-        toolRef.current = '';
-        setStreaming('');
         setStreamingReasoning('');
-        setStreamingTool('');
-        setPendingTool('');
-        subagentLiveRef.current = false;
-        noteLiveRef.current = false;
-        setSubagentLive(false);
-        setNoteLive(false);
-        // A request that threw reports no usage, so nothing else would clear it.
-        liveUsageRef.current = undefined;
-        setUsage(u => ({ total: u.total }));
-        resetTypecheck();
         setReasoningSpin(false);
-        controller.setStatus('idle');
-        abortRef.current = null;
+        // The compaction report round (#280) streams its note as content and commits it as a
+        // system notice, which does not clear the content preview the way an assistant commit
+        // does — without this the round's real reply would stream onto the note's tail.
+        streamingRef.current = '';
+        setStreaming('');
       },
-      events: {
-        onMessage: msg => {
-          if (msg.role === 'assistant') {
-            streamingRef.current = '';
-            reasoningRef.current = '';
-            setStreaming('');
-            setStreamingReasoning('');
-          }
-          if (msg.role === 'tool') {
-            toolRef.current = '';
-            setStreamingTool('');
-            // The result this row was standing in for has landed (#509).
-            setPendingTool('');
-            // Keep `@` autocomplete current with files the model writes this turn,
-            // so a just-created file is attachable without a restart or /cd. The
-            // diff path is relative (write/edit emit `relative(cwd, …)`), matching
-            // fileIndex. addFileToIndex no-ops on existing/filtered paths.
-            //
-            // That relativeness is load-bearing, not incidental: `ignore` throws a
-            // RangeError on an absolute path, so an out-of-project write would take
-            // the turn down here. write/edit keep a separate `display` string for the
-            // user- and model-facing text and never put it on `diff.path`.
-            // A bash command's changes qualify the same way, minus deletions and anything that
-            // reached outside cwd (`../` is exactly what `ignore` throws on).
-            const written = [
-              ...(msg.diff?.path ? [msg.diff.path] : []),
-              ...(msg.changes?.files ?? [])
-                .filter(f => f.kind !== 'deleted' && !f.path.startsWith('..'))
-                .map(f => f.path),
-            ];
-            if (written.length > 0) {
-              s.updateBundle(prev => {
-                const next = written.reduce(
-                  (idx, p) => addFileToIndex(idx, p, prev.ignore),
-                  prev.fileIndex,
-                );
-                return next === prev.fileIndex ? prev : { ...prev, fileIndex: next };
-              });
-            }
-          }
-          if (msg.role === 'user' && pendingNoticesRef.current.length > 0) {
-            const notices = pendingNoticesRef.current;
-            pendingNoticesRef.current = [];
-            controller.append(msg, ...notices);
-            return;
-          }
-          controller.append(msg);
-        },
-        onContentDelta: delta => {
-          lastLiveOutputAtRef.current = Date.now();
-          streamingRef.current += delta;
-          scheduleFlush();
-        },
-        onReasoningDelta: delta => {
-          lastLiveOutputAtRef.current = Date.now();
-          reasoningRef.current += delta;
-          scheduleReasoningFlush();
-        },
-        onToolProgress: (chunk, tool) => {
-          lastLiveOutputAtRef.current = Date.now();
-          toolRef.current += chunk;
-          toolNameRef.current = tool;
-          scheduleToolFlush();
-        },
-        onToolStart: name => {
-          // Stamped here, not in the loop: `onToolStart` fires immediately before `tool.run`, so
-          // this is the call's own start — the same instant the row it ages appears (#585).
-          pendingToolAtRef.current = Date.now();
-          pendingToolRef.current = name;
-          setPendingTool(name);
-          setPendingCall(n => n + 1);
-        },
-        onPhase: p => {
-          // Leaving the thinking phase ends the reasoning block — clear any spin hint.
-          if (p !== 'thinking') setReasoningSpin(false);
-          setPhase(p);
-        },
-        onSubagent: live => {
-          subagentLiveRef.current = live;
-          setSubagentLive(live);
-        },
-        onCompactionNote: live => {
-          noteLiveRef.current = live;
-          setNoteLive(live);
-        },
-        onTypecheck: onTypecheckChange,
-        onRecovering: setRecovering,
-        // Copy: the loop mutates its tracker array in place, so a same-reference set wouldn't
-        // re-render.
-        onPlanProgress: steps => setPlanSteps(steps.map(st => ({ ...st }))),
-        onReasoningStatus: setReasoningSpin,
-        onPromptProgress: onPromptProgressChange,
-        onReasoningReset: () => {
-          // Loop-break recovery: end the degenerate looped reasoning's live preview so the
-          // recovery notice is visible and the next round streams into a fresh Thinking block
-          // instead of appending onto the looped text (#55). Frozen into the scrollback where it
-          // stood rather than erased: erased, the frame dropped by the block's height under a
-          // one-line notice and the input jumped up. The tail is all that is kept, since a cut
-          // spiral can run to tens of thousands of chars and the block only ever drew its end.
-          const reasoning = reasoningRef.current.trim();
-          const content = streamingRef.current.trim();
-          if (reasoning || content) {
-            const frozen: Message = {
-              role: 'assistant',
-              content: content.slice(-FROZEN_STREAM_CHARS),
-              ...(reasoning ? { reasoning: reasoning.slice(-FROZEN_STREAM_CHARS) } : {}),
-              discarded: noteLiveRef.current ? 'note' : 'stream',
-              ...(subagentLiveRef.current ? { nested: true } : {}),
-            };
-            controller.append(frozen);
-          }
-          reasoningRef.current = '';
-          setStreamingReasoning('');
-          setReasoningSpin(false);
-          // The compaction report round (#280) streams its note as content and commits it as a
-          // system notice, which does not clear the content preview the way an assistant commit
-          // does — without this the round's real reply would stream onto the note's tail.
-          streamingRef.current = '';
-          setStreaming('');
-        },
-        onUsage: u => {
-          // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
-          if (!u.estimated) setLastUsage(u);
-          setUsage(({ total: t }) => ({
-            total: {
-              promptTokens: t.promptTokens + u.promptTokens,
-              completionTokens: t.completionTokens + u.completionTokens,
-              ...(u.cachedTokens != null
-                ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
-                : t.cachedTokens != null
-                  ? { cachedTokens: t.cachedTokens }
-                  : {}),
-              ...(u.estimated || t.estimated ? { estimated: true } : {}),
-            },
-          }));
-        },
-        onLiveUsage: live => {
-          // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
-          // touches the ref: onUsage drops `live` with the real count, or the next tick does.
-          const first = live && !liveUsageRef.current;
-          liveUsageRef.current = live;
-          if (first) setUsage(u => ({ total: u.total, live }));
-        },
-        onContextEstimate: t => setEstimatedContext(t),
-        onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
-          setShrink(counts);
-          // The last reported prompt size predates the shed/fold, and the gauge prefers it over
-          // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
-          setLastUsage(null);
-          // Stamp the turn the way the status line counts turns (assistant messages so far), so
-          // the saved event lines up with the `turn N` a reader sees in the header.
-          const turn = controller.messages.filter(m => m.role === 'assistant').length + 1;
-          shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
-        },
-        onDecodeRate: setDecodeRate,
+      onUsage: u => {
+        // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
+        if (!u.estimated) setLastUsage(u);
+        setUsage(({ total: t }) => ({
+          total: {
+            promptTokens: t.promptTokens + u.promptTokens,
+            completionTokens: t.completionTokens + u.completionTokens,
+            ...(u.cachedTokens != null
+              ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
+              : t.cachedTokens != null
+                ? { cachedTokens: t.cachedTokens }
+                : {}),
+            ...(u.estimated || t.estimated ? { estimated: true } : {}),
+          },
+        }));
       },
-    });
+      onLiveUsage: live => {
+        // A round's first report skips the tick so ↑ moves as the request goes out. A clear only
+        // touches the ref: onUsage drops `live` with the real count, or the next tick does.
+        const first = live && !liveUsageRef.current;
+        liveUsageRef.current = live;
+        if (first) setUsage(u => ({ total: u.total, live }));
+      },
+      onContextEstimate: t => setEstimatedContext(t),
+      onShrink: (event: ShrinkEvent, counts: ShrinkCounts) => {
+        setShrink(counts);
+        // The last reported prompt size predates the shed/fold, and the gauge prefers it over
+        // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
+        setLastUsage(null);
+        // Stamp the turn the way the status line counts turns (assistant messages so far), so
+        // the saved event lines up with the `turn N` a reader sees in the header.
+        const turn = controller.messages.filter(m => m.role === 'assistant').length + 1;
+        shrinkEventsRef.current = [...shrinkEventsRef.current, { turn, ...event }];
+      },
+      onDecodeRate: setDecodeRate,
+    },
   };
 
   // The status line's context gauge: raw window for the ratio, shed ceiling for the percent. Same
