@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createController } from './controller.js';
+import { createController, type CommandFrontEnd } from './controller.js';
 import {
   listSessions,
   loadSession,
@@ -16,6 +16,9 @@ import type { QueuedMessage } from './agent/busyqueue.js';
 import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
 import { setAtLaunch } from './config.js';
+import { helpText } from './agent/replycommands.js';
+import { TOGGLE_CANCEL, TOGGLE_OFF, TOGGLE_ON } from './ui/dialogspecs.js';
+import { rememberPaste } from './ui/pastes.js';
 import type { LastState } from './laststate.js';
 import ignore, { type Ignore } from 'ignore';
 import type { McpCallFn, McpCommand } from './mcp/tools.js';
@@ -109,7 +112,11 @@ function fakeSession(config: Policy) {
       turn = next;
     },
     submit: vi.fn((text: string, opts: SubmitOptions) => turn(text, opts)),
-    mcp: { call: vi.fn<McpCallFn>() },
+    mcp: {
+      call: vi.fn<McpCallFn>(),
+      commands: [] as McpCommand[],
+      list: vi.fn(() => 'MCP: 1 server'),
+    },
     updateBundle: vi.fn((update: (b: { cwd: string }) => { cwd: string }) => {
       session.bundle = update(session.bundle);
     }),
@@ -2068,5 +2075,317 @@ describe('controller.boot', () => {
     expect(controller.status).toBe('error');
     expect(controller.getSnapshot().error).toBe('bootstrap failed');
     expect(controller.messages).toEqual([]);
+  });
+});
+
+describe('controller.runCommand', () => {
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  // Every hook a vi.fn, the dialog left to the controller unless a test passes `ask`.
+  const commandFront = (overrides: Partial<CommandFrontEnd> = {}) => ({
+    turn: {},
+    pastes: [],
+    exit: vi.fn(),
+    pickModel: vi.fn(),
+    pickSession: vi.fn(),
+    onNewConversation: vi.fn(),
+    ...overrides,
+  });
+  const issueSkill: Skill = {
+    name: 'issue',
+    description: 'Work on an issue',
+    body: 'Run gh issue view.',
+    source: 'bundled',
+    path: '/repo/app/skills/issue.md',
+    triggers: [],
+  };
+
+  it('starts a new conversation seeded with the echo for /new and /clear', async () => {
+    for (const raw of ['/new', '/clear']) {
+      const { controller } = controllerIn('plan');
+      controller.append(user('old'));
+      const front = commandFront();
+      await controller.runCommand(raw, front);
+      expect(controller.messages[0]).toEqual(echo(raw));
+      expect(controller.messages[1]).toMatchObject({
+        content: expect.stringMatching(/^New session/),
+      });
+      expect(controller.mode).toBe('agent');
+      expect(front.onNewConversation).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('exits on /exit and /quit and prints nothing', async () => {
+    for (const raw of ['/exit', '/quit']) {
+      const { controller } = controllerIn('agent');
+      const front = commandFront();
+      await controller.runCommand(raw, front);
+      expect(front.exit).toHaveBeenCalledTimes(1);
+      expect(controller.messages).toEqual([]);
+    }
+  });
+
+  it('prints a reply command under its echo, before boot too', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/help', commandFront());
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+    await controller.runCommand('/cwd', commandFront());
+    expect(controller.messages.at(-1)).toEqual(note('/repo/app'));
+    await controller.runCommand('/mcp', commandFront());
+    expect(controller.messages.at(-1)).toEqual(note('MCP: 1 server'));
+
+    const unbooted = controllerIn('agent', null).controller;
+    await unbooted.runCommand('/cwd', commandFront());
+    expect(unbooted.messages).toEqual([echo('/cwd'), note('(unknown)')]);
+    await unbooted.runCommand('/skills', commandFront());
+    expect(unbooted.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^No skills loaded/),
+    });
+  });
+
+  it('switches mode with the echo and the banner, and refuses while busy', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/plan', commandFront());
+    expect(controller.mode).toBe('plan');
+    expect(controller.messages).toHaveLength(2);
+    expect(controller.messages[0]).toEqual(echo('/plan'));
+    expect(controller.messages[1]).toMatchObject({ role: 'system' });
+
+    const busy = controllerIn('agent').controller;
+    busy.setStatus('busy');
+    await busy.runCommand('/plan', commandFront());
+    expect(busy.mode).toBe('agent');
+    expect(busy.messages).toEqual([
+      echo('/plan'),
+      note('Cannot switch modes while busy. Wait or ctrl-c to abort.'),
+    ]);
+  });
+
+  it('runs /compact as a turn with its echo and line in front', async () => {
+    const { controller, session } = controllerIn('vibe');
+    await controller.runCommand('/compact', commandFront());
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('compact');
+    expect(opts).toMatchObject({ mode: 'agent', manualCompact: true, display: undefined });
+    expect(controller.messages.slice(0, 2)).toEqual([
+      echo('/compact'),
+      { role: 'system', content: 'Compacting context…', tone: 'info', emphasis: 'line' },
+    ]);
+    expect(controller.messages[2]).toEqual(user('compact'));
+  });
+
+  it('refuses a turn command with a line and runs no turn', async () => {
+    const { controller, session } = controllerIn('chat');
+    await controller.runCommand('/compact', commandFront());
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([
+      echo('/compact'),
+      note("/compact isn't available in chat mode."),
+    ]);
+  });
+
+  it("runs /implement from plan mode in the mode the front end's picker chose, with no echo", async () => {
+    const { controller, session } = controllerIn('plan');
+    await controller.runCommand('/implement', commandFront({ implementMode: 'grind' }));
+    expect(controller.mode).toBe('grind');
+    const [, opts] = session!.submit.mock.calls[0];
+    expect(opts).toMatchObject({ mode: 'grind', display: '/implement' });
+    expect(controller.messages).toEqual([
+      note('Grind mode — implementing the plan above.'),
+      user('/implement'),
+    ]);
+  });
+
+  it('answers /cd with no path and /save on an empty scrollback under the echo', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/cd', commandFront());
+    expect(controller.messages).toEqual([echo('/cd'), note('Usage: /cd <path>')]);
+
+    const empty = controllerIn('agent').controller;
+    await empty.runCommand('/save', commandFront());
+    expect(empty.messages).toEqual([echo('/save'), note('Nothing to save yet.')]);
+  });
+
+  describe('/resume', () => {
+    let root: string;
+    beforeEach(async () => {
+      root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-run-')));
+    });
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('prints why it cannot list under the echo', async () => {
+      const { controller } = controllerIn('agent', {}, 'default', root);
+      controller.setStatus('idle');
+      const front = commandFront();
+      await controller.runCommand('/resume everything', front);
+      expect(controller.messages[0]).toEqual(echo('/resume everything'));
+      expect(controller.messages[1]).toMatchObject({
+        content: expect.stringMatching(/^Usage: \/resume /),
+      });
+      expect(front.pickSession).not.toHaveBeenCalled();
+    });
+
+    it('hands the front end the list to pick from, after the echo alone', async () => {
+      const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'agent');
+      const turns = [user('fix the parser'), { role: 'assistant' as const, content: 'done' }];
+      await writeSession(path, { agent: turns, chat: [] }, metaFor(turns, '/repo/app', false));
+      const { controller } = controllerIn('agent', {}, 'default', root);
+      controller.setStatus('idle');
+      const pickSession = vi.fn<CommandFrontEnd['pickSession']>(() =>
+        expect(controller.messages).toEqual([echo('/resume')]),
+      );
+      await controller.runCommand('/resume', commandFront({ pickSession }));
+      expect(pickSession).toHaveBeenCalledTimes(1);
+      const [list] = pickSession.mock.calls[0];
+      expect(list.heading).toBe('this project');
+      expect(list.entries.map(e => e.path)).toEqual([path]);
+      expect(controller.messages).toEqual([echo('/resume')]);
+    });
+  });
+
+  it('flips a toggle typed with its state, and replies when the env forces it', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/approvals on', commandFront());
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo('/approvals on'), note('Session auto-approve: on')]);
+
+    const forced = controllerIn('agent', { autoApprove: 'bypass', autoApproveExplicit: true });
+    await forced.controller.runCommand('/approvals off', commandFront());
+    expect(forced.controller.messages[0]).toEqual(echo('/approvals off'));
+    expect(forced.controller.messages[1]).toMatchObject({
+      content: expect.stringContaining("forced to 'bypass'"),
+    });
+  });
+
+  it("asks a bare toggle through the front end's dialog, cursor on the current state", async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    const ask = vi.fn(async () => TOGGLE_ON);
+    await controller.runCommand('/approvals', commandFront({ ask }));
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Approvals', options: ['on', 'off', 'Cancel'] }),
+      TOGGLE_OFF,
+    );
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo('/approvals'), note('Session auto-approve: on')]);
+
+    const on = controllerIn('agent', { autoApprove: 'safe' }).controller;
+    const askOn = vi.fn(async () => TOGGLE_ON);
+    await on.runCommand('/approvals', commandFront({ ask: askOn }));
+    expect(askOn).toHaveBeenCalledWith(expect.anything(), TOGGLE_ON);
+  });
+
+  it('leaves the echo alone and the state unchanged when the toggle dialog is cancelled', async () => {
+    for (const answer of [TOGGLE_CANCEL, 'abort' as const]) {
+      const { controller } = controllerIn('agent');
+      await controller.runCommand('/unattended', commandFront({ ask: async () => answer }));
+      expect(controller.messages).toEqual([echo('/unattended')]);
+      expect(controller.getSnapshot().sessionUnattended).toBeNull();
+    }
+  });
+
+  it("asks through the controller's own confirm when the front end brings no dialog", async () => {
+    const { controller } = controllerIn('agent');
+    const running = controller.runCommand('/approvals', commandFront());
+    expect(controller.confirm).toMatchObject({ title: 'Approvals' });
+    controller.answerConfirm(TOGGLE_ON);
+    await running;
+    expect(controller.confirm).toBeNull();
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+  });
+
+  it('switches to a named model, and hands the front end the picker for a bare /model', async () => {
+    const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+    const { controller, session } = controllerIn('agent', { profiles });
+    await controller.runCommand('/model kimi', commandFront());
+    expect(session!.setProfile).toHaveBeenCalledWith('kimi');
+    expect(controller.messages.slice(0, 2)).toEqual([
+      echo('/model kimi'),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+
+    const bare = controllerIn('agent', { profiles });
+    const front = commandFront({
+      pickModel: vi.fn(() => expect(bare.controller.messages).toEqual([echo('/model')])),
+    });
+    await bare.controller.runCommand('/model', front);
+    expect(front.pickModel).toHaveBeenCalledWith(bare.controller.modelTargets());
+    expect(bare.controller.messages).toEqual([echo('/model')]);
+  });
+
+  it('says the config is not loaded for /model before boot', async () => {
+    const { controller } = controllerIn('agent', null);
+    const front = commandFront();
+    await controller.runCommand('/model kimi', front);
+    expect(controller.messages).toEqual([echo('/model kimi'), note('config not loaded')]);
+    expect(front.pickModel).not.toHaveBeenCalled();
+  });
+
+  it("runs an MCP command through the session's server", async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.mcp.commands = [
+      {
+        name: 'files:read_file',
+        server: 'files',
+        tool: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    ];
+    session!.mcp.call.mockResolvedValue({ content: [{ type: 'text', text: 'hello' }] });
+    const raw = '/files:read_file {"path":"a.ts"}';
+    await controller.runCommand(raw, commandFront());
+    expect(session!.mcp.call).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'a.ts' },
+      expect.anything(),
+    );
+    expect(controller.messages).toEqual([expect.objectContaining({ role: 'shell', command: raw })]);
+  });
+
+  it('runs a skill as a turn with no echo, stamped with the skill and shown as typed', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [issueSkill];
+    await controller.runCommand('/issue 14', commandFront());
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('Run gh issue view.\n\n14');
+    expect(opts).toMatchObject({ skill: 'issue', display: '/issue 14' });
+    expect(controller.messages[0]).toEqual(user('/issue 14'));
+    expect(controller.messages[1]).toMatchObject({
+      content: expect.stringMatching(/^Skill \/issue applied/),
+    });
+    expect(controller.messages).toHaveLength(2);
+  });
+
+  it('expands a pasted text the skill arguments point into', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [issueSkill];
+    const { pastes, marker } = rememberPaste([], 'the pasted log');
+    await controller.runCommand(`/issue ${marker}`, commandFront({ pastes }));
+    expect(session!.submit.mock.calls[0][0]).toContain('the pasted log');
+  });
+
+  it('names an unknown command under its echo', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/nope', commandFront());
+    expect(controller.messages).toEqual([
+      echo('/nope'),
+      note('Unknown command: /nope. Try /help.'),
+    ]);
+  });
+
+  it('lets a built-in shadow a skill of the same name', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [
+      { ...issueSkill, name: 'help' },
+      { ...issueSkill, name: 'model' },
+    ];
+    await controller.runCommand('/help', commandFront());
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+    const front = commandFront();
+    await controller.runCommand('/model', front);
+    expect(front.pickModel).toHaveBeenCalledTimes(1);
+    expect(session!.submit).not.toHaveBeenCalled();
   });
 });
