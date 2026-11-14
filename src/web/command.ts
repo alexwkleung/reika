@@ -19,7 +19,8 @@ export const WEB_USAGE = `usage: reika web [--port <n>]   serve the agent to a b
   --port <n>    listen on this port (default: a free one)
   -h, --help    show this
 
-Prints a URL carrying a token made for this run; open it in a browser. ctrl-c stops the server.`;
+Prints a link that works once and for ten minutes; open it in a browser. Press Enter for a new
+link (a second tab, or after it expires). ctrl-c stops the server.`;
 
 // Null unless the first word is `web`, so every other command line falls through to the TUI and
 // headless parsers. Throws on what it does not know, as parseHeadlessArgs does.
@@ -62,6 +63,8 @@ export type WebIo = {
 export type WebHandle = {
   url: string;
   port: number;
+  // A fresh single-use link; the one before it stops working.
+  newLink(): string;
   // Idempotent; the first call's code is the one `done` resolves with.
   shutdown(code?: number): Promise<void>;
   done: Promise<number>;
@@ -148,11 +151,18 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
       '',
       `  ${server.url}`,
       '',
-      'Serves only this machine (127.0.0.1). The token in the URL is the key: do not share it.',
-      'ctrl-c to stop.',
+      'Only this machine can connect, and the link signs in one browser tab: it works once, within',
+      'ten minutes. Press Enter for a new link. ctrl-c to stop.',
       '',
     ].join('\n'),
   );
 
-  return { url: server.url, port: server.port, shutdown, done };
+  const listening = server;
+  return {
+    url: server.url,
+    port: server.port,
+    newLink: () => listening.newLink(),
+    shutdown,
+    done,
+  };
 }

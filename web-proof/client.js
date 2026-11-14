@@ -6,18 +6,34 @@
 const PROTOCOL_VERSION = 1;
 const $ = id => document.getElementById(id);
 
-// The token rides the URL once; it is kept for this tab and taken off the address bar.
-const params = new URLSearchParams(location.search);
-let token = params.get('token');
-if (token) {
-  sessionStorage.setItem('reika-token', token);
+// A link carries a single-use code in its fragment. It is traded for the token once, taken off the
+// address bar, and the token is kept for this tab.
+const NEW_LINK_HINT = 'Press Enter in the terminal running `reika web` for a new link.';
+let token = sessionStorage.getItem('reika-token');
+
+async function tradeLinkCode() {
+  const code = new URLSearchParams(location.hash.slice(1)).get('code');
+  if (!code) return;
   history.replaceState(null, '', location.pathname);
-} else {
-  token = sessionStorage.getItem('reika-token');
+  try {
+    const res = await fetch('/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) {
+      if (!token) banner('This link was already used or has expired. ' + NEW_LINK_HINT);
+      return;
+    }
+    token = (await res.json()).token;
+    sessionStorage.setItem('reika-token', token);
+  } catch (e) {
+    banner(String(e));
+  }
 }
 
 let lastSeq = null;
-let source = null;
+let streamAbort = null;
 let state = null;
 let live = null;
 const dialogs = new Map();
@@ -363,26 +379,63 @@ function onEvent(ev) {
   }
 }
 
-// EventSource resends the last `id:` itself on its own retries. A stream it gave up on (a 401, a
-// 503) is reopened by hand from the last seq seen, which the server reads as `after`.
-function openStream() {
+// Read with fetch, not EventSource, so the token goes in a header and never in a URL. A dropped
+// stream is reopened from the last seq seen.
+async function openStream() {
   if (!token) {
-    banner('No token: open the URL `reika web` printed.');
+    if ($('banner').hidden) banner('Not signed in. ' + NEW_LINK_HINT);
     $('status').textContent = 'not connected';
     return;
   }
-  const after = lastSeq === null ? '' : '&after=' + lastSeq;
-  source = new EventSource('/events?token=' + encodeURIComponent(token) + after);
-  source.onmessage = e => onEvent(JSON.parse(e.data));
-  source.onopen = () => banner('');
-  source.onerror = () => {
-    if (source.readyState === EventSource.CLOSED) {
-      banner('Stream closed (server stopped, or the token is wrong). Retrying in 3s…');
-      setTimeout(openStream, 3000);
-    } else {
-      banner('Stream dropped; reconnecting…');
+  streamAbort = new AbortController();
+  const headers = { Authorization: 'Bearer ' + token };
+  if (lastSeq !== null) headers['Last-Event-ID'] = String(lastSeq);
+  let res;
+  try {
+    res = await fetch('/events', { headers, signal: streamAbort.signal });
+  } catch {
+    banner('Cannot reach the server. Retrying in 3s…');
+    setTimeout(openStream, 3000);
+    return;
+  }
+  if (res.status === 401) {
+    sessionStorage.removeItem('reika-token');
+    token = null;
+    banner('The server no longer accepts this tab (it was restarted). ' + NEW_LINK_HINT);
+    $('status').textContent = 'not connected';
+    return;
+  }
+  if (!res.ok) {
+    banner('Stream refused (' + res.status + '). Retrying in 3s…');
+    setTimeout(openStream, 3000);
+    return;
+  }
+  banner('');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const data = frame
+          .split('\n')
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart())
+          .join('\n');
+        if (data) onEvent(JSON.parse(data));
+      }
     }
-  };
+  } catch {
+    // Falls through to the reconnect below.
+  }
+  banner('Stream dropped; reconnecting…');
+  setTimeout(openStream, 1000);
 }
 
 // Resolves to an error string, or '' on success.
@@ -437,4 +490,4 @@ document.addEventListener('drop', e => {
   refuseImages(e, e.dataTransfer?.items);
 });
 
-openStream();
+void tradeLinkCode().then(openStream);
