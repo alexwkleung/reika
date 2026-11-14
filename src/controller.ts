@@ -1,9 +1,13 @@
 import { canDrain, queueReceipt, takeNext, type QueuedMessage } from './agent/busyqueue.js';
 import { modeSide } from './agent/modes.js';
+import { autoApproves, effectiveAutoApprove } from './approval.js';
 import type { ConfirmSpec } from './ui/dialogspecs.js';
+import type { Approvals } from './ui/summary.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
+  AutoApproveMode,
+  Config,
   Message,
   Mode,
   QuestionAnswer,
@@ -12,7 +16,8 @@ import type {
 
 // The conversation a front end shows, held outside any UI framework (#584): the scrollback of the
 // side on screen, the other side's scrollback while it is off screen, the mode, whether a turn is
-// running, the prompts waiting for it to end, and whatever is waiting on the user. A front end
+// running, the prompts waiting for it to end, whatever is waiting on the user, and whether a tool
+// has to ask at all. A front end
 // renders from `getSnapshot`/`subscribe` and changes them only through these methods, as it does
 // with the session — a copy kept in UI state goes stale between a change and the next render.
 //
@@ -37,6 +42,12 @@ export type ControllerSnapshot = {
   approval: ApprovalRequest | null;
   question: QuestionRequest | null;
   confirm: ConfirmSpec | null;
+  // How many tool actions ran and how many were refused, asked about or not.
+  approvals: Approvals;
+  // The session's own answer to "auto-approve ordinary actions?" and to "is anyone here?". Null
+  // until the user sets one, which leaves the config's value in force.
+  sessionAutoApprove: boolean | null;
+  sessionUnattended: boolean | null;
 };
 
 export type Controller = {
@@ -56,10 +67,22 @@ export type Controller = {
   readonly approval: ApprovalRequest | null;
   readonly question: QuestionRequest | null;
   readonly confirm: ConfirmSpec | null;
-  // Each `open` puts the request on screen and resolves when its `answer` is called. An answer
-  // with nothing open is ignored.
-  openApproval(request: ApprovalRequest): Promise<ApprovalAnswer>;
-  answerApproval(answer: ApprovalAnswer): void;
+  // The approval gate a turn is run with (#526, approval.ts): an ordinary action runs unasked
+  // under `safe`, an unattended session declines what would have asked, and anything else goes on
+  // screen and resolves when `answerApproval` is called. Every outcome is counted.
+  requestApproval(request: ApprovalRequest): Promise<ApprovalAnswer>;
+  // `always` is the "Always (this session)" answer: it also turns the session's auto-approve on.
+  // An answer with nothing open is ignored, here and below.
+  answerApproval(answer: ApprovalAnswer, opts?: { always?: boolean }): void;
+  // The mode the gate is running under: the env's when it forces one, else the session's toggle,
+  // else the config's default.
+  readonly autoApprove: AutoApproveMode;
+  readonly unattended: boolean;
+  setSessionAutoApprove(on: boolean | null): void;
+  setSessionUnattended(on: boolean | null): void;
+  // What an unattended session declined since this was last called.
+  takeUnattendedDeclines(): ApprovalRequest[];
+  resetApprovals(): void;
   // Null is the question dropped unanswered.
   openQuestion(request: QuestionRequest): Promise<QuestionAnswer | null>;
   answerQuestion(answer: QuestionAnswer | null): void;
@@ -85,6 +108,8 @@ export function createController(opts: {
   mode: Mode;
   // Moves the session's model history to the other side when a transition crosses the boundary.
   switchSide: (side: Side) => void;
+  // The session's config, or null before it has booted. Read at each use, never kept.
+  config: () => Pick<Config, 'autoApprove' | 'autoApproveExplicit' | 'unattended'> | null;
 }): Controller {
   let snapshot: ControllerSnapshot = {
     messages: [],
@@ -95,7 +120,11 @@ export function createController(opts: {
     approval: null,
     question: null,
     confirm: null,
+    approvals: { approved: 0, declined: 0 },
+    sessionAutoApprove: null,
+    sessionUnattended: null,
   };
+  let unattendedDeclines: ApprovalRequest[] = [];
   let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
   let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
   let resolveConfirm: ((choice: number | 'abort') => void) | null = null;
@@ -106,6 +135,14 @@ export function createController(opts: {
     snapshot = { ...snapshot, ...next };
     for (const listener of listeners) listener();
   };
+  const counted = (approved: boolean): Approvals => ({
+    approved: snapshot.approvals.approved + (approved ? 1 : 0),
+    declined: snapshot.approvals.declined + (approved ? 0 : 1),
+  });
+  const autoApprove = (): AutoApproveMode =>
+    effectiveAutoApprove(opts.config(), snapshot.sessionAutoApprove);
+  const unattended = (): boolean =>
+    snapshot.sessionUnattended ?? opts.config()?.unattended === true;
 
   return {
     getSnapshot: () => snapshot,
@@ -159,18 +196,53 @@ export function createController(opts: {
     get confirm() {
       return snapshot.confirm;
     },
-    openApproval: request =>
-      new Promise(resolve => {
+    requestApproval: request => {
+      // `bypass` never reaches here: a front end in that mode runs a turn with no gate at all.
+      if (autoApproves(autoApprove(), request)) {
+        set({ approvals: counted(true) });
+        return Promise.resolve(true);
+      }
+      // A dialog nobody answers stalls the turn until morning, so it is declined the way headless
+      // declines; the tool's own summary says why.
+      if (unattended()) {
+        unattendedDeclines.push(request);
+        set({ approvals: counted(false) });
+        return Promise.resolve(false);
+      }
+      return new Promise(resolve => {
         resolveApproval = resolve;
         set({ approval: request });
-      }),
-    answerApproval: answer => {
+      });
+    },
+    answerApproval: (answer, { always = false } = {}) => {
       const resolve = resolveApproval;
       if (!resolve) return;
       resolveApproval = null;
-      set({ approval: null });
+      set({
+        approval: null,
+        approvals: counted(answer === true),
+        ...(always ? { sessionAutoApprove: true } : {}),
+      });
       resolve(answer);
     },
+    get autoApprove() {
+      return autoApprove();
+    },
+    get unattended() {
+      return unattended();
+    },
+    setSessionAutoApprove: on => {
+      if (on !== snapshot.sessionAutoApprove) set({ sessionAutoApprove: on });
+    },
+    setSessionUnattended: on => {
+      if (on !== snapshot.sessionUnattended) set({ sessionUnattended: on });
+    },
+    takeUnattendedDeclines: () => {
+      const taken = unattendedDeclines;
+      unattendedDeclines = [];
+      return taken;
+    },
+    resetApprovals: () => set({ approvals: { approved: 0, declined: 0 } }),
     openQuestion: request =>
       new Promise(resolve => {
         resolveQuestion = resolve;
