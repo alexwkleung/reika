@@ -17,8 +17,6 @@ import {
   type DOMElement,
 } from 'ink';
 import { inputFloorEnabled, installBottomFloor } from './bottomfloor.js';
-import { isAbsolute, resolve } from 'node:path';
-import { homedir } from 'node:os';
 import { Splash } from './Splash.js';
 import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
@@ -30,7 +28,6 @@ import type { PlanStep } from '../agent/plantrack.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
 import { createSession, type Session } from '../session.js';
 import { resolvePr, type PrRef } from './pr.js';
-import { clearIdentity, enableAnon, isAnon } from './identity.js';
 import { theme } from './theme.js';
 import { Approval } from './Approval.js';
 import {
@@ -53,14 +50,12 @@ import {
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { loadLastState, saveLastState, startMode, startProfiles } from '../laststate.js';
-import { autoApproveForced, effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
-import { bootstrap } from '../context/bootstrap.js';
+import { effectiveAutoApprove, formatUnattendedDeclines } from '../approval.js';
 import { budgetWarning, formatBudget } from '../context/bundlesize.js';
 import { debugEnabled, debugLog } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { addFileToIndex } from '../context/files.js';
 import {
-  saveTranscript,
   buildTranscriptMeta,
   type TranscriptShrinkEvent,
   type TranscriptMeta,
@@ -93,15 +88,7 @@ import { ModelSelect } from './ModelSelect.js';
 import { mcpStartupLine, prefillLabel } from './format.js';
 import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
-import {
-  listSessions,
-  loadSession,
-  projectHistoryDir,
-  ROOT_HISTORY_DIR,
-  saveHeader,
-  type SessionEntry,
-  type SessionSides,
-} from '../store/sessions.js';
+import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
 import { type ModelTarget } from './models.js';
 import { isSaveCommand } from './commands.js';
 import {
@@ -165,12 +152,6 @@ type HeaderItem = {
   version: string;
   subagent?: string;
 };
-
-function expandHome(p: string): string {
-  if (p === '~') return homedir();
-  if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
-  return p;
-}
 
 // The ctrl-v hint earns its place here rather than only on the splash: this is the one surface
 // visible at the moment you actually have a screenshot on the clipboard, and it comes back every
@@ -1301,117 +1282,48 @@ export function App() {
       return;
     }
     if (name === 'cd') {
-      const target = args.trim();
-      if (!target) {
-        controller.append(echo, { role: 'system', content: 'Usage: /cd <path>' });
-        return;
-      }
-      if (!bundle || !config) return;
-      const expanded = expandHome(target);
-      const newCwd = isAbsolute(expanded) ? expanded : resolve(bundle.cwd, expanded);
-      controller.setStatus('busy');
-      controller.append(echo, { role: 'system', content: `Re-indexing ${newCwd}…` });
-      try {
-        const newBundle = await bootstrap(newCwd, sessionRef.current?.bundle.repoMapBudget);
-        sessionRef.current?.updateBundle(() => newBundle);
-        controller.append({ role: 'system', content: `cwd is now ${newCwd}` });
-      } catch (e) {
-        controller.append({ role: 'system', content: `cd failed: ${(e as Error).message}` });
-      } finally {
-        controller.setStatus('idle');
-      }
+      await controller.changeDirectory(args, echo);
       return;
     }
-
     if (name === 'resume') {
-      if (!config || !bundle) return;
-      const say = (content: string): void => controller.append(echo, { role: 'system', content });
-      if (controller.status === 'busy') {
-        say('Cannot resume while busy. Wait or ctrl-c to abort.');
-        return;
-      }
-      const target = args.trim().toLowerCase();
-      if (target !== '' && target !== 'all' && target !== 'root') {
-        say(
-          'Usage: /resume (this project; chats only in chat mode), /resume all, or /resume root (manual /save files).',
-        );
-        return;
-      }
-      const projectDir = projectHistoryDir(bundle.cwd);
-      // The session in progress is not something to resume into.
-      const notCurrent = (e: SessionEntry): boolean => e.path !== controller.sessionPath;
-      // Chat history is kept apart from every other mode's, so chat mode lists chats (#875). A
-      // project file saved before the header counted chat turns is not listed here; /resume all
-      // still has it.
-      const chatsOnly = target === '' && controller.mode === 'chat';
-      let entries: SessionEntry[] = [];
-      let heading = 'saved with /save';
-      if (target !== 'root') {
-        entries = (await listSessions(projectDir)).filter(notCurrent);
-        if (chatsOnly) entries = entries.filter(e => e.chat);
-        heading = chatsOnly ? 'chats in this project' : 'this project';
-      }
-      // A project with nothing to list falls back to the manual saves — in chat mode, the ones that
-      // hold a chat (#882).
-      if (entries.length === 0) {
-        entries = await listSessions(ROOT_HISTORY_DIR, true);
-        if (chatsOnly) entries = entries.filter(e => e.chat);
-        if (target === '' && entries.length > 0)
-          heading = chatsOnly
-            ? 'no chats for this project — saved with /save'
-            : 'none for this project — saved with /save';
-      }
-      if (entries.length === 0 && chatsOnly) {
-        say('No saved chats for this project. /resume all lists every session.');
-        return;
-      }
-      if (entries.length === 0) {
-        say(
-          target === 'root'
-            ? `No saved sessions in ${ROOT_HISTORY_DIR}.`
-            : config.autosave
-              ? 'No saved sessions for this project yet.'
-              : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
-        );
+      const list = await controller.resumeList(args);
+      if ('reply' in list) {
+        controller.append(echo, { role: 'system', content: list.reply });
         return;
       }
       controller.append(echo);
       // Deferred past this keypress for the reason /model's picker is: Ink hands the same Enter to
       // every useInput handler, and an open picker would take it as a selection.
       queueMicrotask(() => {
-        setResumeSelect({ entries, heading });
+        setResumeSelect(list);
         setResumeSelected(0);
       });
       return;
     }
-
     if (name === 'save') {
-      if (!config || !bundle) return;
-      const raw = args.trim().toLowerCase() === '--raw';
-      // Mid-turn (#226): the loop hands each finished round to the scrollback as it lands, so a
-      // save now holds everything up to the last completed round. The round still streaming is
-      // not a message yet and is not in it — the receipt says so, so a reader of the transcript
-      // isn't left wondering why it ends without a reply.
-      const midTurn = controller.status === 'busy';
-      const msgs = controller.messages;
-      if (msgs.length === 0) {
-        controller.append(echo, { role: 'system', content: 'Nothing to save yet.' });
+      await controller.saveTranscript(args.trim().toLowerCase() === '--raw', echo);
+      return;
+    }
+    // /approvals, /unattended and /anon (agent/togglecommands.ts). The bare command asks (#625);
+    // cancelling changes nothing and leaves the echo as the only record, like a dismissed picker.
+    const toggle = controller.toggleCommand(name, args);
+    if (toggle) {
+      if (toggle.kind === 'reply') {
+        controller.append(echo, { role: 'system', content: toggle.content });
         return;
       }
-      try {
-        const { jsonlPath, txtPath } = await saveTranscript(
-          ROOT_HISTORY_DIR,
-          msgs,
-          saveHeader(transcriptMeta(msgs, bundle.cwd, midTurn), msgs),
-          { redact: !raw },
-        );
-        controller.append(echo, {
-          role: 'system',
-          content: `saved ${msgs.length} messages${raw ? ' (raw, unredacted)' : ''}${midTurn ? ' — mid-turn, up to the last completed round; the turn continues' : ''} → ${jsonlPath}\n(+ ${txtPath})`,
-        });
-      } catch (e) {
-        controller.append(echo, { role: 'error', content: `save failed: ${(e as Error).message}` });
+      let on: boolean;
+      if (toggle.kind === 'ask') {
+        const choice = await askToggle(toggle.title, toggle.subtitle, toggle.currentlyOn);
+        if (choice === 'abort' || choice === TOGGLE_CANCEL) {
+          controller.append(echo);
+          return;
+        }
+        on = choice === TOGGLE_ON;
+      } else {
+        on = toggle.on;
       }
+      await controller.setToggle(toggle.toggle, on, echo);
       return;
     }
 
@@ -1446,147 +1358,6 @@ export function App() {
           );
         });
         return;
-      }
-      case 'approvals': {
-        const envOn = config ? autoApproveForced(config) : false;
-        const target = args.trim().toLowerCase();
-        if (target === 'on' || target === 'off') {
-          if (envOn) {
-            response = `auto-approve is forced to '${config?.autoApprove}' by REIKA_AUTO_APPROVE; session toggle has no effect.`;
-            break;
-          }
-          controller.setSessionAutoApprove(target === 'on');
-          response = `Session auto-approve: ${target}`;
-          break;
-        }
-        if (target) {
-          response = `Unknown argument: ${target}. Use /approvals on or /approvals off.`;
-          break;
-        }
-        if (!envOn) {
-          // Bare /approvals (#625): the dialog replaces the status line below — a user typing the
-          // command without on/off is reaching for the toggle, not for a status page. On/off apply
-          // like the explicit forms; cancel closes and changes nothing (the command echo above is
-          // the only record, like a dismissed /model picker).
-          const effectiveMode = effectiveAutoApprove(config, sessionAutoApprove);
-          const choice = await askToggle(
-            'Approvals',
-            `session auto-approve: ${effectiveMode} — toggle on or off?`,
-            effectiveMode === 'safe',
-          );
-          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            controller.append(echo);
-            return;
-          }
-          const wantOn = choice === TOGGLE_ON;
-          controller.setSessionAutoApprove(wantOn);
-          response = `Session auto-approve: ${wantOn ? 'on' : 'off'}`;
-          break;
-        }
-        // Env-forced sessions keep the status line: the toggle is shadowed there, so there is
-        // nothing for a dialog to pick.
-        const effectiveMode = config?.autoApprove ?? 'safe';
-        const desc =
-          effectiveMode === 'bypass'
-            ? 'bypass — everything runs without confirmation, including dangerous commands'
-            : 'safe — ordinary actions auto-run; dangerous commands still prompt';
-        response = [
-          `auto-approve: ${effectiveMode}`,
-          `  ${desc}`,
-          `  source: REIKA_AUTO_APPROVE=${config?.autoApprove} (env)`,
-          ...(unattended
-            ? [
-                '  unattended: on — anything that would prompt is declined instead (/unattended off)',
-              ]
-            : []),
-          '',
-          'env REIKA_AUTO_APPROVE forces this; session toggle is shadowed',
-        ].join('\n');
-        break;
-      }
-      case 'unattended': {
-        const arg = args.trim().toLowerCase();
-        if (arg !== '' && arg !== 'on' && arg !== 'off') {
-          response = `Unknown argument: ${arg}. Use /unattended on or /unattended off.`;
-          break;
-        }
-        let next: boolean;
-        if (arg === '') {
-          // Bare /unattended (#625): ask instead of the arg-less toggle it used to be — "turn it
-          // off" is a real action, and the blind flip surprised the user who typed the bare
-          // command to check. Cancel closes and changes nothing.
-          const current = unattended;
-          const choice = await askToggle(
-            'Unattended',
-            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
-            current,
-          );
-          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            controller.append(echo);
-            return;
-          }
-          next = choice === TOGGLE_ON;
-        } else {
-          next = arg === 'on';
-        }
-        controller.setSessionUnattended(next);
-        // ask_user is fixed at launch (the tool list is the cached prefix), so an attended-start
-        // session keeps it; while unattended, its questions resolve as "no user available".
-        response = next
-          ? 'unattended: on — anything that would prompt is declined and listed at turn end; questions go unanswered. /unattended off to approve again.'
-          : 'unattended: off — approvals and questions prompt again.';
-        break;
-      }
-      // Always available, NOT gated on REIKA_ANON — gating it there would make the toggle useless
-      // for the case it exists for ("I'm about to record and didn't set the env var"): you'd need
-      // anonymization already on to reach the command that turns it on. The env var sets the
-      // STARTING state; this switches it at any point. Detection is lazy, so leaving it alone
-      // costs nothing.
-      case 'anon': {
-        const arg = args.trim().toLowerCase();
-        let want: boolean;
-        if (arg === 'on') {
-          want = true;
-        } else if (arg === 'off') {
-          want = false;
-        } else if (arg) {
-          // A stray argument used to fall through to the arg-less toggle; with the dialog (#625)
-          // owning the bare form, a typo should say so like the sibling commands do.
-          response = `Unknown argument: ${arg}. Use /anon on or /anon off.`;
-          break;
-        } else {
-          // Bare /anon (#625): ask instead of the arg-less toggle. Same shape as the two toggle
-          // commands above: current state preselected, cancel closes and changes nothing.
-          const current = isAnon();
-          const choice = await askToggle(
-            'Anonymize',
-            `currently ${current ? 'on' : 'off'} — toggle on or off?`,
-            current,
-          );
-          if (choice === 'abort' || choice === TOGGLE_CANCEL) {
-            controller.append(echo);
-            return;
-          }
-          want = choice === TOGGLE_ON;
-        }
-        if (!want) {
-          clearIdentity();
-          response = 'anonymize: off — names, emails and account slugs render verbatim again';
-          break;
-        }
-        const id = await enableAnon(bundle?.cwd ?? process.cwd());
-        const found = id.names.length + id.emails.length;
-        response = [
-          'anonymize: on',
-          found === 0
-            ? '  no identity found (no git config, no remote) — nothing to substitute'
-            : `  substituting ${id.names.length} name(s) → <user>, ${id.emails.length} email(s) → <email>`,
-          // The honest limitation: scrollback is <Static>, so committed messages never re-render.
-          // /save re-serializes from `messages`, so it IS retroactive. Saying so here beats
-          // burying it in docs and letting the untouched lines above read as a bug.
-          '  applies to new output and to /save; run /clear to scrub what is above',
-        ].join('\n');
-        break;
       }
       default: {
         // An MCP tool (#265) before a skill: the two share one dispatch point, and a command name
