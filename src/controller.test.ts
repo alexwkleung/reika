@@ -1810,7 +1810,7 @@ describe('controller live turn state', () => {
     expect(controller.live.looping).toBe(false);
   });
 
-  it('freezes what had streamed into the scrollback once, then clears the stream', async () => {
+  it('clears the stream, then freezes what had streamed into the scrollback once', async () => {
     const { controller, changes, turn } = live();
     const order: string[] = [];
     controller.subscribe(() => order.push(`messages:${controller.messages.length}`));
@@ -1836,7 +1836,8 @@ describe('controller live turn state', () => {
       },
     ]);
     expect(after).toMatchObject({ content: '', reasoning: '', subagent: true });
-    expect(order.slice(0, 2)).toEqual(['messages:1', 'live']);
+    // The clear first: a front end drawing both would show the text twice (#985).
+    expect(order.slice(0, 2)).toEqual(['live', 'messages:1']);
   });
 
   it('marks a frozen compaction note as one, and freezes nothing when nothing streamed', async () => {

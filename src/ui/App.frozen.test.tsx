@@ -68,6 +68,8 @@ let release: () => void = () => {};
 const runTurn = vi.fn(async (opts: TurnOpts) => {
   opts.onMessage({ role: 'user', content: opts.userInput });
   opts.onReasoningDelta?.('circling the same FROZENMARK idea');
+  // Long enough for the stream flush, so the looped text is on screen when the reset lands.
+  await new Promise(r => setTimeout(r, 150));
   opts.onReasoningReset?.();
   opts.onReasoningDelta?.('a fresh LIVEMARK thought');
   await new Promise<void>(r => (release = r));
@@ -96,6 +98,8 @@ describe('a reasoning reset through the real App', () => {
     expect(count(frame, 'FROZENMARK')).toBe(1);
     expect(count(frame, 'LIVEMARK')).toBe(1);
     expect(frame.indexOf('FROZENMARK')).toBeLessThan(frame.indexOf('LIVEMARK'));
+    // No frame on the way showed the looped text both frozen and still streaming.
+    expect(Math.max(...app.frames.map(f => count(plain(f), 'FROZENMARK')))).toBe(1);
     release();
     app.unmount();
   });

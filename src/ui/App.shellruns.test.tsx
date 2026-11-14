@@ -137,6 +137,21 @@ describe('shell-mode runs reach the model', () => {
     expect(turnInput(1)).toBe('and now');
   });
 
+  // #985: the streamed block is cleared before the committed `shell` message lands.
+  it('never draws a run’s output both streaming and committed', async () => {
+    const app = await mountApp();
+    await submit(app, '/shell');
+    await waitFor(app, 'Shell mode');
+    // Built by printf, so the command's own echo does not hold the marker; the sleep lets the
+    // streamed block reach the screen before the run ends.
+    await submit(app, "printf 'DOUBLE%s\\n' MARK; sleep 0.4");
+    await waitFor(app, 'DOUBLEMARK');
+    await tick(600);
+    const shown = app.frames.map(f => plain(f).split('DOUBLEMARK').length - 1);
+    expect(Math.max(...shown)).toBe(1);
+    app.unmount();
+  });
+
   it('holds runs across a chat detour and drops them on /new', { timeout: 15_000 }, async () => {
     const app = await mountApp();
     await submit(app, '/shell');
