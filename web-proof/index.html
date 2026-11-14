@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>reika web (proof)</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <!-- Throwaway proof client for #584 on the `web` branch; never merged to main. -->
+    <div id="banner" hidden></div>
+    <div id="rows"></div>
+    <div id="live"></div>
+    <div id="dialogs"></div>
+    <div id="status">connecting…</div>
+    <form id="input">
+      <textarea id="text" rows="3" placeholder="Enter sends, Shift+Enter is a newline"></textarea>
+      <button type="button" id="stop" hidden>Stop</button>
+    </form>
+    <script src="/client.js"></script>
+  </body>
+</html>

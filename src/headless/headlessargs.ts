@@ -26,6 +26,8 @@ export type HeadlessArgs = {
 
 export const USAGE = `usage: reika                  start the interactive TUI in the current directory
        reika -p [prompt] ...   run one turn without the TUI and print the reply
+       reika web [--port <n>]  serve the agent to a browser tab on this machine (experimental;
+                               reika web -h for more)
 
   -p, --prompt [text]   run one turn headless; reads stdin when no text is given
   --profile <name>      with -p: use this profile (outranks REIKA_MODEL and REIKA_MODE_MODELS)
