@@ -7,6 +7,7 @@ import {
   type SubmitAnswers,
 } from './agent/busyqueue.js';
 import { buildLaunchNotices } from './agent/launchnotices.js';
+import type { ShrinkCounts } from './agent/loop.js';
 import { modeSide, turnMode } from './agent/modes.js';
 import {
   buildShellRunsBlock,
@@ -51,7 +52,12 @@ import {
   type SessionEntry,
   type SessionSides,
 } from './store/sessions.js';
-import { saveTranscript as writeTranscript, type TranscriptMeta } from './store/transcript.js';
+import {
+  buildTranscriptMeta,
+  saveTranscript as writeTranscript,
+  type TranscriptMeta,
+  type TranscriptShrinkEvent,
+} from './store/transcript.js';
 import { execStream } from './tools/bash.js';
 import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import type { PastedText } from './ui/pastes.js';
@@ -67,6 +73,7 @@ import type {
   Mode,
   QuestionAnswer,
   QuestionRequest,
+  Usage,
 } from './types.js';
 
 // The conversation a front end shows, held outside any UI framework (#584): the scrollback of the
@@ -116,6 +123,14 @@ export type ControllerSnapshot = {
   sessionUnattended: boolean | null;
   // Why the session could not boot, while the status is `error`.
   error: string | null;
+  // What the session measured: the token total, the last real request's count, the pre-send
+  // estimate that fills the gauge before one lands, the sheds and folds, and the decode rate of the
+  // model on now. /stats, the status bar and every saved header read these.
+  usage: Usage;
+  lastUsage: Usage | null;
+  estimatedContext: number | null;
+  shrink: ShrinkCounts;
+  decodeRate: number | undefined;
 };
 
 // One prompt's turn. `mode` is the one turn's override of the controller's mode (/implement flips
@@ -292,9 +307,6 @@ export function createController(opts: {
   // Saves what the next launch opens on (#365): a mode the user switched to, a model they picked.
   // Every front end hands in the same one, so a session started in one resumes in another.
   remember: (state: LastState) => void;
-  // The header a save is written under. Supplied because it carries the token counts and shrink
-  // events a front end still measures.
-  transcriptMeta: (agentSide: Message[], cwd: string, midTurn: boolean) => TranscriptMeta;
   // Where sessions are kept; the default is the user's history directory.
   historyRoot?: string;
   createSession?: typeof createRealSession;
@@ -312,7 +324,15 @@ export function createController(opts: {
     sessionAutoApprove: null,
     sessionUnattended: null,
     error: null,
+    usage: { promptTokens: 0, completionTokens: 0 },
+    lastUsage: null,
+    estimatedContext: null,
+    shrink: { sheds: 0, folds: 0 },
+    decodeRate: undefined,
   };
+  // The events behind the shrink counts, for the saved header only: a shed lands every few rounds
+  // on a small window, so as scrollback lines they would be noise.
+  let shrinkEvents: TranscriptShrinkEvent[] = [];
   let unattendedDeclines: ApprovalRequest[] = [];
   let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
   let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
@@ -391,7 +411,7 @@ export function createController(opts: {
       logSessionFile(sessionPath);
     }
     const path = sessionPath;
-    const meta = opts.transcriptMeta(saved.agent, session.bundle.cwd, snapshot.status === 'busy');
+    const meta = transcriptMeta(session, saved.agent, snapshot.status === 'busy');
     saveChain = saveChain
       .then(() => writeSession(path, saved, meta))
       .catch((e: unknown) => {
@@ -425,6 +445,40 @@ export function createController(opts: {
       }, AUTOSAVE_INTERVAL_MS);
     });
   };
+  // What `newConversation` and a resume both drop beside the conversation itself.
+  const freshMeasurements = (): Partial<ControllerSnapshot> => {
+    shrinkEvents = [];
+    return {
+      usage: { promptTokens: 0, completionTokens: 0 },
+      lastUsage: null,
+      estimatedContext: null,
+      shrink: { sheds: 0, folds: 0 },
+    };
+  };
+  // The header both /save and the auto-save write; `msgs` is what the file's body holds. The
+  // active profile's model and server, so it names what was actually running, not the default.
+  const transcriptMeta = (s: Session, msgs: Message[], midTurn: boolean): TranscriptMeta => {
+    const cfg = s.getSnapshot().config;
+    const profile = cfg.profiles[s.profile] ?? cfg.profiles.default;
+    return buildTranscriptMeta({
+      msgs,
+      model: profile.model,
+      baseURL: profile.baseURL,
+      cwd: s.bundle.cwd,
+      mode: snapshot.mode,
+      midTurn,
+      status: {
+        totals: snapshot.usage,
+        lastUsage: snapshot.lastUsage,
+        estimatedContext: snapshot.estimatedContext,
+        shrink: s.shrink,
+        shrinkEvents,
+        contextWindow: profile.contextWindow ?? cfg.contextWindow,
+        // The session's reserve is the learned one (#551), the number the next round compacts at.
+        minGenTokens: s.config.minGenTokens ?? profile.minGenTokens,
+      },
+    });
+  };
   const counted = (approved: boolean): Approvals => ({
     approved: snapshot.approvals.approved + (approved ? 1 : 0),
     declined: snapshot.approvals.declined + (approved ? 0 : 1),
@@ -445,6 +499,9 @@ export function createController(opts: {
     const next = cfg?.profiles[target];
     if (!session || !cfg || !next) return;
     const kind = cfg.models.map(m => m.toLowerCase()).includes(target) ? 'model' : 'profile';
+    // The tok/s chip describes the model that produced it (#204), so it goes with any switch: one
+    // the user picked or one a mode change brought.
+    if (snapshot.decodeRate !== undefined) set({ decodeRate: undefined });
     // Not awaited: the switch is instant, and a turn submitted before the window probe (#417)
     // answers runs without a window, as it would have anyway.
     void session.setProfile(target).then(notices => append(...notices));
@@ -600,6 +657,42 @@ export function createController(opts: {
       },
       events: {
         ...front.events,
+        onUsage: u => {
+          const t = snapshot.usage;
+          set({
+            // The gauge and cache chip read lastUsage, and an estimate has no real count for either.
+            ...(u.estimated ? {} : { lastUsage: u }),
+            usage: {
+              promptTokens: t.promptTokens + u.promptTokens,
+              completionTokens: t.completionTokens + u.completionTokens,
+              ...(u.cachedTokens != null
+                ? { cachedTokens: (t.cachedTokens ?? 0) + u.cachedTokens }
+                : t.cachedTokens != null
+                  ? { cachedTokens: t.cachedTokens }
+                  : {}),
+              ...(u.estimated || t.estimated ? { estimated: true } : {}),
+            },
+          });
+          front.events?.onUsage?.(u);
+        },
+        onContextEstimate: tokens => {
+          set({ estimatedContext: tokens });
+          front.events?.onContextEstimate?.(tokens);
+        },
+        onShrink: (event, counts) => {
+          // The last reported prompt size predates the shed/fold, and the gauge prefers it over
+          // the estimate — so /compact, with no request after its fold, kept the pre-fold fill.
+          set({ shrink: counts, lastUsage: null });
+          // Stamp the turn the way the status line counts turns (assistant messages so far), so
+          // the saved event lines up with the `turn N` a reader sees in the header.
+          const turnNumber = snapshot.messages.filter(m => m.role === 'assistant').length + 1;
+          shrinkEvents = [...shrinkEvents, { turn: turnNumber, ...event }];
+          front.events?.onShrink?.(event, counts);
+        },
+        onDecodeRate: rate => {
+          set({ decodeRate: rate });
+          front.events?.onDecodeRate?.(rate);
+        },
         onMessage: msg => {
           front.onMessage?.(msg);
           if (msg.role === 'tool') {
@@ -825,6 +918,9 @@ export function createController(opts: {
         ],
         approvals: { approved: 0, declined: 0 },
         sessionAutoApprove: null,
+        ...freshMeasurements(),
+        // The tok/s chip goes with the token counts it sits next to (#204).
+        decodeRate: undefined,
       });
       // Also drops back to the default profile, which may be another model on other hardware.
       session?.reset({ relearn: true });
@@ -846,7 +942,8 @@ export function createController(opts: {
       if (sessionPath) logSessionFile(sessionPath);
       saveHold = countRealTurns(sides.agent) + countRealTurns(sides.chat);
       // Emptied first so a line the mode change prints below can be told from the old scrollback.
-      set({ messages: [] });
+      // The decode rate stays: the model is the same one unless the mode change below brings another.
+      set({ messages: [], ...freshMeasurements() });
       const agentTurns = countRealTurns(sides.agent);
       const chatTurns = countRealTurns(sides.chat);
       // Leaving chat goes to agent, not the saved session's last mode, which could be plan or
@@ -920,7 +1017,7 @@ export function createController(opts: {
         const { jsonlPath, txtPath } = await writeTranscript(
           historyRoot,
           msgs,
-          saveHeader(opts.transcriptMeta(msgs, session.bundle.cwd, midTurn), msgs),
+          saveHeader(transcriptMeta(session, msgs, midTurn), msgs),
           { redact: !raw },
         );
         append(echo, {
