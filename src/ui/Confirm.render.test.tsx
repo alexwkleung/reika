@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import { Confirm, implementModeConfirmSpec } from './Confirm.js';
+import { Confirm } from './Confirm.js';
+import { implementModeConfirmSpec } from './dialogspecs.js';
 import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,

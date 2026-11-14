@@ -1,3 +1,4 @@
+import { IMPLEMENT_MODES, type ImplementMode } from '../agent/turncommands.js';
 import type { SkillMatch } from '../skills/skillmatch.js';
 
 // The dialogs' rows and specs, apart from the Ink components that draw them: headless asks the
@@ -58,6 +59,22 @@ export function pastedUrlConfirmSpec(urls: string[]): ConfirmSpec {
     ),
     options: ['Send as typed', `Fetch ${n > 1 ? `${n} links` : 'the link'}`],
     accept: 'fetch',
+  };
+}
+
+const IMPLEMENT_MODE_LABELS: Record<ImplementMode, string> = {
+  agent: 'Agent — full tool set',
+  minimal: 'Minimal — shell only, no repo map or AGENTS.md',
+  grind: 'Grind — fixed procedure, proves the change by running checks',
+};
+
+// Agent is row 0, so Enter alone keeps the one-keystroke /implement it always was.
+export function implementModeConfirmSpec(): ConfirmSpec {
+  return {
+    title: 'Implement',
+    subtitle: 'which mode should carry out the plan?',
+    details: [],
+    options: IMPLEMENT_MODES.map(m => IMPLEMENT_MODE_LABELS[m]),
   };
 }
 

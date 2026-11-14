@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createController, type CommandFrontEnd } from './controller.js';
+import { createController, type CommandFrontEnd, type InputFrontEnd } from './controller.js';
 import {
   listSessions,
   loadSession,
@@ -13,11 +13,20 @@ import {
 import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
 import type * as Transcript from './store/transcript.js';
 import type { QueuedMessage } from './agent/busyqueue.js';
+import type { ImageAttachment } from './agent/attachments.js';
+import type * as PastedUrls from './agent/pastedurls.js';
+import { IMPLEMENT_MODES } from './agent/turncommands.js';
 import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
 import { setAtLaunch } from './config.js';
 import { helpText } from './agent/replycommands.js';
-import { TOGGLE_CANCEL, TOGGLE_OFF, TOGGLE_ON } from './ui/dialogspecs.js';
+import {
+  CONFIRM_ACCEPT,
+  CONFIRM_DECLINE,
+  TOGGLE_CANCEL,
+  TOGGLE_OFF,
+  TOGGLE_ON,
+} from './ui/dialogspecs.js';
 import { rememberPaste } from './ui/pastes.js';
 import type { LastState } from './laststate.js';
 import ignore, { type Ignore } from 'ignore';
@@ -62,6 +71,21 @@ vi.mock('./ui/identity.js', async importOriginal => {
       const found = { names: ['Mona Lisa'], emails: ['octocat@example.com'], slugs: [] };
       real.setIdentity(found as unknown as Parameters<typeof real.setIdentity>[0]);
       return found;
+    },
+  };
+});
+
+// A confirmed pasted link would be fetched; the test only needs to see that it was asked to.
+const pasteFetches = vi.hoisted(() => ({ incidental: [] as (boolean | undefined)[] }));
+vi.mock('./agent/pastedurls.js', async importOriginal => {
+  const real = await importOriginal<typeof PastedUrls>();
+  return {
+    ...real,
+    expandPastedUrls: (...args: Parameters<typeof real.expandPastedUrls>) => {
+      pasteFetches.incidental.push(args[1].incidental);
+      return args[1].incidental === true
+        ? Promise.resolve({ blocks: ['<url href="stub">the page</url>'], notices: [], fetched: [] })
+        : real.expandPastedUrls(...args);
     },
   };
 });
@@ -2387,5 +2411,298 @@ describe('controller.runCommand', () => {
     await controller.runCommand('/model', front);
     expect(front.pickModel).toHaveBeenCalledTimes(1);
     expect(session!.submit).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller.submit', () => {
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  const verify: Skill = {
+    name: 'verify',
+    description: 'verify a change',
+    body: 'VERIFY BODY',
+    source: 'project',
+    path: '/repo/app/skills/verify.md',
+    triggers: ['verify the change'],
+  };
+  const incidental = 'the build failed\nError: see https://example.com/docs for details\nexit 1';
+  const image: ImageAttachment = { marker: '[Image 1]', text: 'a screenshot', source: 'clipboard' };
+
+  // Every hook a vi.fn that also lands in `calls`, so a test can read the order they ran in.
+  const inputFront = (overrides: Partial<InputFrontEnd> = {}) => {
+    const calls: string[] = [];
+    const front = {
+      turn: { onTurnStart: () => calls.push('turn') },
+      pastes: [],
+      images: [] as ImageAttachment[],
+      exit: vi.fn(),
+      pickModel: vi.fn(),
+      pickSession: vi.fn(),
+      onNewConversation: vi.fn(),
+      shell: { onProgress: vi.fn() },
+      onStage: vi.fn(),
+      onImagesTaken: vi.fn(() => calls.push('images')),
+      onSending: vi.fn(() => calls.push('sending')),
+      onTaken: vi.fn((line?: string) => calls.push(line === undefined ? 'taken' : `taken:${line}`)),
+      beforeImplementQuestion: vi.fn(() => calls.push('suggestions')),
+      ...overrides,
+    };
+    return { front, calls };
+  };
+  const asking = (answer: number | 'abort', calls?: string[]) =>
+    vi.fn(async () => {
+      calls?.push('ask');
+      return answer;
+    });
+  const idle = (mode: Mode = 'agent', policy: Policy = {}, historyRoot?: string) => {
+    const made = controllerIn(mode, policy, 'default', historyRoot);
+    made.controller.setStatus('idle');
+    return made;
+  };
+  beforeEach(() => {
+    pasteFetches.incidental = [];
+  });
+
+  it('runs a plain prompt after the warm stops and the box clears with history', async () => {
+    const { controller, session } = idle();
+    const { front, calls } = inputFront();
+    await controller.submit('  fix the parser ', front);
+    expect(calls).toEqual(['sending', 'taken:fix the parser', 'images', 'turn']);
+    expect(session!.submit.mock.calls[0][0]).toBe('fix the parser');
+  });
+
+  it('clears the box for an empty line and runs nothing, with no history', async () => {
+    const { controller, session } = idle();
+    const { front } = inputFront();
+    await controller.submit('   ', front);
+    expect(front.onTaken).toHaveBeenCalledWith(undefined);
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([]);
+  });
+
+  it('dispatches a command and records it', async () => {
+    const { controller } = idle();
+    const { front } = inputFront();
+    await controller.submit('/help', front);
+    expect(front.onTaken).toHaveBeenCalledWith('/help');
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+  });
+
+  it("asks /implement's mode in plan mode after the suggestions hook, and runs the turn in it", async () => {
+    const { controller, session } = idle('plan');
+    const { front, calls } = inputFront();
+    const ask = asking(IMPLEMENT_MODES.indexOf('grind'), calls);
+    await controller.submit('/implement', { ...front, ask });
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Implement' }));
+    expect(calls).toEqual(['sending', 'suggestions', 'ask', 'taken:/implement', 'turn']);
+    expect(controller.mode).toBe('grind');
+    expect(session!.submit.mock.calls[0][1]).toMatchObject({ mode: 'grind' });
+  });
+
+  it("runs nothing and leaves the box when /implement's question is dismissed", async () => {
+    const { controller, session } = idle('plan');
+    const { front } = inputFront();
+    await controller.submit('/implement', { ...front, ask: asking('abort') });
+    expect(front.onTaken).not.toHaveBeenCalled();
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([]);
+  });
+
+  describe('in shell mode', () => {
+    let cwd: string;
+    beforeEach(async () => {
+      cwd = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-submit-')));
+    });
+    afterEach(async () => {
+      await rm(cwd, { recursive: true, force: true });
+    });
+
+    it('runs the line as a shell command with its paste expanded', async () => {
+      const { controller, session } = idle('shell');
+      session!.bundle.cwd = cwd;
+      const { pastes, marker } = rememberPaste([], 'hello paste');
+      const { front } = inputFront({ pastes });
+      await controller.submit(`echo ${marker}`, front);
+      expect(controller.messages[0]).toEqual(echo('echo hello paste'));
+      expect(controller.messages[1]).toMatchObject({ role: 'shell', command: 'echo hello paste' });
+      expect(front.onTaken).toHaveBeenCalledWith(`echo ${marker}`);
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the skill question', () => {
+    const ready = () => {
+      const made = idle('agent', { skillAuto: 'ask' });
+      made.session!.bundle.skills = [verify];
+      return made;
+    };
+
+    it('applies the skill when accepted, in the order warm, ask, box, turn', async () => {
+      const { controller, session } = ready();
+      const { front, calls } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT, calls);
+      await controller.submit('verify the change', { ...front, ask });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Skill' }));
+      expect(calls).toEqual(['sending', 'ask', 'taken:verify the change', 'images', 'turn']);
+      expect(session!.submit.mock.calls[0][0]).toBe('VERIFY BODY\n\nverify the change');
+    });
+
+    it('sends the prompt as typed when declined', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking(CONFIRM_DECLINE) });
+      expect(session!.submit.mock.calls[0][0]).toBe('verify the change');
+    });
+
+    it('runs nothing and leaves the box when dismissed', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking('abort') });
+      expect(front.onSending).toHaveBeenCalled();
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('is not asked again for a replay that carries its answer', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit('verify the change', { ...front, ask }, { skill: null });
+      expect(ask).not.toHaveBeenCalled();
+      expect(session!.submit.mock.calls[0][0]).toBe('verify the change');
+    });
+
+    it("asks through the controller's own confirm when the front end brings no dialog", async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const running = controller.submit('verify the change', front);
+      expect(controller.confirm).toMatchObject({ title: 'Skill' });
+      controller.answerConfirm(CONFIRM_ACCEPT);
+      await running;
+      expect(session!.submit.mock.calls[0][1]).toMatchObject({ skill: 'verify' });
+    });
+  });
+
+  describe('the pasted-link question', () => {
+    const ready = () => idle('agent', { pasteFetch: 'ask' });
+
+    it('fetches the link when accepted', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit(incidental, { ...front, ask });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Pasted link' }));
+      expect(pasteFetches.incidental).toEqual([true]);
+      expect(session!.submit.mock.calls[0][0]).toMatch(/^<url href="stub">/);
+    });
+
+    it('leaves the link when declined', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit(incidental, { ...front, ask: asking(CONFIRM_DECLINE) });
+      expect(pasteFetches.incidental).toEqual([false]);
+      expect(session!.submit.mock.calls[0][0]).toBe(incidental);
+    });
+
+    it('runs nothing and leaves the box when dismissed', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit(incidental, { ...front, ask: asking('abort') });
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(pasteFetches.incidental).toEqual([]);
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('is not asked again for a replay that carries its answer', async () => {
+      const { controller } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit(incidental, { ...front, ask }, { fetchUrls: false });
+      expect(ask).not.toHaveBeenCalled();
+      expect(pasteFetches.incidental).toEqual([false]);
+    });
+  });
+
+  describe('while busy', () => {
+    const busy = (policy: Policy | null = { skillAuto: 'ask' }) => {
+      const made = controllerIn('agent', policy);
+      if (made.session) made.session.bundle.skills = [verify];
+      made.controller.setStatus('busy');
+      return made;
+    };
+
+    it('asks now and queues the line with its answers and images, with no history', async () => {
+      const { controller, session } = busy();
+      const { front, calls } = inputFront({ images: [image] });
+      const ask = asking(CONFIRM_DECLINE, calls);
+      await controller.submit('verify the change [Image 1]', { ...front, ask });
+      expect(calls).toEqual(['ask', 'images', 'taken']);
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'verify the change [Image 1]', images: [image], answers: { skill: null } },
+      ]);
+      expect(controller.messages.at(-1)).toMatchObject({
+        content: '[Queued] [image] verify the change [Image 1]',
+      });
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('queues nothing and clears nothing for an empty line', async () => {
+      const { controller } = busy();
+      const { front } = inputFront();
+      await controller.submit('  ', front);
+      expect(controller.getSnapshot().queue).toEqual([]);
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(front.onImagesTaken).not.toHaveBeenCalled();
+    });
+
+    it('drops the line, left in the box, when a question is dismissed', async () => {
+      const { controller } = busy();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking('abort') });
+      expect(controller.getSnapshot().queue).toEqual([]);
+      expect(front.onTaken).not.toHaveBeenCalled();
+    });
+
+    it('queues the same way before boot', async () => {
+      const { controller } = controllerIn('agent', null);
+      const { front } = inputFront();
+      await controller.submit('/save', front);
+      expect(controller.getSnapshot().queue).toEqual([{ content: '/save', answers: {} }]);
+      expect(front.onTaken).toHaveBeenCalledWith();
+    });
+
+    describe('/save', () => {
+      let root: string;
+      beforeEach(async () => {
+        root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-submit-save-')));
+      });
+      afterEach(async () => {
+        await rm(root, { recursive: true, force: true });
+      });
+
+      it('runs at once, records it and queues nothing', async () => {
+        const { controller } = controllerIn('agent', {}, 'default', root);
+        controller.append(user('fix the parser'));
+        controller.setStatus('busy');
+        const { front } = inputFront();
+        await controller.submit('/save', front);
+        expect(front.onTaken).toHaveBeenCalledWith('/save');
+        expect(front.onSending).not.toHaveBeenCalled();
+        expect(controller.getSnapshot().queue).toEqual([]);
+        expect(controller.messages.at(-1)).toMatchObject({
+          content: expect.stringMatching(/^saved 1 messages — mid-turn/),
+        });
+      });
+
+      it('takes the ordinary path while idle', async () => {
+        const { controller } = idle('agent', {}, root);
+        controller.append(user('fix the parser'));
+        const { front, calls } = inputFront();
+        await controller.submit('/save', front);
+        expect(calls).toEqual(['sending', 'taken:/save']);
+        expect(controller.messages.at(-1)).toMatchObject({
+          content: expect.stringMatching(/^saved 1 messages → /),
+        });
+      });
+    });
   });
 });

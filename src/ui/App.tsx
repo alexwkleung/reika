@@ -36,10 +36,8 @@ import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
   type ConfirmSpec,
-  pastedUrlConfirmSpec,
-  skillConfirmSpec,
 } from './dialogspecs.js';
-import { Confirm, implementModeConfirmSpec } from './Confirm.js';
+import { Confirm } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
 import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
 import { loadLastState, saveLastState, startMode } from '../laststate.js';
@@ -50,7 +48,7 @@ import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
-import { skillToConfirm, submitStageLabel, urlsToConfirm } from '../agent/submitinput.js';
+import { submitStageLabel } from '../agent/submitinput.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
 import { systemOcr } from '../ocr/system.js';
 import { sniffImageMime } from '../ocr/vision.js';
@@ -63,7 +61,6 @@ import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
 import { type ModelTarget } from './models.js';
-import { isSaveCommand } from './commands.js';
 import {
   isMinimalPrompt,
   isGrindPrompt,
@@ -72,13 +69,12 @@ import {
   turnRefines,
   turnTools,
 } from '../agent/modes.js';
-import { IMPLEMENT_MODES, isImplementCommand, type ImplementMode } from '../agent/turncommands.js';
 import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
-import { createController, type CommandFrontEnd, type TurnFrontEnd } from '../controller.js';
-import { queuedMessage, type SubmitAnswers } from '../agent/busyqueue.js';
-import { expandPastes, rememberPaste, type PastedText } from './pastes.js';
+import { createController, type InputFrontEnd, type TurnFrontEnd } from '../controller.js';
+import { type SubmitAnswers } from '../agent/busyqueue.js';
+import { rememberPaste, type PastedText } from './pastes.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -931,12 +927,17 @@ export function App() {
     controller.transition(next, trailing);
   };
 
-  // What a slash command hands back to this front end: the turn's hooks, the dialog's cursor, and
-  // the pickers, which only it can draw.
-  const commandFrontEnd = (implementMode?: ImplementMode): CommandFrontEnd => ({
+  // What a typed line hands the controller: the turn's hooks, the dialog's cursor, the pickers,
+  // which only this front end can draw, the shell's output stream and the input box. The
+  // attachments and pastes are getters: the controller reads them after the line's questions.
+  const inputFrontEnd = (): InputFrontEnd => ({
     turn: turnFrontEnd,
-    pastes: pastedTextsRef.current,
-    implementMode,
+    get pastes() {
+      return pastedTextsRef.current;
+    },
+    get images() {
+      return imageAttachmentsRef.current;
+    },
     ask: askChoice,
     exit: requestExit,
     onNewConversation: () => setPlanSteps(null),
@@ -963,11 +964,8 @@ export function App() {
         setResumeSelected(0);
       });
     },
-  });
-
-  // The run is the controller's; its output streams through the tool block here.
-  const runShell = (command: string): Promise<void> =>
-    controller.runShell(command, {
+    // The run is the controller's; its output streams through the tool block here.
+    shell: {
       onStart: () => {
         toolRef.current = '';
         setStreamingTool('');
@@ -985,7 +983,28 @@ export function App() {
         toolRef.current = '';
         setStreamingTool('');
       },
-    });
+    },
+    onStage: stage => setExpanding(stage ? submitStageLabel(stage) : null),
+    // Clipboard attachments are consumed by the line that takes them: recalling that text from
+    // history later must not silently re-attach an image the user has moved on from.
+    onImagesTaken: () => {
+      imageAttachmentsRef.current = [];
+    },
+    // Frees the server slot for the real request (the engine keeps already-processed KV in its
+    // slot cache on disconnect, so an interrupted warm still pays off).
+    onSending: () => warmerRef.current.cancel('submit'),
+    onTaken: line => {
+      setInputValue('');
+      setSuggestionState(null);
+      // For ArrowUp/ArrowDown recall, skipping consecutive duplicates.
+      if (line !== undefined) {
+        setInputHistory(prev => (prev[prev.length - 1] === line ? prev : [...prev, line]));
+      }
+    },
+    // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
+    // up, it draws a second `/implement` under the dialog.
+    beforeImplementQuestion: () => setSuggestionState(null),
+  });
 
   // Ctrl+V. Outcomes are all persistent scrollback lines rather than spinner states: the user
   // pressed a key expecting an attachment, and "nothing happened" has to be distinguishable
@@ -1113,79 +1132,6 @@ export function App() {
       queueMicrotask(() => void controller.openConfirm(spec).then(resolve));
     });
   };
-  const askConfirm = async (spec: ConfirmSpec): Promise<boolean | 'abort'> => {
-    const choice = await askChoice(spec);
-    return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
-  };
-
-  // The skill the user's own words route to, decided at keypress (#425). Under REIKA_SKILL_AUTO
-  // a strong match opens the confirm dialog rather than injecting — the user is the classifier,
-  // and the keyword matcher's false positives (a prompt that merely opens with the skill's noun)
-  // stop costing a turn. Resolves to the skill name to apply, null for "send as typed", 'abort'
-  // for ctrl-c, or undefined when nothing needed asking. Runs BEFORE the busy queue and the
-  // expansions so a queued prompt carries its answer and no fetch precedes the question.
-  const decideSkillRoute = async (prompt: string): Promise<string | null | 'abort' | undefined> => {
-    if (!config || !bundle) return undefined;
-    // Every model mode but chat asks (#565). Plan mode asks too — its prompt already keeps an
-    // applied body from turning into edits.
-    const match = skillToConfirm(prompt, {
-      skills: bundle.skills,
-      skillAuto: config.skillAuto,
-      mode: controller.mode,
-      contextWindow: config.profiles[activeProfile]?.contextWindow ?? config.contextWindow,
-    });
-    if (!match) return undefined;
-    const accept = await askConfirm(skillConfirmSpec(match));
-    return accept === 'abort' ? 'abort' : accept ? match.skill.name : null;
-  };
-
-  // The pasted-link confirm (#448): a URL that is not what the prompt is about — one inside a
-  // pasted error, a log line — is asked about rather than fetched, since a GET on a confirm or
-  // tracking link has already acted. A URL the prompt IS about (agent/pastedurls.ts's shape gate)
-  // needs no dialog and fetches as before. Resolves true/false for the fetch, 'abort' for ctrl-c,
-  // undefined when nothing needed asking. Same placement as the skill confirm: before the busy
-  // queue, so the entry carries the answer, and before the expansions, so no fetch precedes it.
-  const decidePastedUrls = async (prompt: string): Promise<boolean | 'abort' | undefined> => {
-    if (!config) return undefined;
-    const urls = urlsToConfirm(prompt, { pasteFetch: config.pasteFetch, mode: controller.mode });
-    return urls ? askConfirm(pastedUrlConfirmSpec(urls)) : undefined;
-  };
-
-  // Which mode /implement hands the plan to (#561). Asked only from plan mode, where the old answer
-  // was always agent; elsewhere /implement stays in (or maps from) the current mode as before.
-  // Same placement as the confirms above: at keypress, so a /implement queued behind the plan turn
-  // carries its answer and the drain never opens a dialog with nobody at the desk.
-  const decideImplementMode = async (
-    prompt: string,
-  ): Promise<ImplementMode | 'abort' | undefined> => {
-    if (controller.mode !== 'plan' || !isImplementCommand(prompt)) return undefined;
-    // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
-    // up, it draws a second `/implement` under the dialog.
-    setSuggestionState(null);
-    const choice = await askChoice(implementModeConfirmSpec());
-    return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
-  };
-
-  // Every question a prompt can raise before it is sent, asked at keypress in one order whether
-  // the prompt runs now or is queued. A replayed prompt hands back the answers it was queued
-  // with, and only a question that never came up then is asked now.
-  const askSubmitAnswers = async (
-    prompt: string,
-    carried: SubmitAnswers = {},
-  ): Promise<SubmitAnswers | 'abort'> => {
-    const skill = carried.skill !== undefined ? carried.skill : await decideSkillRoute(prompt);
-    if (skill === 'abort') return 'abort';
-    const fetchUrls =
-      carried.fetchUrls !== undefined ? carried.fetchUrls : await decidePastedUrls(prompt);
-    if (fetchUrls === 'abort') return 'abort';
-    const implementMode = carried.implementMode ?? (await decideImplementMode(prompt));
-    if (implementMode === 'abort') return 'abort';
-    return {
-      ...(skill !== undefined ? { skill } : {}),
-      ...(fetchUrls !== undefined ? { fetchUrls } : {}),
-      ...(implementMode !== undefined ? { implementMode } : {}),
-    };
-  };
 
   // Drain the queue once the agent is idle again. Replays messages in order through the normal
   // onSubmit path: image attachments go back onto imageAttachmentsRef, where the markers still in
@@ -1206,7 +1152,7 @@ export function App() {
     // typed against, and the user sees it land before deciding to send.
     if (resumingRef.current) return;
     // An answer being typed for `ask_user` — not a message for the model. Intercepted ahead of the
-    // busy-queue branch below: a question only exists mid-turn, so every such submit would otherwise
+    // controller's busy queue: a question only exists mid-turn, so every such submit would otherwise
     // be queued as the user's next prompt.
     // A decline's reason, likewise not a message for the model's next turn. An empty one is not a
     // reason; the field stays open, and ctrl-c is the way back to a plain Decline.
@@ -1240,76 +1186,7 @@ export function App() {
       }
       return;
     }
-    // /save runs immediately even while a turn is in flight (#226): the point of saving mid-run
-    // is to snapshot the conversation the moment something looks off and hand it to another
-    // agent, without aborting the turn to get there. It is safe to run now because it only reads
-    // the scrollback and the usage refs — nothing the loop is writing to. Every other command
-    // still waits: the rest either change what the running turn is doing (mode, model, cwd) or
-    // reset it. Booting is excluded — there is no config/bundle to save under yet.
-    if (config && bundle && status !== 'idle' && isSaveCommand(input)) {
-      setInputValue('');
-      setSuggestionState(null);
-      const trimmed = input.trim();
-      setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
-      await controller.runCommand(trimmed, commandFrontEnd());
-      return;
-    }
-    // While a turn is running (or the session is still booting), don't drop the
-    // message — hold it and replay it through this same path once idle. A
-    // scrollback receipt records what was queued; the ephemeral list above the
-    // input shows the backlog live and clears as the queue drains.
-    if (!config || !bundle || status !== 'idle') {
-      const trimmed = input.trim();
-      // Asked now, while the user is at the keyboard, and carried on the entry: the drain may
-      // run with nobody at the desk. A ctrl-c drops the prompt, still in the box to edit.
-      const answers = await askSubmitAnswers(trimmed, carried);
-      if (answers === 'abort') return;
-      const msg = queuedMessage(trimmed, imageAttachmentsRef.current, answers);
-      if (!msg) return;
-      imageAttachmentsRef.current = [];
-      controller.enqueue(msg);
-      // Clear the box just like the normal submit path does below — the
-      // queued list above the input is now the source of truth for it.
-      setInputValue('');
-      setSuggestionState(null);
-      return;
-    }
-    // Free the server slot for the real request (the engine keeps already-processed KV in its
-    // slot cache on disconnect, so an interrupted warm still pays off). Unconditional: slash
-    // commands (/cd re-bundles, /model switches) and shell submits also land here.
-    warmerRef.current.cancel('submit');
-    const trimmed = input.trim();
-    // Before the box clears: the confirm dialog sits over the input, and the prompt it is asking
-    // about should still be visible underneath. A ctrl-c leaves it there to edit.
-    const answers = await askSubmitAnswers(trimmed, carried);
-    if (answers === 'abort') return;
-    const { skill: route, fetchUrls, implementMode } = answers;
-    setInputValue('');
-    setSuggestionState(null);
-    if (!trimmed) return;
-    // Record for ArrowUp/ArrowDown recall, skipping consecutive duplicates.
-    setInputHistory(prev => (prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]));
-    if (trimmed.startsWith('/')) {
-      await controller.runCommand(trimmed, commandFrontEnd(implementMode));
-      return;
-    }
-    if (controller.mode === 'shell') {
-      await runShell(expandPastes(trimmed, pastedTextsRef.current));
-      return;
-    }
-    await controller.submitPrompt(
-      trimmed,
-      {
-        answers: { skill: route, fetchUrls },
-        images: imageAttachmentsRef.current,
-        pastes: pastedTextsRef.current,
-        onStage: stage => setExpanding(stage ? submitStageLabel(stage) : null),
-        onBuilt: () => {
-          imageAttachmentsRef.current = [];
-        },
-      },
-      turnFrontEnd,
-    );
+    await controller.submit(input, inputFrontEnd(), carried);
   };
 
   // Latch the typecheck indicator: show immediately when a check starts, but defer hiding by

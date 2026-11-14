@@ -1,6 +1,7 @@
 import type { ImageAttachment, NativeImage } from './agent/attachments.js';
 import {
   canDrain,
+  queuedMessage,
   queueReceipt,
   takeNext,
   type QueuedMessage,
@@ -17,7 +18,12 @@ import {
   shellRunBudget,
   type ShellRun,
 } from './agent/shellruns.js';
-import { buildSubmitInput, type SubmitStage } from './agent/submitinput.js';
+import {
+  buildSubmitInput,
+  skillToConfirm,
+  urlsToConfirm,
+  type SubmitStage,
+} from './agent/submitinput.js';
 import {
   resolveToggleCommand,
   toggleReceipt,
@@ -25,6 +31,8 @@ import {
   type ToggleName,
 } from './agent/togglecommands.js';
 import {
+  IMPLEMENT_MODES,
+  isImplementCommand,
   parseCommand,
   resolveSkillCommand,
   resolveTurnCommand,
@@ -69,9 +77,14 @@ import {
 import { execStream } from './tools/bash.js';
 import { isOffline } from './tools/_net.js';
 import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
-import type { PastedText } from './ui/pastes.js';
+import { isSaveCommand } from './ui/commands.js';
+import { expandPastes, type PastedText } from './ui/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import {
+  CONFIRM_ACCEPT,
+  implementModeConfirmSpec,
+  pastedUrlConfirmSpec,
+  skillConfirmSpec,
   TOGGLE_CANCEL,
   TOGGLE_OFF,
   TOGGLE_ON,
@@ -226,6 +239,25 @@ export type CommandFrontEnd = {
   onNewConversation?(): void;
 };
 
+// What a front end hands `submit` for a typed line: the command hooks, the shell's, and the input
+// box's. `images` and `pastes` are read when the line needs them, which is after its questions.
+export type InputFrontEnd = Omit<CommandFrontEnd, 'implementMode'> & {
+  shell: ShellFrontEnd;
+  // The image attachments in the box.
+  images: ImageAttachment[];
+  onStage: SubmitPromptInput['onStage'];
+  // The box's attachments went with the line: built into its prompt, or queued with it.
+  onImagesTaken?(): void;
+  // A line is about to run now, before its questions: a speculative warm of the prefix is stopped
+  // so the real request gets the server's slot.
+  onSending?(): void;
+  // The line was taken and the box should clear. `line` goes into input history, and is absent for
+  // a queued or an empty line, which is not recalled.
+  onTaken(line?: string): void;
+  // Just before /implement's mode question opens, for whatever the typed command left open.
+  beforeImplementQuestion?(): void;
+};
+
 export type Controller = {
   getSnapshot(): ControllerSnapshot;
   subscribe(listener: () => void): () => void;
@@ -340,6 +372,12 @@ export type Controller = {
   // tool, then a skill. Each is echoed in the scrollback, except where its turn's own bubble is
   // the echo.
   runCommand(raw: string, front: CommandFrontEnd): Promise<void>;
+  // A line typed into the input box. A mid-turn /save runs at once (#226). Otherwise its questions
+  // are asked now, whether it runs now or is queued behind a running turn (or a boot), since the
+  // replay may run with nobody at the desk; `carried` is a replayed entry's answers, and only a
+  // question that never came up then is asked. A dismissed question drops the line and leaves it
+  // in the box. Then it is a command, a shell command or a prompt.
+  submit(input: string, front: InputFrontEnd, carried?: SubmitAnswers): Promise<void>;
 };
 
 export function createController(opts: {
@@ -951,6 +989,142 @@ export function createController(opts: {
     append(echo, { role: 'system', content: unknownCommandText(name) });
   };
 
+  // The decide* questions resolve to their answer, 'abort' for a dismissed dialog, or undefined
+  // when nothing needed asking.
+  const ask = (front: InputFrontEnd, spec: ConfirmSpec): Promise<number | 'abort'> =>
+    front.ask ? front.ask(spec) : openConfirm(spec);
+
+  // The skill the user's own words route to (#425). A strong match is asked about rather than
+  // injected: the user is the classifier, and the keyword matcher's false positives (a prompt
+  // that merely opens with the skill's noun) stop costing a turn.
+  const decideSkillRoute = async (
+    prompt: string,
+    front: InputFrontEnd,
+  ): Promise<string | null | 'abort' | undefined> => {
+    const cfg = config();
+    if (!session || !cfg) return undefined;
+    // Every model mode but chat asks (#565). Plan mode asks too — its prompt already keeps an
+    // applied body from turning into edits.
+    const match = skillToConfirm(prompt, {
+      skills: session.bundle.skills,
+      skillAuto: cfg.skillAuto,
+      mode: snapshot.mode,
+      contextWindow: cfg.profiles[session.profile]?.contextWindow ?? cfg.contextWindow,
+    });
+    if (!match) return undefined;
+    const choice = await ask(front, skillConfirmSpec(match));
+    return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT ? match.skill.name : null;
+  };
+
+  // The pasted-link confirm (#448): a URL that is not what the prompt is about — one inside a
+  // pasted error, a log line — is asked about rather than fetched, since a GET on a confirm or
+  // tracking link has already acted. A URL the prompt IS about (agent/pastedurls.ts's shape gate)
+  // needs no dialog.
+  const decidePastedUrls = async (
+    prompt: string,
+    front: InputFrontEnd,
+  ): Promise<boolean | 'abort' | undefined> => {
+    const cfg = config();
+    if (!cfg) return undefined;
+    const urls = urlsToConfirm(prompt, { pasteFetch: cfg.pasteFetch, mode: snapshot.mode });
+    if (!urls) return undefined;
+    const choice = await ask(front, pastedUrlConfirmSpec(urls));
+    return choice === 'abort' ? 'abort' : choice === CONFIRM_ACCEPT;
+  };
+
+  // Which mode /implement hands the plan to (#561). Asked only from plan mode, where the old answer
+  // was always agent; elsewhere /implement stays in (or maps from) the current mode as before.
+  const decideImplementMode = async (
+    prompt: string,
+    front: InputFrontEnd,
+  ): Promise<ImplementMode | 'abort' | undefined> => {
+    if (snapshot.mode !== 'plan' || !isImplementCommand(prompt)) return undefined;
+    front.beforeImplementQuestion?.();
+    const choice = await ask(front, implementModeConfirmSpec());
+    return choice === 'abort' ? 'abort' : IMPLEMENT_MODES[choice];
+  };
+
+  // Every question a line can raise before it is sent, in one order whether it runs now or is
+  // queued. Before the expansions, so no fetch precedes the question.
+  const askSubmitAnswers = async (
+    prompt: string,
+    front: InputFrontEnd,
+    carried: SubmitAnswers = {},
+  ): Promise<SubmitAnswers | 'abort'> => {
+    const skill =
+      carried.skill !== undefined ? carried.skill : await decideSkillRoute(prompt, front);
+    if (skill === 'abort') return 'abort';
+    const fetchUrls =
+      carried.fetchUrls !== undefined ? carried.fetchUrls : await decidePastedUrls(prompt, front);
+    if (fetchUrls === 'abort') return 'abort';
+    const implementMode = carried.implementMode ?? (await decideImplementMode(prompt, front));
+    if (implementMode === 'abort') return 'abort';
+    return {
+      ...(skill !== undefined ? { skill } : {}),
+      ...(fetchUrls !== undefined ? { fetchUrls } : {}),
+      ...(implementMode !== undefined ? { implementMode } : {}),
+    };
+  };
+
+  const submit = async (
+    input: string,
+    front: InputFrontEnd,
+    carried?: SubmitAnswers,
+  ): Promise<void> => {
+    const trimmed = input.trim();
+    // /save runs immediately even while a turn is in flight (#226): the point of saving mid-run is
+    // to snapshot the conversation the moment something looks off and hand it to another agent,
+    // without aborting the turn to get there. It only reads the scrollback and the counts, nothing
+    // the loop is writing to. Every other command still waits: the rest either change what the
+    // running turn is doing (mode, model, cwd) or reset it. Before boot there is nothing to save.
+    if (session && snapshot.status !== 'idle' && isSaveCommand(input)) {
+      front.onTaken(trimmed);
+      await runCommand(trimmed, front);
+      return;
+    }
+    // Held while a turn runs or the session boots, and replayed through here once idle; the
+    // receipt records what was queued.
+    if (!session || snapshot.status !== 'idle') {
+      const answers = await askSubmitAnswers(trimmed, front, carried);
+      if (answers === 'abort') return;
+      const msg = queuedMessage(trimmed, front.images, answers);
+      if (!msg) return;
+      front.onImagesTaken?.();
+      controller.enqueue(msg);
+      // The queued list is now the source of truth for it.
+      front.onTaken();
+      return;
+    }
+    // Unconditional: commands and shell lines land here too.
+    front.onSending?.();
+    // Before the box clears: the dialog sits over the input, and the prompt it is asking about
+    // should still be visible underneath.
+    const answers = await askSubmitAnswers(trimmed, front, carried);
+    if (answers === 'abort') return;
+    const { skill: route, fetchUrls, implementMode } = answers;
+    front.onTaken(trimmed || undefined);
+    if (!trimmed) return;
+    if (trimmed.startsWith('/')) {
+      await runCommand(trimmed, { ...front, implementMode });
+      return;
+    }
+    if (snapshot.mode === 'shell') {
+      await controller.runShell(expandPastes(trimmed, front.pastes), front.shell);
+      return;
+    }
+    await controller.submitPrompt(
+      trimmed,
+      {
+        answers: { skill: route, fetchUrls },
+        images: front.images,
+        pastes: front.pastes,
+        onStage: front.onStage,
+        onBuilt: front.onImagesTaken,
+      },
+      front.turn,
+    );
+  };
+
   const controller: Controller = {
     getSnapshot: () => snapshot,
     subscribe: listener => {
@@ -1405,6 +1579,7 @@ export function createController(opts: {
       return true;
     },
     runCommand,
+    submit,
   };
   return controller;
 }
