@@ -4,6 +4,7 @@ import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage 
 import type { HandleResult, WebBridge } from './bridge.js';
 import type { ClientMessage, ServerEvent } from './protocol.js';
 import {
+  LINK_CODE_TTL_MS,
   MAX_MESSAGE_BYTES,
   MAX_STREAMS,
   startWebServer,
@@ -50,10 +51,29 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(s => s.close()));
 });
 
+// Every token and code the suite is handed, and every response it sees, so the last test can
+// check where each came back.
+const tokens = new Set<string>();
+const codes = new Set<string>();
+type Seen = { path: string; status: number; headers: IncomingHttpHeaders; body: () => string };
+const seenResponses: Seen[] = [];
+
 async function start(fake = fakeBridge(), opts: WebServerOptions = {}) {
   const server = await startWebServer(fake.bridge, opts);
   servers.push(server);
+  tokens.add(server.token);
+  codes.add(codeOf(server.url));
+  const newLink = server.newLink.bind(server);
+  server.newLink = () => {
+    const link = newLink();
+    codes.add(codeOf(link));
+    return link;
+  };
   return { server, fake };
+}
+
+function codeOf(link: string): string {
+  return new URLSearchParams(new URL(link).hash.slice(1)).get('code') ?? '';
 }
 
 // Every response the suite sees goes through here, so the no-CORS rule is asserted on all of them.
@@ -61,6 +81,7 @@ const seenStatuses = new Set<number>();
 function assertNoCorsHeaders(headers: IncomingHttpHeaders, status: number): void {
   seenStatuses.add(status);
   expect(Object.keys(headers).filter(k => k.startsWith('access-control-'))).toEqual([]);
+  expect(headers['set-cookie']).toBeUndefined();
 }
 
 type Req = {
@@ -98,6 +119,12 @@ function send(port: number, req: Req = {}): Promise<Res> {
       res => {
         assertNoCorsHeaders(res.headers, res.statusCode ?? 0);
         const answered: Res = { status: res.statusCode ?? 0, headers: res.headers, body: '' };
+        seenResponses.push({
+          path: req.path ?? '/',
+          status: answered.status,
+          headers: res.headers,
+          body: () => answered.body,
+        });
         response = answered;
         let body = '';
         res.setEncoding('utf8');
@@ -156,6 +183,12 @@ function openStream(port: number, path: string, headers: Record<string, string> 
       res => {
         assertNoCorsHeaders(res.headers, res.statusCode ?? 0);
         let text = '';
+        seenResponses.push({
+          path,
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: () => text,
+        });
         const waiters: (() => void)[] = [];
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => {
@@ -206,7 +239,7 @@ describe('binding', () => {
     const { server } = await start();
     expect(listen.mock.calls[0][1]).toBe('127.0.0.1');
     listen.mockRestore();
-    expect(server.url).toBe(`http://127.0.0.1:${server.port}/?token=${server.token}`);
+    expect(server.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${server.port}/#code=`));
     const refused = await new Promise<string>(resolve => {
       const socket = connect({ host: '::1', port: server.port });
       socket.on('connect', () => {
@@ -333,21 +366,34 @@ describe('methods', () => {
 });
 
 describe('token', () => {
-  it('gates /events: none, wrong and wrong-length refused; query or Bearer admitted', async () => {
+  it('gates /events: none, wrong, wrong-length and any query token refused; Bearer admitted', async () => {
     const { server } = await start();
     const p = server.port;
-    for (const path of ['/events', '/events?token=wrong', `/events?token=${server.token}x`]) {
+    for (const path of [
+      '/events',
+      '/events?token=wrong',
+      `/events?token=${server.token}x`,
+      `/events?token=${server.token}`,
+    ]) {
       const res = await send(p, { path });
       expect(res.status).toBe(401);
       expect(res.body).not.toContain(server.token);
     }
     expect((await send(p, { path: '/events', headers: bearer('nope') })).status).toBe(401);
-    const byQuery = await openStream(p, `/events?token=${encodeURIComponent(server.token)}`);
-    expect(byQuery.status).toBe(200);
-    byQuery.destroy();
     const byHeader = await openStream(p, '/events', bearer(server.token));
     expect(byHeader.status).toBe(200);
     byHeader.destroy();
+  });
+
+  it('refuses ?token= on /events even beside a valid Bearer header', async () => {
+    const { server } = await start();
+    for (const token of [server.token, 'x']) {
+      const res = await send(server.port, {
+        path: `/events?token=${token}`,
+        headers: bearer(server.token),
+      });
+      expect(res.status).toBe(401);
+    }
   });
 
   it('gates /message by the Bearer header alone', async () => {
@@ -380,7 +426,167 @@ describe('token', () => {
   it('uses a given token', async () => {
     const { server } = await start(fakeBridge(), { token: 'given-token' });
     expect(server.token).toBe('given-token');
-    expect(server.url).toBe(`http://127.0.0.1:${server.port}/?token=given-token`);
+    expect(server.url).not.toContain('given-token');
+  });
+});
+
+describe('link code', () => {
+  const origin = (server: WebServer) => ({ Origin: `http://127.0.0.1:${server.port}` });
+  function exchange(
+    server: WebServer,
+    body: unknown,
+    headers: Record<string, string> = { ...json, ...origin(server) },
+    path = '/session',
+  ) {
+    const raw = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
+    return send(server.port, { method: 'POST', path, headers, body: raw });
+  }
+  const refused = { error: 'invalid or expired link code' };
+
+  async function expectStillLive(server: WebServer, code: string) {
+    expect((await exchange(server, { code })).status).toBe(200);
+  }
+
+  it('hands out a #code= link that is not the token, and voids the last one', async () => {
+    const { server } = await start();
+    const first = codeOf(server.url);
+    const link = server.newLink();
+    expect(link).toMatch(
+      new RegExp(`^http://127\\.0\\.0\\.1:${server.port}/#code=[A-Za-z0-9_-]{43}$`),
+    );
+    expect(link).not.toContain(server.token);
+    expect(server.url).not.toContain(server.token);
+    expect(codeOf(link)).not.toBe(first);
+    const old = await exchange(server, { code: first });
+    expect(old.status).toBe(401);
+    expect(JSON.parse(old.body)).toEqual(refused);
+    await expectStillLive(server, codeOf(link));
+  });
+
+  it('trades a good code for the token, which then opens /events and posts', async () => {
+    const { server, fake } = await start(fakeBridge([hello]));
+    const res = await exchange(server, { code: codeOf(server.url) });
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['content-type']).toMatch(/^application\/json/);
+    const { token } = JSON.parse(res.body) as { token: string };
+    expect(token).toBe(server.token);
+    const s = await openStream(server.port, '/events', bearer(token));
+    expect(s.status).toBe(200);
+    await s.until(t => t.includes('"hello"'));
+    s.destroy();
+    const post = await send(server.port, {
+      method: 'POST',
+      path: '/message',
+      headers: { ...json, ...bearer(token) },
+      body: submit,
+    });
+    expect(post.status).toBe(200);
+    expect(fake.handled).toEqual([{ type: 'submit', text: 'hi' }]);
+  });
+
+  it('answers used, wrong, empty, non-string and missing codes with one 401', async () => {
+    const { server } = await start();
+    const code = codeOf(server.url);
+    expect((await exchange(server, { code })).status).toBe(200);
+    for (const body of [
+      { code },
+      { code: 'wrong' },
+      { code: `${code}x` },
+      { code: '' },
+      { code: 3 },
+      { code: [code] },
+      {},
+      null,
+      [code],
+      JSON.stringify(code),
+    ]) {
+      const res = await exchange(server, body);
+      expect(res.status, JSON.stringify(body)).toBe(401);
+      expect(JSON.parse(res.body)).toEqual(refused);
+    }
+  });
+
+  it('answers malformed JSON with 400 and leaves the code live', async () => {
+    const { server } = await start();
+    const res = await exchange(server, '{nope');
+    expect(res.status).toBe(400);
+    await expectStillLive(server, codeOf(server.url));
+  });
+
+  it('expires a code LINK_CODE_TTL_MS after it was minted', async () => {
+    let clock = 1_000_000;
+    const { server } = await start(fakeBridge(), { now: () => clock });
+    const fresh = server.newLink();
+    clock += LINK_CODE_TTL_MS - 1;
+    expect((await exchange(server, { code: codeOf(fresh) })).status).toBe(200);
+    const late = server.newLink();
+    clock += LINK_CODE_TTL_MS;
+    const res = await exchange(server, { code: codeOf(late) });
+    expect(res.status).toBe(401);
+    expect(JSON.parse(res.body)).toEqual(refused);
+  });
+
+  it('refuses no Origin, a foreign one or cross-site with 403, keeping the code', async () => {
+    const { server } = await start();
+    const code = codeOf(server.url);
+    for (const headers of <Record<string, string>[]>[
+      { ...json },
+      { ...json, 'Sec-Fetch-Site': 'same-origin' },
+      { ...json, Origin: 'http://evil.example' },
+      { ...json, Origin: `http://127.0.0.1:${server.port + 1}` },
+      { ...json, ...origin(server), 'Sec-Fetch-Site': 'cross-site' },
+    ]) {
+      const res = await exchange(server, { code }, headers);
+      expect(res.status, JSON.stringify(headers)).toBe(403);
+      expect(res.body).not.toContain(server.token);
+    }
+    await expectStillLive(server, code);
+  });
+
+  it('refuses a wrong content type with 415 and an over-cap body with 413, keeping the code', async () => {
+    const { server } = await start();
+    const code = codeOf(server.url);
+    const asText = await exchange(
+      server,
+      { code },
+      { ...origin(server), 'Content-Type': 'text/plain' },
+    );
+    expect(asText.status).toBe(415);
+    const big = await exchange(server, Buffer.alloc(MAX_MESSAGE_BYTES + 1, 'a'), {
+      ...json,
+      ...origin(server),
+      Connection: 'keep-alive',
+    });
+    expect(big.status).toBe(413);
+    await expectStillLive(server, code);
+  });
+
+  it('refuses a code or token in the /session query with 401', async () => {
+    const { server } = await start();
+    const code = codeOf(server.url);
+    for (const path of [
+      `/session?code=${code}`,
+      `/session?token=${server.token}`,
+      '/session?code=',
+    ]) {
+      const res = await exchange(server, { code }, undefined, path);
+      expect(res.status, path).toBe(401);
+      expect(JSON.parse(res.body)).toEqual(refused);
+    }
+    await expectStillLive(server, code);
+  });
+
+  it('does not exchange on GET /session or GET /?code=', async () => {
+    const { server } = await start();
+    const code = codeOf(server.url);
+    // Both are asset paths, and this server has no asset hook.
+    expect((await send(server.port, { path: '/session' })).status).toBe(404);
+    expect((await send(server.port, { path: `/session?code=${code}` })).status).toBe(404);
+    const root = await send(server.port, { path: `/?code=${code}` });
+    expect(root.status).toBe(404);
+    expect(root.body).not.toContain(server.token);
+    await expectStillLive(server, code);
   });
 });
 
@@ -526,20 +732,38 @@ describe('/events', () => {
   it('reads the resume point from Last-Event-ID, else ?after=, ignoring junk', async () => {
     const { server, fake } = await start();
     const p = server.port;
-    const t = server.token;
     const cases: [string, Record<string, string>][] = [
-      [`/events?token=${t}`, {}],
-      [`/events?token=${t}&after=12`, {}],
-      [`/events?token=${t}&after=12`, { 'Last-Event-ID': '7' }],
-      [`/events?token=${t}&after=-1`, {}],
-      [`/events?token=${t}&after=1.5`, {}],
-      [`/events?token=${t}`, { 'Last-Event-ID': 'abc' }],
+      ['/events', {}],
+      ['/events?after=12', {}],
+      ['/events?after=12', { 'Last-Event-ID': '7' }],
+      ['/events?after=-1', {}],
+      ['/events?after=1.5', {}],
+      ['/events', { 'Last-Event-ID': 'abc' }],
     ];
     for (const [path, headers] of cases) {
-      const s = await openStream(p, path, headers);
+      const s = await openStream(p, path, { ...bearer(server.token), ...headers });
       s.destroy();
     }
     expect(fake.connectCalls).toEqual([undefined, 12, 7, undefined, undefined, undefined]);
+  });
+
+  it('streams to a fetch reader that sets Authorization and Last-Event-ID itself', async () => {
+    const { server, fake } = await start(fakeBridge([hello]));
+    const abort = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${server.port}/events`, {
+      headers: { ...bearer(server.token), 'Last-Event-ID': '3' },
+      signal: abort.signal,
+    });
+    assertNoCorsHeaders(Object.fromEntries(res.headers), res.status);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/event-stream/);
+    const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+    let text = '';
+    while (!text.includes('\n\n')) text += (await reader.read()).value ?? '';
+    expect(frames(text)).toEqual([`id: 4\ndata: ${JSON.stringify(hello)}`]);
+    expect(fake.connectCalls).toEqual([3]);
+    abort.abort();
+    await reader.cancel().catch(() => {});
   });
 
   it('delivers events pushed after connect, and unsubscribes on disconnect', async () => {
@@ -662,5 +886,29 @@ describe('no CORS', () => {
     for (const status of [200, 400, 401, 403, 404, 405, 409, 413, 415, 500, 503]) {
       expect(seenStatuses.has(status), String(status)).toBe(true);
     }
+  });
+});
+
+describe('secrets', () => {
+  it('sends the token only in a /session 200 body, and a code in no response at all', () => {
+    // Runs last in file order, over every response the suite saw.
+    expect(tokens.size).toBeGreaterThan(10);
+    expect(codes.size).toBeGreaterThan(10);
+    expect(seenResponses.length).toBeGreaterThan(50);
+    let tokenBodies = 0;
+    for (const { path, status, headers, body } of seenResponses) {
+      const head = JSON.stringify(headers);
+      const text = body();
+      const exchanged = path === '/session' && status === 200;
+      for (const token of tokens) {
+        expect(head.includes(token), token).toBe(false);
+        if (text.includes(token)) {
+          expect(exchanged, `${status} ${path}`).toBe(true);
+          tokenBodies++;
+        }
+      }
+      for (const code of codes) expect((head + text).includes(code), code).toBe(false);
+    }
+    expect(tokenBodies).toBeGreaterThan(0);
   });
 });
