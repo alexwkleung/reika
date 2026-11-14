@@ -46,6 +46,7 @@ import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { createPrefixWarmer } from '../agent/warm.js';
+import { frozenStreamMessage } from '../agent/frozenstream.js';
 import { type LiveUsage, withLiveUsage } from '../agent/liveusage.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { submitStageLabel } from '../agent/submitinput.js';
@@ -115,8 +116,6 @@ function promptPlaceholder(): string {
   return withHint.length + 6 <= (process.stdout.columns || 80) ? withHint : base;
 }
 
-// A frozen stream's kept tail: well past what a viewport-tall live block can draw.
-const FROZEN_STREAM_CHARS = 16000;
 // An answered approval's rows: held this long for output to fill them, then whatever is still blank
 // shrinks by this fraction a frame (at least a row), so the input slides up rather than snapping.
 // Once the command has printed, the ease waits for it to go quiet this long instead: a command
@@ -1335,22 +1334,14 @@ export function App() {
       onReasoningReset: () => {
         // Loop-break recovery: end the degenerate looped reasoning's live preview so the
         // recovery notice is visible and the next round streams into a fresh Thinking block
-        // instead of appending onto the looped text (#55). Frozen into the scrollback where it
-        // stood rather than erased: erased, the frame dropped by the block's height under a
-        // one-line notice and the input jumped up. The tail is all that is kept, since a cut
-        // spiral can run to tens of thousands of chars and the block only ever drew its end.
-        const reasoning = reasoningRef.current.trim();
-        const content = streamingRef.current.trim();
-        if (reasoning || content) {
-          const frozen: Message = {
-            role: 'assistant',
-            content: content.slice(-FROZEN_STREAM_CHARS),
-            ...(reasoning ? { reasoning: reasoning.slice(-FROZEN_STREAM_CHARS) } : {}),
-            discarded: noteLiveRef.current ? 'note' : 'stream',
-            ...(subagentLiveRef.current ? { nested: true } : {}),
-          };
-          controller.append(frozen);
-        }
+        // instead of appending onto the looped text (#55), frozen where it stood (frozenstream.ts).
+        const frozen = frozenStreamMessage({
+          content: streamingRef.current,
+          reasoning: reasoningRef.current,
+          note: noteLiveRef.current,
+          nested: subagentLiveRef.current,
+        });
+        if (frozen) controller.append(frozen);
         reasoningRef.current = '';
         setStreamingReasoning('');
         setReasoningSpin(false);
