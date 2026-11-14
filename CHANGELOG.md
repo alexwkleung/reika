@@ -14,6 +14,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A loop-break recovery and the end of a shell-mode run no longer draw their text twice for one
+  frame, once still streaming and once committed (#986).
 - With two or more prompts queued behind a running turn, the second could be dropped without a
   trace when the first replayed. Each queued prompt now waits until the one before it has been
   submitted (#960).
