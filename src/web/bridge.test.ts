@@ -461,6 +461,66 @@ describe('pickers', () => {
     expect(controller.messages.slice(0, 2)).toEqual(turns);
   });
 
+  it('refuses a resume while a line is prepared, queued or asked about, or a turn runs (#1004)', async () => {
+    const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'saved');
+    const turns = [user('fix the parser'), { role: 'assistant', content: 'done' } as Message];
+    await writeSession(
+      path,
+      { agent: turns, chat: [] },
+      {
+        version: TRANSCRIPT_VERSION,
+        savedAt: new Date().toISOString(),
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        cwd: '/repo/app',
+        messageCount: turns.length,
+        mode: 'agent',
+      },
+    );
+    const { controller, session, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/resume' });
+    await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
+    const [picker] = dialogs(events);
+    const pick = () => bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path });
+    const refused = { ok: false, conflict: true };
+
+    // A line held before its turn starts: preparing, with the status still idle.
+    const gate = deferred();
+    session.turn = async (text, opts) => {
+      await gate.promise;
+      opts.onTurnStart?.();
+      opts.events?.onMessage?.(user(text));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    bridge.handle({ type: 'submit', text: 'first' });
+    await flush();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'idle', preparing: true });
+    expect(pick()).toMatchObject(refused);
+    gate.resolve();
+    await vi.waitFor(() => expect(controller.getSnapshot().preparing).toBe(false));
+
+    controller.setStatus('busy');
+    expect(pick()).toMatchObject(refused);
+    controller.setStatus('idle');
+
+    const asked = controller.openConfirm({
+      title: 't',
+      subtitle: 's',
+      details: [],
+      options: ['a'],
+    });
+    expect(pick()).toMatchObject(refused);
+    controller.answerConfirm(0);
+    await asked;
+
+    controller.enqueue({ content: 'later', answers: {} });
+    expect(pick()).toMatchObject(refused);
+    expect(types(events)).not.toContain('reset');
+    // The picker stays open for a resume once the session is between prompts again.
+    expect(resolved(events).some(r => r.id === picker.id)).toBe(false);
+  });
+
   it('reports a failed load in the scrollback', async () => {
     const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'saved');
     await writeSession(
