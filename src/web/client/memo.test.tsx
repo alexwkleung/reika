@@ -34,7 +34,14 @@ describe('committed rows are memoised', () => {
     const send = (e: ServerEvent) => act(async () => state.update(s => foldEvent(s, e)));
     const root = createRoot(document.getElementById('root')!);
     await act(async () =>
-      root.render(<App state={state} connection={connection} schedule={cb => cb()} />),
+      root.render(
+        <App
+          state={state}
+          connection={connection}
+          schedule={cb => cb()}
+          send={async () => ({ kind: 'ok' })}
+        />,
+      ),
     );
     await send({ type: 'hello', seq: 0, version: PROTOCOL_VERSION });
     await send({

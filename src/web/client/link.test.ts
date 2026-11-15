@@ -118,7 +118,7 @@ describe('signIn', () => {
 });
 
 describe('browserTokenStore', () => {
-  it('reads and writes the proof page key', () => {
+  it('reads and writes the token under its key', () => {
     const map = new Map<string, string>();
     const storage = {
       getItem: (k: string) => map.get(k) ?? null,

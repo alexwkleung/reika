@@ -1,0 +1,102 @@
+/* Dialogs, inline above the input box. Functional for now; a later PR designs them. */
+.dialog {
+  margin-top: 0.9em;
+  border-left: 2px solid var(--reika-warning);
+  padding: 0.5em 0 0.5em 0.8em;
+  background: var(--reika-code-bg);
+}
+.dialog-title {
+  overflow-wrap: anywhere;
+}
+.dialog-tool {
+  color: var(--reika-tool);
+  font-weight: 700;
+  margin-right: 0.6em;
+}
+.dialog-subject {
+  color: var(--reika-secondary);
+  font-family: var(--reika-mono);
+  font-size: 0.9em;
+}
+.dialog-preview {
+  margin: 0.5em 0 0;
+  font-family: var(--reika-mono);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.dialog-preview-diff {
+  margin-top: 0.5em;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.dialog-warning {
+  color: var(--reika-warning);
+  margin-top: 0.4em;
+}
+.dialog-detail {
+  color: var(--reika-muted);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+.dialog-choices {
+  list-style: none;
+  margin: 0.5em 0 0;
+  padding: 0;
+}
+.dialog-choice + .dialog-choice {
+  margin-top: 0.25em;
+}
+.dialog-choice .dialog-detail {
+  margin-left: 2.2em;
+}
+.dialog-button {
+  font: inherit;
+  color: var(--reika-text);
+  background: var(--reika-user-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 2px;
+  padding: 0.25em 0.7em;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.dialog-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dialog-button--current {
+  border-color: var(--reika-accent);
+}
+.dialog-n {
+  color: var(--reika-muted);
+  margin-right: 0.5em;
+}
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  margin-top: 0.6em;
+  font-size: 0.9em;
+  color: var(--reika-secondary);
+}
+.dialog-field input {
+  font: inherit;
+  color: var(--reika-text);
+  background: var(--reika-page-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 2px;
+  padding: 0.3em 0.5em;
+}
+.dialog-actions {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 0.5em;
+}
+.dialog-error {
+  color: var(--reika-error);
+  margin-top: 0.4em;
+}

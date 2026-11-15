@@ -1,0 +1,60 @@
+/* The input box. Functional for now; a later PR designs it. */
+.composer {
+  padding-top: 0.6em;
+}
+.composer-queue {
+  list-style: none;
+  margin: 0 0 0.4em;
+  padding: 0;
+  font-size: 0.9em;
+  color: var(--reika-secondary);
+}
+.composer-queued {
+  overflow-wrap: anywhere;
+}
+.composer-queued-label {
+  color: var(--reika-queued);
+  margin-right: 0.5em;
+}
+.composer-waiting {
+  color: var(--reika-warning);
+  font-size: 0.9em;
+  margin-bottom: 0.3em;
+}
+.composer-row {
+  display: flex;
+  gap: 0.5em;
+  align-items: flex-end;
+}
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 40vh;
+  overflow-y: auto;
+  font: inherit;
+  color: var(--reika-text);
+  background: var(--reika-user-bg);
+  border: 1px solid var(--reika-rule);
+  border-left: 3px solid var(--reika-accent);
+  border-radius: 2px;
+  padding: 0.45em 0.6em;
+}
+.composer-input:disabled {
+  opacity: 0.55;
+}
+.composer-stop {
+  font: inherit;
+  color: var(--reika-text);
+  background: transparent;
+  border: 1px solid var(--reika-error);
+  border-radius: 2px;
+  padding: 0.4em 0.8em;
+  cursor: pointer;
+}
+.composer-error {
+  color: var(--reika-error);
+  font-size: 0.9em;
+  margin-top: 0.3em;
+  overflow-wrap: anywhere;
+}

@@ -14,3 +14,24 @@ export function frameBatched(notify: () => void, schedule: FrameScheduler): () =
     });
   };
 }
+
+// A hidden tab gets no animation frames, so a frame alone would leave it showing a dialog another
+// tab already answered. The timer draws it instead, throttled by the browser; whichever fires first
+// runs the callback, once.
+export const HIDDEN_TAB_DRAW_MS = 250;
+
+export function frameOrTimer(
+  requestFrame: (callback: () => void) => unknown,
+  setTimer: (callback: () => void, ms: number) => unknown,
+): FrameScheduler {
+  return callback => {
+    let ran = false;
+    const run = () => {
+      if (ran) return;
+      ran = true;
+      callback();
+    };
+    requestFrame(run);
+    setTimer(run, HIDDEN_TAB_DRAW_MS);
+  };
+}

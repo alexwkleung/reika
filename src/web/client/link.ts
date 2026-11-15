@@ -2,7 +2,6 @@
 // POST /session for the token, which this tab keeps. The browser parts are handed in, so this
 // runs under a test with no DOM.
 
-// The proof page's key, so a tab signed in there stays signed in here.
 export const TOKEN_STORAGE_KEY = 'reika-token';
 
 export type TokenStore = {

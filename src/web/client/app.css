@@ -94,16 +94,20 @@ body {
   padding-top: 0.5em;
 }
 
-/* Stage B2 fills this with the input box and the status line. */
-.app-controls-slot {
+/* In flow and sticky, so it stays in view and the last transcript row is never under it. */
+.app-controls {
   position: sticky;
   bottom: 0;
+  z-index: 1;
+  background: var(--reika-page-bg);
+  border-top: 1px solid var(--reika-rule);
+  margin-top: 0.9em;
 }
 
 .app-jump {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: 9em;
   font: inherit;
   font-size: 0.85em;
   color: var(--reika-text);

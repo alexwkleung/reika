@@ -64,21 +64,18 @@ describe('import graph', () => {
   });
 });
 
-let assetsRoot: string;
+let tmp: string;
 let clientRoot: string;
 beforeAll(async () => {
-  assetsRoot = await mkdtemp(join(tmpdir(), 'reika-web-'));
-  clientRoot = join(assetsRoot, 'client');
+  tmp = await mkdtemp(join(tmpdir(), 'reika-web-'));
+  clientRoot = join(tmp, 'client');
   await mkdir(clientRoot);
   await writeFile(join(clientRoot, 'index.html'), '<!doctype html><title>client</title>');
   await writeFile(join(clientRoot, 'app.js'), 'export {};');
   await writeFile(join(clientRoot, 'app.css'), ':root{}');
-  await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>proof</title>');
-  await writeFile(join(assetsRoot, 'client.js'), 'void 0;');
-  await writeFile(join(assetsRoot, 'style.css'), 'body{}');
 });
 afterAll(async () => {
-  await rm(assetsRoot, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true });
 });
 
 const profile = { model: 'local', baseURL: 'http://127.0.0.1:1/v1', apiKey: 'test' };
@@ -134,8 +131,7 @@ function ioWith(overrides: Partial<WebIo> = {}) {
     saveLastState: vi.fn(),
     defaultMode: () => 'agent',
     createSession: create as unknown as typeof createSession,
-    assetsRoot,
-    env: {},
+    clientRoot,
     ...overrides,
   };
   return { io, out, err, session: () => made! };
@@ -298,33 +294,20 @@ describe('runWeb', () => {
     expect(await tradeLink(next)).toBeTruthy();
   });
 
-  it('serves the proof client', async () => {
-    const { run } = await start();
-    const index = await get(run.port, '/');
+  it('serves the built client, and says how to build a missing one', async () => {
+    const built = await start();
+    const index = await get(built.run.port, '/');
     expect(index.status).toBe(200);
     expect(index.headers['content-type']).toBe('text/html; charset=utf-8');
-    expect(index.body).toContain('<title>proof</title>');
+    expect(index.body).toContain('<title>client</title>');
     expect(index.headers['cache-control']).toBe('no-store');
     expect(index.headers['referrer-policy']).toBe('no-referrer');
-    expect((await get(run.port, '/client.js')).headers['content-type']).toMatch(/javascript/);
-    expect((await get(run.port, '/style.css')).headers['content-type']).toMatch(/text\/css/);
-    expect((await get(run.port, '/package.json')).status).toBe(404);
-    expect((await get(run.port, '/app.js')).status).toBe(404);
-  });
-
-  it('serves the built client under REIKA_WEB_CLIENT=1, and says how to build a missing one', async () => {
-    const built = await start({ env: { REIKA_WEB_CLIENT: '1' }, clientRoot });
-    const index = await get(built.run.port, '/');
-    expect(index.headers['content-type']).toBe('text/html; charset=utf-8');
-    expect(index.body).toContain('<title>client</title>');
     expect((await get(built.run.port, '/app.js')).headers['content-type']).toMatch(/javascript/);
     expect((await get(built.run.port, '/app.css')).headers['content-type']).toMatch(/text\/css/);
     expect((await get(built.run.port, '/client.js')).status).toBe(404);
+    expect((await get(built.run.port, '/package.json')).status).toBe(404);
 
-    const missing = await start({
-      env: { REIKA_WEB_CLIENT: '1' },
-      clientRoot: join(clientRoot, 'nope'),
-    });
+    const missing = await start({ clientRoot: join(clientRoot, 'nope') });
     const page = await get(missing.run.port, '/');
     expect(page.status).toBe(200);
     expect(page.headers['content-type']).toBe('text/plain; charset=utf-8');
