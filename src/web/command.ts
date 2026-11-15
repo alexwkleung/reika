@@ -5,7 +5,7 @@ import { startMode, type LastState } from '../laststate.js';
 import type { createSession } from '../session.js';
 import type { Config, Mode } from '../types.js';
 import { PACKAGE_ROOT } from '../version.js';
-import { proofAssets } from './assets.js';
+import { clientAssets, proofAssets } from './assets.js';
 import { createWebBridge } from './bridge.js';
 import { startWebServer } from './server.js';
 
@@ -58,7 +58,18 @@ export type WebIo = {
   // The proof client's directory. From source PACKAGE_ROOT is the repo root; `web-proof/` is
   // deliberately not in package.json `files`, since this command only runs from source for now.
   assetsRoot?: string;
+  // Temporary, until the built client replaces the proof page: REIKA_WEB_CLIENT=1 serves it.
+  env?: NodeJS.ProcessEnv;
+  clientRoot?: string;
 };
+
+// dist/web/ from source and from the bundle alike, since PACKAGE_ROOT is the package root in both.
+function pageAssets(io: WebIo) {
+  if ((io.env ?? process.env).REIKA_WEB_CLIENT === '1') {
+    return clientAssets(io.clientRoot ?? join(PACKAGE_ROOT, 'dist', 'web'));
+  }
+  return proofAssets(io.assetsRoot ?? join(PACKAGE_ROOT, 'web-proof'));
+}
 
 export type WebHandle = {
   url: string;
@@ -136,7 +147,7 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
   try {
     server = await startWebServer(bridge, {
       port: args.port,
-      assets: proofAssets(io.assetsRoot ?? join(PACKAGE_ROOT, 'web-proof')),
+      assets: pageAssets(io),
     });
   } catch (e) {
     bridge.close();

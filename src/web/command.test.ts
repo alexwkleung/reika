@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { connect, createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -65,8 +65,14 @@ describe('import graph', () => {
 });
 
 let assetsRoot: string;
+let clientRoot: string;
 beforeAll(async () => {
   assetsRoot = await mkdtemp(join(tmpdir(), 'reika-web-'));
+  clientRoot = join(assetsRoot, 'client');
+  await mkdir(clientRoot);
+  await writeFile(join(clientRoot, 'index.html'), '<!doctype html><title>client</title>');
+  await writeFile(join(clientRoot, 'app.js'), 'export {};');
+  await writeFile(join(clientRoot, 'app.css'), ':root{}');
   await writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>proof</title>');
   await writeFile(join(assetsRoot, 'client.js'), 'void 0;');
   await writeFile(join(assetsRoot, 'style.css'), 'body{}');
@@ -129,6 +135,7 @@ function ioWith(overrides: Partial<WebIo> = {}) {
     defaultMode: () => 'agent',
     createSession: create as unknown as typeof createSession,
     assetsRoot,
+    env: {},
     ...overrides,
   };
   return { io, out, err, session: () => made! };
@@ -302,6 +309,26 @@ describe('runWeb', () => {
     expect((await get(run.port, '/client.js')).headers['content-type']).toMatch(/javascript/);
     expect((await get(run.port, '/style.css')).headers['content-type']).toMatch(/text\/css/);
     expect((await get(run.port, '/package.json')).status).toBe(404);
+    expect((await get(run.port, '/app.js')).status).toBe(404);
+  });
+
+  it('serves the built client under REIKA_WEB_CLIENT=1, and says how to build a missing one', async () => {
+    const built = await start({ env: { REIKA_WEB_CLIENT: '1' }, clientRoot });
+    const index = await get(built.run.port, '/');
+    expect(index.headers['content-type']).toBe('text/html; charset=utf-8');
+    expect(index.body).toContain('<title>client</title>');
+    expect((await get(built.run.port, '/app.js')).headers['content-type']).toMatch(/javascript/);
+    expect((await get(built.run.port, '/app.css')).headers['content-type']).toMatch(/text\/css/);
+    expect((await get(built.run.port, '/client.js')).status).toBe(404);
+
+    const missing = await start({
+      env: { REIKA_WEB_CLIENT: '1' },
+      clientRoot: join(clientRoot, 'nope'),
+    });
+    const page = await get(missing.run.port, '/');
+    expect(page.status).toBe(200);
+    expect(page.headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(page.body).toContain('pnpm run build:web');
   });
 
   it('streams a hello and a snapshot, and a POSTed submit reaches the turn', async () => {

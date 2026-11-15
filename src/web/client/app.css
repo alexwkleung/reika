@@ -1,0 +1,44 @@
+/* The palette, copied from src/ui/theme.ts's truecolor slots (palette.test.ts keeps the two in
+   step). Named terminal colors there (info, error, success) get a hex chosen to sit with the
+   pastels here. */
+:root {
+  color-scheme: dark;
+  --reika-accent: #d68cd6;
+  --reika-inline-code: #d5afee;
+  --reika-tool: #c8c8c8;
+  --reika-info: #7fd3dc;
+  --reika-secondary: #a0a0a0;
+  --reika-muted: #808080;
+  --reika-reasoning: #6495ed;
+  --reika-prefill: #7a90ee;
+  --reika-warning: #e5d49a;
+  --reika-queued: #e8b87a;
+  --reika-subagent: #e0b48f;
+  --reika-auto-approve: #e8a090;
+  --reika-error: #ef7b7b;
+  --reika-success: #9fd49f;
+  --reika-user-bg: #303030;
+  --reika-mode-agent: #d7a8d7;
+  --reika-mode-plan: #8fd0c8;
+  --reika-mode-vibe: #b4aee0;
+  --reika-mode-minimal: #9aa8b8;
+  --reika-mode-grind: #d89aa8;
+  --reika-mode-chat: #a892c4;
+  --reika-mode-shell: #9fd49f;
+  --reika-link: #aac0f0;
+  --reika-pr-merged: #b48cf0;
+
+  --reika-page-bg: #1a1a1a;
+  --reika-text: #e4e4e4;
+  --reika-font: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--reika-page-bg);
+  color: var(--reika-text);
+  font-family: var(--reika-font);
+  font-size: 14px;
+  line-height: 1.5;
+}

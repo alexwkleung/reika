@@ -1150,6 +1150,8 @@ Auto-injection wants the shape of a command, not just its keywords (`leading` an
 
 ## Web server (#584, `src/web/server.ts`)
 
+The browser client lives in `src/web/client/` (its own tsconfig, DOM lib) and is bundled to `dist/web/` by `scripts/build-web.mjs` (`pnpm run build:web` builds just the page from source). No Node code imports it: the server only reads those files off disk (`clientAssets`), and `bundles.test.ts` fails if the CLI graph reaches it or `react-dom`, or if the page's graph reaches a Node built-in, Ink, or any `src/` module but the type-only `protocol.ts`. Its state is one pure fold (`client/store.ts` `foldEvent`) over the server's events; keep effects in the transport files around it.
+
 Whoever passes these checks can run commands through the agent, so each is a rule, and each has a test in `server.test.ts`:
 
 - **Bind `127.0.0.1` only**, never `0.0.0.0`, `::` or a hostname: nothing off the machine may connect.
