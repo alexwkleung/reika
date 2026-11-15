@@ -89,7 +89,8 @@ type Req = {
   path?: string;
   // `null` sends no Host at all.
   host?: string | null;
-  headers?: Record<string, string>;
+  // A list sends the header once per value.
+  headers?: Record<string, string | string[]>;
   body?: string | Buffer;
   // Sends the body without a Content-Length.
   chunked?: boolean;
@@ -98,7 +99,7 @@ type Req = {
 type Res = { status: number; headers: IncomingHttpHeaders; body: string };
 
 function send(port: number, req: Req = {}): Promise<Res> {
-  const headers: Record<string, string> = { ...req.headers };
+  const headers: Record<string, string | string[]> = { ...req.headers };
   const host = req.host === undefined ? `127.0.0.1:${port}` : req.host;
   if (host !== null) headers.Host = host;
   if (req.body !== undefined && !req.chunked) {
@@ -339,6 +340,65 @@ describe('Origin and Sec-Fetch-Site', () => {
     for (const site of ['same-origin', 'none']) {
       expect((await send(p, { headers: { 'Sec-Fetch-Site': site } })).status).toBe(404);
     }
+  });
+});
+
+describe('a cross-site page load', () => {
+  const navigate = {
+    'Sec-Fetch-Site': 'cross-site',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Dest': 'document',
+  };
+
+  it('admits the page itself, loaded as a top-level document', async () => {
+    const { server } = await start();
+    // No assets in these tests: past the checks, the page is a 404.
+    expect((await send(server.port, { headers: navigate })).status).toBe(404);
+    expect(
+      (await send(server.port, { headers: { ...navigate, 'Sec-Fetch-Site': 'same-site' } })).status,
+    ).toBe(404);
+  });
+
+  it('refuses it framed, fetched, for another path, with a query, or as a POST', async () => {
+    const { server, fake } = await start();
+    const p = server.port;
+    const refused = [
+      { headers: { ...navigate, 'Sec-Fetch-Dest': 'iframe' } },
+      { headers: { ...navigate, 'Sec-Fetch-Mode': 'cors' } },
+      { headers: { ...navigate, 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'script' } },
+      { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } },
+      { path: '/app.js', headers: navigate },
+      { path: '/events', headers: navigate },
+      { path: '/?code=x', headers: navigate },
+      { method: 'POST', path: '/session', headers: { ...navigate, ...json }, body: '{"code":"x"}' },
+      {
+        method: 'POST',
+        path: '/message',
+        headers: { ...navigate, ...json, ...bearer(server.token) },
+        body: submit,
+      },
+    ];
+    for (const r of refused) expect((await send(p, r)).status).toBe(403);
+    expect(fake.handled).toEqual([]);
+  });
+
+  it('refuses a doubled mode or dest header', async () => {
+    const { server } = await start();
+    const doubled = (name: string, value: string) =>
+      send(server.port, {
+        headers: { ...navigate, [name]: [navigate[name as keyof typeof navigate], value] },
+      });
+    expect((await doubled('Sec-Fetch-Dest', 'iframe')).status).toBe(403);
+    expect((await doubled('Sec-Fetch-Mode', 'cors')).status).toBe(403);
+  });
+
+  it('still checks the host and the origin', async () => {
+    const { server } = await start();
+    const p = server.port;
+    expect((await send(p, { host: `evil.example:${p}`, headers: navigate })).status).toBe(403);
+    expect(
+      (await send(p, { headers: { ...navigate, Origin: 'http://evil.example' } })).status,
+    ).toBe(403);
   });
 });
 

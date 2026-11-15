@@ -202,9 +202,25 @@ export async function startWebServer(
     if (siteCount > 1) return false;
     if (siteCount === 1) {
       const site = req.headers['sec-fetch-site'];
-      if (site !== 'same-origin' && site !== 'none') return false;
+      if (site !== 'same-origin' && site !== 'none' && !isPageLoad(req)) return false;
     }
     return true;
+  }
+
+  // The page itself, loaded as a window's top-level document, from anywhere: `reika web --window`
+  // opens it through a local file that redirects (the link must not sit in a command line), which
+  // a browser labels cross-site. Any site could already link the user here, and the bare page
+  // does nothing without the code in its fragment, which no linking site holds. A frame is
+  // `iframe`, not `document`, and stays refused; the API and the other files keep the strict rule.
+  function isPageLoad(req: IncomingMessage): boolean {
+    return (
+      req.method === 'GET' &&
+      req.url === '/' &&
+      headerCount(req, 'sec-fetch-mode') === 1 &&
+      req.headers['sec-fetch-mode'] === 'navigate' &&
+      headerCount(req, 'sec-fetch-dest') === 1 &&
+      req.headers['sec-fetch-dest'] === 'document'
+    );
   }
 
   // In the fragment, so the code never reaches a request line or a Referer, and a speculative
