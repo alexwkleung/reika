@@ -5,13 +5,14 @@ import { connectionNotice, type Connection } from './connection.js';
 import { Dialogs } from './Dialogs.js';
 import { nextFollow, type FollowEvent } from './follow.js';
 import { frameBatched, type FrameScheduler } from './framebatch.js';
+import { History } from './History.js';
 import type { Holder } from './holder.js';
 import { LiveTurn } from './LiveTurn.js';
 import { StatusLine } from './StatusLine.js';
 import type { ClientState } from './store.js';
 import { Transcript } from './Transcript.js';
 
-// The page: the connection banner, the transcript, the running turn under its last row, and the
+// The page: the history drawer, the connection banner, the transcript, the running turn under its last row, and the
 // controls pinned under it: the first open dialog, the input box and the status line.
 
 function useFramed<T>(holder: Holder<T>, schedule: FrameScheduler): T {
@@ -86,6 +87,12 @@ export function App({
   const restoreLine = useRef<() => void>(() => {});
   return (
     <div className="app">
+      <History
+        session={s.session}
+        waiting={s.dialogs.length > 0}
+        locked={s.versionMismatch !== null}
+        send={send}
+      />
       {notice || version ? (
         <div className="app-banner" role="status">
           <span className="app-banner-marker" aria-hidden="true">

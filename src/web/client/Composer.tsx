@@ -164,7 +164,8 @@ export function Composer({
     }
     void send({ type: 'complete', text: completionRequestText(value) }).then(result => {
       if (seq !== completionSeq.current) return;
-      const list = result.kind === 'ok' ? result.reply : null;
+      const list =
+        result.kind === 'ok' && result.reply && !('scope' in result.reply) ? result.reply : null;
       setCompletion(list && list.items.length > 0 ? { list, selected: 0 } : null);
     });
   };
