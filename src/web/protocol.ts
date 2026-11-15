@@ -104,6 +104,8 @@ export type WireState = {
   modelPinned: boolean;
   // The current session's id (its file name), null before its first save and after a `/new`.
   session: string | null;
+  // The busy line rotates the TUI's working verbs (REIKA_WORKING_WORDS, default on).
+  workingWords: boolean;
 };
 
 // A file's name and nothing above it: a tab names a session by this, and the server looks the
@@ -139,6 +141,7 @@ export function wireState(controller: Controller, stage: string | null = null): 
     stage,
     modelPinned: controller.modelPinned,
     session: controller.sessionPath === null ? null : sessionId(controller.sessionPath),
+    workingWords: cfg?.workingWords === true,
   };
 }
 
