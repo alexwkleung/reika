@@ -106,6 +106,15 @@ export function App({
         ) : null}
       </main>
       <div className="app-controls">
+        {/* In the controls, so it sits centred over the input box rather than at the window edge. */}
+        {following ? null : (
+          <button type="button" className="app-jump" onClick={jump}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v10M3.5 8.5 8 13l4.5-4.5" />
+            </svg>
+            Jump to latest
+          </button>
+        )}
         <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
         <Composer
           send={send}
@@ -118,11 +127,6 @@ export function App({
         />
         <StatusLine session={s.session} stream={c.stream} />
       </div>
-      {following ? null : (
-        <button type="button" className="app-jump" onClick={jump}>
-          Jump to latest
-        </button>
-      )}
     </div>
   );
 }

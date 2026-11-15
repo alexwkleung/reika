@@ -10,7 +10,6 @@ import { Markdown } from './Markdown.js';
 export const GLYPH = {
   call: '⏺',
   toolResult: '↳',
-  bar: '▎',
   notice: '❯',
   noticeWarn: '⟳',
   check: '✓',

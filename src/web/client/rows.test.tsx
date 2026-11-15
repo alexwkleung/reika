@@ -23,10 +23,10 @@ const text = (html: string) =>
     .replace(/&amp;/g, '&');
 
 describe('user rows', () => {
-  it('draws the accent bar and the display text over the content', () => {
+  it('draws the display text over the content, with the rule as the row border', () => {
     const html = row({ role: 'user', content: 'expanded body', display: '/review 12' });
     expect(html).toContain('class="row row-user"');
-    expect(html).toContain('▎');
+    expect(html).not.toContain('▎');
     expect(text(html)).toContain('/review 12');
     expect(text(html)).not.toContain('expanded body');
   });
@@ -264,6 +264,18 @@ describe('notices, errors, shell and the rest', () => {
     expect(text(def)).toContain('❯');
     expect(def).not.toContain('row-system-lead');
     expect(row({ role: 'system', content: 'x', emphasis: 'line' })).toContain('row-system--line');
+  });
+
+  it('draws a line of only ─ as a rule, keeping the text around it', () => {
+    const html = row({
+      role: 'system',
+      content: `Session summary\n${'─'.repeat(40)}\nDuration: 5s`,
+    });
+    expect(html).toContain('<span class="row-system-rule" role="separator"></span>');
+    expect(html).not.toContain('─');
+    expect(text(html)).toContain('Session summary');
+    expect(text(html)).toContain('Duration: 5s');
+    expect(row({ role: 'system', content: 'a ── b' })).not.toContain('row-system-rule');
   });
 
   it('an error is labelled, and stays plain text', () => {
