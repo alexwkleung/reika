@@ -288,7 +288,8 @@ export function createWebBridge(
   // A switch only between lines. The status stays idle while a line asks its questions and fetches
   // its links, and the line reads the mode after those waits; a switch then would run it in a mode
   // it was not typed for. A queued line is about to replay, so it holds a switch too.
-  const switchRefusal = (what: 'modes' | 'models'): HandleResult | null => {
+  // The same rule holds a resume (#1004): it replaces the conversation a waiting line was typed for.
+  const switchRefusal = (what: 'modes' | 'models' | 'sessions'): HandleResult | null => {
     const snap = controller.getSnapshot();
     const between =
       controller.session !== null &&
@@ -420,9 +421,8 @@ export function createWebBridge(
         const picked = offered.find(e => e.path === message.path);
         // Only a file this dialog listed: a tab's path is never read as given.
         if (!picked) return { ok: false, error: 'path is not one this dialog offered' };
-        if (resuming || controller.status !== 'idle') {
-          return { ok: false, error: 'cannot resume while busy' };
-        }
+        const busy = switchRefusal('sessions');
+        if (busy) return busy;
         entry.answered = true;
         closeDialog(entry);
         resuming = true;
