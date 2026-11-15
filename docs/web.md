@@ -6,6 +6,8 @@
 terminal UI: the same modes, tools, approvals, context handling and auto-save, drawn in a browser
 instead of a terminal. It is **experimental**.
 
+![Reika's web front end in its own window: the history pane, a diff from an edit, and the input box](web.png)
+
 ## Start it
 
 ```sh

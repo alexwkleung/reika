@@ -87,6 +87,8 @@ To run from a checkout instead — `git clone https://github.com/alexwkleung/rei
 
 Prefer a window to a terminal? `reika web` serves the same agent to a browser tab on this machine, and `reika web --window` opens it in its own app window. It is experimental; [docs/web.md](docs/web.md) covers what it does and what it doesn't yet.
 
+![Reika's web front end in its own window: the history pane, a diff from an edit, and the input box](docs/web.png)
+
 ## Common configuration
 
 Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that order of precedence). The full list, experimental flags, and multi-model profiles are in [docs/configuration.md](docs/configuration.md).
