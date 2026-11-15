@@ -83,6 +83,7 @@ export function App({
   const busy = s.session?.status === 'busy';
   const mode = s.session?.mode;
   const { following, jump } = useFollowBottom(s);
+  const restoreLine = useRef<() => void>(() => {});
   return (
     <div className="app">
       {notice || version ? (
@@ -105,7 +106,7 @@ export function App({
         ) : null}
       </main>
       <div className="app-controls">
-        <Dialogs dialogs={s.dialogs} send={send} />
+        <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
         <Composer
           send={send}
           session={s.session}
@@ -113,6 +114,7 @@ export function App({
           history={s.history}
           waiting={s.dialogs.length > 0}
           locked={s.versionMismatch !== null}
+          restoreLine={restoreLine}
         />
         <StatusLine session={s.session} stream={c.stream} />
       </div>

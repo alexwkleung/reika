@@ -60,6 +60,12 @@
   font-size: 0.71875rem;
   color: var(--reika-muted);
 }
+/* At phone width the folder sits on its own line, so it starts at the left like the rest. */
+@media (max-width: 480px) {
+  .status-path {
+    margin-left: 0;
+  }
+}
 .status-error {
   color: var(--reika-error);
   font-size: 1.15em;

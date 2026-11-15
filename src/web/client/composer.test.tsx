@@ -68,6 +68,7 @@ type MountOpts = {
   history?: string[];
   waiting?: boolean;
   locked?: boolean;
+  restoreLine?: { current: () => void };
 };
 
 async function mount(opts: MountOpts = {}) {
@@ -92,6 +93,7 @@ async function mount(opts: MountOpts = {}) {
           history={over.history ?? opts.history ?? []}
           waiting={over.waiting ?? opts.waiting ?? false}
           locked={over.locked ?? opts.locked ?? false}
+          restoreLine={opts.restoreLine}
         />,
       ),
     );
@@ -369,8 +371,32 @@ describe('Composer', () => {
   it('is disabled with a line while a dialog waits', async () => {
     const m = await mount({ waiting: true });
     expect(m.box().disabled).toBe(true);
-    expect(m.container.textContent).toContain('A question is waiting above.');
+    expect(m.container.textContent).toContain('Answer above to continue.');
     expect(m.button('Mode: agent')!.disabled).toBe(true);
+    await m.unmount();
+  });
+
+  it("takes back its own line on a confirm's Don't send, and only once", async () => {
+    const restoreLine = { current: () => {} };
+    const m = await mount({ restoreLine });
+    await m.type('verify the change');
+    await m.press('Enter');
+    expect(m.box().value).toBe('');
+    await act(async () => restoreLine.current());
+    expect(m.box().value).toBe('verify the change');
+    await m.type('');
+    await act(async () => restoreLine.current());
+    expect(m.box().value).toBe('');
+    await m.unmount();
+  });
+
+  it('does not take back a line it queued behind a running turn', async () => {
+    const restoreLine = { current: () => {} };
+    const m = await mount({ restoreLine, session: { status: 'busy' } });
+    await m.type('later');
+    await m.press('Enter');
+    await act(async () => restoreLine.current());
+    expect(m.box().value).toBe('');
     await m.unmount();
   });
 

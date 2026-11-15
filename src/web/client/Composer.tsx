@@ -6,6 +6,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type MutableRefObject,
 } from 'react';
 import { WIRE_MODES, type ClientMessage, type WireCatalog, type WireState } from '../protocol.js';
 import { isLargePaste, type PastedText } from '../../ui/pastes.js';
@@ -95,6 +96,7 @@ export function Composer({
   history,
   waiting,
   locked,
+  restoreLine,
 }: {
   send: Send;
   session: WireState | null;
@@ -104,6 +106,8 @@ export function Composer({
   waiting: boolean;
   // The server speaks another protocol version: nothing here can be trusted to land.
   locked: boolean;
+  // Set here, called by a confirm's "Don't send": the TUI leaves a cancelled prompt in its box.
+  restoreLine?: MutableRefObject<() => void>;
 }) {
   const mode = session?.mode ?? 'agent';
   const busy = session?.status === 'busy';
@@ -117,6 +121,22 @@ export function Composer({
   const caret = useRef<number | null>(null);
   // Only the newest completion request's answer is shown.
   const completionSeq = useRef(0);
+  // A line this tab sent while nothing else ran, so the one now being prepared, until that ends.
+  // Only it may come back on "Don't send": a confirm another tab's line raised is not this box's.
+  // A line that finishes before its POST answers can outlive its preparation here; the cost is
+  // this tab's previous line refilling an empty box, which is visible and harmless.
+  const ownLine = useRef<string | null>(null);
+  const preparing = session?.preparing ?? false;
+  useEffect(() => {
+    if (!preparing) ownLine.current = null;
+  }, [preparing]);
+  if (restoreLine) {
+    restoreLine.current = () => {
+      const line = ownLine.current;
+      ownLine.current = null;
+      if (line !== null) setText(current => (current === '' ? line : current));
+    };
+  }
 
   useLayoutEffect(() => {
     fitHeight(box.current);
@@ -172,6 +192,9 @@ export function Composer({
     const failure = sendFailure(result);
     setError(failure);
     if (failure) return;
+    const ranAlone =
+      session !== null && session.status === 'idle' && !session.preparing && !session.queue.length;
+    ownLine.current = ranAlone ? value : null;
     // Cleared only once the server took it, and only if nothing was typed meanwhile.
     const left = box.current?.value === value ? '' : (box.current?.value ?? '');
     setText(current => (current === value ? '' : current));
@@ -331,7 +354,7 @@ export function Composer({
           {session.stage}…
         </div>
       ) : null}
-      {waiting ? <div className="composer-waiting">A question is waiting above.</div> : null}
+      {waiting ? <div className="composer-waiting">Answer above to continue.</div> : null}
       <div className="composer-anchor">
         {completion ? (
           <ul className="composer-completions" id={listId} role="listbox" aria-label="Completions">
