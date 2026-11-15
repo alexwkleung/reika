@@ -108,6 +108,8 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
     mode: startMode(io.loadLastState()),
     remember: io.saveLastState,
     ...(io.createSession ? { createSession: io.createSession } : {}),
+    // The status line's PR. A test's injected session skips it: no git or gh from a test.
+    pollPr: !io.createSession,
   });
   const session = await controller.boot({
     cwd: io.cwd,

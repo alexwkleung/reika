@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { formatDurationMs } from '../../ui/format.js';
 import type { PlanChecks } from '../../types.js';
 import { Markdown } from './Markdown.js';
@@ -17,7 +17,7 @@ export const GLYPH = {
   shell: '$',
 } as const;
 
-// Lines a collapsed Thinking block keeps in view: the end of a thought is where it lands.
+// Past this many lines a committed Thinking block offers its whole text behind a toggle.
 export const REASONING_TAIL_LINES = 3;
 
 // Blank-line runs and edge whitespace would become empty rows inside the bar (ui/Scrollback.tsx
@@ -26,39 +26,62 @@ export function reasoningText(text: string): string {
   return text.replace(/\n\s*\n/g, '\n').replace(/^\s*\n|\s+$/g, '');
 }
 
-// Collapsed to its last lines behind a native <details>, so expanding needs no state of ours.
+// A fixed window onto the end of a thought: it grows to four rows and then holds that height,
+// newest text at the bottom, the oldest fading out at the top once it overflows. The live block
+// and the row it commits as share it, so neither streaming nor the commit changes its height. A
+// tail of the last few lines changed height with every wrap, and the block and everything under
+// it jumped as it streamed.
+export function ReasoningWindow({ text, className = '' }: { text: string; className?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  // The overflow is off the top, which scrollHeight does not count, so the heights are compared.
+  const [full, setFull] = useState(false);
+  useLayoutEffect(() => {
+    if (box.current && body.current) {
+      setFull(body.current.offsetHeight > box.current.clientHeight + 1);
+    }
+  }, [text]);
+  return (
+    <div
+      ref={box}
+      className={`reasoning-window${full ? ' reasoning-window--full' : ''}${className ? ` ${className}` : ''}`}
+    >
+      <div ref={body} className="reasoning-text">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+// The whole thought behind a native <details>, so expanding needs no state of ours. Live, it has
+// no toggle yet: the thought is still arriving.
 export function ReasoningBlock({
   text,
   tone = 'reasoning',
+  live = false,
 }: {
   text: string;
   tone?: 'reasoning' | 'info';
+  live?: boolean;
 }) {
-  const lines = reasoningText(text).split('\n');
-  const long = lines.length > REASONING_TAIL_LINES;
+  const shown = reasoningText(text);
+  const lines = shown.split('\n');
   const label = <span className="reasoning-label">Thinking</span>;
+  const long = !live && lines.length > REASONING_TAIL_LINES;
   return (
-    <div className={`reasoning reasoning--${tone}`}>
+    <div className={`reasoning reasoning--${tone}${live ? ' reasoning--live' : ''}`}>
       {long ? (
-        <>
-          <details className="reasoning-details">
-            <summary>
-              {label}
-              <span className="reasoning-more">{` · ${lines.length} lines`}</span>
-            </summary>
-            <div className="reasoning-text">{lines.join('\n')}</div>
-          </details>
-          <div className="reasoning-text reasoning-tail">
-            <span className="reasoning-ellipsis">…</span>
-            {'\n' + lines.slice(-REASONING_TAIL_LINES).join('\n')}
-          </div>
-        </>
+        <details className="reasoning-details">
+          <summary>
+            {label}
+            <span className="reasoning-more">{` · ${lines.length} lines`}</span>
+          </summary>
+          <div className="reasoning-text">{shown}</div>
+        </details>
       ) : (
-        <>
-          <div className="reasoning-head">{label}</div>
-          <div className="reasoning-text">{lines.join('\n')}</div>
-        </>
+        <div className="reasoning-head">{label}</div>
       )}
+      <ReasoningWindow text={shown} className="reasoning-tail" />
     </div>
   );
 }

@@ -63,6 +63,25 @@ export function StatusLine({
                   {item.text}
                 </span>
               );
+            case 'pr': {
+              const label = `PR #${item.number}`;
+              return (
+                <span key={i} className="status-pr">
+                  {item.url ? (
+                    <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.url}>
+                      {label}
+                    </a>
+                  ) : (
+                    label
+                  )}
+                  {item.state ? (
+                    <span className={`status-pr-state status-pr-state--${item.state}`}>
+                      {` ${item.state}`}
+                    </span>
+                  ) : null}
+                </span>
+              );
+            }
             case 'path':
               return (
                 <span key={i} className="status-path" title={item.text}>

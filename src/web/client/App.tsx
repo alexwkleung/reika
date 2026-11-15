@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from 'react';
 import { PROTOCOL_VERSION } from '../protocol.js';
 import { Composer, type Send } from './Composer.js';
 import { connectionNotice, type Connection } from './connection.js';
@@ -7,7 +14,7 @@ import { nextFollow, type FollowEvent } from './follow.js';
 import { frameBatched, type FrameScheduler } from './framebatch.js';
 import { History } from './History.js';
 import type { Holder } from './holder.js';
-import { LiveTurn } from './LiveTurn.js';
+import { BusyLine, busyLabel, LiveTurn } from './LiveTurn.js';
 import { StatusLine } from './StatusLine.js';
 import type { ClientState } from './store.js';
 import { Transcript } from './Transcript.js';
@@ -23,40 +30,58 @@ function useFramed<T>(holder: Holder<T>, schedule: FrameScheduler): T {
   return useSyncExternalStore(subscribe, holder.get, holder.get);
 }
 
-function metrics() {
-  const el = document.scrollingElement ?? document.documentElement;
-  return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-}
-
-// Follows the bottom while the reader is there (follow.ts decides); off the page it does nothing.
-function useFollowBottom(content: unknown): { following: boolean; jump: () => void } {
+// Follows the bottom while the reader is there (follow.ts decides). The transcript scrolls inside
+// its own element, so that is what is measured and moved.
+function useFollowBottom(
+  content: unknown,
+  scroller: RefObject<HTMLElement | null>,
+): { following: boolean; jump: () => void } {
   const [following, setFollowing] = useState(true);
   const followingRef = useRef(true);
-  const apply = useCallback((event: FollowEvent) => {
-    const next = nextFollow(followingRef.current, event);
-    followingRef.current = next;
-    setFollowing(next);
-    if (next) window.scrollTo({ top: metrics().scrollHeight });
-  }, []);
+  const toBottom = useCallback(() => {
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [scroller]);
+  const apply = useCallback(
+    (event: FollowEvent) => {
+      const next = nextFollow(followingRef.current, event);
+      followingRef.current = next;
+      setFollowing(next);
+      if (next) toBottom();
+    },
+    [toBottom],
+  );
   useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
     const onScroll = () => {
-      const next = nextFollow(followingRef.current, { type: 'user-scroll', metrics: metrics() });
+      const next = nextFollow(followingRef.current, {
+        type: 'user-scroll',
+        metrics: {
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+        },
+      });
       if (next !== followingRef.current) {
         followingRef.current = next;
         setFollowing(next);
       }
     };
-    // A narrower window rewraps the rows and taller controls cover the last one.
+    // A narrower window rewraps the rows, and taller controls shorten the transcript.
     const onResize = () => {
-      if (followingRef.current) window.scrollTo({ top: metrics().scrollHeight });
+      if (followingRef.current) toBottom();
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null;
+    observer?.observe(el);
     window.addEventListener('resize', onResize);
     return () => {
-      window.removeEventListener('scroll', onScroll);
+      el.removeEventListener('scroll', onScroll);
+      observer?.disconnect();
       window.removeEventListener('resize', onResize);
     };
-  }, []);
+  }, [scroller, toBottom]);
   useEffect(() => {
     if (followingRef.current) apply({ type: 'content-grew' });
   }, [content, apply]);
@@ -83,7 +108,8 @@ export function App({
       : null;
   const busy = s.session?.status === 'busy';
   const mode = s.session?.mode;
-  const { following, jump } = useFollowBottom(s);
+  const scroller = useRef<HTMLElement>(null);
+  const { following, jump } = useFollowBottom(s, scroller);
   const restoreLine = useRef<() => void>(() => {});
   return (
     <div className="app">
@@ -95,44 +121,55 @@ export function App({
       />
       {notice || version ? (
         <div className="app-banner" role="status">
-          <span className="app-banner-marker" aria-hidden="true">
-            ⟳
-          </span>
-          {[notice, version].filter(Boolean).join(' ')}
+          <div className="app-column">
+            <span className="app-banner-marker" aria-hidden="true">
+              ⟳
+            </span>
+            {[notice, version].filter(Boolean).join(' ')}
+          </div>
         </div>
       ) : null}
-      <main className="app-main" aria-label="Transcript">
-        <Transcript messages={s.messages} idle={!busy} />
-        {s.live ? (
-          <LiveTurn
-            live={s.live}
-            busy={busy}
-            planShown={mode === 'agent' || mode === 'vibe'}
-            clockOffset={s.clockOffset}
-          />
-        ) : null}
+      <main ref={scroller} className="app-scroll" aria-label="Transcript">
+        <div className="app-column app-main">
+          <Transcript messages={s.messages} idle={!busy} />
+          {s.live ? (
+            <LiveTurn
+              live={s.live}
+              busy={busy}
+              planShown={mode === 'agent' || mode === 'vibe'}
+              clockOffset={s.clockOffset}
+            />
+          ) : null}
+        </div>
       </main>
       <div className="app-controls">
-        {/* In the controls, so it sits centred over the input box rather than at the window edge. */}
-        {following ? null : (
-          <button type="button" className="app-jump" onClick={jump}>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 3v10M3.5 8.5 8 13l4.5-4.5" />
-            </svg>
-            Jump to latest
-          </button>
-        )}
-        <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
-        <Composer
-          send={send}
-          session={s.session}
-          catalog={s.catalog}
-          history={s.history}
-          waiting={s.dialogs.length > 0}
-          locked={s.versionMismatch !== null}
-          restoreLine={restoreLine}
-        />
-        <StatusLine session={s.session} stream={c.stream} />
+        <div className="app-column">
+          {/* In the controls, so it sits centred over the input box rather than at the window edge. */}
+          {following ? null : (
+            <button type="button" className="app-jump" onClick={jump}>
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 3v10M3.5 8.5 8 13l4.5-4.5" />
+              </svg>
+              Jump to latest
+            </button>
+          )}
+          {/* Pinned above the input as the TUI's is, so it never scrolls under it; hidden while a
+              dialog is up, as the TUI hides it behind an approval or a question. */}
+          {busy && s.live && s.dialogs.length === 0 ? (
+            <BusyLine {...busyLabel(s.live)} words={s.session?.workingWords ?? false} />
+          ) : null}
+          <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
+          <Composer
+            send={send}
+            session={s.session}
+            catalog={s.catalog}
+            history={s.history}
+            waiting={s.dialogs.length > 0}
+            locked={s.versionMismatch !== null}
+            restoreLine={restoreLine}
+          />
+          <StatusLine session={s.session} stream={c.stream} />
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { WireLive } from '../protocol.js';
-import { busyLabel, LiveTurn } from './LiveTurn.js';
+import { WORKING_WORDS } from '../../ui/workingwords.js';
+import { ReasoningBlock } from './blocks.js';
+import { BusyLine, busyLabel, LiveTurn } from './LiveTurn.js';
 
 const live = (over: Partial<WireLive> = {}): WireLive => ({
   phase: 'thinking',
@@ -27,11 +29,11 @@ const draw = (l: WireLive, busy = true, planShown = true, clockOffset: number | 
 const text = (html: string) => html.replace(/<[^>]+>/g, '');
 
 describe('LiveTurn', () => {
-  it('streams reasoning and content as markdown, with the busy line', () => {
+  it('streams reasoning and content as markdown; the busy line is pinned by App, not here', () => {
     const html = draw(live({ reasoning: 'hmm', content: 'A **bold** start' }));
     expect(text(html)).toContain('Thinking');
     expect(html).toContain('<strong>bold</strong>');
-    expect(html).toContain('class="busy busy--accent"');
+    expect(html).not.toContain('class="busy');
   });
 
   it('draws bash output under the command indent, other tools flush', () => {
@@ -113,6 +115,52 @@ describe('busyLabel', () => {
       'Recovering from a loop',
     );
     expect(busyLabel(live({ looping: true })).text).toBe('Thinking — may be looping');
-    expect(busyLabel(live({ phase: 'tool' })).text).toBe('Running tools');
+    // The ordinary turn, thinking or running tools, rotates the working verbs.
+    expect(busyLabel(live({ phase: 'tool' }))).toEqual({ text: null, tone: 'accent' });
+  });
+});
+
+describe('BusyLine', () => {
+  const label = (html: string) => /class="busy-label"[^>]*>([^<]*)</.exec(html)?.[1];
+
+  it('draws the TUI spinner and a working verb for the ordinary turn', () => {
+    const html = renderToStaticMarkup(<BusyLine text={null} tone="accent" words />);
+    expect(html).toContain('class="busy-spinner"');
+    expect(html).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+    const shown = label(html)!;
+    expect(shown.endsWith('…')).toBe(true);
+    expect(WORKING_WORDS).toContain(shown.slice(0, -1));
+  });
+
+  it('says Working with the verbs off, and keeps a harness state’s own words', () => {
+    expect(label(renderToStaticMarkup(<BusyLine text={null} tone="accent" words={false} />))).toBe(
+      'Working…',
+    );
+    expect(label(renderToStaticMarkup(<BusyLine text="Typechecking" tone="info" words />))).toBe(
+      'Typechecking…',
+    );
+  });
+
+  it('sweeps at the TUI’s pace for the label’s length', () => {
+    const html = renderToStaticMarkup(<BusyLine text="Typechecking" tone="info" words={false} />);
+    // (13 chars + 6 pause) × 2 ticks × 80ms.
+    expect(html).toContain('animation-duration:3040ms');
+  });
+});
+
+describe('ReasoningBlock', () => {
+  it('keeps the whole thought in one window, with blank runs dropped', () => {
+    const html = renderToStaticMarkup(<ReasoningBlock text={'one\n\n\ntwo\nthree'} live />);
+    expect(html).toContain('reasoning-window');
+    expect(text(html)).toBe('Thinkingone\ntwo\nthree');
+  });
+
+  it('live, offers no toggle; committed and long, the same window under one', () => {
+    const long = 'a\nb\nc\nd\ne';
+    expect(renderToStaticMarkup(<ReasoningBlock text={long} live />)).not.toContain('<details');
+    const done = renderToStaticMarkup(<ReasoningBlock text={long} />);
+    expect(done).toContain('<details');
+    expect(done).toContain('· 5 lines');
+    expect(done).toMatch(/reasoning-window reasoning-tail/);
   });
 });

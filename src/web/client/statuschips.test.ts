@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { WireState } from '../protocol.js';
-import { shortenMiddle, statusStrip } from './statuschips.js';
+import { shortenMiddle, statusStrip, type StripItem } from './statuschips.js';
 import { StatusLine } from './StatusLine.js';
 
 const state = (over: Partial<WireState> = {}): WireState => ({
@@ -31,10 +31,12 @@ const state = (over: Partial<WireState> = {}): WireState => ({
   ...over,
 });
 
+// The PR chip carries a number, not a text; every other item reads as its text.
+const label = (i: StripItem) => ('text' in i ? i.text : `PR #${i.number}`);
 const strip = (s: WireState, stream: Parameters<typeof statusStrip>[1] = 'open') =>
   statusStrip(s, stream);
 const texts = (s: WireState, stream: Parameters<typeof statusStrip>[1] = 'open') =>
-  strip(s, stream).map(i => i.text);
+  strip(s, stream).map(label);
 
 describe('statusStrip', () => {
   it('a fresh session with no window: just the folder', () => {
@@ -54,7 +56,7 @@ describe('statusStrip', () => {
         shrink: { sheds: 2, folds: 1 },
       }),
     );
-    expect(items.map(i => i.text)).toEqual([
+    expect(items.map(label)).toEqual([
       'auto approve',
       '63% of 32k',
       '12k ↑ 830 ↓',
@@ -153,5 +155,18 @@ describe('StatusLine', () => {
     expect(renderToStaticMarkup(createElement(StatusLine, { session: null, stream: null }))).toBe(
       '',
     );
+  });
+
+  it('shows the branch PR before the folder, its state when it has one, and links only https', () => {
+    const pr = (p: WireState['pr']) => strip(state({ pr: p })).find(i => i.kind === 'pr');
+    expect(pr({ number: 12, url: 'https://github.com/octocat/app/pull/12' })).toEqual({
+      kind: 'pr',
+      number: 12,
+      url: 'https://github.com/octocat/app/pull/12',
+      state: null,
+    });
+    expect(pr({ number: 12, state: 'merged' })).toMatchObject({ url: null, state: 'merged' });
+    expect(pr({ number: 12, url: 'javascript:alert(1)' })).toMatchObject({ url: null });
+    expect(strip(state({ pr: { number: 3 } })).map(i => i.kind)).toEqual(['pr', 'path']);
   });
 });
