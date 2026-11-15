@@ -343,6 +343,49 @@ describe('Origin and Sec-Fetch-Site', () => {
   });
 });
 
+describe('window hooks', () => {
+  it('says when a link is spent, once, and counts open streams', async () => {
+    const spent = vi.fn();
+    const counts: number[] = [];
+    const { server } = await start(fakeBridge(), {
+      onLinkSpent: spent,
+      onStreamCount: n => counts.push(n),
+    });
+    const code = new URLSearchParams(server.url.split('#')[1]).get('code');
+    const exchange = (value: unknown) =>
+      send(server.port, {
+        method: 'POST',
+        path: '/session',
+        headers: { ...json, Origin: `http://127.0.0.1:${server.port}` },
+        body: JSON.stringify({ code: value }),
+      });
+    expect((await exchange('wrong')).status).toBe(401);
+    expect(spent).not.toHaveBeenCalled();
+    expect((await exchange(code)).status).toBe(200);
+    expect((await exchange(code)).status).toBe(401);
+    expect(spent).toHaveBeenCalledTimes(1);
+
+    const a = await openStream(server.port, '/events', bearer(server.token));
+    const b = await openStream(server.port, '/events', bearer(server.token));
+    await waitFor(() => counts.length === 2);
+    a.destroy();
+    b.destroy();
+    await waitFor(() => counts.length === 4);
+    expect(counts).toEqual([1, 2, 1, 0]);
+  });
+
+  it('keeps serving when a hook throws', async () => {
+    const { server } = await start(fakeBridge(), {
+      onStreamCount: () => {
+        throw new Error('boom');
+      },
+    });
+    const s = await openStream(server.port, '/events', bearer(server.token));
+    expect(s.status).toBe(200);
+    s.destroy();
+  });
+});
+
 describe('a cross-site page load', () => {
   const navigate = {
     'Sec-Fetch-Site': 'cross-site',
@@ -353,10 +396,9 @@ describe('a cross-site page load', () => {
   it('admits the page itself, loaded as a top-level document', async () => {
     const { server } = await start();
     // No assets in these tests: past the checks, the page is a 404.
-    expect((await send(server.port, { headers: navigate })).status).toBe(404);
-    expect(
-      (await send(server.port, { headers: { ...navigate, 'Sec-Fetch-Site': 'same-site' } })).status,
-    ).toBe(404);
+    const page = await send(server.port, { headers: navigate });
+    expect(page.status).toBe(404);
+    expect(page.headers['cross-origin-opener-policy']).toBe('same-origin');
   });
 
   it('refuses it framed, fetched, for another path, with a query, or as a POST', async () => {
@@ -370,6 +412,12 @@ describe('a cross-site page load', () => {
       { path: '/app.js', headers: navigate },
       { path: '/events', headers: navigate },
       { path: '/?code=x', headers: navigate },
+      { path: '/?', headers: navigate },
+      { path: '//', headers: navigate },
+      { path: `http://127.0.0.1:${p}/`, headers: navigate },
+      { method: 'HEAD', headers: navigate },
+      // Another localhost port is same-site, and not the redirect file this exists for.
+      { headers: { ...navigate, 'Sec-Fetch-Site': 'same-site' } },
       { method: 'POST', path: '/session', headers: { ...navigate, ...json }, body: '{"code":"x"}' },
       {
         method: 'POST',
