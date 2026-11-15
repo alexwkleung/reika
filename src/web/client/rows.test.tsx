@@ -64,11 +64,12 @@ describe('assistant rows', () => {
     expect(t.indexOf('Edit(')).toBeLessThan(t.indexOf('Sources: https://example.com/a'));
   });
 
-  it('collapses long reasoning to its tail behind a details element', () => {
+  it('shows long reasoning in its window, the whole of it behind a details element', () => {
     const html = row({ role: 'assistant', reasoning: 'a\nb\nc\nd\ne', content: '' });
     expect(html).toContain('<details class="reasoning-details">');
     expect(html).toContain('5 lines');
-    expect(html).toMatch(/reasoning-tail">.*c\nd\ne/s);
+    // The window holds the whole thought; CSS keeps its last rows in view.
+    expect(html).toMatch(/reasoning-tail"><div class="reasoning-text">a\nb\nc\nd\ne</s);
     const short = row({ role: 'assistant', reasoning: 'one line', content: 'x' });
     expect(short).not.toContain('<details');
   });

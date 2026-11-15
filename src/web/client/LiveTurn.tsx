@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
 import { planWindow } from '../../ui/planwindow.js';
 import { foldedLiveFields } from '../../ui/reasoningfold.js';
+import {
+  BRAILLE_SPINNER,
+  nextWordIndex,
+  SHIMMER_PAUSE,
+  SHIMMER_STEP,
+  TICK_MS,
+  ticksPerWord,
+  WORKING_WORDS,
+} from '../../ui/workingwords.js';
 import type { WireLive } from '../protocol.js';
 import { GLYPH, NoteBlock, Prose, ReasoningBlock } from './blocks.js';
 import { InlineMarkdown } from './Markdown.js';
@@ -19,7 +28,9 @@ import './live.css';
 type PlanStep = NonNullable<WireLive['plan']>[number];
 
 // The one busy line, in the TUI's order: a definite harness action before the soft spin hint.
-export function busyLabel(live: WireLive): { text: string; tone: string } {
+// Null text is the ordinary turn, which rotates the working verbs as the TUI's Working does; a
+// harness state is information and keeps its wording.
+export function busyLabel(live: WireLive): { text: string | null; tone: string } {
   const prefill = prefillLabel(live.promptProgress ?? undefined);
   if (live.typechecking) return { text: 'Typechecking', tone: 'info' };
   if (prefill) return { text: prefill, tone: 'prefill' };
@@ -27,7 +38,55 @@ export function busyLabel(live: WireLive): { text: string; tone: string } {
   if (live.looping) return { text: 'Thinking — may be looping', tone: 'warning' };
   if (live.note) return { text: 'Writing compaction note', tone: 'info' };
   if (live.subagent) return { text: 'Subagent working', tone: 'subagent' };
-  return { text: live.phase === 'tool' ? 'Running tools' : 'Thinking', tone: 'accent' };
+  return { text: null, tone: 'accent' };
+}
+
+// The TUI's working line: a braille spinner, and a glow that sweeps the label at the TUI's pace
+// (one char per SHIMMER_STEP ticks, then a pause), restarted for each new word.
+export function BusyLine({
+  text,
+  tone,
+  words,
+}: {
+  text: string | null;
+  tone: string;
+  words: boolean;
+}) {
+  const pool = text === null && words ? WORKING_WORDS : null;
+  const [frame, setFrame] = useState(0);
+  const [word, setWord] = useState(() => (pool ? Math.floor(Math.random() * pool.length) : 0));
+  const since = useRef(0);
+  useEffect(() => {
+    let tick = 0;
+    const id = setInterval(() => {
+      tick++;
+      setFrame(tick % BRAILLE_SPINNER.length);
+      if (!pool) return;
+      setWord(w => {
+        if (tick - since.current < ticksPerWord(pool[w % pool.length]!)) return w;
+        since.current = tick;
+        return nextWordIndex(w, pool.length);
+      });
+    }, TICK_MS);
+    return () => clearInterval(id);
+  }, [pool]);
+  const label = `${text ?? (pool ? pool[word % pool.length]! : 'Working')}…`;
+  const sweepMs = (label.length + SHIMMER_PAUSE) * SHIMMER_STEP * TICK_MS;
+  return (
+    <div className={`busy busy--${tone}`} role="status">
+      <span className="busy-spinner" aria-hidden="true">
+        {BRAILLE_SPINNER[frame]}
+      </span>
+      <span
+        // Keyed on the label, so a new word opens on a fresh sweep rather than mid-glow.
+        key={label}
+        className="busy-label"
+        style={{ animationDuration: `${sweepMs}ms`, ['--busy-chars' as string]: label.length }}
+      >
+        {label}
+      </span>
+    </div>
+  );
 }
 
 function PlanStepRow({ s, next }: { s: PlanStep; next: boolean }) {
@@ -108,11 +167,13 @@ export function LiveTurn({
   busy,
   planShown,
   clockOffset = null,
+  workingWords = false,
 }: {
   live: WireLive;
   busy: boolean;
   planShown: boolean;
   clockOffset?: number | null;
+  workingWords?: boolean;
 }) {
   const pending = busy ? live.pending : null;
   const due = pending ? pending.since + PENDING_ROW_DELAY_MS : 0;
@@ -157,7 +218,7 @@ export function LiveTurn({
         <>
           {folded.reasoning.trim() ? (
             <div className="row">
-              <ReasoningBlock text={folded.reasoning} />
+              <ReasoningBlock text={folded.reasoning} live />
             </div>
           ) : null}
           {folded.content.trim() ? (
@@ -174,10 +235,7 @@ export function LiveTurn({
         </pre>
       ) : null}
       {plan}
-      <div className={`busy busy--${label.tone}`} role="status">
-        <span className="busy-dot" aria-hidden="true" />
-        {label.text}
-      </div>
+      <BusyLine text={label.text} tone={label.tone} words={workingWords} />
     </section>
   );
 }

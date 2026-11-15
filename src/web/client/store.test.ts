@@ -45,6 +45,7 @@ const wireState = (over: Partial<WireState> = {}): WireState => ({
   stage: null,
   modelPinned: false,
   session: null,
+  workingWords: false,
   ...over,
 });
 

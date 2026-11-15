@@ -96,6 +96,21 @@
 .reasoning-details[open] ~ .reasoning-tail {
   display: none;
 }
+/* Four rows, filled from the bottom; once full, the oldest row fades at the top. */
+.reasoning-window {
+  max-height: calc(4 * 1.6em);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.reasoning-window > .reasoning-text {
+  flex: none;
+}
+.reasoning-window--full {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+}
 .reasoning + .prose,
 .reasoning + .note-body,
 .prose + .calls,

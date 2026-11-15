@@ -59,6 +59,10 @@
 html,
 body {
   margin: 0;
+  height: 100%;
+  /* The page never scrolls: the transcript scrolls inside it (.app-scroll), so the input box and
+     status line stay put while the conversation grows above them. */
+  overflow: hidden;
   background: var(--reika-page-bg);
   color: var(--reika-text);
   font-family: var(--reika-prose);
@@ -77,21 +81,32 @@ body {
   outline-offset: 2px;
 }
 
+:root {
+  /* The column's side room, scaled with the window so the transcript and the input box keep
+     comfortable margins in a narrow window or beside the history pane. */
+  --reika-gutter: clamp(16px, 4vw, 48px);
+}
+
+/* An app shell: the banner, the scrolling transcript and the controls stacked to the window's
+   height. dvh, so a phone's on-screen keyboard shrinks it rather than covering the input. */
 .app {
-  max-width: 52rem;
-  margin: 0 auto;
-  padding: 0 16px 24px;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
 
+/* One centred column, shared by the transcript and the controls so their edges line up. */
+.app-column {
+  width: 100%;
+  max-width: calc(52rem + 2 * var(--reika-gutter));
+  margin: 0 auto;
+  padding-inline: var(--reika-gutter);
+}
+
 .app-banner {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  margin: 0 -16px;
-  padding: 0.5em 16px;
+  flex: none;
+  padding: 0.5em 0;
   background: var(--reika-banner-bg);
   color: var(--reika-warning);
   border-bottom: 1px solid var(--reika-rule);
@@ -100,21 +115,28 @@ body {
   margin-right: 0.4em;
 }
 
-.app-main {
+/* The scroller spans the window, so its scrollbar sits at the window's edge, not the column's. */
+.app-scroll {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.app-main {
   padding-top: 0.5em;
+  padding-bottom: 1.5rem;
 }
 
-/* In flow and sticky, so it stays in view and the last transcript row is never under it. */
 .app-controls {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
+  flex: none;
   background: var(--reika-page-bg);
-  margin-top: 0.9em;
+  padding-bottom: 24px;
+}
+.app-controls > .app-column {
+  position: relative;
 }
 /* The transcript fades out under the controls instead of stopping at a line. */
-.app-controls::before {
+.app-controls > .app-column::before {
   content: '';
   position: absolute;
   left: 0;

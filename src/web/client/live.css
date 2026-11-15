@@ -54,18 +54,46 @@
 
 .busy {
   margin-top: 0.9em;
-  color: var(--reika-secondary);
   font-size: 0.93em;
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 0.5em;
+  --busy-tone: var(--reika-accent);
 }
-.busy-dot {
-  width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
-  background: var(--busy-tone, var(--reika-accent));
-  animation: busy-pulse 1.2s ease-in-out infinite;
+.busy-spinner {
+  font-family: var(--reika-mono);
+  /* Braille dots are drawn small for their cell; a size up reads as the TUI's spinner does. */
+  font-size: 1.15em;
+  line-height: 1;
+  color: var(--busy-tone);
+  width: 1ch;
+}
+/* The TUI's glow: the label rests at a dim tint of its state's colour and a brighter band sweeps
+   across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. */
+.busy-label {
+  --busy-base: color-mix(in oklab, var(--busy-tone) 62%, var(--reika-page-bg));
+  --busy-peak: color-mix(in oklab, var(--busy-tone) 82%, white);
+  background: linear-gradient(
+      90deg,
+      var(--busy-base) 0 40%,
+      var(--busy-peak) 46% 48%,
+      var(--busy-base) 54% 100%
+    )
+    0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation-name: busy-sweep;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes busy-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
 }
 .busy--info {
   --busy-tone: var(--reika-info);
@@ -75,37 +103,14 @@
 }
 .busy--warning {
   --busy-tone: var(--reika-warning);
-  color: var(--reika-warning);
 }
 .busy--subagent {
   --busy-tone: var(--reika-subagent);
 }
-@keyframes busy-pulse {
-  50% {
-    opacity: 0.3;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .busy-dot {
+  .busy-label {
     animation: none;
+    background: none;
+    color: var(--busy-tone);
   }
-}
-.plan-step--summary {
-  list-style: none;
-  color: var(--reika-muted);
-}
-.plan-toggle {
-  margin-top: 0.3em;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--reika-muted);
-  font: inherit;
-  font-size: 0.9em;
-  text-decoration: underline;
-  cursor: pointer;
-}
-.plan-toggle:hover,
-.plan-toggle:focus-visible {
-  color: var(--reika-text);
 }

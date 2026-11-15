@@ -61,6 +61,7 @@ describe('bundle boundaries', () => {
       'src/ui/planwindow.ts', // the plan checklist's fold and tail cap
       'src/ui/reasoningfold.ts', // the display-only reasoning fold
       'src/ui/scrollbackrules.ts', // read-verb elision, notice lead, call args, grouped reads
+      'src/ui/workingwords.ts', // the busy line's verbs, spinner and sweep timing
       'src/web/protocol.ts', // PROTOCOL_VERSION; its one value import is ui/pastes.ts
     ];
     const outside = inputs.filter(f => f.startsWith('src/') && !f.startsWith('src/web/client/'));
