@@ -63,9 +63,15 @@ export type WebIo = {
   // The built page's directory; dist/web/ from source and from the bundle alike, since
   // PACKAGE_ROOT is the package root in both. From source it needs `pnpm run build:web` first.
   clientRoot?: string;
-  // Injected so a test never launches a browser.
+  // Injected so a test never launches a browser, or waits out the real delays.
   openWindow?: typeof openWindow;
+  windowTimings?: Partial<typeof WINDOW_TIMINGS>;
 };
+
+// --window: how long the window may take to sign in before the terminal offers a link instead,
+// and how long no page may be connected before reika stops. A reload reconnects well inside the
+// second; Chrome on macOS outlives its last window, so the page, not the process, says it closed.
+export const WINDOW_TIMINGS = { signInMs: 20_000, pageGoneMs: 5_000 };
 
 export type WebHandle = {
   url: string;
@@ -124,18 +130,54 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
 
   const bridge = createWebBridge(controller, { onExit: () => void shutdown(0) });
 
+  const timings = { ...WINDOW_TIMINGS, ...io.windowTimings };
+  let signedIn = false;
+  let connected = false;
+  let signInTimer: ReturnType<typeof setTimeout> | null = null;
+  let goneTimer: ReturnType<typeof setTimeout> | null = null;
+  const stopTimers = (): void => {
+    if (signInTimer) clearTimeout(signInTimer);
+    if (goneTimer) clearTimeout(goneTimer);
+    signInTimer = goneTimer = null;
+  };
+  // The first sign-in is the window's own code, or one the terminal printed after it.
+  const onLinkSpent = (): void => {
+    if (!args.window || signedIn) return;
+    signedIn = true;
+    if (signInTimer) clearTimeout(signInTimer);
+    void win?.codeSpent();
+  };
+  // Stopping when the last page goes, not when the window's process does: a second tab opened
+  // from the terminal keeps reika running, as an app runs until its last window closes.
+  const onStreamCount = (count: number): void => {
+    if (!args.window || shutdownPromise) return;
+    if (count > 0) {
+      connected = true;
+      if (goneTimer) clearTimeout(goneTimer);
+      goneTimer = null;
+      return;
+    }
+    if (!connected || goneTimer) return;
+    goneTimer = setTimeout(() => {
+      io.stdout('The window closed; stopping.\n');
+      void shutdown(0);
+    }, timings.pageGoneMs);
+  };
+
   // Tabs first, so nothing new arrives; then the turn, so its last rows are in the save; then the
-  // session's own children.
+  // session's own children. The window closes beside the save rather than ahead of the abort, so a
+  // running bash group is not left waiting on it.
   function shutdown(code = 0): Promise<void> {
     shutdownPromise ??= (async () => {
       try {
+        stopTimers();
         await server?.close();
         bridge.close();
-        // Its page has nothing left to talk to.
-        await win?.close().catch(() => {});
+        const closingWindow = win?.close().catch(() => {});
         if (controller.abort()) await waitUntilNotBusy(controller);
         await controller.saveNow();
         await session!.mcp.close();
+        await closingWindow;
       } finally {
         resolveDone(code);
       }
@@ -147,6 +189,8 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
     server = await startWebServer(bridge, {
       port: args.port,
       assets: clientAssets(io.clientRoot ?? join(PACKAGE_ROOT, 'dist', 'web')),
+      onLinkSpent,
+      onStreamCount,
     });
   } catch (e) {
     bridge.close();
@@ -170,6 +214,8 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
       io.stderr(`reika: could not open a window: ${(e as Error).message}\n`);
     }
     const listening = server;
+    const offerLink = (why: string): void =>
+      io.stdout([why, '', `  ${listening.newLink()}`, '', ...linkNote, ''].join('\n'));
     if (win?.kind === 'app') {
       io.stdout(
         [
@@ -181,33 +227,43 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
         ].join('\n'),
       );
       void win.ended.then(outcome => {
-        if (outcome === 'closed') {
-          void shutdown(0);
+        if (shutdownPromise) return;
+        if (outcome === 'failed') {
+          offerLink('The window closed as soon as it opened. Open this link instead:');
           return;
         }
-        io.stdout(
-          [
-            'The window closed as soon as it opened. Open this link instead:',
-            '',
-            `  ${listening.newLink()}`,
-            '',
-            ...linkNote,
-            '',
-          ].join('\n'),
-        );
+        // Where the browser quits with its last window. Once a page has connected, the stream
+        // count already saw it go and decides; a window closed before it ever signed in is
+        // stopped on here.
+        if (!connected) {
+          io.stdout('The window closed; stopping.\n');
+          void shutdown(0);
+        }
       });
     } else if (win?.kind === 'tab') {
       io.stdout(
         [
           header,
           '',
-          `Opened a tab in the default browser (${win.reason}).`,
+          `Opened a tab in the default browser (${win.reason}); closing it stops reika.`,
           'Press Enter for a new link, ctrl-c to stop.',
           '',
         ].join('\n'),
       );
     } else {
       io.stdout([header, '', `  ${listening.newLink()}`, '', ...linkNote, ''].join('\n'));
+    }
+    if (win) {
+      // A window that opened but cannot sign in (an error page, a browser that cannot read the
+      // redirect file, a slow first start) shows nothing in the terminal otherwise.
+      signInTimer = setTimeout(() => {
+        signInTimer = null;
+        if (signedIn || shutdownPromise) return;
+        offerLink(
+          'The window has not signed in yet. If it shows an error, open this link instead:',
+        );
+      }, timings.signInMs);
+      signInTimer.unref();
     }
   }
 

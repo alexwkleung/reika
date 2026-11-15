@@ -169,14 +169,42 @@ function fakeWindow(kind: 'app' | 'tab' = 'app') {
   let end!: (outcome: 'closed' | 'failed') => void;
   const ended = new Promise<'closed' | 'failed'>(r => (end = r));
   const close = vi.fn(async () => end('closed'));
+  const codeSpent = vi.fn(async () => {});
   const openWindow: WebIo['openWindow'] = async link => {
     opened.push(link);
     return kind === 'app'
-      ? { kind, browser: 'Google Chrome', ended, close }
-      : { kind, reason: 'no Chrome found', close };
+      ? { kind, browser: 'Google Chrome', ended, codeSpent, close }
+      : { kind, reason: 'no Chrome found', codeSpent, close };
   };
-  return { opened, end, close, openWindow };
+  return { opened, end, close, codeSpent, openWindow };
 }
+
+// A page's event stream, held open until closed: what a window or tab is to the server.
+function holdStream(port: number, token: string): Promise<{ close: () => void }> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/events',
+        headers: { Host: `127.0.0.1:${port}`, Authorization: `Bearer ${token}` },
+      },
+      res => {
+        res.resume();
+        resolve({ close: () => req.destroy() });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const fastWindow = { windowTimings: { signInMs: 60_000, pageGoneMs: 80 } };
+const settled = (run: WebHandle) =>
+  Promise.race([
+    run.done.then(() => 'stopped'),
+    new Promise(r => setTimeout(() => r('running'), 300)),
+  ]);
 
 type Reply = { status: number; headers: Record<string, unknown>; body: string };
 
@@ -390,11 +418,12 @@ describe('runWeb --window', () => {
     expect(await tradeLink(w.opened[0])).toBeTruthy();
   });
 
-  it('stops when the window is closed', async () => {
+  it('stops when the window is closed before it ever connected', async () => {
     const w = fakeWindow();
-    const { run, session } = await start({ openWindow: w.openWindow }, true);
+    const { run, session, out } = await start({ openWindow: w.openWindow }, true);
     w.end('closed');
     expect(await run.done).toBe(0);
+    expect(out.join('')).toContain('The window closed; stopping.');
     expect(session().mcp.close).toHaveBeenCalledTimes(1);
     expect(await portRefuses(run.port)).toBe(true);
   });
@@ -435,5 +464,68 @@ describe('runWeb --window', () => {
     );
     expect(err.join('')).toContain('could not open a window: every window profile is in use');
     expect(out.join('')).toMatch(/#code=/);
+  });
+
+  it('marks the code spent when the window signs in', async () => {
+    const w = fakeWindow();
+    await start({ openWindow: w.openWindow }, true);
+    expect(w.codeSpent).not.toHaveBeenCalled();
+    await tradeLink(w.opened[0]);
+    expect(w.codeSpent).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a link when the window has not signed in in time, and not when it has', async () => {
+    const slow = fakeWindow();
+    const late = await start(
+      { openWindow: slow.openWindow, windowTimings: { signInMs: 50 } },
+      true,
+    );
+    await vi.waitFor(() => expect(late.out.join('')).toMatch(/has not signed in yet/));
+    const link = late.out.join('').match(/http:\/\/\S+#code=[\w-]+/)?.[0];
+    expect(await tradeLink(link!)).toBeTruthy();
+
+    const quick = fakeWindow();
+    const ok = await start(
+      { openWindow: quick.openWindow, windowTimings: { signInMs: 100 } },
+      true,
+    );
+    await tradeLink(quick.opened[0]);
+    await new Promise(r => setTimeout(r, 200));
+    expect(ok.out.join('')).not.toMatch(/has not signed in/);
+  });
+
+  it('stops once no page is connected, and outlives a reload', async () => {
+    const w = fakeWindow();
+    const { run, out } = await start({ openWindow: w.openWindow, ...fastWindow }, true);
+    const token = await tradeLink(w.opened[0]);
+    const first = await holdStream(run.port, token);
+    first.close();
+    // A reload: the page is back well inside the wait.
+    const again = await holdStream(run.port, token);
+    expect(await settled(run)).toBe('running');
+    again.close();
+    expect(await run.done).toBe(0);
+    expect(out.join('')).toContain('The window closed; stopping.');
+    expect(w.close).toHaveBeenCalled();
+  });
+
+  it('keeps running while a second tab is open after the window closes', async () => {
+    const w = fakeWindow();
+    const { run } = await start({ openWindow: w.openWindow, ...fastWindow }, true);
+    const token = await tradeLink(w.opened[0]);
+    const windowPage = await holdStream(run.port, token);
+    const tab = await holdStream(run.port, token);
+    windowPage.close();
+    w.end('closed');
+    expect(await settled(run)).toBe('running');
+    tab.close();
+    expect(await run.done).toBe(0);
+  });
+
+  it('never stops on its own without --window', async () => {
+    const { run, token } = await start({ ...fastWindow });
+    const page = await holdStream(run.port, token);
+    page.close();
+    expect(await settled(run)).toBe('running');
   });
 });

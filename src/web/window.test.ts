@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import {
   EARLY_EXIT_MS,
   findAppBrowser,
   openWindow,
+  sweepStaleRedirects,
   writeRedirectFile,
 } from './window.js';
 
@@ -80,6 +81,25 @@ describe('claimProfileSlot', () => {
     expect((await claimProfileSlot(root, 222, () => true)).dir).toBe(join(root, '0'));
   });
 
+  it('skips a slot a live browser still holds, as a crashed reika leaves it', async () => {
+    await mkdir(join(root, '0'), { recursive: true });
+    await writeFile(join(root, '0', 'reika.lock'), '111');
+    await symlink('host-4242', join(root, '0', 'SingletonLock'));
+    const alive = (pid: number) => pid === 4242;
+    expect((await claimProfileSlot(root, 222, alive)).dir).toBe(join(root, '1'));
+    // Once that browser is gone the slot is free again.
+    expect((await claimProfileSlot(root, 333, () => false)).dir).toBe(join(root, '0'));
+  });
+
+  it('leaves no lock files aside after a takeover', async () => {
+    await claimProfileSlot(root, 111, () => true);
+    await claimProfileSlot(root, 222, () => false);
+    const { readdir } = await import('node:fs/promises');
+    expect((await readdir(join(root, '0'))).filter(n => n.startsWith('reika.lock'))).toEqual([
+      'reika.lock',
+    ]);
+  });
+
   it('gives up when every slot is held', async () => {
     for (let i = 0; i < 16; i++) await claimProfileSlot(root, 1000 + i, () => true);
     await expect(claimProfileSlot(root, 9999, () => true)).rejects.toThrow(/every window profile/);
@@ -107,13 +127,18 @@ describe('writeRedirectFile', () => {
   });
 });
 
-function fakeChild() {
+// `ignores` lists the signals it outlives, as a browser busy writing its profile might.
+function fakeChild(ignores: string[] = []) {
   const child = new EventEmitter() as ChildProcess & EventEmitter;
   Object.assign(child, {
     exitCode: null,
     signalCode: null,
-    kill: vi.fn(() => {
-      queueMicrotask(() => child.emit('exit', null, 'SIGTERM'));
+    kill: vi.fn((signal: string) => {
+      if (ignores.includes(signal)) return true;
+      queueMicrotask(() => {
+        Object.assign(child, { signalCode: signal });
+        child.emit('exit', null, signal);
+      });
       return true;
     }),
   });
@@ -121,9 +146,9 @@ function fakeChild() {
 }
 
 describe('openWindow', () => {
-  const setup = (opts: { browser?: boolean } = {}) => {
+  const setup = (opts: { browser?: boolean; ignores?: string[] } = {}) => {
     let clock = 0;
-    const child = fakeChild();
+    const child = fakeChild(opts.ignores);
     const spawned: string[][] = [];
     const released = vi.fn(async () => {});
     const openedDefault: string[] = [];
@@ -137,6 +162,7 @@ describe('openWindow', () => {
       },
       openDefault: (url: string) => void openedDefault.push(url),
       now: () => clock,
+      killAfterMs: 20,
     };
     return { child, spawned, released, openedDefault, deps, tick: (ms: number) => (clock += ms) };
   };
@@ -186,5 +212,40 @@ describe('openWindow', () => {
     expect(t.openedDefault[0]).not.toContain('SECRET_CODE');
     await win.close();
     await expect(stat(fileURLToPath(t.openedDefault[0]))).rejects.toThrow();
+  });
+
+  it('kills a browser that outlives the close', async () => {
+    const t = setup({ ignores: ['SIGTERM'] });
+    const win = await openWindow(link, t.deps);
+    await win.close();
+    expect(t.child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+    expect(t.child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+    expect(win.kind === 'app' && (await win.ended)).toBe('closed');
+  });
+
+  it('removes the redirect file once the code is spent', async () => {
+    const t = setup();
+    const win = await openWindow(link, t.deps);
+    const file = fileURLToPath(t.spawned[0][0].slice('--app='.length));
+    await stat(file);
+    await win.codeSpent();
+    await expect(stat(file)).rejects.toThrow();
+    await win.close();
+  });
+});
+
+describe('sweepStaleRedirects', () => {
+  it('removes redirect dirs an hour old, and nothing else', async () => {
+    const old = join(root, 'reika-window-AbC123');
+    const fresh = join(root, 'reika-window-XyZ789');
+    const other = join(root, 'reika-abc123');
+    for (const d of [old, fresh, other]) await mkdir(d);
+    const hourAgo = new Date(Date.now() - 61 * 60_000);
+    await utimes(old, hourAgo, hourAgo);
+    await utimes(other, hourAgo, hourAgo);
+    await sweepStaleRedirects(root);
+    await expect(stat(old)).rejects.toThrow();
+    await stat(fresh);
+    await stat(other);
   });
 });
