@@ -14,6 +14,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A prompt sent while another was still being prepared (a pasted link being fetched, or its
+  question open) was dropped without a trace. It is now queued and runs after the first (#PR).
 - A loop-break recovery and the end of a shell-mode run no longer draw their text twice for one
   frame, once still streaming and once committed (#986).
 - With two or more prompts queued behind a running turn, the second could be dropped without a

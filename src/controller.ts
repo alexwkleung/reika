@@ -139,6 +139,10 @@ export type ControllerSnapshot = {
   queue: QueuedMessage[];
   // A queued prompt has been handed back and its submit has not settled yet.
   replaying: boolean;
+  // A line is past the queue check and has not settled: its questions, its expansions or its run.
+  // The status is still idle through the first two, so this is what sends a second line to the
+  // queue (#993).
+  preparing: boolean;
   // What is waiting on the user, one of each at most: a tool asking to act, the model asking a
   // question (`ask_user`), and the harness asking before a prompt is sent.
   approval: ApprovalRequest | null;
@@ -457,6 +461,7 @@ export function createController(opts: {
     status: 'loading',
     queue: [],
     replaying: false,
+    preparing: false,
     approval: null,
     question: null,
     confirm: null,
@@ -477,6 +482,9 @@ export function createController(opts: {
   let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
   let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
   let resolveConfirm: ((choice: number | 'abort') => void) | null = null;
+  // Confirms asked while one is open, shown in turn: a second over the first would orphan the
+  // first's promise and hang its submit (#993). Two tabs can each be asked about a line.
+  const waitingConfirms: (() => void)[] = [];
   let stashed: Partial<Record<Side, Message[]>> = {};
   let session: Session | null = null;
   // The model a mode switch comes back to when the new mode has none of its own (#616): the
@@ -733,8 +741,12 @@ export function createController(opts: {
     });
   const openConfirm = (spec: ConfirmSpec): Promise<number | 'abort'> =>
     new Promise(resolve => {
-      resolveConfirm = resolve;
-      set({ confirm: spec });
+      const show = (): void => {
+        resolveConfirm = resolve;
+        set({ confirm: spec });
+      };
+      if (resolveConfirm) waitingConfirms.push(show);
+      else show();
     });
   const setStatus = (status: ControllerStatus): void => {
     if (status !== snapshot.status) set({ status });
@@ -1249,14 +1261,15 @@ export function createController(opts: {
     // without aborting the turn to get there. It only reads the scrollback and the counts, nothing
     // the loop is writing to. Every other command still waits: the rest either change what the
     // running turn is doing (mode, model, cwd) or reset it. Before boot there is nothing to save.
-    if (session && snapshot.status !== 'idle' && isSaveCommand(input)) {
+    const held = snapshot.status !== 'idle' || snapshot.preparing;
+    if (session && held && isSaveCommand(input)) {
       front.onTaken(trimmed);
       await runCommand(trimmed, front);
       return;
     }
-    // Held while a turn runs or the session boots, and replayed through here once idle; the
-    // receipt records what was queued.
-    if (!session || snapshot.status !== 'idle') {
+    // Held while a turn runs, another line is being prepared or the session boots, and replayed
+    // through here once idle; the receipt records what was queued.
+    if (!session || held) {
       const answers = await askSubmitAnswers(trimmed, front, carried);
       if (answers === 'abort') return;
       const msg = queuedMessage(trimmed, front.images, answers);
@@ -1267,6 +1280,19 @@ export function createController(opts: {
       front.onTaken();
       return;
     }
+    set({ preparing: true });
+    try {
+      await runLine(trimmed, front, carried);
+    } finally {
+      set({ preparing: false });
+    }
+  };
+
+  const runLine = async (
+    trimmed: string,
+    front: InputFrontEnd,
+    carried?: SubmitAnswers,
+  ): Promise<void> => {
     // Unconditional: commands and shell lines land here too.
     front.onSending?.();
     // Before the box clears: the dialog sits over the input, and the prompt it is asking about
@@ -1339,6 +1365,7 @@ export function createController(opts: {
       const drainable = canDrain({
         idle: snapshot.status === 'idle',
         replaying: snapshot.replaying,
+        preparing: snapshot.preparing,
         dialogOpen: snapshot.approval !== null || snapshot.confirm !== null,
         ...blockers,
       });
@@ -1426,6 +1453,7 @@ export function createController(opts: {
       resolveConfirm = null;
       set({ confirm: null });
       resolve(choice);
+      waitingConfirms.shift()?.();
     },
     append,
     replace: messages => set({ messages }),

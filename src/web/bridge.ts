@@ -92,7 +92,9 @@ export function createWebBridge(
     confirm: null,
   };
   // The row `ask` was handed for the spec it is about to open.
-  let askedInitial: { spec: ConfirmSpec; initial: number } | null = null;
+  // Per spec: a confirm asked while another is open waits its turn (#993), so two can be asked
+  // before either is shown.
+  const askedInitial = new Map<ConfirmSpec, number>();
 
   // A resume is reading its file: a submit now would land in the conversation it is replacing.
   let resuming = false;
@@ -142,8 +144,8 @@ export function createWebBridge(
       return { id, kind, source: request, dialog: questionDialog(request), answered: false };
     }
     const spec = source as ConfirmSpec;
-    const initial = askedInitial?.spec === spec ? askedInitial.initial : 0;
-    askedInitial = null;
+    const initial = askedInitial.get(spec) ?? 0;
+    askedInitial.delete(spec);
     return {
       id,
       kind,
@@ -256,7 +258,7 @@ export function createWebBridge(
   };
 
   const ask = (spec: ConfirmSpec, initial = 0): Promise<number | 'abort'> => {
-    askedInitial = { spec, initial: Math.max(0, Math.min(initial, spec.options.length - 1)) };
+    askedInitial.set(spec, Math.max(0, Math.min(initial, spec.options.length - 1)));
     return controller.openConfirm(spec);
   };
 
