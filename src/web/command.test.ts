@@ -17,7 +17,7 @@ describe('parseWebArgs', () => {
   });
 
   it('defaults to a free port', () => {
-    expect(parseWebArgs(['web'])).toEqual({ port: 0, help: false });
+    expect(parseWebArgs(['web'])).toEqual({ port: 0, window: false, help: false });
   });
 
   it('takes --port and -h/--help', () => {
@@ -26,6 +26,7 @@ describe('parseWebArgs', () => {
     expect(parseWebArgs(['web', '--port', '65535'])?.port).toBe(65535);
     expect(parseWebArgs(['web', '-h'])?.help).toBe(true);
     expect(parseWebArgs(['web', '--help'])?.help).toBe(true);
+    expect(parseWebArgs(['web', '--window'])).toEqual({ port: 0, window: true, help: false });
   });
 
   it('refuses a bad port with the usage', () => {
@@ -37,7 +38,7 @@ describe('parseWebArgs', () => {
   });
 
   it('refuses an unknown flag or argument', () => {
-    expect(() => parseWebArgs(['web', '--window'])).toThrow(/unexpected argument --window/);
+    expect(() => parseWebArgs(['web', '--windows'])).toThrow(/unexpected argument --windows/);
     expect(() => parseWebArgs(['web', 'extra'])).toThrow(/unexpected argument extra/);
   });
 });
@@ -154,12 +155,27 @@ async function tradeLink(link: string): Promise<string> {
   return ((await res.json()) as { token: string }).token;
 }
 
-async function start(overrides: Partial<WebIo> = {}) {
+async function start(overrides: Partial<WebIo> = {}, window = false) {
   const t = ioWith(overrides);
-  const run = await runWeb({ port: 0, help: false }, t.io);
+  const run = await runWeb({ port: 0, window, help: false }, t.io);
   if (typeof run === 'number') throw new Error(`runWeb failed: ${t.err.join('')}`);
   handles.push(run);
-  return { ...t, run, token: await tradeLink(run.url) };
+  return { ...t, run, token: window ? '' : await tradeLink(run.url) };
+}
+
+// A window that never launches anything: records the link it was handed and ends when told.
+function fakeWindow(kind: 'app' | 'tab' = 'app') {
+  const opened: string[] = [];
+  let end!: (outcome: 'closed' | 'failed') => void;
+  const ended = new Promise<'closed' | 'failed'>(r => (end = r));
+  const close = vi.fn(async () => end('closed'));
+  const openWindow: WebIo['openWindow'] = async link => {
+    opened.push(link);
+    return kind === 'app'
+      ? { kind, browser: 'Google Chrome', ended, close }
+      : { kind, reason: 'no Chrome found', close };
+  };
+  return { opened, end, close, openWindow };
 }
 
 type Reply = { status: number; headers: Record<string, unknown>; body: string };
@@ -355,10 +371,69 @@ describe('runWeb', () => {
       },
     });
     const port = await freePort();
-    const run = await runWeb({ port, help: false }, t.io);
+    const run = await runWeb({ port, window: false, help: false }, t.io);
     expect(run).toBe(1);
     expect(t.err.join('')).toContain('REIKA_MODEL is not set');
     expect(t.out).toEqual([]);
     expect(await portRefuses(port)).toBe(true);
+  });
+});
+
+describe('runWeb --window', () => {
+  it('hands the window the first link and prints no link of its own', async () => {
+    const w = fakeWindow();
+    const { run, out } = await start({ openWindow: w.openWindow }, true);
+    expect(w.opened).toEqual([run.url]);
+    const text = out.join('');
+    expect(text).not.toContain('#code=');
+    expect(text).toMatch(/Opened an app window in Google Chrome; closing it stops reika/);
+    expect(await tradeLink(w.opened[0])).toBeTruthy();
+  });
+
+  it('stops when the window is closed', async () => {
+    const w = fakeWindow();
+    const { run, session } = await start({ openWindow: w.openWindow }, true);
+    w.end('closed');
+    expect(await run.done).toBe(0);
+    expect(session().mcp.close).toHaveBeenCalledTimes(1);
+    expect(await portRefuses(run.port)).toBe(true);
+  });
+
+  it('keeps running and prints a fresh link when the window fails to open', async () => {
+    const w = fakeWindow();
+    const { run, out } = await start({ openWindow: w.openWindow }, true);
+    w.end('failed');
+    await vi.waitFor(() => expect(out.join('')).toMatch(/closed as soon as it opened/));
+    const link = out.join('').match(/http:\/\/\S+#code=[\w-]+/)?.[0];
+    expect(link).toBeTruthy();
+    expect(await tradeLink(link!)).toBeTruthy();
+    expect(await portRefuses(run.port)).toBe(false);
+  });
+
+  it('closes the window on shutdown', async () => {
+    const w = fakeWindow();
+    const { run } = await start({ openWindow: w.openWindow }, true);
+    await run.shutdown(130);
+    expect(w.close).toHaveBeenCalledTimes(1);
+    expect(await run.done).toBe(130);
+  });
+
+  it('says why it opened a tab instead', async () => {
+    const w = fakeWindow('tab');
+    const { out } = await start({ openWindow: w.openWindow }, true);
+    expect(out.join('')).toMatch(/Opened a tab in the default browser \(no Chrome found\)/);
+  });
+
+  it('prints a link when the window cannot be opened at all', async () => {
+    const { out, err } = await start(
+      {
+        openWindow: async () => {
+          throw new Error('every window profile is in use');
+        },
+      },
+      true,
+    );
+    expect(err.join('')).toContain('could not open a window: every window profile is in use');
+    expect(out.join('')).toMatch(/#code=/);
   });
 });
