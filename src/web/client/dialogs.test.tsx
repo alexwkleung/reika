@@ -34,7 +34,12 @@ async function mount(dialog: WireDialog, opts: { reply?: SendResult; hold?: bool
   document.body.appendChild(container);
   const root = createRoot(container);
   const dialogs: OpenDialog[] = [{ id: 'd1', dialog }];
-  await act(async () => root.render(<Dialogs dialogs={dialogs} send={send} />));
+  const counts = { restored: 0 };
+  await act(async () =>
+    root.render(
+      <Dialogs dialogs={dialogs} send={send} onDontSend={() => void counts.restored++} />,
+    ),
+  );
   const buttons = () => [...container.querySelectorAll('button')] as HTMLButtonElement[];
   const button = (label: string) => {
     const b = buttons().find(x => x.textContent!.includes(label));
@@ -65,6 +70,9 @@ async function mount(dialog: WireDialog, opts: { reply?: SendResult; hold?: bool
   return {
     sent,
     pending,
+    get restored() {
+      return counts.restored;
+    },
     container,
     button,
     click,
@@ -95,7 +103,7 @@ describe('approval', () => {
     for (const [label, expected] of [
       ['Yes', { type: 'answer', id: 'd1', kind: 'approval', answer: true }],
       [
-        'Always (this session)',
+        'Always this session',
         { type: 'answer', id: 'd1', kind: 'approval', answer: true, always: true },
       ],
       ['No', { type: 'answer', id: 'd1', kind: 'approval', answer: false }],
@@ -112,6 +120,7 @@ describe('approval', () => {
   it('No with a typed reason declines with feedback', async () => {
     const m = await mount(approval);
     await m.type('  use the clean script  ');
+    expect(m.button('No, with reason')).toBeDefined();
     await m.click('No');
     expect(m.sent).toEqual([
       { type: 'answer', id: 'd1', kind: 'approval', answer: { feedback: 'use the clean script' } },
@@ -132,6 +141,23 @@ describe('approval', () => {
     const bash = await mount(approval);
     expect(bash.container.querySelector('pre.dialog-preview')).not.toBeNull();
     await bash.unmount();
+  });
+
+  it('says what will happen: the command and where, or the file with its +/- count', async () => {
+    const bash = await mount(approval);
+    expect(bash.container.querySelector('.dialog-title')!.textContent).toBe(
+      'Run a commandin /repo',
+    );
+    expect(bash.container.querySelector('.dialog-kicker')!.textContent).toBe('Approval needed');
+    await bash.unmount();
+    const edit = await mount({
+      kind: 'approval',
+      tool: 'edit',
+      subject: 'src/a.ts',
+      preview: '  keep\n- old\n+ new\n+ more',
+    });
+    expect(edit.container.querySelector('.dialog-title')!.textContent).toBe('Editsrc/a.ts+2 −1');
+    await edit.unmount();
   });
 
   it('a double click answers once', async () => {
@@ -188,7 +214,8 @@ describe('question', () => {
   it('an option, a typed answer and cancel', async () => {
     let m = await mount(question);
     expect(m.container.textContent).toContain('the first');
-    await m.click('B (recommended)');
+    expect(m.container.textContent).toContain('Recommended');
+    await m.click('B');
     expect(m.sent).toEqual([
       { type: 'answer', id: 'd1', kind: 'question', answer: { text: 'B', index: 1 } },
     ]);
@@ -201,7 +228,7 @@ describe('question', () => {
     ]);
     await m.unmount();
     m = await mount(question);
-    await m.click('Cancel');
+    await m.click('Skip question');
     expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'question', answer: null }]);
     await m.unmount();
   });
@@ -225,8 +252,9 @@ describe('confirm, model and session', () => {
     expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'confirm', choice: 0 }]);
     await m.unmount();
     m = await mount(d);
-    await m.click('Cancel');
+    await m.click('Don’t send');
     expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'confirm', choice: 'abort' }]);
+    expect(m.restored).toBe(1);
     await m.unmount();
   });
 
