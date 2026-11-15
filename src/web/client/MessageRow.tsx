@@ -26,9 +26,6 @@ function UserRow({ m }: { m: Of<'user'> }) {
     <div
       className={`row row-user${nested ? ' row-user--nested' : ''}${m.meta ? ' row-user--meta' : ''}`}
     >
-      <span className="row-user-bar" aria-hidden="true">
-        {GLYPH.bar}
-      </span>
       <span className="sr-only">{nested ? 'Subagent task: ' : 'You: '}</span>
       <div className="row-user-text">{m.display ?? m.content}</div>
     </div>
@@ -175,6 +172,18 @@ function ToolRow({ m, groupedReads }: { m: Of<'tool'>; groupedReads: boolean }) 
   );
 }
 
+// A line of only `─` is a divider the TUI draws in characters (/stats); here it is a real rule, so
+// a narrow page does not wrap it onto two lines.
+const DIVIDER_LINE = /\n?^─{4,}$\n?/m;
+
+function noticeBody(text: string): ReactNode {
+  const parts = text.split(DIVIDER_LINE);
+  if (parts.length === 1) return text;
+  return parts.flatMap((part, i) =>
+    i === 0 ? [part] : [<span key={i} className="row-system-rule" role="separator" />, part],
+  );
+}
+
 function SystemRow({ m }: { m: Of<'system'> }) {
   const tone = m.tone ?? 'default';
   const marker = m.tone === 'warn' ? GLYPH.noticeWarn : GLYPH.notice;
@@ -190,7 +199,7 @@ function SystemRow({ m }: { m: Of<'system'> }) {
       </span>
       <span className="row-system-text">
         {lead ? <span className="row-system-lead">{lead}</span> : null}
-        {m.content.slice(lead.length)}
+        {noticeBody(m.content.slice(lead.length))}
       </span>
     </div>
   );

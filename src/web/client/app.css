@@ -126,15 +126,40 @@ body {
 }
 
 .app-jump {
-  position: fixed;
-  right: 16px;
-  bottom: 9em;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.5rem);
+  transform: translateX(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.875rem;
+  padding: 0 0.75rem;
   font: inherit;
-  font-size: 0.85em;
-  color: var(--reika-text);
-  background: var(--reika-user-bg);
-  border: 1px solid var(--reika-rule);
+  font-size: 0.8125rem;
+  color: var(--reika-control-fg);
+  background: var(--reika-control-bg);
+  border: 1px solid var(--reika-control-border);
   border-radius: 999px;
-  padding: 0.35em 0.9em;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+  white-space: nowrap;
   cursor: pointer;
+}
+.app-jump:hover {
+  border-color: var(--reika-rule-strong);
+  color: var(--reika-text);
+}
+.app-jump:focus-visible {
+  outline: none;
+  border-color: var(--reika-accent);
+}
+.app-jump svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }

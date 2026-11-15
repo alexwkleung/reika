@@ -32,20 +32,17 @@
   margin-top: 0;
 }
 
+/* The TUI's ▎ on every line, as one rule down the whole prompt: the Thinking block's shape, in the
+   accent, so the two first-class marks read alike. */
 .row-user {
   display: flex;
-  gap: 0.5em;
   background: var(--reika-user-bg);
-  padding: 0.35em 0.75em 0.35em 0;
-  border-radius: 2px;
+  border-left: 2px solid var(--reika-accent);
+  padding: 0.4em 0.75em;
+  border-radius: 0 2px 2px 0;
 }
-.row-user-bar {
-  color: var(--reika-accent);
-  flex: none;
-  line-height: inherit;
-}
-.row-user--nested .row-user-bar {
-  color: var(--reika-subagent);
+.row-user--nested {
+  border-left-color: var(--reika-subagent);
 }
 .row-user-text {
   white-space: pre-wrap;
@@ -341,4 +338,12 @@
   font-family: var(--reika-mono);
   font-size: 0.8em;
   overflow-wrap: anywhere;
+}
+
+/* A notice's divider line (/stats), drawn as a rule so it never wraps. */
+.row-system-rule {
+  display: block;
+  max-width: 24rem;
+  margin: 0.5em 0;
+  border-top: 1px solid var(--reika-rule);
 }
