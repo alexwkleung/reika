@@ -79,7 +79,7 @@ function snapshot(
       id,
       dialog,
     })),
-    { type: 'live', live: live() },
+    { type: 'live', now: 0, live: live() },
   ];
 }
 
@@ -124,7 +124,7 @@ describe('foldEvent: a snapshot', () => {
     const before = fold(
       initialClientState,
       ...snapshot(1, { messages: [user('a')], dialogs: [['d1', question]] }),
-      { type: 'live', live: live({ content: 'streaming' }) },
+      { type: 'live', now: 0, live: live({ content: 'streaming' }) },
     );
     const hello = fold(before, { type: 'hello', seq: 5, version: PROTOCOL_VERSION });
     expect(hello.dialogs).toEqual([]);
@@ -195,7 +195,7 @@ describe('foldEvent: committed events', () => {
     const withDialog = fold(
       base,
       { type: 'dialog', seq: 1, id: 'd1', dialog: question },
-      { type: 'live', live: live({ content: 'x' }) },
+      { type: 'live', now: 0, live: live({ content: 'x' }) },
     );
     const s = fold(withDialog, { type: 'reset', seq: 2, messages: [user('z')] });
     expect(s.messages).toEqual([user('z')]);
@@ -253,7 +253,7 @@ describe('foldEvent: live and deltas', () => {
   const base = fold(initialClientState, ...snapshot(0, { messages: [user('a')] }));
 
   it('live replaces the live turn and keeps every other field by identity', () => {
-    const s = fold(base, { type: 'live', live: live({ phase: 'thinking' }) });
+    const s = fold(base, { type: 'live', now: 0, live: live({ phase: 'thinking' }) });
     expect(s.live?.phase).toBe('thinking');
     expect(s.messages).toBe(base.messages);
     expect(s.dialogs).toBe(base.dialogs);
@@ -276,7 +276,7 @@ describe('foldEvent: live and deltas', () => {
   it('a tool delta appends to the block on screen', () => {
     const s = fold(
       base,
-      { type: 'live', live: live({ tool: { name: 'bash', output: 'a\n' } }) },
+      { type: 'live', now: 0, live: live({ tool: { name: 'bash', output: 'a\n' } }) },
       { type: 'delta', channel: 'tool', text: 'b\n' },
     );
     expect(s.live?.tool).toEqual({ name: 'bash', output: 'a\nb\n' });
@@ -305,5 +305,16 @@ describe('foldEvent: version', () => {
     expect(
       fold(s, { type: 'hello', seq: 1, version: PROTOCOL_VERSION }).versionMismatch,
     ).toBeNull();
+  });
+});
+
+describe('foldEvent: the server clock', () => {
+  it('measures the offset at each live event, and keeps it when no arrival time is given', () => {
+    let s = foldEvent(initialClientState, { type: 'live', now: 50_000, live: live() }, 20_000);
+    expect(s.clockOffset).toBe(30_000);
+    s = foldEvent(s, { type: 'live', now: 51_000, live: live() }, 21_500);
+    expect(s.clockOffset).toBe(29_500);
+    s = foldEvent(s, { type: 'live', now: 0, live: live() });
+    expect(s.clockOffset).toBe(29_500);
   });
 });

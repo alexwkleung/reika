@@ -98,7 +98,12 @@ export function App({
       <main className="app-main" aria-label="Transcript">
         <Transcript messages={s.messages} idle={!busy} />
         {s.live ? (
-          <LiveTurn live={s.live} busy={busy} planShown={mode === 'agent' || mode === 'vibe'} />
+          <LiveTurn
+            live={s.live}
+            busy={busy}
+            planShown={mode === 'agent' || mode === 'vibe'}
+            clockOffset={s.clockOffset}
+          />
         ) : null}
       </main>
       <div className="app-controls">

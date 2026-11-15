@@ -37,7 +37,10 @@ async function start(): Promise<void> {
   openEventStream({
     token: result.token,
     resumeFrom: () => state.get().lastSeq,
-    onEvent: event => state.update(s => foldEvent(s, event)),
+    onEvent: event => {
+      const receivedAt = Date.now();
+      state.update(s => foldEvent(s, event, receivedAt));
+    },
     onStatus: status => {
       if (status === 'signed-out') {
         tokens.remove();

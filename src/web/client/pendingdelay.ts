@@ -5,27 +5,19 @@ import { PENDING_ROW_DELAY_MS } from '../../ui/pendingrow.js';
 
 export { PENDING_ROW_DELAY_MS };
 
-// When this tab first saw each call, keyed by its number. Not the server's `pending.since`: that
-// is another machine's clock (or this one's, through a different process), and a skew or a tab
-// that connects mid-call would make the delay and the elapsed chip lie.
-export type CallSightings = { call: number; seenAt: number } | null;
-
-export function sightCall(prev: CallSightings, call: number, now: number): CallSightings {
-  return prev && prev.call === call ? prev : { call, seenAt: now };
+// A call's `since` is on the server's clock, and so is each live event's `now` (#991). The tab
+// reads the server's time as its own plus the offset it last measured, so a skewed clock or a tab
+// that connects mid-call still times the call from when it started.
+export function serverTime(localNow: number, clockOffset: number | null): number {
+  return localNow + (clockOffset ?? 0);
 }
 
 // `force`: streamed output for the call is already on screen, which outranks the delay (as in the
 // TUI), or the row would appear above output that drew first.
-export function pendingRowDue(
-  sighting: CallSightings,
-  call: number,
-  now: number,
-  force = false,
-): boolean {
-  if (!sighting || sighting.call !== call) return force;
-  return force || now - sighting.seenAt >= PENDING_ROW_DELAY_MS;
+export function pendingRowDue(since: number, serverNow: number, force = false): boolean {
+  return force || serverNow - since >= PENDING_ROW_DELAY_MS;
 }
 
-export function pendingElapsedMs(sighting: CallSightings, call: number, now: number): number {
-  return sighting && sighting.call === call ? Math.max(0, now - sighting.seenAt) : 0;
+export function pendingElapsedMs(since: number, serverNow: number): number {
+  return Math.max(0, serverNow - since);
 }

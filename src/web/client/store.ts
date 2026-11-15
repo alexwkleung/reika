@@ -26,6 +26,8 @@ export type ClientState = {
   snapshotSeq: number | null;
   // The server's version when it differs from this page's.
   versionMismatch: number | null;
+  // The server's clock minus this tab's, measured at each live event's arrival (pendingdelay.ts).
+  clockOffset: number | null;
 };
 
 export const initialClientState: ClientState = {
@@ -36,6 +38,7 @@ export const initialClientState: ClientState = {
   lastSeq: null,
   snapshotSeq: null,
   versionMismatch: null,
+  clockOffset: null,
 };
 
 function isSnapshotEvent(state: ClientState, seq: number): boolean {
@@ -110,10 +113,20 @@ function foldDelta(
   return { ...state, live: { ...live, [event.channel]: live[event.channel] + event.text } };
 }
 
-export function foldEvent(state: ClientState, event: ServerEvent): ClientState {
+// `receivedAt` is this tab's clock when the event arrived, passed in so the fold stays pure.
+export function foldEvent(
+  state: ClientState,
+  event: ServerEvent,
+  receivedAt?: number,
+): ClientState {
   switch (event.type) {
     case 'live':
-      return { ...state, live: event.live, snapshotSeq: null };
+      return {
+        ...state,
+        live: event.live,
+        snapshotSeq: null,
+        clockOffset: receivedAt === undefined ? state.clockOffset : event.now - receivedAt,
+      };
     case 'delta':
       return foldDelta(state, event);
     default:

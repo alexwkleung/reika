@@ -20,8 +20,10 @@ const live = (over: Partial<WireLive> = {}): WireLive => ({
   ...over,
 });
 
-const draw = (l: WireLive, busy = true, planShown = true) =>
-  renderToStaticMarkup(<LiveTurn live={l} busy={busy} planShown={planShown} />);
+const draw = (l: WireLive, busy = true, planShown = true, clockOffset: number | null = null) =>
+  renderToStaticMarkup(
+    <LiveTurn live={l} busy={busy} planShown={planShown} clockOffset={clockOffset} />,
+  );
 const text = (html: string) => html.replace(/<[^>]+>/g, '');
 
 describe('LiveTurn', () => {
@@ -40,11 +42,18 @@ describe('LiveTurn', () => {
   });
 
   it('a pending call shows at once only when its output already streams', () => {
-    const pending = { name: 'bash', since: 0, call: 1 };
+    const pending = { name: 'bash', since: Date.now(), call: 1 };
     expect(text(draw(live({ pending })))).not.toContain('Running…');
     expect(text(draw(live({ pending, tool: { name: 'bash', output: 'o' } })))).toContain(
       '↳Running…',
     );
+  });
+
+  it('times a call from its server start, for a tab that joined mid-call', () => {
+    // The server's clock runs a minute ahead of this tab's; the call started 7s ago on it.
+    const offset = 60_000;
+    const pending = { name: 'bash', since: Date.now() + offset - 7000, call: 1 };
+    expect(text(draw(live({ pending }), true, true, offset))).toMatch(/Running….*7s/);
   });
 
   it('draws a compaction note stream as a note', () => {

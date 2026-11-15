@@ -55,6 +55,7 @@ describe('committed rows are memoised', () => {
     expect(renders.rows).toBe(2);
     await send({
       type: 'live',
+      now: 0,
       live: {
         phase: 'thinking',
         content: 'streaming',

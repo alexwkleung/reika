@@ -6,7 +6,7 @@ import {
   PENDING_ROW_DELAY_MS,
   pendingElapsedMs,
   pendingRowDue,
-  sightCall,
+  serverTime,
 } from './pendingdelay.js';
 
 describe('follow', () => {
@@ -32,27 +32,24 @@ describe('follow', () => {
 });
 
 describe('pending row delay', () => {
-  it('holds a call back for the delay from when this tab first saw it', () => {
-    let s = sightCall(null, 4, 1000);
-    expect(pendingRowDue(s, 4, 1000)).toBe(false);
-    expect(pendingRowDue(s, 4, 1000 + PENDING_ROW_DELAY_MS - 1)).toBe(false);
-    s = sightCall(s, 4, 1100);
-    expect(s?.seenAt).toBe(1000);
-    expect(pendingRowDue(s, 4, 1000 + PENDING_ROW_DELAY_MS)).toBe(true);
-    expect(pendingElapsedMs(s, 4, 7000)).toBe(6000);
+  it('holds a call back for the delay from its server start time', () => {
+    expect(pendingRowDue(1000, 1000)).toBe(false);
+    expect(pendingRowDue(1000, 1000 + PENDING_ROW_DELAY_MS - 1)).toBe(false);
+    expect(pendingRowDue(1000, 1000 + PENDING_ROW_DELAY_MS)).toBe(true);
+    expect(pendingElapsedMs(1000, 7000)).toBe(6000);
   });
 
-  it('a new call starts its own delay, even under the same name', () => {
-    let s = sightCall(null, 4, 1000);
-    s = sightCall(s, 5, 5000);
-    expect(pendingRowDue(s, 5, 5100)).toBe(false);
-    expect(pendingElapsedMs(s, 5, 5100)).toBe(100);
+  it('reads the server time off the tab clock and the measured offset', () => {
+    // The server runs 30s ahead; a call it started 6s ago is 6s old here too.
+    const offset = 30_000;
+    const since = 100_000 + offset - 6000;
+    expect(pendingElapsedMs(since, serverTime(100_000, offset))).toBe(6000);
+    expect(serverTime(5, null)).toBe(5);
   });
 
   it('streamed output forces the row up', () => {
-    const s = sightCall(null, 1, 0);
-    expect(pendingRowDue(s, 1, 10, true)).toBe(true);
-    expect(pendingRowDue(null, 1, 10)).toBe(false);
+    expect(pendingRowDue(0, 10, true)).toBe(true);
+    expect(pendingRowDue(0, 10)).toBe(false);
   });
 });
 

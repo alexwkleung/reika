@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
 import { planWindow } from '../../ui/planwindow.js';
 import { foldedLiveFields } from '../../ui/reasoningfold.js';
@@ -9,8 +9,7 @@ import {
   PENDING_ROW_DELAY_MS,
   pendingElapsedMs,
   pendingRowDue,
-  sightCall,
-  type CallSightings,
+  serverTime,
 } from './pendingdelay.js';
 import './live.css';
 
@@ -108,16 +107,17 @@ export function LiveTurn({
   live,
   busy,
   planShown,
+  clockOffset = null,
 }: {
   live: WireLive;
   busy: boolean;
   planShown: boolean;
+  clockOffset?: number | null;
 }) {
   const pending = busy ? live.pending : null;
-  const sighting = useRef<CallSightings>(null);
-  if (pending) sighting.current = sightCall(sighting.current, pending.call, Date.now());
-  const due = sighting.current ? sighting.current.seenAt + PENDING_ROW_DELAY_MS : 0;
-  const now = useNow(!!pending, due > Date.now() ? PENDING_ROW_DELAY_MS : 1000);
+  const due = pending ? pending.since + PENDING_ROW_DELAY_MS : 0;
+  const before = due > serverTime(Date.now(), clockOffset);
+  const now = serverTime(useNow(!!pending, before ? PENDING_ROW_DELAY_MS : 1000), clockOffset);
   const plan =
     planShown && live.plan && live.plan.length > 0 ? <PlanList steps={live.plan} /> : null;
   // The checklist outlives its turn (controller onTurnEnd), so what is left shows before the next.
@@ -131,9 +131,8 @@ export function LiveTurn({
     ? { reasoning: live.reasoning, content: live.content }
     : foldedLiveFields(live.reasoning, live.content);
   const tool = live.tool;
-  const showPending =
-    !!pending && pendingRowDue(sighting.current, pending.call, now, !!tool?.output);
-  const elapsed = pending ? pendingElapsedMs(sighting.current, pending.call, now) : 0;
+  const showPending = !!pending && pendingRowDue(pending.since, now, !!tool?.output);
+  const elapsed = pending ? pendingElapsedMs(pending.since, now) : 0;
   const label = busyLabel(live);
   return (
     <section
