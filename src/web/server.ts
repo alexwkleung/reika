@@ -31,6 +31,10 @@ export type WebServerOptions = {
   assets?: (pathname: string) => Promise<WebAsset | null>;
   heartbeatMs?: number;
   now?: () => number;
+  // For `reika web --window`, which must know when its window has signed in and when no page is
+  // left: a link's code was traded, and the number of open event streams changed.
+  onLinkSpent?: () => void;
+  onStreamCount?: (count: number) => void;
 };
 
 export type WebServer = {
@@ -75,6 +79,9 @@ function setBaseHeaders(res: ServerResponse): void {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  // A page that opened this one keeps no handle to it, now that a cross-site load of `/` is
+  // admitted.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
 }
 
 // `complete` is false inside the handler even for a request with no body, so it cannot be the
@@ -182,6 +189,13 @@ export async function startWebServer(
   const streams = new Set<{ res: ServerResponse; stop: () => void }>();
   let port = 0;
 
+  // A hook is the caller's code running inside a request: its failure must not cost the request.
+  function notify<A extends unknown[]>(hook: ((...args: A) => void) | undefined, ...args: A): void {
+    try {
+      hook?.(...args);
+    } catch {}
+  }
+
   function allowedHosts(): string[] {
     return [`127.0.0.1:${port}`, `localhost:${port}`];
   }
@@ -202,9 +216,26 @@ export async function startWebServer(
     if (siteCount > 1) return false;
     if (siteCount === 1) {
       const site = req.headers['sec-fetch-site'];
-      if (site !== 'same-origin' && site !== 'none') return false;
+      const pageLoad = site === 'cross-site' && isPageLoad(req);
+      if (site !== 'same-origin' && site !== 'none' && !pageLoad) return false;
     }
     return true;
+  }
+
+  // The page itself, loaded as a window's top-level document, cross-site: `reika web --window`
+  // opens it through a local file that redirects (the link must not sit in a command line), which
+  // a browser labels cross-site. Not same-site, which would only add the other localhost ports. Any site could already link the user here, and the bare page
+  // does nothing without the code in its fragment, which no linking site holds. A frame is
+  // `iframe`, not `document`, and stays refused; the API and the other files keep the strict rule.
+  function isPageLoad(req: IncomingMessage): boolean {
+    return (
+      req.method === 'GET' &&
+      req.url === '/' &&
+      headerCount(req, 'sec-fetch-mode') === 1 &&
+      req.headers['sec-fetch-mode'] === 'navigate' &&
+      headerCount(req, 'sec-fetch-dest') === 1 &&
+      req.headers['sec-fetch-dest'] === 'document'
+    );
   }
 
   // In the fragment, so the code never reaches a request line or a Referer, and a speculative
@@ -221,7 +252,10 @@ export async function startWebServer(
     if (live === null) liveCode = null;
     const code = typeof candidate === 'string' ? candidate : undefined;
     const matched = tokenMatches(code ?? '', live?.hash ?? noCodeHash) && live !== null && !!code;
-    if (matched) liveCode = null;
+    if (matched) {
+      liveCode = null;
+      notify(opts.onLinkSpent);
+    }
     return matched;
   }
 
@@ -269,10 +303,11 @@ export async function startWebServer(
       stop: () => {
         clearInterval(heartbeat);
         unsubscribe();
-        streams.delete(entry);
+        if (streams.delete(entry)) notify(opts.onStreamCount, streams.size);
       },
     };
     streams.add(entry);
+    notify(opts.onStreamCount, streams.size);
     res.on('close', entry.stop);
     if (res.destroyed) entry.stop();
   }
