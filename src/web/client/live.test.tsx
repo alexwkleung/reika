@@ -29,11 +29,11 @@ const draw = (l: WireLive, busy = true, planShown = true, clockOffset: number | 
 const text = (html: string) => html.replace(/<[^>]+>/g, '');
 
 describe('LiveTurn', () => {
-  it('streams reasoning and content as markdown, with the busy line', () => {
+  it('streams reasoning and content as markdown; the busy line is pinned by App, not here', () => {
     const html = draw(live({ reasoning: 'hmm', content: 'A **bold** start' }));
     expect(text(html)).toContain('Thinking');
     expect(html).toContain('<strong>bold</strong>');
-    expect(html).toContain('class="busy busy--accent"');
+    expect(html).not.toContain('class="busy');
   });
 
   it('draws bash output under the command indent, other tools flush', () => {

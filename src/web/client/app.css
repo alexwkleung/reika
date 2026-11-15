@@ -96,10 +96,12 @@ body {
   flex-direction: column;
 }
 
-/* One centred column, shared by the transcript and the controls so their edges line up. */
+/* One centred column, shared by the transcript and the controls so their edges line up. 52rem
+   up to a 90rem window, then widening with it to 68rem, so a large display is not a thin strip
+   down the middle and a line of prose still reads in one sweep. */
 .app-column {
   width: 100%;
-  max-width: calc(52rem + 2 * var(--reika-gutter));
+  max-width: calc(clamp(52rem, 52rem + (100vw - 90rem) * 0.5, 68rem) + 2 * var(--reika-gutter));
   margin: 0 auto;
   padding-inline: var(--reika-gutter);
 }

@@ -19,7 +19,10 @@ export type StripItem =
   | { kind: 'meter'; fill: number | null; text: string; title: string; warn: boolean }
   | { kind: 'stat'; text: string; title: string }
   | { kind: 'path'; text: string }
-  | { kind: 'alert'; text: string };
+  | { kind: 'alert'; text: string }
+  // The branch's PR, as the TUI's chip: `PR #12`, plus `draft` or `merged` when that changes what
+  // the branch means. `url` only when it is a GitHub page link.
+  | { kind: 'pr'; number: number; url: string | null; state: 'draft' | 'merged' | null };
 
 // `/Users/a/very/long/path` → `/Users/a/…/path`: both ends say where you are.
 export function shortenMiddle(text: string, max: number): string {
@@ -92,6 +95,10 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
   const shrink = formatShrink(s.shrink.sheds, s.shrink.folds);
   if (shrink)
     items.push({ kind: 'stat', text: shrink, title: 'Context shed and folded this session' });
+  if (s.pr) {
+    const url = s.pr.url && /^https:\/\//.test(s.pr.url) ? s.pr.url : null;
+    items.push({ kind: 'pr', number: s.pr.number, url, state: s.pr.state ?? null });
+  }
   if (stream && stream !== 'open') items.push({ kind: 'alert', text: stream });
   if (s.cwd) items.push({ kind: 'path', text: s.cwd });
   return items;

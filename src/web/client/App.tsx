@@ -14,7 +14,7 @@ import { nextFollow, type FollowEvent } from './follow.js';
 import { frameBatched, type FrameScheduler } from './framebatch.js';
 import { History } from './History.js';
 import type { Holder } from './holder.js';
-import { LiveTurn } from './LiveTurn.js';
+import { BusyLine, busyLabel, LiveTurn } from './LiveTurn.js';
 import { StatusLine } from './StatusLine.js';
 import type { ClientState } from './store.js';
 import { Transcript } from './Transcript.js';
@@ -138,7 +138,6 @@ export function App({
               busy={busy}
               planShown={mode === 'agent' || mode === 'vibe'}
               clockOffset={s.clockOffset}
-              workingWords={s.session?.workingWords ?? false}
             />
           ) : null}
         </div>
@@ -154,6 +153,11 @@ export function App({
               Jump to latest
             </button>
           )}
+          {/* Pinned above the input as the TUI's is, so it never scrolls under it; hidden while a
+              dialog is up, as the TUI hides it behind an approval or a question. */}
+          {busy && s.live && s.dialogs.length === 0 ? (
+            <BusyLine {...busyLabel(s.live)} words={s.session?.workingWords ?? false} />
+          ) : null}
           <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
           <Composer
             send={send}

@@ -46,6 +46,23 @@
 .status-stat {
   white-space: nowrap;
 }
+.status-pr {
+  white-space: nowrap;
+}
+.status-pr a {
+  color: inherit;
+  text-decoration: none;
+}
+.status-pr a:hover {
+  color: var(--reika-text);
+  text-decoration: underline;
+}
+.status-pr-state--draft {
+  color: var(--reika-secondary);
+}
+.status-pr-state--merged {
+  color: var(--reika-pr-merged);
+}
 .status-alert {
   color: var(--reika-warning);
 }

@@ -167,13 +167,11 @@ export function LiveTurn({
   busy,
   planShown,
   clockOffset = null,
-  workingWords = false,
 }: {
   live: WireLive;
   busy: boolean;
   planShown: boolean;
   clockOffset?: number | null;
-  workingWords?: boolean;
 }) {
   const pending = busy ? live.pending : null;
   const due = pending ? pending.since + PENDING_ROW_DELAY_MS : 0;
@@ -194,7 +192,6 @@ export function LiveTurn({
   const tool = live.tool;
   const showPending = !!pending && pendingRowDue(pending.since, now, !!tool?.output);
   const elapsed = pending ? pendingElapsedMs(pending.since, now) : 0;
-  const label = busyLabel(live);
   return (
     <section
       className={`live${live.subagent ? ' nest' : ''}`}
@@ -235,7 +232,6 @@ export function LiveTurn({
         </pre>
       ) : null}
       {plan}
-      <BusyLine text={label.text} tone={label.tone} words={workingWords} />
     </section>
   );
 }

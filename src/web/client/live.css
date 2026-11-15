@@ -53,7 +53,7 @@
 }
 
 .busy {
-  margin-top: 0.9em;
+  margin: 0 0 0.5em;
   font-size: 0.93em;
   display: flex;
   align-items: baseline;
@@ -71,8 +71,8 @@
 /* The TUI's glow: the label rests at a dim tint of its state's colour and a brighter band sweeps
    across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. */
 .busy-label {
-  --busy-base: color-mix(in oklab, var(--busy-tone) 62%, var(--reika-page-bg));
-  --busy-peak: color-mix(in oklab, var(--busy-tone) 82%, white);
+  --busy-base: color-mix(in oklab, var(--busy-tone) 82%, var(--reika-page-bg));
+  --busy-peak: color-mix(in oklab, var(--busy-tone) 65%, white);
   background: linear-gradient(
       90deg,
       var(--busy-base) 0 40%,
