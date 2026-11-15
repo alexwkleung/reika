@@ -34,6 +34,12 @@
   --reika-text: #e4e4e4;
   --reika-code-bg: #1d1d1d;
   --reika-rule: #3a3a3a;
+  /* Controls in the input box: pills, menus, the placeholder. */
+  --reika-rule-strong: #4a4a4a;
+  --reika-control-bg: #232323;
+  --reika-control-border: #333333;
+  --reika-control-fg: #d0d0d0;
+  --reika-placeholder: #8c8c8c;
   --reika-banner-bg: #2a2418;
   --reika-diff-added-bg: #0f5a2c;
   --reika-diff-removed-bg: #6b1a22;
@@ -104,8 +110,18 @@ body {
   bottom: 0;
   z-index: 1;
   background: var(--reika-page-bg);
-  border-top: 1px solid var(--reika-rule);
   margin-top: 0.9em;
+}
+/* The transcript fades out under the controls instead of stopping at a line. */
+.app-controls::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.5rem;
+  background: linear-gradient(transparent, var(--reika-page-bg));
+  pointer-events: none;
 }
 
 .app-jump {

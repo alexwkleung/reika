@@ -1,10 +1,11 @@
-import type { ClientMessage } from '../protocol.js';
+import type { ClientMessage, WireCompletion } from '../protocol.js';
 
 // POST /message. A 409 is its own result: the dialog was answered elsewhere or is gone, which a
 // screen shows differently from a failure.
 
+// `reply` is what a `complete` asked for; absent for every other message.
 export type SendResult =
-  | { kind: 'ok' }
+  | { kind: 'ok'; reply?: WireCompletion }
   | { kind: 'conflict'; error: string }
   | { kind: 'signed-out' }
   | { kind: 'failed'; status: number | null; error: string };
@@ -34,7 +35,10 @@ export async function sendMessage(
   } catch (e) {
     return { kind: 'failed', status: null, error: (e as Error).message };
   }
-  if (res.ok) return { kind: 'ok' };
+  if (res.ok) {
+    const body = (await res.json().catch(() => null)) as { reply?: WireCompletion } | null;
+    return body && 'reply' in body ? { kind: 'ok', reply: body.reply } : { kind: 'ok' };
+  }
   if (res.status === 401) return { kind: 'signed-out' };
   const error = await errorText(res);
   if (res.status === 409) return { kind: 'conflict', error };

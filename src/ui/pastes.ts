@@ -56,6 +56,12 @@ export function hasPasteMarker(input: string): boolean {
   return MARKER_RE.test(input);
 }
 
+// Every marker the text holds, in order, repeats included. A fresh regex: matchAll starts at the
+// shared one's lastIndex, which `hasPasteMarker` leaves set.
+export function pasteMarkersIn(text: string): string[] {
+  return [...text.matchAll(new RegExp(MARKER_RE.source, 'g'))].map(m => m[0]);
+}
+
 // Exactly one marker this module could have minted, and nothing around it.
 export function isPasteMarker(text: string): boolean {
   return new RegExp(`^${MARKER_RE.source}$`).test(text);
@@ -75,8 +81,7 @@ export function adoptPastes(
   const byMarker = new Map(incoming.map(p => [p.marker, p.text]));
   const renamed = new Map<string, string>();
   let store = pastes;
-  // A fresh copy: matchAll starts at the shared regex's lastIndex, which `hasPasteMarker` leaves set.
-  for (const [marker] of text.matchAll(new RegExp(MARKER_RE.source, 'g'))) {
+  for (const marker of pasteMarkersIn(text)) {
     const pasted = byMarker.get(marker);
     if (pasted === undefined || renamed.has(marker)) continue;
     const kept = rememberPaste(store, pasted);

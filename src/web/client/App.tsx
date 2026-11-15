@@ -110,9 +110,11 @@ export function App({
         <Dialogs dialogs={s.dialogs} send={send} />
         <Composer
           send={send}
-          busy={busy}
-          queue={s.session?.queue ?? []}
+          session={s.session}
+          catalog={s.catalog}
+          history={s.history}
           waiting={s.dialogs.length > 0}
+          locked={s.versionMismatch !== null}
         />
         <StatusLine session={s.session} turns={turns} stream={c.stream} />
       </div>
