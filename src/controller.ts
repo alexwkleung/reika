@@ -94,6 +94,7 @@ import {
   type ConfirmSpec,
 } from './ui/dialogspecs.js';
 import type { Approvals } from './ui/summary.js';
+import { resolvePr, type PrRef } from './ui/pr.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -120,6 +121,8 @@ type Side = 'agent' | 'chat';
 
 // `loading` until the session has booted, `error` when it could not.
 const AUTOSAVE_INTERVAL_MS = 3000;
+// How often the status bar's PR is looked up again (ui/pr.ts caches the gh call per branch).
+const PR_POLL_MS = 15_000;
 
 // Input history's bounds: far past what anyone walks back through with ↑, and small enough to send
 // to a web tab whole.
@@ -173,6 +176,9 @@ export type ControllerSnapshot = {
   estimatedContext: number | null;
   shrink: ShrinkCounts;
   decodeRate: number | undefined;
+  // The PR the project's checked-out branch is attached to, for the status bar; null without one,
+  // or without `gh`, a repo or the network (ui/pr.ts).
+  pr: PrRef | null;
 };
 
 // One prompt's turn. `mode` is the one turn's override of the controller's mode (/implement flips
@@ -469,6 +475,9 @@ export function createController(opts: {
   createSession?: typeof createRealSession;
   // Stamps when a pending call started.
   now?: () => number;
+  // Polls the branch's PR for the status bar. Off unless a front end asks, so a test's controller
+  // never shells out to git or gh.
+  pollPr?: boolean;
 }): Controller {
   // Looked up per call, so a clock swapped in after creation is the one read.
   const now = opts.now ?? (() => Date.now());
@@ -492,6 +501,7 @@ export function createController(opts: {
     estimatedContext: null,
     shrink: { sheds: 0, folds: 0 },
     decodeRate: undefined,
+    pr: null,
   };
   // The events behind the shrink counts, for the saved header only: a shed lands every few rounds
   // on a small window, so as scrollback lines they would be noise.
@@ -773,9 +783,27 @@ export function createController(opts: {
     if (status !== snapshot.status) set({ status });
   };
 
+  // The poll only shells out to git (cheap, local); the `gh` lookup behind it is cached per branch,
+  // so a branch switched in another terminal shows within a tick without hammering the network.
+  // The cache hands back the same object while it is fresh, so an unchanged PR sets nothing.
+  let prTimer: ReturnType<typeof setInterval> | null = null;
+  const checkPr = async (): Promise<void> => {
+    const s = session;
+    if (!s) return;
+    const next = await resolvePr(s.bundle.cwd, Date.now());
+    if (next !== snapshot.pr) set({ pr: next });
+  };
+  const startPrPoll = (): void => {
+    if (!opts.pollPr || prTimer) return;
+    void checkPr();
+    prTimer = setInterval(() => void checkPr(), PR_POLL_MS);
+    prTimer.unref?.();
+  };
+
   const attachSession = (attached: Session, own: string): void => {
     session = attached;
     ownProfile = own;
+    startPrPoll();
   };
   const createSession = opts.createSession ?? createRealSession;
   const boot = async (input: BootInput): Promise<Session | null> => {
@@ -1654,6 +1682,8 @@ export function createController(opts: {
         const bundle = await bootstrap(cwd, session.bundle.repoMapBudget);
         session.updateBundle(() => bundle);
         append({ role: 'system', content: `cwd is now ${cwd}` });
+        // Another project's branch, maybe another PR.
+        if (opts.pollPr) void checkPr();
       } catch (e) {
         append({ role: 'system', content: `cd failed: ${(e as Error).message}` });
       } finally {

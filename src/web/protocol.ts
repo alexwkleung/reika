@@ -106,6 +106,8 @@ export type WireState = {
   session: string | null;
   // The busy line rotates the TUI's working verbs (REIKA_WORKING_WORDS, default on).
   workingWords: boolean;
+  // The PR the checked-out branch is attached to, as the TUI's status bar shows it.
+  pr: { number: number; url?: string; state?: 'draft' | 'merged' } | null;
 };
 
 // A file's name and nothing above it: a tab names a session by this, and the server looks the
@@ -142,6 +144,7 @@ export function wireState(controller: Controller, stage: string | null = null): 
     modelPinned: controller.modelPinned,
     session: controller.sessionPath === null ? null : sessionId(controller.sessionPath),
     workingWords: cfg?.workingWords === true,
+    pr: snap.pr ? { ...snap.pr } : null,
   };
 }
 
