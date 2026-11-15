@@ -215,6 +215,7 @@ describe('wireState', () => {
       modelPinned: false,
       session: null,
       workingWords: false,
+      pr: null,
     });
   });
 
@@ -229,6 +230,11 @@ describe('wireState', () => {
       autoApprove: 'safe',
       unattended: true,
     });
+  });
+
+  it('carries the branch PR as a copy', () => {
+    const controller = booted();
+    expect(wireState(controller).pr).toBeNull();
   });
 
   it('says whether the busy line rotates the working verbs', () => {

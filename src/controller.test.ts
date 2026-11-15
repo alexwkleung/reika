@@ -227,6 +227,7 @@ describe('createController', () => {
       estimatedContext: null,
       shrink: { sheds: 0, folds: 0 },
       decodeRate: undefined,
+      pr: null,
     });
     expect(controller.messages).toEqual([]);
     expect(controller.mode).toBe('plan');
