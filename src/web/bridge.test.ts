@@ -339,6 +339,33 @@ describe('pickers', () => {
     expect(controller.getSnapshot().messages.at(-1)).toMatchObject({ content: '/model' });
   });
 
+  it('takes only a model the picker offered, and not while a turn runs (#995)', async () => {
+    const { controller, session, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/model' });
+    await flush();
+    const [picker] = dialogs(events);
+    for (const name of ['anything', '']) {
+      expect(bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name })).toEqual({
+        ok: false,
+        error: 'name is not one this dialog offered',
+      });
+    }
+    controller.setStatus('busy');
+    expect(bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name: 'other' })).toEqual({
+      ok: false,
+      error: 'cannot switch while busy',
+    });
+    expect(session.setProfile).not.toHaveBeenCalled();
+    expect(session.addProfile).not.toHaveBeenCalled();
+    expect(resolved(events)).toEqual([]);
+
+    controller.setStatus('idle');
+    expect(bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name: 'other' })).toEqual({
+      ok: true,
+    });
+    expect(session.setProfile).toHaveBeenCalledWith('other');
+  });
+
   it('cancels a picker superseded by a new one of the same kind', async () => {
     const { bridge, events } = setup();
     bridge.handle({ type: 'submit', text: '/model' });

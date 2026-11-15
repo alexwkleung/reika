@@ -57,7 +57,7 @@ type OpenDialog = {
   | { kind: 'approval'; source: ApprovalRequest }
   | { kind: 'question'; source: QuestionRequest }
   | { kind: 'confirm'; source: ConfirmSpec; rows: number }
-  | { kind: 'model' }
+  | { kind: 'model'; targets: ModelTarget[] }
   | { kind: 'session'; entries: SessionEntry[] }
 );
 
@@ -268,7 +268,13 @@ export function createWebBridge(
     exit: () => opts.onExit?.(),
     pickModel: (targets: ModelTarget[]) => {
       supersedePicker('model');
-      openDialog({ id: nextId(), kind: 'model', dialog: modelDialog(targets), answered: false });
+      openDialog({
+        id: nextId(),
+        kind: 'model',
+        targets,
+        dialog: modelDialog(targets),
+        answered: false,
+      });
     },
     pickSession: list => {
       supersedePicker('session');
@@ -321,11 +327,24 @@ export function createWebBridge(
         controller.answerConfirm(message.choice);
         return { ok: true };
       }
-      case 'model':
+      case 'model': {
+        if (message.name === null) {
+          entry.answered = true;
+          closeDialog(entry);
+          return { ok: true };
+        }
+        const offered = entry.kind === 'model' ? entry.targets : [];
+        // Only a target this dialog listed: an unknown name would become an ad-hoc profile, which
+        // is for a typed `/model x` (#995).
+        if (!offered.some(t => t.name === message.name)) {
+          return { ok: false, error: 'name is not one this dialog offered' };
+        }
+        if (controller.status !== 'idle') return { ok: false, error: 'cannot switch while busy' };
         entry.answered = true;
         closeDialog(entry);
-        if (message.name !== null) controller.pickModel(message.name);
+        controller.pickModel(message.name);
         return { ok: true };
+      }
       case 'session': {
         if (message.path === null) {
           entry.answered = true;
