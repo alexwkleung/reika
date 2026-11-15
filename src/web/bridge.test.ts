@@ -9,6 +9,22 @@ import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { createWebBridge } from './bridge.js';
 import type { ServerEvent } from './protocol.js';
+import type * as PastedUrls from '../agent/pastedurls.js';
+
+// A pasted-link fetch that announces itself and waits for the test to let it finish.
+const linkFetch = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
+vi.mock('../agent/pastedurls.js', async importOriginal => {
+  const real = await importOriginal<typeof PastedUrls>();
+  return {
+    ...real,
+    expandPastedUrls: async (...args: Parameters<typeof real.expandPastedUrls>) => {
+      if (!linkFetch.gate) return real.expandPastedUrls(...args);
+      args[1].onStart?.(1);
+      await linkFetch.gate;
+      return { blocks: ['<url href="stub">the page</url>'], notices: [], fetched: [] };
+    },
+  };
+});
 
 const user = (content: string): Message => ({ role: 'user', content });
 const note = (content: string): Message => ({ role: 'system', content });
@@ -108,11 +124,11 @@ function deferred<T = void>() {
 }
 
 describe('connect', () => {
-  it('sends a fresh tab hello, reset, state and live, all at the newest seq', () => {
+  it('sends a fresh tab hello, reset, state, catalog, history and live, all at the newest seq', () => {
     const { bridge } = setup();
     const events = bridge.connect();
-    expect(types(events)).toEqual(['hello', 'reset', 'state', 'live']);
-    expect(committed(events).map(e => (e as { seq: number }).seq)).toEqual([0, 0, 0]);
+    expect(types(events)).toEqual(['hello', 'reset', 'state', 'catalog', 'history', 'live']);
+    expect(committed(events).map(e => (e as { seq: number }).seq)).toEqual([0, 0, 0, 0, 0]);
     expect(events[2]).toMatchObject({ state: { mode: 'agent', status: 'idle', model: 'local' } });
   });
 });
@@ -157,13 +173,21 @@ describe('committed events', () => {
     expect(types(events)).toEqual(['dialog']);
   });
 
-  it('sends state for a change only the session reports', async () => {
+  it('sends state and the model list for a change only the session reports', async () => {
     const { session, events } = setup();
     await session.setProfile('other');
     expect(events).toEqual([
       expect.objectContaining({
         type: 'state',
         state: expect.objectContaining({ model: 'other-model', profile: 'other' }),
+      }),
+      expect.objectContaining({
+        type: 'catalog',
+        catalog: {
+          models: expect.arrayContaining([
+            expect.objectContaining({ name: 'other', active: true }),
+          ]),
+        },
       }),
     ]);
   });
@@ -176,9 +200,10 @@ describe('committed events', () => {
     const session = fakeSession();
     controller.attachSession(session as unknown as Session, 'default');
     controller.setStatus('idle');
-    expect(events.at(-1)).toMatchObject({ type: 'state', state: { model: 'local' } });
+    const states = () => events.filter(e => e.type === 'state');
+    expect(states().at(-1)).toMatchObject({ state: { model: 'local' } });
     await session.setProfile('other');
-    expect(events.at(-1)).toMatchObject({ type: 'state', state: { model: 'other-model' } });
+    expect(states().at(-1)).toMatchObject({ state: { model: 'other-model' } });
   });
 });
 
@@ -211,9 +236,23 @@ describe('replay', () => {
   it('sends a snapshot for a seq the bounded log no longer covers', () => {
     const { controller, bridge } = setup('agent', { maxLogEvents: 2 });
     for (const t of ['a', 'b', 'c', 'd']) controller.append(user(t));
-    expect(types(bridge.connect(1))).toEqual(['hello', 'reset', 'state', 'live']);
+    expect(types(bridge.connect(1))).toEqual([
+      'hello',
+      'reset',
+      'state',
+      'catalog',
+      'history',
+      'live',
+    ]);
     expect(types(bridge.connect(2))).toEqual(['message', 'message', 'live']);
-    expect(types(bridge.connect(99))).toEqual(['hello', 'reset', 'state', 'live']);
+    expect(types(bridge.connect(99))).toEqual([
+      'hello',
+      'reset',
+      'state',
+      'catalog',
+      'history',
+      'live',
+    ]);
   });
 
   it('sends only live to a tab that is up to date', () => {
@@ -231,7 +270,15 @@ describe('controller dialogs', () => {
     const answered = controller.requestApproval(request);
     const [opened] = dialogs(events);
     expect(opened).toMatchObject({ id: 'd1', dialog: { kind: 'approval', preview: 'ls' } });
-    expect(types(bridge.connect())).toEqual(['hello', 'reset', 'state', 'dialog', 'live']);
+    expect(types(bridge.connect())).toEqual([
+      'hello',
+      'reset',
+      'state',
+      'catalog',
+      'history',
+      'dialog',
+      'live',
+    ]);
 
     expect(
       bridge.handle({ type: 'answer', id: 'd1', kind: 'approval', answer: true, always: true }),
@@ -597,6 +644,230 @@ describe('input', () => {
     expect(bridge.handle({ type: 'submit', text: 'go' })).toEqual({ ok: true });
     await flush();
     expect(controller.messages.at(-1)).toEqual({ role: 'error', content: 'boom' });
+  });
+});
+
+describe('mode and model switches', () => {
+  // A turn that has started but not reached onTurnStart: the line is being prepared, status idle.
+  const heldBeforeStart = (session: ReturnType<typeof fakeSession>) => {
+    const gate = deferred();
+    session.turn = async (text, opts) => {
+      await gate.promise;
+      opts.onTurnStart?.();
+      opts.events?.onMessage?.(user(text));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    return gate;
+  };
+
+  it('switches the mode between lines, and a repeat of the current mode is a no-op', () => {
+    const { controller, bridge, events } = setup();
+    expect(bridge.handle({ type: 'mode', mode: 'plan' })).toEqual({ ok: true });
+    expect(controller.mode).toBe('plan');
+    expect(events.filter(e => e.type === 'message')).toEqual([]);
+    events.length = 0;
+    expect(bridge.handle({ type: 'mode', mode: 'plan' })).toEqual({ ok: true });
+    expect(events).toEqual([]);
+  });
+
+  it('refuses a switch while a line is being prepared, runs, waits on a dialog or is queued', async () => {
+    const refused = { ok: false, conflict: true };
+    const { controller, session, bridge } = setup();
+    const gate = heldBeforeStart(session);
+    bridge.handle({ type: 'submit', text: 'first' });
+    await flush();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'idle', preparing: true });
+    expect(bridge.handle({ type: 'mode', mode: 'shell' })).toMatchObject(refused);
+    expect(bridge.handle({ type: 'model', name: 'other' })).toMatchObject(refused);
+    gate.resolve();
+    await vi.waitFor(() => expect(controller.getSnapshot().preparing).toBe(false));
+
+    controller.setStatus('busy');
+    expect(bridge.handle({ type: 'mode', mode: 'shell' })).toMatchObject(refused);
+    controller.setStatus('idle');
+
+    const asked = controller.openConfirm({
+      title: 't',
+      subtitle: 's',
+      details: [],
+      options: ['a'],
+    });
+    expect(bridge.handle({ type: 'mode', mode: 'shell' })).toMatchObject(refused);
+    controller.answerConfirm(0);
+    await asked;
+
+    controller.enqueue({ content: 'later', answers: {} });
+    expect(bridge.handle({ type: 'mode', mode: 'shell' })).toMatchObject(refused);
+    expect(controller.mode).toBe('agent');
+    expect(session.setProfile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch before the session has booted', () => {
+    const controller = createController({ mode: 'agent', remember: vi.fn(), historyRoot: root });
+    const bridge = createWebBridge(controller);
+    expect(bridge.handle({ type: 'mode', mode: 'plan' })).toMatchObject({ ok: false });
+    expect(bridge.handle({ type: 'model', name: 'other' })).toMatchObject({ ok: false });
+  });
+
+  it('refuses a submit typed in a mode another tab has since left', async () => {
+    const { controller, session, bridge } = setup();
+    expect(bridge.handle({ type: 'submit', text: 'hi', mode: 'agent' })).toEqual({ ok: true });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(controller.getSnapshot().preparing).toBe(false));
+    controller.replace([]);
+    session.submit.mockClear();
+    bridge.handle({ type: 'mode', mode: 'shell' });
+    expect(bridge.handle({ type: 'submit', text: 'fix it', mode: 'agent' })).toEqual({
+      ok: false,
+      error: 'the mode is now shell, not agent',
+      conflict: true,
+    });
+    await flush();
+    expect(controller.messages).toEqual([]);
+    expect(session.submit).not.toHaveBeenCalled();
+  });
+
+  it('picks a listed model, pinned as /model pins it, and closes an open picker', async () => {
+    const { controller, session, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/model' });
+    await flush();
+    const [picker] = dialogs(events);
+    expect(bridge.handle({ type: 'model', name: 'other' })).toEqual({ ok: true });
+    expect(session.setProfile).toHaveBeenCalledWith('other');
+    expect(resolved(events)).toEqual([{ id: picker.id, outcome: 'cancelled' }]);
+    expect(controller.modelPinned).toBe(true);
+    expect(events.filter(e => e.type === 'state').at(-1)).toMatchObject({
+      state: { modelPinned: true },
+    });
+  });
+
+  it('takes only a listed model name', () => {
+    const { session, bridge } = setup();
+    expect(bridge.handle({ type: 'model', name: 'made-up' })).toEqual({
+      ok: false,
+      error: 'name is not one of the listed models',
+    });
+    expect(session.addProfile).not.toHaveBeenCalled();
+    expect(session.setProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('pastes', () => {
+  const big = (tag: string) => `${tag}\n`.repeat(12);
+  const marker = (id: number) => `[Pasted text #${id} +12 lines]`;
+
+  it('expands a paste last, so the questions read only the words typed (#448)', async () => {
+    const { session, bridge } = setup();
+    const log = `error at https://example.com/a\n`.repeat(12);
+    bridge.handle({
+      type: 'submit',
+      text: `why does this fail? ${marker(1)}`,
+      pastes: [{ marker: marker(1), text: log }],
+    });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledOnce());
+    expect(session.submit.mock.calls[0][0]).toBe(`why does this fail? ${log}`);
+  });
+
+  it('numbers two tabs’ #1 apart, and a recalled marker still expands', async () => {
+    const { session, bridge } = setup();
+    bridge.handle({
+      type: 'submit',
+      text: marker(1),
+      pastes: [{ marker: marker(1), text: big('a') }],
+    });
+    bridge.handle({
+      type: 'submit',
+      text: marker(1),
+      pastes: [{ marker: marker(1), text: big('b') }],
+    });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledTimes(2));
+    expect(session.submit.mock.calls.map(c => c[0])).toEqual([big('a'), big('b')]);
+
+    // The second line went through the queue as #2; recalled, it needs no pastes of its own.
+    bridge.handle({ type: 'submit', text: `again ${marker(2)}` });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledTimes(3));
+    expect(session.submit.mock.calls[2][0]).toBe(`again ${big('b')}`);
+  });
+
+  it('records the line with the server’s marker, for recall in every tab', async () => {
+    const { controller, bridge, events } = setup();
+    bridge.handle({
+      type: 'submit',
+      text: `x ${marker(4)}`,
+      pastes: [{ marker: marker(4), text: big('a') }],
+    });
+    await flush();
+    expect(controller.getSnapshot().history).toEqual([`x ${marker(1)}`]);
+    expect(events.filter(e => e.type === 'historyAdd')).toEqual([
+      { type: 'historyAdd', seq: expect.any(Number), entry: `x ${marker(1)}` },
+    ]);
+  });
+});
+
+describe('history', () => {
+  it('appends a line, sends the whole list when it is cut, and is in every snapshot', async () => {
+    const { controller, bridge, events } = setup('agent', { maxLogEvents: 2 });
+    bridge.handle({ type: 'submit', text: 'one' });
+    bridge.handle({ type: 'submit', text: 'two' });
+    await vi.waitFor(() => expect(controller.getSnapshot().history).toEqual(['one', 'two']));
+    expect(
+      events.filter(e => e.type === 'historyAdd').map(e => (e as { entry: string }).entry),
+    ).toEqual(['one', 'two']);
+    const snapshot = bridge.connect(1);
+    expect(snapshot.find(e => e.type === 'history')).toMatchObject({ entries: ['one', 'two'] });
+    expect(snapshot.find(e => e.type === 'catalog')).toMatchObject({
+      catalog: { models: expect.arrayContaining([expect.objectContaining({ name: 'default' })]) },
+    });
+  });
+});
+
+describe('completions', () => {
+  it('answers with the controller’s list, and null before boot', () => {
+    const { session, bridge } = setup();
+    session.bundle.fileIndex = ['src/app.ts', 'README.md'] as never;
+    expect(bridge.handle({ type: 'complete', text: 'see @app' })).toEqual({
+      ok: true,
+      reply: {
+        kind: 'file',
+        partial: '@app',
+        items: [{ value: '@src/app.ts', display: 'src/app.ts' }],
+      },
+    });
+    expect(bridge.handle({ type: 'complete', text: '/mod' })).toMatchObject({
+      ok: true,
+      reply: { kind: 'command', items: [expect.objectContaining({ value: '/model' })] },
+    });
+    expect(bridge.handle({ type: 'complete', text: 'plain words' })).toEqual({
+      ok: true,
+      reply: null,
+    });
+
+    const unbooted = createWebBridge(
+      createController({ mode: 'agent', remember: vi.fn(), historyRoot: root }),
+    );
+    expect(unbooted.handle({ type: 'complete', text: '/mod' })).toEqual({ ok: true, reply: null });
+  });
+});
+
+describe('stage', () => {
+  afterEach(() => {
+    linkFetch.gate = null;
+  });
+
+  it('shows what a submit is waiting on, and clears it when the wait ends', async () => {
+    const gate = deferred();
+    linkFetch.gate = gate.promise;
+    const { session, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: 'https://example.com/docs' });
+    await vi.waitFor(() =>
+      expect(events.filter(e => e.type === 'state').at(-1)).toMatchObject({
+        state: { stage: 'Fetching 1 pasted link' },
+      }),
+    );
+    gate.resolve();
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledOnce());
+    expect(events.filter(e => e.type === 'state').at(-1)).toMatchObject({ state: { stage: null } });
   });
 });
 

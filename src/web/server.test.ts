@@ -631,6 +631,23 @@ describe('/message', () => {
     expect(fake.handled).toEqual([{ type: 'submit', text: 'hi' }]);
   });
 
+  it('sends a reply in the body, null included', async () => {
+    const { server, fake } = await start();
+    const complete = JSON.stringify({ type: 'complete', text: '/mo' });
+    const reply = {
+      kind: 'command' as const,
+      partial: '/mo',
+      items: [{ value: '/model', display: '/model' }],
+    };
+    fake.setResult({ ok: true, reply });
+    expect(JSON.parse((await post(server, complete, json)).body)).toEqual({ ok: true, reply });
+    fake.setResult({ ok: true, reply: null });
+    expect(JSON.parse((await post(server, complete, json)).body)).toEqual({
+      ok: true,
+      reply: null,
+    });
+  });
+
   it('answers a conflict with 409 and another failure with 400', async () => {
     const { server, fake } = await start();
     fake.setResult({ ok: false, error: 'no open approval dialog d1', conflict: true });

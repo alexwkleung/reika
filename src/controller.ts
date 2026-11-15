@@ -81,6 +81,7 @@ import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import { isSaveCommand } from './ui/commands.js';
 import { expandPastes, type PastedText } from './ui/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
+import { computeSuggestions, type SuggestionState } from './ui/suggest.js';
 import {
   CONFIRM_ACCEPT,
   implementModeConfirmSpec,
@@ -120,6 +121,11 @@ type Side = 'agent' | 'chat';
 // `loading` until the session has booted, `error` when it could not.
 const AUTOSAVE_INTERVAL_MS = 3000;
 
+// Input history's bounds: far past what anyone walks back through with ↑, and small enough to send
+// to a web tab whole.
+export const MAX_HISTORY_ENTRIES = 500;
+export const MAX_HISTORY_CHARS = 2_000_000;
+
 export type ControllerStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // What `/resume` comes to: sessions to pick from under a heading, or a line saying why not.
@@ -139,6 +145,9 @@ export type ControllerSnapshot = {
   queue: QueuedMessage[];
   // A queued prompt has been handed back and its submit has not settled yet.
   replaying: boolean;
+  // Lines sent, oldest first, for ↑/↓ recall in every front end. Kept across /new and a resume, as
+  // a shell keeps its history across `clear`; never saved.
+  history: string[];
   // A line is past the queue check and has not settled: its questions, its expansions or its run.
   // The status is still idle through the first two, so this is what sends a second line to the
   // queue (#993).
@@ -385,6 +394,11 @@ export type Controller = {
   pickModel(typed: string, echo?: Message): void;
   // What the model picker and `/model` completion list.
   modelTargets(): ModelTarget[];
+  // A model picked this session outranks the mode's own until `/new` (#616).
+  readonly modelPinned: boolean;
+  // The completion list for the input box's text: commands, skills, MCP commands, `/model`
+  // arguments and `@` files. Null before boot and when nothing matches.
+  completions(text: string): SuggestionState | null;
   // When this conversation began: launch, or the last `newConversation`.
   readonly startedAt: number;
   // `/new`: drops both sides and everything the session learned about the engine, and starts over
@@ -461,6 +475,7 @@ export function createController(opts: {
     status: 'loading',
     queue: [],
     replaying: false,
+    history: [],
     preparing: false,
     approval: null,
     question: null,
@@ -1250,6 +1265,19 @@ export function createController(opts: {
     };
   };
 
+  // Consecutive repeats are one entry, as in a shell. Bounded by count and by size, since one line
+  // can be a megabyte and every web tab is sent the whole list when it connects.
+  const recordHistory = (line: string): void => {
+    const prev = snapshot.history;
+    if (prev[prev.length - 1] === line) return;
+    const next = [...prev, line];
+    let chars = next.reduce((n, l) => n + l.length, 0);
+    while (next.length > 1 && (next.length > MAX_HISTORY_ENTRIES || chars > MAX_HISTORY_CHARS)) {
+      chars -= next.shift()!.length;
+    }
+    set({ history: next });
+  };
+
   const submit = async (
     input: string,
     front: InputFrontEnd,
@@ -1264,6 +1292,7 @@ export function createController(opts: {
     const held = snapshot.status !== 'idle' || snapshot.preparing;
     if (session && held && isSaveCommand(input)) {
       front.onTaken(trimmed);
+      recordHistory(trimmed);
       await runCommand(trimmed, front);
       return;
     }
@@ -1301,6 +1330,7 @@ export function createController(opts: {
     if (answers === 'abort') return;
     const { skill: route, fetchUrls, implementMode } = answers;
     front.onTaken(trimmed || undefined);
+    if (trimmed) recordHistory(trimmed);
     if (!trimmed) return;
     if (trimmed.startsWith('/')) {
       await runCommand(trimmed, { ...front, implementMode });
@@ -1498,6 +1528,26 @@ export function createController(opts: {
     modelTargets: () => {
       const cfg = config();
       return session && cfg ? buildModelTargets(cfg, session.profile) : [];
+    },
+    get modelPinned() {
+      return modelPinned;
+    },
+    completions: text => {
+      if (!session) return null;
+      return computeSuggestions(
+        text,
+        session.bundle.fileIndex,
+        // MCP commands complete like skills (#265): to the user both are a slash command that is
+        // not a mode. Built-ins win a name clash; an MCP name carries a colon, so none clashes.
+        [
+          ...session.bundle.skills,
+          ...session.mcp.commands.map(c => ({
+            name: c.name,
+            description: `MCP ${c.server}${c.description ? ` · ${c.description}` : ''}`,
+          })),
+        ],
+        controller.modelTargets(),
+      );
     },
     get startedAt() {
       return startedAt;

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   createController,
   emptyLive,
+  MAX_HISTORY_ENTRIES,
   type CommandFrontEnd,
   type InputFrontEnd,
   type LiveChange,
@@ -212,6 +213,7 @@ describe('createController', () => {
       status: 'loading',
       queue: [],
       replaying: false,
+      history: [],
       preparing: false,
       approval: null,
       question: null,
@@ -3039,6 +3041,77 @@ describe('controller.submit', () => {
       await controller.submit(incidental, { ...front, ask }, { fetchUrls: false });
       expect(ask).not.toHaveBeenCalled();
       expect(pasteFetches.incidental).toEqual([false]);
+    });
+  });
+
+  describe('input history', () => {
+    it('records each line sent, commands and shell lines too, once per run of repeats', async () => {
+      const { controller } = idle();
+      for (const line of ['fix it', 'fix it', '/help', ' fix it ']) {
+        await controller.submit(line, inputFront().front);
+      }
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/help', 'fix it']);
+    });
+
+    it('records a queued line when it replays, not when it is queued', async () => {
+      const { controller } = idle();
+      controller.setStatus('busy');
+      await controller.submit('later', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('idle');
+      const next = controller.takeQueued({ resuming: false })!;
+      await controller.submit(next.content, inputFront().front, next.answers);
+      controller.replayDone();
+      expect(controller.getSnapshot().history).toEqual(['later']);
+    });
+
+    it('records /save run mid-turn, and nothing for an empty line', async () => {
+      const { controller } = idle();
+      await controller.submit('   ', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('busy');
+      await controller.submit('/save', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['/save']);
+    });
+
+    it('keeps it across /new', async () => {
+      const { controller } = idle();
+      await controller.submit('fix it', inputFront().front);
+      await controller.submit('/new', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/new']);
+    });
+
+    it('drops the oldest past the entry bound', async () => {
+      const { controller } = idle();
+      for (let i = 0; i <= MAX_HISTORY_ENTRIES; i++) {
+        await controller.submit(`/cwd ${i}`, inputFront().front);
+      }
+      const history = controller.getSnapshot().history;
+      expect(history).toHaveLength(MAX_HISTORY_ENTRIES);
+      expect(history[0]).toBe('/cwd 1');
+    });
+  });
+
+  describe('completions', () => {
+    it('lists commands, skills, MCP commands, models and files from the session', () => {
+      const { controller, session } = idle();
+      session!.bundle.skills = [verify];
+      session!.bundle.fileIndex = ['src/app.ts'];
+      session!.mcp.commands = [
+        { name: 'docs:find', server: 'docs', description: 'find a page' } as McpCommand,
+      ];
+      const names = (text: string) => controller.completions(text)?.items.map(i => i.value);
+      expect(names('/ver')).toEqual(['/verify']);
+      expect(names('/docs')).toEqual(['/docs:find']);
+      expect(controller.completions('/docs')?.items[0].display).toContain('MCP docs · find a page');
+      expect(names('see @app')).toEqual(['@src/app.ts']);
+      expect(names('/model ')).toEqual(expect.arrayContaining(['/model default']));
+      expect(controller.completions('plain words')).toBeNull();
+    });
+
+    it('is null before boot', () => {
+      const { controller } = controllerIn('agent', null);
+      expect(controller.completions('/he')).toBeNull();
     });
   });
 

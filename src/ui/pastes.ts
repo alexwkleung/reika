@@ -56,6 +56,36 @@ export function hasPasteMarker(input: string): boolean {
   return MARKER_RE.test(input);
 }
 
+// Exactly one marker this module could have minted, and nothing around it.
+export function isPasteMarker(text: string): boolean {
+  return new RegExp(`^${MARKER_RE.source}$`).test(text);
+}
+
+// Takes another front end's pastes into this store (a browser tab's, #584): each marker the text
+// still holds gets a marker of this store's, in one pass, so a renumbered marker can never be
+// renumbered again by a later one. A marker the text holds but `incoming` does not name is left as
+// it is: it is this store's own, from a recalled line. Incoming pastes the text no longer holds are
+// not kept, or they would push live ones out.
+export function adoptPastes(
+  pastes: PastedText[],
+  text: string,
+  incoming: PastedText[],
+): { pastes: PastedText[]; text: string } {
+  if (incoming.length === 0) return { pastes, text };
+  const byMarker = new Map(incoming.map(p => [p.marker, p.text]));
+  const renamed = new Map<string, string>();
+  let store = pastes;
+  // A fresh copy: matchAll starts at the shared regex's lastIndex, which `hasPasteMarker` leaves set.
+  for (const [marker] of text.matchAll(new RegExp(MARKER_RE.source, 'g'))) {
+    const pasted = byMarker.get(marker);
+    if (pasted === undefined || renamed.has(marker)) continue;
+    const kept = rememberPaste(store, pasted);
+    store = kept.pastes;
+    renamed.set(marker, kept.marker);
+  }
+  return { pastes: store, text: text.replace(MARKER_RE, m => renamed.get(m) ?? m) };
+}
+
 function nextMarker(pastes: PastedText[], text: string): string {
   const used = pastes.map(p => Number(/#(\d+)/.exec(p.marker)?.[1] ?? 0));
   const id = Math.max(0, ...used) + 1;
