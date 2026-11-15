@@ -13,6 +13,7 @@ beforeAll(async () => {
   await writeFile(join(root, 'secret.txt'), 'no');
   await writeFile(join(root, 'app.js'), 'export {};');
   await writeFile(join(root, 'app.css'), ':root{}');
+  await writeFile(join(root, 'favicon.svg'), '<svg/>');
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
@@ -61,6 +62,7 @@ describe('clientAssets', () => {
     expect(js?.contentType).toBe('text/javascript; charset=utf-8');
     expect(Buffer.from(js!.body).toString()).toBe('export {};');
     expect((await assets('/app.css'))?.contentType).toBe('text/css; charset=utf-8');
+    expect((await assets('/favicon.svg'))?.contentType).toBe('image/svg+xml');
   });
 
   it('serves nothing else, the proof files included', async () => {

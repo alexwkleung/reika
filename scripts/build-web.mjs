@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Bundles the browser client (src/web/client/) into dist/web/. The Node process never imports any
-// of it: it only reads these three files off disk and serves them (src/web/assets.ts).
+// of it: it only reads these files off disk and serves them (src/web/assets.ts).
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,8 @@ export async function buildWeb() {
     logLevel: 'warning',
     absWorkingDir: ROOT,
   });
-  copyFileSync(join(CLIENT, 'index.html'), join(OUT, 'index.html'));
+  for (const file of ['index.html', 'favicon.svg'])
+    copyFileSync(join(CLIENT, file), join(OUT, file));
   return result.metafile;
 }
 

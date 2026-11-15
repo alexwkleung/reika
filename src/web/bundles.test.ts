@@ -48,9 +48,27 @@ describe('bundle boundaries', () => {
     ).toEqual([]);
     const imports = Object.values(result.metafile.inputs).flatMap(f => f.imports.map(i => i.path));
     expect(imports.filter(p => p.startsWith('node:'))).toEqual([]);
-    // protocol.ts for PROTOCOL_VERSION: its own imports are all `import type`, so it brings nothing.
+    // Each a pure module the TUI also uses, so both front ends draw by one set of rules. A new
+    // entry must be Ink-, chalk- and Node-free all the way down; listed so one cannot arrive unseen.
+    const SHARED = [
+      'src/mcp/toolprefix.ts', // the MCP name prefix toolLabel reads
+      'src/ui/diffrows.ts', // diff line numbering
+      'src/ui/format.ts', // toolLabel, toolVerb, toolTimer, changeLabel, prefillLabel
+      'src/ui/harnessecho.ts', // reasoningfold's echo strip
+      'src/ui/pendingrow.ts', // PENDING_ROW_DELAY_MS (its hook imports only react)
+      'src/ui/reasoningfold.ts', // the display-only reasoning fold
+      'src/ui/scrollbackrules.ts', // read-verb elision, notice lead, call args, grouped reads
+      'src/web/protocol.ts', // PROTOCOL_VERSION; its own imports are all `import type`
+    ];
     const outside = inputs.filter(f => f.startsWith('src/') && !f.startsWith('src/web/client/'));
-    expect(outside).toEqual(['src/web/protocol.ts']);
+    expect(outside.sort()).toEqual(SHARED);
     expect(result.metafile.inputs['src/web/protocol.ts']!.imports).toEqual([]);
+    const imported = outside.flatMap(f => result.metafile.inputs[f]!.imports.map(i => i.path));
+    expect(
+      imported.filter(
+        p =>
+          !p.startsWith('src/') && !/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?react\//.test(p),
+      ),
+    ).toEqual([]);
   });
 });

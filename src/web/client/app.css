@@ -28,9 +28,21 @@
   --reika-link: #aac0f0;
   --reika-pr-merged: #b48cf0;
 
-  --reika-page-bg: #1a1a1a;
+  /* Page-only values. The background is dark enough that the muted grey above (#808080) clears
+     4.5:1 for body text (4.7:1 here). */
+  --reika-page-bg: #141414;
   --reika-text: #e4e4e4;
-  --reika-font: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --reika-code-bg: #1d1d1d;
+  --reika-rule: #3a3a3a;
+  --reika-banner-bg: #2a2418;
+  --reika-diff-added-bg: #0f5a2c;
+  --reika-diff-removed-bg: #6b1a22;
+  --reika-diff-added-fg: #6fdc8c;
+  --reika-diff-removed-fg: #f28b8b;
+  --reika-syntax-rose: #db9499;
+  --reika-syntax-gray: #8b909a;
+  --reika-prose: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --reika-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
 html,
@@ -38,7 +50,66 @@ body {
   margin: 0;
   background: var(--reika-page-bg);
   color: var(--reika-text);
-  font-family: var(--reika-font);
-  font-size: 14px;
-  line-height: 1.5;
+  font-family: var(--reika-prose);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 2px;
+}
+
+.app {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 16px 24px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -16px;
+  padding: 0.5em 16px;
+  background: var(--reika-banner-bg);
+  color: var(--reika-warning);
+  border-bottom: 1px solid var(--reika-rule);
+}
+.app-banner-marker {
+  margin-right: 0.4em;
+}
+
+.app-main {
+  flex: 1;
+  padding-top: 0.5em;
+}
+
+/* Stage B2 fills this with the input box and the status line. */
+.app-controls-slot {
+  position: sticky;
+  bottom: 0;
+}
+
+.app-jump {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  font: inherit;
+  font-size: 0.85em;
+  color: var(--reika-text);
+  background: var(--reika-user-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 999px;
+  padding: 0.35em 0.9em;
+  cursor: pointer;
 }

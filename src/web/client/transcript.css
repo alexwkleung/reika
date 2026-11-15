@@ -1,0 +1,344 @@
+/* Committed rows. One continuous column, no bubbles: markers and role colours carry who is
+   speaking, as in the TUI. Prose is proportional; code, commands, paths and tool rows are mono. */
+.transcript {
+  min-width: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.row {
+  margin-top: 0.9em;
+  min-width: 0;
+}
+.row-tool {
+  margin-top: 0.15em;
+}
+.row-tool.row--gap {
+  margin-top: 0.9em;
+}
+
+/* A subagent's rows: one level in, with a faint guide line. */
+.nest {
+  margin-left: 0.6em;
+  padding-left: 1em;
+  border-left: 1px solid var(--reika-rule);
+}
+.nest > .row:first-child {
+  margin-top: 0;
+}
+
+.row-user {
+  display: flex;
+  gap: 0.5em;
+  background: var(--reika-user-bg);
+  padding: 0.35em 0.75em 0.35em 0;
+  border-radius: 2px;
+}
+.row-user-bar {
+  color: var(--reika-accent);
+  flex: none;
+  line-height: inherit;
+}
+.row-user--nested .row-user-bar {
+  color: var(--reika-subagent);
+}
+.row-user-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  color: #f4f4f4;
+}
+.row-user--meta .row-user-text {
+  font-family: var(--reika-mono);
+  font-size: 0.92em;
+}
+
+.reasoning {
+  border-left: 2px solid var(--reika-reasoning);
+  padding-left: 0.75em;
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.reasoning--info {
+  border-left-color: var(--reika-info);
+}
+.reasoning-label {
+  color: var(--reika-reasoning);
+  font-weight: 700;
+}
+.reasoning--info .reasoning-label {
+  color: var(--reika-info);
+}
+.reasoning-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.reasoning-details > summary::-webkit-details-marker {
+  display: none;
+}
+.reasoning-details > summary::after {
+  content: ' ▸';
+  color: var(--reika-muted);
+}
+.reasoning-details[open] > summary::after {
+  content: ' ▾';
+}
+.reasoning-more {
+  color: var(--reika-muted);
+  font-size: 0.9em;
+}
+.reasoning-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.reasoning-details[open] ~ .reasoning-tail {
+  display: none;
+}
+.reasoning + .prose,
+.reasoning + .note-body,
+.prose + .calls,
+.reasoning + .calls,
+.checks + .calls {
+  margin-top: 0.6em;
+}
+
+.prose {
+  display: flex;
+  gap: 0.55em;
+  min-width: 0;
+}
+.prose-marker {
+  color: var(--reika-secondary);
+  flex: none;
+  font-size: 0.8em;
+  line-height: 1.95;
+}
+.prose > .md {
+  min-width: 0;
+  flex: 1;
+}
+
+.calls {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+}
+.call {
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+  overflow-wrap: anywhere;
+}
+.call-marker {
+  color: var(--reika-tool);
+  display: inline-block;
+  width: 1.4em;
+  text-indent: 0;
+}
+.call-name {
+  color: var(--reika-tool);
+}
+.call-args {
+  color: var(--reika-secondary);
+}
+
+.sources {
+  margin-top: 0.6em;
+  color: var(--reika-tool);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  border-left: 2px solid var(--reika-info);
+}
+.note > .reasoning {
+  border-left: 0;
+}
+.note-body {
+  padding-left: 0.75em;
+}
+.note-label {
+  color: var(--reika-info);
+  font-weight: 700;
+  margin-bottom: 0.4em;
+}
+
+.checks {
+  margin-top: 0.6em;
+  margin-left: 1.3em;
+  border-left: 2px solid var(--reika-warning);
+  padding-left: 0.75em;
+}
+.checks-label {
+  color: var(--reika-warning);
+  font-weight: 700;
+}
+.checks-section {
+  margin-top: 0.4em;
+}
+.checks-head {
+  color: var(--reika-secondary);
+}
+.checks-hint {
+  color: var(--reika-muted);
+  font-size: 0.92em;
+}
+
+.row-frozen {
+  opacity: 0.7;
+}
+.row-frozen .md {
+  color: var(--reika-secondary);
+}
+
+.tool-summary {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  color: var(--reika-secondary);
+  padding-left: 2.4em;
+  text-indent: -1.4em;
+  overflow-wrap: anywhere;
+}
+.tool-marker {
+  color: var(--reika-tool);
+  display: inline-block;
+  width: 1.4em;
+  text-indent: 0;
+}
+.tool-duration {
+  color: var(--reika-muted);
+}
+.tool-block {
+  margin-top: 0.5em;
+  margin-left: 2.4em;
+  min-width: 0;
+}
+.command {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+}
+.command-line {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: 1.2em;
+  text-indent: -1.2em;
+}
+.command .command-line {
+  font-size: 1em;
+}
+.command-prompt {
+  color: var(--reika-success);
+  display: inline-block;
+  width: 1.2em;
+  text-indent: 0;
+}
+.command-output {
+  margin-top: 0.4em;
+}
+.command-omitted {
+  color: var(--reika-muted);
+}
+.command-tail {
+  margin: 0;
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  color: var(--reika-muted);
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 8;
+}
+.command .command-tail {
+  font-size: 1em;
+}
+.row-shell .command-tail {
+  margin-top: 0.3em;
+}
+
+.change + .change {
+  margin-top: 0.8em;
+}
+.change-head {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+.change-path {
+  color: var(--reika-tool);
+}
+.change-label,
+.change-more {
+  color: var(--reika-muted);
+}
+.change-more {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+}
+.change .diff {
+  margin-top: 0.3em;
+}
+
+.row-system {
+  display: flex;
+  gap: 0.5em;
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.row-system-marker {
+  flex: none;
+  color: var(--reika-accent);
+}
+.row-system--info .row-system-marker,
+.row-system--info .row-system-lead,
+.row-system--info.row-system--line {
+  color: var(--reika-info);
+}
+.row-system--warn .row-system-marker,
+.row-system--warn .row-system-lead,
+.row-system--warn.row-system--line {
+  color: var(--reika-warning);
+}
+.row-system--default .row-system-lead,
+.row-system--default.row-system--line {
+  color: var(--reika-accent);
+}
+.row-system-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.row-error {
+  color: var(--reika-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.row-error-marker,
+.row-error-label {
+  color: var(--reika-error);
+}
+.row-error-marker {
+  font-size: 0.8em;
+  margin-right: 0.55em;
+}
+
+.row-worked {
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.row-worked-marker {
+  color: var(--reika-accent);
+  margin-right: 0.5em;
+}
+
+.row-unknown {
+  color: var(--reika-muted);
+  font-family: var(--reika-mono);
+  font-size: 0.8em;
+  overflow-wrap: anywhere;
+}

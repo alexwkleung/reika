@@ -1,4 +1,6 @@
-import { MCP_TOOL_PREFIX, type McpServerConfig } from '../mcp/config.js';
+// Imported by the browser client too (src/web/client), so its runtime imports must stay Node-free.
+import type { McpServerConfig } from '../mcp/config.js';
+import { MCP_TOOL_PREFIX } from '../mcp/toolprefix.js';
 import type { PromptProgress } from '../types.js';
 
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback

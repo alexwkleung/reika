@@ -15,6 +15,8 @@ const CLIENT_FILES: ReadonlyMap<string, { file: string; contentType: string }> =
   ['/', { file: 'index.html', contentType: 'text/html; charset=utf-8' }],
   ['/app.js', { file: 'app.js', contentType: 'text/javascript; charset=utf-8' }],
   ['/app.css', { file: 'app.css', contentType: 'text/css; charset=utf-8' }],
+  // Same-origin, so the page's CSP (default-src 'self') needs no data: exception for it.
+  ['/favicon.svg', { file: 'favicon.svg', contentType: 'image/svg+xml' }],
 ]);
 
 export const CLIENT_NOT_BUILT =
