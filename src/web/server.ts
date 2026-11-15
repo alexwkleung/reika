@@ -294,7 +294,7 @@ export async function startWebServer(
       sendJson(req, res, 400, { error: message.error });
       return;
     }
-    const result = bridge.handle(message);
+    const result = await bridge.handle(message);
     if (result.ok) {
       sendJson(req, res, 200, 'reply' in result ? { ok: true, reply: result.reply } : { ok: true });
     } else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
