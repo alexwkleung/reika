@@ -1,60 +1,68 @@
-/* The status line. Functional for now; a later PR designs it. */
+/* The quiet strip under the input box (direction B). */
 .status {
-  padding: 0.35em 0 0.6em;
-  font-family: var(--reika-mono);
-  font-size: 0.78em;
-  color: var(--reika-muted);
+  padding: 0.5rem 0.25rem 0.75rem;
+  font-family: var(--reika-prose);
+  font-size: 0.75rem;
+  color: var(--reika-secondary);
+  font-variant-numeric: tabular-nums;
 }
-.status-line {
+.status-strip {
   display: flex;
   flex-wrap: wrap;
-  column-gap: 0;
+  align-items: center;
+  gap: 0.25rem 1.125rem;
+  min-width: 0;
 }
-.status-chip {
+.status-tag--auto-approve {
+  color: var(--reika-auto-approve);
+}
+.status-tag--bypass {
+  color: var(--reika-error);
+}
+.status-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   white-space: nowrap;
+}
+.status-track {
+  width: 3.5rem;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--reika-control-border);
+  overflow: hidden;
+}
+.status-fill {
+  display: block;
+  height: 100%;
+  background: var(--reika-secondary);
+}
+.status-meter--warn {
+  color: var(--reika-warning);
+}
+.status-meter--warn .status-fill {
+  background: var(--reika-warning);
+}
+.status-stat {
+  white-space: nowrap;
+}
+.status-alert {
+  color: var(--reika-warning);
+}
+.status-path {
+  margin-left: auto;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.status-chip + .status-chip::before {
-  content: ' · ';
+  white-space: nowrap;
+  font-family: var(--reika-mono);
+  font-size: 0.71875rem;
   color: var(--reika-muted);
-  white-space: pre;
-}
-.status-chip--mode-agent {
-  color: var(--reika-mode-agent);
-}
-.status-chip--mode-plan {
-  color: var(--reika-mode-plan);
-}
-.status-chip--mode-vibe {
-  color: var(--reika-mode-vibe);
-}
-.status-chip--mode-minimal {
-  color: var(--reika-mode-minimal);
-}
-.status-chip--mode-grind {
-  color: var(--reika-mode-grind);
-}
-.status-chip--mode-chat {
-  color: var(--reika-mode-chat);
-}
-.status-chip--mode-shell {
-  color: var(--reika-mode-shell);
-}
-.status-chip--auto-approve {
-  color: var(--reika-auto-approve);
-}
-.status-chip--bypass {
-  color: var(--reika-error);
-}
-.status-chip--warning {
-  color: var(--reika-warning);
 }
 .status-error {
   color: var(--reika-error);
-  font-family: var(--reika-prose);
   font-size: 1.15em;
-  margin-bottom: 0.2em;
+  margin-bottom: 0.25rem;
   overflow-wrap: anywhere;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { PROTOCOL_VERSION } from '../protocol.js';
 import { Composer, type Send } from './Composer.js';
 import { connectionNotice, type Connection } from './connection.js';
@@ -83,8 +83,6 @@ export function App({
   const busy = s.session?.status === 'busy';
   const mode = s.session?.mode;
   const { following, jump } = useFollowBottom(s);
-  // The TUI's `turn N`: every assistant message so far.
-  const turns = useMemo(() => s.messages.filter(m => m.role === 'assistant').length, [s.messages]);
   return (
     <div className="app">
       {notice || version ? (
@@ -116,7 +114,7 @@ export function App({
           waiting={s.dialogs.length > 0}
           locked={s.versionMismatch !== null}
         />
-        <StatusLine session={s.session} turns={turns} stream={c.stream} />
+        <StatusLine session={s.session} stream={c.stream} />
       </div>
       {following ? null : (
         <button type="button" className="app-jump" onClick={jump}>
