@@ -12,6 +12,7 @@ import {
   messageEvent,
   modelDialog,
   MAX_COMPLETE_CHARS,
+  MAX_SESSION_FILTER_CHARS,
   MAX_SUBMIT_PASTES,
   parseClientMessage,
   WIRE_MODES,
@@ -212,6 +213,7 @@ describe('wireState', () => {
       preparing: false,
       stage: null,
       modelPinned: false,
+      session: null,
     });
   });
 
@@ -391,6 +393,10 @@ describe('parseClientMessage', () => {
     { type: 'answer', id: 'd4', kind: 'model', name: null },
     { type: 'answer', id: 'd5', kind: 'session', path: '/repo/history/a.jsonl' },
     { type: 'answer', id: 'd5', kind: 'session', path: null },
+    { type: 'sessions', scope: 'project' },
+    { type: 'sessions', scope: 'root', filter: 'parser' },
+    { type: 'resume', scope: 'project', id: '2026-11-15T10-00-00-000Z-a1b2c3.jsonl' },
+    { type: 'new' },
   ];
 
   it.each(valid)('accepts %j as it is', message => {
@@ -441,6 +447,20 @@ describe('parseClientMessage', () => {
     ['an empty object', {}, 'type'],
     ['an unknown type', { type: 'shout' }, 'type'],
     ['submit without text', { type: 'submit' }, 'text'],
+    ['sessions with an unknown scope', { type: 'sessions', scope: 'all' }, 'scope'],
+    ['sessions with a numeric filter', { type: 'sessions', scope: 'project', filter: 1 }, 'filter'],
+    [
+      'sessions with a filter over the cap',
+      { type: 'sessions', scope: 'project', filter: 'x'.repeat(MAX_SESSION_FILTER_CHARS + 1) },
+      'filter',
+    ],
+    ['resume without a scope', { type: 'resume', id: 'a.jsonl' }, 'scope'],
+    ['resume by path', { type: 'resume', scope: 'project', id: '/etc/a.jsonl' }, 'id'],
+    ['resume up a level', { type: 'resume', scope: 'root', id: '../a.jsonl' }, 'id'],
+    ['resume with a backslash', { type: 'resume', scope: 'root', id: 'x\\a.jsonl' }, 'id'],
+    ['resume of a dot file', { type: 'resume', scope: 'root', id: '.a.jsonl' }, 'id'],
+    ['resume of a non-session file', { type: 'resume', scope: 'root', id: 'passwd' }, 'id'],
+    ['resume with a NUL', { type: 'resume', scope: 'root', id: 'a\0.jsonl' }, 'id'],
     ['submit with a number', { type: 'submit', text: 5 }, 'text'],
     ['submit with an unknown mode', { type: 'submit', text: 'a', mode: 'turbo' }, 'mode'],
     ['submit with pastes not a list', { type: 'submit', text: 'a', pastes: {} }, 'pastes'],
