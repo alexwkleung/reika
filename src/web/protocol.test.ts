@@ -214,6 +214,7 @@ describe('wireState', () => {
       stage: null,
       modelPinned: false,
       session: null,
+      workingWords: false,
     });
   });
 
@@ -228,6 +229,12 @@ describe('wireState', () => {
       autoApprove: 'safe',
       unattended: true,
     });
+  });
+
+  it('says whether the busy line rotates the working verbs', () => {
+    expect(wireState(booted({ workingWords: true })).workingWords).toBe(true);
+    expect(wireState(booted({ workingWords: false })).workingWords).toBe(false);
+    expect(wireState(booted()).workingWords).toBe(false);
   });
 
   it('takes the active profile’s window over the config’s', () => {

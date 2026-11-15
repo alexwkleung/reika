@@ -7,6 +7,7 @@
 // Detected from TERM rather than probed: there is no query a terminal answers with "can draw
 // this glyph". `REIKA_BASIC_GLYPHS=1` forces it for a terminal detection misses (an old Windows
 // console font), `0` turns it off.
+import { BRAILLE_SPINNER } from './workingwords.js';
 
 export function wantsBasicGlyphs(env: NodeJS.ProcessEnv = process.env): boolean {
   const flag = env.REIKA_BASIC_GLYPHS;
@@ -42,7 +43,7 @@ const unicode: Glyphs = {
   check: '✓',
   next: '▸',
   brand: '✿',
-  spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+  spinner: BRAILLE_SPINNER,
   border: 'round',
 };
 
