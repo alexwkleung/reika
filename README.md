@@ -85,6 +85,8 @@ Using a hosted API instead? Skip the server and set `REIKA_BASE_URL`, `REIKA_API
 
 To run from a checkout instead — `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm`) and `pnpm run install:global` to build and install the `reika` binary, or `cp .env.example .env` and `pnpm run dev` to run without installing. `pnpm run uninstall:global` removes the global binary.
 
+Prefer a window to a terminal? `reika web` serves the same agent to a browser tab on this machine, and `reika web --window` opens it in its own app window. It is experimental; [docs/web.md](docs/web.md) covers what it does and what it doesn't yet.
+
 ## Common configuration
 
 Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that order of precedence). The full list, experimental flags, and multi-model profiles are in [docs/configuration.md](docs/configuration.md).
@@ -125,19 +127,20 @@ Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY
 
 The same pages are on the website, [reikacode.com](https://reikacode.com).
 
-| Doc                                              | Covers                                                                                    |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| [Install and first run](docs/getting-started.md) | Requirements, installing, serving a model, and the first run                              |
-| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                  |
-| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                       |
-| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`          |
-| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                 |
-| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                          |
-| [Findings](docs/findings.md)                     | The measured record: what broke, what held, and how each number was obtained              |
-| [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                |
-| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                              |
-| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines |
-| [Changelog](CHANGELOG.md)                        | What changed in each release                                                              |
+| Doc                                              | Covers                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| [Install and first run](docs/getting-started.md) | Requirements, installing, serving a model, and the first run                                |
+| [Configuration](docs/configuration.md)           | Every `.env` key, experimental flags, named profiles, last-session state                    |
+| [Modes, headless, commands](docs/usage.md)       | Each mode in depth, `reika -p`, slash commands, `/save` transcripts                         |
+| [Web front end](docs/web.md)                     | `reika web` and `--window`: the page, history, what is not there yet, how it is locked down |
+| [Tools](docs/tools.md)                           | The model's tools, approval prompts, web search setup, MCP servers, `.gitignore`            |
+| [Instructions and skills](docs/skills.md)        | `AGENTS.md`, skills as slash commands, plain-English routing, pasted URLs                   |
+| [Tested models](docs/models.md)                  | Local quants and APIs Reika has been run against                                            |
+| [Findings](docs/findings.md)                     | The measured record: what broke, what held, and how each number was obtained                |
+| [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                  |
+| [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                                |
+| [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines   |
+| [Changelog](CHANGELOG.md)                        | What changed in each release                                                                |
 
 ## Inspired by
 

@@ -70,6 +70,7 @@ export default defineConfigWithTheme<TranslationTheme>({
             items: [
               { text: '安装（英文）', link: '/zh/getting-started' },
               { text: '使用（英文）', link: '/zh/usage' },
+              { text: '网页界面（英文）', link: '/zh/web' },
               { text: '配置（英文）', link: '/zh/configuration' },
               { text: '工具（英文）', link: '/zh/tools' },
               { text: '指令与技能（英文）', link: '/zh/skills' },
@@ -167,6 +168,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         items: [
           { text: 'Install', link: '/getting-started' },
           { text: 'Usage', link: '/usage' },
+          { text: 'Web front end', link: '/web' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Tools', link: '/tools' },
           { text: 'Instructions and skills', link: '/skills' },

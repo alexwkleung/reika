@@ -5,6 +5,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ## [Unreleased]
 
+### Added
+
+- `reika web` serves the agent to a browser tab on this machine, and `reika web --window` opens it in
+  its own app window that stops Reika when it closes. It is the same session as the terminal UI —
+  modes, tools, approvals, auto-save — with a history pane for this project's saved sessions.
+  Experimental: pasting images is not supported yet. See [docs/web.md](docs/web.md) (#PRNUM).
+
 ### Changed
 
 - `pnpm run install:global` now installs a copy of the checkout instead of a link to it. A linked
