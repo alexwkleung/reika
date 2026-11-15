@@ -239,6 +239,7 @@ export function App() {
     status,
     queue,
     replaying,
+    preparing,
     approval: pending,
     question,
     confirm,
@@ -1054,7 +1055,7 @@ export function App() {
     imageAttachmentsRef.current = next.images ?? [];
     void onSubmit(next.content, next.answers).finally(() => controller.replayDone());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pending, confirm, replaying, queue]);
+  }, [status, pending, confirm, replaying, preparing, queue]);
 
   const onSubmit = async (input: string, carried?: SubmitAnswers) => {
     // Left in the box rather than queued: the resume replaces the conversation the prompt was

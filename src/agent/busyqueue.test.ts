@@ -46,17 +46,24 @@ describe('queuedMessage', () => {
 });
 
 describe('canDrain', () => {
-  const open = { idle: true, dialogOpen: false, resuming: false, replaying: false };
+  const open = {
+    idle: true,
+    dialogOpen: false,
+    resuming: false,
+    replaying: false,
+    preparing: false,
+  };
 
   it('drains when idle with nothing in the way', () => {
     expect(canDrain(open)).toBe(true);
   });
 
-  it('waits on a running turn, an open dialog, a resume and a replay still being submitted', () => {
+  it('waits on a running turn, an open dialog, a resume, a replay and a line being prepared', () => {
     expect(canDrain({ ...open, idle: false })).toBe(false);
     expect(canDrain({ ...open, dialogOpen: true })).toBe(false);
     expect(canDrain({ ...open, resuming: true })).toBe(false);
     expect(canDrain({ ...open, replaying: true })).toBe(false);
+    expect(canDrain({ ...open, preparing: true })).toBe(false);
   });
 });
 

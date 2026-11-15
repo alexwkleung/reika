@@ -40,8 +40,9 @@ export function canDrain(state: {
   dialogOpen: boolean;
   resuming: boolean;
   replaying: boolean;
+  preparing: boolean;
 }): boolean {
-  return state.idle && !state.dialogOpen && !state.resuming && !state.replaying;
+  return state.idle && !state.dialogOpen && !state.resuming && !state.replaying && !state.preparing;
 }
 
 export function takeNext(
