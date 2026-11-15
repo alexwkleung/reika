@@ -23,7 +23,8 @@ import type { Approvals } from '../ui/summary.js';
 // a server.
 
 // 2: mode and model switches, pastes on submit, completions, input history, the model list (#584).
-export const PROTOCOL_VERSION = 2;
+// 3: the session list, a resume by id, a new conversation, and the current session in state.
+export const PROTOCOL_VERSION = 3;
 
 // Spelled out rather than imported from the mode module; a test holds it to MODE_CYCLE.
 export const WIRE_MODES = [
@@ -40,6 +41,14 @@ export const WIRE_MODES = [
 // the server's main thread; a tab past the cap sends only the trailing `@word`.
 export const MAX_COMPLETE_CHARS = 2000;
 export const MAX_SUBMIT_PASTES = 32;
+// The session list's filter matches titles, which a prompt's first line makes short.
+export const MAX_SESSION_FILTER_CHARS = 200;
+// A list is read fresh each time a tab asks; the filter reaches the ones past the cap.
+export const MAX_LISTED_SESSIONS = 200;
+
+// `project` is this project's auto-saves; `root` the /save transcripts under the history root.
+export const SESSION_SCOPES = ['project', 'root'] as const;
+export type SessionScope = (typeof SESSION_SCOPES)[number];
 
 type KeysOfUnion<T> = T extends unknown ? keyof T : never;
 
@@ -93,7 +102,15 @@ export type WireState = {
   // What a submit is waiting on before its turn starts, e.g. "Fetching 1 pasted link".
   stage: string | null;
   modelPinned: boolean;
+  // The current session's id (its file name), null before its first save and after a `/new`.
+  session: string | null;
 };
+
+// A file's name and nothing above it: a tab names a session by this, and the server looks the
+// name up in a list it has just read again, so no path from a tab is ever opened.
+export function sessionId(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+}
 
 export function wireState(controller: Controller, stage: string | null = null): WireState {
   const snap = controller.getSnapshot();
@@ -121,6 +138,7 @@ export function wireState(controller: Controller, stage: string | null = null): 
     preparing: snap.preparing,
     stage,
     modelPinned: controller.modelPinned,
+    session: controller.sessionPath === null ? null : sessionId(controller.sessionPath),
   };
 }
 
@@ -156,6 +174,23 @@ export function wireCatalog(controller: Controller): WireCatalog {
 
 // A completion list, or null for none. `partial` is the tail of the text an item replaces.
 export type WireCompletion = SuggestionState | null;
+
+// What the history drawer lists. No path: `id` is what a `resume` names.
+export type WireSessionEntry = Omit<SessionEntry, 'path'> & { id: string; current?: true };
+
+// `total` counts every match, of which `entries` holds the newest. `autosave` is false when the
+// project list is empty because nothing is saved, which the drawer says.
+export type WireSessionList = {
+  scope: SessionScope;
+  entries: WireSessionEntry[];
+  total: number;
+  autosave: boolean;
+};
+
+export function wireSessionEntry(entry: SessionEntry, current: boolean): WireSessionEntry {
+  const { path, ...rest } = entry;
+  return { ...rest, id: sessionId(path), ...(current ? { current: true as const } : {}) };
+}
 
 export type WireDialog =
   | {
@@ -296,6 +331,9 @@ export type ClientMessage =
   | { type: 'mode'; mode: Mode }
   | { type: 'model'; name: string }
   | { type: 'complete'; text: string }
+  | { type: 'sessions'; scope: SessionScope; filter?: string }
+  | { type: 'resume'; scope: SessionScope; id: string }
+  | { type: 'new' }
   | { type: 'answer'; id: string; kind: 'approval'; answer: ApprovalAnswer; always?: boolean }
   | { type: 'answer'; id: string; kind: 'question'; answer: QuestionAnswer | null }
   | { type: 'answer'; id: string; kind: 'confirm'; choice: number | 'abort' }
@@ -360,6 +398,25 @@ function parsePastes(value: unknown): PastedText[] | { error: string } {
     out.push({ marker: p.marker, text: p.text });
   }
   return out;
+}
+
+function parseScope(value: unknown): SessionScope | { error: string } {
+  return (
+    SESSION_SCOPES.find(s => s === value) ?? {
+      error: `scope must be one of ${SESSION_SCOPES.join(', ')}`,
+    }
+  );
+}
+
+// A file name the history directories could hold, never a path: no separator, no dot segment.
+function isSessionId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.endsWith('.jsonl') &&
+    value.length <= 255 &&
+    !/[/\\\0]/.test(value) &&
+    !value.startsWith('.')
+  );
 }
 
 function parseSubmit(value: Record<string, unknown>): ParseResult {
@@ -451,9 +508,29 @@ export function parseClientMessage(value: unknown): ParseResult {
         return { error: `text must be at most ${MAX_COMPLETE_CHARS} chars` };
       }
       return { type: 'complete', text: value.text };
+    case 'sessions': {
+      const scope = parseScope(value.scope);
+      if (typeof scope === 'object') return scope;
+      if (value.filter === undefined) return { type: 'sessions', scope };
+      if (typeof value.filter !== 'string') return { error: 'filter must be a string' };
+      if (value.filter.length > MAX_SESSION_FILTER_CHARS) {
+        return { error: `filter must be at most ${MAX_SESSION_FILTER_CHARS} chars` };
+      }
+      return { type: 'sessions', scope, filter: value.filter };
+    }
+    case 'resume': {
+      const scope = parseScope(value.scope);
+      if (typeof scope === 'object') return scope;
+      if (!isSessionId(value.id)) return { error: 'id must be a session file name' };
+      return { type: 'resume', scope, id: value.id };
+    }
+    case 'new':
+      return { type: 'new' };
     case 'answer':
       return parseAnswer(value);
     default:
-      return { error: 'type must be submit, abort, mode, model, complete or answer' };
+      return {
+        error: 'type must be submit, abort, mode, model, complete, sessions, resume, new or answer',
+      };
   }
 }

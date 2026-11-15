@@ -428,6 +428,9 @@ export type Controller = {
   // `/resume [all|root]`: the sessions to offer, the one in progress left out. Chat mode lists
   // chats (#875), and a project with nothing to list falls back to the manual saves.
   resumeList(args: string): Promise<ResumeList>;
+  // The web history drawer's list, newest first: unlike `resumeList`, answered while busy, with no
+  // fallback to the root, no chat filter, and the session in progress kept. Empty before boot.
+  sessionList(scope: 'project' | 'root'): Promise<SessionEntry[]>;
   // Runs one prompt through the session as the controller's mode (or `opts.mode`) and hands back
   // what it emitted, or nothing before the session has booted. Busy for each loop turn it runs
   // (vibe runs two), each with its own abort; under `bypass` there is no approval gate at all.
@@ -602,6 +605,9 @@ export function createController(opts: {
       stemClaimed = true;
       sessionPath = newSessionPath(dir, new Date(), stem);
       logSessionFile(sessionPath);
+      // Nothing in the snapshot moved, but a front end that marks the current session must hear
+      // that this one now has a file.
+      for (const listener of listeners) listener();
     }
     const path = sessionPath;
     const meta = transcriptMeta(session, saved.agent, snapshot.status === 'busy');
@@ -1724,6 +1730,11 @@ export function createController(opts: {
               ? 'No saved sessions for this project yet.'
               : 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
       };
+    },
+    sessionList: async scope => {
+      if (scope === 'root') return session ? listSessions(historyRoot, true) : [];
+      const dir = projectDir();
+      return dir ? listSessions(dir) : [];
     },
     runTurn,
     submitPrompt: async (text, input, front) => {

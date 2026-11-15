@@ -16,7 +16,7 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
   const listeners = new Set<(event: ServerEvent) => void>();
   const connectCalls: (number | undefined)[] = [];
   const handled: ClientMessage[] = [];
-  let result: HandleResult = { ok: true };
+  let result: HandleResult | Promise<HandleResult> = { ok: true };
   const bridge: WebBridge = {
     connect(afterSeq) {
       connectCalls.push(afterSeq);
@@ -37,7 +37,7 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
     listeners,
     connectCalls,
     handled,
-    setResult(next: HandleResult) {
+    setResult(next: HandleResult | Promise<HandleResult>) {
       result = next;
     },
     push(event: ServerEvent) {
@@ -646,6 +646,16 @@ describe('/message', () => {
       ok: true,
       reply: null,
     });
+  });
+
+  it('waits for a reply the bridge answers in a promise', async () => {
+    const { server, fake } = await start();
+    const reply = { scope: 'project' as const, entries: [], total: 0, autosave: true };
+    fake.setResult(new Promise(resolve => setTimeout(() => resolve({ ok: true, reply }), 20)));
+    const sessions = JSON.stringify({ type: 'sessions', scope: 'project' });
+    expect(JSON.parse((await post(server, sessions, json)).body)).toEqual({ ok: true, reply });
+    fake.setResult(Promise.resolve({ ok: false, error: 'busy', conflict: true }));
+    expect((await post(server, sessions, json)).status).toBe(409);
   });
 
   it('answers a conflict with 409 and another failure with 400', async () => {

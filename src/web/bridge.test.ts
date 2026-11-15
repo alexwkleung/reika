@@ -8,7 +8,7 @@ import { newSessionPath, projectHistoryDir, writeSession } from '../store/sessio
 import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { createWebBridge } from './bridge.js';
-import type { ServerEvent } from './protocol.js';
+import { MAX_LISTED_SESSIONS, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
 // A pasted-link fetch that announces itself and waits for the test to let it finish.
@@ -461,6 +461,66 @@ describe('pickers', () => {
     expect(controller.messages.slice(0, 2)).toEqual(turns);
   });
 
+  it('refuses a resume while a line is prepared, queued or asked about, or a turn runs (#1004)', async () => {
+    const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'saved');
+    const turns = [user('fix the parser'), { role: 'assistant', content: 'done' } as Message];
+    await writeSession(
+      path,
+      { agent: turns, chat: [] },
+      {
+        version: TRANSCRIPT_VERSION,
+        savedAt: new Date().toISOString(),
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        cwd: '/repo/app',
+        messageCount: turns.length,
+        mode: 'agent',
+      },
+    );
+    const { controller, session, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/resume' });
+    await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
+    const [picker] = dialogs(events);
+    const pick = () => bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path });
+    const refused = { ok: false, conflict: true };
+
+    // A line held before its turn starts: preparing, with the status still idle.
+    const gate = deferred();
+    session.turn = async (text, opts) => {
+      await gate.promise;
+      opts.onTurnStart?.();
+      opts.events?.onMessage?.(user(text));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    bridge.handle({ type: 'submit', text: 'first' });
+    await flush();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'idle', preparing: true });
+    expect(pick()).toMatchObject(refused);
+    gate.resolve();
+    await vi.waitFor(() => expect(controller.getSnapshot().preparing).toBe(false));
+
+    controller.setStatus('busy');
+    expect(pick()).toMatchObject(refused);
+    controller.setStatus('idle');
+
+    const asked = controller.openConfirm({
+      title: 't',
+      subtitle: 's',
+      details: [],
+      options: ['a'],
+    });
+    expect(pick()).toMatchObject(refused);
+    controller.answerConfirm(0);
+    await asked;
+
+    controller.enqueue({ content: 'later', answers: {} });
+    expect(pick()).toMatchObject(refused);
+    expect(types(events)).not.toContain('reset');
+    // The picker stays open for a resume once the session is between prompts again.
+    expect(resolved(events).some(r => r.id === picker.id)).toBe(false);
+  });
+
   it('reports a failed load in the scrollback', async () => {
     const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'saved');
     await writeSession(
@@ -489,6 +549,174 @@ describe('pickers', () => {
         content: expect.stringMatching(/^resume failed: /),
       }),
     );
+  });
+});
+
+describe('history drawer', () => {
+  const project = () => projectHistoryDir('/repo/app', root);
+  // A session file whose title is its first prompt, saved `ago` ms before now.
+  async function saved(dir: string, stem: string, prompt: string, ago = 0): Promise<string> {
+    const path = newSessionPath(dir, new Date(), stem);
+    const turns = [user(prompt), { role: 'assistant', content: 'done' } as Message];
+    await writeSession(
+      path,
+      { agent: turns, chat: [] },
+      {
+        version: TRANSCRIPT_VERSION,
+        savedAt: new Date(Date.now() - ago).toISOString(),
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        cwd: '/repo/app',
+        messageCount: turns.length,
+        mode: 'agent',
+      },
+    );
+    return path;
+  }
+  const list = async (bridge: ReturnType<typeof setup>['bridge'], filter?: string) => {
+    const result = await bridge.handle({
+      type: 'sessions',
+      scope: 'project',
+      ...(filter !== undefined ? { filter } : {}),
+    });
+    if (!result.ok || !result.reply || !('scope' in result.reply)) throw new Error('no list');
+    return result.reply;
+  };
+  const resumeTo = (bridge: ReturnType<typeof setup>['bridge'], id: string) =>
+    Promise.resolve(bridge.handle({ type: 'resume', scope: 'project', id }));
+
+  it('lists the project newest first by id, while busy, with no root fallback or paths', async () => {
+    await saved(project(), 'older', 'fix the parser', 60_000);
+    await saved(project(), 'newer', 'rename foo to bar');
+    const { controller, bridge } = setup();
+    controller.setStatus('busy');
+    const reply = await list(bridge);
+    expect(reply).toMatchObject({ scope: 'project', total: 2, autosave: false });
+    expect(reply.entries.map(e => [e.id, e.title])).toEqual([
+      ['newer.jsonl', 'rename foo to bar'],
+      ['older.jsonl', 'fix the parser'],
+    ]);
+    expect(JSON.stringify(reply)).not.toContain(root);
+
+    // An empty project lists nothing, where `/resume` would offer the /save files.
+    await rm(project(), { recursive: true });
+    await saved(root, 'manual', 'a save');
+    expect(await list(bridge)).toMatchObject({ entries: [], total: 0 });
+    const roots = await bridge.handle({ type: 'sessions', scope: 'root' });
+    expect(roots).toMatchObject({ ok: true, reply: { entries: [{ id: 'manual.jsonl' }] } });
+  });
+
+  it('filters titles on the server and caps the list, counting every match', async () => {
+    for (let i = 0; i < MAX_LISTED_SESSIONS + 3; i++) {
+      await saved(project(), `s${String(i).padStart(3, '0')}`, i % 2 ? 'Parser work' : 'other', i);
+    }
+    const { bridge } = setup();
+    const all = await list(bridge);
+    expect(all.entries).toHaveLength(MAX_LISTED_SESSIONS);
+    expect(all.total).toBe(MAX_LISTED_SESSIONS + 3);
+    const parser = await list(bridge, '  parser ');
+    expect(parser.total).toBe(Math.floor((MAX_LISTED_SESSIONS + 3) / 2));
+    expect(parser.entries.every(e => e.title === 'Parser work')).toBe(true);
+  });
+
+  it('resumes by id from a fresh list, then marks it current and refuses it again', async () => {
+    await saved(project(), 'a', 'fix the parser');
+    const { controller, bridge, events } = setup();
+    expect(await resumeTo(bridge, 'a.jsonl')).toEqual({ ok: true });
+    expect(controller.messages[0]).toMatchObject({ content: 'fix the parser' });
+    const state = events.filter(e => e.type === 'state').at(-1);
+    expect(state).toMatchObject({ state: { session: 'a.jsonl' } });
+    expect((await list(bridge)).entries).toEqual([
+      expect.objectContaining({ id: 'a.jsonl', current: true }),
+    ]);
+    expect(await resumeTo(bridge, 'a.jsonl')).toMatchObject({ ok: false, conflict: true });
+  });
+
+  it('refuses an id the fresh list does not hold, and reads nothing', async () => {
+    const path = await saved(project(), 'gone', 'x');
+    const { controller, bridge, events } = setup();
+    await rm(path);
+    expect(await resumeTo(bridge, 'gone.jsonl')).toMatchObject({ ok: false, conflict: true });
+    expect(await resumeTo(bridge, 'never.jsonl')).toMatchObject({ ok: false, conflict: true });
+    expect(types(events)).not.toContain('reset');
+    expect(controller.messages.some(m => m.role === 'error')).toBe(false);
+  });
+
+  it('loads exactly one of two resumes sent together', async () => {
+    await saved(project(), 'a', 'first');
+    await saved(project(), 'b', 'second');
+    const { controller, bridge } = setup();
+    const [one, two] = await Promise.all([
+      resumeTo(bridge, 'a.jsonl'),
+      resumeTo(bridge, 'b.jsonl'),
+    ]);
+    expect(one).toEqual({ ok: true });
+    expect(two).toMatchObject({ ok: false, conflict: true });
+    expect(controller.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual([
+      'first',
+    ]);
+  });
+
+  it('refuses a resume or a new conversation unless between prompts', async () => {
+    await saved(project(), 'a', 'x');
+    const { controller, bridge, events } = setup();
+    const refused = { ok: false, conflict: true };
+
+    controller.setStatus('busy');
+    expect(await resumeTo(bridge, 'a.jsonl')).toMatchObject(refused);
+    expect(bridge.handle({ type: 'new' })).toMatchObject(refused);
+    controller.setStatus('idle');
+
+    const asked = controller.openConfirm({
+      title: 't',
+      subtitle: 's',
+      details: [],
+      options: ['a'],
+    });
+    expect(await resumeTo(bridge, 'a.jsonl')).toMatchObject(refused);
+    expect(bridge.handle({ type: 'new' })).toMatchObject(refused);
+    controller.answerConfirm(0);
+    await asked;
+
+    controller.enqueue({ content: 'later', answers: {} });
+    expect(await resumeTo(bridge, 'a.jsonl')).toMatchObject(refused);
+    expect(bridge.handle({ type: 'new' })).toMatchObject(refused);
+    expect(types(events)).not.toContain('reset');
+    // Refused rather than queued: no `/new` echo and no resumed rows, now or after the replay.
+    await flush();
+    const contents = controller.messages.map(m => ('content' in m ? m.content : ''));
+    expect(contents).not.toContain('/new');
+    expect(contents).not.toContain('x');
+  });
+
+  it('starts a new conversation as /new does, closing an open /resume picker', async () => {
+    await saved(project(), 'a', 'x');
+    const { controller, bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/resume' });
+    await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
+    const [picker] = dialogs(events);
+    expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
+    expect(resolved(events)).toContainEqual({ id: picker.id, outcome: 'cancelled' });
+    expect(controller.messages[0]).toEqual({ role: 'user', content: '/new', meta: true });
+    expect(controller.getSnapshot().history).toEqual(['/resume']);
+  });
+
+  it('closes an open /resume picker on a drawer resume, and refuses its pick of the open session', async () => {
+    await saved(project(), 'a', 'first');
+    const b = await saved(project(), 'b', 'second');
+    const { bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/resume' });
+    await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
+    const [stale] = dialogs(events);
+    expect(await resumeTo(bridge, 'b.jsonl')).toEqual({ ok: true });
+    expect(resolved(events)).toContainEqual({ id: stale.id, outcome: 'cancelled' });
+
+    // A picker listed before the drawer opened `b` must not open it a second time.
+    bridge.handle({ type: 'submit', text: '/resume all' });
+    await vi.waitFor(() => expect(dialogs(events)).toHaveLength(2));
+    const picker = dialogs(events)[1];
+    const offered = picker.dialog.kind === 'session' ? picker.dialog.entries : [];
+    expect(offered.some(e => e.path === b)).toBe(false);
   });
 });
 

@@ -25,6 +25,11 @@ import {
   resetEvent,
   resolvedEvent,
   sameState,
+  sessionId,
+  wireSessionEntry,
+  MAX_LISTED_SESSIONS,
+  type SessionScope,
+  type WireSessionList,
   sessionDialog,
   stateEvent,
   wireState,
@@ -48,14 +53,14 @@ export type WebBridge = {
   // `afterSeq` the log no longer covers; otherwise the committed events after it, then live.
   connect(afterSeq?: number): ServerEvent[];
   subscribe(listener: (event: ServerEvent) => void): () => void;
-  // Never throws.
-  handle(message: ClientMessage): HandleResult;
+  // Never throws or rejects. A message that reads the history directory answers in a promise.
+  handle(message: ClientMessage): HandleResult | Promise<HandleResult>;
   close(): void;
 };
 
-// `reply` is what a `complete` asks for, sent back as the POST's body.
+// `reply` is what a `complete` or a `sessions` asks for, sent back as the POST's body.
 export type HandleResult =
-  | { ok: true; reply?: WireCompletion }
+  | { ok: true; reply?: WireCompletion | WireSessionList }
   | { ok: false; error: string; conflict?: true };
 
 type ControllerDialogKind = 'approval' | 'question' | 'confirm';
@@ -288,7 +293,10 @@ export function createWebBridge(
   // A switch only between lines. The status stays idle while a line asks its questions and fetches
   // its links, and the line reads the mode after those waits; a switch then would run it in a mode
   // it was not typed for. A queued line is about to replay, so it holds a switch too.
-  const switchRefusal = (what: 'modes' | 'models'): HandleResult | null => {
+  // The same rule holds a resume (#1004): it replaces the conversation a waiting line was typed for.
+  const switchRefusal = (
+    what: 'modes' | 'models' | 'sessions' | 'conversations',
+  ): HandleResult | null => {
     const snap = controller.getSnapshot();
     const between =
       controller.session !== null &&
@@ -310,6 +318,51 @@ export function createWebBridge(
   // Everything a tab is sent goes out through the bridge, replies included, so a later scrub of
   // what reaches a browser (#990) has one place to stand.
   const completionReply = (text: string): WireCompletion => controller.completions(text);
+
+  // Answered while busy, unlike `/resume`: the drawer is only looking. Filtered here rather than in
+  // the tab, so a session past the cap can still be found.
+  const sessionsReply = async (scope: SessionScope, filter = ''): Promise<WireSessionList> => {
+    const all = await controller.sessionList(scope);
+    const needle = filter.trim().toLowerCase();
+    const matched = needle
+      ? all.filter(e => (e.title ?? 'untitled').toLowerCase().includes(needle))
+      : all;
+    const current = controller.sessionPath;
+    return {
+      scope,
+      entries: matched
+        .slice(0, MAX_LISTED_SESSIONS)
+        .map(e => wireSessionEntry(e, e.path === current)),
+      total: matched.length,
+      autosave: Boolean(controller.session?.getSnapshot().config.autosave),
+    };
+  };
+
+  // The drawer names a session by its file name; the file opened is one this list has just found,
+  // so a tab's id is never read as a path. `resuming` is set before the first await: a second
+  // resume, from this tab or another, is refused rather than interleaved with this one.
+  const resumeById = async (scope: SessionScope, id: string): Promise<HandleResult> => {
+    resuming = true;
+    try {
+      const entries = await controller.sessionList(scope);
+      const picked = entries.find(e => sessionId(e.path) === id);
+      if (!picked) {
+        return { ok: false, error: 'that session is no longer listed', conflict: true };
+      }
+      if (picked.path === controller.sessionPath) {
+        return { ok: false, error: 'that session is the one open', conflict: true };
+      }
+      // A `/resume` picker's list no longer says what is open.
+      supersedePicker('session');
+      const loaded = await resume(picked);
+      return loaded ? { ok: true } : { ok: false, error: 'the session could not be read' };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    } finally {
+      resuming = false;
+      scheduleDrain();
+    }
+  };
 
   const supersedePicker = (kind: 'model' | 'session'): void => {
     for (const entry of [...dialogs.values()]) if (entry.kind === kind) closeDialog(entry);
@@ -356,17 +409,18 @@ export function createWebBridge(
     onTaken: () => {},
   });
 
-  const resume = async (entry: SessionEntry): Promise<void> => {
+  const resume = async (entry: SessionEntry): Promise<boolean> => {
     let sides: SessionSides;
     try {
       sides = await loadSession(entry.path);
     } catch (e) {
       controller.append({ role: 'error', content: `resume failed: ${(e as Error).message}` });
-      return;
+      return false;
     }
     // Save whatever this session had before it is replaced.
     await controller.saveNow();
     controller.replace(controller.loadConversation(sides, entry));
+    return true;
   };
 
   const answer = (message: Extract<ClientMessage, { type: 'answer' }>): HandleResult => {
@@ -420,9 +474,12 @@ export function createWebBridge(
         const picked = offered.find(e => e.path === message.path);
         // Only a file this dialog listed: a tab's path is never read as given.
         if (!picked) return { ok: false, error: 'path is not one this dialog offered' };
-        if (resuming || controller.status !== 'idle') {
-          return { ok: false, error: 'cannot resume while busy' };
+        // The drawer may have opened it since this picker listed it.
+        if (picked.path === controller.sessionPath) {
+          return { ok: false, error: 'that session is the one open', conflict: true };
         }
+        const busy = switchRefusal('sessions');
+        if (busy) return busy;
         entry.answered = true;
         closeDialog(entry);
         resuming = true;
@@ -528,6 +585,25 @@ export function createWebBridge(
           }
           case 'complete':
             return { ok: true, reply: completionReply(message.text) };
+          case 'sessions':
+            return sessionsReply(message.scope, message.filter).then(
+              (reply): HandleResult => ({ ok: true, reply }),
+              (e: unknown): HandleResult => ({ ok: false, error: (e as Error).message }),
+            );
+          case 'resume': {
+            const busy = switchRefusal('sessions');
+            if (busy) return busy;
+            return resumeById(message.scope, message.id);
+          }
+          case 'new': {
+            // Its own message rather than a submitted `/new`, which mid-turn would be queued and
+            // wipe the conversation whenever the turn ended.
+            const busy = switchRefusal('conversations');
+            if (busy) return busy;
+            supersedePicker('session');
+            controller.newConversation({ role: 'user', content: '/new', meta: true });
+            return { ok: true };
+          }
           case 'answer':
             return answer(message);
         }
