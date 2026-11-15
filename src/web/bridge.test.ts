@@ -83,7 +83,7 @@ function setup(mode: Mode = 'agent', opts: Parameters<typeof createWebBridge>[1]
   const session = fakeSession();
   controller.attachSession(session as unknown as Session, 'default');
   controller.setStatus('idle');
-  const bridge = createWebBridge(controller, opts);
+  const bridge = createWebBridge(controller, { now: () => 1000, ...opts });
   const events: ServerEvent[] = [];
   bridge.subscribe(e => events.push(e));
   return { controller, session, bridge, events };
@@ -192,7 +192,7 @@ describe('replay', () => {
     expect(replay).toEqual([
       { type: 'message', seq: 2, message: user('b') },
       { type: 'message', seq: 3, message: user('c') },
-      { type: 'live', live: expect.any(Object) },
+      { type: 'live', live: expect.any(Object), now: 1000 },
     ]);
   });
 
@@ -204,7 +204,7 @@ describe('replay', () => {
     controller.append(user('b'));
     expect(bridge.connect(seen)).toEqual([
       { type: 'message', seq: seen + 1, message: user('b') },
-      { type: 'live', live: expect.any(Object) },
+      { type: 'live', live: expect.any(Object), now: 1000 },
     ]);
   });
 
