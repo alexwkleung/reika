@@ -188,14 +188,20 @@ export type CommittedEvent =
   | { type: 'dialog'; seq: number; id: string; dialog: WireDialog }
   | { type: 'resolved'; seq: number; id: string; outcome: 'answered' | 'cancelled' };
 
+// `now` is the server's clock when the event was sent. `live.pending.since` is on that clock too,
+// so a tab times a running call from the pair and never from its own clock against the server's.
 export type LiveEvent =
-  | { type: 'live'; live: WireLive }
+  | { type: 'live'; live: WireLive; now: number }
   | { type: 'delta'; channel: 'content' | 'reasoning' | 'tool'; text: string };
 
 export type ServerEvent = CommittedEvent | LiveEvent;
 
 export function helloEvent(seq: number): CommittedEvent {
   return { type: 'hello', seq, version: PROTOCOL_VERSION };
+}
+
+export function liveEvent(live: WireLive, now: number): LiveEvent {
+  return { type: 'live', live, now };
 }
 
 export function messageEvent(seq: number, message: Message): CommittedEvent {

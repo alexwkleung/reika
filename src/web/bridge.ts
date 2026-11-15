@@ -9,6 +9,7 @@ import {
   confirmDialog,
   dialogEvent,
   helloEvent,
+  liveEvent,
   messageEvent,
   modelDialog,
   questionDialog,
@@ -68,8 +69,10 @@ function startsWithByIdentity(next: Message[], prev: Message[]): boolean {
 
 export function createWebBridge(
   controller: Controller,
-  opts: { onExit?: () => void; maxLogEvents?: number } = {},
+  // `now` must be the controller's clock: a live event pairs it with `pending.since`.
+  opts: { onExit?: () => void; maxLogEvents?: number; now?: () => number } = {},
 ): WebBridge {
+  const now = opts.now ?? Date.now;
   const maxLogEvents = opts.maxLogEvents ?? MAX_LOG_EVENTS;
   const listeners = new Set<(event: ServerEvent) => void>();
   let closed = false;
@@ -113,7 +116,7 @@ export function createWebBridge(
     emit(event);
   };
 
-  const emitLive = (): void => emit({ type: 'live', live: controller.live });
+  const emitLive = (): void => emit(liveEvent(controller.live, now()));
 
   const openDialog = (entry: OpenDialog): void => {
     dialogs.set(entry.id, entry);
@@ -374,7 +377,7 @@ export function createWebBridge(
     resetEvent(lastSeq, messages),
     stateEvent(lastSeq, state),
     ...[...dialogs.values()].map(d => dialogEvent(lastSeq, d.id, d.dialog)),
-    { type: 'live', live: controller.live },
+    liveEvent(controller.live, now()),
   ];
 
   return {
@@ -385,7 +388,7 @@ export function createWebBridge(
         afterSeq >= droppedThrough &&
         afterSeq <= lastSeq;
       if (!covered) return snapshotEvents();
-      return [...log.filter(e => e.seq > afterSeq), { type: 'live', live: controller.live }];
+      return [...log.filter(e => e.seq > afterSeq), liveEvent(controller.live, now())];
     },
     subscribe: listener => {
       listeners.add(listener);
