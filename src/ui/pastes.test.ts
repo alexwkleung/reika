@@ -4,6 +4,7 @@ import {
   expandPastes,
   hasPasteMarker,
   isPasteMarker,
+  pasteMarkersIn,
   isLargePaste,
   rememberPaste,
   MAX_PASTE_STORE_CHARS,
@@ -181,5 +182,19 @@ describe('adoptPastes', () => {
     const own = rememberPaste([], big('own'));
     const out = adoptPastes(own.pastes, own.marker, []);
     expect(out).toEqual({ pastes: own.pastes, text: own.marker });
+  });
+});
+
+describe('pasteMarkersIn', () => {
+  it('lists every marker in order, after hasPasteMarker has moved the shared regex', () => {
+    const text =
+      'a [Pasted text #2 +12 lines] b [Pasted text #1 +40 chars] [Pasted text #2 +12 lines]';
+    expect(hasPasteMarker(text)).toBe(true);
+    expect(pasteMarkersIn(text)).toEqual([
+      '[Pasted text #2 +12 lines]',
+      '[Pasted text #1 +40 chars]',
+      '[Pasted text #2 +12 lines]',
+    ]);
+    expect(pasteMarkersIn('nothing here')).toEqual([]);
   });
 });

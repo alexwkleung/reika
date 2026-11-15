@@ -29,6 +29,25 @@ describe('sendMessage', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ type: 'submit', text: 'hi' });
   });
 
+  it("passes a completion's reply on, null included", async () => {
+    const reply = {
+      kind: 'command' as const,
+      partial: '/mo',
+      items: [{ value: '/model', display: '/model' }],
+    };
+    const complete = { type: 'complete' as const, text: '/mo' };
+    expect(
+      await sendMessage('tok', complete, answering(json(200, { ok: true, reply })) as typeof fetch),
+    ).toEqual({ kind: 'ok', reply });
+    expect(
+      await sendMessage(
+        'tok',
+        complete,
+        answering(json(200, { ok: true, reply: null })) as typeof fetch,
+      ),
+    ).toEqual({ kind: 'ok', reply: null });
+  });
+
   it('a 409 is a conflict carrying the server error', async () => {
     const fetchFn = answering(json(409, { error: 'no open approval dialog d3' }));
     expect(
