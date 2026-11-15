@@ -1,0 +1,60 @@
+/* The status line. Functional for now; a later PR designs it. */
+.status {
+  padding: 0.35em 0 0.6em;
+  font-family: var(--reika-mono);
+  font-size: 0.78em;
+  color: var(--reika-muted);
+}
+.status-line {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0;
+}
+.status-chip {
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-chip + .status-chip::before {
+  content: ' · ';
+  color: var(--reika-muted);
+  white-space: pre;
+}
+.status-chip--mode-agent {
+  color: var(--reika-mode-agent);
+}
+.status-chip--mode-plan {
+  color: var(--reika-mode-plan);
+}
+.status-chip--mode-vibe {
+  color: var(--reika-mode-vibe);
+}
+.status-chip--mode-minimal {
+  color: var(--reika-mode-minimal);
+}
+.status-chip--mode-grind {
+  color: var(--reika-mode-grind);
+}
+.status-chip--mode-chat {
+  color: var(--reika-mode-chat);
+}
+.status-chip--mode-shell {
+  color: var(--reika-mode-shell);
+}
+.status-chip--auto-approve {
+  color: var(--reika-auto-approve);
+}
+.status-chip--bypass {
+  color: var(--reika-error);
+}
+.status-chip--warning {
+  color: var(--reika-warning);
+}
+.status-error {
+  color: var(--reika-error);
+  font-family: var(--reika-prose);
+  font-size: 1.15em;
+  margin-bottom: 0.2em;
+  overflow-wrap: anywhere;
+}

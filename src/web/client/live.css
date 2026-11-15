@@ -1,0 +1,111 @@
+/* The running turn: drawn like the rows it will commit as, plus the busy line. */
+.live-pending {
+  margin-top: 0.15em;
+}
+.live-tool {
+  margin: 0.5em 0 0;
+  font-family: var(--reika-mono);
+  font-size: 0.82em;
+  color: var(--reika-muted);
+  overflow-x: auto;
+  white-space: pre;
+  tab-size: 8;
+}
+.live-tool--command {
+  margin-left: 2.4em;
+}
+
+.plan {
+  margin-top: 0.9em;
+  font-size: 0.93em;
+}
+.plan-head {
+  color: var(--reika-mode-plan);
+}
+.plan-waived {
+  color: var(--reika-muted);
+}
+.plan-steps {
+  list-style: none;
+  margin: 0.2em 0 0;
+  padding: 0;
+}
+.plan-step {
+  color: var(--reika-secondary);
+}
+.plan-step--done,
+.plan-step--waived {
+  color: var(--reika-muted);
+}
+.plan-mark {
+  display: inline-block;
+  width: 1.3em;
+  color: var(--reika-muted);
+}
+.plan-step--done .plan-mark {
+  color: var(--reika-success);
+}
+.plan-step--waived .plan-mark {
+  color: var(--reika-warning);
+}
+.plan-step--next .plan-mark {
+  color: var(--reika-accent);
+}
+
+.busy {
+  margin-top: 0.9em;
+  color: var(--reika-secondary);
+  font-size: 0.93em;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.busy-dot {
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: var(--busy-tone, var(--reika-accent));
+  animation: busy-pulse 1.2s ease-in-out infinite;
+}
+.busy--info {
+  --busy-tone: var(--reika-info);
+}
+.busy--prefill {
+  --busy-tone: var(--reika-prefill);
+}
+.busy--warning {
+  --busy-tone: var(--reika-warning);
+  color: var(--reika-warning);
+}
+.busy--subagent {
+  --busy-tone: var(--reika-subagent);
+}
+@keyframes busy-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .busy-dot {
+    animation: none;
+  }
+}
+.plan-step--summary {
+  list-style: none;
+  color: var(--reika-muted);
+}
+.plan-toggle {
+  margin-top: 0.3em;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--reika-muted);
+  font: inherit;
+  font-size: 0.9em;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.plan-toggle:hover,
+.plan-toggle:focus-visible {
+  color: var(--reika-text);
+}

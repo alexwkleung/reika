@@ -5,7 +5,7 @@ import { startMode, type LastState } from '../laststate.js';
 import type { createSession } from '../session.js';
 import type { Config, Mode } from '../types.js';
 import { PACKAGE_ROOT } from '../version.js';
-import { proofAssets } from './assets.js';
+import { clientAssets } from './assets.js';
 import { createWebBridge } from './bridge.js';
 import { startWebServer } from './server.js';
 
@@ -55,9 +55,9 @@ export type WebIo = {
   saveLastState: (state: LastState) => void;
   defaultMode?: () => Mode;
   createSession?: typeof createSession;
-  // The proof client's directory. From source PACKAGE_ROOT is the repo root; `web-proof/` is
-  // deliberately not in package.json `files`, since this command only runs from source for now.
-  assetsRoot?: string;
+  // The built page's directory; dist/web/ from source and from the bundle alike, since
+  // PACKAGE_ROOT is the package root in both. From source it needs `pnpm run build:web` first.
+  clientRoot?: string;
 };
 
 export type WebHandle = {
@@ -136,7 +136,7 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
   try {
     server = await startWebServer(bridge, {
       port: args.port,
-      assets: proofAssets(io.assetsRoot ?? join(PACKAGE_ROOT, 'web-proof')),
+      assets: clientAssets(io.clientRoot ?? join(PACKAGE_ROOT, 'dist', 'web')),
     });
   } catch (e) {
     bridge.close();
