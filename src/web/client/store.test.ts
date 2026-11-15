@@ -41,6 +41,9 @@ const wireState = (over: Partial<WireState> = {}): WireState => ({
   decodeRate: null,
   queue: [],
   approvals: { approved: 0, declined: 0 },
+  preparing: false,
+  stage: null,
+  modelPinned: false,
   ...over,
 });
 
@@ -246,6 +249,37 @@ describe('foldEvent: committed events', () => {
     const s = fold(base, { type: 'resolved', seq: 1, id: 'nope', outcome: 'answered' });
     expect(s.dialogs).toBe(base.dialogs);
     expect(s.lastSeq).toBe(1);
+  });
+
+  it('catalog replaces the model list', () => {
+    const models = [
+      {
+        name: 'default',
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        kind: 'model' as const,
+        active: true,
+      },
+    ];
+    expect(fold(base, { type: 'catalog', seq: 1, catalog: { models } }).catalog).toEqual({
+      models,
+    });
+  });
+
+  it('history replaces the list and historyAdd appends one line', () => {
+    const s = fold(
+      base,
+      { type: 'history', seq: 1, entries: ['one'] },
+      { type: 'historyAdd', seq: 2, entry: 'two' },
+    );
+    expect(s.history).toEqual(['one', 'two']);
+    expect(fold(s, { type: 'history', seq: 3, entries: ['fresh'] }).history).toEqual(['fresh']);
+  });
+
+  it('an event this page does not know is taken for its seq and changes nothing else', () => {
+    const unknown = { type: 'from-the-future', seq: 1, payload: 1 } as unknown as ServerEvent;
+    const s = fold(base, unknown);
+    expect(s).toEqual({ ...base, lastSeq: 1, snapshotSeq: null });
   });
 });
 

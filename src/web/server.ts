@@ -295,8 +295,9 @@ export async function startWebServer(
       return;
     }
     const result = bridge.handle(message);
-    if (result.ok) sendJson(req, res, 200, { ok: true });
-    else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
+    if (result.ok) {
+      sendJson(req, res, 200, 'reply' in result ? { ok: true, reply: result.reply } : { ok: true });
+    } else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
   }
 
   // The one route that hands out the token, so the one that never takes a credential in its URL

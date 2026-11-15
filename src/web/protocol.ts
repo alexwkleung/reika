@@ -14,12 +14,32 @@ import type {
 } from '../types.js';
 import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
+import { isPasteMarker, type PastedText } from '../ui/pastes.js';
+import type { SuggestionState } from '../ui/suggest.js';
 import type { Approvals } from '../ui/summary.js';
 
 // The JSON a local server sends a browser tab and accepts back (#584/#595). Types only on the
-// import side, so nothing here loads Ink, React or a server.
+// import side, but for the dependency-free paste marker check, so nothing here loads Ink, React or
+// a server.
 
-export const PROTOCOL_VERSION = 1;
+// 2: mode and model switches, pastes on submit, completions, input history, the model list (#584).
+export const PROTOCOL_VERSION = 2;
+
+// Spelled out rather than imported from the mode module; a test holds it to MODE_CYCLE.
+export const WIRE_MODES = [
+  'agent',
+  'plan',
+  'minimal',
+  'vibe',
+  'grind',
+  'chat',
+  'shell',
+] as const satisfies readonly Mode[];
+
+// Bounds on what a tab may send. A completion is asked per keystroke, and `@word` matching runs on
+// the server's main thread; a tab past the cap sends only the trailing `@word`.
+export const MAX_COMPLETE_CHARS = 2000;
+export const MAX_SUBMIT_PASTES = 32;
 
 type KeysOfUnion<T> = T extends unknown ? keyof T : never;
 
@@ -68,9 +88,14 @@ export type WireState = {
   // A count of images, never their bytes or OCR text.
   queue: { content: string; images: number }[];
   approvals: Approvals;
+  // A line is being prepared (its questions, a link fetch) or run: a mode or model switch waits.
+  preparing: boolean;
+  // What a submit is waiting on before its turn starts, e.g. "Fetching 1 pasted link".
+  stage: string | null;
+  modelPinned: boolean;
 };
 
-export function wireState(controller: Controller): WireState {
+export function wireState(controller: Controller, stage: string | null = null): WireState {
   const snap = controller.getSnapshot();
   const session = controller.session;
   const cfg = session?.getSnapshot().config;
@@ -93,6 +118,9 @@ export function wireState(controller: Controller): WireState {
     decodeRate: snap.decodeRate ?? null,
     queue: snap.queue.map(m => ({ content: m.content, images: m.images?.length ?? 0 })),
     approvals: snap.approvals,
+    preparing: snap.preparing,
+    stage,
+    modelPinned: controller.modelPinned,
   };
 }
 
@@ -113,6 +141,21 @@ function sameJson(a: unknown, b: unknown): boolean {
 export function sameState(a: WireState, b: WireState): boolean {
   return sameJson(a, b);
 }
+
+export function sameCatalog(a: WireCatalog, b: WireCatalog): boolean {
+  return sameJson(a, b);
+}
+
+// What the mode and model pills offer. `models` carries each target's base URL, as the model
+// picker's dialog does.
+export type WireCatalog = { models: ModelTarget[] };
+
+export function wireCatalog(controller: Controller): WireCatalog {
+  return { models: controller.modelTargets().map(t => ({ ...t })) };
+}
+
+// A completion list, or null for none. `partial` is the tail of the text an item replaces.
+export type WireCompletion = SuggestionState | null;
 
 export type WireDialog =
   | {
@@ -186,7 +229,11 @@ export type CommittedEvent =
   | { type: 'reset'; seq: number; messages: WireMessage[] }
   | { type: 'state'; seq: number; state: WireState }
   | { type: 'dialog'; seq: number; id: string; dialog: WireDialog }
-  | { type: 'resolved'; seq: number; id: string; outcome: 'answered' | 'cancelled' };
+  | { type: 'resolved'; seq: number; id: string; outcome: 'answered' | 'cancelled' }
+  | { type: 'catalog'; seq: number; catalog: WireCatalog }
+  // The whole input history, replacing what a tab holds; `historyAdd` appends one line.
+  | { type: 'history'; seq: number; entries: string[] }
+  | { type: 'historyAdd'; seq: number; entry: string };
 
 // `now` is the server's clock when the event was sent. `live.pending.since` is on that clock too,
 // so a tab times a running call from the pair and never from its own clock against the server's.
@@ -216,6 +263,18 @@ export function stateEvent(seq: number, state: WireState): CommittedEvent {
   return { type: 'state', seq, state };
 }
 
+export function catalogEvent(seq: number, catalog: WireCatalog): CommittedEvent {
+  return { type: 'catalog', seq, catalog };
+}
+
+export function historyEvent(seq: number, entries: string[]): CommittedEvent {
+  return { type: 'history', seq, entries: [...entries] };
+}
+
+export function historyAddEvent(seq: number, entry: string): CommittedEvent {
+  return { type: 'historyAdd', seq, entry };
+}
+
 export function dialogEvent(seq: number, id: string, dialog: WireDialog): CommittedEvent {
   return { type: 'dialog', seq, id, dialog };
 }
@@ -228,11 +287,15 @@ export function resolvedEvent(
   return { type: 'resolved', seq, id, outcome };
 }
 
-// Version 1 carries typed text only. Images are left out by decision (#979): they need an upload
-// path of their own. A large paste needs nothing, since a browser text box can hold it.
+// Images are left out by decision (#979): they need an upload path of their own. A large paste
+// rides beside the text, as the TUI parks it, so the questions read the user's own words (#448).
+// `mode` is the mode the line was typed in: a submit is refused if it has changed since.
 export type ClientMessage =
-  | { type: 'submit'; text: string }
+  | { type: 'submit'; text: string; mode?: Mode; pastes?: PastedText[] }
   | { type: 'abort' }
+  | { type: 'mode'; mode: Mode }
+  | { type: 'model'; name: string }
+  | { type: 'complete'; text: string }
   | { type: 'answer'; id: string; kind: 'approval'; answer: ApprovalAnswer; always?: boolean }
   | { type: 'answer'; id: string; kind: 'question'; answer: QuestionAnswer | null }
   | { type: 'answer'; id: string; kind: 'confirm'; choice: number | 'abort' }
@@ -273,6 +336,46 @@ function parseQuestionAnswer(value: unknown): QuestionAnswer | null | { error: s
     ...(value.index !== undefined ? { index: value.index } : {}),
     ...(value.notes !== undefined ? { notes: value.notes } : {}),
   };
+}
+
+function parseMode(value: unknown): Mode | { error: string } {
+  return (
+    WIRE_MODES.find(m => m === value) ?? { error: `mode must be one of ${WIRE_MODES.join(', ')}` }
+  );
+}
+
+function parsePastes(value: unknown): PastedText[] | { error: string } {
+  if (!Array.isArray(value)) return { error: 'pastes must be an array' };
+  if (value.length > MAX_SUBMIT_PASTES) return { error: `at most ${MAX_SUBMIT_PASTES} pastes` };
+  const out: PastedText[] = [];
+  const seen = new Set<string>();
+  for (const p of value) {
+    if (!isRecord(p) || typeof p.marker !== 'string' || typeof p.text !== 'string') {
+      return { error: 'each paste must be { marker, text } strings' };
+    }
+    if (!isPasteMarker(p.marker))
+      return { error: 'paste marker is not a [Pasted text #N …] marker' };
+    if (seen.has(p.marker)) return { error: 'paste markers must be distinct' };
+    seen.add(p.marker);
+    out.push({ marker: p.marker, text: p.text });
+  }
+  return out;
+}
+
+function parseSubmit(value: Record<string, unknown>): ParseResult {
+  if (typeof value.text !== 'string') return { error: 'text must be a string' };
+  const out: Extract<ClientMessage, { type: 'submit' }> = { type: 'submit', text: value.text };
+  if (value.mode !== undefined) {
+    const mode = parseMode(value.mode);
+    if (typeof mode === 'object') return mode;
+    out.mode = mode;
+  }
+  if (value.pastes !== undefined) {
+    const pastes = parsePastes(value.pastes);
+    if (!Array.isArray(pastes)) return pastes;
+    out.pastes = pastes;
+  }
+  return out;
 }
 
 function parseAnswer(value: Record<string, unknown>): ParseResult {
@@ -330,13 +433,27 @@ export function parseClientMessage(value: unknown): ParseResult {
   if (!isRecord(value)) return { error: 'message must be an object' };
   switch (value.type) {
     case 'submit':
-      if (typeof value.text !== 'string') return { error: 'text must be a string' };
-      return { type: 'submit', text: value.text };
+      return parseSubmit(value);
     case 'abort':
       return { type: 'abort' };
+    case 'mode': {
+      const mode = parseMode(value.mode);
+      return typeof mode === 'object' ? mode : { type: 'mode', mode };
+    }
+    case 'model':
+      if (typeof value.name !== 'string' || value.name === '') {
+        return { error: 'name must be a non-empty string' };
+      }
+      return { type: 'model', name: value.name };
+    case 'complete':
+      if (typeof value.text !== 'string') return { error: 'text must be a string' };
+      if (value.text.length > MAX_COMPLETE_CHARS) {
+        return { error: `text must be at most ${MAX_COMPLETE_CHARS} chars` };
+      }
+      return { type: 'complete', text: value.text };
     case 'answer':
       return parseAnswer(value);
     default:
-      return { error: 'type must be submit, abort or answer' };
+      return { error: 'type must be submit, abort, mode, model, complete or answer' };
   }
 }

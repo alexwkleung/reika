@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   createController,
   emptyLive,
+  MAX_HISTORY_ENTRIES,
   type CommandFrontEnd,
   type InputFrontEnd,
   type LiveChange,
@@ -212,6 +213,8 @@ describe('createController', () => {
       status: 'loading',
       queue: [],
       replaying: false,
+      history: [],
+      preparing: false,
       approval: null,
       question: null,
       confirm: null,
@@ -479,6 +482,20 @@ describe('controller dialogs', () => {
     const second = controller.openConfirm(spec);
     controller.answerConfirm('abort');
     await expect(second).resolves.toBe('abort');
+    expect(controller.confirm).toBeNull();
+  });
+
+  it('shows a confirm asked while another is open once the first is answered (#993)', async () => {
+    const { controller } = controllerIn('agent');
+    const other = { ...spec, title: 'Other' };
+    const first = controller.openConfirm(spec);
+    const second = controller.openConfirm(other);
+    expect(controller.confirm).toBe(spec);
+    controller.answerConfirm(0);
+    await expect(first).resolves.toBe(0);
+    expect(controller.confirm).toBe(other);
+    controller.answerConfirm(1);
+    await expect(second).resolves.toBe(1);
     expect(controller.confirm).toBeNull();
   });
 
@@ -3024,6 +3041,138 @@ describe('controller.submit', () => {
       await controller.submit(incidental, { ...front, ask }, { fetchUrls: false });
       expect(ask).not.toHaveBeenCalled();
       expect(pasteFetches.incidental).toEqual([false]);
+    });
+  });
+
+  describe('input history', () => {
+    it('records each line sent, commands and shell lines too, once per run of repeats', async () => {
+      const { controller } = idle();
+      for (const line of ['fix it', 'fix it', '/help', ' fix it ']) {
+        await controller.submit(line, inputFront().front);
+      }
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/help', 'fix it']);
+    });
+
+    it('records a queued line when it replays, not when it is queued', async () => {
+      const { controller } = idle();
+      controller.setStatus('busy');
+      await controller.submit('later', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('idle');
+      const next = controller.takeQueued({ resuming: false })!;
+      await controller.submit(next.content, inputFront().front, next.answers);
+      controller.replayDone();
+      expect(controller.getSnapshot().history).toEqual(['later']);
+    });
+
+    it('records /save run mid-turn, and nothing for an empty line', async () => {
+      const { controller } = idle();
+      await controller.submit('   ', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('busy');
+      await controller.submit('/save', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['/save']);
+    });
+
+    it('keeps it across /new', async () => {
+      const { controller } = idle();
+      await controller.submit('fix it', inputFront().front);
+      await controller.submit('/new', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/new']);
+    });
+
+    it('drops the oldest past the entry bound', async () => {
+      const { controller } = idle();
+      for (let i = 0; i <= MAX_HISTORY_ENTRIES; i++) {
+        await controller.submit(`/cwd ${i}`, inputFront().front);
+      }
+      const history = controller.getSnapshot().history;
+      expect(history).toHaveLength(MAX_HISTORY_ENTRIES);
+      expect(history[0]).toBe('/cwd 1');
+    });
+  });
+
+  describe('completions', () => {
+    it('lists commands, skills, MCP commands, models and files from the session', () => {
+      const { controller, session } = idle();
+      session!.bundle.skills = [verify];
+      session!.bundle.fileIndex = ['src/app.ts'];
+      session!.mcp.commands = [
+        { name: 'docs:find', server: 'docs', description: 'find a page' } as McpCommand,
+      ];
+      const names = (text: string) => controller.completions(text)?.items.map(i => i.value);
+      expect(names('/ver')).toEqual(['/verify']);
+      expect(names('/docs')).toEqual(['/docs:find']);
+      expect(controller.completions('/docs')?.items[0].display).toContain('MCP docs · find a page');
+      expect(names('see @app')).toEqual(['@src/app.ts']);
+      expect(names('/model ')).toEqual(expect.arrayContaining(['/model default']));
+      expect(controller.completions('plain words')).toBeNull();
+    });
+
+    it('is null before boot', () => {
+      const { controller } = controllerIn('agent', null);
+      expect(controller.completions('/he')).toBeNull();
+    });
+  });
+
+  describe('while another line is being prepared (#993)', () => {
+    const asked = () => {
+      const made = idle('agent', { skillAuto: 'ask' });
+      made.session!.bundle.skills = [verify];
+      return made;
+    };
+
+    it('queues a second line instead of dropping it, and replays it once the first is done', async () => {
+      const { controller, session } = asked();
+      const first = inputFront();
+      const running = controller.submit('verify the change', first.front);
+      expect(controller.confirm).toMatchObject({ title: 'Skill' });
+      expect(controller.getSnapshot().preparing).toBe(true);
+
+      const second = inputFront();
+      await controller.submit('and then the docs', second.front);
+      expect(second.front.onTaken).toHaveBeenCalledWith();
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'and then the docs', answers: {} },
+      ]);
+      expect(controller.takeQueued({ resuming: false })).toBeNull();
+
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
+      expect(session!.submit.mock.calls.map(c => c[0])).toEqual(['verify the change']);
+      expect(controller.getSnapshot().preparing).toBe(false);
+      expect(controller.takeQueued({ resuming: false })).toMatchObject({
+        content: 'and then the docs',
+      });
+    });
+
+    it("waits for the first line's question before asking the second's", async () => {
+      const { controller } = asked();
+      const running = controller.submit('verify the change', inputFront().front);
+      const first = controller.confirm;
+      const queued = controller.submit('verify the change again', inputFront().front);
+      expect(controller.confirm).toBe(first);
+
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
+      expect(controller.confirm).not.toBeNull();
+      expect(controller.confirm).not.toBe(first);
+      controller.answerConfirm(CONFIRM_ACCEPT);
+      await queued;
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'verify the change again', answers: { skill: 'verify' } },
+      ]);
+    });
+
+    it('runs /save at once', async () => {
+      const { controller } = asked();
+      const running = controller.submit('verify the change', inputFront().front);
+      const save = inputFront();
+      await controller.submit('/save', save.front);
+      expect(save.front.onTaken).toHaveBeenCalledWith('/save');
+      expect(controller.getSnapshot().queue).toEqual([]);
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
     });
   });
 

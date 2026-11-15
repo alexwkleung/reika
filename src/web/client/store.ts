@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   type CommittedEvent,
   type ServerEvent,
+  type WireCatalog,
   type WireDialog,
   type WireLive,
   type WireMessage,
@@ -16,6 +17,9 @@ export type OpenDialog = { id: string; dialog: WireDialog };
 export type ClientState = {
   messages: WireMessage[];
   session: WireState | null;
+  // The model list the pills offer, and input history for ↑/↓, shared by every tab.
+  catalog: WireCatalog | null;
+  history: string[];
   live: WireLive | null;
   // Arrival order, so a second dialog stacks under the first.
   dialogs: OpenDialog[];
@@ -33,6 +37,8 @@ export type ClientState = {
 export const initialClientState: ClientState = {
   messages: [],
   session: null,
+  catalog: null,
+  history: [],
   live: null,
   dialogs: [],
   lastSeq: null,
@@ -90,6 +96,16 @@ function foldCommitted(state: ClientState, event: CommittedEvent): ClientState {
         : state.dialogs;
       return { ...next, dialogs };
     }
+    case 'catalog':
+      return { ...next, catalog: event.catalog };
+    case 'history':
+      return { ...next, history: event.entries };
+    case 'historyAdd':
+      return { ...next, history: [...state.history, event.entry] };
+    default:
+      // An event this page does not know: a newer server, which `hello` has already flagged.
+      // Taken for its seq so a reconnect does not ask for it again.
+      return next;
   }
 }
 

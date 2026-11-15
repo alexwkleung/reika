@@ -81,6 +81,7 @@ import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import { isSaveCommand } from './ui/commands.js';
 import { expandPastes, type PastedText } from './ui/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
+import { computeSuggestions, type SuggestionState } from './ui/suggest.js';
 import {
   CONFIRM_ACCEPT,
   implementModeConfirmSpec,
@@ -120,6 +121,11 @@ type Side = 'agent' | 'chat';
 // `loading` until the session has booted, `error` when it could not.
 const AUTOSAVE_INTERVAL_MS = 3000;
 
+// Input history's bounds: far past what anyone walks back through with ↑, and small enough to send
+// to a web tab whole.
+export const MAX_HISTORY_ENTRIES = 500;
+export const MAX_HISTORY_CHARS = 2_000_000;
+
 export type ControllerStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // What `/resume` comes to: sessions to pick from under a heading, or a line saying why not.
@@ -139,6 +145,13 @@ export type ControllerSnapshot = {
   queue: QueuedMessage[];
   // A queued prompt has been handed back and its submit has not settled yet.
   replaying: boolean;
+  // Lines sent, oldest first, for ↑/↓ recall in every front end. Kept across /new and a resume, as
+  // a shell keeps its history across `clear`; never saved.
+  history: string[];
+  // A line is past the queue check and has not settled: its questions, its expansions or its run.
+  // The status is still idle through the first two, so this is what sends a second line to the
+  // queue (#993).
+  preparing: boolean;
   // What is waiting on the user, one of each at most: a tool asking to act, the model asking a
   // question (`ask_user`), and the harness asking before a prompt is sent.
   approval: ApprovalRequest | null;
@@ -381,6 +394,11 @@ export type Controller = {
   pickModel(typed: string, echo?: Message): void;
   // What the model picker and `/model` completion list.
   modelTargets(): ModelTarget[];
+  // A model picked this session outranks the mode's own until `/new` (#616).
+  readonly modelPinned: boolean;
+  // The completion list for the input box's text: commands, skills, MCP commands, `/model`
+  // arguments and `@` files. Null before boot and when nothing matches.
+  completions(text: string): SuggestionState | null;
   // When this conversation began: launch, or the last `newConversation`.
   readonly startedAt: number;
   // `/new`: drops both sides and everything the session learned about the engine, and starts over
@@ -457,6 +475,8 @@ export function createController(opts: {
     status: 'loading',
     queue: [],
     replaying: false,
+    history: [],
+    preparing: false,
     approval: null,
     question: null,
     confirm: null,
@@ -477,6 +497,9 @@ export function createController(opts: {
   let resolveApproval: ((answer: ApprovalAnswer) => void) | null = null;
   let resolveQuestion: ((answer: QuestionAnswer | null) => void) | null = null;
   let resolveConfirm: ((choice: number | 'abort') => void) | null = null;
+  // Confirms asked while one is open, shown in turn: a second over the first would orphan the
+  // first's promise and hang its submit (#993). Two tabs can each be asked about a line.
+  const waitingConfirms: (() => void)[] = [];
   let stashed: Partial<Record<Side, Message[]>> = {};
   let session: Session | null = null;
   // The model a mode switch comes back to when the new mode has none of its own (#616): the
@@ -733,8 +756,12 @@ export function createController(opts: {
     });
   const openConfirm = (spec: ConfirmSpec): Promise<number | 'abort'> =>
     new Promise(resolve => {
-      resolveConfirm = resolve;
-      set({ confirm: spec });
+      const show = (): void => {
+        resolveConfirm = resolve;
+        set({ confirm: spec });
+      };
+      if (resolveConfirm) waitingConfirms.push(show);
+      else show();
     });
   const setStatus = (status: ControllerStatus): void => {
     if (status !== snapshot.status) set({ status });
@@ -1238,6 +1265,19 @@ export function createController(opts: {
     };
   };
 
+  // Consecutive repeats are one entry, as in a shell. Bounded by count and by size, since one line
+  // can be a megabyte and every web tab is sent the whole list when it connects.
+  const recordHistory = (line: string): void => {
+    const prev = snapshot.history;
+    if (prev[prev.length - 1] === line) return;
+    const next = [...prev, line];
+    let chars = next.reduce((n, l) => n + l.length, 0);
+    while (next.length > 1 && (next.length > MAX_HISTORY_ENTRIES || chars > MAX_HISTORY_CHARS)) {
+      chars -= next.shift()!.length;
+    }
+    set({ history: next });
+  };
+
   const submit = async (
     input: string,
     front: InputFrontEnd,
@@ -1249,14 +1289,16 @@ export function createController(opts: {
     // without aborting the turn to get there. It only reads the scrollback and the counts, nothing
     // the loop is writing to. Every other command still waits: the rest either change what the
     // running turn is doing (mode, model, cwd) or reset it. Before boot there is nothing to save.
-    if (session && snapshot.status !== 'idle' && isSaveCommand(input)) {
+    const held = snapshot.status !== 'idle' || snapshot.preparing;
+    if (session && held && isSaveCommand(input)) {
       front.onTaken(trimmed);
+      recordHistory(trimmed);
       await runCommand(trimmed, front);
       return;
     }
-    // Held while a turn runs or the session boots, and replayed through here once idle; the
-    // receipt records what was queued.
-    if (!session || snapshot.status !== 'idle') {
+    // Held while a turn runs, another line is being prepared or the session boots, and replayed
+    // through here once idle; the receipt records what was queued.
+    if (!session || held) {
       const answers = await askSubmitAnswers(trimmed, front, carried);
       if (answers === 'abort') return;
       const msg = queuedMessage(trimmed, front.images, answers);
@@ -1267,6 +1309,19 @@ export function createController(opts: {
       front.onTaken();
       return;
     }
+    set({ preparing: true });
+    try {
+      await runLine(trimmed, front, carried);
+    } finally {
+      set({ preparing: false });
+    }
+  };
+
+  const runLine = async (
+    trimmed: string,
+    front: InputFrontEnd,
+    carried?: SubmitAnswers,
+  ): Promise<void> => {
     // Unconditional: commands and shell lines land here too.
     front.onSending?.();
     // Before the box clears: the dialog sits over the input, and the prompt it is asking about
@@ -1275,6 +1330,7 @@ export function createController(opts: {
     if (answers === 'abort') return;
     const { skill: route, fetchUrls, implementMode } = answers;
     front.onTaken(trimmed || undefined);
+    if (trimmed) recordHistory(trimmed);
     if (!trimmed) return;
     if (trimmed.startsWith('/')) {
       await runCommand(trimmed, { ...front, implementMode });
@@ -1339,6 +1395,7 @@ export function createController(opts: {
       const drainable = canDrain({
         idle: snapshot.status === 'idle',
         replaying: snapshot.replaying,
+        preparing: snapshot.preparing,
         dialogOpen: snapshot.approval !== null || snapshot.confirm !== null,
         ...blockers,
       });
@@ -1426,6 +1483,7 @@ export function createController(opts: {
       resolveConfirm = null;
       set({ confirm: null });
       resolve(choice);
+      waitingConfirms.shift()?.();
     },
     append,
     replace: messages => set({ messages }),
@@ -1470,6 +1528,26 @@ export function createController(opts: {
     modelTargets: () => {
       const cfg = config();
       return session && cfg ? buildModelTargets(cfg, session.profile) : [];
+    },
+    get modelPinned() {
+      return modelPinned;
+    },
+    completions: text => {
+      if (!session) return null;
+      return computeSuggestions(
+        text,
+        session.bundle.fileIndex,
+        // MCP commands complete like skills (#265): to the user both are a slash command that is
+        // not a mode. Built-ins win a name clash; an MCP name carries a colon, so none clashes.
+        [
+          ...session.bundle.skills,
+          ...session.mcp.commands.map(c => ({
+            name: c.name,
+            description: `MCP ${c.server}${c.description ? ` · ${c.description}` : ''}`,
+          })),
+        ],
+        controller.modelTargets(),
+      );
     },
     get startedAt() {
       return startedAt;

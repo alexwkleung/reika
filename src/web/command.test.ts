@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { createSession, Session, SessionOptions, SubmitOptions } from '../session.js';
 import type { Config, Message } from '../types.js';
 import { parseWebArgs, runWeb, type WebHandle, type WebIo } from './command.js';
-import type { ServerEvent } from './protocol.js';
+import { PROTOCOL_VERSION, type ServerEvent } from './protocol.js';
 
 describe('parseWebArgs', () => {
   it('is null unless the first word is web', () => {
@@ -317,8 +317,15 @@ describe('runWeb', () => {
   it('streams a hello and a snapshot, and a POSTed submit reaches the turn', async () => {
     const { run, token, session } = await start();
     const first = await readEvents(run.port, token, e => e.some(x => x.type === 'live'));
-    expect(first[0]).toMatchObject({ type: 'hello', version: 1 });
-    expect(first.map(e => e.type)).toEqual(['hello', 'reset', 'state', 'live']);
+    expect(first[0]).toMatchObject({ type: 'hello', version: PROTOCOL_VERSION });
+    expect(first.map(e => e.type)).toEqual([
+      'hello',
+      'reset',
+      'state',
+      'catalog',
+      'history',
+      'live',
+    ]);
 
     const reply = await post(run.port, token, { type: 'submit', text: 'hello there' });
     expect(reply.status).toBe(200);

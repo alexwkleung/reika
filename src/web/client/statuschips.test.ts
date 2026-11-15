@@ -22,6 +22,9 @@ const state = (over: Partial<WireState> = {}): WireState => ({
   decodeRate: null,
   queue: [],
   approvals: { approved: 0, declined: 0 },
+  preparing: false,
+  stage: null,
+  modelPinned: false,
   ...over,
 });
 
