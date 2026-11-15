@@ -4,8 +4,17 @@ import { loadSession, type SessionEntry, type SessionSides } from '../store/sess
 import type { ApprovalRequest, Message, QuestionRequest } from '../types.js';
 import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
+import { adoptPastes, type PastedText } from '../ui/pastes.js';
+import { submitStageLabel } from '../agent/submitinput.js';
 import {
   approvalDialog,
+  catalogEvent,
+  historyAddEvent,
+  historyEvent,
+  sameCatalog,
+  wireCatalog,
+  type WireCatalog,
+  type WireCompletion,
   confirmDialog,
   dialogEvent,
   helloEvent,
@@ -44,7 +53,10 @@ export type WebBridge = {
   close(): void;
 };
 
-export type HandleResult = { ok: true } | { ok: false; error: string; conflict?: true };
+// `reply` is what a `complete` asks for, sent back as the POST's body.
+export type HandleResult =
+  | { ok: true; reply?: WireCompletion }
+  | { ok: false; error: string; conflict?: true };
 
 type ControllerDialogKind = 'approval' | 'question' | 'confirm';
 
@@ -82,8 +94,15 @@ export function createWebBridge(
   let droppedThrough = 0;
   const log: CommittedEvent[] = [];
 
+  // What a submit is waiting on, from the controller's onStage hook; the controller keeps none.
+  let stage: string | null = null;
   let messages = controller.messages;
-  let state: WireState = wireState(controller);
+  let state: WireState = wireState(controller, stage);
+  let catalog: WireCatalog = wireCatalog(controller);
+  let history = controller.getSnapshot().history;
+  // Pastes from every tab, session-long as the TUI keeps its own: a recalled line's markers must
+  // still expand, and a queued line's at replay.
+  let pastes: PastedText[] = [];
   let dialogCounter = 0;
   const dialogs = new Map<string, OpenDialog>();
   const fromController: Record<ControllerDialogKind, ControllerOpenDialog | null> = {
@@ -91,8 +110,7 @@ export function createWebBridge(
     question: null,
     confirm: null,
   };
-  // The row `ask` was handed for the spec it is about to open.
-  // Per spec: a confirm asked while another is open waits its turn (#993), so two can be asked
+  // The row `ask` was handed for the spec it is about to open. Per spec: a confirm asked while another is open waits its turn (#993), so two can be asked
   // before either is shown.
   const askedInitial = new Map<ConfirmSpec, number>();
 
@@ -211,10 +229,24 @@ export function createWebBridge(
           }
         }
         syncDialogs();
-        const nextState = wireState(controller);
+        const nextState = wireState(controller, stage);
         if (!sameState(state, nextState)) {
           state = nextState;
           commit(seq => stateEvent(seq, nextState));
+        }
+        const nextCatalog = wireCatalog(controller);
+        if (!sameCatalog(catalog, nextCatalog)) {
+          catalog = nextCatalog;
+          commit(seq => catalogEvent(seq, nextCatalog));
+        }
+        const nextHistory = controller.getSnapshot().history;
+        if (nextHistory !== history) {
+          const prev = history;
+          history = nextHistory;
+          const appended =
+            nextHistory.length === prev.length + 1 && prev.every((l, i) => nextHistory[i] === l);
+          if (appended) commit(seq => historyAddEvent(seq, nextHistory[prev.length]));
+          else commit(seq => historyEvent(seq, nextHistory));
         }
       } while (dirty);
     } finally {
@@ -253,6 +285,32 @@ export function createWebBridge(
       controller.append({ role: 'error', content: (e as Error).message });
     });
 
+  // A switch only between lines. The status stays idle while a line asks its questions and fetches
+  // its links, and the line reads the mode after those waits; a switch then would run it in a mode
+  // it was not typed for. A queued line is about to replay, so it holds a switch too.
+  const switchRefusal = (what: 'modes' | 'models'): HandleResult | null => {
+    const snap = controller.getSnapshot();
+    const between =
+      controller.session !== null &&
+      snap.status === 'idle' &&
+      !snap.preparing &&
+      !snap.replaying &&
+      !resuming &&
+      snap.queue.length === 0 &&
+      snap.approval === null &&
+      snap.confirm === null;
+    if (between) return null;
+    return {
+      ok: false,
+      error: `Cannot switch ${what} while a prompt is running or waiting.`,
+      conflict: true,
+    };
+  };
+
+  // Everything a tab is sent goes out through the bridge, replies included, so a later scrub of
+  // what reaches a browser (#990) has one place to stand.
+  const completionReply = (text: string): WireCompletion => controller.completions(text);
+
   const supersedePicker = (kind: 'model' | 'session'): void => {
     for (const entry of [...dialogs.values()]) if (entry.kind === kind) closeDialog(entry);
   };
@@ -264,7 +322,9 @@ export function createWebBridge(
 
   const inputFrontEnd = (images: ImageAttachment[] = []): InputFrontEnd => ({
     turn: {},
-    pastes: [],
+    get pastes() {
+      return pastes;
+    },
     images,
     ask,
     exit: () => opts.onExit?.(),
@@ -289,7 +349,10 @@ export function createWebBridge(
       });
     },
     shell: {},
-    onStage: () => {},
+    onStage: next => {
+      stage = next ? submitStageLabel(next) : null;
+      sync();
+    },
     onTaken: () => {},
   });
 
@@ -397,6 +460,8 @@ export function createWebBridge(
     helloEvent(lastSeq),
     resetEvent(lastSeq, messages),
     stateEvent(lastSeq, state),
+    catalogEvent(lastSeq, catalog),
+    historyEvent(lastSeq, history),
     ...[...dialogs.values()].map(d => dialogEvent(lastSeq, d.id, d.dialog)),
     liveEvent(controller.live, now()),
   ];
@@ -421,15 +486,48 @@ export function createWebBridge(
       if (closed) return { ok: false, error: 'closed' };
       try {
         switch (message.type) {
-          case 'submit':
+          case 'submit': {
             // Left with the tab, as the TUI leaves it in the box: the resume replaces the
             // conversation it was typed against.
             if (resuming) return { ok: false, error: 'a session is still loading' };
-            void submitSafely(message.text, inputFrontEnd());
+            // Another tab switched the mode before this tab saw it: a prompt typed for agent must
+            // not run as a shell command.
+            if (message.mode !== undefined && message.mode !== controller.mode) {
+              return {
+                ok: false,
+                error: `the mode is now ${controller.mode}, not ${message.mode}`,
+                conflict: true,
+              };
+            }
+            // Before anything awaits, so two tabs' pastes can never be given the same number.
+            const adopted = adoptPastes(pastes, message.text, message.pastes ?? []);
+            pastes = adopted.pastes;
+            void submitSafely(adopted.text, inputFrontEnd());
             return { ok: true };
+          }
           case 'abort':
             controller.abort();
             return { ok: true };
+          case 'mode': {
+            if (message.mode === controller.mode) return { ok: true };
+            const busy = switchRefusal('modes');
+            if (busy) return busy;
+            controller.transition(message.mode);
+            return { ok: true };
+          }
+          case 'model': {
+            // A typed `/model x` reaches an ad-hoc model; a pill offers only the listed ones.
+            if (!controller.modelTargets().some(t => t.name === message.name)) {
+              return { ok: false, error: 'name is not one of the listed models' };
+            }
+            const busy = switchRefusal('models');
+            if (busy) return busy;
+            supersedePicker('model');
+            controller.pickModel(message.name);
+            return { ok: true };
+          }
+          case 'complete':
+            return { ok: true, reply: completionReply(message.text) };
           case 'answer':
             return answer(message);
         }

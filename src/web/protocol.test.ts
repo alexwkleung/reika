@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImageAttachment } from '../agent/attachments.js';
 import { createController } from '../controller.js';
+import { MODE_CYCLE } from '../agent/modes.js';
 import type { Session, SubmitOptions } from '../session.js';
 import type { Config, Message, Profile } from '../types.js';
 import {
@@ -10,7 +11,10 @@ import {
   helloEvent,
   messageEvent,
   modelDialog,
+  MAX_COMPLETE_CHARS,
+  MAX_SUBMIT_PASTES,
   parseClientMessage,
+  WIRE_MODES,
   PROTOCOL_VERSION,
   questionDialog,
   resetEvent,
@@ -205,6 +209,9 @@ describe('wireState', () => {
       decodeRate: null,
       queue: [],
       approvals: { approved: 0, declined: 0 },
+      preparing: false,
+      stage: null,
+      modelPinned: false,
     });
   });
 
@@ -351,10 +358,26 @@ describe('dialog builders', () => {
   });
 });
 
+describe('WIRE_MODES', () => {
+  it('is the mode cycle', () => {
+    expect([...WIRE_MODES]).toEqual(MODE_CYCLE);
+  });
+});
+
 describe('parseClientMessage', () => {
   const valid = [
     { type: 'submit', text: '/model' },
+    { type: 'submit', text: 'fix it', mode: 'plan' },
+    {
+      type: 'submit',
+      text: 'see [Pasted text #1 +12 lines]',
+      pastes: [{ marker: '[Pasted text #1 +12 lines]', text: 'a\n'.repeat(12) }],
+    },
     { type: 'abort' },
+    { type: 'mode', mode: 'shell' },
+    { type: 'model', name: 'kimi' },
+    { type: 'complete', text: '/mo' },
+    { type: 'complete', text: 'x'.repeat(MAX_COMPLETE_CHARS) },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true },
     { type: 'answer', id: 'd1', kind: 'approval', answer: false, always: false },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true, always: true },
@@ -419,6 +442,52 @@ describe('parseClientMessage', () => {
     ['an unknown type', { type: 'shout' }, 'type'],
     ['submit without text', { type: 'submit' }, 'text'],
     ['submit with a number', { type: 'submit', text: 5 }, 'text'],
+    ['submit with an unknown mode', { type: 'submit', text: 'a', mode: 'turbo' }, 'mode'],
+    ['submit with pastes not a list', { type: 'submit', text: 'a', pastes: {} }, 'pastes'],
+    [
+      'a paste with a made-up marker',
+      { type: 'submit', text: 'a', pastes: [{ marker: '[my paste]', text: 'x' }] },
+      'marker',
+    ],
+    [
+      'a paste with numeric text',
+      { type: 'submit', text: 'a', pastes: [{ marker: '[Pasted text #1 +2 lines]', text: 1 }] },
+      'paste',
+    ],
+    [
+      'two pastes with one marker',
+      {
+        type: 'submit',
+        text: 'a',
+        pastes: [
+          { marker: '[Pasted text #1 +2 lines]', text: 'x' },
+          { marker: '[Pasted text #1 +2 lines]', text: 'y' },
+        ],
+      },
+      'distinct',
+    ],
+    [
+      'too many pastes',
+      {
+        type: 'submit',
+        text: 'a',
+        pastes: Array.from({ length: MAX_SUBMIT_PASTES + 1 }, (_, i) => ({
+          marker: `[Pasted text #${i + 1} +2 lines]`,
+          text: 'x',
+        })),
+      },
+      'pastes',
+    ],
+    ['mode without a mode', { type: 'mode' }, 'mode'],
+    ['mode with an unknown mode', { type: 'mode', mode: 'turbo' }, 'mode'],
+    ['model with an empty name', { type: 'model', name: '' }, 'name'],
+    ['model with name null', { type: 'model', name: null }, 'name'],
+    ['complete without text', { type: 'complete' }, 'text'],
+    [
+      'complete past the cap',
+      { type: 'complete', text: 'x'.repeat(MAX_COMPLETE_CHARS + 1) },
+      'text',
+    ],
     ['answer without id', { type: 'answer', kind: 'model', name: null }, 'id'],
     ['answer with an empty id', { type: 'answer', id: '', kind: 'model', name: null }, 'id'],
     ['answer with an unknown kind', answer('vote', {}), 'kind'],

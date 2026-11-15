@@ -68,7 +68,7 @@ import {
   turnRefines,
   turnTools,
 } from '../agent/modes.js';
-import { acceptSuggestion, computeSuggestions, type SuggestionState } from './suggest.js';
+import { acceptSuggestion, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
 import { createController, type InputFrontEnd, type TurnFrontEnd } from '../controller.js';
@@ -240,6 +240,7 @@ export function App() {
     queue,
     replaying,
     preparing,
+    history,
     approval: pending,
     question,
     confirm,
@@ -264,7 +265,6 @@ export function App() {
   const [inputValue, setInputValue] = useState<string>('');
   // Past submissions (oldest→newest) the Input recalls via ArrowUp/ArrowDown,
   // independent of the chat transcript so it spans chat, shell, and commands.
-  const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [suggestionState, setSuggestionState] = useState<SuggestionState | null>(null);
   const [suggestionSelected, setSuggestionSelected] = useState(0);
   // Interactive /model picker (bare /model). Modal like Approval: the input is
@@ -791,21 +791,7 @@ export function App() {
         calibration: s.calibration ?? 1,
       });
     }
-    const next = computeSuggestions(
-      value,
-      bundle.fileIndex,
-      // MCP tools complete like skills (#265): they are the same kind of thing to the user — a
-      // slash command that resolves to something other than a mode. Built-ins win on a name
-      // collision inside computeSuggestions; an MCP name carries a colon, so nothing collides.
-      [
-        ...bundle.skills,
-        ...(sessionRef.current?.mcp.commands ?? []).map(c => ({
-          name: c.name,
-          description: `MCP ${c.server}${c.description ? ` · ${c.description}` : ''}`,
-        })),
-      ],
-      controller.modelTargets(),
-    );
+    const next = controller.completions(value);
     setSuggestionState(next);
     setSuggestionSelected(0);
   };
@@ -903,13 +889,9 @@ export function App() {
     // Frees the server slot for the real request (the engine keeps already-processed KV in its
     // slot cache on disconnect, so an interrupted warm still pays off).
     onSending: () => warmerRef.current.cancel('submit'),
-    onTaken: line => {
+    onTaken: () => {
       setInputValue('');
       setSuggestionState(null);
-      // For ArrowUp/ArrowDown recall, skipping consecutive duplicates.
-      if (line !== undefined) {
-        setInputHistory(prev => (prev[prev.length - 1] === line ? prev : [...prev, line]));
-      }
     },
     // Typing the command opened its autocomplete row, and the list only recomputes on an edit: left
     // up, it draws a second `/implement` under the dialog.
@@ -1402,7 +1384,7 @@ export function App() {
                 : statusExtraRows
             }
             suggesting={!!suggestionState && suggestionState.items.length > 0}
-            history={inputHistory}
+            history={history}
             mode={mode}
             value={inputValue}
             onChange={onInputChange}
