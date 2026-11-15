@@ -55,7 +55,9 @@ describe('bundle boundaries', () => {
       'src/ui/diffrows.ts', // diff line numbering
       'src/ui/format.ts', // toolLabel, toolVerb, toolTimer, changeLabel, prefillLabel
       'src/ui/harnessecho.ts', // reasoningfold's echo strip
+      'src/ui/intraline.ts', // which paired diff lines get word highlights; the path's language
       'src/ui/pendingrow.ts', // PENDING_ROW_DELAY_MS (its hook imports only react)
+      'src/ui/planwindow.ts', // the plan checklist's fold and tail cap
       'src/ui/reasoningfold.ts', // the display-only reasoning fold
       'src/ui/scrollbackrules.ts', // read-verb elision, notice lead, call args, grouped reads
       'src/web/protocol.ts', // PROTOCOL_VERSION; its own imports are all `import type`
@@ -67,7 +69,9 @@ describe('bundle boundaries', () => {
     expect(
       imported.filter(
         p =>
-          !p.startsWith('src/') && !/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?react\//.test(p),
+          !p.startsWith('src/') &&
+          // `diff` is jsdiff, pure JS: intraline.ts pairs words with it.
+          !/node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?(react|diff)\//.test(p),
       ),
     ).toEqual([]);
   });

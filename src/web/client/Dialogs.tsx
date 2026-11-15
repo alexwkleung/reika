@@ -150,7 +150,7 @@ function Preview({ d }: { d: Of<'approval'> }) {
   }
   return (
     <div className="dialog-preview-diff">
-      <DiffView diff={d.preview} startLine={d.startLine} />
+      <DiffView diff={d.preview} path={d.subject} startLine={d.startLine} />
     </div>
   );
 }

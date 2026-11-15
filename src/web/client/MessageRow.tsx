@@ -132,7 +132,13 @@ function Changes({ changes }: { changes: NonNullable<Of<'tool'>['changes']> }) {
             <span className="change-label">{` ${changeLabel(f)}`}</span>
           </div>
           {f.hunks.map((h, i) => (
-            <DiffView key={i} diff={h.text} startLine={h.startLine} oldStartLine={h.oldStartLine} />
+            <DiffView
+              key={i}
+              diff={h.text}
+              path={f.path}
+              startLine={h.startLine}
+              oldStartLine={h.oldStartLine}
+            />
           ))}
           {f.omitted ? <div className="change-more">{`…(${f.omitted} more lines)`}</div> : null}
         </div>
@@ -160,7 +166,7 @@ function ToolRow({ m, groupedReads }: { m: Of<'tool'>; groupedReads: boolean }) 
       </div>
       {m.diff ? (
         <div className="tool-block">
-          <DiffView diff={m.diff.text} startLine={m.diff.startLine} />
+          <DiffView diff={m.diff.text} path={m.diff.path} startLine={m.diff.startLine} />
         </div>
       ) : null}
       {m.command ? <CommandChip command={m.command} /> : null}

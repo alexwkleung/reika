@@ -57,6 +57,21 @@ describe('LiveTurn', () => {
     expect(draw(live({ subagent: true, content: 'x' }))).toContain('class="live nest"');
   });
 
+  it('folds a long plan by the TUI rule and offers every step', () => {
+    const plan = Array.from({ length: 12 }, (_, i) => ({
+      n: i + 1,
+      text: `step ${i + 1}`,
+      done: i < 3,
+      waived: false,
+    })) as unknown as NonNullable<WireLive['plan']>;
+    const t = text(draw(live({ plan }), false));
+    expect(t).toContain('steps 1–3 done');
+    expect(t).toContain('4. step 4');
+    expect(t).not.toContain('10. step 10');
+    expect(t).toContain('… 3 more');
+    expect(t).toContain('Show all 12 steps');
+  });
+
   it('keeps the plan checklist when idle, and draws nothing else', () => {
     const plan = [
       { n: 1, text: 'Edit `a.ts`', paths: [], commands: [], snippets: [], done: true },

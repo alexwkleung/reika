@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { highlightCode, parseHljsHtml } from './highlight.js';
+import { highlightCode, highlightNodes, parseHljsHtml, sliceNodes } from './highlight.js';
 
 const markup = (code: string, lang?: string) =>
   renderToStaticMarkup(<code>{highlightCode(code, lang)}</code>);
@@ -66,5 +66,39 @@ describe('highlightCode', () => {
     expect(html).not.toContain('<script>');
     expect(html).toContain('<span class="hljs-name">script</span>');
     expect(html.replace(/<[^>]+>/g, '')).toBe('&quot;&lt;script&gt;alert(1)&lt;/script&gt;&quot;');
+  });
+});
+
+describe('sliceNodes', () => {
+  const nodes = parseHljsHtml(
+    '<span class="hljs-comment">// <span class="hljs-doctag">TODO</span> later</span> x',
+  );
+
+  it('keeps the spans around a slice from the middle', () => {
+    expect(sliceNodes(nodes, 3, 9)).toEqual([
+      {
+        className: 'hljs-comment',
+        children: [{ className: 'hljs-doctag', children: ['TODO'] }, ' l'],
+      },
+    ]);
+  });
+
+  it('drops spans the slice does not reach, and joins back to the whole text', () => {
+    expect(sliceNodes(nodes, 13, 14)).toEqual([' ']);
+    const text = (list: ReturnType<typeof sliceNodes>): string =>
+      list.map(n => (typeof n === 'string' ? n : text(n.children))).join('');
+    const whole = text(nodes);
+    expect(
+      [0, 4, 11, whole.length].every(
+        cut =>
+          text(sliceNodes(nodes, 0, cut)) + text(sliceNodes(nodes, cut, whole.length)) === whole,
+      ),
+    ).toBe(true);
+  });
+
+  it('cuts a comment word out of a highlighted line still coloured as comment', () => {
+    const line = 'const a = 1; // keep this';
+    const cut = sliceNodes(highlightNodes(line, 'typescript'), line.indexOf('keep'), line.length);
+    expect(cut).toEqual([{ className: 'hljs-comment', children: ['keep this'] }]);
   });
 });

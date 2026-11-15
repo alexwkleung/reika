@@ -39,6 +39,10 @@
   --reika-diff-removed-bg: #6b1a22;
   --reika-diff-added-fg: #6fdc8c;
   --reika-diff-removed-fg: #f28b8b;
+  /* The changed words of a paired line, as the TUI paints them (ui/DiffView.tsx). */
+  --reika-diff-added-word-bg: #1f8a48;
+  --reika-diff-removed-word-bg: #a3303a;
+  --reika-diff-word-fg: #e8e8e8;
   --reika-syntax-rose: #db9499;
   --reika-syntax-gray: #8b909a;
   --reika-prose: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;

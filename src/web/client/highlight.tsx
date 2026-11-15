@@ -64,7 +64,7 @@ export function parseHljsHtml(html: string): HljsNode[] {
   return root;
 }
 
-function toReact(nodes: HljsNode[], key = ''): ReactNode[] {
+export function toReact(nodes: HljsNode[], key = ''): ReactNode[] {
   return nodes.map((node, i) =>
     typeof node === 'string' ? (
       node
@@ -77,14 +77,41 @@ function toReact(nodes: HljsNode[], key = ''): ReactNode[] {
 }
 
 // Plain text for a language highlight.js does not know, as the TUI does.
-export function highlightCode(code: string, language: string | undefined): ReactNode[] {
+export function highlightNodes(code: string, language: string | undefined): HljsNode[] {
   const lang = language?.split(/\s/)[0]?.toLowerCase();
   if (!lang || !hljs.getLanguage(lang)) return [code];
   try {
-    return toReact(
-      parseHljsHtml(hljs.highlight(code, { language: lang, ignoreIllegals: true }).value),
-    );
+    return parseHljsHtml(hljs.highlight(code, { language: lang, ignoreIllegals: true }).value);
   } catch {
     return [code];
   }
+}
+
+export function highlightCode(code: string, language: string | undefined): ReactNode[] {
+  return toReact(highlightNodes(code, language));
+}
+
+// The characters [start, end) of highlighted text, keeping the spans around them. A word cut out of
+// a highlighted line keeps the line's colours: highlighted alone, a word from the middle of a
+// comment has no `//` and comes out uncoloured (#852).
+export function sliceNodes(nodes: HljsNode[], start: number, end: number): HljsNode[] {
+  const out: HljsNode[] = [];
+  let at = 0;
+  const walk = (list: HljsNode[], into: HljsNode[]): void => {
+    for (const node of list) {
+      if (at >= end) return;
+      if (typeof node === 'string') {
+        const from = Math.max(start - at, 0);
+        const to = Math.min(end - at, node.length);
+        if (to > from) into.push(node.slice(from, to));
+        at += node.length;
+        continue;
+      }
+      const children: HljsNode[] = [];
+      walk(node.children, children);
+      if (children.length > 0) into.push({ className: node.className, children });
+    }
+  };
+  walk(nodes, out);
+  return out;
 }

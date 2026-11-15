@@ -185,6 +185,38 @@ describe('tool rows', () => {
     expect(html).toMatch(/diff-lineno">10<.*diff-lineno">11<.*diff-lineno">11</s);
   });
 
+  it('marks the changed words of a paired line and colours the rest by the path', () => {
+    const html = row({
+      role: 'tool',
+      callId: 'c',
+      summary: 'Edited a.ts (+1 -1)',
+      diff: {
+        text: '- const x = foo(a, b);\n+ const x = bar(a, c);',
+        path: 'a.ts',
+        added: 1,
+        removed: 1,
+      },
+    });
+    expect(html).toContain('<span class="diff-word">foo</span>');
+    expect(html).toContain('<span class="diff-word">bar</span>');
+    expect(html).toContain('hljs-keyword');
+  });
+
+  it('draws a pair too different to compare as two plain coloured lines', () => {
+    const html = row({
+      role: 'tool',
+      callId: 'c',
+      summary: 'Edited a.txt (+1 -1)',
+      diff: {
+        text: '- alpha beta gamma\n+ one two three four',
+        path: 'a.txt',
+        added: 1,
+        removed: 1,
+      },
+    });
+    expect(html).not.toContain('diff-word');
+  });
+
   it('draws changed files with their labels, hunks and remainders', () => {
     const html = row({
       role: 'tool',

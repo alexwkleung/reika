@@ -49,3 +49,13 @@
 .diff-row--removed .diff-lineno {
   color: var(--reika-diff-removed-fg);
 }
+.diff-word {
+  color: var(--reika-diff-word-fg);
+  border-radius: 2px;
+}
+.diff-row--added .diff-word {
+  background: var(--reika-diff-added-word-bg);
+}
+.diff-row--removed .diff-word {
+  background: var(--reika-diff-removed-word-bg);
+}

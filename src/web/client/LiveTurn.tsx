@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
+import { planWindow } from '../../ui/planwindow.js';
 import { foldedLiveFields } from '../../ui/reasoningfold.js';
 import type { WireLive } from '../protocol.js';
 import { GLYPH, NoteBlock, Prose, ReasoningBlock } from './blocks.js';
@@ -30,10 +31,30 @@ export function busyLabel(live: WireLive): { text: string; tone: string } {
   return { text: live.phase === 'tool' ? 'Running tools' : 'Thinking', tone: 'accent' };
 }
 
-function PlanList({ steps }: { steps: PlanStep[] }) {
+function PlanStepRow({ s, next }: { s: PlanStep; next: boolean }) {
+  const state = s.done ? 'done' : s.waived ? 'waived' : next ? 'next' : 'todo';
+  const mark = s.done ? GLYPH.check : s.waived ? '~' : next ? GLYPH.next : '·';
+  return (
+    <li className={`plan-step plan-step--${state}`}>
+      <span className="plan-mark" aria-label={state}>
+        {mark}
+      </span>
+      {`${s.n}. `}
+      <InlineMarkdown text={s.text} />
+    </li>
+  );
+}
+
+// Folded by the TUI's rule (ui/planwindow.ts) unless the user asks for every step; a page has room
+// to show them, so the fold is a default here rather than a ceiling.
+export function PlanList({ steps }: { steps: PlanStep[] }) {
+  const [all, setAll] = useState(false);
   const done = steps.filter(s => s.done).length;
   const waived = steps.filter(s => s.waived).length;
-  const next = steps.findIndex(s => !s.done && !s.waived);
+  const next = steps.find(s => !s.done && !s.waived);
+  const w = planWindow(steps);
+  const folds = w.collapsedDone > 0 || w.hiddenTail > 0;
+  const shown = all || !folds ? steps : w.visible;
   return (
     <div className="plan">
       <div className="plan-head">
@@ -41,20 +62,31 @@ function PlanList({ steps }: { steps: PlanStep[] }) {
         {waived > 0 ? <span className="plan-waived">{` · ${waived} waived`}</span> : null}
       </div>
       <ol className="plan-steps">
-        {steps.map((s, i) => {
-          const state = s.done ? 'done' : s.waived ? 'waived' : i === next ? 'next' : 'todo';
-          const mark = s.done ? GLYPH.check : s.waived ? '~' : i === next ? GLYPH.next : '·';
-          return (
-            <li key={s.n} className={`plan-step plan-step--${state}`}>
-              <span className="plan-mark" aria-label={state}>
-                {mark}
-              </span>
-              {`${s.n}. `}
-              <InlineMarkdown text={s.text} />
-            </li>
-          );
-        })}
+        {!all && w.collapsedDone > 0 ? (
+          <li className="plan-step plan-step--done plan-step--summary">
+            <span className="plan-mark" aria-hidden="true">
+              {GLYPH.check}
+            </span>
+            {`steps ${steps[0]!.n}–${steps[w.collapsedDone - 1]!.n} done`}
+          </li>
+        ) : null}
+        {shown.map(s => (
+          <PlanStepRow key={s.n} s={s} next={s === next} />
+        ))}
+        {!all && w.hiddenTail > 0 ? (
+          <li className="plan-step plan-step--summary">{`… ${w.hiddenTail} more`}</li>
+        ) : null}
       </ol>
+      {folds ? (
+        <button
+          type="button"
+          className="plan-toggle"
+          aria-expanded={all}
+          onClick={() => setAll(v => !v)}
+        >
+          {all ? 'Show fewer steps' : `Show all ${steps.length} steps`}
+        </button>
+      ) : null}
     </div>
   );
 }

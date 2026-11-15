@@ -90,3 +90,22 @@
     animation: none;
   }
 }
+.plan-step--summary {
+  list-style: none;
+  color: var(--reika-muted);
+}
+.plan-toggle {
+  margin-top: 0.3em;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--reika-muted);
+  font: inherit;
+  font-size: 0.9em;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.plan-toggle:hover,
+.plan-toggle:focus-visible {
+  color: var(--reika-text);
+}
