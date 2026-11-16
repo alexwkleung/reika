@@ -163,6 +163,84 @@
   cursor: not-allowed;
 }
 
+/* Attached images (#979): one plain row each, the marker the box holds first. Thumbnails later. */
+.composer-images {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.composer-image {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  height: 1.875rem;
+  padding: 0 0.25rem 0 0.625rem;
+  border: 1px solid var(--reika-control-border);
+  border-radius: 8px;
+  background: var(--reika-control-bg);
+  font-size: 0.8125rem;
+  cursor: default;
+}
+.composer-image-marker {
+  flex-shrink: 0;
+  font-family: var(--reika-mono);
+  color: var(--reika-accent);
+}
+.composer-image-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--reika-control-fg);
+}
+.composer-image-detail {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--reika-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.composer-image-failed {
+  border-color: color-mix(in srgb, var(--reika-error) 45%, var(--reika-control-border));
+}
+.composer-image-failed .composer-image-marker,
+.composer-image-failed .composer-image-detail {
+  color: var(--reika-error);
+}
+.composer-image-reading .composer-image-detail {
+  color: var(--reika-muted);
+}
+.composer-image-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.composer-image-remove svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: none;
+  stroke: var(--reika-secondary);
+  stroke-width: 1.6;
+}
+.composer-image-remove:hover svg {
+  stroke: var(--reika-text);
+}
+.composer-image-remove:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 1px;
+}
+
 /* The bar's gaps keep the card's text cursor: a press there goes to the box too. Its controls
    set their own. */
 .composer-bar {

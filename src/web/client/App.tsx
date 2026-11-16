@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from 'react';
 import { PROTOCOL_VERSION } from '../protocol.js';
-import { Composer, type Send } from './Composer.js';
+import { Composer, type Send, type Upload } from './Composer.js';
 import { connectionNotice, type Connection } from './connection.js';
 import { Dialogs } from './Dialogs.js';
 import { nextFollow, type FollowEvent } from './follow.js';
@@ -94,11 +94,13 @@ export function App({
   connection,
   schedule,
   send,
+  upload,
 }: {
   state: Holder<ClientState>;
   connection: Holder<Connection>;
   schedule: FrameScheduler;
   send: Send;
+  upload?: Upload;
 }) {
   const s = useFramed(state, schedule);
   const c = useFramed(connection, schedule);
@@ -163,6 +165,7 @@ export function App({
           <Dialogs dialogs={s.dialogs} send={send} onDontSend={() => restoreLine.current()} />
           <Composer
             send={send}
+            upload={upload}
             session={s.session}
             catalog={s.catalog}
             history={s.history}

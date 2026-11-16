@@ -1,8 +1,8 @@
 import { parseHTML } from 'linkedom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, WireCatalog, WireCompletion, WireState } from '../protocol.js';
 import { PASTE_LINE_THRESHOLD as n } from '../../ui/pastes.js';
-import type { SendResult } from './send.js';
+import type { SendResult, UploadResult } from './send.js';
 
 const { window, document } = parseHTML('<!doctype html><html><body></body></html>');
 Object.assign(globalThis, {
@@ -73,6 +73,7 @@ type MountOpts = {
   waiting?: boolean;
   locked?: boolean;
   restoreLine?: { current: () => void };
+  upload?: (file: Blob) => Promise<UploadResult>;
 };
 
 async function mount(opts: MountOpts = {}) {
@@ -98,6 +99,7 @@ async function mount(opts: MountOpts = {}) {
       root.render(
         <Composer
           send={send}
+          upload={opts.upload}
           session={session({ ...opts.session, ...over.session })}
           catalog={catalog}
           history={over.history ?? opts.history ?? []}
@@ -123,12 +125,16 @@ async function mount(opts: MountOpts = {}) {
       }
       box().dispatchEvent(e);
     });
-  const paste = (data: { types?: string[]; text?: string }) =>
+  const paste = (data: { types?: string[]; text?: string; files?: File[] }) =>
     act(async () => {
       const e = new window.Event('paste', { bubbles: true, cancelable: true });
       Object.defineProperty(e, 'clipboardData', {
         value: {
-          items: (data.types ?? []).map(type => ({ kind: 'file', type })),
+          files: data.files ?? [],
+          items: [...(data.types ?? []), ...(data.files ?? []).map(f => f.type)].map(type => ({
+            kind: 'file',
+            type,
+          })),
           getData: (t: string) => (t === 'text/plain' ? (data.text ?? '') : ''),
         },
       });
@@ -254,6 +260,84 @@ describe('Composer', () => {
     expect(m.container.textContent).toContain(IMAGES_UNSUPPORTED);
     expect(m.box().value).toBe('');
     await m.unmount();
+  });
+
+  describe('images (#979)', () => {
+    const shot = (type = 'image/png') => new File([new Uint8Array(2048)], 'shot.png', { type });
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const uploading = () => {
+      let answer!: (r: UploadResult) => void;
+      const upload = vi.fn(
+        () =>
+          new Promise<UploadResult>(resolve => {
+            answer = resolve;
+          }),
+      );
+      return { upload, answer: (r: UploadResult) => act(async () => answer(r)) };
+    };
+
+    it('uploads a pasted image, shows its chip, and sends it with the line', async () => {
+      const u = uploading();
+      const m = await mount({ upload: u.upload, history: ['old [Image 2]'] });
+      await m.type('what is');
+      await m.paste({ files: [shot()] });
+      expect(m.box().value).toBe('what is [Image 3] ');
+      expect(m.container.textContent).toContain('Reading…');
+      await m.press('Enter');
+      expect(m.sent).toEqual([]);
+      expect(m.container.textContent).toContain('An image is still being read.');
+      await u.answer({ kind: 'ok', upload: { id, chars: 812 } });
+      expect(m.container.textContent).toContain('812 chars');
+      await m.press('Enter');
+      expect(m.sent).toEqual([
+        {
+          type: 'submit',
+          text: 'what is [Image 3] ',
+          mode: 'agent',
+          images: [{ marker: '[Image 3]', id }],
+        },
+      ]);
+      expect(m.container.querySelector('.composer-images')).toBeNull();
+      await m.unmount();
+    });
+
+    it('a failed read keeps its chip and takes the marker out of the box', async () => {
+      const u = uploading();
+      const m = await mount({ upload: u.upload });
+      await m.paste({ files: [shot()] });
+      await u.answer({ kind: 'failed', error: 'No text found in the pasted image.' });
+      expect(m.box().value).toBe('');
+      expect(m.container.querySelector('.composer-image-failed')?.textContent).toContain(
+        'No text found',
+      );
+      await m.unmount();
+    });
+
+    it('removing a chip discards the upload and its marker', async () => {
+      const u = uploading();
+      const m = await mount({ upload: u.upload });
+      await m.paste({ files: [shot()] });
+      await u.answer({ kind: 'ok', upload: { id, chars: null } });
+      expect(m.container.textContent).toContain('sent as an image');
+      await m.click(m.button('Remove [Image 1]')!);
+      expect(m.sent).toEqual([{ type: 'discard', ids: [id] }]);
+      expect(m.box().value).toBe('');
+      expect(m.container.querySelector('.composer-images')).toBeNull();
+      await m.unmount();
+    });
+
+    it('refuses a type the server does not take, and anything in shell mode', async () => {
+      const u = uploading();
+      const m = await mount({ upload: u.upload });
+      await m.paste({ files: [shot('image/svg+xml')] });
+      expect(m.container.textContent).toContain('Only PNG, JPEG, WebP and GIF');
+      const sh = await mount({ upload: u.upload, session: { mode: 'shell' } });
+      await sh.paste({ files: [shot()] });
+      expect(sh.container.textContent).toContain("Can't attach an image in shell mode.");
+      expect(u.upload).not.toHaveBeenCalled();
+      await m.unmount();
+      await sh.unmount();
+    });
   });
 
   it('parks a large paste as a marker numbered above the history, and sends it beside the text', async () => {

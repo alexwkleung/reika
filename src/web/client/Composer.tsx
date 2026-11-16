@@ -8,7 +8,13 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
 } from 'react';
-import { WIRE_MODES, type ClientMessage, type WireCatalog, type WireState } from '../protocol.js';
+import {
+  MAX_SUBMIT_IMAGES,
+  WIRE_MODES,
+  type ClientMessage,
+  type WireCatalog,
+  type WireState,
+} from '../protocol.js';
 import { isLargePaste, type PastedText } from '../../ui/pastes.js';
 import { isTypingEdge } from './typingedge.js';
 import type { Mode } from '../../types.js';
@@ -20,11 +26,20 @@ import {
   type Completion,
 } from './completion.js';
 import { afterSend, parkPaste, pastesFor } from './composerpastes.js';
+import {
+  chipLabel,
+  imageRefusal,
+  imagesFor,
+  nextImageMarker,
+  stillReading,
+  withoutMarker,
+  type ImageChip,
+} from './composerimages.js';
 import { connectionNotice } from './connection.js';
 import { notRecalling, recallStep, type Recall } from './inputhistory.js';
 import { caretLines, carriesImage, composerKeyAction, IMAGES_UNSUPPORTED } from './keys.js';
 import { PillMenu, type PillOption } from './PillMenu.js';
-import type { SendResult } from './send.js';
+import type { SendResult, UploadResult } from './send.js';
 import './composer.css';
 import { tip } from './Tooltip.js';
 
@@ -34,6 +49,7 @@ import { tip } from './Tooltip.js';
 // opens the server's completion list. A prompt sent while a turn runs is queued by the server.
 
 export type Send = (message: ClientMessage) => Promise<SendResult>;
+export type Upload = (file: Blob) => Promise<UploadResult>;
 
 // The line under the box for a send that did not land.
 export function sendFailure(result: SendResult): string | null {
@@ -50,12 +66,24 @@ export function sendFailure(result: SendResult): string | null {
 }
 
 // The TUI's placeholder, less the image hint until images work here (#979).
-export function placeholderFor(mode: Mode, busy: boolean, locked: boolean): string {
+// `pasteKey` names the image paste on this platform, when images can be attached at all.
+export function placeholderFor(
+  mode: Mode,
+  busy: boolean,
+  locked: boolean,
+  pasteKey: string | null = null,
+): string {
   if (locked) return 'Reload the page to keep going';
   if (busy) return 'Queue a message · Esc stops';
   if (mode === 'shell') return 'Run a shell command';
-  return 'Type / for commands, @ to attach files';
+  const images = pasteKey ? `, ${pasteKey} for images` : '';
+  return `Type / for commands, @ to attach files${images}`;
 }
+
+const PASTE_KEY =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '')
+    ? '⌘V'
+    : 'Ctrl+V';
 
 // Why the pills are off, or null when a switch can go through. The server decides; this only
 // keeps a click that would be refused from looking like it might work.
@@ -93,6 +121,7 @@ function selection(el: HTMLTextAreaElement): { start: number; end: number } {
 
 export function Composer({
   send,
+  upload,
   session,
   catalog,
   history,
@@ -101,6 +130,8 @@ export function Composer({
   restoreLine,
 }: {
   send: Send;
+  // Absent: images are refused with a line saying so, as before uploads existed.
+  upload?: Upload;
   session: WireState | null;
   catalog: WireCatalog | null;
   history: string[];
@@ -116,6 +147,7 @@ export function Composer({
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [parked, setParked] = useState<PastedText[]>([]);
+  const [chips, setChips] = useState<ImageChip[]>([]);
   const [recall, setRecall] = useState<Recall>(notRecalling);
   const [completion, setCompletion] = useState<{ list: Completion; selected: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -199,14 +231,20 @@ export function Composer({
   const sending = useRef(false);
   const submit = async (value: string): Promise<void> => {
     if (sending.current || locked) return;
+    if (stillReading(chips)) {
+      setError('An image is still being read.');
+      return;
+    }
     sending.current = true;
     closeCompletion();
     const pastes = pastesFor(value, parked);
+    const images = imagesFor(value, chips);
     const message: ClientMessage = {
       type: 'submit',
       text: value,
       ...(session ? { mode } : {}),
       ...(pastes.length > 0 ? { pastes } : {}),
+      ...(images.length > 0 ? { images } : {}),
     };
     const result = await send(message).finally(() => {
       sending.current = false;
@@ -221,6 +259,11 @@ export function Composer({
     const left = box.current?.value === value ? '' : (box.current?.value ?? '');
     setText(current => (current === value ? '' : current));
     setParked(p => afterSend(p, pastes, left));
+    // The server took the sent ones; what the box no longer names is let go.
+    const sent = new Set(images.map(i => i.marker));
+    const kept = chips.filter(c => !sent.has(c.marker) && left.includes(c.marker));
+    discard(chips.filter(c => !sent.has(c.marker) && !kept.includes(c)));
+    setChips(kept);
     setRecall(notRecalling);
   };
   const abort = async (): Promise<void> => setError(sendFailure(await send({ type: 'abort' })));
@@ -320,7 +363,7 @@ export function Composer({
     const items = e.clipboardData?.items;
     if (carriesImage(items ? [...items] : null)) {
       e.preventDefault();
-      setError(IMAGES_UNSUPPORTED);
+      addImages([...(e.clipboardData?.files ?? [])], e.currentTarget);
       return;
     }
     const pasted = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');
@@ -333,6 +376,74 @@ export function Composer({
     setParked(nextParked);
     const next = el.value.slice(0, start) + marker + el.value.slice(end);
     replaceText(next, start + marker.length);
+    setRecall(notRecalling);
+  };
+
+  const discard = (gone: ImageChip[]): void => {
+    const ids = gone.flatMap(c => (c.state.kind === 'ready' ? [c.state.id] : []));
+    if (ids.length > 0) void send({ type: 'discard', ids });
+  };
+
+  const removeChip = (marker: string): void => {
+    const chip = chips.find(c => c.marker === marker);
+    if (chip) discard([chip]);
+    setChips(cs => cs.filter(c => c.marker !== marker));
+    setText(t => withoutMarker(t, marker));
+    box.current?.focus();
+  };
+
+  // Each image goes up at once and its marker lands at the caret, as a paste's text would.
+  const addImages = (files: File[], el: HTMLTextAreaElement): void => {
+    if (!upload) {
+      setError(IMAGES_UNSUPPORTED);
+      return;
+    }
+    if (mode === 'shell') {
+      setError("Can't attach an image in shell mode.");
+      return;
+    }
+    const taken: ImageChip[] = [];
+    for (const file of files) {
+      const refusal = imageRefusal(file);
+      if (refusal) {
+        setError(refusal);
+        continue;
+      }
+      if (chips.length + taken.length >= MAX_SUBMIT_IMAGES) {
+        setError(`At most ${MAX_SUBMIT_IMAGES} images per message.`);
+        break;
+      }
+      const marker = nextImageMarker([...chips, ...taken], [el.value, ...history]);
+      taken.push({
+        marker,
+        name: file.name || 'Pasted image',
+        size: file.size,
+        state: { kind: 'reading' },
+      });
+      void upload(file).then(result => {
+        const state: ImageChip['state'] =
+          result.kind === 'ok'
+            ? { kind: 'ready', id: result.upload.id, chars: result.upload.chars }
+            : {
+                kind: 'failed',
+                error: result.kind === 'signed-out' ? 'Signed out' : result.error,
+              };
+        if (state.kind === 'failed') setText(t => withoutMarker(t, marker));
+        setChips(cs => {
+          const live = cs.some(c => c.marker === marker);
+          // Removed while it was read: the server's copy goes too.
+          if (!live && state.kind === 'ready') void send({ type: 'discard', ids: [state.id] });
+          return cs.map(c => (c.marker === marker ? { ...c, state } : c));
+        });
+      });
+    }
+    if (taken.length === 0) return;
+    setChips(cs => [...cs, ...taken]);
+    const { start, end } = selection(el);
+    const before = el.value.slice(0, start);
+    const lead = before === '' || /\s$/.test(before) ? '' : ' ';
+    const inserted = `${lead}${taken.map(c => c.marker).join(' ')} `;
+    replaceText(before + inserted + el.value.slice(end), start + inserted.length);
     setRecall(notRecalling);
   };
 
@@ -420,8 +531,17 @@ export function Composer({
             rows={1}
             value={text}
             disabled={waiting || locked}
-            placeholder={placeholderFor(mode, busy, locked)}
+            placeholder={placeholderFor(mode, busy, locked, upload ? PASTE_KEY : null)}
             onChange={e => {
+              const value = e.target.value;
+              // Deleting a marker drops its image, as in the TUI; a failed one stays until removed.
+              const dropped = chips.filter(
+                c => c.state.kind === 'ready' && !value.includes(c.marker),
+              );
+              if (dropped.length > 0) {
+                discard(dropped);
+                setChips(cs => cs.filter(c => !dropped.includes(c)));
+              }
               if (isTypingEdge(text, e.target.value)) {
                 void send({ type: 'typing', text: e.target.value });
               }
@@ -437,9 +557,42 @@ export function Composer({
               const items = e.dataTransfer?.items;
               if (!carriesImage(items ? [...items] : null)) return;
               e.preventDefault();
-              setError(IMAGES_UNSUPPORTED);
+              addImages([...(e.dataTransfer?.files ?? [])], e.currentTarget);
             }}
           />
+          {chips.length > 0 ? (
+            <ul className="composer-images" aria-label="Attached images">
+              {chips.map(chip => {
+                const { name, detail } = chipLabel(chip);
+                return (
+                  <li
+                    key={chip.marker}
+                    className={`composer-image composer-image-${chip.state.kind}`}
+                  >
+                    <span className="composer-image-marker">{chip.marker}</span>
+                    <span className="composer-image-name">{name}</span>
+                    <span
+                      className="composer-image-detail"
+                      role={chip.state.kind === 'failed' ? 'alert' : undefined}
+                    >
+                      {detail}
+                    </span>
+                    <button
+                      type="button"
+                      className="composer-image-remove"
+                      aria-label={`Remove ${chip.marker}`}
+                      {...tip('Remove', { aria: false })}
+                      onClick={() => removeChip(chip.marker)}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
+                      </svg>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
           <div className="composer-bar">
             <PillMenu
               ariaLabel={`Mode: ${mode}`}
