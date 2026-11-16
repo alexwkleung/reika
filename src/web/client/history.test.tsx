@@ -87,6 +87,8 @@ type Opts = {
   // Null answers as a failed request.
   list?: (m: Extract<ClientMessage, { type: 'sessions' }>) => WireSessionList | null;
   reply?: (m: ClientMessage) => SendResult;
+  // Held open until the test settles it, for what the panel shows while a resume is in flight.
+  hold?: Promise<SendResult>;
 };
 
 async function mount(opts: Opts = {}) {
@@ -99,6 +101,7 @@ async function mount(opts: Opts = {}) {
         reply ? { kind: 'ok', reply } : { kind: 'failed', status: 500, error: 'down' },
       );
     }
+    if (opts.hold) return opts.hold;
     return Promise.resolve(opts.reply?.(m) ?? { kind: 'ok' });
   };
   const container = document.createElement('div');
@@ -155,6 +158,22 @@ describe('History as a drawer', () => {
     expect(h.q('.history-head .history-new')).not.toBeNull();
     // The section label sits on the list it names.
     expect(h.q('.history-heading')?.nextElementSibling?.className).toBe('history-list');
+  });
+
+  it('keeps its rows as drawn while a resume is in flight, and takes no second click', async () => {
+    let settle!: (r: SendResult) => void;
+    const h = await mount({ hold: new Promise<SendResult>(r => (settle = r)) });
+    await h.open();
+    await h.click(h.rows()[1]);
+    // Dimmed for the frame or two a resume takes, every row read as a flicker.
+    expect(h.rows()[1].disabled).toBe(false);
+    expect(h.rows()[1].getAttribute('aria-disabled')).toBe('true');
+    expect(h.q<HTMLButtonElement>('.history-new')!.disabled).toBe(false);
+    expect(h.rows()[1].textContent).toContain('6 msgs');
+    await h.click(h.rows()[1]);
+    await h.click(h.q('.history-new'));
+    expect(h.sent.filter(m => m.type !== 'sessions')).toHaveLength(1);
+    await act(async () => settle({ kind: 'ok' }));
   });
 
   it('opens a row by id in the listed scope and closes', async () => {

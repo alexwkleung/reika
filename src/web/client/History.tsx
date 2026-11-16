@@ -174,7 +174,11 @@ export function History({
     }
   };
 
+  // A resume lands in a frame or two, and dimming every row for it read as a flicker: while one is
+  // in flight the rows look the same and ignore clicks (aria-disabled), and only a block the user
+  // must wait out (a running prompt) dims them.
   const act = async (id: string, message: Parameters<Send>[0]) => {
+    if (pending !== null) return;
     setPending(id);
     setError(null);
     const r = await send(message);
@@ -229,7 +233,8 @@ export function History({
         <button
           type="button"
           className="history-new"
-          disabled={blocked !== null || pending !== null}
+          disabled={blocked !== null}
+          aria-disabled={pending !== null || undefined}
           title={blocked ?? undefined}
           onClick={() => void act('new', { type: 'new' })}
         >
@@ -296,7 +301,8 @@ export function History({
                 type="button"
                 className="history-row"
                 aria-current={isCurrent ? 'true' : undefined}
-                disabled={reason !== null || pending !== null}
+                disabled={reason !== null}
+                aria-disabled={pending !== null || undefined}
                 // A title cut to the row's one line is still there to read.
                 title={reason ?? sessionTitle(entry)}
                 onClick={() => void act(entry.id, { type: 'resume', scope, id: entry.id })}

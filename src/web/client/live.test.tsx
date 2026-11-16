@@ -149,10 +149,15 @@ describe('BusyLine', () => {
 });
 
 describe('ReasoningBlock', () => {
-  it('keeps the whole thought in one window, with blank runs dropped', () => {
-    const html = renderToStaticMarkup(<ReasoningBlock text={'one\n\n\ntwo\nthree'} live />);
+  it('keeps the whole thought in one window, as markdown with its line breaks', () => {
+    const html = renderToStaticMarkup(
+      <ReasoningBlock text={'one\n\n\ntwo\nthree **bold**\n- item'} live />,
+    );
     expect(html).toContain('reasoning-window');
-    expect(text(html)).toBe('Thinkingone\ntwo\nthree');
+    expect(html).toContain(
+      '<p>one</p><p>two\nthree <strong>bold</strong></p><ul><li><span>item</span></li></ul>',
+    );
+    expect(html).not.toContain('**');
   });
 
   it('live, offers no toggle; committed and long, the same window under one', () => {

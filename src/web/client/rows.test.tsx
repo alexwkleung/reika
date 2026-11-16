@@ -55,7 +55,7 @@ describe('assistant rows', () => {
     });
     const t = text(html);
     expect(t.indexOf('Thinking')).toBeLessThan(t.indexOf('Use bold here.'));
-    expect(t).toContain('first\nsecond');
+    expect(html).toContain('<p>first</p><p>second</p>');
     expect(html).toContain('<strong>bold</strong>');
     expect(t).toContain('⏺Read(path="src/a.ts")');
     // An edit's strings are shown by its diff, so the call row hides them.
@@ -69,14 +69,16 @@ describe('assistant rows', () => {
     expect(html).toContain('<details class="reasoning-details">');
     expect(html).toContain('5 lines');
     // The window holds the whole thought; CSS keeps its last rows in view.
-    expect(html).toMatch(/reasoning-tail"><div class="reasoning-text">a\nb\nc\nd\ne</s);
+    expect(html).toMatch(
+      /reasoning-tail"><div class="reasoning-text"><div class="reasoning-md">.*a\nb\nc\nd\ne/s,
+    );
     const short = row({ role: 'assistant', reasoning: 'one line', content: 'x' });
     expect(short).not.toContain('<details');
   });
 
   it('carries a thought the endpoint cut into content back into Thinking', () => {
     const html = row({ role: 'assistant', reasoning: 'quoting `--reasoning', content: '` flag.' });
-    expect(text(html)).toContain('quoting `--reasoning` flag.');
+    expect(html).toContain('quoting <code class="md-inline-code">--reasoning</code> flag.');
     expect(html).not.toContain('class="prose"');
   });
 
