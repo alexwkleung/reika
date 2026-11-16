@@ -2,6 +2,7 @@ import type { Theme } from 'vitepress';
 import DefaultTheme from 'vitepress/theme';
 import { h } from 'vue';
 import BlogIndex from './BlogIndex.vue';
+import DemoToggle from './DemoToggle.vue';
 import Landing from './Landing.vue';
 import PostMeta from './PostMeta.vue';
 import './style.css';
@@ -15,5 +16,6 @@ export default {
   enhanceApp({ app }) {
     app.component('Landing', Landing);
     app.component('BlogIndex', BlogIndex);
+    app.component('DemoToggle', DemoToggle);
   },
 } satisfies Theme;
