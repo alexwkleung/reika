@@ -10,8 +10,9 @@ export function savedAgo(savedAt: string, now: number): string {
   const s = Math.max(0, Math.floor((now - t) / 1000));
   if (s < 60) return 'just now';
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86_400) return `${Math.floor(s / 3600)} h ago`;
-  if (s < 7 * 86_400) return `${Math.floor(s / 86_400)} d ago`;
+  // A one-letter unit sits against its number; `min` is a word and keeps its space.
+  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 7 * 86_400) return `${Math.floor(s / 86_400)}d ago`;
   return savedAt.slice(0, 10);
 }
 

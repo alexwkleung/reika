@@ -78,22 +78,64 @@
 .reasoning-details > summary::-webkit-details-marker {
   display: none;
 }
-.reasoning-details > summary::after {
-  content: ' ▸';
-  color: var(--reika-muted);
+/* The toggle reads as one: a chevron and the line count beside the label, both brightening when
+   the summary or the preview under it is hovered. */
+.reasoning-details > summary {
+  /* Baselines, not centres: the bold label and the smaller chip text share no centre line. */
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  width: fit-content;
 }
-.reasoning-details[open] > summary::after {
-  content: ' ▾';
-}
-.reasoning-more {
+.reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  padding: 0 0.25em 0 0.45em;
+  border-radius: 999px;
   color: var(--reika-muted);
   font-size: 0.9em;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+.reasoning-chevron {
+  width: 0.9em;
+  height: 0.9em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* The icon centres on the line box, a little above the text's x-height; the down caret is half
+     as tall as the right one and reads higher still, so it drops a little more. */
+  transform: translateY(0.06em);
+  transition: transform 120ms ease;
+}
+.reasoning-details[open] .reasoning-chevron {
+  transform: translateY(0.12em) rotate(90deg);
+}
+.reasoning-details > summary:hover .reasoning-toggle,
+.reasoning-details:has(~ .reasoning-tail-toggle:hover) .reasoning-toggle,
+.reasoning-details > summary:focus-visible .reasoning-toggle {
+  color: var(--reika-text);
+  background: var(--reika-control-bg);
+}
+.reasoning-tail-toggle {
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-chevron,
+  .reasoning-toggle {
+    transition: none;
+  }
 }
 .reasoning-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.reasoning-details[open] ~ .reasoning-tail {
+.reasoning-details[open] ~ .reasoning-tail,
+.reasoning-details[open] ~ .reasoning-tail-toggle {
   display: none;
 }
 /* Four rows, filled from the bottom; once full, the oldest row fades at the top. */

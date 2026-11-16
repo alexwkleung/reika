@@ -68,20 +68,42 @@ export function ReasoningBlock({
   const lines = shown.split('\n');
   const label = <span className="reasoning-label">Thinking</span>;
   const long = !live && lines.length > REASONING_TAIL_LINES;
+  const details = useRef<HTMLDetailsElement>(null);
   return (
     <div className={`reasoning reasoning--${tone}${live ? ' reasoning--live' : ''}`}>
       {long ? (
-        <details className="reasoning-details">
+        <details className="reasoning-details" ref={details}>
           <summary>
             {label}
-            <span className="reasoning-more">{` · ${lines.length} lines`}</span>
+            <span className="reasoning-toggle">
+              {`${lines.length} lines`}
+              <svg className="reasoning-chevron" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M6 4l4 4-4 4" />
+              </svg>
+            </span>
           </summary>
           <div className="reasoning-text">{shown}</div>
         </details>
       ) : (
         <div className="reasoning-head">{label}</div>
       )}
-      <ReasoningWindow text={shown} className="reasoning-tail" />
+      {long ? (
+        // The faded preview opens the whole thought too: it is what the eye lands on. The summary
+        // above stays the keyboard's way in, so this is a pointer shortcut only.
+        <div
+          className="reasoning-tail-toggle"
+          title="Show all"
+          onClick={() => {
+            if (details.current && window.getSelection?.()?.isCollapsed !== false) {
+              details.current.open = true;
+            }
+          }}
+        >
+          <ReasoningWindow text={shown} className="reasoning-tail" />
+        </div>
+      ) : (
+        <ReasoningWindow text={shown} className="reasoning-tail" />
+      )}
     </div>
   );
 }

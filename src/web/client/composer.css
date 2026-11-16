@@ -125,11 +125,12 @@
 .composer-card {
   display: flex;
   flex-direction: column;
-  gap: 0.625rem;
+  gap: 1rem;
   padding: 0.75rem 0.75rem 0.625rem 1rem;
   background: var(--reika-code-bg);
   border: 1px solid var(--reika-rule);
   border-radius: 14px;
+  cursor: text;
   transition: border-color 120ms ease;
 }
 .composer-card:focus-within {
@@ -162,7 +163,9 @@
   cursor: not-allowed;
 }
 
+/* The bar's own gaps take a press for the box too, but read as the box's chrome. */
 .composer-bar {
+  cursor: default;
   display: flex;
   align-items: center;
   gap: 0.375rem;
