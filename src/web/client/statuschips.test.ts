@@ -169,4 +169,15 @@ describe('StatusLine', () => {
     expect(pr({ number: 12, url: 'javascript:alert(1)' })).toMatchObject({ url: null });
     expect(strip(state({ pr: { number: 3 } })).map(i => i.kind)).toEqual(['pr', 'path']);
   });
+
+  it('links the PR number and not its label, as the TUI does', () => {
+    const html = (pr: WireState['pr']) =>
+      renderToStaticMarkup(createElement(StatusLine, { session: state({ pr }), stream: 'open' }));
+    expect(
+      html({ number: 12, url: 'https://github.com/octocat/app/pull/12', state: 'draft' }),
+    ).toContain(
+      '<span class="status-pr">PR <a href="https://github.com/octocat/app/pull/12" target="_blank" rel="noopener noreferrer" title="https://github.com/octocat/app/pull/12">#12</a><span class="status-pr-state status-pr-state--draft"> draft</span></span>',
+    );
+    expect(html({ number: 12 })).toContain('<span class="status-pr">PR #12</span>');
+  });
 });
