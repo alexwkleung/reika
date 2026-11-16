@@ -147,15 +147,15 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 ## Web tools
 
-| Key                           | Default | What                                                                                                      |
-| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `REIKA_SEARXNG_URL`           | _unset_ | SearXNG instance URL (self-hosted, local-first); enables the `search` tool when CDP search is not in use. |
-| `REIKA_CDP_SEARCH`            | _auto_  | Drive a real Chrome over CDP for `search`.                                                                |
-| `REIKA_CDP_PORT`              | `9222`  | Chrome remote-debugging port for the above.                                                               |
-| `REIKA_CHROME_PATH`           | _unset_ | Override Chrome/Chromium binary discovery for CDP search                                                  |
-| `REIKA_PASTE_FETCH`           | `1`     | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each).                  |
-| `REIKA_MAX_SEARCHES_PER_TURN` | `3`     | Cap `search` calls per user turn (prevents runaway / quota burn)                                          |
-| `REIKA_MAX_FETCHES_PER_TURN`  | `5`     | Cap `fetch_url` calls per user turn                                                                       |
+| Key                           | Default | What                                                                                                       |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `REIKA_SEARXNG_URL`           | _unset_ | SearXNG instance URL (self-hosted, local-first); enables the `search` tool when CDP search is not in use.  |
+| `REIKA_CDP_SEARCH`            | _auto_  | Drive a real Chrome over CDP for `search`.                                                                 |
+| `REIKA_CDP_PORT`              | `9222`  | Chrome remote-debugging port for the above.                                                                |
+| `REIKA_CHROME_PATH`           | _unset_ | The Chrome/Chromium binary for CDP search and `reika web --window`, instead of a search of the usual paths |
+| `REIKA_PASTE_FETCH`           | `1`     | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each).                   |
+| `REIKA_MAX_SEARCHES_PER_TURN` | `3`     | Cap `search` calls per user turn (prevents runaway / quota burn)                                           |
+| `REIKA_MAX_FETCHES_PER_TURN`  | `5`     | Cap `fetch_url` calls per user turn                                                                        |
 
 - **`REIKA_SEARXNG_URL`** — `fetch_url` registers regardless
 - **`REIKA_CDP_SEARCH`** — drives a real Chrome over CDP for `search`; unset is **auto**. Three
@@ -373,11 +373,12 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 ## Terminal
 
-| Key                  | Default | What                                                                                                                                                                                                           |
-| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_SYNC_OUTPUT`  | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                                                          |
-| `REIKA_INPUT_FLOOR`  | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
-| `REIKA_BASIC_GLYPHS` | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
+| Key                   | Default | What                                                                                                                                                                                                           |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REIKA_SYNC_OUTPUT`   | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                                                          |
+| `REIKA_INPUT_FLOOR`   | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
+| `REIKA_BASIC_GLYPHS`  | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
+| `REIKA_WORKING_WORDS` | `1`     | Rotates garden and perfumery verbs on the busy line ("Blooming…", "Steeping…"); `0` shows "Working". The web page follows it too.                                                                              |
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame as erase-then-redraw, three separate writes when a
   message commits to scrollback, and a process swapped out under memory pressure (a large local
