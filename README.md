@@ -22,9 +22,11 @@
 
 <sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
 
-Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck. It also runs on 4B-class models: they handle short, well-scoped tasks, but expect them to lose the thread on multi-step work. It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
+Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck.
 
-Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and below 7B rarely got far.
+It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
+
+Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and 4B-class models ran end to end but rarely got past short tasks.
 
 Reika is pre-1.0, so commands, settings and behavior can still change between releases.
 
