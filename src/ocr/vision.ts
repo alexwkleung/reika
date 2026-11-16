@@ -26,6 +26,12 @@ export type VisionSettings = { model: string; baseURL: string; apiKey: string };
 // Data URLs need a MIME type, and the bytes are the only reliable source of one: clipboard
 // captures are always PNG, but a dragged-in file can be anything the mention regex admits.
 export function sniffImageMime(bytes: Uint8Array): string {
+  return sniffKnownImageMime(bytes) ?? 'image/png';
+}
+
+// Null for bytes that are none of the formats below: an upload is refused on that rather than
+// sent on as a PNG it is not (#979).
+export function sniffKnownImageMime(bytes: Uint8Array): string | null {
   const b = bytes;
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47)
     return 'image/png';
@@ -51,7 +57,7 @@ export function sniffImageMime(bytes: Uint8Array): string {
       (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0x00 && b[3] === 0x2a))
   )
     return 'image/tiff';
-  return 'image/png';
+  return null;
 }
 
 // The request body, split out so tests can pin the wire shape without a server: OpenAI's

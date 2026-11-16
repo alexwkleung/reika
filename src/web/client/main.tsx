@@ -8,7 +8,7 @@ import { openEventStream } from './eventstream.js';
 import { frameOrTimer } from './framebatch.js';
 import { createHolder } from './holder.js';
 import { browserTokenStore, signIn } from './link.js';
-import { sendMessage, type SendResult } from './send.js';
+import { sendMessage, uploadImage, type SendResult, type UploadResult } from './send.js';
 import { foldEvent, initialClientState, type ClientState } from './store.js';
 
 // Wiring only: sign in, stream, fold into the holder, render.
@@ -23,6 +23,9 @@ const schedule = frameOrTimer(requestAnimationFrame, (callback, ms) => setTimeou
 let token: string | null = null;
 const send = (message: ClientMessage): Promise<SendResult> =>
   token ? sendMessage(token, message, browserFetch) : Promise.resolve({ kind: 'signed-out' });
+
+const upload = (file: Blob): Promise<UploadResult> =>
+  token ? uploadImage(token, file, browserFetch) : Promise.resolve({ kind: 'signed-out' });
 
 async function start(): Promise<void> {
   const result = await signIn({
@@ -54,7 +57,7 @@ async function start(): Promise<void> {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App state={state} connection={connection} schedule={schedule} send={send} />
+    <App state={state} connection={connection} schedule={schedule} send={send} upload={upload} />
   </StrictMode>,
 );
 void start();

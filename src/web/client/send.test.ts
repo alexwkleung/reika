@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { sendMessage } from './send.js';
+import { sendMessage, uploadImage } from './send.js';
 
 function answering(response: Response | Error) {
   return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
@@ -94,5 +94,38 @@ describe('sendMessage', () => {
     expect(
       await sendMessage('t', { type: 'abort' }, answering(new Error('offline')) as typeof fetch),
     ).toEqual({ kind: 'failed', status: null, error: 'offline' });
+  });
+});
+
+describe('uploadImage (#979)', () => {
+  it('posts the raw bytes under the image type, with the token in a header', async () => {
+    const fetchFn = answering(json(200, { ok: true, reply: { id: 'u1', chars: 3 } }));
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    expect(await uploadImage('tok', file, fetchFn as typeof fetch)).toEqual({
+      kind: 'ok',
+      upload: { id: 'u1', chars: 3 },
+    });
+    const [url, init] = fetchFn.mock.calls[0]!;
+    expect(url).toBe('/upload');
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Authorization')).toBe('Bearer tok');
+    expect(headers.get('Content-Type')).toBe('image/png');
+    expect(init?.body).toBe(file);
+  });
+
+  it('reads a refusal, a lost sign-in and a network failure', async () => {
+    const png = new Blob([], { type: 'image/png' });
+    const refused = answering(json(422, { error: 'No text found in the pasted image.' }));
+    expect(await uploadImage('tok', png, refused as typeof fetch)).toEqual({
+      kind: 'failed',
+      error: 'No text found in the pasted image.',
+    });
+    const out = answering(new Response('unauthorized', { status: 401 }));
+    expect(await uploadImage('tok', png, out as typeof fetch)).toEqual({ kind: 'signed-out' });
+    const down = answering(new Error('offline'));
+    expect(await uploadImage('tok', png, down as typeof fetch)).toEqual({
+      kind: 'failed',
+      error: 'offline',
+    });
   });
 });

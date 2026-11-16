@@ -1,4 +1,4 @@
-import type { ClientMessage, WireCompletion, WireSessionList } from '../protocol.js';
+import type { ClientMessage, WireCompletion, WireSessionList, WireUpload } from '../protocol.js';
 
 // POST /message. A 409 is its own result: the dialog was answered elsewhere or is gone, which a
 // screen shows differently from a failure.
@@ -45,4 +45,34 @@ export async function sendMessage(
   const error = await errorText(res);
   if (res.status === 409) return { kind: 'conflict', error };
   return { kind: 'failed', status: res.status, error };
+}
+
+export type UploadResult =
+  | { kind: 'ok'; upload: WireUpload }
+  | { kind: 'signed-out' }
+  | { kind: 'failed'; error: string };
+
+// POST /upload: the image's own bytes under its own type (#979). The answer is an id the submit
+// names; the text read from it stays on the server.
+export async function uploadImage(
+  token: string,
+  file: Blob,
+  fetchFn: typeof fetch = (input, init) => globalThis.fetch(input, init),
+): Promise<UploadResult> {
+  let res: Response;
+  try {
+    res = await fetchFn('/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': file.type },
+      body: file,
+    });
+  } catch (e) {
+    return { kind: 'failed', error: (e as Error).message };
+  }
+  if (res.ok) {
+    const body = (await res.json().catch(() => null)) as { reply?: WireUpload } | null;
+    return body?.reply ? { kind: 'ok', upload: body.reply } : { kind: 'failed', error: 'no reply' };
+  }
+  if (res.status === 401) return { kind: 'signed-out' };
+  return { kind: 'failed', error: await errorText(res) };
 }
