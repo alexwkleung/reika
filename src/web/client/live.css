@@ -69,7 +69,9 @@
   width: 1ch;
 }
 /* The TUI's glow: the label rests at a dim tint of its state's colour and a brighter band sweeps
-   across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. */
+   across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. The
+   page sets the real gradient inline from ui/shimmer.ts (sweepGradient, LiveTurn.tsx); this one
+   stands only where the state's colour cannot be read. */
 .busy-label {
   --busy-base: color-mix(in oklab, var(--busy-tone) 82%, var(--reika-page-bg));
   --busy-peak: color-mix(in oklab, var(--busy-tone) 65%, white);
@@ -112,7 +114,7 @@
 @media (prefers-reduced-motion: reduce) {
   .busy-label {
     animation: none;
-    background: none;
+    background: none !important;
     color: var(--busy-tone);
   }
 }

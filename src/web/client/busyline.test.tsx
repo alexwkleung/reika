@@ -44,3 +44,19 @@ describe('BusyLine sweep', () => {
     expect(b.span()).not.toBe(first);
   });
 });
+
+describe('sweepGradient', () => {
+  it('glows with the TUI’s colours: its base outside the band and its ramp one character apart', async () => {
+    const { sweepGradient } = await import('./LiveTurn.js');
+    const { shimmerBase, shimmerRamp } = await import('../../ui/shimmer.js');
+    const tone = '#d68cd6';
+    const g = sweepGradient(tone, 10);
+    const ramp = shimmerRamp(tone);
+    // One character is 1/30 of a gradient three labels wide; the tip sits at its middle.
+    expect(g).toContain(`${ramp[2]} 50.000%`);
+    expect(g).toContain(`${ramp[0]} 43.333%`);
+    expect(g).toContain(`${ramp[4]} 56.667%`);
+    expect(g.startsWith(`linear-gradient(90deg, ${shimmerBase(tone)} 0,`)).toBe(true);
+    expect(g.endsWith(`${shimmerBase(tone)} 100%)`)).toBe(true);
+  });
+});

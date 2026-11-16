@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
 import { planWindow } from '../../ui/planwindow.js';
 import { foldedLiveFields } from '../../ui/reasoningfold.js';
+import { shimmerBase, shimmerRamp } from '../../ui/shimmer.js';
 import {
   BRAILLE_SPINNER,
   nextWordIndex,
@@ -84,17 +85,53 @@ export function BusyLine({
         // the glow never crossed the line.
         key={text === null ? label : tone}
         label={label}
+        tone={tone}
       />
     </div>
   );
 }
 
+// The TUI's glow as a gradient: its colours (ui/shimmer.ts, the same resting and peak lightness
+// for every state) and its band, the ramp's five stops one character apart, on the dim base. The
+// gradient is three labels wide (live.css slides it across), so one character is 1/(3·chars) of it,
+// and the band is centred on its middle.
+export function sweepGradient(tone: string, chars: number): string {
+  const ramp = shimmerRamp(tone);
+  const base = shimmerBase(tone);
+  const step = 100 / (3 * Math.max(1, chars));
+  const half = (ramp.length - 1) / 2;
+  const at = (offset: number) => `${(50 + offset * step).toFixed(3)}%`;
+  const stops = [
+    `${base} 0`,
+    `${base} ${at(-half - 1)}`,
+    ...ramp.map((c, i) => `${c} ${at(i - half)}`),
+    `${base} ${at(half + 1)}`,
+    `${base} 100%`,
+  ];
+  return `linear-gradient(90deg, ${stops.join(', ')})`;
+}
+
+// The state's colour as app.css defines it; null outside a browser (a render test), where the
+// stylesheet's own gradient stands.
+function toneHex(tone: string): string | null {
+  if (typeof getComputedStyle !== 'function' || !document.documentElement) return null;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(`--reika-${tone}`);
+  return /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : null;
+}
+
 // The sweep's pace is set from the label it opened on: re-timed as a count changes length, the
-// running animation would jump to another point of its cycle.
-function SweepLabel({ label }: { label: string }) {
+// running animation would jump to another point of its cycle. The band's width is set then too.
+function SweepLabel({ label, tone }: { label: string; tone: string }) {
   const [sweepMs] = useState(() => (label.length + SHIMMER_PAUSE) * SHIMMER_STEP * TICK_MS);
+  const [glow] = useState(() => {
+    const hex = toneHex(tone);
+    return hex ? sweepGradient(hex, label.length) : null;
+  });
   return (
-    <span className="busy-label" style={{ animationDuration: `${sweepMs}ms` }}>
+    <span
+      className="busy-label"
+      style={{ animationDuration: `${sweepMs}ms`, ...(glow ? { backgroundImage: glow } : {}) }}
+    >
       {label}
     </span>
   );

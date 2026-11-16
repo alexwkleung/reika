@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lightness, shimmerBase, shimmerRamp } from './Working.js';
+import { lightness, shimmerBase, shimmerRamp } from './shimmer.js';
 import { theme } from './theme.js';
 
 // The label carries the spinner's hue (#349): a hex accent keeps its channel ratios across the
