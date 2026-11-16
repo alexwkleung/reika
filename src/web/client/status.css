@@ -11,6 +11,16 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  /* Two items: the group and the folder. On one line the folder ends at the right; alone on its
+     own line it starts at the left, where the eye goes on to read it. */
+  justify-content: space-between;
+  gap: 0.25rem 1.125rem;
+  min-width: 0;
+}
+.status-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.25rem 1.125rem;
   min-width: 0;
 }
@@ -73,7 +83,6 @@
   color: var(--reika-warning);
 }
 .status-path {
-  margin-left: auto;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -83,12 +92,6 @@
   /* Monospace runs wide for its size, so a step under the strip's text matches it by eye. */
   font-size: 0.84375rem;
   color: var(--reika-muted);
-}
-/* At phone width the folder sits on its own line, so it starts at the left like the rest. */
-@media (max-width: 480px) {
-  .status-path {
-    margin-left: 0;
-  }
 }
 .status-error {
   color: var(--reika-error);
