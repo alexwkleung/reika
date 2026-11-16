@@ -16,7 +16,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - `/new` (and New conversation in `reika web`) keeps the model you are on instead of switching back
   to the default profile. It still resets the conversation, tokens and mode, and `REIKA_MODE_MODELS`
-  applies over the kept model again (#PR).
+  applies over the kept model again (#1033).
 - `pnpm run install:global` now installs a copy of the checkout instead of a link to it. A linked
   install showed the version of whatever branch was checked out and ran whatever was last built, so
   switching branches or building elsewhere silently changed the installed `reika`. Run
