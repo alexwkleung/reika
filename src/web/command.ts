@@ -71,7 +71,9 @@ export type WebIo = {
 // --window: how long the window may take to sign in before the terminal offers a link instead,
 // and how long no page may be connected before reika stops. A reload reconnects well inside the
 // second; Chrome on macOS outlives its last window, so the page, not the process, says it closed.
-export const WINDOW_TIMINGS = { signInMs: 20_000, pageGoneMs: 5_000 };
+// `pageGoneMs` outlasts the page's longest reconnect wait (MAX_BACKOFF_MS in client/eventstream.ts,
+// pinned by a test), or a slow reconnect would read as the window closing and stop reika.
+export const WINDOW_TIMINGS = { signInMs: 20_000, pageGoneMs: 15_000 };
 
 export type WebHandle = {
   url: string;
