@@ -306,9 +306,9 @@ export function History({
                   {entry.chat ? <span className="history-tag">chat</span> : null}
                   {isCurrent ? <span className="history-tag">current</span> : null}
                 </span>
-                <span className="history-meta">
-                  {pending === entry.id ? 'Opening…' : sessionMeta(entry, now)}
-                </span>
+                {/* No "Opening…" in its place: a resume lands in a moment, and the swap read as a
+                    flicker. The disabled rows already say something is under way. */}
+                <span className="history-meta">{sessionMeta(entry, now)}</span>
               </button>
             </li>
           );
