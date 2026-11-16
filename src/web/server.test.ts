@@ -21,8 +21,11 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
   let uploadResult: UploadResult = { ok: true, reply: { id: 'u1', chars: 12 } };
   let refusal: Extract<UploadResult, { ok: false }> | null = null;
   const bridge: WebBridge = {
-    uploadRefusal: () => refusal,
-    async upload(bytes, type) {
+    // Like the real bridge: a refusal is answered before the body is read.
+    async upload(body, type) {
+      if (refusal) return refusal;
+      const bytes = typeof body === 'function' ? await body() : body;
+      if (bytes === 'too-large') return { ok: false, error: 'payload too large', status: 413 };
       uploaded.push({ bytes, type });
       return uploadResult;
     },

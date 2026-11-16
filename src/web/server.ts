@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { protectLoopbackPort } from '../tools/_sandbox.js';
 import type { WebBridge } from './bridge.js';
 import { MAX_IMAGE_BYTES, parseClientMessage, UPLOAD_TYPES, type ServerEvent } from './protocol.js';
 
@@ -8,6 +9,7 @@ import { MAX_IMAGE_BYTES, parseClientMessage, UPLOAD_TYPES, type ServerEvent } f
 // messages in over POST. Whoever passes these checks can drive the agent, so each one is a rule.
 
 export const MAX_STREAMS = 32;
+export const MAX_OTHER_CONNECTIONS = 32;
 export const MAX_STREAM_BUFFER_BYTES = 8 * 1024 * 1024;
 export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export const DEFAULT_HEARTBEAT_MS = 15_000;
@@ -360,18 +362,9 @@ export async function startWebServer(
       sendText(req, res, 413, 'payload too large');
       return;
     }
-    // Before the read: a refused upload must not buffer its bytes first.
-    const refused = bridge.uploadRefusal();
-    if (refused) {
-      sendJson(req, res, refused.status, { error: refused.error });
-      return;
-    }
-    const body = await readBody(req, MAX_IMAGE_BYTES);
-    if (body === 'too-large') {
-      sendText(req, res, 413, 'payload too large');
-      return;
-    }
-    const result = await bridge.upload(body, mediaType);
+    // The bridge reads the body only once it has given this upload the one read slot, so parallel
+    // uploads are refused before any of them buffers its bytes.
+    const result = await bridge.upload(() => readBody(req, MAX_IMAGE_BYTES), mediaType);
     // The tab that sent it is gone and will never name the id: nobody else can.
     if (result.ok && (res.destroyed || req.socket.destroyed)) {
       await bridge.handle({ type: 'discard', ids: [result.reply.id] });
@@ -488,6 +481,9 @@ export async function startWebServer(
       }
     });
   });
+  // Streams have their own cap; this bounds everything else, a process holding open `/session`
+  // bodies included.
+  server.maxConnections = MAX_STREAMS + MAX_OTHER_CONNECTIONS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   server.on('clientError', (_err, socket) => socket.destroy());
@@ -500,6 +496,9 @@ export async function startWebServer(
     });
   });
   port = (server.address() as AddressInfo).port;
+  // A sandboxed command must not reach this server, whose token it could read off the browser's
+  // profile on disk.
+  const unprotect = protectLoopbackPort(port);
 
   return {
     port,
@@ -512,6 +511,7 @@ export async function startWebServer(
           stream.stop();
           stream.res.end();
         }
+        unprotect();
         server.close(() => resolve());
         server.closeAllConnections();
       }),
