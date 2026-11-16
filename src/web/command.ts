@@ -178,8 +178,13 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
         await server?.close();
         bridge.close();
         const closingWindow = win?.close().catch(() => {});
-        if (controller.abort()) await waitUntilNotBusy(controller);
-        await controller.saveNow();
+        // stop, not abort: a line still asking its questions or fetching its links is not running
+        // yet, and would start its turn during the save below.
+        const running = controller.status === 'busy';
+        controller.stop();
+        if (running) await waitUntilNotBusy(controller);
+        // A failed save must not leave the MCP servers running.
+        await controller.saveNow().catch(() => {});
         await session!.mcp.close();
         await closingWindow;
       } finally {
