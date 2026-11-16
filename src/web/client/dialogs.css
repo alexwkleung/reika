@@ -133,7 +133,7 @@
   font-size: 0.875rem;
   cursor: pointer;
 }
-.dialog-button:hover:not(:disabled) {
+.dialog-button:hover:not(:disabled):not(:focus) {
   border-color: var(--reika-rule-strong);
 }
 .dialog-button--primary {
@@ -160,9 +160,11 @@
   color: var(--reika-muted);
 }
 /* Focus is the border itself plus a lighter fill: nothing outside the box, so a focused control
-   is its neighbours' size, and no thick inner ring that makes it read as smaller. */
-.dialog-button:focus-visible,
-.dialog-row:focus-visible,
+   is its neighbours' size, and no thick inner ring that makes it read as smaller. :focus, not
+   :focus-visible, on the choices: hovering one focuses it (useFocusKeys), and the accent must
+   follow the pointer there, since Enter answers whatever holds it. */
+.dialog-button:focus,
+.dialog-row:focus,
 .dialog-input:focus-visible {
   outline: none;
   border-color: var(--reika-accent);
@@ -223,8 +225,7 @@
   text-align: left;
   cursor: pointer;
 }
-.dialog-row:hover:not(:disabled),
-.dialog-row:focus-visible {
+.dialog-row:hover:not(:disabled):not(:focus) {
   background: var(--reika-control-bg);
   border-color: var(--reika-control-border);
 }

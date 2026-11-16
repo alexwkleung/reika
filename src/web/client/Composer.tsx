@@ -108,11 +108,15 @@ export function modelOptions(catalog: WireCatalog | null): PillOption[] {
   }));
 }
 
-// Grows with its content up to the CSS max-height, then scrolls.
+// Grows with its content up to the CSS max-height, then scrolls. The scrollbar only exists past
+// that height: a box that fits its text shows none, even for a frame where a new placeholder or
+// width has not been fitted yet.
 function fitHeight(el: HTMLTextAreaElement | null): void {
   if (!el) return;
   el.style.height = 'auto';
-  el.style.height = `${el.scrollHeight}px`;
+  const full = el.scrollHeight;
+  el.style.height = `${full}px`;
+  el.style.overflowY = full > el.clientHeight + 1 ? 'auto' : 'hidden';
 }
 
 function selection(el: HTMLTextAreaElement): { start: number; end: number } {
@@ -203,6 +207,22 @@ export function Composer({
     }
     caret.current = null;
   }, [text]);
+  // The placeholder changes with the turn ("Queue a message · Esc stops") and may wrap differently,
+  // and a narrower window rewraps the text: both change the height the box needs.
+  const placeholder = placeholderFor(mode, busy, locked, upload ? PASTE_KEY : null);
+  useLayoutEffect(() => fitHeight(box.current), [placeholder]);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let width = el.clientWidth;
+    const watch = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitHeight(el);
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
   // On load, and again when a dialog closes and hands the box back.
   useEffect(() => {
     if (!waiting && !locked) box.current?.focus();
@@ -564,7 +584,7 @@ export function Composer({
             rows={1}
             value={text}
             disabled={waiting || locked}
-            placeholder={placeholderFor(mode, busy, locked, upload ? PASTE_KEY : null)}
+            placeholder={placeholder}
             onChange={e => {
               const value = e.target.value;
               // Deleting a marker drops its image, as in the TUI; a failed one stays until removed.

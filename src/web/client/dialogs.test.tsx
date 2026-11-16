@@ -219,6 +219,40 @@ describe('approval', () => {
     }
   });
 
+  it('the arrows step between the buttons and a pointer move focuses one; neither answers', async () => {
+    const focused: string[] = [];
+    const proto = window.HTMLElement.prototype as { focus: () => void };
+    const original = proto.focus;
+    proto.focus = function (this: HTMLElement) {
+      focused.push(this.textContent ?? '');
+    };
+    const move = (target: EventTarget, moved: boolean) =>
+      act(async () => {
+        const e = new window.Event('mousemove', { bubbles: true });
+        Object.defineProperty(e, 'movementX', { value: moved ? 3 : 0 });
+        Object.defineProperty(e, 'movementY', { value: 0 });
+        target.dispatchEvent(e);
+      });
+    try {
+      const m = await mount(approval);
+      focused.length = 0;
+      await m.key('ArrowRight', m.button('Yes'));
+      await m.key('ArrowLeft', m.button('No'));
+      await m.key('ArrowRight', m.button('Always'));
+      await m.key('ArrowLeft', m.container.querySelector('input')!);
+      expect(focused).toEqual(['No2', 'Yes1', 'Always this session3']);
+      focused.length = 0;
+      // A dialog opening under a resting pointer reports no movement, and must not move focus.
+      await move(m.button('Always'), false);
+      await move(m.button('No'), true);
+      expect(focused).toEqual(['No2']);
+      expect(m.sent).toEqual([]);
+      await m.unmount();
+    } finally {
+      proto.focus = original;
+    }
+  });
+
   it('the buttons run in the TUI order: Yes, No, Always', async () => {
     const m = await mount(approval);
     const labels = [...m.container.querySelectorAll('.dialog-actions button')].map(

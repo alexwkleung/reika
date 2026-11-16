@@ -206,16 +206,22 @@
   margin-top: 0.6em;
 }
 
+/* Baseline, not centre: a call's marker shares its line's baseline, so the dot sits at the same
+   height over the text as there (and in the TUI). Centred in the line box it rode 1.5px high, the
+   prose's 15px text sitting lower in its line than the 13.2px mono a call's does. */
 .prose {
   display: flex;
-  gap: 0.55em;
+  align-items: baseline;
   min-width: 0;
 }
+/* The call marker's box exactly (.call-marker): its font, size and column, so the two glyphs share
+   an x and the prose starts where a call's name does. */
 .prose-marker {
   color: var(--reika-secondary);
   flex: none;
-  font-size: 0.8em;
-  line-height: 1.95;
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  width: 1.4em;
 }
 .prose > .md {
   min-width: 0;

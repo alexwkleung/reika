@@ -50,16 +50,54 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
 }
 
+function dialogChoices(): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>('.dialog [data-dialog-n]')].filter(
+    b => !b.disabled,
+  );
+}
+
+// The arrow that steps from the focused choice, or null when focus is not on one.
+function arrowStep(key: string, choices: HTMLButtonElement[], from: EventTarget | null) {
+  const step =
+    key === 'ArrowLeft' || key === 'ArrowUp'
+      ? -1
+      : key === 'ArrowRight' || key === 'ArrowDown'
+        ? 1
+        : 0;
+  const at = choices.indexOf(from as HTMLButtonElement);
+  if (step === 0 || at < 0) return null;
+  return choices[Math.min(choices.length - 1, Math.max(0, at + step))]!;
+}
+
 // Digits (and a dialog's own letters) move focus to that numbered button, from anywhere but a
 // text field; Enter or Space then answers. As in the TUI, a key that picks a row never answers:
-// one stray `2` on an approval would otherwise turn auto-approve on for the session.
+// one stray `2` on an approval would otherwise turn auto-approve on for the session. The arrows
+// step between the choices, and the pointer focuses the one it moves onto, so one accent marks
+// what Enter would answer.
 function useFocusKeys(count: number, disabled: boolean, letters: Record<string, number> = {}) {
   const latest = useRef(letters);
   latest.current = letters;
   useEffect(() => {
     if (disabled) return;
+    // A real move only: a dialog opening under a resting pointer must not move focus off the first
+    // choice onto, say, "Always this session". Nor is a field being typed in robbed of focus.
+    const onMove = (e: globalThis.MouseEvent) => {
+      if (e.movementX === 0 && e.movementY === 0) return;
+      if (isTextField(document.activeElement)) return;
+      const target = (e.target as Element | null)?.closest?.<HTMLButtonElement>(
+        '.dialog [data-dialog-n]',
+      );
+      if (!target || target.disabled) return;
+      if (document.activeElement !== target) target.focus({ preventScroll: true });
+    };
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const next = arrowStep(e.key, dialogChoices(), e.target);
+      if (next) {
+        e.preventDefault();
+        next.focus();
+        return;
+      }
       const inField = isTextField(e.target);
       const index =
         digitPick(e.key, inField, count) ?? (inField ? null : latest.current[e.key.toLowerCase()]);
@@ -72,7 +110,11 @@ function useFocusKeys(count: number, disabled: boolean, letters: Record<string, 
       target.focus();
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    document.addEventListener('mousemove', onMove);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousemove', onMove);
+    };
   }, [count, disabled]);
 }
 
