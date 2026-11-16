@@ -1,6 +1,14 @@
 import { MCP_TOOL_PREFIX, type McpServerConfig } from '../mcp/config.js';
 import type { PromptProgress } from '../types.js';
 
+// Args whose values are already shown in full elsewhere (the diff view) and only bloat the header,
+// so an edit reads "Edit(path=…)". Path stays; it's the one bit the diff header doesn't make
+// obvious at a glance. The web bridge drops them before they reach a tab.
+export const HIDDEN_TOOL_ARGS: Record<string, ReadonlySet<string>> = {
+  edit: new Set(['old_string', 'new_string']),
+  write: new Set(['content']),
+};
+
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback
 // lines, transcript exports, and /summary all render times identically (issue #74). Fields are
 // zero-padded because the status bar ticks every second and must not jitter in width.
