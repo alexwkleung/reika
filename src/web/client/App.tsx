@@ -18,6 +18,7 @@ import { BusyLine, busyLabel, LiveTurn } from './LiveTurn.js';
 import { StatusLine } from './StatusLine.js';
 import type { ClientState } from './store.js';
 import { Transcript } from './Transcript.js';
+import { TooltipLayer } from './Tooltip.js';
 
 // The page: the history drawer, the connection banner, the transcript, the running turn under its last row, and the
 // controls pinned under it: the first open dialog, the input box and the status line.
@@ -113,6 +114,7 @@ export function App({
   const restoreLine = useRef<() => void>(() => {});
   return (
     <div className="app">
+      <TooltipLayer />
       <History
         session={s.session}
         waiting={s.dialogs.length > 0}

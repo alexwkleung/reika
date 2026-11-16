@@ -9,6 +9,7 @@ import { digitPick } from './keys.js';
 import type { Send } from './Composer.js';
 import type { OpenDialog } from './store.js';
 import './dialogs.css';
+import { tip } from './Tooltip.js';
 
 // The first open dialog, inline above the input box: one neutral card for every kind, a small
 // label saying what is asked, the subject, and real buttons carrying their digit. Each kind sends
@@ -121,7 +122,7 @@ function Action({
       type="button"
       className={`dialog-button${kind}`}
       disabled={disabled}
-      title={title}
+      {...tip(title)}
       onClick={onPick}
     >
       {label}
@@ -246,7 +247,12 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
           <span className="dialog-verb">{heading.verb}</span>
           {heading.target ? <span className="dialog-target">{heading.target}</span> : null}
           {heading.where ? (
-            <span className="dialog-where" title={heading.where}>
+            <span
+              className="dialog-where"
+              {...(shortenMiddle(heading.where, WHERE_MAX_CHARS) === heading.where
+                ? {}
+                : tip(heading.where))}
+            >
               in {shortenMiddle(heading.where, WHERE_MAX_CHARS)}
             </span>
           ) : null}

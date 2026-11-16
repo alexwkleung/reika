@@ -105,7 +105,6 @@ export function ReasoningBlock({
         // above stays the keyboard's way in, so this is a pointer shortcut only.
         <div
           className="reasoning-tail-toggle"
-          title="Show all"
           onClick={() => {
             if (details.current && window.getSelection?.()?.isCollapsed !== false) {
               details.current.open = true;
