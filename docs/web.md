@@ -41,8 +41,8 @@ another). Without any of those it opens a tab in your default browser and says s
   command output, Thinking blocks (the end of the thought in view, the whole of it behind the
   `· N lines` toggle), the plan checklist and the busy line with its spinner.
 - **The input box** takes what the terminal's does: `/` for commands and `@` for files, both with
-  completion; ↑ and ↓ for the lines you sent; a line ending in `\` continues on the next line instead
-  of sending. A large paste is parked behind a marker, as in the terminal. While a turn runs, Enter
+  completion; ↑ and ↓ for the lines you sent; Shift+Enter, or a line ending in `\`, continues on
+  the next line instead of sending. A large paste is parked behind a marker, as in the terminal. While a turn runs, Enter
   queues the line and Esc in an empty box stops the turn.
 - **Images** go in by pasting (⌘V or Ctrl+V) or dropping a PNG, JPEG, WebP or GIF of up to 32 MB
   on the box, up to 8 per message. Each lands as an `[Image N]` marker in the text and a chip under
@@ -52,11 +52,15 @@ another). Without any of those it opens a tab in your default browser and says s
   image could not be read; click its thumbnail to see the image full size, and × to remove it.
   Enter waits until every image is read. Once sent, a line under your prompt says what was read
   from each image.
-- **Two pills under the input** switch the mode and the model. They are off while a prompt runs or
+- **Two pills in the input box** switch the mode and the model. They are off while a prompt runs or
   waits, since a switch then would change what the waiting line was typed for.
 - **The status line** shows the approval mode, how full the context is, the token counts, decode
   speed, cache hits, the branch's PR and the project folder.
-- **Approvals and questions** open as a card above the input. Number keys pick an option.
+- **Approvals and questions** open as a card above the input. A number key moves to that option
+  and Enter answers, so a stray key never answers for you; on an approval, `y` and `n` move to Yes
+  and No. An approval takes a reason to send with No. A question takes your own answer instead of
+  an option, or a note to send with the option you pick. Esc cancels a model or session picker and
+  a question asked before sending, never an approval or the model's question.
 - **History** lists this project's saved sessions, newest first, with a filter and a switch for
   your `/save` transcripts. Opening one replaces the conversation in place, as `/resume` does, and
   New conversation is `/new`. Both wait until no prompt is running. On a wide window history is a
