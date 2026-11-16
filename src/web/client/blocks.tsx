@@ -47,8 +47,19 @@ export function ReasoningWindow({ text, className = '' }: { text: string; classN
       className={`reasoning-window${full ? ' reasoning-window--full' : ''}${className ? ` ${className}` : ''}`}
     >
       <div ref={body} className="reasoning-text">
-        {text}
+        <ReasoningMarkdown text={text} />
       </div>
+    </div>
+  );
+}
+
+// The reply's markdown, flattened in CSS as the TUI flattens it (renderReasoningMarkdown): bullets,
+// link text and no fence lines or `**`, but muted, uncoloured and without the gaps between blocks.
+// Parsed from the text as written: blank lines are what separate its paragraphs.
+function ReasoningMarkdown({ text }: { text: string }) {
+  return (
+    <div className="reasoning-md">
+      <Markdown text={text.trim()} />
     </div>
   );
 }
@@ -82,7 +93,9 @@ export function ReasoningBlock({
               </svg>
             </span>
           </summary>
-          <div className="reasoning-text">{shown}</div>
+          <div className="reasoning-text">
+            <ReasoningMarkdown text={text} />
+          </div>
         </details>
       ) : (
         <div className="reasoning-head">{label}</div>
@@ -99,10 +112,10 @@ export function ReasoningBlock({
             }
           }}
         >
-          <ReasoningWindow text={shown} className="reasoning-tail" />
+          <ReasoningWindow text={text} className="reasoning-tail" />
         </div>
       ) : (
-        <ReasoningWindow text={shown} className="reasoning-tail" />
+        <ReasoningWindow text={text} className="reasoning-tail" />
       )}
     </div>
   );

@@ -131,8 +131,54 @@
   }
 }
 .reasoning-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Every block a row of its own, as the TUI collapses blank lines in the bar: no margins, headings
+   at the text's size, code without its panel or highlighting. */
+.reasoning-md .md p,
+.reasoning-md .md ul,
+.reasoning-md .md ol,
+.reasoning-md .md blockquote,
+.reasoning-md .md pre,
+.reasoning-md .md .md-table-scroll,
+.reasoning-md .md-heading,
+.reasoning-md .md li > ul,
+.reasoning-md .md li > ol {
+  margin: 0;
+}
+.reasoning-md .md ul,
+.reasoning-md .md ol {
+  padding-left: 1.25em;
+}
+/* A thought breaks lines without blank lines between them; the TUI keeps each one. */
+.reasoning-md .md p,
+.reasoning-md .md li {
+  white-space: pre-line;
+}
+.reasoning-md .md-heading {
+  font-size: 1em;
+  font-weight: 600;
+}
+.reasoning-md .md-code {
+  padding: 0;
+  background: none;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+}
+.reasoning-md .md-inline-code,
+.reasoning-md .md-link,
+.reasoning-md .md-link-plain,
+.reasoning-md .md-code [class^='hljs-'],
+.reasoning-md .md-code [class*=' hljs-'] {
+  color: inherit;
+  font-style: inherit;
+}
+.reasoning-md .md-link {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.reasoning-md .md-hr {
+  margin: 0.4em 0;
 }
 .reasoning-details[open] ~ .reasoning-tail,
 .reasoning-details[open] ~ .reasoning-tail-toggle {
