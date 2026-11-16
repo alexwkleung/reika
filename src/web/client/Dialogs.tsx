@@ -50,10 +50,12 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
 }
 
+// The numbered choices and the dialog's quiet text buttons ("Don't send", "Skip"), in page order:
+// what the arrows step through and the pointer focuses. Only the numbered ones take a digit.
+const CHOICES = '.dialog [data-dialog-n], .dialog .dialog-quiet';
+
 function dialogChoices(): HTMLButtonElement[] {
-  return [...document.querySelectorAll<HTMLButtonElement>('.dialog [data-dialog-n]')].filter(
-    b => !b.disabled,
-  );
+  return [...document.querySelectorAll<HTMLButtonElement>(CHOICES)].filter(b => !b.disabled);
 }
 
 // The arrow that steps from the focused choice, or null when focus is not on one.
@@ -84,9 +86,7 @@ function useFocusKeys(count: number, disabled: boolean, letters: Record<string, 
     const onMove = (e: globalThis.MouseEvent) => {
       if (e.movementX === 0 && e.movementY === 0) return;
       if (isTextField(document.activeElement)) return;
-      const target = (e.target as Element | null)?.closest?.<HTMLButtonElement>(
-        '.dialog [data-dialog-n]',
-      );
+      const target = (e.target as Element | null)?.closest?.<HTMLButtonElement>(CHOICES);
       if (!target || target.disabled) return;
       if (document.activeElement !== target) target.focus({ preventScroll: true });
     };
@@ -119,8 +119,10 @@ function useFocusKeys(count: number, disabled: boolean, letters: Record<string, 
 }
 
 // Esc cancels the dialogs where cancelling sends nothing, as in the terminal: a confirm (the line
-// goes back to the box) and the two pickers. Not an approval or a question, where Esc would answer
-// for the user. Captured, so the box's own Esc (which stops a turn) does not see it too.
+// goes back to the box) and the two pickers. On an approval or a question it stops the turn, as
+// Esc does in the input box and ctrl-c in the TUI: the server declines or drops the dialog first.
+// (The TUI binds no Esc there because a split arrow sequence arrives as one; a browser's keys
+// never split.) Captured, so the box's own Esc does not see it too.
 function useEscape(cancel: () => void, disabled: boolean): void {
   const latest = useRef(cancel);
   latest.current = cancel;
@@ -313,6 +315,7 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
   const pick = (i: number) => void a.answer(answers[i]![1]());
   // y and n focus Yes and No; unlike the TUI's y/n, they do not answer, as the digits do not.
   useFocusKeys(answers.length, a.disabled, { y: 0, n: 1 });
+  useEscape(() => void send({ type: 'abort' }), a.disabled);
   return (
     <Frame
       kicker="Approval needed"
@@ -410,6 +413,7 @@ function QuestionDialog({ id, d, send }: { id: string; d: Of<'question'>; send: 
     }
   };
   useFocusKeys(d.options.length, a.disabled);
+  useEscape(() => void send({ type: 'abort' }), a.disabled);
   return (
     <Frame kicker="The model asks" error={a.error} title={<span>{d.question}</span>}>
       <ol className="dialog-rows">

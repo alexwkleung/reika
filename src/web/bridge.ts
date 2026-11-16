@@ -850,6 +850,10 @@ export function createWebBridge(
           return { ok: true };
         }
         case 'abort':
+          // As the TUI's ctrl-c: an open approval is declined and a question dropped first. An
+          // abort alone leaves the tool waiting on an answer, and the dialog up over a stopped turn.
+          if (controller.approval) controller.answerApproval(false);
+          if (controller.question) controller.answerQuestion(null);
           controller.abort();
           return { ok: true };
         case 'discard':

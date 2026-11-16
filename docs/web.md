@@ -58,9 +58,11 @@ another). Without any of those it opens a tab in your default browser and says s
   speed, cache hits, the branch's PR and the project folder.
 - **Approvals and questions** open as a card above the input. A number key moves to that option
   and Enter answers, so a stray key never answers for you; on an approval, `y` and `n` move to Yes
-  and No. An approval takes a reason to send with No. A question takes your own answer instead of
-  an option, or a note to send with the option you pick. Esc cancels a model or session picker and
-  a question asked before sending, never an approval or the model's question.
+  and No; the arrow keys step through the options, and so does the pointer. An approval takes a
+  reason to send with No. A question takes your own answer instead of an option, or a note to send
+  with the option you pick. Esc cancels a model or session picker and a question asked before
+  sending; on an approval or the model's question it stops the turn, declining or dropping it, as
+  the stop button does.
 - **History** lists this project's saved sessions, newest first, with a filter and a switch for
   your `/save` transcripts. Opening one replaces the conversation in place, as `/resume` does, and
   New conversation is `/new`. Both wait until no prompt is running. On a wide window history is a

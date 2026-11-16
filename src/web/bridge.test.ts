@@ -891,6 +891,18 @@ describe('input', () => {
     expect(bridge.handle({ type: 'abort' })).toEqual({ ok: true });
   });
 
+  it('a stop declines an open approval and drops a question, as ctrl-c does in the TUI', async () => {
+    const { controller, bridge } = setup();
+    const approval = controller.requestApproval({ tool: 'bash', subject: 'Run', preview: 'ls' });
+    expect(bridge.handle({ type: 'abort' })).toEqual({ ok: true });
+    await expect(approval).resolves.toBe(false);
+    expect(controller.approval).toBeNull();
+    const question = controller.openQuestion({ question: 'Which?', options: [{ label: 'A' }] });
+    bridge.handle({ type: 'abort' });
+    await expect(question).resolves.toBeNull();
+    expect(controller.question).toBeNull();
+  });
+
   it('calls onExit for /exit', async () => {
     const onExit = vi.fn();
     const { bridge } = setup('agent', { onExit });

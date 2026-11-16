@@ -241,13 +241,29 @@ describe('approval', () => {
       await m.key('ArrowRight', m.button('Always'));
       await m.key('ArrowLeft', m.container.querySelector('input')!);
       expect(focused).toEqual(['No2', 'Yes1', 'Always this session3']);
+      await m.unmount();
+      // The quiet text button is one more stop: a confirm's "Don't send" is reached from its rows.
+      const c = await mount({
+        kind: 'confirm',
+        title: 'Pasted link',
+        subtitle: 'fetch it?',
+        details: [],
+        options: ['Send as typed', 'Fetch the link'],
+        initial: 0,
+      });
+      focused.length = 0;
+      await c.key('ArrowDown', c.button('Fetch the link'));
+      expect(focused.at(-1)).toContain('Don’t send');
+      expect(c.sent).toEqual([]);
+      await c.unmount();
+      const m2 = await mount(approval);
       focused.length = 0;
       // A dialog opening under a resting pointer reports no movement, and must not move focus.
-      await move(m.button('Always'), false);
-      await move(m.button('No'), true);
+      await move(m2.button('Always'), false);
+      await move(m2.button('No'), true);
       expect(focused).toEqual(['No2']);
-      expect(m.sent).toEqual([]);
-      await m.unmount();
+      expect(m2.sent).toEqual([]);
+      await m2.unmount();
     } finally {
       proto.focus = original;
     }
@@ -335,7 +351,7 @@ describe('confirm, model and session', () => {
     await m.unmount();
   });
 
-  it('Esc cancels a confirm and the pickers, as in the terminal, and never answers an approval', async () => {
+  it('Esc cancels a confirm and the pickers, and stops the turn on an approval or a question', async () => {
     const confirm: WireDialog = {
       kind: 'confirm',
       title: 'Pasted link',
@@ -359,7 +375,11 @@ describe('confirm, model and session', () => {
     await m.unmount();
     m = await mount(approval);
     await m.key('Escape');
-    expect(m.sent).toEqual([]);
+    expect(m.sent).toEqual([{ type: 'abort' }]);
+    await m.unmount();
+    m = await mount({ kind: 'question', question: 'Which?', options: [{ label: 'A' }] });
+    await m.key('Escape');
+    expect(m.sent).toEqual([{ type: 'abort' }]);
     await m.unmount();
   });
 
