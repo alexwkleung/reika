@@ -117,6 +117,7 @@ export function Composer({
   const [recall, setRecall] = useState<Recall>(notRecalling);
   const [completion, setCompletion] = useState<{ list: Completion; selected: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const completionList = useRef<HTMLUListElement>(null);
   // Where to put the caret once a programmatic change has rendered.
   const caret = useRef<number | null>(null);
   // Only the newest completion request's answer is shown.
@@ -150,6 +151,24 @@ export function Composer({
   useEffect(() => {
     if (!waiting && !locked) box.current?.focus();
   }, [waiting, locked]);
+
+  // The arrow keys move the selection past the list's visible rows.
+  const selected = completion?.selected ?? null;
+  useLayoutEffect(() => {
+    if (selected === null) return;
+    const row = completionList.current?.children[selected] as HTMLElement | undefined;
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected]);
+
+  // The whole card is the box's target, but for its controls; preventDefault keeps a press from
+  // blurring the box first, which would close an open completion list.
+  const focusFromCard = (e: { target: EventTarget; preventDefault(): void }) => {
+    const target = e.target as Element;
+    if (target === box.current || target.closest('button, a, input, [role="menu"]')) return;
+    if (!box.current || box.current.disabled) return;
+    e.preventDefault();
+    box.current.focus();
+  };
 
   const replaceText = (next: string, at = next.length) => {
     caret.current = at;
@@ -358,7 +377,13 @@ export function Composer({
       {waiting ? <div className="composer-waiting">Answer above to continue.</div> : null}
       <div className="composer-anchor">
         {completion ? (
-          <ul className="composer-completions" id={listId} role="listbox" aria-label="Completions">
+          <ul
+            ref={completionList}
+            className="composer-completions"
+            id={listId}
+            role="listbox"
+            aria-label="Completions"
+          >
             {completion.list.items.map((item, i) => {
               const { label, detail } = splitDisplay(item.display);
               return (
@@ -379,7 +404,10 @@ export function Composer({
             })}
           </ul>
         ) : null}
-        <div className={`composer-card${locked ? ' composer-card-locked' : ''}`}>
+        <div
+          className={`composer-card${locked ? ' composer-card-locked' : ''}`}
+          onMouseDown={focusFromCard}
+        >
           <textarea
             ref={box}
             className="composer-input"

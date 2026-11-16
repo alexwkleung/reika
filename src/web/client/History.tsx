@@ -85,7 +85,7 @@ export function History({
   // Focus goes back to the show button once it is on screen again.
   const focusShowButton = useRef(false);
   const panel = useRef<HTMLElement>(null);
-  const filterBox = useRef<HTMLInputElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const requestSeq = useRef(0);
   // Focus moves into the panel only when the user opened it, never for a pane shown on load.
   const focusOnShow = useRef(false);
@@ -128,7 +128,9 @@ export function History({
   }, [shown]);
 
   useEffect(() => {
-    if (shown && focusOnShow.current) filterBox.current?.focus();
+    // The button that hides it again, where the show button was: typing in the filter is a choice
+    // the user makes, not where opening the panel should leave them.
+    if (shown && focusOnShow.current) closeButton.current?.focus();
     if (!shown && focusShowButton.current) showButton.current?.focus();
     focusOnShow.current = false;
     focusShowButton.current = false;
@@ -224,9 +226,21 @@ export function History({
       onKeyDown={onKeyDown}
     >
       <div className="history-head">
-        <h2 className="history-heading">History</h2>
+        <button
+          type="button"
+          className="history-new"
+          disabled={blocked !== null || pending !== null}
+          title={blocked ?? undefined}
+          onClick={() => void act('new', { type: 'new' })}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+          New conversation
+        </button>
         {asPane ? (
           <button
+            ref={closeButton}
             type="button"
             className="history-close"
             aria-label="Hide history"
@@ -238,27 +252,20 @@ export function History({
             <PanelIcon open />
           </button>
         ) : (
-          <button type="button" className="history-close" aria-label="Close" onClick={hide}>
+          <button
+            ref={closeButton}
+            type="button"
+            className="history-close"
+            aria-label="Close"
+            onClick={hide}
+          >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M4 4l8 8M12 4l-8 8" />
             </svg>
           </button>
         )}
       </div>
-      <button
-        type="button"
-        className="history-new"
-        disabled={blocked !== null || pending !== null}
-        title={blocked ?? undefined}
-        onClick={() => void act('new', { type: 'new' })}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M8 3v10M3 8h10" />
-        </svg>
-        New conversation
-      </button>
       <input
-        ref={filterBox}
         className="history-filter"
         type="search"
         placeholder="Filter sessions"
@@ -276,7 +283,10 @@ export function History({
           {error ?? listError}
         </p>
       ) : null}
-      <ul className="history-list" aria-busy={list === null}>
+      <h2 className="history-heading" id="history-heading">
+        History
+      </h2>
+      <ul className="history-list" aria-labelledby="history-heading" aria-busy={list === null}>
         {list?.entries.map(entry => {
           const isCurrent = entry.current === true;
           const reason = isCurrent ? 'The session you are in' : blocked;
@@ -287,7 +297,8 @@ export function History({
                 className="history-row"
                 aria-current={isCurrent ? 'true' : undefined}
                 disabled={reason !== null || pending !== null}
-                title={reason ?? undefined}
+                // A title cut to the row's one line is still there to read.
+                title={reason ?? sessionTitle(entry)}
                 onClick={() => void act(entry.id, { type: 'resume', scope, id: entry.id })}
               >
                 <span className="history-title">

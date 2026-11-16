@@ -1,5 +1,5 @@
 import { parseHTML } from 'linkedom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, WireSessionList, WireState } from '../protocol.js';
 import type { SendResult } from './send.js';
 
@@ -140,6 +140,21 @@ describe('History as a drawer', () => {
     expect(other.textContent).toContain('which db');
     expect(other.textContent).toContain('chat');
     expect(other.textContent).toContain('6 msgs');
+  });
+
+  it('puts focus on its close button, not the filter, when opened', async () => {
+    // linkedom keeps no focus, so the call is what is checked.
+    const proto = window.HTMLElement.prototype as { focus?: () => void };
+    const real = proto.focus;
+    const focus = vi.fn();
+    proto.focus = focus;
+    const h = await mount();
+    await h.open();
+    proto.focus = real;
+    expect(focus.mock.contexts).toEqual([h.q('.history-close')]);
+    expect(h.q('.history-head .history-new')).not.toBeNull();
+    // The section label sits on the list it names.
+    expect(h.q('.history-heading')?.nextElementSibling?.className).toBe('history-list');
   });
 
   it('opens a row by id in the listed scope and closes', async () => {

@@ -24,10 +24,10 @@ describe('savedAgo', () => {
     [59, 'just now'],
     [60, '1 min ago'],
     [3599, '59 min ago'],
-    [3600, '1 h ago'],
-    [86_399, '23 h ago'],
-    [86_400, '1 d ago'],
-    [6 * 86_400, '6 d ago'],
+    [3600, '1h ago'],
+    [86_399, '23h ago'],
+    [86_400, '1d ago'],
+    [6 * 86_400, '6d ago'],
     [8 * 86_400, '2026-11-07'],
   ])('%is ago reads %s', (s, text) => {
     expect(savedAgo(at(s), now)).toBe(text);
@@ -41,8 +41,8 @@ describe('savedAgo', () => {
 
 describe('sessionMeta', () => {
   it('joins age, count and model, leaving out what is absent', () => {
-    expect(sessionMeta(entry({ model: 'qwen' }), now)).toBe('2 h ago · 13 msgs · qwen');
-    expect(sessionMeta(entry({ messageCount: 1 }), now)).toBe('2 h ago · 1 msg');
+    expect(sessionMeta(entry({ model: 'qwen' }), now)).toBe('2h ago · 13 msgs · qwen');
+    expect(sessionMeta(entry({ messageCount: 1 }), now)).toBe('2h ago · 1 msg');
   });
 });
 

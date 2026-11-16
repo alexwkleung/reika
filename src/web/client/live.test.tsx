@@ -160,7 +160,8 @@ describe('ReasoningBlock', () => {
     expect(renderToStaticMarkup(<ReasoningBlock text={long} live />)).not.toContain('<details');
     const done = renderToStaticMarkup(<ReasoningBlock text={long} />);
     expect(done).toContain('<details');
-    expect(done).toContain('· 5 lines');
+    expect(done).toContain('5 lines</span></summary>');
+    expect(done).toContain('title="Show all"');
     expect(done).toMatch(/reasoning-window reasoning-tail/);
   });
 });
