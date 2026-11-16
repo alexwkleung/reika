@@ -18,6 +18,7 @@ const state = (over: Partial<WireState> = {}): WireState => ({
   lastUsage: null,
   estimatedContext: null,
   contextWindow: null,
+  contextUsable: null,
   shrink: { sheds: 0, folds: 0 },
   decodeRate: null,
   queue: [],
@@ -72,6 +73,24 @@ describe('statusStrip', () => {
       warn: false,
     });
     expect(items[4]).toMatchObject({ title: '90% cached (18k)' });
+  });
+
+  it('measures against the usable limit when the server sends it, the raw window on hover', () => {
+    const meter = (over: Partial<WireState>) =>
+      strip(state({ contextWindow: 32_000, contextUsable: 23_398, ...over }))[0];
+    expect(meter({ lastUsage: { promptTokens: 20_000, completionTokens: 1 } })).toMatchObject({
+      kind: 'meter',
+      text: '85% of 23k',
+      title: 'ctx 20k/32k (85% of 23k)',
+      // 63% of the raw window: the warning that never fired before history was shed.
+      warn: true,
+    });
+    expect(meter({})).toMatchObject({ text: '0% of 23k', title: 'ctx 0/32k (0% of 23k)' });
+    // Past the limit the bar holds full; the percent says by how much.
+    expect(meter({ lastUsage: { promptTokens: 30_000, completionTokens: 1 } })).toMatchObject({
+      fill: 1,
+      text: '128% of 23k',
+    });
   });
 
   it('shows the window at 0% before any request, and warns past 80%', () => {

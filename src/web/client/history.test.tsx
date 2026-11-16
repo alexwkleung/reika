@@ -29,6 +29,7 @@ const session = (over: Partial<WireState> = {}): WireState => ({
   lastUsage: null,
   estimatedContext: null,
   contextWindow: null,
+  contextUsable: null,
   shrink: { sheds: 0, folds: 0 },
   decodeRate: null,
   queue: [],
