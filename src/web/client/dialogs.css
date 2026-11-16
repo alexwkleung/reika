@@ -31,14 +31,14 @@
 }
 .dialog-target {
   font-family: var(--reika-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 400;
   color: var(--reika-text);
 }
 .dialog-where,
 .dialog-subtitle {
   font-weight: 400;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
 }
 .dialog-where {
@@ -69,7 +69,7 @@
 .dialog-preview {
   padding: 0.5rem 0.75rem;
   font-family: var(--reika-mono);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -88,7 +88,7 @@
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-warning);
   overflow-wrap: anywhere;
 }
@@ -108,7 +108,7 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
   overflow-wrap: anywhere;
 }
@@ -130,7 +130,7 @@
   background: var(--reika-control-bg);
   color: var(--reika-control-fg);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 .dialog-button:hover:not(:disabled) {
@@ -180,7 +180,7 @@
   padding: 0.25rem 0.25rem;
   color: var(--reika-secondary);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -259,7 +259,7 @@
   white-space: nowrap;
 }
 .dialog-row-detail {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
   overflow-wrap: anywhere;
 }
@@ -292,18 +292,18 @@
   background: var(--reika-page-bg);
   color: var(--reika-text);
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 .dialog-input::placeholder {
   color: var(--reika-placeholder);
 }
 
 .dialog-empty {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
 }
 .dialog-error {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-error);
   overflow-wrap: anywhere;
 }

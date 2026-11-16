@@ -197,7 +197,7 @@ textarea,
   height: 1.875rem;
   padding: 0 0.75rem;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-control-fg);
   background: var(--reika-control-bg);
   border: 1px solid var(--reika-control-border);
