@@ -49,13 +49,18 @@
 .status-pr {
   white-space: nowrap;
 }
+/* The transcript's link colour, so the chip reads as something to click; unlinked (under /anon,
+   #990) it keeps the strip's own colour. */
 .status-pr a {
-  color: inherit;
+  color: var(--reika-link);
   text-decoration: none;
 }
 .status-pr a:hover {
-  color: var(--reika-text);
   text-decoration: underline;
+}
+.status-pr a:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 2px;
 }
 .status-pr-state--draft {
   color: var(--reika-secondary);

@@ -64,15 +64,17 @@ export function StatusLine({
                 </span>
               );
             case 'pr': {
-              const label = `PR #${item.number}`;
+              // The number is the link and the `PR ` label is not, as the TUI's chip draws it.
+              const number = `#${item.number}`;
               return (
                 <span key={i} className="status-pr">
+                  {'PR '}
                   {item.url ? (
                     <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.url}>
-                      {label}
+                      {number}
                     </a>
                   ) : (
-                    label
+                    number
                   )}
                   {item.state ? (
                     <span className={`status-pr-state status-pr-state--${item.state}`}>
