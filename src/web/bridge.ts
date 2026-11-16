@@ -74,10 +74,9 @@ export type WebBridge = {
   subscribe(listener: (event: ServerEvent) => void): () => void;
   // Never throws or rejects. A message that reads the history directory answers in a promise.
   handle(message: ClientMessage): HandleResult | Promise<HandleResult>;
-  // An image's raw bytes, from `POST /upload`: read now, held until a submit names it (#979).
-  upload(bytes: Uint8Array, contentType: string): Promise<UploadResult>;
-  // A refusal the server can answer before it reads the bytes, or null.
-  uploadRefusal(): Extract<UploadResult, { ok: false }> | null;
+  // An image's raw bytes, from `POST /upload`: read now, held until a submit names it (#979). The
+  // server hands a reader, called only once this upload holds the read slot.
+  upload(body: UploadBody, contentType: string): Promise<UploadResult>;
   close(): void;
 };
 
@@ -85,6 +84,8 @@ export type WebBridge = {
 export type HandleResult =
   | { ok: true; reply?: WireCompletion | WireSessionList }
   | { ok: false; error: string; conflict?: true };
+
+export type UploadBody = Uint8Array | (() => Promise<Uint8Array | 'too-large'>);
 
 // `status` is the HTTP answer for a refusal.
 export type UploadResult =
@@ -229,6 +230,7 @@ export function createWebBridge(
   // Bumped by a new conversation and a resume: a read that finishes after one belongs to the
   // conversation it was pasted into, which is gone.
   let uploadGeneration = 0;
+  let uploadConversation = controller.conversation;
   const heldBytes = (): number =>
     [...uploads.values()].reduce((n, u) => n + (u.native?.bytes.length ?? 0), 0);
   const sweepUploads = (): void => {
@@ -261,18 +263,24 @@ export function createWebBridge(
     return null;
   };
 
-  const readUpload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
-    // The bytes decide, and the declared type must agree: a refusal names a mislabelled file
-    // rather than sending a model data under a type it is not.
-    const mime = sniffKnownImageMime(bytes);
-    if (mime === null || mime !== contentType) {
-      return { ok: false, error: 'not a PNG, JPEG, WebP or GIF image', status: 415 };
-    }
-    const refused = uploadRefusal(bytes.length);
+  const readUpload = async (body: UploadBody, contentType: string): Promise<UploadResult> => {
+    // The slot is taken before the body is read, so parallel uploads are refused unbuffered.
+    const refused = uploadRefusal();
     if (refused) return refused;
     reading = true;
     const generation = uploadGeneration;
     try {
+      const bytes = typeof body === 'function' ? await body() : body;
+      if (bytes === 'too-large') return { ok: false, error: 'payload too large', status: 413 };
+      // The bytes decide, and the declared type must agree: a refusal names a mislabelled file
+      // rather than sending a model data under a type it is not.
+      const mime = sniffKnownImageMime(bytes);
+      if (mime === null || mime !== contentType) {
+        return { ok: false, error: 'not a PNG, JPEG, WebP or GIF image', status: 415 };
+      }
+      if (heldBytes() + bytes.length > MAX_PENDING_UPLOAD_BYTES) {
+        return { ok: false, error: 'the images waiting to be sent are too large', status: 413 };
+      }
       const read = await controller.readImage(bytes, 'image');
       if (!read.ok) {
         // Persistent, for every tab: the chip goes when it is removed, and the failure must not.
@@ -304,8 +312,8 @@ export function createWebBridge(
     }
   };
   // A refusal can quote what the OCR child or a vision server said, a path included (#990).
-  const upload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
-    const result = await readUpload(bytes, contentType);
+  const upload = async (body: UploadBody, contentType: string): Promise<UploadResult> => {
+    const result = await readUpload(body, contentType);
     return result.ok ? result : { ...result, error: scrubError(result.error, cwd()) };
   };
 
@@ -449,6 +457,11 @@ export function createWebBridge(
       do {
         dirty = false;
         followSession();
+        // A typed `/new` or a `/resume` picker reaches the controller without passing here.
+        if (controller.conversation !== uploadConversation) {
+          uploadConversation = controller.conversation;
+          clearUploads();
+        }
         const nextGeneration = scrubGeneration();
         if (nextGeneration !== generation) {
           // A tab reconnecting must not be replayed what was sent under the old rules: the log
@@ -709,7 +722,10 @@ export function createWebBridge(
         if (!offered.some(t => t.name === message.name)) {
           return { ok: false, error: 'name is not one this dialog offered' };
         }
-        if (controller.status !== 'idle') return { ok: false, error: 'cannot switch while busy' };
+        // The between-lines rule the pill follows: a line still preparing or queued was typed for
+        // the model it would otherwise lose.
+        const busy = switchRefusal('models');
+        if (busy) return busy;
         entry.answered = true;
         closeDialog(entry);
         controller.pickModel(message.name);
@@ -903,7 +919,6 @@ export function createWebBridge(
       };
     },
     upload,
-    uploadRefusal: () => uploadRefusal(),
     handle: message => {
       const result = handleRaw(message);
       return result instanceof Promise ? result.then(scrubResult) : scrubResult(result);

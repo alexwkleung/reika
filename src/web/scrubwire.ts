@@ -40,17 +40,24 @@ const UNSCRUBBED = new Set<string>(UNSCRUBBED_KEYS);
 type Scrub = (s: string) => string;
 
 // Every string under `value`, but for the keys above. A field added to Message later is scrubbed
-// by this default rather than sent raw.
-function scrubLeaves(value: unknown, scrub: Scrub): unknown {
+// by this default rather than sent raw. `keep` is empty for data whose keys are not ours: a tool's
+// arguments, where an MCP server may call a path `name` or `id`.
+function scrubLeaves(
+  value: unknown,
+  scrub: Scrub,
+  keep: ReadonlySet<string> = UNSCRUBBED,
+): unknown {
   if (typeof value === 'string') return scrub(value);
-  if (Array.isArray(value)) return value.map(v => scrubLeaves(v, scrub));
+  if (Array.isArray(value)) return value.map(v => scrubLeaves(v, scrub, keep));
   if (typeof value !== 'object' || value === null) return value;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
-    out[k] = UNSCRUBBED.has(k) ? v : scrubLeaves(v, scrub);
+    out[k] = keep.has(k) ? v : scrubLeaves(v, scrub, keep);
   }
   return out;
 }
+
+const KEEP_NONE: ReadonlySet<string> = new Set();
 
 // Per line, so a diff's row count and line numbers cannot move.
 function perLine(s: string, scrub: Scrub): string {
@@ -84,7 +91,7 @@ export function scrubMessage(msg: Message, cwd: string): WireMessage {
         own.toolCalls = msg.toolCalls.map(tc => {
           const hidden = HIDDEN_TOOL_ARGS[tc.name];
           const args = Object.fromEntries(Object.entries(tc.args).filter(([k]) => !hidden?.has(k)));
-          return { id: tc.id, name: tc.name, args: scrubLeaves(args, display) };
+          return { id: tc.id, name: tc.name, args: scrubLeaves(args, display, KEEP_NONE) };
         });
       }
       break;

@@ -387,6 +387,25 @@ describe('runWeb', () => {
     expect(await portRefuses(run.port)).toBe(true);
   });
 
+  it('stops a running turn before the save, and runs no turn after', async () => {
+    const { run, token, session } = await start();
+    let signal: AbortSignal | undefined;
+    session().submit.mockImplementationOnce(async (_text: string, opts: SubmitOptions) => {
+      // The controller hands the turn its abort signal from onTurnStart.
+      signal = opts.onTurnStart?.() ?? undefined;
+      await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve()));
+      opts.onTurnEnd?.();
+      return [];
+    });
+    expect((await post(run.port, token, { type: 'submit', text: 'long' })).status).toBe(200);
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await run.shutdown(130);
+    expect(signal!.aborted).toBe(true);
+    expect(await run.done).toBe(130);
+    expect(session().mcp.close).toHaveBeenCalledTimes(1);
+    expect(session().submit).toHaveBeenCalledTimes(1);
+  });
+
   it('shuts down on a tab /exit', async () => {
     const { run, token } = await start();
     expect((await post(run.port, token, { type: 'submit', text: '/exit' })).status).toBe(200);
