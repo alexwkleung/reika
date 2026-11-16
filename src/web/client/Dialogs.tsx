@@ -472,7 +472,7 @@ function ModelDialog({ id, d, send }: { id: string; d: Of<'model'>; send: Send }
 function SessionDialog({ id, d, send }: { id: string; d: Of<'session'>; send: Send }) {
   const a = useAnswer(send);
   const pick = (i: number) =>
-    void a.answer({ type: 'answer', id, kind: 'session', path: d.entries[i]!.path });
+    void a.answer({ type: 'answer', id, kind: 'session', session: d.entries[i]!.id });
   useDigitKeys(d.entries.length, pick, a.disabled);
   const now = Date.now();
   return (
@@ -481,7 +481,7 @@ function SessionDialog({ id, d, send }: { id: string; d: Of<'session'>; send: Se
       <ol className="dialog-rows dialog-rows--scroll">
         {d.entries.map((e, i) => (
           <Row
-            key={e.path}
+            key={e.id}
             n={i + 1}
             label={e.title ?? 'untitled'}
             detail={[savedAgo(e.savedAt, now), `${e.messageCount} msgs`, e.model]
@@ -498,7 +498,7 @@ function SessionDialog({ id, d, send }: { id: string; d: Of<'session'>; send: Se
         <Quiet
           label="Cancel"
           disabled={a.disabled}
-          onClick={() => void a.answer({ type: 'answer', id, kind: 'session', path: null })}
+          onClick={() => void a.answer({ type: 'answer', id, kind: 'session', session: null })}
         />
       </div>
     </Frame>

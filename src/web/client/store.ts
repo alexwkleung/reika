@@ -123,10 +123,16 @@ function foldDelta(
     if (!live.tool) return state;
     return {
       ...state,
-      live: { ...live, tool: { ...live.tool, output: live.tool.output + event.text } },
+      live: { ...live, tool: { ...live.tool, output: applyDelta(live.tool.output, event) } },
     };
   }
-  return { ...state, live: { ...live, [event.channel]: live[event.channel] + event.text } };
+  return { ...state, live: { ...live, [event.channel]: applyDelta(live[event.channel], event) } };
+}
+
+// `drop` takes back what the server's scrubber has since matched as part of a path or a name.
+function applyDelta(text: string, event: { text: string; drop?: number }): string {
+  const drop = Math.min(event.drop ?? 0, text.length);
+  return text.slice(0, text.length - drop) + event.text;
 }
 
 // `receivedAt` is this tab's clock when the event arrived, passed in so the fold stays pure.

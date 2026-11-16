@@ -288,13 +288,13 @@ describe('confirm, model and session', () => {
     await m.unmount();
   });
 
-  it('session picks an entry by path or cancels', async () => {
+  it('session picks an entry by id or cancels', async () => {
     const d: WireDialog = {
       kind: 'session',
       heading: 'Sessions in this project',
       entries: [
         {
-          path: '/h/s1.jsonl',
+          id: 's1.jsonl',
           title: 'Fix the parser',
           savedAt: '2026-11-01 10:00',
           messageCount: 12,
@@ -304,11 +304,11 @@ describe('confirm, model and session', () => {
     let m = await mount(d);
     expect(m.container.textContent).toContain('12 msgs');
     await m.click('Fix the parser');
-    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'session', path: '/h/s1.jsonl' }]);
+    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'session', session: 's1.jsonl' }]);
     await m.unmount();
     m = await mount(d);
     await m.click('Cancel');
-    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'session', path: null }]);
+    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'session', session: null }]);
     await m.unmount();
   });
 });

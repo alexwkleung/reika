@@ -24,7 +24,8 @@ import type { Approvals } from '../ui/summary.js';
 
 // 2: mode and model switches, pastes on submit, completions, input history, the model list (#584).
 // 3: the session list, a resume by id, a new conversation, and the current session in state.
-export const PROTOCOL_VERSION = 3;
+// 4: scrubbed on the server (#990): a delta's `drop`, the /resume dialog by id, no user `display`.
+export const PROTOCOL_VERSION = 4;
 
 // Spelled out rather than imported from the mode module; a test holds it to MODE_CYCLE.
 export const WIRE_MODES = [
@@ -218,7 +219,7 @@ export type WireDialog =
       initial: number;
     }
   | { kind: 'model'; targets: ModelTarget[] }
-  | { kind: 'session'; heading: string; entries: SessionEntry[] };
+  | { kind: 'session'; heading: string; entries: WireSessionEntry[] };
 
 export function approvalDialog(request: ApprovalRequest): WireDialog {
   return {
@@ -255,8 +256,13 @@ export function modelDialog(targets: ModelTarget[]): WireDialog {
   return { kind: 'model', targets: targets.map(t => ({ ...t })) };
 }
 
+// Answered by id, as the drawer is: a path on the wire names the home directory.
 export function sessionDialog(list: { heading: string; entries: SessionEntry[] }): WireDialog {
-  return { kind: 'session', heading: list.heading, entries: list.entries.map(e => ({ ...e })) };
+  return {
+    kind: 'session',
+    heading: list.heading,
+    entries: list.entries.map(e => wireSessionEntry(e, false)),
+  };
 }
 
 // The in-flight turn, sent whole on each change rather than patched: a tab that missed one
@@ -280,7 +286,9 @@ export type CommittedEvent =
 // so a tab times a running call from the pair and never from its own clock against the server's.
 export type LiveEvent =
   | { type: 'live'; live: WireLive; now: number }
-  | { type: 'delta'; channel: 'content' | 'reasoning' | 'tool'; text: string };
+  // `drop` takes that many characters off the end before `text` is added: a path the scrubber
+  // matched only once the rest of it arrived replaces text already shown.
+  | { type: 'delta'; channel: 'content' | 'reasoning' | 'tool'; text: string; drop?: number };
 
 export type ServerEvent = CommittedEvent | LiveEvent;
 
@@ -344,7 +352,7 @@ export type ClientMessage =
   | { type: 'answer'; id: string; kind: 'question'; answer: QuestionAnswer | null }
   | { type: 'answer'; id: string; kind: 'confirm'; choice: number | 'abort' }
   | { type: 'answer'; id: string; kind: 'model'; name: string | null }
-  | { type: 'answer'; id: string; kind: 'session'; path: string | null };
+  | { type: 'answer'; id: string; kind: 'session'; session: string | null };
 
 type ParseResult = ClientMessage | { error: string };
 
@@ -479,11 +487,11 @@ function parseAnswer(value: Record<string, unknown>): ParseResult {
       return { type: 'answer', id, kind: 'model', name };
     }
     case 'session': {
-      const path = value.path;
-      if (path !== null && typeof path !== 'string') {
-        return { error: 'path must be a string or null' };
+      const session = value.session;
+      if (session !== null && !isSessionId(session)) {
+        return { error: 'session must be a session file name or null' };
       }
-      return { type: 'answer', id, kind: 'session', path };
+      return { type: 'answer', id, kind: 'session', session };
     }
     default:
       return { error: 'kind must be approval, question, confirm, model or session' };
