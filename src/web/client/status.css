@@ -2,8 +2,8 @@
 .status {
   padding: 0.5rem 0.25rem 0.75rem;
   font-family: var(--reika-prose);
-  /* The page's small-text size, as the sidebar's details use; 0.75rem read as a size apart. */
-  font-size: 0.8125rem;
+  /* The page's small-text size, as the input box's controls and the sidebar's details use. */
+  font-size: 0.875rem;
   color: var(--reika-secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -78,7 +78,7 @@
   white-space: nowrap;
   font-family: var(--reika-mono);
   /* Monospace runs wide for its size, so a step under the strip's text matches it by eye. */
-  font-size: 0.78125rem;
+  font-size: 0.84375rem;
   color: var(--reika-muted);
 }
 /* At phone width the folder sits on its own line, so it starts at the left like the rest. */

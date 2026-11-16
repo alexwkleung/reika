@@ -163,13 +163,13 @@ body.with-history {
 .history-blocked {
   margin: 0;
   padding: 0 0.25rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
 }
 
 .history-error {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-error);
 }
 
@@ -262,7 +262,7 @@ body.with-history {
 .history-note {
   margin: 0;
   padding: 0 0.25rem;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-muted);
 }
 
@@ -272,7 +272,7 @@ body.with-history {
   gap: 0.5rem;
   padding: 0.5rem 0.25rem 0;
   border-top: 1px solid var(--reika-rule);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--reika-secondary);
   cursor: pointer;
 }
