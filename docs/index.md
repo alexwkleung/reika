@@ -75,9 +75,12 @@ docs:
     link: /support
 ---
 
-![Reika fixing a retry helper and its test with a local model](./demo.gif)
-
-<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
+<DemoToggle
+  terminal-alt="Reika fixing a retry helper and its test with a local model"
+  terminal-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error."
+  web-alt="The same task in reika web: Reika fixing a retry helper and its test with a local model"
+  web-caption="TODO: the web take's model, quant and speed-up, stated as the terminal caption states them."
+/>
 
 ## Install
 

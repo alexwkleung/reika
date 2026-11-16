@@ -72,9 +72,14 @@ docs:
 
 目前仅首页、[模型](models.md)、[平台](platforms.md)和[架构](architecture.md)有中文译文。标注“（英文）”的链接会进入英文页面；语言菜单会切换到已有的对应译页，其他页面则回到所选语言的首页。
 
-![Reika 使用本地模型修复重试辅助函数及其测试](../demo.gif)
-
-<sup>通过 llama.cpp 运行 Qwen3.6 35B A3B（Unsloth UD-IQ2_M）的一次真实本地运行，播放速度加快 3 倍。模型的第一次测试失败后，根据错误进行了修复。</sup>
+<DemoToggle
+  terminal-label="终端"
+  web-label="网页"
+  terminal-alt="Reika 使用本地模型修复重试辅助函数及其测试"
+  terminal-caption="通过 llama.cpp 运行 Qwen3.6 35B A3B（Unsloth UD-IQ2_M）的一次真实本地运行，播放速度加快 3 倍。模型的第一次测试失败后，根据错误进行了修复。"
+  web-alt="在 reika web 中完成同一任务：Reika 使用本地模型修复重试辅助函数及其测试"
+  web-caption="TODO: the web take's caption, translated."
+/>
 
 ## 安装
 
