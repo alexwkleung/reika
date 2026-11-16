@@ -1605,13 +1605,13 @@ export function createController(opts: {
         // The tok/s chip goes with the token counts it sits next to (#204).
         decodeRate: undefined,
       });
-      // Also drops back to the default profile, which may be another model on other hardware.
-      session?.reset({ relearn: true });
+      // The model stays: it is the user's choice, not the conversation's, and a launch reopens it too.
+      session?.reset();
       session?.switchSide('agent');
-      // A picked model belonged to the conversation that just went away. Unpinned before the mode
-      // moves: the mode's model is applied over `ownProfile`, which must already be the default.
+      // A picked model becomes the session's own, unpinned so the mode map applies over it again.
+      // Set before the mode moves, since the mode's model is applied over `ownProfile`.
+      if (modelPinned && session) ownProfile = session.profile;
       modelPinned = false;
-      ownProfile = 'default';
       setMode('agent');
       applyModeModel();
       setLive(emptyLive());
@@ -1619,7 +1619,7 @@ export function createController(opts: {
     loadConversation: (sides, from) => {
       setLive(emptyLive());
       stashed = {};
-      session?.reset({ relearn: false });
+      session?.reset();
       // A project session carries on in its own file. A manual save from the root is left as it
       // was, and the continuation gets a project file of its own at its next save.
       stopSaveTimer();

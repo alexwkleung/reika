@@ -37,7 +37,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_MODE_MODELS`** — The mode a turn runs in picks the model — at startup and on every mode
   switch, outranking the profile the last session saved. A mode with no entry runs the session's own
   model, so leaving a mapped mode comes back to it. A `/model` you pick by hand outranks the map for
-  the rest of the session (and `/new` clears that). Values are profile names or `REIKA_MODEL`
+  the rest of the session (`/new` keeps the model, with the map applying again). Values are profile names or `REIKA_MODEL`
   models; an entry naming neither is ignored with a startup line. `shell` runs no model and is not a
   mode here. See [Per-mode models](#per-mode-models)
 - **`REIKA_DEFAULT_MODE`** — Unrecognized values fall back to `agent`. `REIKA_PLAN_EXPERIMENT=1`
@@ -481,7 +481,7 @@ Then in-session:
 - `/model kimi-k2` — switch to a model on the default base URL (model name only swaps)
 - `/model kimi` — switch to a named profile (model + endpoint + key swap as a unit)
 - `/model some-new-model` — a name that isn't in your config still switches: it rides the current base URL/key, so you can test a model without touching `.env`. The switch message and picker flag it as `(not in config)`
-- `/new` — resets to default
+- `/new` — starts a new conversation on the same model
 
 Conversation history persists across switches; if styles clash, run `/new` first. Token counter
 accumulates across models/profiles for a single session bill.
@@ -517,7 +517,8 @@ What it does, in order:
    session's own model — the profile it opened on — so `plan → agent` is a round trip rather than a
    one-way switch onto the plan model.
 3. **A `/model` you pick by hand outranks the map for the rest of the session**: from then on, mode
-   switches leave the model where you put it. `/new` starts a new session and the map applies again.
+   switches leave the model where you put it. `/new` keeps that model as the session's own, and the
+   map applies over it again.
 4. Headless (`-p --mode=plan`) honors it too, since there is no `/model` there: the config decides.
 
 ## Last session state
@@ -542,6 +543,6 @@ shell leaves the last work mode on record. A mode's own model is never saved as 
 re-derived from `REIKA_MODE_MODELS` on every launch, so removing an entry puts the session back on
 its own model rather than stranding it on that mode's. A saved profile the config no longer has — a
 removed `REIKA_PROFILES` entry, or an ad-hoc `/model some-new-model` that was never in `.env` —
-falls back to `default` rather than being recreated. `/new` resets to agent and `default`, and that
-is remembered too. Headless runs (`-p`) neither read nor write it: a script's behavior should
+falls back to `default` rather than being recreated. `/new` resets the mode to agent, which is
+remembered too, and keeps the model. Headless runs (`-p`) neither read nor write it: a script's behavior should
 follow from its env, not from the last interactive session. Delete the file to forget.

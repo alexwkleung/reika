@@ -567,7 +567,7 @@ describe('createSession', () => {
       expect(s.history).toBe(other);
     });
 
-    it('reset drops the conversation but keeps what it learned; relearn forgets that too', async () => {
+    it('reset drops the conversation but keeps the model and what it learned', async () => {
       const TWO: Config = {
         ...CONFIG,
         profiles: { ...CONFIG.profiles, vl: { model: 'vl', baseURL: 'x', apiKey: 'k' } },
@@ -587,11 +587,6 @@ describe('createSession', () => {
       await s.submit('again', { mode: 'agent' });
       expect(calls[1].prefixTrace).not.toBe(trace);
       expect(calls[1].priorCalibration).toBe(1.1);
-
-      s.reset({ relearn: true });
-      expect(s.calibration).toBeUndefined();
-      expect(s.decodeRate).toBeUndefined();
-      expect(s.profile).toBe('default');
     });
 
     it('updates the bundle and tells subscribers only when it changed', async () => {

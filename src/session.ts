@@ -191,9 +191,9 @@ export type Session = {
   switchSide(side: Side): void;
   // Replaces both sides' model history with a resumed conversation.
   loadHistory(active: Message[], other: Message[]): void;
-  // Drops the conversation and everything measured about it. `relearn` also forgets what was learned
-  // about the engine and returns to the default profile — /new, where the next model may differ.
-  reset(opts?: { relearn?: boolean }): void;
+  // Drops the conversation and everything measured about it. What was learned about the engine stays:
+  // the model is the same one, and a switch after this goes through `setProfile`.
+  reset(): void;
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
@@ -455,7 +455,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     });
   };
 
-  const reset = (resetOpts: { relearn?: boolean } = {}): void => {
+  const reset = (): void => {
     history = [];
     stashed = {};
     transcript = [];
@@ -466,18 +466,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     shrink = { sheds: 0, folds: 0 };
     // The engine holds none of the dropped bytes, so the trace compares against nothing.
     prefixTrace = new PrefixTrace();
-    if (!resetOpts.relearn) return;
-    calibration = undefined;
-    // The default profile may be a different model on different hardware — a rate learned under
-    // the old one would misprice every round until it re-learns.
-    prefillRate = undefined;
-    decodeRate = undefined;
-    genReserve = new GenReserve();
-    if (profile !== 'default') {
-      profile = 'default';
-      changed();
-      logEndpoint();
-    }
   };
 
   return {
