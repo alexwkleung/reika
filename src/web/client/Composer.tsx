@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { WIRE_MODES, type ClientMessage, type WireCatalog, type WireState } from '../protocol.js';
 import { isLargePaste, type PastedText } from '../../ui/pastes.js';
+import { isTypingEdge } from './typingedge.js';
 import type { Mode } from '../../types.js';
 import {
   acceptCompletion,
@@ -421,6 +422,9 @@ export function Composer({
             disabled={waiting || locked}
             placeholder={placeholderFor(mode, busy, locked)}
             onChange={e => {
+              if (isTypingEdge(text, e.target.value)) {
+                void send({ type: 'typing', text: e.target.value });
+              }
               setText(e.target.value);
               setRecall(notRecalling);
               requestCompletion(e.target.value);
