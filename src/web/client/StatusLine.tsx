@@ -1,5 +1,7 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { WireState } from '../protocol.js';
 import type { StreamStatus } from './eventstream.js';
+import { nextPathLine, PATH_INLINE, pathFits, pathReturnsAt } from './pathdwell.js';
 import { CWD_MAX_CHARS, shortenMiddle, statusStrip } from './statuschips.js';
 import './status.css';
 import { tip } from './Tooltip.js';
@@ -13,6 +15,36 @@ export function StatusLine({
   session: WireState | null;
   stream: StreamStatus | null;
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  const groupRef = useRef<HTMLSpanElement>(null);
+  const pathRef = useRef<HTMLSpanElement>(null);
+  const line = useRef(PATH_INLINE);
+  const [own, setOwn] = useState(false);
+  const [recheck, setRecheck] = useState(0);
+  // After every render and before paint, so a path that stops fitting never draws a frame wrapped
+  // by flex alone; the hold then keeps it there.
+  useLayoutEffect(() => {
+    const fits = measurePathFits(stripRef.current, groupRef.current, pathRef.current);
+    if (fits === null) return;
+    line.current = nextPathLine(line.current, fits, Date.now());
+    setOwn(line.current.own);
+  }, [session, stream, recheck]);
+  // A held path comes back once its dwell is over, even if nothing else renders by then.
+  const returnsAt = pathReturnsAt(line.current);
+  useEffect(() => {
+    if (returnsAt === null) return;
+    const t = setTimeout(() => setRecheck(n => n + 1), Math.max(0, returnsAt - Date.now()) + 50);
+    return () => clearTimeout(t);
+  }, [returnsAt, recheck]);
+  // The window narrowing or widening changes the room without a render.
+  const mounted = session !== null;
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => setRecheck(n => n + 1));
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [mounted]);
   if (!session) return null;
   const items = statusStrip(session, stream);
   // The folder sits outside the group: `space-between` keeps it at the right on the group's line,
@@ -87,7 +119,8 @@ export function StatusLine({
         return (
           <span
             key={i}
-            className="status-path"
+            ref={pathRef}
+            className={`status-path${own ? ' status-path--own' : ''}`}
             {...(shown === item.text ? tip(item.text, { cut: '' }) : tip(item.text))}
           >
             {shown}
@@ -103,12 +136,30 @@ export function StatusLine({
           {session.error}
         </div>
       ) : null}
-      <div className="status-strip" aria-label="Status">
-        <span className="status-items">
+      <div ref={stripRef} className="status-strip" aria-label="Status">
+        <span ref={groupRef} className="status-items">
           {items.filter(item => item.kind !== 'path').map(renderItem)}
         </span>
         {items.filter(item => item.kind === 'path').map(renderItem)}
       </div>
     </div>
   );
+}
+
+// Null where nothing can be measured (no path, or a DOM without layout, as in render tests).
+function measurePathFits(
+  strip: HTMLElement | null,
+  group: HTMLElement | null,
+  path: HTMLElement | null,
+): boolean | null {
+  if (!strip || !group || !path || typeof document.createRange !== 'function') return null;
+  const range = document.createRange();
+  range.selectNodeContents(path);
+  if (typeof range.getBoundingClientRect !== 'function') return null;
+  const pathWidth = range.getBoundingClientRect().width;
+  const stripStyle = getComputedStyle(strip);
+  const chipGap = parseFloat(getComputedStyle(group).columnGap) || 0;
+  const chips = [...group.children].map(c => c.getBoundingClientRect().width);
+  const chipsWidth = chips.reduce((sum, w) => sum + w, 0) + chipGap * Math.max(0, chips.length - 1);
+  return pathFits(strip.clientWidth, chipsWidth, pathWidth, parseFloat(stripStyle.columnGap) || 0);
 }
