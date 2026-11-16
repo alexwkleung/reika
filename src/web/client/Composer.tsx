@@ -38,6 +38,7 @@ import {
 import { connectionNotice } from './connection.js';
 import { notRecalling, recallStep, type Recall } from './inputhistory.js';
 import { caretLines, carriesImage, composerKeyAction, IMAGES_UNSUPPORTED } from './keys.js';
+import { ImagePreview } from './ImagePreview.js';
 import { PillMenu, type PillOption } from './PillMenu.js';
 import type { SendResult, UploadResult } from './send.js';
 import './composer.css';
@@ -148,6 +149,21 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
   const [parked, setParked] = useState<PastedText[]>([]);
   const [chips, setChips] = useState<ImageChip[]>([]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  // Every thumbnail URL not yet let go: revoked when its chip is gone for good, and on unmount.
+  const previews = useRef(new Set<string>());
+  const letGo = (gone: ImageChip[]): void => {
+    for (const c of gone) {
+      if (c.preview && previews.current.delete(c.preview)) URL.revokeObjectURL(c.preview);
+    }
+  };
+  useEffect(() => {
+    const live = previews.current;
+    return () => {
+      for (const url of live) URL.revokeObjectURL(url);
+      live.clear();
+    };
+  }, []);
   const [recall, setRecall] = useState<Recall>(notRecalling);
   const [completion, setCompletion] = useState<{ list: Completion; selected: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -164,7 +180,10 @@ export function Composer({
   const ownLine = useRef<{ text: string; chips: ImageChip[] } | null>(null);
   const preparing = session?.preparing ?? false;
   useEffect(() => {
-    if (!preparing) ownLine.current = null;
+    if (preparing) return;
+    // The line ran: its chips will not come back.
+    if (ownLine.current) letGo(ownLine.current.chips);
+    ownLine.current = null;
   }, [preparing]);
   if (restoreLine) {
     restoreLine.current = () => {
@@ -266,7 +285,11 @@ export function Composer({
     // The server took the sent ones; what the box no longer names is let go.
     const sent = new Set(images.map(i => i.marker));
     const kept = chips.filter(c => !sent.has(c.marker) && left.includes(c.marker));
-    discard(chips.filter(c => !sent.has(c.marker) && !kept.includes(c)));
+    const dropped = chips.filter(c => !sent.has(c.marker) && !kept.includes(c));
+    discard(dropped);
+    letGo(dropped);
+    // A line another tab's turn holds cannot come back to this box.
+    if (!ranAlone) letGo(sentChips);
     setChips(kept);
     setRecall(notRecalling);
   };
@@ -390,7 +413,10 @@ export function Composer({
 
   const removeChip = (marker: string): void => {
     const chip = chips.find(c => c.marker === marker);
-    if (chip) discard([chip]);
+    if (chip) {
+      discard([chip]);
+      letGo([chip]);
+    }
     setChips(cs => cs.filter(c => c.marker !== marker));
     setText(t => withoutMarker(t, marker));
     box.current?.focus();
@@ -418,10 +444,13 @@ export function Composer({
         break;
       }
       const marker = nextImageMarker([...chips, ...taken], [el.value, ...history]);
+      const preview = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : null;
+      if (preview) previews.current.add(preview);
       taken.push({
         marker,
         name: file.name || 'Pasted image',
         size: file.size,
+        preview,
         state: { kind: 'reading' },
       });
       void upload(file).then(result => {
@@ -544,6 +573,7 @@ export function Composer({
               );
               if (dropped.length > 0) {
                 discard(dropped);
+                letGo(dropped);
                 setChips(cs => cs.filter(c => !dropped.includes(c)));
               }
               if (isTypingEdge(text, e.target.value)) {
@@ -573,6 +603,17 @@ export function Composer({
                     key={chip.marker}
                     className={`composer-image composer-image-${chip.state.kind}`}
                   >
+                    {chip.preview ? (
+                      <button
+                        type="button"
+                        className="composer-image-thumb"
+                        aria-label={`View ${chip.marker}`}
+                        {...tip('View', { aria: false })}
+                        onClick={() => setViewing(chip.marker)}
+                      >
+                        <img src={chip.preview} alt="" />
+                      </button>
+                    ) : null}
                     <span className="composer-image-marker">{chip.marker}</span>
                     <span className="composer-image-name">{name}</span>
                     <span
@@ -661,6 +702,20 @@ export function Composer({
           </div>
         </div>
       </div>
+      {(() => {
+        const chip = chips.find(c => c.marker === viewing);
+        if (!chip?.preview) return null;
+        return (
+          <ImagePreview
+            src={chip.preview}
+            caption={`${chip.marker} ${chipLabel(chip).name}`}
+            onClose={() => {
+              setViewing(null);
+              box.current?.focus();
+            }}
+          />
+        );
+      })()}
       {error ? (
         <div className="composer-error" role="alert">
           {error}

@@ -8,6 +8,9 @@ export type ImageChip = {
   marker: string;
   name: string;
   size: number;
+  // An object URL for the page's own copy of the file, for the thumbnail; null where none can be
+  // made. Never sent anywhere.
+  preview: string | null;
   // `id` once the server has it; `chars` null for bytes a model that can see is sent as they are.
   state:
     | { kind: 'reading' }
