@@ -67,6 +67,25 @@ function useDigitKeys(count: number, pick: (index: number) => void, disabled: bo
   }, [count, disabled]);
 }
 
+// Esc cancels the dialogs where cancelling sends nothing, as in the terminal: a confirm (the line
+// goes back to the box) and the two pickers. Not an approval or a question, where Esc would answer
+// for the user. Captured, so the box's own Esc (which stops a turn) does not see it too.
+function useEscape(cancel: () => void, disabled: boolean): void {
+  const latest = useRef(cancel);
+  latest.current = cancel;
+  useEffect(() => {
+    if (disabled) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      latest.current();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [disabled]);
+}
+
 function Frame({
   kicker,
   title,
@@ -393,6 +412,13 @@ function ConfirmDialog({
   const a = useAnswer(send);
   const pick = (choice: number) => void a.answer({ type: 'answer', id, kind: 'confirm', choice });
   useDigitKeys(d.options.length, pick, a.disabled);
+  const dontSend = () => {
+    // Before the answer: the line's preparation ends with it, and the box decides whether the
+    // line was its own while that is still known.
+    onDontSend();
+    void a.answer({ type: 'answer', id, kind: 'confirm', choice: 'abort' });
+  };
+  useEscape(dontSend, a.disabled);
   return (
     <Frame
       kicker="Before sending"
@@ -423,16 +449,7 @@ function ConfirmDialog({
             onPick={() => pick(i)}
           />
         ))}
-        <Quiet
-          label="Don’t send"
-          disabled={a.disabled}
-          onClick={() => {
-            // Before the answer: the line's preparation ends with it, and the box decides whether
-            // the line was its own while that is still known.
-            onDontSend();
-            void a.answer({ type: 'answer', id, kind: 'confirm', choice: 'abort' });
-          }}
-        />
+        <Quiet label="Don’t send" disabled={a.disabled} onClick={dontSend} />
       </div>
     </Frame>
   );
@@ -440,6 +457,7 @@ function ConfirmDialog({
 
 function ModelDialog({ id, d, send }: { id: string; d: Of<'model'>; send: Send }) {
   const a = useAnswer(send);
+  useEscape(() => void a.answer({ type: 'answer', id, kind: 'model', name: null }), a.disabled);
   const pick = (i: number) =>
     void a.answer({ type: 'answer', id, kind: 'model', name: d.targets[i]!.name });
   useDigitKeys(d.targets.length, pick, a.disabled);
@@ -477,6 +495,10 @@ function ModelDialog({ id, d, send }: { id: string; d: Of<'model'>; send: Send }
 
 function SessionDialog({ id, d, send }: { id: string; d: Of<'session'>; send: Send }) {
   const a = useAnswer(send);
+  useEscape(
+    () => void a.answer({ type: 'answer', id, kind: 'session', session: null }),
+    a.disabled,
+  );
   const pick = (i: number) =>
     void a.answer({ type: 'answer', id, kind: 'session', session: d.entries[i]!.id });
   useDigitKeys(d.entries.length, pick, a.disabled);

@@ -258,6 +258,34 @@ describe('confirm, model and session', () => {
     await m.unmount();
   });
 
+  it('Esc cancels a confirm and the pickers, as in the terminal, and never answers an approval', async () => {
+    const confirm: WireDialog = {
+      kind: 'confirm',
+      title: 'Pasted link',
+      subtitle: 'fetch it?',
+      details: [],
+      options: ['Send as typed', 'Fetch the link'],
+      initial: 0,
+    };
+    let m = await mount(confirm);
+    await m.key('Escape');
+    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'confirm', choice: 'abort' }]);
+    expect(m.restored).toBe(1);
+    await m.unmount();
+    m = await mount({ kind: 'model', targets: [] });
+    await m.key('Escape');
+    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'model', name: null }]);
+    await m.unmount();
+    m = await mount({ kind: 'session', heading: 'Sessions', entries: [] });
+    await m.key('Escape');
+    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'session', session: null }]);
+    await m.unmount();
+    m = await mount(approval);
+    await m.key('Escape');
+    expect(m.sent).toEqual([]);
+    await m.unmount();
+  });
+
   it('model picks a target by name or cancels', async () => {
     const d: WireDialog = {
       kind: 'model',

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { createSession, Session, SessionOptions, SubmitOptions } from '../session.js';
 import type { Config, Message } from '../types.js';
-import { parseWebArgs, runWeb, type WebHandle, type WebIo } from './command.js';
+import { parseWebArgs, runWeb, WINDOW_TIMINGS, type WebHandle, type WebIo } from './command.js';
+import { MAX_BACKOFF_MS } from './client/eventstream.js';
 import { PROTOCOL_VERSION, type ServerEvent } from './protocol.js';
 
 describe('parseWebArgs', () => {
@@ -527,5 +528,11 @@ describe('runWeb --window', () => {
     const page = await holdStream(run.port, token);
     page.close();
     expect(await settled(run)).toBe('running');
+  });
+});
+
+describe('--window timings', () => {
+  it('waits out the page’s longest reconnect before reading the window as closed', () => {
+    expect(WINDOW_TIMINGS.pageGoneMs).toBeGreaterThan(MAX_BACKOFF_MS);
   });
 });
