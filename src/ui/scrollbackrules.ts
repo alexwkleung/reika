@@ -1,4 +1,5 @@
 import type { Message } from '../types.js';
+import { HIDDEN_TOOL_ARGS } from './format.js';
 
 // The scrollback's content rules that need no terminal: which verb a read row keeps, which part of
 // a notice is its lead, how a call's arguments print. Ink-free so the browser client (src/web/client)
@@ -119,21 +120,12 @@ export function hasBlockUnderSummary(msg: Message): boolean {
   return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
 }
 
-// Args whose values are already shown in full elsewhere (the diff view) and only
-// bloat the header — drop them so e.g. an edit reads "⏺︎ Edit(path=…)" instead of
-// "⏺︎ Edit(path=…, old_string=…, new_string=…)". Path stays; it's the one bit the
-// diff header doesn't make obvious at a glance.
-const HIDDEN_ARGS: Record<string, ReadonlySet<string>> = {
-  edit: new Set(['old_string', 'new_string']),
-  write: new Set(['content']),
-};
-
 export function formatArgs(
   name: string,
   args: Record<string, unknown>,
   scrub: (text: string) => string = text => text,
 ): string {
-  const hidden = HIDDEN_ARGS[name];
+  const hidden = HIDDEN_TOOL_ARGS[name];
   return Object.entries(args)
     .filter(([k]) => !hidden?.has(k))
     .map(([k, v]) => `${k}=${truncate(scrub(JSON.stringify(v)), 120)}`)

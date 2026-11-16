@@ -365,10 +365,11 @@ describe('dialog builders', () => {
     };
     expect(modelDialog([target])).toEqual({ kind: 'model', targets: [target] });
     const entry = { path: '/repo/history/a.jsonl', savedAt: '2026-01-01', messageCount: 4 };
+    // By id, as the drawer answers: the path names the home directory.
     expect(sessionDialog({ heading: 'this project', entries: [entry] })).toEqual({
       kind: 'session',
       heading: 'this project',
-      entries: [entry],
+      entries: [{ id: 'a.jsonl', savedAt: '2026-01-01', messageCount: 4 }],
     });
   });
 });
@@ -404,8 +405,8 @@ describe('parseClientMessage', () => {
     { type: 'answer', id: 'd3', kind: 'confirm', choice: 'abort' },
     { type: 'answer', id: 'd4', kind: 'model', name: 'kimi' },
     { type: 'answer', id: 'd4', kind: 'model', name: null },
-    { type: 'answer', id: 'd5', kind: 'session', path: '/repo/history/a.jsonl' },
-    { type: 'answer', id: 'd5', kind: 'session', path: null },
+    { type: 'answer', id: 'd5', kind: 'session', session: 'a.jsonl' },
+    { type: 'answer', id: 'd5', kind: 'session', session: null },
     { type: 'sessions', scope: 'project' },
     { type: 'sessions', scope: 'root', filter: 'parser' },
     { type: 'resume', scope: 'project', id: '2026-11-15T10-00-00-000Z-a1b2c3.jsonl' },
@@ -542,7 +543,8 @@ describe('parseClientMessage', () => {
     ['confirm without choice', answer('confirm', {}), 'choice'],
     ['model with name 5', answer('model', { name: 5 }), 'name'],
     ['model without name', answer('model', {}), 'name'],
-    ['session with path {}', answer('session', { path: {} }), 'path'],
+    ['session with session {}', answer('session', { session: {} }), 'session'],
+    ['session with a path', answer('session', { session: '/repo/history/a.jsonl' }), 'session'],
   ];
 
   it.each(rejected)('rejects %s, naming the field', (_label, message, field) => {
