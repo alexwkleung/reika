@@ -9,6 +9,9 @@ which also serve as the comparison for what a local quant can and cannot hold.
 Quantization is the one in parentheses. Where a note names modes, that is where the model was used
 rather than the only thing it can do.
 
+The 4B-class models at the bottom of the local list run end to end, but are weak on anything past
+a few steps. Use them for short, well-scoped tasks.
+
 ## Local
 
 - LFM2.5 24B A2B (UD-IQ3_XXS)
