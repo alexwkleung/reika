@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { tip } from './Tooltip.js';
 
 // A pill in the input box that opens a menu above it: the mode and the model. A real button and
 // real menu items, so it works from the keyboard as well as the mouse.
@@ -97,7 +98,7 @@ export function PillMenu({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         disabled={disabled}
-        title={disabled ? title : undefined}
+        {...tip(disabled ? title : null)}
         onClick={() => (open ? setOpen(false) : show())}
         onKeyDown={e => {
           if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {

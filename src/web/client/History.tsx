@@ -3,6 +3,7 @@ import type { SessionScope, WireSessionList, WireState } from '../protocol.js';
 import { switchBlocked, type Send } from './Composer.js';
 import { listNote, sessionMeta, sessionTitle } from './sessionlist.js';
 import './history.css';
+import { tip } from './Tooltip.js';
 
 // This project's saved sessions, opened in place as `/resume` does (one session per server, never
 // a live switcher). A pane pinned beside the chat on a wide window, a drawer over it on a narrow
@@ -235,7 +236,7 @@ export function History({
           className="history-new"
           disabled={blocked !== null}
           aria-disabled={pending !== null || undefined}
-          title={blocked ?? undefined}
+          {...tip(blocked)}
           onClick={() => void act('new', { type: 'new' })}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -249,7 +250,7 @@ export function History({
             type="button"
             className="history-close"
             aria-label="Hide history"
-            title="Hide history"
+            {...tip('Hide history', { aria: false })}
             aria-expanded="true"
             aria-controls="history-panel"
             onClick={hide}
@@ -303,8 +304,9 @@ export function History({
                 aria-current={isCurrent ? 'true' : undefined}
                 disabled={reason !== null}
                 aria-disabled={pending !== null || undefined}
-                // A title cut to the row's one line is still there to read.
-                title={reason ?? sessionTitle(entry)}
+                // A title cut to the row's one line is still there to read. Why a row is off goes
+                // unsaid here: the current one is marked, and a running prompt has its line above.
+                {...tip(sessionTitle(entry), { cut: '.history-title-text' })}
                 onClick={() => void act(entry.id, { type: 'resume', scope, id: entry.id })}
               >
                 <span className="history-title">
@@ -345,7 +347,7 @@ export function History({
           type="button"
           className="history-show"
           aria-label="Show history"
-          title="Show history"
+          {...tip('Show history', { aria: false })}
           aria-expanded={shown}
           onClick={show}
         >

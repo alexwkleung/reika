@@ -68,6 +68,42 @@ body {
   font-family: var(--reika-prose);
   font-size: 15px;
   line-height: 1.6;
+  /* An app, not a document: chrome does not select. The text a user copies opts back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* What a user copies: the conversation's words, a command and its output, a diff, what a dialog
+   asks or would run, an error. Inputs edit, so they select too (Safari carries a parent's none
+   into a field). Markers and labels inside these stay out, so a drag copies the words alone. */
+input,
+textarea,
+.app-scroll .row,
+.live,
+.dialog-title,
+.dialog-preview,
+.dialog-details,
+.dialog-warnings,
+.composer-error,
+.status-error {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.prose-marker,
+.tool-marker,
+.call-marker,
+.row-system-marker,
+.row-error-marker,
+.row-worked-marker,
+.reasoning-head,
+.reasoning-details > summary,
+.plan-mark,
+.plan-toggle,
+.dialog-key,
+.dialog-kicker,
+.sr-only {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 *,

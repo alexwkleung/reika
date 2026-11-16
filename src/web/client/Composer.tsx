@@ -25,6 +25,7 @@ import { caretLines, carriesImage, composerKeyAction, IMAGES_UNSUPPORTED } from 
 import { PillMenu, type PillOption } from './PillMenu.js';
 import type { SendResult } from './send.js';
 import './composer.css';
+import { tip } from './Tooltip.js';
 
 // The input box (direction B): the text, then a row inside the box with the mode and model pills,
 // attach, and Send (Stop while a turn runs from an empty box). Enter sends, Shift+Enter or a
@@ -462,7 +463,7 @@ export function Composer({
               type="button"
               className="pill pill-icon"
               aria-label="Attach a file"
-              title="Attach a file (@)"
+              {...tip('Attach a file (@)', { aria: false })}
               disabled={waiting || locked}
               onClick={attach}
             >
@@ -475,7 +476,8 @@ export function Composer({
                 type="button"
                 className="composer-round composer-stop"
                 aria-label="Stop"
-                title="Stop (Esc)"
+                aria-keyshortcuts="Escape"
+                {...tip('Stop (Esc)', { aria: false })}
                 onClick={() => void abort()}
               >
                 <span className="composer-stop-square" aria-hidden="true" />
@@ -485,7 +487,8 @@ export function Composer({
                 type="button"
                 className="composer-round composer-send"
                 aria-label={busy ? 'Queue' : 'Send'}
-                title={busy ? 'Queue (Enter)' : 'Send (Enter)'}
+                aria-keyshortcuts="Enter"
+                {...tip(busy ? 'Queue (Enter)' : 'Send (Enter)', { aria: false })}
                 disabled={!canSend}
                 onClick={() => void submit(text)}
               >

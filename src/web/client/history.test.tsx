@@ -201,10 +201,13 @@ describe('History as a drawer', () => {
     await h.open();
     const other = h.rows()[1];
     expect(other.disabled).toBe(true);
-    expect(other.title).toMatch(/running prompt/);
+    // Said once, in the panel, rather than on every row.
+    expect(h.q('.history-blocked')?.textContent).toMatch(/running prompt/);
     const fresh = h.q<HTMLButtonElement>('.history-new')!;
     expect(fresh.disabled).toBe(true);
-    expect(fresh.title).toMatch(/running prompt/);
+    expect(fresh.getAttribute('data-tip')).toMatch(/running prompt/);
+    expect(fresh.getAttribute('aria-description')).toMatch(/running prompt/);
+    expect(fresh.hasAttribute('title')).toBe(false);
   });
 
   it('sends new for New conversation', async () => {

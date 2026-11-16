@@ -170,7 +170,13 @@ describe('StatusLine', () => {
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('style="width:50%"');
     expect(html).toContain('16k/32k (50%)');
-    expect(html).toContain('<span class="status-path" title="/repo">/repo</span>');
+    // Its tooltip only when cut, and no browser title anywhere in the strip.
+    expect(html).toContain(
+      '<span class="status-path" data-tip="/repo" data-tip-cut="">/repo</span>',
+    );
+    expect(html).not.toContain('title=');
+    expect(html).toContain('data-tip="16k of a 32k window."');
+    expect(html).toContain('aria-description="16k of a 32k window."');
     expect(renderToStaticMarkup(createElement(StatusLine, { session: null, stream: null }))).toBe(
       '',
     );
@@ -195,7 +201,7 @@ describe('StatusLine', () => {
     expect(
       html({ number: 12, url: 'https://github.com/octocat/app/pull/12', state: 'draft' }),
     ).toContain(
-      '<span class="status-pr">PR <a href="https://github.com/octocat/app/pull/12" target="_blank" rel="noopener noreferrer" title="https://github.com/octocat/app/pull/12">#12</a><span class="status-pr-state status-pr-state--draft"> draft</span></span>',
+      '<span class="status-pr">PR <a href="https://github.com/octocat/app/pull/12" target="_blank" rel="noopener noreferrer">#12</a><span class="status-pr-state status-pr-state--draft"> draft</span></span>',
     );
     expect(html({ number: 12 })).toContain('<span class="status-pr">PR #12</span>');
   });

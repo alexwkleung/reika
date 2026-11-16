@@ -2,6 +2,7 @@ import type { WireState } from '../protocol.js';
 import type { StreamStatus } from './eventstream.js';
 import { CWD_MAX_CHARS, shortenMiddle, statusStrip } from './statuschips.js';
 import './status.css';
+import { tip } from './Tooltip.js';
 
 // The quiet strip under the input box: approvals, the context meter, the session's numbers and the
 // folder, with a session error above it.
@@ -34,7 +35,7 @@ export function StatusLine({
                 <span
                   key={i}
                   className={`status-meter${item.warn ? ' status-meter--warn' : ''}`}
-                  title={item.title}
+                  {...tip(item.title)}
                 >
                   {item.fill !== null ? (
                     <span
@@ -53,7 +54,7 @@ export function StatusLine({
               );
             case 'stat':
               return (
-                <span key={i} className="status-stat" title={item.title}>
+                <span key={i} className="status-stat" {...tip(item.title)}>
                   {item.text}
                 </span>
               );
@@ -70,7 +71,8 @@ export function StatusLine({
                 <span key={i} className="status-pr">
                   {'PR '}
                   {item.url ? (
-                    <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.url}>
+                    // No tip: the browser shows a link's address on hover itself.
+                    <a href={item.url} target="_blank" rel="noopener noreferrer">
                       {number}
                     </a>
                   ) : (
@@ -84,12 +86,19 @@ export function StatusLine({
                 </span>
               );
             }
-            case 'path':
+            case 'path': {
+              const shown = shortenMiddle(item.text, CWD_MAX_CHARS);
+              // The whole folder, when either the shortening or the strip's width cut it.
               return (
-                <span key={i} className="status-path" title={item.text}>
-                  {shortenMiddle(item.text, CWD_MAX_CHARS)}
+                <span
+                  key={i}
+                  className="status-path"
+                  {...(shown === item.text ? tip(item.text, { cut: '' }) : tip(item.text))}
+                >
+                  {shown}
                 </span>
               );
+            }
           }
         })}
       </div>

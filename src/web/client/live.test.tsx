@@ -166,7 +166,8 @@ describe('ReasoningBlock', () => {
     const done = renderToStaticMarkup(<ReasoningBlock text={long} />);
     expect(done).toContain('<details');
     expect(done).toMatch(/5 lines<svg class="reasoning-chevron"/);
-    expect(done).toContain('title="Show all"');
+    // The chip says it opens; the preview carries no title of its own.
+    expect(done).not.toContain('title=');
     expect(done).toMatch(/reasoning-window reasoning-tail/);
   });
 });
