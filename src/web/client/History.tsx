@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { SessionScope, WireSessionList, WireState } from '../protocol.js';
 import { switchBlocked, type Send } from './Composer.js';
-import { listNote, sessionMeta, sessionTitle } from './sessionlist.js';
+import { listCount, listNote, sessionMeta, sessionTitle } from './sessionlist.js';
 import './history.css';
 import { tip } from './Tooltip.js';
 
@@ -221,6 +221,7 @@ export function History({
   };
 
   const note = list ? listNote(list, query) : null;
+  const count = list ? listCount(list) : null;
   const body = (
     <aside
       ref={panel}
@@ -280,10 +281,6 @@ export function History({
         maxLength={200}
         onChange={e => setFilter(e.target.value)}
       />
-      {/* Said once, in the open: a pinned pane spends a long turn with every row disabled. */}
-      {blocked && list && list.entries.some(e => !e.current) ? (
-        <p className="history-blocked">{blocked}</p>
-      ) : null}
       {error || listError ? (
         <p className="history-error" role="alert">
           {error ?? listError}
@@ -291,6 +288,14 @@ export function History({
       ) : null}
       <h2 className="history-heading" id="history-heading">
         History
+        {count ? (
+          <span
+            className="history-count"
+            {...tip('The newest sessions; filter to find older ones')}
+          >
+            {` (${count})`}
+          </span>
+        ) : null}
       </h2>
       <ul className="history-list" aria-labelledby="history-heading" aria-busy={list === null}>
         {list?.entries.map(entry => {
@@ -305,7 +310,7 @@ export function History({
                 disabled={reason !== null}
                 aria-disabled={pending !== null || undefined}
                 // A title cut to the row's one line is still there to read. Why a row is off goes
-                // unsaid here: the current one is marked, and a running prompt has its line above.
+                // unsaid here: the current one is marked, and a running prompt is in the input box.
                 {...tip(sessionTitle(entry), { cut: '.history-title-text' })}
                 onClick={() => void act(entry.id, { type: 'resume', scope, id: entry.id })}
               >

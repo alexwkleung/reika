@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WireSessionEntry, WireSessionList } from '../protocol.js';
-import { listNote, savedAgo, sessionMeta, sessionTitle } from './sessionlist.js';
+import { listCount, listNote, savedAgo, sessionMeta, sessionTitle } from './sessionlist.js';
 
 const now = Date.parse('2026-11-15T12:00:00Z');
 const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString();
@@ -64,10 +64,14 @@ describe('listNote', () => {
     expect(listNote(list({ autosave: false }), 'x')).toBe('No sessions match.');
   });
 
-  it('says a list is capped, and nothing when it is whole', () => {
-    expect(listNote(list({ entries: [entry()], total: 1 }), '')).toBeNull();
-    expect(listNote(list({ entries: [entry()], total: 250 }), '')).toBe(
-      'Showing the newest 1 of 250. Filter to find older ones.',
-    );
+  it('says nothing under a list with rows', () => {
+    expect(listNote(list({ entries: [entry()], total: 250 }), '')).toBeNull();
+  });
+});
+
+describe('listCount', () => {
+  it('counts a capped list, and nothing when it is whole', () => {
+    expect(listCount(list({ entries: [entry()], total: 1 }))).toBeNull();
+    expect(listCount(list({ entries: [entry()], total: 250 }))).toBe('1 of 250');
   });
 });

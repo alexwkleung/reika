@@ -201,8 +201,8 @@ describe('History as a drawer', () => {
     await h.open();
     const other = h.rows()[1];
     expect(other.disabled).toBe(true);
-    // Said once, in the panel, rather than on every row.
-    expect(h.q('.history-blocked')?.textContent).toMatch(/running prompt/);
+    // Not said in the panel: the input box already shows the prompt running.
+    expect(h.q('.history-blocked')).toBeNull();
     const fresh = h.q<HTMLButtonElement>('.history-new')!;
     expect(fresh.disabled).toBe(true);
     expect(fresh.getAttribute('data-tip')).toMatch(/running prompt/);
@@ -216,6 +216,16 @@ describe('History as a drawer', () => {
     await h.click(h.q('.history-new'));
     expect(h.sent.at(-1)).toEqual({ type: 'new' });
     expect(h.q('.history')).toBeNull();
+  });
+
+  it('counts a capped list beside its heading, and nothing when it is whole', async () => {
+    const capped = await mount({ list: () => listOf({ total: 250 }) });
+    await capped.open();
+    expect(capped.q('.history-heading')?.textContent).toBe('History (2 of 250)');
+    expect(capped.q('.history-note')).toBeNull();
+    const whole = await mount({ list: () => listOf({ total: 2 }) });
+    await whole.open();
+    expect(whole.q('.history-heading')?.textContent).toBe('History');
   });
 
   it('switches to the /save transcripts', async () => {
@@ -309,13 +319,15 @@ describe('History as a pane', () => {
     expect(env.stored.get('reika.history.pinned')).toBe('true');
   });
 
-  it('says once why rows are off while a prompt runs, and asks again when it ends', async () => {
+  it('turns rows off while a prompt runs, and asks again when it ends', async () => {
     env.stored.clear();
     const h = await wide({ state: { status: 'busy' } });
-    expect(h.q('.history-blocked')?.textContent).toMatch(/running prompt/);
+    expect(h.rows().some(r => r.disabled)).toBe(true);
     const asked = h.sent.filter(m => m.type === 'sessions').length;
     await h.render({ status: 'idle' });
-    expect(h.q('.history-blocked')).toBeNull();
+    expect(h.rows().every(r => r.disabled === (r.getAttribute('aria-current') === 'true'))).toBe(
+      true,
+    );
     expect(h.sent.filter(m => m.type === 'sessions').length).toBe(asked + 1);
   });
 
