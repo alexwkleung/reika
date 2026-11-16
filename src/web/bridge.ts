@@ -76,6 +76,8 @@ export type WebBridge = {
   handle(message: ClientMessage): HandleResult | Promise<HandleResult>;
   // An image's raw bytes, from `POST /upload`: read now, held until a submit names it (#979).
   upload(bytes: Uint8Array, contentType: string): Promise<UploadResult>;
+  // A refusal the server can answer before it reads the bytes, or null.
+  uploadRefusal(): Extract<UploadResult, { ok: false }> | null;
   close(): void;
 };
 
@@ -216,26 +218,34 @@ export function createWebBridge(
 
   // A resume is reading its file: a submit now would land in the conversation it is replacing.
   let resuming = false;
-  // Uploads by id, per session rather than per tab: a POST is not tied to a stream. Freed by the
-  // submit that takes them, a `discard`, age, a new conversation, a resume and close.
-  const uploads = new Map<string, HeldUpload>();
+  // Uploads by id, per session rather than per tab: a POST is not tied to a stream. Freed once a
+  // line that names them is built, by a `discard`, by age, and by a new conversation, a resume and
+  // close. `claimed` holds one for a line still asking its questions: a cancelled line hands it
+  // back, as the TUI leaves an image in the box until a turn takes it.
+  const uploads = new Map<string, HeldUpload & { claimed: boolean }>();
   // One read at a time: a vision model or the OCR child is the slow part, and a second tab's
   // paste waits for its own answer rather than racing it.
   let reading = false;
+  // Bumped by a new conversation and a resume: a read that finishes after one belongs to the
+  // conversation it was pasted into, which is gone.
+  let uploadGeneration = 0;
   const heldBytes = (): number =>
     [...uploads.values()].reduce((n, u) => n + (u.native?.bytes.length ?? 0), 0);
   const sweepUploads = (): void => {
     for (const [id, u] of uploads) if (now() - u.at > UPLOAD_TTL_MS) uploads.delete(id);
   };
+  // Age is checked on every upload and submit too; the timer is for a session nobody touches.
+  const sweepTimer = setInterval(sweepUploads, 60_000);
+  sweepTimer.unref?.();
+  const clearUploads = (): void => {
+    uploads.clear();
+    uploadGeneration++;
+  };
 
-  const upload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
+  type UploadRefusal = Extract<UploadResult, { ok: false }>;
+  // What can be refused before the bytes are read, so a refused upload never buffers 32MB.
+  const uploadRefusal = (incoming = 0): UploadRefusal | null => {
     if (closed) return { ok: false, error: 'closed', status: 409 };
-    // The bytes decide, and the declared type must agree: a refusal names a mislabelled file
-    // rather than sending a model data under a type it is not.
-    const mime = sniffKnownImageMime(bytes);
-    if (mime === null || mime !== contentType) {
-      return { ok: false, error: 'not a PNG, JPEG, WebP or GIF image', status: 415 };
-    }
     // Shell mode sends the line to bash, which would try to run `[Image 1]`.
     if (controller.mode === 'shell') {
       return { ok: false, error: "can't attach an image in shell mode", status: 409 };
@@ -245,10 +255,23 @@ export function createWebBridge(
     if (uploads.size >= MAX_PENDING_UPLOADS) {
       return { ok: false, error: 'too many images waiting to be sent', status: 429 };
     }
-    if (heldBytes() + bytes.length > MAX_PENDING_UPLOAD_BYTES) {
+    if (heldBytes() + incoming > MAX_PENDING_UPLOAD_BYTES) {
       return { ok: false, error: 'the images waiting to be sent are too large', status: 413 };
     }
+    return null;
+  };
+
+  const readUpload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
+    // The bytes decide, and the declared type must agree: a refusal names a mislabelled file
+    // rather than sending a model data under a type it is not.
+    const mime = sniffKnownImageMime(bytes);
+    if (mime === null || mime !== contentType) {
+      return { ok: false, error: 'not a PNG, JPEG, WebP or GIF image', status: 415 };
+    }
+    const refused = uploadRefusal(bytes.length);
+    if (refused) return refused;
     reading = true;
+    const generation = uploadGeneration;
     try {
       const read = await controller.readImage(bytes, 'image');
       if (!read.ok) {
@@ -257,6 +280,13 @@ export function createWebBridge(
         return { ok: false, error: read.notice, status: 422 };
       }
       if (closed) return { ok: false, error: 'closed', status: 409 };
+      if (generation !== uploadGeneration) {
+        return {
+          ok: false,
+          error: 'the conversation changed while the image was read',
+          status: 409,
+        };
+      }
       const id = randomUUID();
       uploads.set(id, {
         text: read.text,
@@ -264,33 +294,49 @@ export function createWebBridge(
         ...(read.native ? { native: read.native } : {}),
         detail: read.detail,
         at: now(),
+        claimed: false,
       });
-      return {
-        ok: true,
-        reply: { id, chars: read.native ? null : read.text.length },
-      };
+      return { ok: true, reply: { id, chars: read.native ? null : read.text.length } };
     } catch (e) {
       return { ok: false, error: (e as Error).message, status: 422 };
     } finally {
       reading = false;
     }
   };
+  // A refusal can quote what the OCR child or a vision server said, a path included (#990).
+  const upload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
+    const result = await readUpload(bytes, contentType);
+    return result.ok ? result : { ...result, error: scrubError(result.error, cwd()) };
+  };
 
-  // Every named upload, or a refusal and nothing taken: a line must not run without an image the
-  // user saw on its chip.
-  const takeUploads = (
+  // Every named upload, or a refusal and nothing claimed: a line must not run without an image
+  // the user saw on its chip. Claimed, not deleted: the line may still be cancelled.
+  const claimUploads = (
     images: SubmittedImage[],
-  ): { images: ImageAttachment[] } | { error: string } => {
+  ): { images: ImageAttachment[]; ids: string[] } | { error: string } => {
     sweepUploads();
     const out: ImageAttachment[] = [];
     for (const { marker, id } of images) {
       const held = uploads.get(id);
       if (!held) return { error: `${marker} is no longer held: attach it again` };
-      const { detail, at: _at, ...attachment } = held;
+      if (held.claimed) return { error: `${marker} is already being sent` };
+      const { detail, at: _at, claimed: _claimed, ...attachment } = held;
       out.push({ ...attachment, marker, receipt: `${marker} — ${detail}.` });
     }
-    for (const { id } of images) uploads.delete(id);
-    return { images: out };
+    const ids = images.map(i => i.id);
+    for (const id of ids) uploads.get(id)!.claimed = true;
+    return { images: out, ids };
+  };
+  // The line was built (or queued): the uploads are its now.
+  const takeUploads = (ids: string[]): void => {
+    for (const id of ids) uploads.delete(id);
+  };
+  // The line ended without being built: whatever it still claims is the tab's again.
+  const releaseUploads = (ids: string[]): void => {
+    for (const id of ids) {
+      const held = uploads.get(id);
+      if (held) held.claimed = false;
+    }
   };
 
   const emit = (event: ServerEvent): void => {
@@ -555,7 +601,7 @@ export function createWebBridge(
       // A `/resume` picker's list no longer says what is open.
       supersedePicker('session');
       const loaded = await resume(picked);
-      if (loaded) uploads.clear();
+      if (loaded) clearUploads();
       return loaded ? { ok: true } : { ok: false, error: 'the session could not be read' };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -574,12 +620,16 @@ export function createWebBridge(
     return controller.openConfirm(spec);
   };
 
-  const inputFrontEnd = (images: ImageAttachment[] = []): InputFrontEnd => ({
+  const inputFrontEnd = (
+    images: ImageAttachment[] = [],
+    onImagesTaken?: () => void,
+  ): InputFrontEnd => ({
     turn: {},
     get pastes() {
       return pastes;
     },
     images,
+    ...(onImagesTaken ? { onImagesTaken } : {}),
     ask,
     exit: () => opts.onExit?.(),
     pickModel: (targets: ModelTarget[]) => {
@@ -763,12 +813,15 @@ export function createWebBridge(
             return { ok: false, error: "can't attach an image in shell mode", conflict: true };
           }
           // Before anything awaits, like the pastes below, so two submits cannot take one upload.
-          const taken = takeUploads(named);
+          const taken = claimUploads(named);
           if ('error' in taken) return { ok: false, error: taken.error, conflict: true };
           // Before anything awaits, so two tabs' pastes can never be given the same number.
           const adopted = adoptPastes(pastes, message.text, message.pastes ?? []);
           pastes = adopted.pastes;
-          void submitSafely(adopted.text, inputFrontEnd(taken.images));
+          void submitSafely(
+            adopted.text,
+            inputFrontEnd(taken.images, () => takeUploads(taken.ids)),
+          ).finally(() => releaseUploads(taken.ids));
           return { ok: true };
         }
         case 'abort':
@@ -817,7 +870,7 @@ export function createWebBridge(
           const busy = switchRefusal('conversations');
           if (busy) return busy;
           supersedePicker('session');
-          uploads.clear();
+          clearUploads();
           controller.newConversation({ role: 'user', content: '/new', meta: true });
           return { ok: true };
         }
@@ -850,6 +903,7 @@ export function createWebBridge(
       };
     },
     upload,
+    uploadRefusal: () => uploadRefusal(),
     handle: message => {
       const result = handleRaw(message);
       return result instanceof Promise ? result.then(scrubResult) : scrubResult(result);
@@ -859,7 +913,8 @@ export function createWebBridge(
       supersedePicker('model');
       supersedePicker('session');
       closed = true;
-      uploads.clear();
+      clearUploads();
+      clearInterval(sweepTimer);
       unsubscribeController();
       unsubscribeLive();
       unsubscribeSession?.();
