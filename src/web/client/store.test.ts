@@ -319,6 +319,18 @@ describe('foldEvent: live and deltas', () => {
     expect(s.live?.tool).toEqual({ name: 'bash', output: 'a\nb\n' });
   });
 
+  it('a delta takes back what drop names before it appends (#990)', () => {
+    const s = fold(
+      base,
+      { type: 'live', now: 0, live: live({ tool: { name: 'bash', output: '10%' } }) },
+      { type: 'delta', channel: 'content', text: 'by Mona ' },
+      { type: 'delta', channel: 'content', text: '<user> today ', drop: 5 },
+      { type: 'delta', channel: 'tool', text: '50%', drop: 3 },
+    );
+    expect(s.live?.content).toBe('by <user> today ');
+    expect(s.live?.tool?.output).toBe('50%');
+  });
+
   it('a tool delta with no tool block is dropped', () => {
     expect(fold(base, { type: 'delta', channel: 'tool', text: 'x' })).toBe(base);
   });
