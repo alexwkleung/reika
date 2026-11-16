@@ -77,6 +77,11 @@ export function scrubGeneration(): number {
   return generation;
 }
 
+// For a rule that lives outside this file (the display root, paths.ts).
+export function bumpScrubGeneration(): void {
+  generation++;
+}
+
 export function setIdentity(id: Identity): void {
   rules = buildRules(id);
   enabled = true;

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { redactSecrets } from './redact.js';
-import { scrubPaths } from './paths.js';
+import { displayRoot, scrubPaths } from './paths.js';
 import { scrubIdentity } from './identity.js';
 import { sanitizeTerminalText } from './termtext.js';
 
@@ -48,4 +48,37 @@ export function displayCwd(cwd: string): string {
 // a key and its value is enough to break the anchor a rule matches on.
 export function scrubOutput(s: string, cwd?: string): string {
   return scrubDisplay(sanitizeTerminalText(s), cwd);
+}
+
+// A live stream re-rendered every flush can end inside a path the scrubber would match whole: a
+// frame of `/Users/al` shows the account name before the next chunk turns it into `~/…`. The tail
+// of the stream that is still a prefix of `$HOME/` or the cwd is held back until it settles (#1015).
+const HELD_TAIL_SCAN = 512;
+
+export function holdPartialPath(s: string): string {
+  const roots = [homedir() + '/', displayRoot() + '/'];
+  const from = Math.max(0, s.length - HELD_TAIL_SCAN);
+  for (let i = s.indexOf('/', from); i !== -1; i = s.indexOf('/', i + 1)) {
+    const tail = s.slice(i);
+    if (/\s/.test(tail)) continue;
+    if (roots.some(r => r.length > tail.length && r.startsWith(tail))) return s.slice(0, i);
+  }
+  return s;
+}
+
+// What an approval preview shows: paths and identity, never a masked secret, since the user must
+// see exactly what they approve.
+export function scrubPreview(s: string): string {
+  return s
+    .split('\n')
+    .map(line => scrubIdentity(scrubPaths(line)))
+    .join('\n');
+}
+
+// Per line, so a diff's row count and line numbers cannot move.
+export function scrubLines(s: string): string {
+  return s
+    .split('\n')
+    .map(line => scrubDisplay(line))
+    .join('\n');
 }

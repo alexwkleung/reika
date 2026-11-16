@@ -1,4 +1,5 @@
 import React from 'react';
+import { scrubOutput } from './scrub.js';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
 import { queuedPreview, type QueuedMessage } from '../agent/busyqueue.js';
@@ -18,7 +19,7 @@ export function QueuedList({ queue }: { queue: QueuedMessage[] }) {
         <Box key={i} width="100%">
           <Text wrap="wrap">
             <Text color={theme.queued}>{i === 0 ? 'next › ' : 'then › '}</Text>
-            <Text>{queuedPreview(msg)}</Text>
+            <Text>{scrubOutput(queuedPreview(msg))}</Text>
           </Text>
         </Box>
       ))}
