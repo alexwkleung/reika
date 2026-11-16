@@ -71,21 +71,30 @@ export function BusyLine({
     return () => clearInterval(id);
   }, [pool]);
   const label = `${text ?? (pool ? pool[word % pool.length]! : 'Working')}…`;
-  const sweepMs = (label.length + SHIMMER_PAUSE) * SHIMMER_STEP * TICK_MS;
   return (
     <div className={`busy busy--${tone}`} role="status">
       <span className="busy-spinner" aria-hidden="true">
         {BRAILLE_SPINNER[frame]}
       </span>
-      <span
-        // Keyed on the label, so a new word opens on a fresh sweep rather than mid-glow.
-        key={label}
-        className="busy-label"
-        style={{ animationDuration: `${sweepMs}ms`, ['--busy-chars' as string]: label.length }}
-      >
-        {label}
-      </span>
+      <SweepLabel
+        // A new working word opens on a fresh sweep. A harness label keeps its sweep while its
+        // numbers move: keyed on the text, "Processing context 41%" restarted at every percent and
+        // the glow never crossed the line.
+        key={text === null ? label : tone}
+        label={label}
+      />
     </div>
+  );
+}
+
+// The sweep's pace is set from the label it opened on: re-timed as a count changes length, the
+// running animation would jump to another point of its cycle.
+function SweepLabel({ label }: { label: string }) {
+  const [sweepMs] = useState(() => (label.length + SHIMMER_PAUSE) * SHIMMER_STEP * TICK_MS);
+  return (
+    <span className="busy-label" style={{ animationDuration: `${sweepMs}ms` }}>
+      {label}
+    </span>
   );
 }
 
