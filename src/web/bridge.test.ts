@@ -404,10 +404,10 @@ describe('pickers', () => {
       });
     }
     controller.setStatus('busy');
-    expect(bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name: 'other' })).toEqual({
-      ok: false,
-      error: 'cannot switch while busy',
-    });
+    expect(
+      bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name: 'other' }),
+    ).toMatchObject({ ok: false, conflict: true });
+
     expect(session.setProfile).not.toHaveBeenCalled();
     expect(session.addProfile).not.toHaveBeenCalled();
     expect(resolved(events)).toEqual([]);
@@ -417,6 +417,18 @@ describe('pickers', () => {
       ok: true,
     });
     expect(session.setProfile).toHaveBeenCalledWith('other');
+  });
+
+  it('takes a model only between lines, as the pill does: not with a line queued', async () => {
+    const { bridge, controller, session, events } = setup();
+    bridge.handle({ type: 'submit', text: '/model' });
+    await flush();
+    const picker = dialogs(events).at(-1)!;
+    controller.enqueue({ content: 'queued', answers: {} });
+    expect(
+      bridge.handle({ type: 'answer', id: picker.id, kind: 'model', name: 'other' }),
+    ).toMatchObject({ ok: false, conflict: true });
+    expect(session.setProfile).not.toHaveBeenCalled();
   });
 
   it('cancels a picker superseded by a new one of the same kind', async () => {
@@ -1171,11 +1183,32 @@ describe('image uploads (#979)', () => {
       }),
     );
     const pending = bridge.upload(png, 'image/png');
-    expect(bridge.uploadRefusal()).toMatchObject({ status: 429 });
     expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
     release();
     expect(await pending).toMatchObject({ ok: false, status: 409 });
-    expect(bridge.uploadRefusal()).toBeNull();
+  });
+
+  it('takes the read slot before the body is read, so a parallel upload buffers nothing', async () => {
+    const { controller, bridge } = setup();
+    reads(controller);
+    let deliver!: (b: Uint8Array) => void;
+    const first = bridge.upload(() => new Promise(r => (deliver = r)), 'image/png');
+    const second = vi.fn(async () => png);
+    expect(await bridge.upload(second, 'image/png')).toMatchObject({ ok: false, status: 429 });
+    expect(second).not.toHaveBeenCalled();
+    deliver(png);
+    expect((await first).ok).toBe(true);
+  });
+
+  it('a typed /new frees what is held, as the drawer’s New conversation does', async () => {
+    const { controller, session, bridge } = setup();
+    reads(controller);
+    const id = idOf(await bridge.upload(png, 'image/png'));
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    expect(
+      bridge.handle({ type: 'submit', text: '[Image 1]', images: [{ marker: '[Image 1]', id }] }),
+    ).toMatchObject({ ok: false, conflict: true });
+    expect(session.submit).not.toHaveBeenCalled();
   });
 
   it('refuses bytes that are not the declared image type, and reads nothing', async () => {

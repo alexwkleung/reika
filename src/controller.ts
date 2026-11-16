@@ -469,6 +469,12 @@ export type Controller = {
   runMcpCommand(raw: string, command: McpCommand, args: string): Promise<void>;
   // Stops the turn, shell command or MCP call that is running. False when nothing was.
   abort(): boolean;
+  // For a front end shutting down: aborts what runs and refuses every later turn, shell run and
+  // MCP call, a line still asking its questions or fetching its links included, which `abort`
+  // cannot reach because nothing is running yet.
+  stop(): void;
+  // Bumped by `/new` and a resume: what a front end held for one conversation is not the next's.
+  readonly conversation: number;
   // A typed `/command`, decided in a fixed order: /new, /exit, the commands that only print, the
   // mode commands, the ones that end in a turn, /cd, /resume, /save, the toggles, /model, an MCP
   // tool, then a skill. Each is echoed in the scrollback, except where its turn's own bubble is
@@ -539,6 +545,8 @@ export function createController(opts: {
   // The user said which model this session runs, which outranks the per-mode map (#616).
   let modelPinned = false;
   let startedAt = Date.now();
+  let conversation = 0;
+  let stopped = false;
   let sessionPath: string | null = null;
   // The process's first transcript shares the debug log's name (#761); a later one gets its own.
   let stemClaimed = false;
@@ -877,7 +885,7 @@ export function createController(opts: {
   ): Promise<Message[]> => {
     const s = session;
     const cfg = config();
-    if (!s || !cfg) return [];
+    if (!s || !cfg || stopped) return [];
     let notices = turn.notices ?? [];
     const activeMode = turn.mode ?? snapshot.mode;
     return s.submit(text, {
@@ -1335,6 +1343,7 @@ export function createController(opts: {
     front: InputFrontEnd,
     carried?: SubmitAnswers,
   ): Promise<void> => {
+    if (stopped) return;
     const trimmed = input.trim();
     // /save runs immediately even while a turn is in flight (#226): the point of saving mid-run is
     // to snapshot the conversation the moment something looks off and hand it to another agent,
@@ -1380,7 +1389,7 @@ export function createController(opts: {
     // Before the box clears: the dialog sits over the input, and the prompt it is asking about
     // should still be visible underneath.
     const answers = await askSubmitAnswers(trimmed, front, carried);
-    if (answers === 'abort') return;
+    if (answers === 'abort' || stopped) return;
     const { skill: route, fetchUrls, implementMode } = answers;
     front.onTaken(trimmed || undefined);
     if (trimmed) recordHistory(trimmed);
@@ -1624,10 +1633,14 @@ export function createController(opts: {
         controller.modelTargets(),
       );
     },
+    get conversation() {
+      return conversation;
+    },
     get startedAt() {
       return startedAt;
     },
     newConversation: echo => {
+      conversation++;
       stashed = {};
       heldShellRuns = [];
       startedAt = Date.now();
@@ -1658,6 +1671,7 @@ export function createController(opts: {
       setLive(emptyLive());
     },
     loadConversation: (sides, from) => {
+      conversation++;
       setLive(emptyLive());
       stashed = {};
       session?.reset({ relearn: false });
@@ -1858,7 +1872,7 @@ export function createController(opts: {
     },
     runShell: async (command, front) => {
       const s = session;
-      if (!s) return;
+      if (!s || stopped) return;
       // Shell mode is "raw bash, no model": the echo and the `shell` message are UI-only. The model
       // sees the run through the held copy, attached to the next prompt.
       append({ role: 'user', content: command, meta: true });
@@ -1902,7 +1916,7 @@ export function createController(opts: {
     // tool, not the model calling it.
     runMcpCommand: async (raw, command, args) => {
       const s = session;
-      if (!s) return;
+      if (!s || stopped) return;
       const parsed = parseMcpArgs(command, args);
       if ('error' in parsed) {
         append({ role: 'system', content: parsed.error, tone: 'warn' });
@@ -1931,6 +1945,11 @@ export function createController(opts: {
       if (snapshot.status !== 'busy' || !aborter) return false;
       aborter.abort();
       return true;
+    },
+    stop: () => {
+      stopped = true;
+      warmer.cancel('stop');
+      controller.abort();
     },
     runCommand,
     submit,
