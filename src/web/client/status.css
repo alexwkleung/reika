@@ -93,6 +93,10 @@
   font-size: 0.84375rem;
   color: var(--reika-muted);
 }
+/* Held on its own line (pathdwell.ts): the whole line, so it starts at the left. */
+.status-path--own {
+  flex-basis: 100%;
+}
 .status-error {
   color: var(--reika-error);
   font-size: 1.15em;
