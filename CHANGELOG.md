@@ -14,6 +14,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- The TUI now shortens home paths to `~/…`, and hides your name, handle and email under `/anon`, in
+  assistant replies, Thinking, compaction notes, diffs, the plan checklist, queued prompts and the
+  approval, question and confirm dialogs. An approval still shows any secret in full, since you
+  must see what you approve. Paths also stay project-relative after a `/cd` (#1035).
 - A prompt sent while another was still being prepared (a pasted link being fetched, or its
   question open) was dropped without a trace. It is now queued and runs after the first (#994).
 - A loop-break recovery and the end of a shell-mode run no longer draw their text twice for one

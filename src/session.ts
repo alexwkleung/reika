@@ -25,6 +25,7 @@ import { PrefixTrace } from './agent/prefixtrace.js';
 import type { NativeImage } from './agent/attachments.js';
 import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
+import { setDisplayRoot } from './ui/paths.js';
 import { kFormat } from './ui/format.js';
 import { planWritten } from './ui/commands.js';
 import {
@@ -232,6 +233,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       repoMapBudgetFor(resolveProfile(cfg, profile).contextWindow, cfg.repoMapBudget),
     );
   let bundle = fitRepoMap(booted);
+  setDisplayRoot(bundle.cwd);
   // Profiles whose probe reached no server (llama-server still loading): asked again at the next
   // submit on that profile, awaited so the window governs that turn rather than the one after.
   const retryWindow = new Set<string>();
@@ -536,6 +538,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       const next = update(bundle);
       if (next === bundle) return;
       bundle = next;
+      setDisplayRoot(bundle.cwd);
       changed();
     },
     switchSide: next => {

@@ -2,6 +2,7 @@ import { Box, Text } from 'ink';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
 import { renderInlineMarkdown } from './markdown.js';
+import { scrubDisplay } from './scrub.js';
 import type { PlanStep } from '../agent/plantrack.js';
 
 // Live checklist for a plan being implemented (#71). State comes from the loop's deterministic
@@ -82,7 +83,7 @@ export function PlanProgress({ steps }: { steps: PlanStep[] }) {
                   ? `${glyphs.next} `
                   : '· '}
           </Text>
-          {s.n}. {renderInlineMarkdown(s.text)}
+          {s.n}. {renderInlineMarkdown(scrubDisplay(s.text))}
         </Text>
       ))}
       {hiddenTail > 0 ? <Text color={theme.muted}>… {hiddenTail} more</Text> : null}
