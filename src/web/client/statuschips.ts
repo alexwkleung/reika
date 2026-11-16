@@ -50,17 +50,25 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
     items.push({ kind: 'tag', text: 'unattended', tone: 'auto-approve' });
   }
 
-  // The TUI measures against the usable ceiling, which needs the generation reserve; the wire
-  // carries only the window, so the percent here is of the window.
+  // Against the usable limit, as the TUI's gauge is: history is shed there, so a share of the raw
+  // window tops out short of 100% and its warning never fired (#1001). The raw window stays in the
+  // tooltip, and is the ceiling only for a server that does not send the limit.
   const contextTokens = s.lastUsage?.promptTokens ?? s.estimatedContext ?? 0;
   const window = s.contextWindow ?? undefined;
   if (window) {
-    const fill = contextFill(contextTokens, window) ?? 0;
+    const usable = s.contextUsable ?? undefined;
+    const ceiling = usable ?? window;
+    const fill = contextFill(contextTokens, ceiling) ?? 0;
+    const pct = Math.round(fill * 100);
+    // The TUI's own text, `20k/32k (85% of 23k)`, less its `ctx`: the bar beside it says that.
+    const size = `${kFormat(contextTokens)}/${kFormat(window)}`;
     items.push({
       kind: 'meter',
       fill: Math.min(1, fill),
-      text: `${Math.round(fill * 100)}% of ${kFormat(window)}`,
-      title: formatContext(contextTokens, window) || `ctx 0/${kFormat(window)}`,
+      text: usable ? `${size} (${pct}% of ${kFormat(usable)})` : `${size} (${pct}%)`,
+      title: usable
+        ? `${kFormat(contextTokens)} of a ${kFormat(window)} window. History is shed at ${kFormat(usable)}, the window less room for the reply.`
+        : `${kFormat(contextTokens)} of a ${kFormat(window)} window.`,
       warn: fill >= CONTEXT_WARN_FILL,
     });
   } else if (contextTokens > 0) {
